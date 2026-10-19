@@ -1,0 +1,38 @@
+# Rules for `cargo deny check`, which `cargo xtask ci` runs.
+# Advisories use cargo-deny's defaults: known vulnerabilities and
+# unmaintained crates fail the check.
+
+[licenses]
+# Licenses dependencies may use: any whose terms do not conflict with
+# distributing Cox under MIT. Permissive licenses qualify; GPL-family
+# licenses do not, because they would require Cox itself to be GPL.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# The list is a policy, not a record of current dependencies, so entries no
+# dependency uses yet are expected.
+unused-allowed-license = "allow"
+
+[bans]
+# Duplicate versions of a crate fail the check. Allow a specific one with
+# `skip` and a reason when it cannot be avoided.
+multiple-versions = "deny"
+wildcards = "deny"
+
+[sources]
+# Dependencies come from crates.io only.
+unknown-registry = "deny"
+unknown-git = "deny"
