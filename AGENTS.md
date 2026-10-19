@@ -1,0 +1,3 @@
+# AGENTS.md
+
+Follow [CONTRIBUTING.md](CONTRIBUTING.md).
