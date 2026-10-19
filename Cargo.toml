@@ -12,3 +12,7 @@ repository = "https://github.com/tennashi/cox"
 pedantic = { level = "warn", priority = -1 }
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+xshell = "0.2.7"
