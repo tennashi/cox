@@ -6,15 +6,18 @@ use std::sync::Mutex;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, InitializeRequest, NewSessionRequest, PromptRequest, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TextContent,
+    ContentBlock, ContentChunk, InitializeRequest, NewSessionRequest, PermissionOptionKind,
+    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate, StopReason,
+    TextContent,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Result};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 
 /// Talks to `agent`: opens a session, then takes one turn for each line of
 /// `input` until it ends. In each turn, shows on `output` the reply as it
-/// arrives and then how the turn ended.
+/// arrives and then how the turn ended. Rejects every permission request
+/// the agent makes, and shows that it did.
 ///
 /// # Errors
 ///
@@ -34,6 +37,12 @@ pub async fn run(
                 show_update(&screen, &notification.update)
             },
             agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_request(
+            async |request: RequestPermissionRequest, responder, _cx| {
+                responder.respond(reject(&screen, &request)?)
+            },
+            agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
             let session = start(&cx).await?;
@@ -91,6 +100,32 @@ fn show_update(screen: &Mutex<impl Write>, update: &SessionUpdate) -> Result<()>
         }) => show(screen, &text.text),
         _ => Ok(()),
     }
+}
+
+/// Rejects a permission request and shows that it did. Picks the agent's
+/// "reject once" option, or cancels the request if there is none.
+fn reject(
+    screen: &Mutex<impl Write>,
+    request: &RequestPermissionRequest,
+) -> Result<RequestPermissionResponse> {
+    let title = request
+        .tool_call
+        .fields
+        .title
+        .as_deref()
+        .unwrap_or("a tool call");
+    show(screen, format_args!("\n[rejected: {title}]\n"))?;
+    let outcome = match request
+        .options
+        .iter()
+        .find(|option| option.kind == PermissionOptionKind::RejectOnce)
+    {
+        Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+            option.option_id.clone(),
+        )),
+        None => RequestPermissionOutcome::Cancelled,
+    };
+    Ok(RequestPermissionResponse::new(outcome))
 }
 
 /// The stop reason as ACP names it on the wire.

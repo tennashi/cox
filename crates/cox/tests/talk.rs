@@ -3,6 +3,7 @@
 
 mod fake_agent;
 
+use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
 use fake_agent::FakeAgent;
 
 #[tokio::test]
@@ -61,5 +62,26 @@ async fn takes_a_turn_for_each_line_until_the_input_ends() {
     assert_eq!(
         String::from_utf8(screen).unwrap(),
         "echo: hello\n[end_turn]\necho: how are you\n[end_turn]\n"
+    );
+}
+
+#[tokio::test]
+async fn rejects_permission_requests_and_shows_it() {
+    let agent = FakeAgent::default();
+    let mut screen = Vec::new();
+
+    cox::run(agent.connect(), "ask permission\n".as_bytes(), &mut screen)
+        .await
+        .expect("cox ends without an error");
+
+    assert_eq!(
+        agent.answers(),
+        [RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new("reject")
+        )]
+    );
+    assert_eq!(
+        String::from_utf8(screen).unwrap(),
+        "\n[rejected: touch x.txt]\necho: ask permission\n[end_turn]\n"
     );
 }

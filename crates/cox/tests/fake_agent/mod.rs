@@ -1,14 +1,17 @@
 //! An ACP agent for tests, connected to Cox in memory. It replies to each
-//! prompt with `echo: <prompt>`, a word at a time, and records what Cox asked
-//! of it so tests can check what Cox did.
+//! prompt with `echo: <prompt>`, a word at a time. When the prompt mentions
+//! "permission", it first asks permission to run `touch x.txt`. It records
+//! what Cox asked of it and answered so tests can check what Cox did.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
-    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TextContent,
+    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
+    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
+    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallUpdate,
+    ToolCallUpdateFields,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Result};
 
@@ -16,6 +19,7 @@ use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Result};
 pub struct FakeAgent {
     sessions_opened: Arc<AtomicUsize>,
     prompts: Arc<Mutex<Vec<String>>>,
+    answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
 }
 
 impl FakeAgent {
@@ -26,6 +30,7 @@ impl FakeAgent {
             agent_end,
             Arc::clone(&self.sessions_opened),
             Arc::clone(&self.prompts),
+            Arc::clone(&self.answers),
         ));
         cox_end
     }
@@ -39,12 +44,18 @@ impl FakeAgent {
     pub fn prompts(&self) -> Vec<String> {
         self.prompts.lock().unwrap().clone()
     }
+
+    /// Cox's answer to each permission request, in order.
+    pub fn answers(&self) -> Vec<RequestPermissionOutcome> {
+        self.answers.lock().unwrap().clone()
+    }
 }
 
 async fn serve(
     transport: Channel,
     sessions_opened: Arc<AtomicUsize>,
     prompts: Arc<Mutex<Vec<String>>>,
+    answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
 ) -> Result<()> {
     Agent
         .builder()
@@ -68,11 +79,21 @@ async fn serve(
         .on_receive_request(
             async move |request: PromptRequest, responder, cx: ConnectionTo<Client>| {
                 let text = text_of(&request.prompt);
-                for word in format!("echo: {text}").split_inclusive(' ') {
-                    say(&cx, &request.session_id, word)?;
-                }
-                prompts.lock().unwrap().push(text);
-                responder.respond(PromptResponse::new(StopReason::EndTurn))
+                prompts.lock().unwrap().push(text.clone());
+                let answers = Arc::clone(&answers);
+                let turn = cx.clone();
+                // Asking permission waits for Cox's answer, which arrives
+                // through the loop that runs this handler, so wait elsewhere.
+                cx.spawn(async move {
+                    if text.contains("permission") {
+                        let answer = ask_permission(&turn, &request.session_id).await?;
+                        answers.lock().unwrap().push(answer);
+                    }
+                    for word in format!("echo: {text}").split_inclusive(' ') {
+                        say(&turn, &request.session_id, word)?;
+                    }
+                    responder.respond(PromptResponse::new(StopReason::EndTurn))
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -99,4 +120,21 @@ fn say(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()>
             text,
         )))),
     ))
+}
+
+/// Asks permission to run `touch x.txt`, offering to allow or reject it once.
+async fn ask_permission(
+    cx: &ConnectionTo<Client>,
+    session: &SessionId,
+) -> Result<RequestPermissionOutcome> {
+    let request = RequestPermissionRequest::new(
+        session.clone(),
+        ToolCallUpdate::new("call-1", ToolCallUpdateFields::new().title("touch x.txt")),
+        vec![
+            PermissionOption::new("allow", "Allow once", PermissionOptionKind::AllowOnce),
+            PermissionOption::new("reject", "Reject once", PermissionOptionKind::RejectOnce),
+        ],
+    );
+    let response = cx.send_request(request).block_task().await?;
+    Ok(response.outcome)
 }
