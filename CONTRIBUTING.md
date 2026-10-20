@@ -7,8 +7,8 @@
 
 ## Pull requests
 
-Pull requests are merged by rebasing, so every commit lands on `main` as
-written and must pass `cargo xtask ci` on its own.
+Pull requests are merged with a merge commit, so every commit lands on
+`main` as written and must pass `cargo xtask ci` on its own.
 
 ## Commit messages
 
