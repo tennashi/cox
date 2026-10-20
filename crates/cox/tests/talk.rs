@@ -26,5 +26,20 @@ async fn sends_a_line_and_shows_how_the_turn_ended() {
         .expect("cox ends without an error");
 
     assert_eq!(agent.prompts(), ["hello"]);
-    assert_eq!(String::from_utf8(screen).unwrap(), "[end_turn]\n");
+    assert!(String::from_utf8(screen).unwrap().ends_with("[end_turn]\n"));
+}
+
+#[tokio::test]
+async fn shows_the_reply_as_it_arrives() {
+    let agent = FakeAgent::default();
+    let mut screen = Vec::new();
+
+    cox::run(agent.connect(), "hello\n".as_bytes(), &mut screen)
+        .await
+        .expect("cox ends without an error");
+
+    assert_eq!(
+        String::from_utf8(screen).unwrap(),
+        "echo: hello\n[end_turn]\n"
+    );
 }

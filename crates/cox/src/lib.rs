@@ -1,17 +1,19 @@
 //! Cox: a terminal where a human talks to a coding agent.
 
+use std::fmt::Display;
 use std::io::Write;
+use std::sync::Mutex;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, SessionId, StopReason,
-    TextContent,
+    ContentBlock, ContentChunk, InitializeRequest, NewSessionRequest, PromptRequest, SessionId,
+    SessionNotification, SessionUpdate, StopReason, TextContent,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Result};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 
-/// Talks to `agent`: opens a session, and if `input` has a line, sends it
-/// and shows on `output` how the turn ended.
+/// Talks to `agent`: opens a session, and if `input` has a line, sends it,
+/// shows on `output` the reply as it arrives and then how the turn ended.
 ///
 /// # Errors
 ///
@@ -22,9 +24,16 @@ pub async fn run(
     input: impl AsyncBufRead + Unpin + Send,
     output: &mut (impl Write + Send),
 ) -> Result<()> {
+    let screen = Mutex::new(output);
     Client
         .builder()
         .name("cox")
+        .on_receive_notification(
+            async |notification: SessionNotification, _cx| {
+                show_update(&screen, &notification.update)
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
             let session = start(&cx).await?;
             let mut lines = input.lines();
@@ -33,7 +42,7 @@ pub async fn run(
                 .await
                 .map_err(Error::into_internal_error)?
             {
-                take_turn(&cx, &session, line, output).await?;
+                take_turn(&cx, &session, line, &screen).await?;
             }
             Ok(())
         })
@@ -54,20 +63,33 @@ async fn start(cx: &ConnectionTo<Agent>) -> Result<SessionId> {
 }
 
 /// Sends `line` to the agent, waits for the turn to end, and shows why it
-/// ended.
+/// ended. The reply is shown by `show_update` while the turn goes on.
 async fn take_turn(
     cx: &ConnectionTo<Agent>,
     session: &SessionId,
     line: String,
-    output: &mut impl Write,
+    screen: &Mutex<impl Write>,
 ) -> Result<()> {
     let prompt = PromptRequest::new(
         session.clone(),
         vec![ContentBlock::Text(TextContent::new(line))],
     );
     let response = cx.send_request(prompt).block_task().await?;
-    writeln!(output, "[{}]", stop_reason_name(response.stop_reason))
-        .map_err(Error::into_internal_error)
+    show(
+        screen,
+        format_args!("\n[{}]\n", stop_reason_name(response.stop_reason)),
+    )
+}
+
+/// Shows the part of an update the human reads: the text of the reply.
+fn show_update(screen: &Mutex<impl Write>, update: &SessionUpdate) -> Result<()> {
+    match update {
+        SessionUpdate::AgentMessageChunk(ContentChunk {
+            content: ContentBlock::Text(text),
+            ..
+        }) => show(screen, &text.text),
+        _ => Ok(()),
+    }
 }
 
 /// The stop reason as ACP names it on the wire.
@@ -80,4 +102,11 @@ fn stop_reason_name(reason: StopReason) -> &'static str {
         StopReason::Cancelled => "cancelled",
         _ => "unknown",
     }
+}
+
+/// Writes `text` to the screen right away.
+fn show(screen: &Mutex<impl Write>, text: impl Display) -> Result<()> {
+    let mut screen = screen.lock().expect("no writer to the screen panicked");
+    write!(screen, "{text}").map_err(Error::into_internal_error)?;
+    screen.flush().map_err(Error::into_internal_error)
 }

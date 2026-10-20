@@ -1,14 +1,16 @@
-//! An ACP agent for tests, connected to Cox in memory. It records what Cox
-//! asked of it so tests can check what Cox did.
+//! An ACP agent for tests, connected to Cox in memory. It replies to each
+//! prompt with `echo: <prompt>`, a word at a time, and records what Cox asked
+//! of it so tests can check what Cox did.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, ContentBlock, InitializeRequest, InitializeResponse, NewSessionRequest,
-    NewSessionResponse, PromptRequest, PromptResponse, StopReason,
+    AgentCapabilities, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
+    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SessionId,
+    SessionNotification, SessionUpdate, StopReason, TextContent,
 };
-use agent_client_protocol::{Agent, Channel, Result};
+use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Result};
 
 #[derive(Default)]
 pub struct FakeAgent {
@@ -64,8 +66,12 @@ async fn serve(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: PromptRequest, responder, _cx| {
-                prompts.lock().unwrap().push(text_of(&request.prompt));
+            async move |request: PromptRequest, responder, cx: ConnectionTo<Client>| {
+                let text = text_of(&request.prompt);
+                for word in format!("echo: {text}").split_inclusive(' ') {
+                    say(&cx, &request.session_id, word)?;
+                }
+                prompts.lock().unwrap().push(text);
                 responder.respond(PromptResponse::new(StopReason::EndTurn))
             },
             agent_client_protocol::on_receive_request!(),
@@ -83,4 +89,14 @@ fn text_of(prompt: &[ContentBlock]) -> String {
             _ => None,
         })
         .collect()
+}
+
+/// Sends a piece of the reply.
+fn say(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()> {
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+            text,
+        )))),
+    ))
 }
