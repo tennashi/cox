@@ -85,3 +85,14 @@ async fn rejects_permission_requests_and_shows_it() {
         "\n[rejected: touch x.txt]\necho: ask permission\n[end_turn]\n"
     );
 }
+
+#[tokio::test]
+async fn skips_blank_lines() {
+    let agent = FakeAgent::default();
+
+    cox::run(agent.connect(), "\nhello\n  \n".as_bytes(), &mut Vec::new())
+        .await
+        .expect("cox ends without an error");
+
+    assert_eq!(agent.prompts(), ["hello"]);
+}

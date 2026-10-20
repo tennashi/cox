@@ -15,9 +15,9 @@ use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Resul
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 
 /// Talks to `agent`: opens a session, then takes one turn for each line of
-/// `input` until it ends. In each turn, shows on `output` the reply as it
-/// arrives and then how the turn ended. Rejects every permission request
-/// the agent makes, and shows that it did.
+/// `input` until it ends, skipping blank lines. In each turn, shows on
+/// `output` the reply as it arrives and then how the turn ended. Rejects
+/// every permission request the agent makes, and shows that it did.
 ///
 /// # Errors
 ///
@@ -52,6 +52,9 @@ pub async fn run(
                 .await
                 .map_err(Error::into_internal_error)?
             {
+                if line.trim().is_empty() {
+                    continue;
+                }
                 take_turn(&cx, &session, line, &screen).await?;
             }
             Ok(())
