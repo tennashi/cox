@@ -12,8 +12,9 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Result};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 
-/// Talks to `agent`: opens a session, and if `input` has a line, sends it,
-/// shows on `output` the reply as it arrives and then how the turn ended.
+/// Talks to `agent`: opens a session, then takes one turn for each line of
+/// `input` until it ends. In each turn, shows on `output` the reply as it
+/// arrives and then how the turn ended.
 ///
 /// # Errors
 ///
@@ -37,7 +38,7 @@ pub async fn run(
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
             let session = start(&cx).await?;
             let mut lines = input.lines();
-            if let Some(line) = lines
+            while let Some(line) = lines
                 .next_line()
                 .await
                 .map_err(Error::into_internal_error)?

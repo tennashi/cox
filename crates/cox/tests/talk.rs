@@ -43,3 +43,23 @@ async fn shows_the_reply_as_it_arrives() {
         "echo: hello\n[end_turn]\n"
     );
 }
+
+#[tokio::test]
+async fn takes_a_turn_for_each_line_until_the_input_ends() {
+    let agent = FakeAgent::default();
+    let mut screen = Vec::new();
+
+    cox::run(
+        agent.connect(),
+        "hello\nhow are you\n".as_bytes(),
+        &mut screen,
+    )
+    .await
+    .expect("cox ends without an error");
+
+    assert_eq!(agent.prompts(), ["hello", "how are you"]);
+    assert_eq!(
+        String::from_utf8(screen).unwrap(),
+        "echo: hello\n[end_turn]\necho: how are you\n[end_turn]\n"
+    );
+}
