@@ -13,3 +13,6 @@ Pull requests are merged with a merge commit, so every commit lands on
 ## Commit messages
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+A change confined to one crate uses the crate name as the scope, dropping a
+leading `cox-`, as in `feat(core): ...` for `cox-core`. Other changes have no
+scope.
