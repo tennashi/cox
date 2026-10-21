@@ -1,7 +1,8 @@
 //! An ACP agent for tests, connected to Cox in memory. It replies to each
 //! prompt with `echo: <prompt>`, a word at a time. When the prompt mentions
 //! "permission", it first asks permission to run `touch x.txt`. When the
-//! prompt mentions "fail", it answers with an error instead. It records
+//! prompt mentions "fail", it answers with an error instead. When the prompt
+//! mentions "tool", it first runs `ls` as a tool call that completes. It records
 //! what Cox asked of it and answered so tests can check what Cox did.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,8 +12,8 @@ use agent_client_protocol::schema::v1::{
     AgentCapabilities, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
     NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
     PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallUpdate,
-    ToolCallUpdateFields,
+    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result};
 
@@ -90,6 +91,9 @@ async fn serve(
                         return responder
                             .respond_with_error(Error::new(-32603, "the model is unavailable"));
                     }
+                    if text.contains("tool") {
+                        run_tool(&turn, &request.session_id)?;
+                    }
                     if text.contains("permission") {
                         let answer = ask_permission(&turn, &request.session_id).await?;
                         answers.lock().unwrap().push(answer);
@@ -142,4 +146,17 @@ async fn ask_permission(
     );
     let response = cx.send_request(request).block_task().await?;
     Ok(response.outcome)
+}
+
+/// Runs `ls` as a tool call: announces it, then reports it running and done.
+fn run_tool(cx: &ConnectionTo<Client>, session: &SessionId) -> Result<()> {
+    let update = |update| cx.send_notification(SessionNotification::new(session.clone(), update));
+    update(SessionUpdate::ToolCall(ToolCall::new("call-2", "ls")))?;
+    for status in [ToolCallStatus::InProgress, ToolCallStatus::Completed] {
+        update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "call-2",
+            ToolCallUpdateFields::new().status(status),
+        )))?;
+    }
+    Ok(())
 }

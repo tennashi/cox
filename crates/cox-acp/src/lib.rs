@@ -4,6 +4,7 @@
 //! starts a [`Turn`], which hands over what the agent sends as [`Update`]s
 //! until the turn ends.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -12,7 +13,8 @@ use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, InitializeRequest, NewSessionRequest, PermissionOptionKind,
     PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
-    SessionUpdate, StopReason as AcpStopReason, TextContent,
+    SessionUpdate, StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall, ToolCallId,
+    ToolCallStatus, ToolCallUpdate,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
 use anyhow::Context;
@@ -61,14 +63,22 @@ pub async fn connect<T>(
         .on_receive_request(
             async |request: RequestPermissionRequest, responder, _cx| {
                 let request = PermissionRequest::new(request, responder);
-                deliver(&updates, Update::PermissionRequest(request));
+                deliver(
+                    &updates,
+                    Received::Update(Update::PermissionRequest(request)),
+                );
                 Ok(())
             },
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
             let id = start(&cx).await?;
-            let session = Session { cx, id, received };
+            let session = Session {
+                cx,
+                id,
+                received,
+                tool_calls: HashMap::new(),
+            };
             outcome = Some(talk(session).await);
             Ok(())
         })
@@ -89,20 +99,50 @@ async fn start(cx: &ConnectionTo<Agent>) -> agent_client_protocol::Result<Sessio
     Ok(session.session_id)
 }
 
-/// Hands `update` to the turn that is running. The receiver lives as long as
-/// the session, so sending only fails after `talk` has returned, when there
-/// is no one left to show the update to.
-fn deliver(updates: &UnboundedSender<Update>, update: Update) {
-    let _ = updates.send(update);
+/// What the connection hands to the turn that is running: an update ready to
+/// show, or news of a tool call, which the turn gathers until the call ends.
+enum Received {
+    Update(Update),
+    ToolCall {
+        id: ToolCallId,
+        title: Option<String>,
+        status: Option<ToolCallStatus>,
+    },
+}
+
+/// Hands `received` to the turn that is running. The receiver lives as long
+/// as the session, so sending only fails after `talk` has returned, when
+/// there is no one left to show it to.
+fn deliver(updates: &UnboundedSender<Received>, received: Received) {
+    let _ = updates.send(received);
 }
 
 /// The parts of a session update Cox uses, or `None` for the rest.
-fn translate(update: SessionUpdate) -> Option<Update> {
+fn translate(update: SessionUpdate) -> Option<Received> {
     match update {
         SessionUpdate::AgentMessageChunk(ContentChunk {
             content: ContentBlock::Text(text),
             ..
-        }) => Some(Update::ReplyText(text.text)),
+        }) => Some(Received::Update(Update::ReplyText(text.text))),
+        SessionUpdate::ToolCall(AcpToolCall {
+            tool_call_id,
+            title,
+            status,
+            ..
+        }) => Some(Received::ToolCall {
+            id: tool_call_id,
+            title: Some(title),
+            status: Some(status),
+        }),
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate {
+            tool_call_id,
+            fields,
+            ..
+        }) => Some(Received::ToolCall {
+            id: tool_call_id,
+            title: fields.title,
+            status: fields.status,
+        }),
         _ => None,
     }
 }
@@ -111,7 +151,9 @@ fn translate(update: SessionUpdate) -> Option<Update> {
 pub struct Session {
     cx: ConnectionTo<Agent>,
     id: SessionId,
-    received: UnboundedReceiver<Update>,
+    received: UnboundedReceiver<Received>,
+    /// The title of each tool call that has not ended yet.
+    tool_calls: HashMap<ToolCallId, Option<String>>,
 }
 
 impl Session {
@@ -121,8 +163,10 @@ impl Session {
             self.id.clone(),
             vec![ContentBlock::Text(TextContent::new(text))],
         );
+        self.tool_calls.clear();
         Turn {
             received: &mut self.received,
+            tool_calls: &mut self.tool_calls,
             response: Box::pin(self.cx.send_request(prompt).block_task()),
             answer: None,
         }
@@ -131,7 +175,8 @@ impl Session {
 
 /// One prompt and everything the agent does in answer to it.
 pub struct Turn<'s> {
-    received: &'s mut UnboundedReceiver<Update>,
+    received: &'s mut UnboundedReceiver<Received>,
+    tool_calls: &'s mut HashMap<ToolCallId, Option<String>>,
     response: Pin<Box<dyn Future<Output = agent_client_protocol::Result<PromptResponse>> + Send>>,
     /// The agent's answer to the prompt, once it has arrived.
     answer: Option<agent_client_protocol::Result<PromptResponse>>,
@@ -141,20 +186,55 @@ impl Turn<'_> {
     /// The next thing the agent sends in this turn, or `None` once the turn
     /// has ended.
     pub async fn next(&mut self) -> Option<Update> {
-        if self.answer.is_some() {
-            return None;
-        }
-        // The agent sends a turn's updates before answering the prompt, and
-        // they are delivered in that order, so take every waiting update
-        // before looking at the answer.
-        tokio::select! {
-            biased;
-            Some(update) = self.received.recv() => Some(update),
-            answer = &mut self.response => {
-                self.answer = Some(answer);
-                None
+        loop {
+            if self.answer.is_some() {
+                return None;
+            }
+            // The agent sends a turn's updates before answering the prompt,
+            // and they are delivered in that order, so take every waiting
+            // update before looking at the answer.
+            let received = tokio::select! {
+                biased;
+                Some(received) = self.received.recv() => received,
+                answer = &mut self.response => {
+                    self.answer = Some(answer);
+                    return None;
+                }
+            };
+            match received {
+                Received::Update(update) => return Some(update),
+                Received::ToolCall { id, title, status } => {
+                    if let Some(call) = self.follow_tool_call(id, title, status) {
+                        return Some(Update::ToolCall(call));
+                    }
+                }
             }
         }
+    }
+
+    /// Records news of a tool call, and returns the call once it has ended.
+    fn follow_tool_call(
+        &mut self,
+        id: ToolCallId,
+        title: Option<String>,
+        status: Option<ToolCallStatus>,
+    ) -> Option<ToolCall> {
+        let result = match status {
+            Some(ToolCallStatus::Completed) => ToolCallResult::Completed,
+            Some(ToolCallStatus::Failed) => ToolCallResult::Failed,
+            _ => {
+                let known = self.tool_calls.entry(id).or_default();
+                if title.is_some() {
+                    *known = title;
+                }
+                return None;
+            }
+        };
+        let known = self.tool_calls.remove(&id).flatten();
+        Some(ToolCall {
+            title: title.or(known),
+            result,
+        })
     }
 
     /// Waits for the turn to end, and returns why it ended. Updates not taken
@@ -180,6 +260,22 @@ pub enum Update {
     ReplyText(String),
     /// The agent asks to be allowed to run a tool call.
     PermissionRequest(PermissionRequest),
+    /// A tool call the agent made has ended.
+    ToolCall(ToolCall),
+}
+
+/// A tool call the agent made, once it has ended.
+pub struct ToolCall {
+    /// The title the agent gave the call, if any.
+    pub title: Option<String>,
+    pub result: ToolCallResult,
+}
+
+/// How a tool call ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolCallResult {
+    Completed,
+    Failed,
 }
 
 /// A request from the agent for permission to run a tool call. Answer it with

@@ -112,3 +112,18 @@ async fn shows_an_error_from_the_agent_and_goes_on() {
         "\n[error: the model is unavailable]\necho: hello\n[end_turn]\n"
     );
 }
+
+#[tokio::test]
+async fn shows_each_tool_call_on_one_line_when_it_ends() {
+    let agent = FakeAgent::default();
+    let mut screen = Vec::new();
+
+    cox::run(agent.connect(), "use a tool\n".as_bytes(), &mut screen)
+        .await
+        .expect("cox ends without an error");
+
+    assert_eq!(
+        String::from_utf8(screen).unwrap(),
+        "\n[tool: ls … completed]\necho: use a tool\n[end_turn]\n"
+    );
+}

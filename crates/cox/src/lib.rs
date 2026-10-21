@@ -4,14 +4,15 @@ use std::fmt::Display;
 use std::io::Write;
 
 use cox_acp::{
-    PermissionAnswer, PermissionKind, PermissionRequest, Session, StopReason, Transport, Update,
+    PermissionAnswer, PermissionKind, PermissionRequest, Session, StopReason, ToolCall,
+    ToolCallResult, Transport, Update,
 };
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 
 /// Talks to `agent`: opens a session, then takes one turn for each line of
 /// `input` until it ends, skipping blank lines. In each turn, shows on
-/// `output` the reply as it arrives and then how the turn ended, or the error
-/// the agent answered with. Rejects every permission request the agent makes,
+/// `output` the reply as it arrives, each tool call as it ends, and then how
+/// the turn ended, or the error the agent answered with. Rejects every permission request the agent makes,
 /// and shows that it did.
 ///
 /// # Errors
@@ -37,8 +38,9 @@ pub async fn run(
 }
 
 /// Sends `line` to the agent and shows what the agent does in the turn: the
-/// reply as it arrives, the permission requests it rejects, and then why the
-/// turn ended, or the error the agent answered with.
+/// reply as it arrives, the tool calls it made as they end, the permission
+/// requests it rejects, and then why the turn ended, or the error the agent
+/// answered with.
 async fn take_turn(
     session: &mut Session,
     line: String,
@@ -49,12 +51,23 @@ async fn take_turn(
         match update {
             Update::ReplyText(text) => show(output, text)?,
             Update::PermissionRequest(request) => reject(output, request)?,
+            Update::ToolCall(call) => show_tool_call(output, &call)?,
         }
     }
     match turn.end().await {
         Ok(reason) => show(output, format_args!("\n[{}]\n", stop_reason_name(reason))),
         Err(error) => show(output, format_args!("\n[error: {error}]\n")),
     }
+}
+
+/// Shows a tool call that has ended, on one line.
+fn show_tool_call(output: &mut impl Write, call: &ToolCall) -> anyhow::Result<()> {
+    let title = call.title.as_deref().unwrap_or("a tool call");
+    let result = match call.result {
+        ToolCallResult::Completed => "completed",
+        ToolCallResult::Failed => "failed",
+    };
+    show(output, format_args!("\n[tool: {title} … {result}]\n"))
 }
 
 /// Rejects a permission request and shows that it did. Picks the agent's
