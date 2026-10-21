@@ -5,6 +5,12 @@
 - `cargo xtask setup` installs the pinned development tools.
 - `cargo xtask ci` runs every check. A change is ready only when it passes.
 
+## Building on macOS
+
+The Command Line Tools are enough: `cox` turns on gpui's `runtime_shaders`
+feature, which compiles the Metal shaders when the app starts instead of
+at build time, so Xcode's `metal` compiler is not needed.
+
 ## Building on Linux
 
 `cox` uses [gpui](https://crates.io/crates/gpui), which links these
