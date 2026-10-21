@@ -76,7 +76,8 @@ async fn start(cx: &ConnectionTo<Agent>) -> Result<SessionId> {
 }
 
 /// Sends `line` to the agent, waits for the turn to end, and shows why it
-/// ended. The reply is shown by `show_update` while the turn goes on.
+/// ended, or the error the agent answered with. The reply is shown by
+/// `show_update` while the turn goes on.
 async fn take_turn(
     cx: &ConnectionTo<Agent>,
     session: &SessionId,
@@ -87,11 +88,13 @@ async fn take_turn(
         session.clone(),
         vec![ContentBlock::Text(TextContent::new(line))],
     );
-    let response = cx.send_request(prompt).block_task().await?;
-    show(
-        screen,
-        format_args!("\n[{}]\n", stop_reason_name(response.stop_reason)),
-    )
+    match cx.send_request(prompt).block_task().await {
+        Ok(response) => show(
+            screen,
+            format_args!("\n[{}]\n", stop_reason_name(response.stop_reason)),
+        ),
+        Err(error) => show(screen, format_args!("\n[error: {error}]\n")),
+    }
 }
 
 /// Shows the part of an update the human reads: the text of the reply.

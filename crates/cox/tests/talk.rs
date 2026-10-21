@@ -96,3 +96,19 @@ async fn skips_blank_lines() {
 
     assert_eq!(agent.prompts(), ["hello"]);
 }
+
+#[tokio::test]
+async fn shows_an_error_from_the_agent_and_goes_on() {
+    let agent = FakeAgent::default();
+    let mut screen = Vec::new();
+
+    cox::run(agent.connect(), "fail\nhello\n".as_bytes(), &mut screen)
+        .await
+        .expect("cox ends without an error");
+
+    assert_eq!(agent.prompts(), ["fail", "hello"]);
+    assert_eq!(
+        String::from_utf8(screen).unwrap(),
+        "\n[error: the model is unavailable]\necho: hello\n[end_turn]\n"
+    );
+}

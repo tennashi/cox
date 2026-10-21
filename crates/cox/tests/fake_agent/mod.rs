@@ -1,6 +1,7 @@
 //! An ACP agent for tests, connected to Cox in memory. It replies to each
 //! prompt with `echo: <prompt>`, a word at a time. When the prompt mentions
-//! "permission", it first asks permission to run `touch x.txt`. It records
+//! "permission", it first asks permission to run `touch x.txt`. When the
+//! prompt mentions "fail", it answers with an error instead. It records
 //! what Cox asked of it and answered so tests can check what Cox did.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -13,7 +14,7 @@ use agent_client_protocol::schema::v1::{
     SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallUpdate,
     ToolCallUpdateFields,
 };
-use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Result};
+use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result};
 
 #[derive(Default)]
 pub struct FakeAgent {
@@ -85,6 +86,10 @@ async fn serve(
                 // Asking permission waits for Cox's answer, which arrives
                 // through the loop that runs this handler, so wait elsewhere.
                 cx.spawn(async move {
+                    if text.contains("fail") {
+                        return responder
+                            .respond_with_error(Error::new(-32603, "the model is unavailable"));
+                    }
                     if text.contains("permission") {
                         let answer = ask_permission(&turn, &request.session_id).await?;
                         answers.lock().unwrap().push(answer);
