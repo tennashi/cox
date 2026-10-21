@@ -19,6 +19,8 @@ allow = [
     "BSD-3-Clause",
     "BSL-1.0",
     "CC0-1.0",
+    # The root certificates the cef crate's build downloads CEF with.
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MIT-0",
@@ -27,6 +29,8 @@ allow = [
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
+    # BSD-like; the bzip2 the cef crate's build unpacks CEF with.
+    "bzip2-1.0.6",
 ]
 # The list is a policy, not a record of current dependencies, so entries no
 # dependency uses yet are expected.

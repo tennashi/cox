@@ -15,8 +15,20 @@ env_logger = "0.11.11"
 # runtime_shaders: compile the Metal shaders when the app starts, so a Mac
 # with only the Command Line Tools (no Xcode, no `metal` compiler) can build.
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+# The version gpui uses, to hand it the browser's frames.
+image = "0.25.10"
+log = "0.4.29"
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 unicode-segmentation = "1.12.0"
+
+# The stage runs on Linux for now: on macOS, CEF has to be loaded from an
+# app bundle with helper apps, which Cox does not build yet.
+[target.'cfg(target_os = "linux")'.dependencies]
+cef = { version = "=152.3.0", default-features = false }
+# cef accepts any 152.x of its sys crate, and the newest expects a newer
+# CEF than the one these bindings were generated from; pin the pair that
+# matches CEF 152.0.6.
+cef-dll-sys = "=152.3.0"
 
 [dev-dependencies]
 agent-client-protocol.workspace = true

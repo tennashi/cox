@@ -2,8 +2,8 @@
 //! input for it.
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, SharedString, Subscription, Task, Window, div,
-    prelude::*, px, rgb,
+    AnyView, App, Context, Entity, FocusHandle, Focusable, MouseButton, SharedString, Subscription,
+    Task, Window, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -11,17 +11,24 @@ use crate::agent::Agent;
 use crate::conversation::{Command, Conversation, Entry, State};
 use crate::input::{LineInput, Submitted};
 
+/// How wide the conversation is when the stage sits beside it.
+const CONVERSATION_WIDTH: f32 = 420.;
+
 pub struct CoxView {
     conversation: Conversation,
     /// The line the human is typing.
     input: Entity<LineInput>,
+    /// The page the agent and the human work on, beside the conversation.
+    stage: Option<AnyView>,
     commands: UnboundedSender<Command>,
     _events: Task<()>,
     _submitted: Subscription,
 }
 
 impl CoxView {
-    pub fn new(agent: Agent, cx: &mut Context<Self>) -> Self {
+    /// Opens on `agent`, with `stage` beside the conversation when there is
+    /// one.
+    pub fn new(agent: Agent, stage: Option<impl Into<AnyView>>, cx: &mut Context<Self>) -> Self {
         let Agent {
             commands,
             mut events,
@@ -44,6 +51,7 @@ impl CoxView {
         Self {
             conversation: Conversation::new(),
             input,
+            stage: stage.map(Into::into),
             commands,
             _events: task,
             _submitted: submitted,
@@ -150,8 +158,8 @@ impl Focusable for CoxView {
     }
 }
 
-impl Render for CoxView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl CoxView {
+    fn render_conversation(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let prompt = match self.conversation.state() {
             State::Idle => "> ",
             State::Busy => "… ",
@@ -165,14 +173,11 @@ impl Render for CoxView {
             .enumerate()
             .map(|(index, entry)| self.render_entry(index, entry, cx))
             .collect();
+        let input = self.input.clone();
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x1e_1e1e))
-            .text_color(rgb(0xe0_e0e0))
-            .font_family("monospace")
-            .text_size(px(14.))
             .child(
                 div()
                     .id("conversation")
@@ -191,8 +196,42 @@ impl Render for CoxView {
                     .p_3()
                     .border_t_1()
                     .border_color(rgb(0x40_4040))
+                    // A click brings the keyboard back from the stage.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_, _, window, cx| {
+                            window.focus(&input.focus_handle(cx));
+                        }),
+                    )
                     .child(prompt)
                     .child(self.input.clone()),
             )
+    }
+}
+
+impl Render for CoxView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let conversation = self.render_conversation(cx).into_any_element();
+        let root = div()
+            .size_full()
+            .flex()
+            .bg(rgb(0x1e_1e1e))
+            .text_color(rgb(0xe0_e0e0))
+            .font_family("monospace")
+            .text_size(px(14.));
+        match self.stage.clone() {
+            Some(stage) => root
+                .child(
+                    div()
+                        .w(px(CONVERSATION_WIDTH))
+                        .h_full()
+                        .flex_shrink_0()
+                        .border_r_1()
+                        .border_color(rgb(0x40_4040))
+                        .child(conversation),
+                )
+                .child(div().flex_1().h_full().child(stage)),
+            None => root.child(conversation),
+        }
     }
 }

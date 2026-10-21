@@ -11,6 +11,12 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/tennashi/cox"
 
+# Dependencies carry no debug info: with gpui's and CEF's, every test
+# binary came out above half a gigabyte, more than CI's disk holds for all
+# of them together.
+[profile.dev.package."*"]
+debug = false
+
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 allow_attributes = "warn"
