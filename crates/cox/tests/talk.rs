@@ -27,7 +27,7 @@ async fn sends_a_line_and_shows_how_the_turn_ended() {
         .expect("cox ends without an error");
 
     assert_eq!(agent.prompts(), ["hello"]);
-    assert!(String::from_utf8(screen).unwrap().ends_with("[end_turn]\n"));
+    assert!(String::from_utf8(screen).unwrap().contains("[end_turn]\n"));
 }
 
 #[tokio::test]
@@ -41,7 +41,22 @@ async fn shows_the_reply_as_it_arrives() {
 
     assert_eq!(
         String::from_utf8(screen).unwrap(),
-        "echo: hello\n[end_turn]\n"
+        "> echo: hello\n[end_turn]\n> \n"
+    );
+}
+
+#[tokio::test]
+async fn shows_a_prompt_each_time_it_waits_for_a_line() {
+    let agent = FakeAgent::default();
+    let mut screen = Vec::new();
+
+    cox::run(agent.connect(), "\nhello\n".as_bytes(), &mut screen)
+        .await
+        .expect("cox ends without an error");
+
+    assert_eq!(
+        String::from_utf8(screen).unwrap(),
+        "> > echo: hello\n[end_turn]\n> \n"
     );
 }
 
@@ -61,7 +76,7 @@ async fn takes_a_turn_for_each_line_until_the_input_ends() {
     assert_eq!(agent.prompts(), ["hello", "how are you"]);
     assert_eq!(
         String::from_utf8(screen).unwrap(),
-        "echo: hello\n[end_turn]\necho: how are you\n[end_turn]\n"
+        "> echo: hello\n[end_turn]\n> echo: how are you\n[end_turn]\n> \n"
     );
 }
 
@@ -86,8 +101,8 @@ async fn answers_a_permission_request_with_the_option_the_human_chooses() {
     );
     assert_eq!(
         String::from_utf8(screen).unwrap(),
-        "\n[permission: touch x.txt]\n  1. Allow once\n  2. Reject once\nchoose> \
-         echo: ask permission\n[end_turn]\n"
+        "> [permission: touch x.txt]\n  1. Allow once\n  2. Reject once\nchoose> \
+         echo: ask permission\n[end_turn]\n> \n"
     );
 }
 
@@ -157,7 +172,7 @@ async fn shows_an_error_from_the_agent_and_goes_on() {
     assert_eq!(agent.prompts(), ["fail", "hello"]);
     assert_eq!(
         String::from_utf8(screen).unwrap(),
-        "\n[error: the model is unavailable]\necho: hello\n[end_turn]\n"
+        "> [error: the model is unavailable]\n> echo: hello\n[end_turn]\n> \n"
     );
 }
 
@@ -172,6 +187,6 @@ async fn shows_each_tool_call_on_one_line_when_it_ends() {
 
     assert_eq!(
         String::from_utf8(screen).unwrap(),
-        "\n[tool: ls … completed]\necho: use a tool\n[end_turn]\n"
+        "> [tool: ls … completed]\necho: use a tool\n[end_turn]\n> \n"
     );
 }
