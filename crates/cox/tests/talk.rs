@@ -66,13 +66,17 @@ async fn takes_a_turn_for_each_line_until_the_input_ends() {
 }
 
 #[tokio::test]
-async fn rejects_permission_requests_and_shows_it() {
+async fn answers_a_permission_request_with_the_option_the_human_chooses() {
     let agent = FakeAgent::default();
     let mut screen = Vec::new();
 
-    cox::run(agent.connect(), "ask permission\n".as_bytes(), &mut screen)
-        .await
-        .expect("cox ends without an error");
+    cox::run(
+        agent.connect(),
+        "ask permission\n2\n".as_bytes(),
+        &mut screen,
+    )
+    .await
+    .expect("cox ends without an error");
 
     assert_eq!(
         agent.answers(),
@@ -82,8 +86,52 @@ async fn rejects_permission_requests_and_shows_it() {
     );
     assert_eq!(
         String::from_utf8(screen).unwrap(),
-        "\n[rejected: touch x.txt]\necho: ask permission\n[end_turn]\n"
+        "\n[permission: touch x.txt]\n  1. Allow once\n  2. Reject once\nchoose> \
+         echo: ask permission\n[end_turn]\n"
     );
+}
+
+#[tokio::test]
+async fn asks_again_until_the_human_chooses_one_of_the_options() {
+    let agent = FakeAgent::default();
+    let mut screen = Vec::new();
+
+    cox::run(
+        agent.connect(),
+        "ask permission\nyes\n3\n1\n".as_bytes(),
+        &mut screen,
+    )
+    .await
+    .expect("cox ends without an error");
+
+    assert_eq!(
+        agent.answers(),
+        [RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new("allow")
+        )]
+    );
+    assert_eq!(
+        String::from_utf8(screen)
+            .unwrap()
+            .matches("choose> ")
+            .count(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn cancels_a_permission_request_when_the_input_ends() {
+    let agent = FakeAgent::default();
+
+    cox::run(
+        agent.connect(),
+        "ask permission\n".as_bytes(),
+        &mut Vec::new(),
+    )
+    .await
+    .expect("cox ends without an error");
+
+    assert_eq!(agent.answers(), [RequestPermissionOutcome::Cancelled]);
 }
 
 #[tokio::test]
