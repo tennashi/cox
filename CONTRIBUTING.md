@@ -24,6 +24,20 @@ sudo apt-get install libvulkan-dev libwayland-dev libx11-xcb-dev libxkbcommon-de
 does not build with later `libc` releases on Linux. Do not update `libc`
 until gpui moves off that `xattr`.
 
+## The stage
+
+The window's stage is a page rendered by CEF (Chromium) with no window of
+its own, through the [cef](https://crates.io/crates/cef) crate. The crate's
+build downloads the matching CEF distribution from the official builds
+(about 200 MB, once per target directory).
+
+The stage runs on Linux for now. On macOS, CEF has to be loaded from an
+app bundle with helper apps, which Cox does not build yet, so `cox` builds
+there without the stage.
+
+`cox --stage <url> <agent command>` shows `<url>` on the stage. An agent
+drives the same page over the Chrome DevTools Protocol on port 9222.
+
 ## Pull requests
 
 Pull requests are merged with a merge commit, so every commit lands on

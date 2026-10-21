@@ -20,8 +20,13 @@ fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<CoxView>, &mut Visua
     cx.update(cox::input::bind_keys);
     let agent = Arc::new(FakeAgent::default());
     let fake = Arc::clone(&agent);
-    let (view, cx) =
-        cx.add_window_view(|_, cx| CoxView::new(cox::agent::spawn(move || Ok(fake.connect())), cx));
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        CoxView::new(
+            cox::agent::spawn(move || Ok(fake.connect())),
+            None::<gpui::AnyView>,
+            cx,
+        )
+    });
     cx.update(|window, cx| window.focus(&view.focus_handle(cx)));
     (agent, view, cx)
 }
