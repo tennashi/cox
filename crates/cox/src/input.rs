@@ -74,8 +74,14 @@ impl LineInput {
     }
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.set_text("", cx);
+    }
+
+    /// Puts `text` in the line, with the cursor at its end.
+    pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.content.clear();
-        self.selected_range = 0..0;
+        self.content.push_str(text);
+        self.selected_range = self.content.len()..self.content.len();
         self.marked_range = None;
         cx.notify();
     }

@@ -1,5 +1,6 @@
 //! The stage: the part of the window where the browser's picture is shown,
 //! and where the human's mouse, keys and input-method text go to the page.
+//! A toolbar above the picture holds the address and the history buttons.
 //!
 //! The picture arrives from CEF as BGRA pixels whenever the page changes;
 //! the stage uploads it as a GPUI image and paints it over its bounds.
@@ -8,15 +9,17 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use gpui::{
-    App, Bounds, Context, Corners, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior,
+    App, Bounds, Context, Corners, DispatchPhase, Div, Element, ElementId, ElementInputHandler,
+    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior,
     InspectorElementId, IntoElement, KeyDownEvent, KeyUpEvent, LayoutId, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, ScrollDelta, ScrollWheelEvent, Style,
-    Task, UTF16Selection, Window, div, fill, point, prelude::*, px, relative, rgb, size,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, ScrollDelta, ScrollWheelEvent,
+    Stateful, Style, Subscription, Task, UTF16Selection, Window, div, fill, point, prelude::*, px,
+    relative, rgb, size,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::browser::{Browser, Caret, Event, Modifiers, MouseButton};
+use crate::browser::{Browser, Caret, Event, Modifiers, MouseButton, Navigation};
+use crate::input::{LineInput, Submitted};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
 const LINE_HEIGHT: f32 = 40.;
@@ -28,30 +31,159 @@ pub struct Stage {
     image: Option<Arc<RenderImage>>,
     /// Text the input method is composing, if any.
     composing: Option<String>,
+    /// Where the browser is, as of the last `Navigated` event.
+    navigation: Navigation,
+    /// The line the human types an address into.
+    address: Entity<LineInput>,
+    /// The address last put in that line by the browser, to tell the
+    /// human's own typing from it.
+    address_shown: String,
     _events: Task<()>,
+    _submitted: Subscription,
 }
 
 impl Stage {
     pub fn new(
         browser: Browser,
         mut events: UnboundedReceiver<Event>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let task = cx.spawn(async move |this, cx| {
             // Painted, created or closed: the stage looks different either way.
-            while let Some(_event) = events.recv().await {
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+            while let Some(event) = events.recv().await {
+                let shown = this.update(cx, |stage, cx| {
+                    if event == Event::Navigated {
+                        stage.navigated(cx);
+                    }
+                    cx.notify();
+                });
+                if shown.is_err() {
                     break;
                 }
             }
         });
+        let navigation = browser.navigation();
+        let address = cx.new(LineInput::new);
+        address.update(cx, |address, cx| address.set_text(&navigation.url, cx));
+        let submitted =
+            cx.subscribe_in(&address, window, |stage, address, Submitted, window, cx| {
+                stage.go(address, window, cx);
+            });
         Self {
             browser,
             focus_handle: cx.focus_handle(),
             image: None,
             composing: None,
+            address_shown: navigation.url.clone(),
+            navigation,
+            address,
             _events: task,
+            _submitted: submitted,
         }
+    }
+
+    /// The address line.
+    #[must_use]
+    pub fn address(&self) -> &Entity<LineInput> {
+        &self.address
+    }
+
+    /// The browser moved: show where, unless the human is in the middle of
+    /// typing an address of their own.
+    fn navigated(&mut self, cx: &mut Context<Self>) {
+        self.navigation = self.browser.navigation();
+        let url = self.navigation.url.clone();
+        let typing = self.address.read(cx).text() != self.address_shown;
+        if !typing && url != self.address_shown {
+            self.address
+                .update(cx, |address, cx| address.set_text(&url, cx));
+            self.address_shown = url;
+        }
+    }
+
+    /// The human pressed Enter in the address line: go there, and give the
+    /// page the keyboard.
+    fn go(&mut self, address: &Entity<LineInput>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(url) = address_to_url(address.read(cx).text()) else {
+            return;
+        };
+        address.update(cx, |address, cx| address.set_text(&url, cx));
+        self.address_shown.clone_from(&url);
+        self.browser.load(&url);
+        cx.focus_self(window);
+        cx.notify();
+    }
+
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let Navigation {
+            loading,
+            can_go_back,
+            can_go_forward,
+            ..
+        } = self.navigation;
+        let address = self.address.clone();
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(rgb(0x40_4040))
+            .child(Self::button("back", "◀", can_go_back, Browser::go_back, cx))
+            .child(Self::button(
+                "forward",
+                "▶",
+                can_go_forward,
+                Browser::go_forward,
+                cx,
+            ))
+            .child(if loading {
+                Self::button("stop", "✕", true, Browser::stop, cx)
+            } else {
+                Self::button("reload", "↻", true, Browser::reload, cx)
+            })
+            .child(
+                div()
+                    .debug_selector(|| "address".to_owned())
+                    .flex_1()
+                    .px_2()
+                    .rounded_sm()
+                    .bg(rgb(0x2a_2a2a))
+                    // A click brings the keyboard to the address line.
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |_, _, window, cx| {
+                            window.focus(&address.focus_handle(cx));
+                        }),
+                    )
+                    .child(self.address.clone()),
+            )
+    }
+
+    /// A toolbar button that calls `action` on the browser when clicked,
+    /// drawn dim and inert when `enabled` is false.
+    fn button(
+        name: &'static str,
+        label: &'static str,
+        enabled: bool,
+        action: fn(&Browser),
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let button = div()
+            .id(name)
+            .debug_selector(|| name.to_owned())
+            .px_2()
+            .rounded_sm()
+            .child(label);
+        if !enabled {
+            return button.text_color(rgb(0x60_6060));
+        }
+        button
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(0x30_3030)))
+            .on_click(cx.listener(move |stage, _, _, _| action(&stage.browser)))
     }
 
     /// Called from paint: tells the browser the stage's size, and picks up
@@ -246,17 +378,48 @@ impl EntityInputHandler for Stage {
     }
 }
 
+/// What the human typed in the address line, as a URL to load: a scheme is
+/// taken as given, anything else is a host on the web. Blank is nothing.
+fn address_to_url(typed: &str) -> Option<String> {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return None;
+    }
+    // `about:blank` and `http://...` have a scheme; `localhost:3000` has a
+    // port.
+    let has_scheme = typed.split_once(':').is_some_and(|(scheme, rest)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+            && !rest.starts_with(|c: char| c.is_ascii_digit())
+    });
+    Some(if has_scheme {
+        typed.to_owned()
+    } else {
+        format!("https://{typed}")
+    })
+}
+
 impl Render for Stage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .id("stage")
-            .debug_selector(|| "stage".to_owned())
             .size_full()
-            .track_focus(&self.focus_handle)
-            .key_context("Stage")
-            .on_key_down(cx.listener(Self::key_down))
-            .on_key_up(cx.listener(Self::key_up))
-            .child(StageElement { stage: cx.entity() })
+            .flex()
+            .flex_col()
+            .child(self.render_toolbar(cx))
+            .child(
+                div()
+                    .id("stage")
+                    .debug_selector(|| "stage".to_owned())
+                    .flex_1()
+                    .min_h_0()
+                    .track_focus(&self.focus_handle)
+                    .key_context("Stage")
+                    .on_key_down(cx.listener(Self::key_down))
+                    .on_key_up(cx.listener(Self::key_up))
+                    .child(StageElement { stage: cx.entity() }),
+            )
     }
 }
 
@@ -418,5 +581,39 @@ impl Element for StageElement {
                 );
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::address_to_url;
+
+    #[test]
+    fn a_scheme_is_taken_as_given() {
+        assert_eq!(
+            address_to_url("http://localhost:3000/"),
+            Some("http://localhost:3000/".to_owned())
+        );
+        assert_eq!(
+            address_to_url("about:blank"),
+            Some("about:blank".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_host_is_on_the_web() {
+        assert_eq!(
+            address_to_url(" example.com/path "),
+            Some("https://example.com/path".to_owned())
+        );
+        assert_eq!(
+            address_to_url("localhost:3000"),
+            Some("https://localhost:3000".to_owned())
+        );
+    }
+
+    #[test]
+    fn blank_is_nothing() {
+        assert_eq!(address_to_url("  "), None);
     }
 }
