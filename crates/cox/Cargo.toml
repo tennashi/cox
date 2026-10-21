@@ -11,7 +11,11 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 cox-acp.workspace = true
-tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt-multi-thread"] }
+env_logger = "0.11.11"
+gpui = "0.2.2"
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 
 [dev-dependencies]
 agent-client-protocol.workspace = true
+gpui = { version = "0.2.2", features = ["test-support"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }

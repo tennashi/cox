@@ -1,6 +1,11 @@
 # Rules for `cargo deny check`, which `cargo xtask ci` runs.
-# Advisories use cargo-deny's defaults: known vulnerabilities and
-# unmaintained crates fail the check.
+
+[advisories]
+# Known vulnerabilities fail the check anywhere in the tree. Unmaintained
+# crates fail only when the workspace depends on them directly: gpui pulls
+# in a dozen unmaintained transitive crates (ttf-parser, rustybuzz, paste,
+# async-std, ...) that only Zed can swap out.
+unmaintained = "workspace"
 
 [licenses]
 # Licenses dependencies may use: any whose terms do not conflict with
@@ -18,6 +23,7 @@ allow = [
     "MIT",
     "MIT-0",
     "MPL-2.0",
+    "NCSA",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
@@ -27,15 +33,10 @@ allow = [
 unused-allowed-license = "allow"
 
 [bans]
-# Duplicate versions of a crate fail the check. Allow a specific one with
-# `skip` and a reason when it cannot be avoided.
-multiple-versions = "deny"
+# Duplicate versions of a crate are allowed:
+# gpui's tree carries about seventy of them, and only Zed can reduce that.
+multiple-versions = "allow"
 wildcards = "deny"
-skip = [
-    # syn 3 is new, and proc-macro crates are moving to it one by one; the
-    # agent-client-protocol tree uses both. Remove once nothing needs syn 2.
-    { crate = "syn@2", reason = "the ecosystem is midway from syn 2 to syn 3" },
-]
 
 [sources]
 # Dependencies come from crates.io only.
