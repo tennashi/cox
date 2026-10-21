@@ -1327,6 +1327,8 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "cox-acp",
+ "env_logger",
+ "gpui",
  "tokio",
 ]
 
@@ -1336,18 +1338,6 @@ version = "0.0.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
- "tokio",
-]
-
-[[package]]
-name = "cox-gui"
-version = "0.0.0"
-dependencies = [
- "agent-client-protocol",
- "anyhow",
- "cox-acp",
- "env_logger",
- "gpui",
  "tokio",
 ]
 

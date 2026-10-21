@@ -1,15 +1,13 @@
 //! A human using the window, with the agent faked in memory.
 
-#[path = "../../cox/tests/fake_agent/mod.rs"]
-#[expect(dead_code, reason = "shared with cox's tests, which use all of it")]
 mod fake_agent;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
-use cox_gui::conversation::{Entry, State};
-use cox_gui::view::CoxView;
+use cox::conversation::{Entry, State};
+use cox::view::CoxView;
 use fake_agent::FakeAgent;
 use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext};
 
@@ -20,9 +18,8 @@ fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<CoxView>, &mut Visua
     cx.executor().allow_parking();
     let agent = Arc::new(FakeAgent::default());
     let fake = Arc::clone(&agent);
-    let (view, cx) = cx.add_window_view(|_, cx| {
-        CoxView::new(cox_gui::agent::spawn(move || Ok(fake.connect())), cx)
-    });
+    let (view, cx) =
+        cx.add_window_view(|_, cx| CoxView::new(cox::agent::spawn(move || Ok(fake.connect())), cx));
     cx.update(|window, cx| window.focus(&view.focus_handle(cx)));
     (agent, view, cx)
 }
@@ -54,6 +51,7 @@ async fn sends_what_the_human_types_and_shows_the_reply(cx: &mut TestAppContext)
     cx.simulate_keystrokes("enter");
     wait_for(cx, &view, State::Idle).await;
 
+    assert_eq!(agent.sessions_opened(), 1);
     assert_eq!(agent.prompts(), ["hello"]);
     view.read_with(cx, |view, _| {
         assert_eq!(

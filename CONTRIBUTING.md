@@ -7,7 +7,7 @@
 
 ## Building on Linux
 
-`cox-gui` uses [gpui](https://crates.io/crates/gpui), which links these
+`cox` uses [gpui](https://crates.io/crates/gpui), which links these
 system libraries on Linux (Debian and Ubuntu package names):
 
 ```sh
