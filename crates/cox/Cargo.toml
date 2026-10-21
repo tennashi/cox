@@ -12,7 +12,9 @@ workspace = true
 anyhow.workspace = true
 cox-acp.workspace = true
 env_logger = "0.11.11"
-gpui = "0.2.2"
+# runtime_shaders: compile the Metal shaders when the app starts, so a Mac
+# with only the Command Line Tools (no Xcode, no `metal` compiler) can build.
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 unicode-segmentation = "1.12.0"
 
