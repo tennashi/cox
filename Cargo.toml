@@ -19,5 +19,6 @@ allow_attributes_without_reason = "warn"
 [workspace.dependencies]
 agent-client-protocol = "3.4.0"
 anyhow = "1.0.104"
+cox-acp = { path = "crates/cox-acp", version = "0.0.0" }
 tokio = "1.54.0"
 xshell = "0.2.7"

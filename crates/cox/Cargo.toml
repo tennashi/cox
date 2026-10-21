@@ -9,6 +9,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-agent-client-protocol = { workspace = true, features = ["process"] }
 anyhow.workspace = true
+cox-acp.workspace = true
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+agent-client-protocol.workspace = true
