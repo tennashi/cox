@@ -35,11 +35,21 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 /// The port an agent connects to with the Chrome `DevTools` Protocol (CDP).
 pub const DEVTOOLS_PORT: i32 = 9222;
 
-/// One picture CEF painted: the whole view in BGRA, in device pixels.
+/// One picture CEF painted: the whole view, or the whole popup, in BGRA,
+/// in device pixels.
 pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub bgra: Vec<u8>,
+}
+
+/// Where the popup is over the view, in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PopupRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 /// What happened on CEF's side, for the stage to redraw on.
@@ -99,6 +109,11 @@ struct Shared {
     scale: f32,
     /// The newest picture, until the stage takes it.
     frame: Option<Frame>,
+    /// The popup: the dropdown of a `<select>`, which Chromium draws apart
+    /// from the page. Where it is while it is open, and its newest
+    /// picture until the stage takes it.
+    popup: Option<PopupRect>,
+    popup_frame: Option<Frame>,
     host: Option<BrowserHost>,
     caret: Option<Caret>,
     navigation: Navigation,
@@ -189,6 +204,8 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
         height: 600,
         scale: 1.0,
         frame: None,
+        popup: None,
+        popup_frame: None,
         host: None,
         caret: None,
         navigation: Navigation {
@@ -331,6 +348,19 @@ impl Browser {
         if let Some(browser) = self.browser() {
             browser.stop_load();
         }
+    }
+
+    /// Where the popup is, while one is open.
+    #[must_use]
+    pub fn popup(&self) -> Option<PopupRect> {
+        self.shared().popup
+    }
+
+    /// The newest picture CEF painted of the popup since the last call, if
+    /// any.
+    #[must_use]
+    pub fn take_popup_frame(&self) -> Option<Frame> {
+        self.shared().popup_frame.take()
     }
 
     /// Gives the page keyboard focus.
@@ -845,7 +875,8 @@ mod handlers {
                 1
             }
 
-            /// CEF painted: keep the picture and wake the stage.
+            /// CEF painted the view or the popup: keep the picture and wake
+            /// the stage.
             fn on_paint(
                 &self,
                 _browser: Option<&mut cef::Browser>,
@@ -855,7 +886,7 @@ mod handlers {
                 width: c_int,
                 height: c_int,
             ) {
-                if *type_.as_ref() != cef_paint_element_type_t::PET_VIEW || buffer.is_null() {
+                if buffer.is_null() {
                     return;
                 }
                 let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
@@ -865,12 +896,43 @@ mod handlers {
                 // SAFETY: CEF gives `width * height` BGRA pixels, valid for the
                 // duration of this call; the copy outlives it.
                 let bgra = unsafe { std::slice::from_raw_parts(buffer, len) }.to_vec();
-                self.shared.lock().unwrap_or_else(PoisonError::into_inner).frame = Some(Frame {
+                let frame = Some(Frame {
                     width,
                     height,
                     bgra,
                 });
+                let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+                match *type_.as_ref() {
+                    cef_paint_element_type_t::PET_VIEW => shared.frame = frame,
+                    cef_paint_element_type_t::PET_POPUP => shared.popup_frame = frame,
+                    _ => return,
+                }
+                drop(shared);
                 let _ = self.events.send(Event::Painted);
+            }
+
+            /// The popup opened or closed. Its place comes separately, in
+            /// `on_popup_size`, before the first paint.
+            fn on_popup_show(&self, _browser: Option<&mut cef::Browser>, show: c_int) {
+                if show == 0 {
+                    let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+                    shared.popup = None;
+                    shared.popup_frame = None;
+                    drop(shared);
+                    let _ = self.events.send(Event::Painted);
+                }
+            }
+
+            fn on_popup_size(&self, _browser: Option<&mut cef::Browser>, rect: Option<&cef::Rect>) {
+                if let Some(rect) = rect {
+                    self.shared.lock().unwrap_or_else(PoisonError::into_inner).popup =
+                        Some(PopupRect {
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: rect.height,
+                        });
+                }
             }
 
             /// Where the composition is on the page, for placing the input
