@@ -8,6 +8,16 @@ repository.workspace = true
 [lints]
 workspace = true
 
+# `cox` itself, and the small executable that runs CEF's helper processes
+# (renderer, GPU, ...) on macOS: see `src/bin/helper.rs`.
+[[bin]]
+name = "cox"
+path = "src/main.rs"
+
+[[bin]]
+name = "cox-helper"
+path = "src/bin/helper.rs"
+
 [dependencies]
 anyhow.workspace = true
 cox-acp.workspace = true
@@ -21,9 +31,9 @@ log = "0.4.29"
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 unicode-segmentation = "1.12.0"
 
-# The stage runs on Linux for now: on macOS, CEF has to be loaded from an
-# app bundle with helper apps, which Cox does not build yet.
-[target.'cfg(target_os = "linux")'.dependencies]
+# The stage runs on Linux and macOS. On macOS, CEF lives in an app bundle
+# that `cargo xtask bundle` assembles; see CONTRIBUTING.md.
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 cef = { version = "=152.3.0", default-features = false }
 # cef accepts any 152.x of its sys crate, and the newest expects a newer
 # CEF than the one these bindings were generated from; pin the pair that

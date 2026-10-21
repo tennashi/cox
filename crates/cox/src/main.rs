@@ -1,5 +1,8 @@
 //! `cox [--stage <url>] <agent command> [args...]` starts the agent and opens
 //! a window to talk to it, with the stage showing `<url>`.
+//!
+//! On macOS, run it from inside the bundle `cargo xtask bundle` makes, as
+//! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
 
 use gpui::{
     App, Application, Bounds, Focusable, WindowBounds, WindowOptions, prelude::*, px, size,
@@ -32,16 +35,21 @@ impl Args {
     }
 }
 
+/// How often GPUI gives CEF's UI thread a turn on macOS: a little above
+/// the stage's frame rate, so a frame never waits for the next turn.
+#[cfg(target_os = "macos")]
+const PUMP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
+
 fn main() {
     env_logger::init();
     let args = Args::parse(std::env::args().skip(1));
 
-    // CEF first: its helper processes run this same executable with
-    // arguments of their own, and exit inside `start`.
-    #[cfg(target_os = "linux")]
+    // CEF first: on Linux, its helper processes run this same executable
+    // with arguments of their own, and exit inside `start`.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let (browser, events) = cox::browser::start(args.stage.clone());
-    // The stage is Linux only for now; the option still parses everywhere.
-    #[cfg(not(target_os = "linux"))]
+    // Elsewhere the option still parses, and does nothing.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = &args.stage;
 
     if args.command.is_empty() {
@@ -50,14 +58,36 @@ fn main() {
     }
     let command = args.command;
 
-    #[cfg(target_os = "linux")]
-    let shutdown = browser.clone();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut events = Some(events);
 
     Application::new().run(move |cx: &mut App| {
         cox::input::bind_keys(cx);
         let agent = cox::agent::spawn(move || cox_acp::launch(command));
+
+        #[cfg(target_os = "macos")]
+        {
+            let pumped = browser.clone();
+            cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor().timer(PUMP_INTERVAL).await;
+                    pumped.pump();
+                }
+            })
+            .detach();
+        }
+        // Quitting ends the app's run loop, or on macOS the whole process,
+        // so the browser goes before either.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let closing = browser.clone();
+            cx.on_app_quit(move |_| {
+                closing.clone().shutdown();
+                async {}
+            })
+            .detach();
+        }
+
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         let window = cx
             .open_window(
@@ -66,7 +96,7 @@ fn main() {
                     ..Default::default()
                 },
                 |_, cx| {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
                     let stage = Some(cx.new(|cx| {
                         cox::stage::Stage::new(
                             browser.clone(),
@@ -74,8 +104,8 @@ fn main() {
                             cx,
                         )
                     }));
-                    #[cfg(not(target_os = "linux"))]
-                    let stage = None;
+                    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+                    let stage = None::<gpui::AnyView>;
                     cx.new(|cx| cox::view::CoxView::new(agent, stage, cx))
                 },
             )
@@ -86,9 +116,6 @@ fn main() {
         cx.on_window_closed(|cx| cx.quit()).detach();
         cx.activate(true);
     });
-
-    #[cfg(target_os = "linux")]
-    shutdown.shutdown();
 }
 
 #[cfg(test)]

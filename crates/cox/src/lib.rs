@@ -11,14 +11,14 @@
 //!   into input.
 //! - [`browser`] runs CEF, which renders a page with no window of its own,
 //!   and [`stage`] shows that page in the window and sends the human's
-//!   input to it. An agent drives the same page over CDP. Linux only for
-//!   now.
+//!   input to it. An agent drives the same page over CDP. On Linux and
+//!   macOS; on macOS, inside the app bundle `cargo xtask bundle` makes.
 
 pub mod agent;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod browser;
 pub mod conversation;
 pub mod input;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod stage;
 pub mod view;
