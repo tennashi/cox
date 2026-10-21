@@ -5,6 +5,9 @@
 //! would also hand gpui CEF's own `libvulkan.so.1`, which cannot draw to a
 //! window. So the loader is pointed at a mirror of the distribution, made
 //! of links, that leaves that one file out.
+//!
+//! macOS needs none of this: there, nothing links CEF at build time, and
+//! `cargo xtask bundle` puts the framework where the app loads it from.
 
 use std::path::PathBuf;
 use std::{env, fs};

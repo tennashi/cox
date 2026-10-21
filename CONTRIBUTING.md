@@ -31,12 +31,28 @@ its own, through the [cef](https://crates.io/crates/cef) crate. The crate's
 build downloads the matching CEF distribution from the official builds
 (about 200 MB, once per target directory).
 
-The stage runs on Linux for now. On macOS, CEF has to be loaded from an
-app bundle with helper apps, which Cox does not build yet, so `cox` builds
-there without the stage.
-
 `cox --stage <url> <agent command>` shows `<url>` on the stage. An agent
 drives the same page over the Chrome DevTools Protocol on port 9222.
+
+On Linux, `cargo run` is enough: CEF is linked into `cox`, and its helper
+processes run `cox` again.
+
+On macOS, CEF is a framework that the app loads when it starts, and its
+helper processes are small apps of their own, so Cox has to run from an
+app bundle. The cef crate's build also compiles a C++ wrapper with CMake,
+which needs `cmake` and `ninja` (`brew install cmake ninja`).
+
+```sh
+cargo xtask bundle            # or: cargo xtask bundle --release
+target/debug/Cox.app/Contents/MacOS/Cox --stage <url> <agent command>
+```
+
+`cargo xtask bundle` builds `cox` and `cox-helper`, then lays them out as
+`Cox.app` next to them: `cox` as `Contents/MacOS/Cox`, the framework and
+five copies of `cox-helper` (`Cox Helper.app`, `Cox Helper (GPU).app`,
+...) under `Contents/Frameworks`. CEF fixes that layout and those names,
+starting from the executable's. `cargo run` on macOS stops at once,
+saying where the framework was expected.
 
 ## Pull requests
 

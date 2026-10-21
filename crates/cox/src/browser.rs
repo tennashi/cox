@@ -6,7 +6,9 @@
 //!
 //! CEF runs its own threads: the browser is created and painted on CEF's UI
 //! thread, while GPUI owns the main thread. Everything the two sides share
-//! sits behind one mutex.
+//! sits behind one mutex. On macOS, CEF's UI thread has to be the main
+//! thread, so GPUI gives it a turn every few milliseconds instead (see
+//! [`Browser::pump`]).
 
 use std::os::raw::c_int;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -95,6 +97,51 @@ const NO_RANGE: cef::Range = cef::Range {
     to: u32::MAX,
 };
 
+/// Which process of the app is loading CEF on macOS.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Process {
+    /// `cox` itself, at `Cox.app/Contents/MacOS/Cox`.
+    Main,
+    /// A helper, at `Cox.app/Contents/Frameworks/<name>.app/Contents/MacOS/<name>`.
+    Helper,
+}
+
+/// Loads CEF on macOS, where it is a framework in the app bundle that
+/// nothing links at build time, so it has to be found and loaded before
+/// any other `cef` call.
+///
+/// # Panics
+///
+/// When this executable is not inside the bundle `cargo xtask bundle`
+/// makes, or the framework does not load.
+#[cfg(target_os = "macos")]
+pub fn load_framework(process: Process) {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let exe = std::env::current_exe().expect("the executable has a path");
+    // From `Contents/MacOS/` of the app or the helper to `Contents/Frameworks/`
+    // of the app.
+    let frameworks = match process {
+        Process::Main => "../Frameworks",
+        Process::Helper => "../../..",
+    };
+    let framework = exe
+        .parent()
+        .expect("the executable is in a directory")
+        .join(frameworks)
+        .join(cef::sys::FRAMEWORK_PATH);
+    let path = std::ffi::CString::new(framework.as_os_str().as_bytes())
+        .expect("the framework path has no NUL");
+    // SAFETY: `path` outlives the call, and CEF reads it as a C string.
+    let loaded = unsafe { cef::load_library(Some(&*path.as_ptr())) } == 1;
+    assert!(
+        loaded,
+        "CEF did not load from {}; run Cox from the bundle `cargo xtask bundle` makes",
+        framework.display()
+    );
+}
+
 /// The stage's handle to the browser. Cloning it shares the same browser.
 #[derive(Clone)]
 pub struct Browser {
@@ -106,14 +153,17 @@ pub struct Browser {
 /// Starts CEF and the browser showing `url`, and returns the handle to it
 /// with the events CEF will send.
 ///
-/// Call this before anything else: CEF's helper processes (renderer, GPU,
-/// ...) run this same executable, and exit inside this function.
+/// Call this before anything else, on the main thread. On Linux, CEF's
+/// helper processes (renderer, GPU, ...) run this same executable, and exit
+/// inside this function.
 ///
 /// # Panics
 ///
-/// When CEF does not initialize.
+/// When CEF does not load or initialize.
 #[must_use]
 pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
+    #[cfg(target_os = "macos")]
+    load_framework(Process::Main);
     // The bindings were generated for this API version; tell CEF before
     // anything else.
     cef::api_hash(cef::sys::CEF_API_VERSION, 0);
@@ -150,7 +200,12 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
         no_sandbox: 1,
         windowless_rendering_enabled: 1,
         // CEF runs its own UI thread, so GPUI can own the main thread.
+        #[cfg(target_os = "linux")]
         multi_threaded_message_loop: 1,
+        // macOS has no such option: CEF's UI thread is the main thread, and
+        // the app gives it its turns with `Browser::pump`.
+        #[cfg(target_os = "macos")]
+        external_message_pump: 1,
         remote_debugging_port: DEVTOOLS_PORT,
         root_cache_path: CefString::from(cache.to_string_lossy().as_ref()),
         ..Default::default()
@@ -192,10 +247,23 @@ impl Browser {
         shared.width = width;
         shared.height = height;
         shared.scale = scale;
-        if let Some(host) = &shared.host {
+        let host = shared.host.clone();
+        // CEF answers these by asking the render handler for the screen
+        // info, which locks `shared` too: on macOS that happens right here,
+        // on this thread, so the lock must be gone by then.
+        drop(shared);
+        if let Some(host) = host {
             host.notify_screen_info_changed();
             host.was_resized();
         }
+    }
+
+    /// Gives CEF's UI thread a turn. Call it on the main thread, often: a
+    /// few times per frame keeps the page responsive, and nothing happens on
+    /// CEF's side between calls. Linux does not need it.
+    #[cfg(target_os = "macos")]
+    pub fn pump(&self) {
+        cef::do_message_loop_work();
     }
 
     /// The newest picture CEF painted since the last call, if any.
@@ -334,6 +402,9 @@ impl Browser {
         }
         let deadline = Instant::now() + Duration::from_secs(3);
         while self.is_open() && Instant::now() < deadline {
+            // Closing happens on CEF's UI thread, which on macOS is this one.
+            #[cfg(target_os = "macos")]
+            self.pump();
             std::thread::sleep(Duration::from_millis(50));
         }
         cef::shutdown();
@@ -461,6 +532,9 @@ mod handlers {
         impl App {
             /// Chromium's first-run flow would open a terms-of-service window
             /// of its own and wait for it; Cox is not that kind of browser.
+            /// On macOS it would also ask for the login keychain, to keep the
+            /// key it encrypts cookies with; a cache that lives for one run
+            /// has no use for that.
             fn on_before_command_line_processing(
                 &self,
                 _process_type: Option<&CefString>,
@@ -468,6 +542,8 @@ mod handlers {
             ) {
                 if let Some(command_line) = command_line {
                     command_line.append_switch(Some(&CefString::from("no-first-run")));
+                    #[cfg(target_os = "macos")]
+                    command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
                 }
             }
 
