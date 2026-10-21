@@ -2,21 +2,22 @@
 //! input for it.
 
 use gpui::{
-    App, Context, FocusHandle, Focusable, KeyDownEvent, SharedString, Task, Window, div,
+    App, Context, Entity, FocusHandle, Focusable, SharedString, Subscription, Task, Window, div,
     prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::Agent;
 use crate::conversation::{Command, Conversation, Entry, State};
+use crate::input::{LineInput, Submitted};
 
 pub struct CoxView {
     conversation: Conversation,
     /// The line the human is typing.
-    input: String,
+    input: Entity<LineInput>,
     commands: UnboundedSender<Command>,
-    focus_handle: FocusHandle,
     _events: Task<()>,
+    _submitted: Subscription,
 }
 
 impl CoxView {
@@ -36,12 +37,16 @@ impl CoxView {
                 }
             }
         });
+        let input = cx.new(LineInput::new);
+        let submitted = cx.subscribe(&input, |view, input, Submitted, cx| {
+            view.submit(&input, cx);
+        });
         Self {
             conversation: Conversation::new(),
-            input: String::new(),
+            input,
             commands,
-            focus_handle: cx.focus_handle(),
             _events: task,
+            _submitted: submitted,
         }
     }
 
@@ -51,37 +56,21 @@ impl CoxView {
     }
 
     #[must_use]
-    pub fn input(&self) -> &str {
+    pub fn input(&self) -> &Entity<LineInput> {
         &self.input
     }
 
-    fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        match keystroke.key.as_str() {
-            "enter" => {
-                let input = std::mem::take(&mut self.input);
-                if let Some(command) = self.conversation.submit(&input) {
-                    self.send(command);
-                } else if self.conversation.state() == State::Busy {
-                    // Keep what the human typed until the turn ends.
-                    self.input = input;
-                }
-            }
-            "backspace" => {
-                self.input.pop();
-            }
-            _ => {
-                let modifiers = keystroke.modifiers;
-                if modifiers.control || modifiers.alt || modifiers.platform {
-                    return;
-                }
-                let Some(text) = &keystroke.key_char else {
-                    return;
-                };
-                self.input.push_str(text);
-            }
+    /// The human pressed Enter: send the line, or answer the permission
+    /// request with the number typed.
+    fn submit(&mut self, input: &Entity<LineInput>, cx: &mut Context<Self>) {
+        let text = input.read(cx).text().to_owned();
+        if let Some(command) = self.conversation.submit(&text) {
+            self.send(command);
+            input.update(cx, LineInput::clear);
+            cx.notify();
         }
-        cx.notify();
+        // Otherwise the line stays: a turn is running, or the number was
+        // not one of the options.
     }
 
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -156,8 +145,8 @@ impl CoxView {
 }
 
 impl Focusable for CoxView {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.input.focus_handle(cx)
     }
 }
 
@@ -177,9 +166,6 @@ impl Render for CoxView {
             .map(|(index, entry)| self.render_entry(index, entry, cx))
             .collect();
         div()
-            .key_context("Cox")
-            .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(Self::key_down))
             .size_full()
             .flex()
             .flex_col()
@@ -201,10 +187,12 @@ impl Render for CoxView {
             .child(
                 div()
                     .debug_selector(|| "input".to_owned())
+                    .flex()
                     .p_3()
                     .border_t_1()
                     .border_color(rgb(0x40_4040))
-                    .child(format!("{prompt}{}▏", self.input)),
+                    .child(prompt)
+                    .child(self.input.clone()),
             )
     }
 }

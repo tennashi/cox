@@ -7,15 +7,17 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
 use cox::conversation::{Entry, State};
+
 use cox::view::CoxView;
 use fake_agent::FakeAgent;
-use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext};
+use gpui::{Entity, EntityInputHandler, Focusable, Modifiers, TestAppContext, VisualTestContext};
 
 /// Opens the window, talking to a fake agent, with the input focused.
 fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<CoxView>, &mut VisualTestContext) {
     // The agent side runs on a thread of its own, so the test waits for it
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
+    cx.update(cox::input::bind_keys);
     let agent = Arc::new(FakeAgent::default());
     let fake = Arc::clone(&agent);
     let (view, cx) =
@@ -44,10 +46,7 @@ async fn sends_what_the_human_types_and_shows_the_reply(cx: &mut TestAppContext)
     let (agent, view, cx) = open(cx);
 
     cx.simulate_input("hello");
-    assert_eq!(
-        view.read_with(cx, |view, _| view.input().to_owned()),
-        "hello"
-    );
+    assert_eq!(input_text(cx, &view), "hello");
     cx.simulate_keystrokes("enter");
     wait_for(cx, &view, State::Idle).await;
 
@@ -61,8 +60,47 @@ async fn sends_what_the_human_types_and_shows_the_reply(cx: &mut TestAppContext)
                 Entry::Reply("echo: hello".to_owned())
             ]
         );
-        assert_eq!(view.input(), "");
     });
+    assert_eq!(input_text(cx, &view), "");
+}
+
+/// Types "ab", then composes with an input method the way GPUI relays it:
+/// the text under composition is marked, and only the committed text is
+/// sent.
+#[gpui::test]
+async fn sends_what_the_input_method_commits(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open(cx);
+    let input = view.read_with(cx, |view, _| view.input().clone());
+    let compose = |cx: &mut VisualTestContext, text: &str| {
+        input.update_in(cx, |input, window, cx| {
+            input.replace_and_mark_text_in_range(None, text, None, window, cx);
+        });
+    };
+
+    cx.simulate_input("ab");
+    compose(cx, "k");
+    compose(cx, "こんにちは");
+    assert_eq!(input_text(cx, &view), "abこんにちは");
+    assert!(input.read_with(cx, |input, _| input.is_composing()));
+    // Enter while composing is for the input method, not for Cox.
+    cx.simulate_keystrokes("enter");
+    assert_eq!(agent.prompts(), Vec::<String>::new());
+
+    input.update_in(cx, |input, window, cx| {
+        input.replace_text_in_range(None, "今日は", window, cx);
+    });
+    assert_eq!(input_text(cx, &view), "ab今日は");
+    assert!(!input.read_with(cx, |input, _| input.is_composing()));
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(input_text(cx, &view), "ab今日");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+
+    assert_eq!(agent.prompts(), ["ab今日"]);
+}
+
+fn input_text(cx: &mut VisualTestContext, view: &Entity<CoxView>) -> String {
+    view.read_with(cx, |view, cx| view.input().read(cx).text().to_owned())
 }
 
 #[gpui::test]

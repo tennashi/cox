@@ -1330,6 +1330,7 @@ dependencies = [
  "env_logger",
  "gpui",
  "tokio",
+ "unicode-segmentation",
 ]
 
 [[package]]

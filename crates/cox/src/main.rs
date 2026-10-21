@@ -9,6 +9,7 @@ fn main() {
     env_logger::init();
     let command: Vec<String> = std::env::args().skip(1).collect();
     Application::new().run(move |cx: &mut App| {
+        cox::input::bind_keys(cx);
         let agent = cox::agent::spawn(move || cox_acp::launch(command));
         let bounds = Bounds::centered(None, size(px(800.), px(600.)), cx);
         let window = cx
