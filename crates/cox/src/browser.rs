@@ -752,6 +752,38 @@ mod handlers {
         }
 
         impl LifeSpanHandler {
+            /// The page wants a window of its own, for a link with
+            /// `target="_blank"` or `window.open`. The stage is the only
+            /// window there is, so the page goes there instead.
+            fn on_before_popup(
+                &self,
+                browser: Option<&mut cef::Browser>,
+                _frame: Option<&mut cef::Frame>,
+                _popup_id: c_int,
+                target_url: Option<&CefString>,
+                _target_frame_name: Option<&CefString>,
+                _target_disposition: cef::WindowOpenDisposition,
+                _user_gesture: c_int,
+                _popup_features: Option<&cef::PopupFeatures>,
+                _window_info: Option<&mut WindowInfo>,
+                _client: Option<&mut Option<Client>>,
+                _settings: Option<&mut BrowserSettings>,
+                _extra_info: Option<&mut Option<cef::DictionaryValue>>,
+                _no_javascript_access: Option<&mut c_int>,
+            ) -> c_int {
+                let frame = browser.and_then(|browser| browser.main_frame());
+                match (frame, target_url) {
+                    (Some(frame), Some(url)) if !url.to_string().is_empty() => {
+                        frame.load_url(Some(url));
+                    }
+                    // `window.open()` with no address opens a blank page
+                    // for the script to fill; there is nowhere to show it.
+                    _ => {}
+                }
+                // 1: no popup.
+                1
+            }
+
             fn on_after_created(&self, browser: Option<&mut cef::Browser>) {
                 if let Some(browser) = browser {
                     let host = browser.host();
