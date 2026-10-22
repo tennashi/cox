@@ -13,7 +13,7 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, ElementId, ElementInputHandler, Entity,
+    App, Bounds, ClipboardItem, ContentMask, Context, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId,
     KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, ShapedLine, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions,
@@ -85,6 +85,9 @@ pub struct LineInput {
     /// candidate window and finding the text under the mouse.
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    /// How far the text is moved to the left, so that the cursor of a line
+    /// longer than the field stays in view.
+    scroll: Pixels,
 }
 
 impl LineInput {
@@ -98,6 +101,7 @@ impl LineInput {
             marked_range: None,
             last_layout: None,
             last_bounds: None,
+            scroll: px(0.),
         }
     }
 
@@ -274,7 +278,13 @@ impl LineInput {
         let (Some(bounds), Some(line)) = (self.last_bounds, self.last_layout.as_ref()) else {
             return 0;
         };
-        line.closest_index_for_x(position.x - bounds.left())
+        line.closest_index_for_x(position.x - self.text_left(bounds))
+    }
+
+    /// Where the text starts in the window, in a field at `bounds`: left
+    /// of the field once it scrolls.
+    fn text_left(&self, bounds: Bounds<Pixels>) -> Pixels {
+        bounds.left() - self.scroll
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
@@ -431,13 +441,11 @@ impl EntityInputHandler for LineInput {
     ) -> Option<Bounds<Pixels>> {
         let layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
+        let left = self.text_left(element_bounds);
         Some(Bounds::from_corners(
+            point(left + layout.x_for_index(range.start), element_bounds.top()),
             point(
-                element_bounds.left() + layout.x_for_index(range.start),
-                element_bounds.top(),
-            ),
-            point(
-                element_bounds.left() + layout.x_for_index(range.end),
+                left + layout.x_for_index(range.end),
                 element_bounds.bottom(),
             ),
         ))
@@ -453,7 +461,7 @@ impl EntityInputHandler for LineInput {
         let index = self
             .last_layout
             .as_ref()?
-            .index_for_x(point.x - bounds.left())?;
+            .index_for_x(point.x - self.text_left(bounds))?;
         Some(self.offset_to_utf16(index))
     }
 }
@@ -493,6 +501,19 @@ fn one_line(text: &str) -> String {
     text.replace("\r\n", " ").replace(['\n', '\r'], " ")
 }
 
+/// How far to move the text left in a field `width` wide, so that the
+/// cursor, `cursor` from the start of a line `line_width` long, shows. It
+/// moves no more than it has to from `scroll`, and never so far as to
+/// leave room after the end of the line.
+fn scroll_to_show(scroll: Pixels, cursor: Pixels, line_width: Pixels, width: Pixels) -> Pixels {
+    // Room for the cursor itself after the last character.
+    let width = width - CURSOR_WIDTH;
+    let scroll = scroll.min(cursor).max(cursor - width);
+    scroll.min(line_width - width).max(px(0.))
+}
+
+const CURSOR_WIDTH: Pixels = px(1.);
+
 /// Draws the line: the text, the composed part underlined, the selection,
 /// and the cursor.
 struct LineElement {
@@ -502,6 +523,8 @@ struct LineElement {
 /// What `prepaint` shaped, taken by `paint` of the same frame.
 struct Prepainted {
     line: Option<ShapedLine>,
+    /// Where the text starts, left of the field once it scrolls.
+    left: Pixels,
     selection: Option<PaintQuad>,
     cursor: Option<PaintQuad>,
 }
@@ -550,6 +573,7 @@ impl Element for LineElement {
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
         let text = input.content.clone();
+        let scroll = input.scroll;
         let selected = input.selected_range.clone();
         let cursor = input.cursor();
         let style = window.text_style();
@@ -590,30 +614,33 @@ impl Element for LineElement {
         let line = window
             .text_system()
             .shape_line(text.into(), font_size, &runs, None);
+        let scroll = scroll_to_show(
+            scroll,
+            line.x_for_index(cursor),
+            line.width,
+            bounds.size.width,
+        );
+        self.input.update(cx, |input, _| input.scroll = scroll);
+        let left = bounds.left() - scroll;
         let selection = (!selected.is_empty()).then(|| {
             fill(
                 Bounds::from_corners(
-                    point(
-                        bounds.left() + line.x_for_index(selected.start),
-                        bounds.top(),
-                    ),
-                    point(
-                        bounds.left() + line.x_for_index(selected.end),
-                        bounds.bottom(),
-                    ),
+                    point(left + line.x_for_index(selected.start), bounds.top()),
+                    point(left + line.x_for_index(selected.end), bounds.bottom()),
                 ),
                 rgba(0x4080_ff60),
             )
         });
         let cursor = fill(
             Bounds::new(
-                point(bounds.left() + line.x_for_index(cursor), bounds.top()),
-                size(px(1.), bounds.size.height),
+                point(left + line.x_for_index(cursor), bounds.top()),
+                size(CURSOR_WIDTH, bounds.size.height),
             ),
             rgb(0xe0_e0e0),
         );
         Prepainted {
             line: Some(line),
+            left,
             selection,
             cursor: Some(cursor),
         }
@@ -635,20 +662,76 @@ impl Element for LineElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        if let Some(selection) = prepainted.selection.take() {
-            window.paint_quad(selection);
-        }
         let line = prepainted.line.take().expect("prepaint shaped the line");
-        line.paint(bounds.origin, window.line_height(), window, cx)
+        // What scrolled out of the field is not drawn.
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            if let Some(selection) = prepainted.selection.take() {
+                window.paint_quad(selection);
+            }
+            line.paint(
+                point(prepainted.left, bounds.top()),
+                window.line_height(),
+                window,
+                cx,
+            )
             .expect("the line was shaped for this window");
-        if focus_handle.is_focused(window)
-            && let Some(cursor) = prepainted.cursor.take()
-        {
-            window.paint_quad(cursor);
-        }
+            if focus_handle.is_focused(window)
+                && let Some(cursor) = prepainted.cursor.take()
+            {
+                window.paint_quad(cursor);
+            }
+        });
         self.input.update(cx, |input, _| {
             input.last_layout = Some(line);
             input.last_bounds = Some(bounds);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::px;
+
+    use super::scroll_to_show;
+
+    #[test]
+    fn a_line_that_fits_does_not_scroll() {
+        assert_eq!(scroll_to_show(px(0.), px(50.), px(80.), px(100.)), px(0.));
+    }
+
+    #[test]
+    fn the_line_scrolls_to_keep_the_cursor_at_the_right_edge() {
+        // The cursor at the end of a line 30 pixels longer than the field.
+        assert_eq!(
+            scroll_to_show(px(0.), px(130.), px(130.), px(100.)),
+            px(31.)
+        );
+    }
+
+    #[test]
+    fn the_line_stays_put_while_the_cursor_is_in_view() {
+        assert_eq!(
+            scroll_to_show(px(31.), px(60.), px(130.), px(100.)),
+            px(31.)
+        );
+    }
+
+    #[test]
+    fn the_line_scrolls_back_to_show_a_cursor_left_of_the_field() {
+        assert_eq!(
+            scroll_to_show(px(31.), px(10.), px(130.), px(100.)),
+            px(10.)
+        );
+    }
+
+    #[test]
+    fn a_line_that_got_shorter_scrolls_back_to_its_end() {
+        // Deleted down to 110 pixels, the cursor at the end.
+        assert_eq!(
+            scroll_to_show(px(31.), px(110.), px(110.), px(100.)),
+            px(11.)
+        );
+        // Deleted until it fits.
+        assert_eq!(scroll_to_show(px(31.), px(90.), px(90.), px(100.)), px(0.));
     }
 }
