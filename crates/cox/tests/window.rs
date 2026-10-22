@@ -70,6 +70,24 @@ async fn sends_what_the_human_types_and_shows_the_reply(cx: &mut TestAppContext)
     assert_eq!(input_text(cx, &view), "");
 }
 
+#[gpui::test]
+async fn keeps_the_newest_entries_in_view(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    for _ in 0..40 {
+        cx.simulate_input("hello");
+        cx.simulate_keystrokes("enter");
+        wait_for(cx, &view, State::Idle).await;
+    }
+    cx.run_until_parked();
+
+    let (offset, max) = view.read_with(cx, |view, _| {
+        (view.scroll().offset().y, view.scroll().max_offset().height)
+    });
+    assert!(max > gpui::px(0.), "the conversation overflows");
+    assert_eq!(offset, -max);
+}
+
 /// Types "ab", then composes with an input method the way GPUI relays it:
 /// the text under composition is marked, and only the committed text is
 /// sent.
