@@ -7,6 +7,7 @@
 
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{
     App, Bounds, Context, Corners, DispatchPhase, Div, Element, ElementId, ElementInputHandler,
@@ -39,8 +40,13 @@ pub struct Stage {
     /// human's own typing from it.
     address_shown: String,
     _events: Task<()>,
+    /// Checks now and then that the browser answered the last resize.
+    _ticks: Task<()>,
     _submitted: Subscription,
 }
+
+/// How often the stage checks on a resize the browser has not answered.
+const TICK: Duration = Duration::from_millis(250);
 
 impl Stage {
     pub fn new(
@@ -63,6 +69,15 @@ impl Stage {
                 }
             }
         });
+        let ticking = browser.clone();
+        let ticks = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(TICK).await;
+                if this.update(cx, |_, _| ticking.settle_resize()).is_err() {
+                    break;
+                }
+            }
+        });
         let navigation = browser.navigation();
         let address = cx.new(LineInput::new);
         address.update(cx, |address, cx| address.set_text(&navigation.url, cx));
@@ -79,6 +94,7 @@ impl Stage {
             navigation,
             address,
             _events: task,
+            _ticks: ticks,
             _submitted: submitted,
         }
     }
@@ -193,11 +209,10 @@ impl Stage {
         bounds: Bounds<Pixels>,
         window: &mut Window,
     ) -> Option<Arc<RenderImage>> {
-        self.browser.resize(
-            whole_pixels(bounds.size.width),
-            whole_pixels(bounds.size.height),
-            window.scale_factor(),
-        );
+        let scale = window.scale_factor();
+        let width = whole_pixels(bounds.size.width);
+        let height = whole_pixels(bounds.size.height);
+        self.browser.resize(width, height, scale);
         if let Some(frame) = self.browser.take_frame()
             && let Some(buffer) = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)
         {
@@ -238,6 +253,24 @@ fn in_stage(position: Point<Pixels>, bounds: Bounds<Pixels>) -> (i32, i32) {
 )]
 fn whole_pixels(pixels: Pixels) -> i32 {
     f32::from(pixels).round() as i32
+}
+
+/// Where the picture goes: at its own size from the stage's top left
+/// corner, so a picture painted for another size is cut off or leaves a
+/// gap rather than being stretched.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "pixel counts are far below what f32 keeps exactly"
+)]
+fn image_bounds(image: &RenderImage, bounds: Bounds<Pixels>, scale: f32) -> Bounds<Pixels> {
+    let painted = image.size(0);
+    Bounds {
+        origin: bounds.origin,
+        size: size(
+            px(painted.width.0 as f32 / scale),
+            px(painted.height.0 as f32 / scale),
+        ),
+    }
 }
 
 fn modifiers(modifiers: gpui::Modifiers) -> Modifiers {
@@ -496,13 +529,12 @@ impl Element for StageElement {
         let image = self
             .stage
             .update(cx, |stage, _| stage.prepare_frame(bounds, window));
-        match image {
-            Some(image) => {
-                window
-                    .paint_image(bounds, Corners::default(), image, 0, false)
-                    .ok();
-            }
-            None => window.paint_quad(fill(bounds, rgb(0x33_3333))),
+        window.paint_quad(fill(bounds, rgb(0x33_3333)));
+        if let Some(image) = image {
+            let at = image_bounds(&image, bounds, window.scale_factor());
+            window
+                .paint_image(at, Corners::default(), image, 0, false)
+                .ok();
         }
 
         let hovered = hitbox.clone();
