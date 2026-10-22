@@ -33,7 +33,7 @@ use cef::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 /// The port an agent connects to with the Chrome `DevTools` Protocol (CDP).
-pub const DEVTOOLS_PORT: i32 = 9222;
+pub const DEVTOOLS_PORT: u16 = 9222;
 
 /// One picture CEF painted: the whole view, or the whole popup, in BGRA,
 /// in device pixels.
@@ -348,7 +348,7 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
         // the app gives it its turns with `Browser::pump`.
         #[cfg(target_os = "macos")]
         external_message_pump: 1,
-        remote_debugging_port: DEVTOOLS_PORT,
+        remote_debugging_port: i32::from(DEVTOOLS_PORT),
         root_cache_path: CefString::from(cache.to_string_lossy().as_ref()),
         ..Default::default()
     };

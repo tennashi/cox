@@ -6,18 +6,21 @@
 //! the stage uploads it as a GPUI image and paints it over its bounds. The
 //! dropdown of a `<select>` arrives as a picture of its own, painted over
 //! the page where CEF says it goes.
+//!
+//! Over the page, the stage draws the agent's pointer: where the agent
+//! points, clicks and types, as the relay saw it.
 
 use std::ops::Range;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, Context, Corners, DispatchPhase, Div, Element, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior,
-    InspectorElementId, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, LayoutId, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, ScrollDelta, ScrollWheelEvent,
-    Stateful, Style, Subscription, Task, UTF16Selection, Window, div, fill, point, prelude::*, px,
-    relative, rgb, size,
+    App, BorderStyle, Bounds, ContentMask, Context, Corners, DispatchPhase, Div, Element,
+    ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable,
+    GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, KeyDownEvent,
+    KeyUpEvent, Keystroke, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
+    Pixels, Point, RenderImage, ScrollDelta, ScrollWheelEvent, Stateful, Style, Subscription, Task,
+    UTF16Selection, Window, div, fill, point, prelude::*, px, quad, relative, rgb, size, white,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -25,6 +28,8 @@ use crate::browser::{
     Browser, Caret, EditCommand, Event, Frame, Modifiers, MouseButton, Navigation,
 };
 use crate::input::{LineInput, Submitted};
+use crate::pointer::{AgentPointer, Look, Rect, Spot};
+use crate::relay::AgentInput;
 
 /// How many logical pixels one line of a wheel scroll moves the page.
 const LINE_HEIGHT: f32 = 40.;
@@ -45,7 +50,13 @@ pub struct Stage {
     /// The address last put in that line by the browser, to tell the
     /// human's own typing from it.
     address_shown: String,
+    /// The agent's pointer, and how it looks as of the last render.
+    pointer: AgentPointer,
+    look: Option<Look>,
+    /// Renders the stage again when the pointer's look next changes.
+    _pointer_changes: Option<Task<()>>,
     _events: Task<()>,
+    _agent_input: Task<()>,
     /// Checks now and then that the browser answered the last resize.
     _ticks: Task<()>,
     _submitted: Subscription,
@@ -58,6 +69,7 @@ impl Stage {
     pub fn new(
         browser: Browser,
         mut events: UnboundedReceiver<Event>,
+        mut agent_input: UnboundedReceiver<AgentInput>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -68,6 +80,17 @@ impl Stage {
                     if event == Event::Navigated {
                         stage.navigated(cx);
                     }
+                    cx.notify();
+                });
+                if shown.is_err() {
+                    break;
+                }
+            }
+        });
+        let agent_task = cx.spawn(async move |this, cx| {
+            while let Some(input) = agent_input.recv().await {
+                let shown = this.update(cx, |stage, cx| {
+                    stage.pointer.see(input, Instant::now());
                     cx.notify();
                 });
                 if shown.is_err() {
@@ -100,7 +123,11 @@ impl Stage {
             address_shown: navigation.url.clone(),
             navigation,
             address,
+            pointer: AgentPointer::default(),
+            look: None,
+            _pointer_changes: None,
             _events: task,
+            _agent_input: agent_task,
             _ticks: ticks,
             _submitted: submitted,
         }
@@ -521,8 +548,55 @@ fn address_to_url(typed: &str) -> Option<String> {
     })
 }
 
+impl Stage {
+    /// Works out how the agent's pointer looks now, and arranges to render
+    /// again when that changes on its own: the stage's paint asks for the
+    /// next frame while it moves, and a timer wakes it for what comes
+    /// later.
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the timer is only held: dropping it cancels it"
+    )]
+    fn update_look(&mut self, cx: &mut Context<Self>) {
+        self.look = self.pointer.look(Instant::now());
+        self._pointer_changes = self
+            .look
+            .as_ref()
+            .map(|look| look.next_change)
+            .filter(|next| !next.is_zero())
+            .map(|next| {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(next).await;
+                    this.update(cx, |_, cx| cx.notify()).ok();
+                })
+            });
+    }
+
+    /// The label by the agent's pointer, which says whose it is, and that
+    /// the agent is typing.
+    fn render_label(look: &Look) -> Div {
+        div()
+            .absolute()
+            .left(px(look.pointer.x + 14.))
+            .top(px(look.pointer.y + 18.))
+            .opacity(look.opacity)
+            .px_1p5()
+            .rounded_sm()
+            .bg(agent_color())
+            .text_color(white())
+            .text_xs()
+            .whitespace_nowrap()
+            .child(if look.typing {
+                "Agent · typing"
+            } else {
+                "Agent"
+            })
+    }
+}
+
 impl Render for Stage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.update_look(cx);
         div()
             .size_full()
             .flex()
@@ -532,20 +606,126 @@ impl Render for Stage {
                 div()
                     .id("stage")
                     .debug_selector(|| "stage".to_owned())
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .track_focus(&self.focus_handle)
                     .key_context("Stage")
                     .on_key_down(cx.listener(Self::key_down))
                     .on_key_up(cx.listener(Self::key_up))
-                    .child(StageElement { stage: cx.entity() }),
+                    .child(StageElement { stage: cx.entity() })
+                    .children(self.look.as_ref().map(Self::render_label)),
             )
+    }
+}
+
+/// The color of everything the stage draws for the agent.
+fn agent_color() -> Hsla {
+    rgb(0x4f_6bff).into()
+}
+
+/// The agent's pointer at `look`, over the stage at `bounds`: the ring of
+/// each click, the outline of the field it types into, and the arrow.
+fn paint_agent(look: &Look, bounds: Bounds<Pixels>, window: &mut Window) {
+    let color = agent_color();
+    let on_stage = |spot: Spot| bounds.origin + point(px(spot.x), px(spot.y));
+    if let Some(Rect {
+        x,
+        y,
+        width,
+        height,
+    }) = look.field
+    {
+        let field = Bounds {
+            origin: on_stage(Spot { x, y }) - point(px(3.), px(3.)),
+            size: size(px(width + 6.), px(height + 6.)),
+        };
+        window.paint_quad(quad(
+            field,
+            px(4.),
+            color.opacity(0.08 * look.opacity),
+            px(2.),
+            color.opacity(look.opacity),
+            BorderStyle::Solid,
+        ));
+    }
+    for ripple in &look.ripples {
+        let radius = px(ripple.radius);
+        let ring = Bounds {
+            origin: on_stage(ripple.at) - point(radius, radius),
+            size: size(radius * 2., radius * 2.),
+        };
+        window.paint_quad(quad(
+            ring,
+            radius,
+            color.opacity(0.2 * ripple.opacity),
+            px(2.),
+            color.opacity(ripple.opacity),
+            BorderStyle::Solid,
+        ));
+    }
+
+    // An arrow with its tip on the spot, the shape of the usual pointer.
+    let tip = on_stage(look.pointer);
+    let corners = [
+        (0., 0.),
+        (0., 17.),
+        (4.5, 13.),
+        (7.5, 20.),
+        (10., 19.),
+        (7., 12.),
+        (12.5, 12.),
+    ]
+    .map(|(x, y)| tip + point(px(x), px(y)));
+    let mut arrow = PathBuilder::fill();
+    arrow.add_polygon(&corners, true);
+    let mut edge = PathBuilder::stroke(px(1.5));
+    edge.add_polygon(&corners, true);
+    if let Ok(arrow) = arrow.build() {
+        window.paint_path(arrow, color.opacity(look.opacity));
+    }
+    if let Ok(edge) = edge.build() {
+        window.paint_path(edge, white().opacity(look.opacity));
     }
 }
 
 /// Paints the browser's picture and sends mouse events over it to the page.
 struct StageElement {
     stage: Entity<Stage>,
+}
+
+impl StageElement {
+    /// Paints the page, the popup over it, and the agent's pointer over
+    /// both.
+    fn paint_page(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+        let (image, popup, look) = self.stage.update(cx, |stage, _| {
+            (
+                stage.prepare_frame(bounds, window),
+                stage.prepare_popup(bounds, window),
+                stage.look.clone(),
+            )
+        });
+        window.paint_quad(fill(bounds, rgb(0x33_3333)));
+        if let Some(image) = image {
+            let at = image_bounds(&image, bounds, window.scale_factor());
+            window
+                .paint_image(at, Corners::default(), image, 0, false)
+                .ok();
+        }
+        if let Some((image, popup)) = popup {
+            window
+                .paint_image(popup, Corners::default(), image, 0, false)
+                .ok();
+        }
+        if let Some(look) = look {
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                paint_agent(&look, bounds, window);
+            });
+            if look.next_change.is_zero() {
+                window.request_animation_frame();
+            }
+        }
+    }
 }
 
 impl IntoElement for StageElement {
@@ -613,24 +793,7 @@ impl Element for StageElement {
             cx,
         );
 
-        let (image, popup) = self.stage.update(cx, |stage, _| {
-            (
-                stage.prepare_frame(bounds, window),
-                stage.prepare_popup(bounds, window),
-            )
-        });
-        window.paint_quad(fill(bounds, rgb(0x33_3333)));
-        if let Some(image) = image {
-            let at = image_bounds(&image, bounds, window.scale_factor());
-            window
-                .paint_image(at, Corners::default(), image, 0, false)
-                .ok();
-        }
-        if let Some((image, popup)) = popup {
-            window
-                .paint_image(popup, Corners::default(), image, 0, false)
-                .ok();
-        }
+        self.paint_page(bounds, window, cx);
 
         let hovered = hitbox.clone();
         let target = browser.clone();

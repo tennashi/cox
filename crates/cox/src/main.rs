@@ -59,20 +59,27 @@ fn main() {
     }
     let command = args.command;
 
+    // The agent's browser tools go through the relay, which tells the
+    // stage where the agent points, clicks and types.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let mut events = Some(events);
+    let (relay_port, agent_input) = match cox::relay::start(cox::browser::DEVTOOLS_PORT) {
+        Ok((port, input)) => (Some(port), input),
+        Err(error) => {
+            log::error!("no relay to the stage, so the agent gets no tools for it: {error:#}");
+            (None, tokio::sync::mpsc::unbounded_channel().1)
+        }
+    };
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let mut stage_input = Some((events, agent_input));
 
     Application::new().run(move |cx: &mut App| {
         cox::input::bind_keys(cx);
-        // The agent gets the page the human sees, over the stage's remote
-        // debugging port.
+        // The agent gets the page the human sees.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let tools = cox::tools::stage(
-            cox::browser::DEVTOOLS_PORT,
-            &std::env::var_os("PATH").unwrap_or_default(),
-        )
-        .into_iter()
-        .collect();
+        let tools = relay_port
+            .and_then(|port| cox::tools::stage(port, &std::env::var_os("PATH").unwrap_or_default()))
+            .into_iter()
+            .collect();
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let tools = Vec::new();
         let agent = cox::agent::spawn(move || cox_acp::launch(command), tools);
@@ -112,12 +119,9 @@ fn main() {
                 |window, cx| {
                     #[cfg(any(target_os = "linux", target_os = "macos"))]
                     let stage = Some(cx.new(|cx| {
-                        cox::stage::Stage::new(
-                            browser.clone(),
-                            events.take().expect("the window opens once"),
-                            window,
-                            cx,
-                        )
+                        let (events, agent_input) =
+                            stage_input.take().expect("the window opens once");
+                        cox::stage::Stage::new(browser.clone(), events, agent_input, window, cx)
                     }));
                     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                     let _ = window;
