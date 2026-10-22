@@ -13,6 +13,7 @@
 //!   and [`stage`] shows that page in the window and sends the human's
 //!   input to it. An agent drives the same page over CDP. On Linux and
 //!   macOS; on macOS, inside the app bundle `cargo xtask bundle` makes.
+//! - [`tools`] says which MCP servers the agent gets: the stage's.
 
 pub mod agent;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -23,4 +24,5 @@ pub mod input;
 pub mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod stage;
+pub mod tools;
 pub mod view;

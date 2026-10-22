@@ -5,7 +5,7 @@
 
 use std::thread;
 
-use cox_acp::{PermissionAnswer, Session, Transport, Update};
+use cox_acp::{McpServer, PermissionAnswer, Session, Transport, Update};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::conversation::{AgentEvent, Command};
@@ -17,9 +17,11 @@ pub struct Agent {
 }
 
 /// Starts the agent side on a thread of its own. `connect` runs on its
-/// runtime and returns the transport to the agent.
+/// runtime and returns the transport to the agent, which gets the tools of
+/// `mcp_servers`.
 pub fn spawn<T: Transport + 'static>(
     connect: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+    mcp_servers: Vec<McpServer>,
 ) -> Agent {
     let (commands, received) = unbounded_channel();
     let (sent, events) = unbounded_channel();
@@ -28,7 +30,7 @@ pub fn spawn<T: Transport + 'static>(
             .enable_all()
             .build()
             .map_err(anyhow::Error::from)
-            .and_then(|runtime| runtime.block_on(run(connect, received, &sent)));
+            .and_then(|runtime| runtime.block_on(run(connect, mcp_servers, received, &sent)));
         let _ = sent.send(AgentEvent::Closed(outcome.err().map(|e| format!("{e:#}"))));
     });
     Agent { commands, events }
@@ -36,11 +38,12 @@ pub fn spawn<T: Transport + 'static>(
 
 async fn run<T: Transport + 'static>(
     connect: impl FnOnce() -> anyhow::Result<T>,
+    mcp_servers: Vec<McpServer>,
     mut commands: UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
     let transport = connect()?;
-    cox_acp::connect(transport, async |mut session| {
+    cox_acp::connect(transport, mcp_servers, async |mut session| {
         while let Some(command) = commands.recv().await {
             // An answer with no permission request waiting has nothing to answer.
             if let Command::Prompt(text) = command {
