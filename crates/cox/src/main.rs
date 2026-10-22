@@ -97,15 +97,18 @@ fn main() {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
-                |_, cx| {
+                |window, cx| {
                     #[cfg(any(target_os = "linux", target_os = "macos"))]
                     let stage = Some(cx.new(|cx| {
                         cox::stage::Stage::new(
                             browser.clone(),
                             events.take().expect("the window opens once"),
+                            window,
                             cx,
                         )
                     }));
+                    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+                    let _ = window;
                     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                     let stage = None::<gpui::AnyView>;
                     cx.new(|cx| cox::view::CoxView::new(agent, stage, cx))

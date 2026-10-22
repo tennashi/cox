@@ -22,11 +22,13 @@ use cef::sys::{
 use cef::rc::Rc as _;
 use cef::{
     App, BrowserHost, BrowserProcessHandler, BrowserSettings, CefString, Client, CommandLine,
-    CompositionUnderline, ImplApp, ImplBrowser, ImplBrowserHost, ImplBrowserProcessHandler,
-    ImplClient, ImplCommandLine, ImplLifeSpanHandler, ImplRenderHandler, KeyEvent, KeyEventType,
-    LifeSpanHandler, MouseButtonType, MouseEvent, RenderHandler, Settings, WindowInfo, WrapApp,
-    WrapBrowserProcessHandler, WrapClient, WrapLifeSpanHandler, WrapRenderHandler, wrap_app,
-    wrap_browser_process_handler, wrap_client, wrap_life_span_handler, wrap_render_handler,
+    CompositionUnderline, DisplayHandler, ImplApp, ImplBrowser, ImplBrowserHost,
+    ImplBrowserProcessHandler, ImplClient, ImplCommandLine, ImplDisplayHandler, ImplFrame,
+    ImplLifeSpanHandler, ImplLoadHandler, ImplRenderHandler, KeyEvent, KeyEventType,
+    LifeSpanHandler, LoadHandler, MouseButtonType, MouseEvent, RenderHandler, Settings, WindowInfo,
+    WrapApp, WrapBrowserProcessHandler, WrapClient, WrapDisplayHandler, WrapLifeSpanHandler,
+    WrapLoadHandler, WrapRenderHandler, wrap_app, wrap_browser_process_handler, wrap_client,
+    wrap_display_handler, wrap_life_span_handler, wrap_load_handler, wrap_render_handler,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -49,6 +51,19 @@ pub enum Event {
     Created,
     /// The browser is gone.
     Closed,
+    /// The page moved, or started or finished loading: see
+    /// [`Browser::navigation`].
+    Navigated,
+}
+
+/// Where the browser is in its history, as the toolbar shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Navigation {
+    /// The address of the page being shown, or being loaded.
+    pub url: String,
+    pub loading: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
 }
 
 /// A mouse button CEF knows.
@@ -86,6 +101,7 @@ struct Shared {
     frame: Option<Frame>,
     host: Option<BrowserHost>,
     caret: Option<Caret>,
+    navigation: Navigation,
 }
 
 type SharedRef = Arc<Mutex<Shared>>;
@@ -175,6 +191,10 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
         frame: None,
         host: None,
         caret: None,
+        navigation: Navigation {
+            url: url.clone(),
+            ..Default::default()
+        },
     }));
     let (events, receiver) = unbounded_channel();
 
@@ -270,6 +290,47 @@ impl Browser {
     #[must_use]
     pub fn take_frame(&self) -> Option<Frame> {
         self.shared().frame.take()
+    }
+
+    /// Where the browser is: its address and loading state.
+    #[must_use]
+    pub fn navigation(&self) -> Navigation {
+        self.shared().navigation.clone()
+    }
+
+    fn browser(&self) -> Option<cef::Browser> {
+        self.host().and_then(|host| host.browser())
+    }
+
+    /// Leaves the page for `url`.
+    pub fn load(&self, url: &str) {
+        if let Some(frame) = self.browser().and_then(|browser| browser.main_frame()) {
+            frame.load_url(Some(&CefString::from(url)));
+        }
+    }
+
+    pub fn go_back(&self) {
+        if let Some(browser) = self.browser() {
+            browser.go_back();
+        }
+    }
+
+    pub fn go_forward(&self) {
+        if let Some(browser) = self.browser() {
+            browser.go_forward();
+        }
+    }
+
+    pub fn reload(&self) {
+        if let Some(browser) = self.browser() {
+            browser.reload();
+        }
+    }
+
+    pub fn stop(&self) {
+        if let Some(browser) = self.browser() {
+            browser.stop_load();
+        }
     }
 
     /// Gives the page keyboard focus.
@@ -579,6 +640,8 @@ mod handlers {
                 let mut client = StageClient::new(
                     StageRenderHandler::new(Arc::clone(&self.shared), self.events.clone()),
                     StageLifeSpanHandler::new(Arc::clone(&self.shared), self.events.clone()),
+                    StageLoadHandler::new(Arc::clone(&self.shared), self.events.clone()),
+                    StageDisplayHandler::new(Arc::clone(&self.shared), self.events.clone()),
                 );
                 let settings = BrowserSettings {
                     windowless_frame_rate: 60,
@@ -604,6 +667,8 @@ mod handlers {
         struct StageClient {
             render: RenderHandler,
             life_span: LifeSpanHandler,
+            load: LoadHandler,
+            display: DisplayHandler,
         }
 
         impl Client {
@@ -613,6 +678,69 @@ mod handlers {
 
             fn life_span_handler(&self) -> Option<LifeSpanHandler> {
                 Some(self.life_span.clone())
+            }
+
+            fn load_handler(&self) -> Option<LoadHandler> {
+                Some(self.load.clone())
+            }
+
+            fn display_handler(&self) -> Option<DisplayHandler> {
+                Some(self.display.clone())
+            }
+        }
+    }
+
+    wrap_load_handler! {
+        struct StageLoadHandler {
+            shared: SharedRef,
+            events: UnboundedSender<Event>,
+        }
+
+        impl LoadHandler {
+            /// Loading started or finished somewhere in the page, and the
+            /// history may have moved.
+            fn on_loading_state_change(
+                &self,
+                _browser: Option<&mut cef::Browser>,
+                is_loading: c_int,
+                can_go_back: c_int,
+                can_go_forward: c_int,
+            ) {
+                {
+                    let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+                    shared.navigation.loading = is_loading == 1;
+                    shared.navigation.can_go_back = can_go_back == 1;
+                    shared.navigation.can_go_forward = can_go_forward == 1;
+                }
+                let _ = self.events.send(Event::Navigated);
+            }
+        }
+    }
+
+    wrap_display_handler! {
+        struct StageDisplayHandler {
+            shared: SharedRef,
+            events: UnboundedSender<Event>,
+        }
+
+        impl DisplayHandler {
+            /// The page's address changed. Frames inside the page have
+            /// addresses too; only the page's own counts.
+            fn on_address_change(
+                &self,
+                _browser: Option<&mut cef::Browser>,
+                frame: Option<&mut cef::Frame>,
+                url: Option<&CefString>,
+            ) {
+                let is_main = frame.is_some_and(|frame| frame.is_main() == 1);
+                if let (true, Some(url)) = (is_main, url) {
+                    self.shared
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .navigation
+                        .url = url.to_string();
+                    let _ = self.events.send(Event::Navigated);
+                }
             }
         }
     }
