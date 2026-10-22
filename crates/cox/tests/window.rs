@@ -9,6 +9,7 @@ use agent_client_protocol::schema::v1::{
     McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
 };
 use cox::conversation::{Entry, State};
+use cox::input::LineInput;
 use cox::view::CoxView;
 use cox_acp::{McpServer, ToolCallResult};
 use fake_agent::FakeAgent;
@@ -176,13 +177,57 @@ fn cuts_copies_and_pastes_with_the_keyboard(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn pastes_line_breaks_as_spaces(cx: &mut TestAppContext) {
+fn keeps_pasted_line_breaks(cx: &mut TestAppContext) {
     let (_agent, view, cx) = open(cx);
 
     cx.write_to_clipboard(ClipboardItem::new_string("one\ntwo\r\nthree".to_owned()));
     cx.simulate_keystrokes("secondary-v");
 
-    assert_eq!(input_text(cx, &view), "one two three");
+    assert_eq!(input_text(cx, &view), "one\ntwo\nthree");
+}
+
+/// The address line holds one line.
+#[gpui::test]
+fn an_input_of_one_line_pastes_line_breaks_as_spaces(cx: &mut TestAppContext) {
+    cx.update(cox::input::bind_keys);
+    let (input, cx) = cx.add_window_view(|_, cx| LineInput::new(cx));
+    cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
+
+    cx.write_to_clipboard(ClipboardItem::new_string("one\ntwo\r\nthree".to_owned()));
+    cx.simulate_keystrokes("secondary-v");
+
+    assert_eq!(
+        input.read_with(cx, |input, _| input.text().to_owned()),
+        "one two three"
+    );
+}
+
+#[gpui::test]
+async fn sends_lines_started_with_shift_enter_as_one_prompt(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open(cx);
+
+    cx.simulate_input("first");
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("second");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+
+    assert_eq!(agent.prompts(), ["first\nsecond"]);
+}
+
+#[gpui::test]
+fn moves_between_lines_with_up_and_down(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("ab");
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("cd");
+    cx.simulate_keystrokes("up end");
+    cx.simulate_input("X");
+    cx.simulate_keystrokes("down home");
+    cx.simulate_input("Y");
+
+    assert_eq!(input_text(cx, &view), "abX\nYcd");
 }
 
 /// Selecting leftward and then rightward past where it started turns the
