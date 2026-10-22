@@ -1,5 +1,6 @@
 //! `cox [--stage <url>] <agent command> [args...]` starts the agent and opens
-//! a window to talk to it, with the stage showing `<url>`.
+//! a window to talk to it, with the stage showing `<url>`. The agent can
+//! read and drive the stage too.
 //!
 //! On macOS, run it from inside the bundle `cargo xtask bundle` makes, as
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
@@ -63,7 +64,18 @@ fn main() {
 
     Application::new().run(move |cx: &mut App| {
         cox::input::bind_keys(cx);
-        let agent = cox::agent::spawn(move || cox_acp::launch(command));
+        // The agent gets the page the human sees, over the stage's remote
+        // debugging port.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let tools = cox::tools::stage(
+            cox::browser::DEVTOOLS_PORT,
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )
+        .into_iter()
+        .collect();
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let tools = Vec::new();
+        let agent = cox::agent::spawn(move || cox_acp::launch(command), tools);
 
         #[cfg(target_os = "macos")]
         {

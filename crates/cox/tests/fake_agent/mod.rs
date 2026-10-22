@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
-    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
-    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
+    McpServer, NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind,
+    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
     SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus,
     ToolCallUpdate, ToolCallUpdateFields,
 };
@@ -21,6 +21,7 @@ use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result}
 #[derive(Default)]
 pub struct FakeAgent {
     sessions_opened: Arc<AtomicUsize>,
+    mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Vec<String>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
 }
@@ -32,6 +33,7 @@ impl FakeAgent {
         tokio::spawn(serve(
             agent_end,
             Arc::clone(&self.sessions_opened),
+            Arc::clone(&self.mcp_servers),
             Arc::clone(&self.prompts),
             Arc::clone(&self.answers),
         ));
@@ -41,6 +43,11 @@ impl FakeAgent {
     /// How many sessions Cox has opened.
     pub fn sessions_opened(&self) -> usize {
         self.sessions_opened.load(Ordering::SeqCst)
+    }
+
+    /// The MCP servers Cox handed over when it opened the session.
+    pub fn mcp_servers(&self) -> Vec<McpServer> {
+        self.mcp_servers.lock().unwrap().clone()
     }
 
     /// The text of each prompt Cox has sent, in order.
@@ -57,6 +64,7 @@ impl FakeAgent {
 async fn serve(
     transport: Channel,
     sessions_opened: Arc<AtomicUsize>,
+    mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Vec<String>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
 ) -> Result<()> {
@@ -73,8 +81,9 @@ async fn serve(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |_request: NewSessionRequest, responder, _cx| {
+            async move |request: NewSessionRequest, responder, _cx| {
                 sessions_opened.fetch_add(1, Ordering::SeqCst);
+                *mcp_servers.lock().unwrap() = request.mcp_servers;
                 responder.respond(NewSessionResponse::new("session-1"))
             },
             agent_client_protocol::on_receive_request!(),

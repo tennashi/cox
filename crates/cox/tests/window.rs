@@ -5,16 +5,25 @@ mod fake_agent;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
+use agent_client_protocol::schema::v1::{
+    McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
+};
 use cox::conversation::{Entry, State};
-
 use cox::view::CoxView;
-use cox_acp::ToolCallResult;
+use cox_acp::{McpServer, ToolCallResult};
 use fake_agent::FakeAgent;
 use gpui::{Entity, EntityInputHandler, Focusable, Modifiers, TestAppContext, VisualTestContext};
 
 /// Opens the window, talking to a fake agent, with the input focused.
 fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<CoxView>, &mut VisualTestContext) {
+    open_with(cx, Vec::new())
+}
+
+/// Opens the window like [`open`], handing the agent `mcp_servers`.
+fn open_with(
+    cx: &mut TestAppContext,
+    mcp_servers: Vec<McpServer>,
+) -> (Arc<FakeAgent>, Entity<CoxView>, &mut VisualTestContext) {
     // The agent side runs on a thread of its own, so the test waits for it
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
@@ -23,7 +32,7 @@ fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<CoxView>, &mut Visua
     let fake = Arc::clone(&agent);
     let (view, cx) = cx.add_window_view(|_, cx| {
         CoxView::new(
-            cox::agent::spawn(move || Ok(fake.connect())),
+            cox::agent::spawn(move || Ok(fake.connect()), mcp_servers),
             None::<gpui::AnyView>,
             cx,
         )
@@ -86,6 +95,28 @@ async fn keeps_the_newest_entries_in_view(cx: &mut TestAppContext) {
     });
     assert!(max > gpui::px(0.), "the conversation overflows");
     assert_eq!(offset, -max);
+}
+
+#[gpui::test]
+async fn hands_the_agent_its_tools(cx: &mut TestAppContext) {
+    let stage = McpServer {
+        name: "stage".to_owned(),
+        command: "/usr/bin/npx".into(),
+        args: vec!["-y".to_owned(), "chrome-devtools-mcp".to_owned()],
+    };
+    let (agent, view, cx) = open_with(cx, vec![stage]);
+
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+
+    assert_eq!(
+        agent.mcp_servers(),
+        [AcpMcpServer::Stdio(
+            McpServerStdio::new("stage", "/usr/bin/npx")
+                .args(vec!["-y".to_owned(), "chrome-devtools-mcp".to_owned()])
+        )]
+    );
 }
 
 /// Types "ab", then composes with an input method the way GPUI relays it:

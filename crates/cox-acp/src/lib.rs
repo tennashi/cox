@@ -1,20 +1,23 @@
 //! Talking to an agent over the Agent Client Protocol (ACP), in Cox's terms.
 //!
-//! [`connect`] opens a [`Session`] with an agent. Each [`Session::send`]
-//! starts a [`Turn`], which hands over what the agent sends as [`Update`]s
-//! until the turn ends.
+//! [`connect`] opens a [`Session`] with an agent, handing it the
+//! [`McpServer`]s whose tools it may use. Each [`Session::send`] starts a
+//! [`Turn`], which hands over what the agent sends as [`Update`]s until the
+//! turn ends.
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, InitializeRequest, NewSessionRequest, PermissionOptionKind,
-    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
-    SessionUpdate, StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall, ToolCallId,
-    ToolCallStatus, ToolCallUpdate,
+    ContentBlock, ContentChunk, InitializeRequest, McpServer as AcpMcpServer, McpServerStdio,
+    NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate,
+    StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall, ToolCallId, ToolCallStatus,
+    ToolCallUpdate,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
 use anyhow::Context;
@@ -35,8 +38,26 @@ pub fn launch(command: impl IntoIterator<Item = String>) -> anyhow::Result<impl 
     Ok(AcpAgent::from_args(command)?)
 }
 
-/// Connects to `agent`, opens a session in the current directory, and runs
-/// `talk` with it. The connection closes when `talk` returns.
+/// An MCP server the agent starts for the session, to use its tools. The
+/// agent runs `command` with `args`, and talks MCP over its stdio.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpServer {
+    /// The name the agent knows the server by, and names its tools after.
+    pub name: String,
+    /// The program to run, as an absolute path.
+    pub command: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl From<McpServer> for AcpMcpServer {
+    fn from(server: McpServer) -> Self {
+        Self::Stdio(McpServerStdio::new(server.name, server.command).args(server.args))
+    }
+}
+
+/// Connects to `agent`, opens a session in the current directory with
+/// `mcp_servers` for the agent to use, and runs `talk` with it. The
+/// connection closes when `talk` returns.
 ///
 /// # Errors
 ///
@@ -44,6 +65,7 @@ pub fn launch(command: impl IntoIterator<Item = String>) -> anyhow::Result<impl 
 /// the agent refuses to open a session.
 pub async fn connect<T>(
     agent: impl Transport,
+    mcp_servers: Vec<McpServer>,
     talk: impl AsyncFnOnce(Session) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     let (updates, received) = unbounded_channel();
@@ -72,7 +94,7 @@ pub async fn connect<T>(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
-            let id = start(&cx).await?;
+            let id = start(&cx, mcp_servers).await?;
             let session = Session {
                 cx,
                 id,
@@ -87,13 +109,19 @@ pub async fn connect<T>(
 }
 
 /// Initializes the connection and opens a session in the current directory.
-async fn start(cx: &ConnectionTo<Agent>) -> agent_client_protocol::Result<SessionId> {
+async fn start(
+    cx: &ConnectionTo<Agent>,
+    mcp_servers: Vec<McpServer>,
+) -> agent_client_protocol::Result<SessionId> {
     cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
         .block_task()
         .await?;
     let cwd = std::env::current_dir().map_err(Error::into_internal_error)?;
     let session = cx
-        .send_request(NewSessionRequest::new(cwd))
+        .send_request(
+            NewSessionRequest::new(cwd)
+                .mcp_servers(mcp_servers.into_iter().map(Into::into).collect()),
+        )
         .block_task()
         .await?;
     Ok(session.session_id)
