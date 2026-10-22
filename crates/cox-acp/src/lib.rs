@@ -180,7 +180,7 @@ pub struct Session {
     cx: ConnectionTo<Agent>,
     id: SessionId,
     received: UnboundedReceiver<Received>,
-    /// The title of each tool call that has not ended yet.
+    /// The title of each tool call of the turn that has not ended yet.
     tool_calls: HashMap<ToolCallId, Option<String>>,
 }
 
@@ -240,7 +240,8 @@ impl Turn<'_> {
         }
     }
 
-    /// Records news of a tool call, and returns the call once it has ended.
+    /// Records news of a tool call, and returns the call when there is
+    /// something new to show: it started, its title changed, or it ended.
     fn follow_tool_call(
         &mut self,
         id: ToolCallId,
@@ -248,20 +249,29 @@ impl Turn<'_> {
         status: Option<ToolCallStatus>,
     ) -> Option<ToolCall> {
         let result = match status {
-            Some(ToolCallStatus::Completed) => ToolCallResult::Completed,
-            Some(ToolCallStatus::Failed) => ToolCallResult::Failed,
-            _ => {
-                let known = self.tool_calls.entry(id).or_default();
-                if title.is_some() {
-                    *known = title;
-                }
-                return None;
-            }
+            Some(ToolCallStatus::Completed) => Some(ToolCallResult::Completed),
+            Some(ToolCallStatus::Failed) => Some(ToolCallResult::Failed),
+            _ => None,
         };
-        let known = self.tool_calls.remove(&id).flatten();
-        Some(ToolCall {
-            title: title.or(known),
-            result,
+        let shown_id = id.to_string();
+        if result.is_some() {
+            let known = self.tool_calls.remove(&id).flatten();
+            return Some(ToolCall {
+                id: shown_id,
+                title: title.or(known),
+                result,
+            });
+        }
+        let started = !self.tool_calls.contains_key(&id);
+        let known = self.tool_calls.entry(id).or_default();
+        let retitled = title.is_some() && title != *known;
+        if retitled {
+            *known = title;
+        }
+        (started || retitled).then(|| ToolCall {
+            id: shown_id,
+            title: known.clone(),
+            result: None,
         })
     }
 
@@ -288,15 +298,19 @@ pub enum Update {
     ReplyText(String),
     /// The agent asks to be allowed to run a tool call.
     PermissionRequest(PermissionRequest),
-    /// A tool call the agent made has ended.
+    /// A tool call the agent made started, was retitled, or ended.
     ToolCall(ToolCall),
 }
 
-/// A tool call the agent made, once it has ended.
+/// A tool call the agent made, as it stands.
 pub struct ToolCall {
+    /// Tells the calls of a session apart: the news of one call carries the
+    /// same id from start to end.
+    pub id: String,
     /// The title the agent gave the call, if any.
     pub title: Option<String>,
-    pub result: ToolCallResult,
+    /// How the call ended, or `None` while it runs.
+    pub result: Option<ToolCallResult>,
 }
 
 /// How a tool call ended.

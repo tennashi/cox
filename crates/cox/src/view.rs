@@ -2,8 +2,8 @@
 //! input for it.
 
 use gpui::{
-    AnyView, App, Context, Entity, FocusHandle, Focusable, MouseButton, SharedString, Subscription,
-    Task, Window, div, prelude::*, px, rgb,
+    AnyView, App, Context, Entity, FocusHandle, Focusable, MouseButton, ScrollHandle, SharedString,
+    Subscription, Task, Window, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -16,6 +16,8 @@ const CONVERSATION_WIDTH: f32 = 420.;
 
 pub struct CoxView {
     conversation: Conversation,
+    /// Where the conversation is scrolled to.
+    scroll: ScrollHandle,
     /// The line the human is typing.
     input: Entity<LineInput>,
     /// The page the agent and the human work on, beside the conversation.
@@ -36,7 +38,7 @@ impl CoxView {
         let task = cx.spawn(async move |this, cx| {
             while let Some(event) = events.recv().await {
                 let shown = this.update(cx, |view, cx| {
-                    view.conversation.apply(event);
+                    view.follow(|conversation| conversation.apply(event));
                     cx.notify();
                 });
                 if shown.is_err() {
@@ -50,6 +52,7 @@ impl CoxView {
         });
         Self {
             conversation: Conversation::new(),
+            scroll: ScrollHandle::new(),
             input,
             stage: stage.map(Into::into),
             commands,
@@ -68,11 +71,30 @@ impl CoxView {
         &self.input
     }
 
+    /// Where the conversation is scrolled to.
+    #[must_use]
+    pub fn scroll(&self) -> &ScrollHandle {
+        &self.scroll
+    }
+
+    /// Changes the conversation with `change`, keeping its end in view if
+    /// it was: the human reads along as entries arrive, unless they have
+    /// scrolled back to read something earlier.
+    fn follow<T>(&mut self, change: impl FnOnce(&mut Conversation) -> T) -> T {
+        // The offset grows downward as negative numbers.
+        let at_end = self.scroll.offset().y <= -self.scroll.max_offset().height + px(1.);
+        let changed = change(&mut self.conversation);
+        if at_end {
+            self.scroll.scroll_to_bottom();
+        }
+        changed
+    }
+
     /// The human pressed Enter: send the line, or answer the permission
     /// request with the number typed.
     fn submit(&mut self, input: &Entity<LineInput>, cx: &mut Context<Self>) {
         let text = input.read(cx).text().to_owned();
-        if let Some(command) = self.conversation.submit(&text) {
+        if let Some(command) = self.follow(|conversation| conversation.submit(&text)) {
             self.send(command);
             input.update(cx, LineInput::clear);
             cx.notify();
@@ -106,10 +128,16 @@ impl CoxView {
                 .child(format!("> {text}"))
                 .into_any_element(),
             Entry::Reply(text) => div().child(text.clone()).into_any_element(),
-            Entry::ToolCall { title, result } => div()
-                .text_color(rgb(0xa0_a0a0))
-                .child(format!("[tool: {title} … {result:?}]"))
-                .into_any_element(),
+            Entry::ToolCall { title, result, .. } => {
+                let state = match result {
+                    Some(result) => format!("{result:?}"),
+                    None => "running".to_owned(),
+                };
+                div()
+                    .text_color(rgb(0xa0_a0a0))
+                    .child(format!("[tool: {title} … {state}]"))
+                    .into_any_element()
+            }
             Entry::Note(text) => div()
                 .text_color(rgb(0xa0_a0a0))
                 .child(text.clone())
@@ -183,6 +211,7 @@ impl CoxView {
                     .id("conversation")
                     .flex_1()
                     .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
                     .p_3()
                     .flex()
                     .flex_col()
