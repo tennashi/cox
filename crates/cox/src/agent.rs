@@ -66,6 +66,7 @@ async fn take_turn(
         match update {
             Update::ReplyText(text) => send(AgentEvent::ReplyText(text)),
             Update::ToolCall(call) => send(AgentEvent::ToolCall {
+                id: call.id,
                 title: call.title,
                 result: call.result,
             }),

@@ -1,6 +1,7 @@
 //! An ACP agent for tests, connected to Cox in memory. It replies to each
 //! prompt with `echo: <prompt>`, a word at a time. When the prompt mentions
-//! "permission", it first asks permission to run `touch x.txt`. When the
+//! "permission", it first announces a tool call to run `touch x.txt`, asks
+//! permission to run it, and then reports it done. When the
 //! prompt mentions "fail", it answers with an error instead. When the prompt
 //! mentions "tool", it first runs `ls` as a tool call that completes. It records
 //! what Cox asked of it and answered so tests can check what Cox did.
@@ -97,6 +98,7 @@ async fn serve(
                     if text.contains("permission") {
                         let answer = ask_permission(&turn, &request.session_id).await?;
                         answers.lock().unwrap().push(answer);
+                        finish(&turn, &request.session_id, "call-1")?;
                     }
                     for word in format!("echo: {text}").split_inclusive(' ') {
                         say(&turn, &request.session_id, word)?;
@@ -131,11 +133,16 @@ fn say(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()>
     ))
 }
 
-/// Asks permission to run `touch x.txt`, offering to allow or reject it once.
+/// Announces a tool call to run `touch x.txt` and asks permission to run
+/// it, offering to allow or reject it once.
 async fn ask_permission(
     cx: &ConnectionTo<Client>,
     session: &SessionId,
 ) -> Result<RequestPermissionOutcome> {
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::ToolCall(ToolCall::new("call-1", "touch x.txt")),
+    ))?;
     let request = RequestPermissionRequest::new(
         session.clone(),
         ToolCallUpdate::new("call-1", ToolCallUpdateFields::new().title("touch x.txt")),
@@ -146,6 +153,17 @@ async fn ask_permission(
     );
     let response = cx.send_request(request).block_task().await?;
     Ok(response.outcome)
+}
+
+/// Reports the tool call `id` done.
+fn finish(cx: &ConnectionTo<Client>, session: &SessionId, id: &str) -> Result<()> {
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            id.to_owned(),
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        )),
+    ))
 }
 
 /// Runs `ls` as a tool call: announces it, then reports it running and done.

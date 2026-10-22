@@ -106,10 +106,16 @@ impl CoxView {
                 .child(format!("> {text}"))
                 .into_any_element(),
             Entry::Reply(text) => div().child(text.clone()).into_any_element(),
-            Entry::ToolCall { title, result } => div()
-                .text_color(rgb(0xa0_a0a0))
-                .child(format!("[tool: {title} … {result:?}]"))
-                .into_any_element(),
+            Entry::ToolCall { title, result, .. } => {
+                let state = match result {
+                    Some(result) => format!("{result:?}"),
+                    None => "running".to_owned(),
+                };
+                div()
+                    .text_color(rgb(0xa0_a0a0))
+                    .child(format!("[tool: {title} … {state}]"))
+                    .into_any_element()
+            }
             Entry::Note(text) => div()
                 .text_color(rgb(0xa0_a0a0))
                 .child(text.clone())

@@ -9,6 +9,7 @@ use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermis
 use cox::conversation::{Entry, State};
 
 use cox::view::CoxView;
+use cox_acp::ToolCallResult;
 use fake_agent::FakeAgent;
 use gpui::{Entity, EntityInputHandler, Focusable, Modifiers, TestAppContext, VisualTestContext};
 
@@ -115,6 +116,7 @@ async fn answers_a_permission_request_with_a_click(cx: &mut TestAppContext) {
     cx.simulate_input("permission");
     cx.simulate_keystrokes("enter");
     wait_for(cx, &view, State::Asking).await;
+    assert_eq!(tool_call(cx, &view), ("touch x.txt".to_owned(), None));
     let option = cx
         .debug_bounds("option-1")
         .expect("the first option is drawn");
@@ -127,4 +129,25 @@ async fn answers_a_permission_request_with_a_click(cx: &mut TestAppContext) {
             SelectedPermissionOutcome::new("allow")
         )]
     );
+    assert_eq!(
+        tool_call(cx, &view),
+        ("touch x.txt".to_owned(), Some(ToolCallResult::Completed))
+    );
+}
+
+/// The title and result of the first tool call in the conversation.
+fn tool_call(
+    cx: &mut VisualTestContext,
+    view: &Entity<CoxView>,
+) -> (String, Option<ToolCallResult>) {
+    view.read_with(cx, |view, _| {
+        view.conversation()
+            .entries()
+            .iter()
+            .find_map(|entry| match entry {
+                Entry::ToolCall { title, result, .. } => Some((title.clone(), *result)),
+                _ => None,
+            })
+            .expect("a tool call is shown")
+    })
 }

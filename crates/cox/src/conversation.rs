@@ -7,10 +7,13 @@ use cox_acp::{PermissionAnswer, StopReason, ToolCallResult};
 pub enum AgentEvent {
     /// A piece of the agent's reply.
     ReplyText(String),
-    /// A tool call the agent made has ended.
+    /// A tool call the agent made started, was retitled, or ended.
     ToolCall {
+        /// The same for every event of one call.
+        id: String,
         title: Option<String>,
-        result: ToolCallResult,
+        /// How the call ended, or `None` while it runs.
+        result: Option<ToolCallResult>,
     },
     /// The agent asks permission for a tool call; the turn waits for an
     /// [`Command::Answer`].
@@ -41,9 +44,11 @@ pub enum Entry {
     Human(String),
     /// The agent's reply, as much of it as has arrived.
     Reply(String),
+    /// A tool call, running until it has a result.
     ToolCall {
+        id: String,
         title: String,
-        result: ToolCallResult,
+        result: Option<ToolCallResult>,
     },
     Permission {
         title: String,
@@ -142,6 +147,37 @@ impl Conversation {
         Some(Command::Answer(PermissionAnswer::Select(index)))
     }
 
+    /// Shows news of a tool call: in place of the call's entry once it has
+    /// one, so a call shows as running until it ends.
+    fn show_tool_call(
+        &mut self,
+        id: String,
+        title: Option<String>,
+        result: Option<ToolCallResult>,
+    ) {
+        let shown = self.entries.iter_mut().rev().find_map(|entry| match entry {
+            Entry::ToolCall {
+                id: shown_id,
+                title,
+                result,
+            } if *shown_id == id => Some((title, result)),
+            _ => None,
+        });
+        match shown {
+            Some((shown_title, shown_result)) => {
+                if let Some(title) = title {
+                    *shown_title = title;
+                }
+                *shown_result = result;
+            }
+            None => self.entries.push(Entry::ToolCall {
+                id,
+                title: title.unwrap_or_else(|| "a tool call".to_owned()),
+                result,
+            }),
+        }
+    }
+
     /// Shows what the agent side sent.
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
@@ -152,10 +188,7 @@ impl Conversation {
                     self.entries.push(Entry::Reply(text));
                 }
             }
-            AgentEvent::ToolCall { title, result } => self.entries.push(Entry::ToolCall {
-                title: title.unwrap_or_else(|| "a tool call".to_owned()),
-                result,
-            }),
+            AgentEvent::ToolCall { id, title, result } => self.show_tool_call(id, title, result),
             AgentEvent::PermissionRequest { title, options } => {
                 self.entries.push(Entry::Permission {
                     title: title.unwrap_or_else(|| "a tool call".to_owned()),
@@ -218,6 +251,41 @@ mod tests {
             ]
         );
         assert_eq!(conversation.state(), State::Idle);
+    }
+
+    #[test]
+    fn shows_a_tool_call_as_running_until_it_ends() {
+        let mut conversation = Conversation::new();
+        conversation.submit("tool");
+        let tool_call = |title: Option<&str>, result| AgentEvent::ToolCall {
+            id: "call-1".to_owned(),
+            title: title.map(str::to_owned),
+            result,
+        };
+
+        conversation.apply(tool_call(Some("ls"), None));
+        assert_eq!(
+            conversation.entries()[1],
+            Entry::ToolCall {
+                id: "call-1".to_owned(),
+                title: "ls".to_owned(),
+                result: None,
+            }
+        );
+
+        conversation.apply(AgentEvent::ReplyText("listing".to_owned()));
+        conversation.apply(tool_call(None, Some(ToolCallResult::Completed)));
+        assert_eq!(
+            conversation.entries()[1..],
+            [
+                Entry::ToolCall {
+                    id: "call-1".to_owned(),
+                    title: "ls".to_owned(),
+                    result: Some(ToolCallResult::Completed),
+                },
+                Entry::Reply("listing".to_owned()),
+            ]
+        );
     }
 
     #[test]
