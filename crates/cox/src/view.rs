@@ -7,7 +7,7 @@ use gpui::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::agent::Agent;
+use crate::agent::{Agent, AgentThread};
 use crate::conversation::{Command, Conversation, Entry, State};
 use crate::input::{LineInput, Submitted};
 
@@ -23,6 +23,8 @@ pub struct CoxView {
     /// The page the agent and the human work on, beside the conversation.
     stage: Option<AnyView>,
     commands: UnboundedSender<Command>,
+    /// The agent lives as long as the window: dropping this stops it.
+    _agent: AgentThread,
     _events: Task<()>,
     _submitted: Subscription,
 }
@@ -34,6 +36,7 @@ impl CoxView {
         let Agent {
             commands,
             mut events,
+            thread,
         } = agent;
         let task = cx.spawn(async move |this, cx| {
             while let Some(event) = events.recv().await {
@@ -56,6 +59,7 @@ impl CoxView {
             input,
             stage: stage.map(Into::into),
             commands,
+            _agent: thread,
             _events: task,
             _submitted: submitted,
         }
