@@ -5,7 +5,7 @@
 //!   input means, in plain Rust, so it is tested without GPUI.
 //! - [`agent`] runs the ACP connection on a tokio runtime of its own, and talks
 //!   to the window over channels.
-//! - [`input`] is the line the human types into, which an input method can
+//! - [`input`] is the text the human types into, which an input method can
 //!   compose into.
 //! - [`view`] draws the conversation with GPUI and turns keystrokes and clicks
 //!   into input.

@@ -46,7 +46,7 @@ impl CoxView {
                 }
             }
         });
-        let input = cx.new(LineInput::new);
+        let input = cx.new(LineInput::wrapping);
         let submitted = cx.subscribe(&input, |view, input, Submitted, cx| {
             view.submit(&input, cx);
         });
@@ -90,7 +90,7 @@ impl CoxView {
         changed
     }
 
-    /// The human pressed Enter: send the line, or answer the permission
+    /// The human pressed Enter: send the text, or answer the permission
     /// request with the number typed.
     fn submit(&mut self, input: &Entity<LineInput>, cx: &mut Context<Self>) {
         let text = input.read(cx).text().to_owned();
@@ -99,7 +99,7 @@ impl CoxView {
             input.update(cx, LineInput::clear);
             cx.notify();
         }
-        // Otherwise the line stays: a turn is running, or the number was
+        // Otherwise the text stays: a turn is running, or the number was
         // not one of the options.
     }
 
