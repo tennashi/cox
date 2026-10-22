@@ -5,20 +5,41 @@
 //! the input method is still composing arrives as marked text, which the
 //! input shows underlined. Offsets in that trait count UTF-16 units, as the
 //! platforms do, while `content` is indexed in bytes.
+//!
+//! The human selects with the mouse or with Shift and the arrows, and cuts,
+//! copies and pastes with the usual keys. The input holds one line, so a
+//! pasted line break becomes a space.
 
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, Context, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, GlobalElementId, InspectorElementId, KeyBinding, LayoutId, PaintQuad,
-    Pixels, ShapedLine, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill,
-    point, prelude::*, px, relative, rgb, size,
+    App, Bounds, ClipboardItem, Context, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId,
+    KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    Pixels, Point, ShapedLine, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions,
+    div, fill, point, prelude::*, px, relative, rgb, rgba, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
 actions!(
     line_input,
-    [Backspace, Delete, Left, Right, Home, End, Submit]
+    [
+        Backspace,
+        Delete,
+        Left,
+        Right,
+        Home,
+        End,
+        SelectLeft,
+        SelectRight,
+        SelectToHome,
+        SelectToEnd,
+        SelectAll,
+        Cut,
+        Copy,
+        Paste,
+        Submit,
+    ]
 );
 
 const KEY_CONTEXT: &str = "LineInput";
@@ -32,6 +53,15 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("right", Right, Some(KEY_CONTEXT)),
         KeyBinding::new("home", Home, Some(KEY_CONTEXT)),
         KeyBinding::new("end", End, Some(KEY_CONTEXT)),
+        KeyBinding::new("shift-left", SelectLeft, Some(KEY_CONTEXT)),
+        KeyBinding::new("shift-right", SelectRight, Some(KEY_CONTEXT)),
+        KeyBinding::new("shift-home", SelectToHome, Some(KEY_CONTEXT)),
+        KeyBinding::new("shift-end", SelectToEnd, Some(KEY_CONTEXT)),
+        // The secondary key is Command on macOS, Control elsewhere.
+        KeyBinding::new("secondary-a", SelectAll, Some(KEY_CONTEXT)),
+        KeyBinding::new("secondary-x", Cut, Some(KEY_CONTEXT)),
+        KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT)),
+        KeyBinding::new("secondary-v", Paste, Some(KEY_CONTEXT)),
         KeyBinding::new("enter", Submit, Some(KEY_CONTEXT)),
     ]);
 }
@@ -44,11 +74,17 @@ pub struct LineInput {
     content: String,
     /// Byte range of the selection; empty when it is just the cursor.
     selected_range: Range<usize>,
+    /// Whether the cursor is at the start of the selection rather than its
+    /// end: the selection grew to the left.
+    selection_reversed: bool,
+    /// Whether a mouse button went down on the line and is still held.
+    selecting: bool,
     /// Byte range the input method is composing, shown underlined.
     marked_range: Option<Range<usize>>,
-    /// What the last paint drew, for placing the input method's candidate
-    /// window.
+    /// What the last paint drew, and where, for placing the input method's
+    /// candidate window and finding the text under the mouse.
     last_layout: Option<ShapedLine>,
+    last_bounds: Option<Bounds<Pixels>>,
 }
 
 impl LineInput {
@@ -57,8 +93,11 @@ impl LineInput {
             focus_handle: cx.focus_handle(),
             content: String::new(),
             selected_range: 0..0,
+            selection_reversed: false,
+            selecting: false,
             marked_range: None,
             last_layout: None,
+            last_bounds: None,
         }
     }
 
@@ -81,9 +120,8 @@ impl LineInput {
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.content.clear();
         self.content.push_str(text);
-        self.selected_range = self.content.len()..self.content.len();
+        self.move_to(self.content.len(), cx);
         self.marked_range = None;
-        cx.notify();
     }
 
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
@@ -135,9 +173,108 @@ impl LineInput {
         self.move_to(self.content.len(), cx);
     }
 
+    fn select_left(&mut self, _: &SelectLeft, _window: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.previous_boundary(self.cursor()), cx);
+    }
+
+    fn select_right(&mut self, _: &SelectRight, _window: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.next_boundary(self.cursor()), cx);
+    }
+
+    fn select_to_home(&mut self, _: &SelectToHome, _window: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(0, cx);
+    }
+
+    fn select_to_end(&mut self, _: &SelectToEnd, _window: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.content.len(), cx);
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(0, cx);
+        self.select_to(self.content.len(), cx);
+    }
+
+    fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.copy_selection(cx) {
+            self.replace_text_in_range(None, "", window, cx);
+        }
+    }
+
+    fn copy(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
+        self.copy_selection(cx);
+    }
+
+    fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            self.replace_text_in_range(None, &one_line(&text), window, cx);
+        }
+    }
+
+    /// Puts the selected text on the clipboard, and says whether there was
+    /// any.
+    fn copy_selection(&self, cx: &mut Context<Self>) -> bool {
+        if self.selected_range.is_empty() {
+            return false;
+        }
+        let text = self.content[self.selected_range.clone()].to_owned();
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        true
+    }
+
+    fn mouse_down(&mut self, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.selecting = true;
+        let offset = self.offset_at(event.position);
+        if event.modifiers.shift {
+            self.select_to(offset, cx);
+        } else {
+            self.move_to(offset, cx);
+        }
+    }
+
+    fn mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.selecting {
+            self.select_to(self.offset_at(event.position), cx);
+        }
+    }
+
+    fn mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.selecting = false;
+    }
+
+    /// Where the cursor is: the end of the selection it moves.
+    fn cursor(&self) -> usize {
+        if self.selection_reversed {
+            self.selected_range.start
+        } else {
+            self.selected_range.end
+        }
+    }
+
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
+        self.selection_reversed = false;
         cx.notify();
+    }
+
+    /// Moves the cursor to `offset`, keeping the other end of the selection
+    /// where it is.
+    fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let anchor = if self.selection_reversed {
+            self.selected_range.end
+        } else {
+            self.selected_range.start
+        };
+        self.selection_reversed = offset < anchor;
+        self.selected_range = anchor.min(offset)..anchor.max(offset);
+        cx.notify();
+    }
+
+    /// The offset in the text closest to `position` in the window.
+    fn offset_at(&self, position: Point<Pixels>) -> usize {
+        let (Some(bounds), Some(line)) = (self.last_bounds, self.last_layout.as_ref()) else {
+            return 0;
+        };
+        line.closest_index_for_x(position.x - bounds.left())
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
@@ -227,7 +364,7 @@ impl EntityInputHandler for LineInput {
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
             range: self.range_to_utf16(&self.selected_range),
-            reversed: false,
+            reversed: self.selection_reversed,
         })
     }
 
@@ -257,9 +394,8 @@ impl EntityInputHandler for LineInput {
     ) {
         let range = self.target_range(range_utf16.as_ref());
         let placed = self.replace(range, text);
-        self.selected_range = placed.end..placed.end;
+        self.move_to(placed.end, cx);
         self.marked_range = None;
-        cx.notify();
     }
 
     /// Text the input method is still composing.
@@ -282,6 +418,7 @@ impl EntityInputHandler for LineInput {
             }
             None => placed.end..placed.end,
         };
+        self.selection_reversed = false;
         cx.notify();
     }
 
@@ -308,11 +445,16 @@ impl EntityInputHandler for LineInput {
 
     fn character_index_for_point(
         &mut self,
-        _point: gpui::Point<Pixels>,
+        point: Point<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        None
+        let bounds = self.last_bounds?;
+        let index = self
+            .last_layout
+            .as_ref()?
+            .index_for_x(point.x - bounds.left())?;
+        Some(self.offset_to_utf16(index))
     }
 }
 
@@ -328,12 +470,31 @@ impl Render for LineInput {
             .on_action(cx.listener(Self::right))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_to_home))
+            .on_action(cx.listener(Self::select_to_end))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::paste))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+            .on_mouse_move(cx.listener(Self::mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .w_full()
             .child(LineElement { input: cx.entity() })
     }
 }
 
-/// Draws the line: the text, the composed part underlined, and the cursor.
+/// A pasted text as one line: each line break, of any kind, becomes a
+/// space.
+fn one_line(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\n', '\r'], " ")
+}
+
+/// Draws the line: the text, the composed part underlined, the selection,
+/// and the cursor.
 struct LineElement {
     input: Entity<LineInput>,
 }
@@ -341,6 +502,7 @@ struct LineElement {
 /// What `prepaint` shaped, taken by `paint` of the same frame.
 struct Prepainted {
     line: Option<ShapedLine>,
+    selection: Option<PaintQuad>,
     cursor: Option<PaintQuad>,
 }
 
@@ -388,7 +550,8 @@ impl Element for LineElement {
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
         let text = input.content.clone();
-        let cursor = input.selected_range.end;
+        let selected = input.selected_range.clone();
+        let cursor = input.cursor();
         let style = window.text_style();
         let plain = TextRun {
             len: text.len(),
@@ -427,6 +590,21 @@ impl Element for LineElement {
         let line = window
             .text_system()
             .shape_line(text.into(), font_size, &runs, None);
+        let selection = (!selected.is_empty()).then(|| {
+            fill(
+                Bounds::from_corners(
+                    point(
+                        bounds.left() + line.x_for_index(selected.start),
+                        bounds.top(),
+                    ),
+                    point(
+                        bounds.left() + line.x_for_index(selected.end),
+                        bounds.bottom(),
+                    ),
+                ),
+                rgba(0x4080_ff60),
+            )
+        });
         let cursor = fill(
             Bounds::new(
                 point(bounds.left() + line.x_for_index(cursor), bounds.top()),
@@ -436,6 +614,7 @@ impl Element for LineElement {
         );
         Prepainted {
             line: Some(line),
+            selection,
             cursor: Some(cursor),
         }
     }
@@ -456,6 +635,9 @@ impl Element for LineElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
+        if let Some(selection) = prepainted.selection.take() {
+            window.paint_quad(selection);
+        }
         let line = prepainted.line.take().expect("prepaint shaped the line");
         line.paint(bounds.origin, window.line_height(), window, cx)
             .expect("the line was shaped for this window");
@@ -464,7 +646,9 @@ impl Element for LineElement {
         {
             window.paint_quad(cursor);
         }
-        self.input
-            .update(cx, |input, _| input.last_layout = Some(line));
+        self.input.update(cx, |input, _| {
+            input.last_layout = Some(line);
+            input.last_bounds = Some(bounds);
+        });
     }
 }

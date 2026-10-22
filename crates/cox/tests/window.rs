@@ -12,7 +12,10 @@ use cox::conversation::{Entry, State};
 use cox::view::CoxView;
 use cox_acp::{McpServer, ToolCallResult};
 use fake_agent::FakeAgent;
-use gpui::{Entity, EntityInputHandler, Focusable, Modifiers, TestAppContext, VisualTestContext};
+use gpui::{
+    ClipboardItem, Entity, EntityInputHandler, Focusable, Modifiers, TestAppContext,
+    VisualTestContext,
+};
 
 /// Opens the window, talking to a fake agent, with the input focused.
 fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<CoxView>, &mut VisualTestContext) {
@@ -152,6 +155,51 @@ async fn sends_what_the_input_method_commits(cx: &mut TestAppContext) {
     wait_for(cx, &view, State::Idle).await;
 
     assert_eq!(agent.prompts(), ["ab今日"]);
+}
+
+#[gpui::test]
+fn cuts_copies_and_pastes_with_the_keyboard(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("hello world");
+    cx.simulate_keystrokes("shift-left shift-left shift-left shift-left shift-left secondary-x");
+    assert_eq!(input_text(cx, &view), "hello ");
+    assert_eq!(clipboard(cx), Some("world".to_owned()));
+
+    cx.simulate_keystrokes("home secondary-v");
+    assert_eq!(input_text(cx, &view), "worldhello ");
+
+    cx.simulate_keystrokes("secondary-a secondary-c");
+    assert_eq!(clipboard(cx), Some("worldhello ".to_owned()));
+    cx.simulate_input("x");
+    assert_eq!(input_text(cx, &view), "x");
+}
+
+#[gpui::test]
+fn pastes_line_breaks_as_spaces(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.write_to_clipboard(ClipboardItem::new_string("one\ntwo\r\nthree".to_owned()));
+    cx.simulate_keystrokes("secondary-v");
+
+    assert_eq!(input_text(cx, &view), "one two three");
+}
+
+/// Selecting leftward and then rightward past where it started turns the
+/// selection around that point.
+#[gpui::test]
+fn a_selection_keeps_its_anchor(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("abcd");
+    cx.simulate_keystrokes("left left shift-left shift-right shift-right shift-right secondary-x");
+
+    assert_eq!(input_text(cx, &view), "ab");
+    assert_eq!(clipboard(cx), Some("cd".to_owned()));
+}
+
+fn clipboard(cx: &mut VisualTestContext) -> Option<String> {
+    cx.read_from_clipboard().and_then(|item| item.text())
 }
 
 fn input_text(cx: &mut VisualTestContext, view: &Entity<CoxView>) -> String {
