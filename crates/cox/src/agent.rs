@@ -3,10 +3,12 @@
 //! over channels. Tokio's channels do not need a tokio runtime to wait on,
 //! so the window awaits events on GPUI's executor.
 
-use std::thread;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use cox_acp::{McpServer, PermissionAnswer, Session, Transport, Update};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
 
 use crate::conversation::{AgentEvent, Command};
 
@@ -14,6 +16,34 @@ use crate::conversation::{AgentEvent, Command};
 pub struct Agent {
     pub commands: UnboundedSender<Command>,
     pub events: UnboundedReceiver<AgentEvent>,
+    /// Stops the agent when dropped.
+    pub thread: AgentThread,
+}
+
+/// How long the agent side's tasks get to end once the agent is stopped.
+const STOP_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The thread the agent side runs on. Dropping it stops the agent, along
+/// with every process the agent started, and waits for the thread to end.
+///
+/// The process ending does not do that by itself: the agent runs in a
+/// process group of its own, and its processes outlive Cox unless the
+/// connection to it is dropped first, which kills the group.
+pub struct AgentThread {
+    /// Never sent: dropping it tells the thread to stop.
+    stop: Option<oneshot::Sender<()>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for AgentThread {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            log::error!("the agent's thread panicked");
+        }
+    }
 }
 
 /// Starts the agent side on a thread of its own. `connect` runs on its
@@ -25,15 +55,61 @@ pub fn spawn<T: Transport + 'static>(
 ) -> Agent {
     let (commands, received) = unbounded_channel();
     let (sent, events) = unbounded_channel();
-    thread::spawn(move || {
+    let (stop, stopped) = oneshot::channel();
+    let thread = thread::spawn(move || {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        close_on_exec();
         let outcome = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(anyhow::Error::from)
-            .and_then(|runtime| runtime.block_on(run(connect, mcp_servers, received, &sent)));
+            .and_then(|runtime| {
+                let outcome = runtime.block_on(async {
+                    tokio::select! {
+                        outcome = run(connect, mcp_servers, received, &sent) => outcome,
+                        // Dropping the connection kills the agent.
+                        _ = stopped => Ok(()),
+                    }
+                });
+                // The connection's tasks go with the runtime.
+                runtime.shutdown_timeout(STOP_TIMEOUT);
+                outcome
+            });
         let _ = sent.send(AgentEvent::Closed(outcome.err().map(|e| format!("{e:#}"))));
     });
-    Agent { commands, events }
+    Agent {
+        commands,
+        events,
+        thread: AgentThread {
+            stop: Some(stop),
+            thread: Some(thread),
+        },
+    }
+}
+
+/// Marks every file Cox has open to close when a program starts, so the
+/// agent, started next, gets none of them. Rust opens its files that way
+/// already, but CEF opens the stage's `DevTools` port without: an agent
+/// that outlived Cox would keep the port from the next Cox.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn close_on_exec() {
+    let Ok(entries) = std::fs::read_dir("/dev/fd") else {
+        return;
+    };
+    let fds: Vec<libc::c_int> = entries
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+        .collect();
+    // Past standard input, output and error, which the agent gets its own of.
+    for fd in fds.into_iter().filter(|&fd| fd > 2) {
+        // SAFETY: this only sets a flag of the descriptor, and fails
+        // harmlessly on one no longer open, like the listing's own.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+    }
 }
 
 async fn run<T: Transport + 'static>(
@@ -95,4 +171,88 @@ async fn take_turn(
         Err(error) => send(AgentEvent::TurnFailed(format!("{error:#}"))),
     }
     Ok(())
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod tests {
+    use std::process::Command;
+    use std::time::Instant;
+
+    use super::*;
+
+    /// Whether process `pid` is still running: there, and not a zombie.
+    fn running(pid: &str) -> bool {
+        let output = Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .expect("ps runs");
+        let state = String::from_utf8_lossy(&output.stdout);
+        output.status.success() && !state.trim_start().starts_with('Z')
+    }
+
+    /// Waits up to five seconds for `done`.
+    fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            if Instant::now() > deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+
+    #[test]
+    fn dropping_the_agent_ends_every_process_it_started() {
+        let file = std::env::temp_dir().join(format!("cox-agent-{}", std::process::id()));
+        // Like `npx`, a launcher whose child does the work. This agent never
+        // answers, so only stopping it ends it.
+        let script = format!("sleep 60 & echo $! > {}; wait", file.display());
+        let agent = spawn(
+            move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            Vec::new(),
+        );
+        let mut pid = String::new();
+        assert!(wait_until(|| {
+            pid = std::fs::read_to_string(&file).unwrap_or_default();
+            pid.ends_with('\n')
+        }));
+        let pid = pid.trim();
+        assert!(running(pid));
+
+        drop(agent);
+        let _ = std::fs::remove_file(&file);
+        assert!(
+            wait_until(|| !running(pid)),
+            "the agent's child outlived it"
+        );
+    }
+
+    #[test]
+    fn the_agent_gets_none_of_coxs_files() {
+        let file = std::env::temp_dir().join(format!("cox-agent-files-{}", std::process::id()));
+        // A descriptor that stays open across `exec`, like CEF's port.
+        let open = std::fs::File::open("/dev/null").unwrap();
+        // SAFETY: `open` is a valid descriptor; the copy is closed below.
+        let inherited = unsafe { libc::dup(std::os::fd::AsRawFd::as_raw_fd(&open)) };
+        assert!(inherited > 2);
+        let script = format!(
+            "if [ -e /dev/fd/{inherited} ]; then echo has; else echo not; fi > {}",
+            file.display()
+        );
+        let agent = spawn(
+            move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            Vec::new(),
+        );
+        let mut seen = String::new();
+        assert!(wait_until(|| {
+            seen = std::fs::read_to_string(&file).unwrap_or_default();
+            seen.ends_with('\n')
+        }));
+        drop(agent);
+        // SAFETY: `inherited` is open, and nothing else uses it.
+        unsafe { libc::close(inherited) };
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(seen, "not\n");
+    }
 }

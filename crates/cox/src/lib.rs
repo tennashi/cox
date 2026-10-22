@@ -17,6 +17,7 @@
 //!   and tells the stage where the agent points, clicks and types, which
 //!   [`pointer`] turns into what the stage draws over the page.
 //! - [`tools`] says which MCP servers the agent gets: the stage's.
+//! - [`quit`] lets signals, and CEF on macOS, ask the app to quit.
 
 pub mod agent;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -27,6 +28,8 @@ pub mod input;
 pub mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod pointer;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod quit;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod relay;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -6,6 +6,13 @@
 //! method, and an Objective-C object that gets a message it does not know
 //! ends the process. So the methods are added to that class at run time,
 //! with `sendEvent:` wrapped to keep the flag.
+//!
+//! Quitting is `terminate:`, which runs the app's quit handlers and ends the
+//! process. Those shut CEF down, which must not happen while CEF has the
+//! main thread, yet CEF quits from there itself, as when it is told to
+//! over CDP. So a quit during CEF's turn (see [`cef_turn`]) is only asked
+//! for, and done once the turn is over, much as CEF's own examples take
+//! `terminate:` over.
 
 use std::ffi::CString;
 use std::fmt::Write as _;
@@ -19,6 +26,9 @@ use objc2::{class, msg_send, sel};
 /// Whether `NSApp` is inside `sendEvent:` right now. Events are sent on
 /// the main thread only, but the flag is read from CEF's threads too.
 static HANDLING_SEND_EVENT: AtomicBool = AtomicBool::new(false);
+
+/// Whether CEF has the main thread right now.
+static IN_CEF_TURN: AtomicBool = AtomicBool::new(false);
 
 /// Teaches the application's class the protocol. Call it once, after GPUI
 /// made the application and CEF's framework is loaded, and before the
@@ -55,12 +65,27 @@ pub fn adopt_cef_app_protocol() {
             &Encoding::Void,
             &[<*mut AnyObject>::ENCODING],
         );
+        add_method(
+            class,
+            sel!(terminate:),
+            terminate as extern "C-unwind" fn(_, _, _),
+            &Encoding::Void,
+            &[<*mut AnyObject>::ENCODING],
+        );
         // The protocol itself is declared by CEF's framework. Chromium only
         // checks for it in debug builds, so a missing one is not an error.
         if let Some(protocol) = AnyProtocol::get(c"CefAppProtocol") {
             class_addProtocol(class, protocol);
         }
     }
+}
+
+/// Runs `turn`, which gives CEF the main thread. A quit meanwhile waits
+/// until the turn is over.
+pub fn cef_turn(turn: impl FnOnce()) {
+    let was = IN_CEF_TURN.swap(true, Ordering::SeqCst);
+    turn();
+    IN_CEF_TURN.store(was, Ordering::SeqCst);
 }
 
 /// Adds a method to `class`, unless it already has one of that name.
@@ -116,4 +141,18 @@ extern "C-unwind" fn send_event(this: &AnyObject, _cmd: Sel, event: *mut AnyObje
         let _: () = msg_send![super(this, class!(NSApplication)), sendEvent: event];
     }
     HANDLING_SEND_EVENT.store(was, Ordering::SeqCst);
+}
+
+/// `NSApplication`'s `terminate:`, unless CEF has the main thread: then
+/// the quit is only asked for.
+extern "C-unwind" fn terminate(this: &AnyObject, _cmd: Sel, sender: *mut AnyObject) {
+    if IN_CEF_TURN.load(Ordering::SeqCst) {
+        log::info!("quitting once CEF's turn is over");
+        crate::quit::ask();
+        return;
+    }
+    // SAFETY: as in `send_event`, with the sender AppKit passed in.
+    unsafe {
+        let _: () = msg_send![super(this, class!(NSApplication)), terminate: sender];
+    }
 }

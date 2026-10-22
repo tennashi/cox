@@ -42,6 +42,9 @@ cef-dll-sys = "=152.3.0"
 # The relay between the agent's browser tools and the stage: see
 # `src/relay.rs`.
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+# Signal handlers in place of CEF's (`src/quit.rs`), and keeping Cox's open
+# files from the agent (`src/agent.rs`).
+libc = "0.2.188"
 serde_json = "1.0.154"
 tokio-tungstenite = "0.30.0"
 
