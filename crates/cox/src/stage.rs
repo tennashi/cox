@@ -3,7 +3,9 @@
 //! A toolbar above the picture holds the address and the history buttons.
 //!
 //! The picture arrives from CEF as BGRA pixels whenever the page changes;
-//! the stage uploads it as a GPUI image and paints it over its bounds.
+//! the stage uploads it as a GPUI image and paints it over its bounds. The
+//! dropdown of a `<select>` arrives as a picture of its own, painted over
+//! the page where CEF says it goes.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -19,7 +21,7 @@ use gpui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::browser::{Browser, Caret, Event, Modifiers, MouseButton, Navigation};
+use crate::browser::{Browser, Caret, Event, Frame, Modifiers, MouseButton, Navigation};
 use crate::input::{LineInput, Submitted};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
@@ -30,6 +32,8 @@ pub struct Stage {
     focus_handle: FocusHandle,
     /// The picture currently uploaded to the GPU.
     image: Option<Arc<RenderImage>>,
+    /// The popup's picture, while one is open.
+    popup: Option<Arc<RenderImage>>,
     /// Text the input method is composing, if any.
     composing: Option<String>,
     /// Where the browser is, as of the last `Navigated` event.
@@ -89,6 +93,7 @@ impl Stage {
             browser,
             focus_handle: cx.focus_handle(),
             image: None,
+            popup: None,
             composing: None,
             address_shown: navigation.url.clone(),
             navigation,
@@ -209,20 +214,46 @@ impl Stage {
         bounds: Bounds<Pixels>,
         window: &mut Window,
     ) -> Option<Arc<RenderImage>> {
-        let scale = window.scale_factor();
-        let width = whole_pixels(bounds.size.width);
-        let height = whole_pixels(bounds.size.height);
-        self.browser.resize(width, height, scale);
-        if let Some(frame) = self.browser.take_frame()
-            && let Some(buffer) = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)
+        self.browser.resize(
+            whole_pixels(bounds.size.width),
+            whole_pixels(bounds.size.height),
+            window.scale_factor(),
+        );
+        if let Some(image) = upload(self.browser.take_frame())
+            && let Some(old) = self.image.replace(image)
         {
-            // GPUI keeps images as BGRA too, so the bytes go in as they are.
-            let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
-            if let Some(old) = self.image.replace(image) {
-                window.drop_image(old).ok();
-            }
+            window.drop_image(old).ok();
         }
         self.image.clone()
+    }
+
+    /// Called from paint: picks up the popup's newest picture, and where
+    /// it goes over the stage, while one is open.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "pixel counts are far below what f32 keeps exactly"
+    )]
+    fn prepare_popup(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+    ) -> Option<(Arc<RenderImage>, Bounds<Pixels>)> {
+        let Some(rect) = self.browser.popup() else {
+            if let Some(old) = self.popup.take() {
+                window.drop_image(old).ok();
+            }
+            return None;
+        };
+        if let Some(image) = upload(self.browser.take_popup_frame())
+            && let Some(old) = self.popup.replace(image)
+        {
+            window.drop_image(old).ok();
+        }
+        let popup = Bounds {
+            origin: bounds.origin + point(px(rect.x as f32), px(rect.y as f32)),
+            size: size(px(rect.width as f32), px(rect.height as f32)),
+        };
+        self.popup.clone().map(|image| (image, popup))
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -236,6 +267,14 @@ impl Stage {
         self.browser
             .key_up(&keystroke.key, modifiers(keystroke.modifiers));
     }
+}
+
+/// A picture from CEF as a GPUI image. GPUI keeps images as BGRA too, so
+/// the bytes go in as they are.
+fn upload(frame: Option<Frame>) -> Option<Arc<RenderImage>> {
+    let frame = frame?;
+    let buffer = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)?;
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
 /// A position in the window, as a position in the stage in whole logical
@@ -526,14 +565,22 @@ impl Element for StageElement {
             cx,
         );
 
-        let image = self
-            .stage
-            .update(cx, |stage, _| stage.prepare_frame(bounds, window));
+        let (image, popup) = self.stage.update(cx, |stage, _| {
+            (
+                stage.prepare_frame(bounds, window),
+                stage.prepare_popup(bounds, window),
+            )
+        });
         window.paint_quad(fill(bounds, rgb(0x33_3333)));
         if let Some(image) = image {
             let at = image_bounds(&image, bounds, window.scale_factor());
             window
                 .paint_image(at, Corners::default(), image, 0, false)
+                .ok();
+        }
+        if let Some((image, popup)) = popup {
+            window
+                .paint_image(popup, Corners::default(), image, 0, false)
                 .ok();
         }
 

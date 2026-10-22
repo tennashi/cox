@@ -67,6 +67,8 @@ fn main() {
 
         #[cfg(target_os = "macos")]
         {
+            // Before the browser exists: CEF asks the app about itself.
+            cox::macos::adopt_cef_app_protocol();
             let pumped = browser.clone();
             cx.spawn(async move |cx| {
                 loop {

@@ -40,6 +40,11 @@ cef = { version = "=152.3.0", default-features = false }
 # matches CEF 152.0.6.
 cef-dll-sys = "=152.3.0"
 
+# CEF expects a little of the app's Objective-C class on macOS: see
+# `src/macos.rs`.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+
 [dev-dependencies]
 agent-client-protocol.workspace = true
 gpui = { version = "0.2.2", features = ["test-support"] }
