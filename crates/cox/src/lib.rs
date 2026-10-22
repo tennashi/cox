@@ -19,6 +19,8 @@ pub mod agent;
 pub mod browser;
 pub mod conversation;
 pub mod input;
+#[cfg(target_os = "macos")]
+pub mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod stage;
 pub mod view;
