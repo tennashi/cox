@@ -2,8 +2,8 @@
 //! session.
 //!
 //! For the stage, that is the Chrome `DevTools` MCP server, connected to the
-//! stage's remote debugging port: the agent reads and drives the page the
-//! human sees. It runs on Node through `npx`, which fetches it the first
+//! stage's remote debugging port through the relay: the agent reads and
+//! drives the page the human sees, and the stage shows where. It runs on Node through `npx`, which fetches it the first
 //! time.
 
 use std::ffi::OsStr;
@@ -14,11 +14,11 @@ use cox_acp::McpServer;
 /// The Chrome `DevTools` MCP server, at the version Cox was tried with.
 const DEVTOOLS_MCP: &str = "chrome-devtools-mcp@1.11.0";
 
-/// The MCP server that gives the agent the stage, whose remote debugging
-/// port is `port`. It runs with the `npx` found on `path`, a value of
-/// `PATH`, or is `None` when there is none.
+/// The MCP server that gives the agent the stage, through the relay on
+/// `relay_port`. It runs with the `npx` found on `path`, a value of `PATH`,
+/// or is `None` when there is none.
 #[must_use]
-pub fn stage(port: i32, path: &OsStr) -> Option<McpServer> {
+pub fn stage(relay_port: u16, path: &OsStr) -> Option<McpServer> {
     let Some(npx) = find("npx", path) else {
         log::warn!("no npx on PATH, so the agent gets no tools for the stage");
         return None;
@@ -29,8 +29,9 @@ pub fn stage(port: i32, path: &OsStr) -> Option<McpServer> {
         args: vec![
             "-y".to_owned(),
             DEVTOOLS_MCP.to_owned(),
-            "--browserUrl".to_owned(),
-            format!("http://127.0.0.1:{port}"),
+            // The relay takes any path; this one is the browser's own.
+            "--wsEndpoint".to_owned(),
+            format!("ws://127.0.0.1:{relay_port}/devtools/browser"),
             // Both send data to Google unless turned off: usage statistics,
             // and the page's URL to look up field data for performance
             // traces. That is the human's call, not Cox's.
@@ -54,13 +55,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_stage_is_the_devtools_server_on_its_port() {
+    fn the_stage_is_the_devtools_server_through_the_relay() {
         let bin = std::env::temp_dir().join(format!("cox-tools-{}", std::process::id()));
         fs::create_dir_all(&bin).unwrap();
         fs::write(bin.join("npx"), "").unwrap();
         let path = std::env::join_paths([bin.join("missing"), bin.clone()]).unwrap();
 
-        let server = stage(9222, &path);
+        let server = stage(4321, &path);
         fs::remove_dir_all(&bin).unwrap();
 
         let server = server.expect("npx is on the path");
@@ -68,13 +69,17 @@ mod tests {
         assert_eq!(server.command, bin.join("npx"));
         assert_eq!(
             server.args[1..4],
-            [DEVTOOLS_MCP, "--browserUrl", "http://127.0.0.1:9222"]
+            [
+                DEVTOOLS_MCP,
+                "--wsEndpoint",
+                "ws://127.0.0.1:4321/devtools/browser"
+            ]
         );
     }
 
     #[test]
     fn there_is_no_stage_without_npx() {
         let missing = std::env::temp_dir().join("cox-tools-missing");
-        assert_eq!(stage(9222, missing.as_os_str()), None);
+        assert_eq!(stage(4321, missing.as_os_str()), None);
     }
 }

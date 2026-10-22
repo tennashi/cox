@@ -36,7 +36,10 @@ the Chrome DevTools Protocol on port 9222, and Cox hands the agent the
 [Chrome DevTools MCP server](https://www.npmjs.com/package/chrome-devtools-mcp)
 connected to it, so the agent reads and drives the page the human sees.
 The server runs through `npx`, so Node has to be on `PATH`; without it,
-the agent gets no tools for the stage.
+the agent gets no tools for the stage. The server connects through a
+relay in Cox, which passes everything on and tells the stage where the
+agent points, clicks and types, so the stage can draw the agent's
+pointer over the page.
 
 On Linux, `cargo run` is enough: CEF is linked into `cox`, and its helper
 processes run `cox` again.
