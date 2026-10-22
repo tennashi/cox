@@ -6,8 +6,10 @@
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
 
 use gpui::{
-    App, Application, Bounds, Focusable, WindowBounds, WindowOptions, prelude::*, px, size,
+    App, Application, Bounds, Focusable, WindowBounds, WindowOptions, actions, prelude::*, px, size,
 };
+
+actions!(cox, [Quit]);
 
 const USAGE: &str = "Usage: cox [--stage <url>] <agent command> [args...]";
 
@@ -41,6 +43,11 @@ impl Args {
 #[cfg(target_os = "macos")]
 const PUMP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
 
+/// How often the app looks whether it was asked to quit from where it
+/// could not quit right away (see `cox::quit`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const QUIT_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
 fn main() {
     env_logger::init();
     let args = Args::parse(std::env::args().skip(1));
@@ -52,6 +59,11 @@ fn main() {
     // Elsewhere the option still parses, and does nothing.
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = &args.stage;
+    // In place of CEF's handlers, which quit without the app's quit handlers.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if let Err(error) = cox::quit::on_signals() {
+        log::error!("signals will end Cox without stopping the agent: {error}");
+    }
 
     if args.command.is_empty() {
         eprintln!("{USAGE}");
@@ -74,6 +86,9 @@ fn main() {
 
     Application::new().run(move |cx: &mut App| {
         cox::input::bind_keys(cx);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        #[cfg(target_os = "macos")]
+        cx.bind_keys([gpui::KeyBinding::new("cmd-q", Quit, None)]);
         // The agent gets the page the human sees.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let tools = relay_port
@@ -97,8 +112,19 @@ fn main() {
             })
             .detach();
         }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor().timer(QUIT_CHECK_INTERVAL).await;
+                if cox::quit::take_asked() {
+                    let _ = cx.update(|cx| cx.quit());
+                }
+            }
+        })
+        .detach();
         // Quitting ends the app's run loop, or on macOS the whole process,
-        // so the browser goes before either.
+        // so the browser goes before either. The agent goes with the
+        // window.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let closing = browser.clone();

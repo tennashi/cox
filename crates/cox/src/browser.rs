@@ -465,7 +465,7 @@ impl Browser {
     /// CEF's side between calls. Linux does not need it.
     #[cfg(target_os = "macos")]
     pub fn pump(&self) {
-        cef::do_message_loop_work();
+        crate::macos::cef_turn(cef::do_message_loop_work);
     }
 
     /// The newest picture CEF painted since the last call, if any.
