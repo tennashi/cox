@@ -86,10 +86,28 @@ pub enum MouseButton {
 
 /// Modifier keys held during an event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each key is held or not, as CEF's flags have them"
+)]
 pub struct Modifiers {
     pub shift: bool,
     pub control: bool,
     pub alt: bool,
+    /// The Command key on macOS; nothing elsewhere.
+    pub command: bool,
+}
+
+/// An editing command the page's focused element carries out, as a
+/// keyboard shortcut would in a browser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditCommand {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
 }
 
 /// Where the input method's caret is, in logical pixels within the stage.
@@ -350,6 +368,24 @@ impl Browser {
         }
     }
 
+    /// Carries out `command` in the frame that has the focus.
+    pub fn edit(&self, command: EditCommand) {
+        let Some(frame) = self
+            .browser()
+            .and_then(|browser| browser.focused_frame().or_else(|| browser.main_frame()))
+        else {
+            return;
+        };
+        match command {
+            EditCommand::Undo => frame.undo(),
+            EditCommand::Redo => frame.redo(),
+            EditCommand::Cut => frame.cut(),
+            EditCommand::Copy => frame.copy(),
+            EditCommand::Paste => frame.paste(),
+            EditCommand::SelectAll => frame.select_all(),
+        }
+    }
+
     /// Where the popup is, while one is open.
     #[must_use]
     pub fn popup(&self) -> Option<PopupRect> {
@@ -525,6 +561,9 @@ fn event_flags(modifiers: Modifiers) -> u32 {
     if modifiers.alt {
         flags |= cef_event_flags_t::EVENTFLAG_ALT_DOWN.0;
     }
+    if modifiers.command {
+        flags |= cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0;
+    }
     flags
 }
 
@@ -545,8 +584,9 @@ fn button_type(button: MouseButton) -> MouseButtonType {
 }
 
 /// Windows virtual key code for a GPUI key name: CEF speaks VK codes on
-/// every platform. Keys without a code here still type, since their
-/// character arrives through [`Browser::commit`].
+/// every platform. GPUI names a key by what it types without Shift, on
+/// the US layout for the symbols. Keys without a code here still type,
+/// since their character arrives through [`Browser::commit`].
 fn virtual_key(key: &str) -> i32 {
     match key {
         "backspace" => 0x08,
@@ -555,6 +595,7 @@ fn virtual_key(key: &str) -> i32 {
         "shift" => 0x10,
         "control" => 0x11,
         "alt" => 0x12,
+        "capslock" => 0x14,
         "escape" => 0x1B,
         "space" => 0x20,
         "pageup" => 0x21,
@@ -565,16 +606,57 @@ fn virtual_key(key: &str) -> i32 {
         "up" => 0x26,
         "right" => 0x27,
         "down" => 0x28,
+        "insert" => 0x2D,
         "delete" => 0x2E,
+        "platform" => 0x5B,
+        ";" => 0xBA,
+        "=" => 0xBB,
+        "," => 0xBC,
+        "-" => 0xBD,
+        "." => 0xBE,
+        "/" => 0xBF,
+        "`" => 0xC0,
+        "[" => 0xDB,
+        "\\" => 0xDC,
+        "]" => 0xDD,
+        "'" => 0xDE,
         key => {
             let mut chars = key.chars();
             match (chars.next(), chars.next()) {
                 (Some(c), None) if c.is_ascii_alphanumeric() => {
                     i32::from(c.to_ascii_uppercase() as u8)
                 }
+                // f1 to f24.
+                (Some('f'), Some(_)) => key[1..]
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|n| (1..=24).contains(n))
+                    .map_or(0, |n| 0x6F + n),
                 _ => 0,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::virtual_key;
+
+    #[test]
+    fn keys_have_their_windows_codes() {
+        assert_eq!(virtual_key("a"), 0x41);
+        assert_eq!(virtual_key("7"), 0x37);
+        assert_eq!(virtual_key("enter"), 0x0D);
+        assert_eq!(virtual_key("-"), 0xBD);
+        assert_eq!(virtual_key("f1"), 0x70);
+        assert_eq!(virtual_key("f12"), 0x7B);
+    }
+
+    #[test]
+    fn unknown_keys_have_no_code() {
+        assert_eq!(virtual_key("f0"), 0);
+        assert_eq!(virtual_key("fn"), 0);
+        assert_eq!(virtual_key("ä"), 0);
     }
 }
 
