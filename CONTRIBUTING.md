@@ -4,6 +4,8 @@
 
 - `cargo xtask setup` installs the pinned development tools.
 - `cargo xtask ci` runs every check. A change is ready only when it passes.
+- `cargo xtask install` builds Cox for release and installs it apart from
+  `target/` (see [Using Cox to build Cox](#using-cox-to-build-cox)).
 
 ## Building on macOS
 
@@ -61,6 +63,22 @@ five copies of `cox-helper` (`Cox Helper.app`, `Cox Helper (GPU).app`,
 ...) under `Contents/Frameworks`. CEF fixes that layout and those names,
 starting from the executable's. `cargo run` on macOS stops at once,
 saying where the framework was expected.
+
+## Using Cox to build Cox
+
+The Cox in use runs from where `cargo xtask install` puts it, so that
+building and trying a change in `target/` leaves it be:
+
+- On macOS, `~/Applications/Cox.app`: run
+  `~/Applications/Cox.app/Contents/MacOS/Cox --stage <url> <agent command>`.
+- On Linux, `~/.local/bin/cox`, with what it needs of CEF in
+  `~/.local/lib/cox`.
+
+A Cox started from it, such as `target/debug/Cox.app`, runs beside it
+with a DevTools port of its own (see [The stage](#the-stage)), so each
+agent drives its own stage. Installing
+again while the Cox in use runs is fine: it runs the new version once it
+is started again.
 
 ## Pull requests
 

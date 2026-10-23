@@ -1,7 +1,7 @@
 //! Development tasks for the Cox workspace, run as `cargo xtask <task>`.
 
-use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use anyhow::{Context, bail};
 use xshell::{Shell, cmd};
@@ -18,6 +18,9 @@ Tasks:
             Build Cox and assemble Cox.app, the macOS app bundle, next to
             the executables under target/
     ci      Run every check that CI runs: format, lint, test and dependencies
+    install
+            Build Cox for release and install it apart from target/:
+            ~/Applications/Cox.app on macOS, ~/.local/bin/cox on Linux
     setup   Install the pinned development tools that `ci` needs
     help    Show this message
 ";
@@ -27,6 +30,7 @@ fn main() -> anyhow::Result<()> {
     match env::args().nth(1).as_deref() {
         Some("bundle") => bundle(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("ci") => ci(&sh),
+        Some("install") => install(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("setup") => setup(&sh),
         None | Some("help" | "-h" | "--help") => {
             print!("{USAGE}");
@@ -91,16 +95,17 @@ fn bundle(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
         [flag] if flag == "--release" => true,
         _ => bail!("usage: cargo xtask bundle [--release]"),
     };
-    let profile = release.then_some("--release");
-    // cargo's JSON output says where the executables went, and where
-    // cef-dll-sys's build found the CEF distribution.
-    let messages = cmd!(
-        sh,
-        "cargo build --bin cox --bin cox-helper {profile...} --message-format=json-render-diagnostics"
-    )
-    .read()?;
-    let build = Build::parse(&messages)?;
+    let app = assemble(sh, &build(sh, release)?)?;
+    println!(
+        "Run Cox as {}",
+        app.join("Contents/MacOS").join(APP).display()
+    );
+    Ok(())
+}
 
+/// Lays out `Cox.app` next to the executables of `build`, and answers
+/// where it is.
+fn assemble(sh: &Shell, build: &Build) -> anyhow::Result<PathBuf> {
     let app = build
         .cox
         .parent()
@@ -132,12 +137,110 @@ fn bundle(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
         sh.create_dir(contents.join("MacOS"))?;
         sh.copy_file(&build.helper, contents.join("MacOS").join(&name))?;
     }
+    Ok(app)
+}
 
-    println!(
-        "Run Cox as {}",
-        app.join("Contents/MacOS").join(APP).display()
-    );
+/// What Cox needs of the CEF distribution on Linux when it runs: CEF and
+/// the libraries it loads, and its resources. Not CEF's `libvulkan.so.1`,
+/// which `cox` must not find (see `crates/cox/build.rs`), nor its sandbox,
+/// which Cox runs without.
+const CEF_ON_LINUX: &[&str] = &[
+    "libcef.so",
+    "libEGL.so",
+    "libGLESv2.so",
+    "libvk_swiftshader.so",
+    "vk_swiftshader_icd.json",
+    "icudtl.dat",
+    "v8_context_snapshot.bin",
+    "chrome_100_percent.pak",
+    "chrome_200_percent.pak",
+    "resources.pak",
+    "locales",
+];
+
+/// Builds Cox for release and installs it where the Cox in use runs from,
+/// apart from `target/`, so that building and trying Cox leaves it be:
+/// `~/Applications/Cox.app` on macOS, and on Linux `~/.local/bin/cox`
+/// with CEF in `~/.local/lib/cox`, where `cox` looks for it first.
+///
+/// A Cox already running there keeps running; it runs the new version
+/// once it is started again.
+fn install(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
+        bail!("install knows where Cox goes on macOS and Linux only");
+    }
+    if !args.is_empty() {
+        bail!("usage: cargo xtask install");
+    }
+    let home = PathBuf::from(env::var_os("HOME").context("HOME is set")?);
+    let build = build(sh, true)?;
+    let installed = if cfg!(target_os = "macos") {
+        let app = assemble(sh, &build)?;
+        let applications = home.join("Applications");
+        sh.create_dir(&applications)?;
+        let installed = applications.join(format!("{APP}.app"));
+        // cp keeps what the framework is made of, as `assemble` does.
+        replace(sh, &installed, |staged| {
+            Ok(cmd!(sh, "cp -R {app} {staged}").run()?)
+        })?;
+        installed.join("Contents/MacOS").join(APP)
+    } else {
+        replace(sh, &home.join(".local/lib/cox"), |staged| {
+            sh.create_dir(staged)?;
+            for name in CEF_ON_LINUX {
+                let file = build.cef_dir.join(name);
+                cmd!(sh, "cp -R {file} {staged}/").run()?;
+            }
+            Ok(())
+        })?;
+        let bin = home.join(".local/bin");
+        sh.create_dir(&bin)?;
+        let installed = bin.join("cox");
+        replace(sh, &installed, |staged| {
+            Ok(sh.copy_file(&build.cox, staged)?)
+        })?;
+        installed
+    };
+    println!("Run Cox as {}", installed.display());
     Ok(())
+}
+
+/// Puts what `make` makes at `path`, in place of what is there. `make`
+/// makes it beside `path`, so `path` holds either the old one or the new
+/// one, whole, all but for a moment.
+fn replace(
+    sh: &Shell,
+    path: &Path,
+    make: impl FnOnce(&Path) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let name = path
+        .file_name()
+        .context("the path ends in a name")?
+        .to_string_lossy();
+    let staged = path.with_file_name(format!(".{name}.new"));
+    let old = path.with_file_name(format!(".{name}.old"));
+    sh.remove_path(&staged)?;
+    sh.remove_path(&old)?;
+    make(&staged)?;
+    if sh.path_exists(path) {
+        fs::rename(path, &old)?;
+    }
+    fs::rename(&staged, path)?;
+    sh.remove_path(&old)?;
+    Ok(())
+}
+
+/// Builds `cox` and `cox-helper`, for release or not.
+fn build(sh: &Shell, release: bool) -> anyhow::Result<Build> {
+    let profile = release.then_some("--release");
+    // cargo's JSON output says where the executables went, and where
+    // cef-dll-sys's build found the CEF distribution.
+    let messages = cmd!(
+        sh,
+        "cargo build --bin cox --bin cox-helper {profile...} --message-format=json-render-diagnostics"
+    )
+    .read()?;
+    Build::parse(&messages)
 }
 
 /// What `cargo build --message-format=json` said that `bundle` needs.
