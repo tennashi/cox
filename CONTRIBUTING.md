@@ -32,7 +32,8 @@ build downloads the matching CEF distribution from the official builds
 (about 200 MB, once per target directory).
 
 `cox --stage <url> <agent command>` shows `<url>` on the stage. CEF opens
-the Chrome DevTools Protocol on port 9222, and Cox hands the agent the
+the Chrome DevTools Protocol on a port that is free when Cox starts, so
+two Cox can run side by side, and Cox hands the agent the
 [Chrome DevTools MCP server](https://www.npmjs.com/package/chrome-devtools-mcp)
 connected to it, so the agent reads and drives the page the human sees.
 The server runs through `npx`, so Node has to be on `PATH`; without it,

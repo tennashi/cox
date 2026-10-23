@@ -71,16 +71,8 @@ fn main() {
     }
     let command = args.command;
 
-    // The agent's browser tools go through the relay, which tells the
-    // stage where the agent points, clicks and types.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let (relay_port, agent_input) = match cox::relay::start(cox::browser::DEVTOOLS_PORT) {
-        Ok((port, input)) => (Some(port), input),
-        Err(error) => {
-            log::error!("no relay to the stage, so the agent gets no tools for it: {error:#}");
-            (None, tokio::sync::mpsc::unbounded_channel().1)
-        }
-    };
+    let (relay_port, agent_input) = relay(&browser);
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut stage_input = Some((events, agent_input));
 
@@ -163,6 +155,29 @@ fn main() {
         cx.on_window_closed(|cx| cx.quit()).detach();
         cx.activate(true);
     });
+}
+
+/// Starts the relay that the agent's browser tools go through, which tells
+/// the stage where the agent points, clicks and types. Answers its port,
+/// or `None` when it did not start, and the input the agent sends.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn relay(
+    browser: &cox::browser::Browser,
+) -> (
+    Option<u16>,
+    tokio::sync::mpsc::UnboundedReceiver<cox::relay::AgentInput>,
+) {
+    match browser
+        .devtools_port()
+        .ok_or_else(|| anyhow::anyhow!("the browser has no DevTools port"))
+        .and_then(cox::relay::start)
+    {
+        Ok((port, input)) => (Some(port), input),
+        Err(error) => {
+            log::error!("no relay to the stage, so the agent gets no tools for it: {error:#}");
+            (None, tokio::sync::mpsc::unbounded_channel().1)
+        }
+    }
 }
 
 #[cfg(test)]
