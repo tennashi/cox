@@ -33,6 +33,8 @@ use cef::{
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+use crate::profile::Profile;
+
 /// One picture CEF painted: the whole view, or the whole popup, in BGRA,
 /// in device pixels.
 pub struct Frame {
@@ -274,8 +276,8 @@ pub fn load_framework(process: Process) {
 #[derive(Clone)]
 pub struct Browser {
     shared: SharedRef,
-    /// Where CEF keeps this run's cache.
-    cache: std::path::PathBuf,
+    /// Where CEF keeps cookies, logins and the like.
+    profile: Arc<Profile>,
     /// The port an agent connects to with the Chrome `DevTools` Protocol
     /// (CDP), if one was free.
     devtools_port: Option<u16>,
@@ -336,9 +338,8 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
     }
     assert_eq!(code, -1, "the browser process carries on");
 
-    // A cache of its own per run: Chromium treats the cache directory as
-    // the mark of a running instance, so two Cox windows must not share one.
-    let cache = std::env::temp_dir().join(format!("cox-cef-{}", std::process::id()));
+    let profile = Profile::open();
+    let profile_path = CefString::from(profile.path().to_string_lossy().as_ref());
     let devtools_port = match free_port() {
         Ok(port) => Some(port),
         Err(error) => {
@@ -358,7 +359,14 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
         external_message_pump: 1,
         // 0 leaves the port closed.
         remote_debugging_port: devtools_port.map_or(0, i32::from),
-        root_cache_path: CefString::from(cache.to_string_lossy().as_ref()),
+        root_cache_path: profile_path.clone(),
+        // Left empty, CEF keeps cookies and storage in memory only, which
+        // a throwaway profile may as well.
+        cache_path: if profile.is_kept() {
+            profile_path
+        } else {
+            CefString::default()
+        },
         ..Default::default()
     };
     let initialized = cef::initialize(
@@ -372,7 +380,7 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
     (
         Browser {
             shared,
-            cache,
+            profile: Arc::new(profile),
             devtools_port,
         },
         receiver,
@@ -713,9 +721,7 @@ impl Browser {
             std::thread::sleep(Duration::from_millis(50));
         }
         cef::shutdown();
-        if let Err(error) = std::fs::remove_dir_all(&self.cache) {
-            log::warn!("the cache at {} stays: {error}", self.cache.display());
-        }
+        self.profile.discard();
     }
 }
 
@@ -909,8 +915,10 @@ mod handlers {
             /// Chromium's first-run flow would open a terms-of-service window
             /// of its own and wait for it; Cox is not that kind of browser.
             /// On macOS it would also ask for the login keychain, to keep the
-            /// key it encrypts cookies with; a cache that lives for one run
-            /// has no use for that.
+            /// key it encrypts cookies with, and ask again for each build of
+            /// Cox, which the keychain takes for a different app. So the
+            /// cookies Cox keeps are guarded by the permissions on their
+            /// directory alone.
             ///
             /// Going back would bring a page out of the back-forward cache
             /// frozen at the size it was left at, and painted so until the

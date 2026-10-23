@@ -44,6 +44,15 @@ relay in Cox, which passes everything on and tells the stage where the
 agent points, clicks and types, so the stage can draw the agent's
 pointer over the page.
 
+The stage keeps its cookies, logins and storage in a profile that lasts
+across runs, one for each place Cox runs from. The Cox that
+`cargo xtask install` puts in place keeps it in
+`~/Library/Application Support/Cox/stage` on macOS and
+`~/.local/share/cox/stage` on Linux; any other, such as
+`target/debug/Cox.app`, keeps its own in `cox-stage` beside it, as in
+`target/debug/cox-stage`. Only one Cox at a time can use a profile; a
+second Cox from the same place gets a profile for that run only.
+
 On Linux, `cargo run` is enough: CEF is linked into `cox`, and its helper
 processes run `cox` again.
 
@@ -75,8 +84,8 @@ building and trying a change in `target/` leaves it be:
   `~/.local/lib/cox`.
 
 A Cox started from it, such as `target/debug/Cox.app`, runs beside it
-with a DevTools port of its own (see [The stage](#the-stage)), so each
-agent drives its own stage. Installing
+with a DevTools port and a stage profile of its own (see
+[The stage](#the-stage)), so each agent drives its own stage. Installing
 again while the Cox in use runs is fine: it runs the new version once it
 is started again.
 
