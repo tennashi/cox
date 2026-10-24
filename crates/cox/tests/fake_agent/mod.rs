@@ -6,6 +6,7 @@
 //! mentions "tool", it first runs `ls` as a tool call that completes. It records
 //! what Cox asked of it and answered so tests can check what Cox did.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -21,6 +22,7 @@ use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result}
 #[derive(Default)]
 pub struct FakeAgent {
     sessions_opened: Arc<AtomicUsize>,
+    cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Vec<String>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
@@ -33,6 +35,7 @@ impl FakeAgent {
         tokio::spawn(serve(
             agent_end,
             Arc::clone(&self.sessions_opened),
+            Arc::clone(&self.cwd),
             Arc::clone(&self.mcp_servers),
             Arc::clone(&self.prompts),
             Arc::clone(&self.answers),
@@ -43,6 +46,11 @@ impl FakeAgent {
     /// How many sessions Cox has opened.
     pub fn sessions_opened(&self) -> usize {
         self.sessions_opened.load(Ordering::SeqCst)
+    }
+
+    /// The directory Cox opened the session in.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        self.cwd.lock().unwrap().clone()
     }
 
     /// The MCP servers Cox handed over when it opened the session.
@@ -64,6 +72,7 @@ impl FakeAgent {
 async fn serve(
     transport: Channel,
     sessions_opened: Arc<AtomicUsize>,
+    cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Vec<String>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
@@ -83,6 +92,7 @@ async fn serve(
         .on_receive_request(
             async move |request: NewSessionRequest, responder, _cx| {
                 sessions_opened.fetch_add(1, Ordering::SeqCst);
+                *cwd.lock().unwrap() = Some(request.cwd);
                 *mcp_servers.lock().unwrap() = request.mcp_servers;
                 responder.respond(NewSessionResponse::new("session-1"))
             },

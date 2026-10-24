@@ -3,6 +3,7 @@
 //! over channels. Tokio's channels do not need a tokio runtime to wait on,
 //! so the window awaits events on GPUI's executor.
 
+use std::path::PathBuf;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -47,10 +48,11 @@ impl Drop for AgentThread {
 }
 
 /// Starts the agent side on a thread of its own. `connect` runs on its
-/// runtime and returns the transport to the agent, which gets the tools of
-/// `mcp_servers`.
+/// runtime and returns the transport to the agent, which works in `cwd`, an
+/// absolute path, and gets the tools of `mcp_servers`.
 pub fn spawn<T: Transport + 'static>(
     connect: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+    cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
 ) -> Agent {
     let (commands, received) = unbounded_channel();
@@ -66,7 +68,7 @@ pub fn spawn<T: Transport + 'static>(
             .and_then(|runtime| {
                 let outcome = runtime.block_on(async {
                     tokio::select! {
-                        outcome = run(connect, mcp_servers, received, &sent) => outcome,
+                        outcome = run(connect, cwd, mcp_servers, received, &sent) => outcome,
                         // Dropping the connection kills the agent.
                         _ = stopped => Ok(()),
                     }
@@ -114,12 +116,13 @@ fn close_on_exec() {
 
 async fn run<T: Transport + 'static>(
     connect: impl FnOnce() -> anyhow::Result<T>,
+    cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     mut commands: UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
     let transport = connect()?;
-    cox_acp::connect(transport, mcp_servers, async |mut session| {
+    cox_acp::connect(transport, cwd, mcp_servers, async |mut session| {
         while let Some(command) = commands.recv().await {
             // An answer with no permission request waiting has nothing to answer.
             if let Command::Prompt(text) = command {
@@ -210,6 +213,7 @@ mod tests {
         let script = format!("sleep 60 & echo $! > {}; wait", file.display());
         let agent = spawn(
             move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            std::env::temp_dir(),
             Vec::new(),
         );
         let mut pid = String::new();
@@ -242,6 +246,7 @@ mod tests {
         );
         let agent = spawn(
             move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            std::env::temp_dir(),
             Vec::new(),
         );
         let mut seen = String::new();

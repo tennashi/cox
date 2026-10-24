@@ -28,7 +28,7 @@ gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 # The version gpui uses, to hand it the browser's frames.
 image = "0.25.10"
 log = "0.4.29"
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 unicode-segmentation = "1.12.0"
 
 # The stage runs on Linux and macOS. On macOS, CEF lives in an app bundle
@@ -42,6 +42,9 @@ cef-dll-sys = "=152.3.0"
 # The relay between the agent's browser tools and the stage: see
 # `src/relay.rs`.
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+# Reading only the head of what the browser sends the agent: see
+# `src/relay.rs`.
+serde = { version = "1.0.229", features = ["derive"] }
 # Signal handlers in place of CEF's (`src/quit.rs`), and keeping Cox's open
 # files from the agent (`src/agent.rs`).
 libc = "0.2.188"

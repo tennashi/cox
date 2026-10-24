@@ -408,6 +408,13 @@ fn clicks(count: usize) -> i32 {
     i32::try_from(count).unwrap_or(i32::MAX)
 }
 
+impl Drop for Stage {
+    /// The page goes with its stage.
+    fn drop(&mut self) {
+        self.browser.close();
+    }
+}
+
 impl Focusable for Stage {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
