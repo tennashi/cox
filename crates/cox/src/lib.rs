@@ -13,6 +13,7 @@
 //!   and [`stage`] shows that page in the window and sends the human's
 //!   input to it. An agent drives the same page over CDP. On Linux and
 //!   macOS; on macOS, inside the app bundle `cargo xtask bundle` makes.
+//!   [`profile`] is where the browser keeps logins and the like.
 //! - [`relay`] stands between the agent's browser tools and the browser,
 //!   and tells the stage where the agent points, clicks and types, which
 //!   [`pointer`] turns into what the stage draws over the page.
@@ -28,6 +29,8 @@ pub mod input;
 pub mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod pointer;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod profile;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod quit;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

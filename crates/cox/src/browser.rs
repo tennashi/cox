@@ -2,7 +2,8 @@
 //! window of its own. CEF hands each painted picture to [`Shared`], and the
 //! stage hands mouse, keys and input-method text back through [`Browser`].
 //! CEF's remote debugging port stays on, so an agent can drive the same
-//! page over CDP meanwhile.
+//! page over CDP meanwhile. The port is one that is free when Cox starts,
+//! so that two Cox can run side by side.
 //!
 //! CEF runs its own threads: the browser is created and painted on CEF's UI
 //! thread, while GPUI owns the main thread. Everything the two sides share
@@ -32,8 +33,7 @@ use cef::{
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-/// The port an agent connects to with the Chrome `DevTools` Protocol (CDP).
-pub const DEVTOOLS_PORT: u16 = 9222;
+use crate::profile::Profile;
 
 /// One picture CEF painted: the whole view, or the whole popup, in BGRA,
 /// in device pixels.
@@ -276,8 +276,11 @@ pub fn load_framework(process: Process) {
 #[derive(Clone)]
 pub struct Browser {
     shared: SharedRef,
-    /// Where CEF keeps this run's cache.
-    cache: std::path::PathBuf,
+    /// Where CEF keeps cookies, logins and the like.
+    profile: Arc<Profile>,
+    /// The port an agent connects to with the Chrome `DevTools` Protocol
+    /// (CDP), if one was free.
+    devtools_port: Option<u16>,
 }
 
 /// Starts CEF and the browser showing `url`, and returns the handle to it
@@ -335,9 +338,15 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
     }
     assert_eq!(code, -1, "the browser process carries on");
 
-    // A cache of its own per run: Chromium treats the cache directory as
-    // the mark of a running instance, so two Cox windows must not share one.
-    let cache = std::env::temp_dir().join(format!("cox-cef-{}", std::process::id()));
+    let profile = Profile::open();
+    let profile_path = CefString::from(profile.path().to_string_lossy().as_ref());
+    let devtools_port = match free_port() {
+        Ok(port) => Some(port),
+        Err(error) => {
+            log::error!("no port is free for DevTools, so agents cannot reach the stage: {error}");
+            None
+        }
+    };
     let settings = Settings {
         no_sandbox: 1,
         windowless_rendering_enabled: 1,
@@ -348,8 +357,16 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
         // the app gives it its turns with `Browser::pump`.
         #[cfg(target_os = "macos")]
         external_message_pump: 1,
-        remote_debugging_port: i32::from(DEVTOOLS_PORT),
-        root_cache_path: CefString::from(cache.to_string_lossy().as_ref()),
+        // 0 leaves the port closed.
+        remote_debugging_port: devtools_port.map_or(0, i32::from),
+        root_cache_path: profile_path.clone(),
+        // Left empty, CEF keeps cookies and storage in memory only, which
+        // a throwaway profile may as well.
+        cache_path: if profile.is_kept() {
+            profile_path
+        } else {
+            CefString::default()
+        },
         ..Default::default()
     };
     let initialized = cef::initialize(
@@ -360,7 +377,22 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
     );
     assert_eq!(initialized, 1, "CEF initializes");
 
-    (Browser { shared, cache }, receiver)
+    (
+        Browser {
+            shared,
+            profile: Arc::new(profile),
+            devtools_port,
+        },
+        receiver,
+    )
+}
+
+/// A port no one listens on right now. Chromium wants a port number, not
+/// a listener, so another process could still take it before Chromium
+/// does; the system hands out such ports in turn, which makes that rare.
+fn free_port() -> std::io::Result<u16> {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    Ok(listener.local_addr()?.port())
 }
 
 impl Browser {
@@ -371,6 +403,13 @@ impl Browser {
 
     fn host(&self) -> Option<BrowserHost> {
         self.shared().host.clone()
+    }
+
+    /// The port an agent connects to with the Chrome `DevTools` Protocol
+    /// (CDP), or `None` when none was free.
+    #[must_use]
+    pub fn devtools_port(&self) -> Option<u16> {
+        self.devtools_port
     }
 
     /// Whether the browser exists and takes input.
@@ -682,9 +721,7 @@ impl Browser {
             std::thread::sleep(Duration::from_millis(50));
         }
         cef::shutdown();
-        if let Err(error) = std::fs::remove_dir_all(&self.cache) {
-            log::warn!("the cache at {} stays: {error}", self.cache.display());
-        }
+        self.profile.discard();
     }
 }
 
@@ -878,8 +915,10 @@ mod handlers {
             /// Chromium's first-run flow would open a terms-of-service window
             /// of its own and wait for it; Cox is not that kind of browser.
             /// On macOS it would also ask for the login keychain, to keep the
-            /// key it encrypts cookies with; a cache that lives for one run
-            /// has no use for that.
+            /// key it encrypts cookies with, and ask again for each build of
+            /// Cox, which the keychain takes for a different app. So the
+            /// cookies Cox keeps are guarded by the permissions on their
+            /// directory alone.
             ///
             /// Going back would bring a page out of the back-forward cache
             /// frozen at the size it was left at, and painted so until the

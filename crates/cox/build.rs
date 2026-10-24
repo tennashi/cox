@@ -6,6 +6,10 @@
 //! window. So the loader is pointed at a mirror of the distribution, made
 //! of links, that leaves that one file out.
 //!
+//! `cargo xtask install` puts `cox` in `~/.local/bin` and the same files
+//! in `~/.local/lib/cox`, so the loader looks there first, beside the
+//! executable. Next to `target/<profile>/cox` there is no such directory.
+//!
 //! macOS needs none of this: there, nothing links CEF at build time, and
 //! `cargo xtask bundle` puts the framework where the app loads it from.
 
@@ -33,5 +37,6 @@ fn main() {
         std::os::unix::fs::symlink(entry.path(), lib_dir.join(entry.file_name()))
             .expect("the CEF file is linked");
     }
+    println!("cargo::rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/cox");
     println!("cargo::rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
 }
