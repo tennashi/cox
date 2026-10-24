@@ -41,7 +41,7 @@ fn open_window(
         let agent = Arc::new(FakeAgent::default());
         opened.borrow_mut().push(Arc::clone(&agent));
         let agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new());
-        cx.new(|cx| SessionView::new(agent, None::<AnyView>, cx))
+        cx.new(|cx| SessionView::new(agent, None::<AnyView>, Rc::new(|_, _, _| {}), cx))
     });
     let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, open, cx));
     cx.update(|window, cx| window.focus(&workspace.focus_handle(cx)));

@@ -379,7 +379,7 @@ impl Render for Workspace {
             .flex()
             .bg(rgb(0x1e_1e1e))
             .text_color(rgb(0xe0_e0e0))
-            .font_family("monospace")
+            .font_family(crate::view::FONT)
             .text_size(px(14.))
             .child(self.render_list(cx))
             .child(div().flex_1().min_w_0().h_full().child(shown))

@@ -4,10 +4,11 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui::{App, Entity, Window, prelude::*};
 
-use crate::view::SessionView;
+use crate::view::{OpenLink, SessionView};
 
 /// Opens sessions, each with an agent of the same command.
 pub struct Launcher {
@@ -26,7 +27,7 @@ impl Launcher {
     /// view.
     pub fn open(&self, cwd: PathBuf, window: &mut Window, cx: &mut App) -> Entity<SessionView> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let (stage, tools) = {
+        let (stage, tools, open_link) = {
             let (browser, events) = self.cef.open(&self.stage);
             let (relay_port, agent_input) = self.relay(&browser);
             // The agent gets the page the human sees.
@@ -36,16 +37,23 @@ impl Launcher {
                 .collect();
             let stage =
                 cx.new(|cx| crate::stage::Stage::new(browser, events, agent_input, window, cx));
-            (Some(stage), tools)
+            // Links in the conversation open on the session's stage.
+            let shown = stage.clone();
+            let open_link: OpenLink = Rc::new(move |url, window, cx| {
+                shown.update(cx, |stage, cx| stage.open(url, window, cx));
+            });
+            (Some(stage), tools, open_link)
         };
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        let (stage, tools) = {
+        let (stage, tools, open_link) = {
             let _ = (window, &self.stage, &self.path);
-            (None::<gpui::AnyView>, Vec::new())
+            // With no stage, links open in the human's browser.
+            let open_link: OpenLink = Rc::new(|url, _, cx| cx.open_url(url));
+            (None::<gpui::AnyView>, Vec::new(), open_link)
         };
         let command = self.command.clone();
         let agent = crate::agent::spawn(move || cox_acp::launch(command), cwd, tools);
-        cx.new(|cx| SessionView::new(agent, stage, cx))
+        cx.new(|cx| SessionView::new(agent, stage, open_link, cx))
     }
 
     /// Starts the relay that the agent's browser tools go through, kept to

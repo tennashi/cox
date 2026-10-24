@@ -2,10 +2,18 @@
 //! beside it, and turns keystrokes and clicks into input for it. Escape in
 //! the conversation, or its Stop button, stops the turn the agent is
 //! taking.
+//!
+//! The human selects the conversation's text with the mouse, a word with
+//! a double click and a whole paragraph or block with a triple click, and
+//! copies it with the usual key while the input has nothing selected. A
+//! click on a link opens it on the session's stage.
+
+use std::rc::Rc;
 
 use gpui::{
-    AnyView, App, Context, Entity, FocusHandle, Focusable, KeyBinding, MouseButton, ScrollHandle,
-    SharedString, Subscription, Task, Window, actions, div, prelude::*, px, rgb,
+    AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, SharedString, Subscription, Task,
+    Window, actions, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -13,12 +21,16 @@ use crate::agent::{Agent, AgentThread};
 use crate::conversation::{Command, Content, Conversation, Entry, State};
 use crate::diff::Line;
 use crate::input::{LineInput, Submitted};
+use crate::selection::Selection;
+use crate::text::{Painted, Writer};
 
 actions!(
     cox,
     [
         /// Stops the turn the agent is taking.
         Stop,
+        /// Copies the text selected in the conversation.
+        Copy,
     ]
 );
 
@@ -27,8 +39,24 @@ const KEY_CONTEXT: &str = "Conversation";
 /// Binds the keys of the conversation. Escape is the stage's while the
 /// stage has the keyboard, and the input method's while it composes.
 pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", Stop, Some(KEY_CONTEXT))]);
+    cx.bind_keys([
+        KeyBinding::new("escape", Stop, Some(KEY_CONTEXT)),
+        // The secondary key is Command on macOS, Control elsewhere.
+        KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT)),
+    ]);
 }
+
+/// Opens a link the human clicked: on the session's stage, where it has
+/// one.
+pub type OpenLink = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
+/// The font the window is drawn in: a monospaced family the system has.
+/// A generic name such as `monospace` finds no font, and GPUI then falls
+/// back to a font with no bold.
+#[cfg(target_os = "macos")]
+pub const FONT: &str = "Menlo";
+#[cfg(not(target_os = "macos"))]
+pub const FONT: &str = "DejaVu Sans Mono";
 
 /// How wide the conversation is when the stage sits beside it.
 const CONVERSATION_WIDTH: f32 = 420.;
@@ -49,6 +77,14 @@ pub struct SessionView {
     input: Entity<LineInput>,
     /// The page the agent and the human work on, beside the conversation.
     stage: Option<AnyView>,
+    open_link: OpenLink,
+    /// The conversation's text as the last frame laid it out.
+    painted: Painted,
+    /// The text the human selected in the conversation, if any.
+    selection: Option<Selection>,
+    /// Whether a mouse button went down on the conversation and is still
+    /// held.
+    selecting: bool,
     commands: UnboundedSender<Command>,
     /// The agent lives as long as the window: dropping this stops it.
     _agent: AgentThread,
@@ -58,8 +94,13 @@ pub struct SessionView {
 
 impl SessionView {
     /// Opens on `agent`, with `stage` beside the conversation when there is
-    /// one.
-    pub fn new(agent: Agent, stage: Option<impl Into<AnyView>>, cx: &mut Context<Self>) -> Self {
+    /// one. Links the human clicks go to `open_link`.
+    pub fn new(
+        agent: Agent,
+        stage: Option<impl Into<AnyView>>,
+        open_link: OpenLink,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let Agent {
             commands,
             mut events,
@@ -85,6 +126,10 @@ impl SessionView {
             scroll: ScrollHandle::new(),
             input,
             stage: stage.map(Into::into),
+            open_link,
+            painted: Painted::default(),
+            selection: None,
+            selecting: false,
             commands,
             _agent: thread,
             _events: task,
@@ -106,6 +151,68 @@ impl SessionView {
     #[must_use]
     pub fn scroll(&self) -> &ScrollHandle {
         &self.scroll
+    }
+
+    /// The text the human selected in the conversation.
+    #[must_use]
+    pub fn selected_text(&self) -> String {
+        self.selection
+            .map(|selection| self.painted.copy(&selection))
+            .unwrap_or_default()
+    }
+
+    /// A button went down on the conversation: start selecting there, a
+    /// word or a whole piece of text at a time on a double or triple
+    /// click. The keyboard goes to the input, so that the human copies
+    /// what they select, and types on.
+    fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.input.focus_handle(cx));
+        window.prevent_default();
+        self.input.update(cx, LineInput::deselect);
+        let spot = self.painted.spot_at(event.position);
+        self.selection = spot.map(|spot| match event.click_count {
+            1 => match self.selection {
+                Some(selection) if event.modifiers.shift => Selection {
+                    head: spot,
+                    ..selection
+                },
+                _ => Selection::at(spot),
+            },
+            2 => self.painted.word_at(spot),
+            _ => self.painted.piece_at(spot),
+        });
+        self.selecting = self.selection.is_some();
+        cx.notify();
+    }
+
+    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.selecting {
+            return;
+        }
+        if let (Some(selection), Some(spot)) =
+            (&mut self.selection, self.painted.spot_at(event.position))
+            && selection.head != spot
+        {
+            selection.head = spot;
+            cx.notify();
+        }
+    }
+
+    /// The button came up: a click that selected nothing opens the link
+    /// under it.
+    fn mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let clicked = std::mem::take(&mut self.selecting)
+            && self.selection.is_none_or(|selection| selection.is_empty());
+        if clicked && let Some(url) = self.painted.link_at(event.position) {
+            (self.open_link)(&url, window, cx);
+        }
+    }
+
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        let text = self.selected_text();
+        if !text.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
     }
 
     /// Changes the conversation with `change`, keeping its end in view if
@@ -160,12 +267,18 @@ impl SessionView {
         entry: &Entry,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let mut writer = Writer::new(&self.painted, self.selection, index);
         match entry {
             Entry::Human(text) => div()
+                .flex()
                 .text_color(rgb(0x7f_b4ff))
-                .child(format!("> {text}"))
+                .child(div().flex_shrink_0().child("> "))
+                .child(div().flex_1().min_w_0().child(writer.plain(text, "\n\n")))
                 .into_any_element(),
-            Entry::Reply(text) => div().child(text.clone()).into_any_element(),
+            Entry::Reply(text) => writer
+                .markdown(text)
+                .debug_selector(|| format!("reply-{index}"))
+                .into_any_element(),
             Entry::ToolCall {
                 title,
                 content,
@@ -183,14 +296,14 @@ impl SessionView {
                     .child(
                         div()
                             .text_color(rgb(DIM))
-                            .child(format!("[tool: {title} … {state}]")),
+                            .child(writer.plain(&format!("[tool: {title} … {state}]"), "\n\n")),
                     )
-                    .children(render_content(index, content))
+                    .children(render_content(index, content, &mut writer))
                     .into_any_element()
             }
             Entry::Note(text) => div()
-                .text_color(rgb(0xa0_a0a0))
-                .child(text.clone())
+                .text_color(rgb(DIM))
+                .child(writer.plain(text, "\n\n"))
                 .into_any_element(),
             Entry::Permission {
                 title,
@@ -209,8 +322,8 @@ impl SessionView {
                     .p_2()
                     .border_1()
                     .border_color(rgb(0xd0_a040))
-                    .child(format!("[permission: {title}]"))
-                    .children(render_content(index, content))
+                    .child(writer.plain(&format!("[permission: {title}]"), "\n\n"))
+                    .children(render_content(index, content, &mut writer))
                     .children(options.iter().enumerate().map(|(i, name)| {
                         let label: SharedString = format!("{}. {name}", i + 1).into();
                         let mut option = div()
@@ -236,12 +349,28 @@ impl SessionView {
 }
 
 /// What a tool call or a permission request shows, under its title, or
-/// `None` when it shows nothing. It scrolls on its own once it is tall,
-/// such as a long output or a change to a large file.
-fn render_content(index: usize, content: &[Content]) -> Option<gpui::AnyElement> {
+/// `None` when it shows nothing: text as Markdown, as the agent sends
+/// what a command printed in a code block. It scrolls on its own once it
+/// is tall, such as a long output or a change to a large file.
+fn render_content(
+    index: usize,
+    content: &[Content],
+    writer: &mut Writer,
+) -> Option<gpui::AnyElement> {
     if content.is_empty() {
         return None;
     }
+    let shown: Vec<_> = content
+        .iter()
+        .map(|content| match content {
+            Content::Text(text) => writer.markdown(text),
+            Content::Diff { path, lines } => div()
+                .flex()
+                .flex_col()
+                .child(div().text_color(rgb(DIM)).child(writer.plain(path, "\n")))
+                .children(lines.iter().map(|line| render_line(line, writer))),
+        })
+        .collect();
     let content = div()
         .id(("content", index))
         .max_h(px(CONTENT_HEIGHT))
@@ -253,22 +382,13 @@ fn render_content(index: usize, content: &[Content]) -> Option<gpui::AnyElement>
         .border_l_1()
         .border_color(rgb(0x40_4040))
         .text_size(px(12.))
-        .children(content.iter().map(|content| {
-            match content {
-                Content::Text(text) => div().child(text.clone()),
-                Content::Diff { path, lines } => div()
-                    .flex()
-                    .flex_col()
-                    .child(div().text_color(rgb(DIM)).child(path.clone()))
-                    .children(lines.iter().map(render_line)),
-            }
-        }));
+        .children(shown);
     Some(content.into_any_element())
 }
 
 /// One line of a change, its mark in a column of its own, so that a line
-/// too long for the conversation wraps clear of it.
-fn render_line(line: &Line) -> gpui::Div {
+/// too long for the conversation wraps clear of it, and copies without it.
+fn render_line(line: &Line, writer: &mut Writer) -> gpui::Div {
     let (color, mark, text) = match line {
         Line::Same(text) => (DIM, "", text.clone()),
         Line::Removed(text) => (REMOVED, "-", text.clone()),
@@ -280,7 +400,7 @@ fn render_line(line: &Line) -> gpui::Div {
         .flex()
         .text_color(rgb(color))
         .child(div().flex_shrink_0().w(px(14.)).child(mark))
-        .child(div().flex_1().min_w_0().child(text))
+        .child(div().flex_1().min_w_0().child(writer.plain(&text, "\n")))
 }
 
 impl Focusable for SessionView {
@@ -299,6 +419,8 @@ impl SessionView {
             State::Closed => "closed ",
         };
         let running = matches!(self.conversation.state(), State::Busy | State::Asking);
+        // The frame lays the text out again.
+        self.painted.clear();
         let entries: Vec<_> = self
             .conversation
             .entries()
@@ -310,6 +432,7 @@ impl SessionView {
         div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &Stop, _, cx| view.stop(cx)))
+            .on_action(cx.listener(Self::copy))
             .size_full()
             .flex()
             .flex_col()
@@ -319,6 +442,13 @@ impl SessionView {
                     .flex_1()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
+                    .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                    .on_mouse_move(cx.listener(Self::mouse_move))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|view, _, _, _| view.selecting = false),
+                    )
                     .p_3()
                     .flex()
                     .flex_col()
@@ -334,11 +464,16 @@ impl SessionView {
                     .border_color(rgb(0x40_4040))
                     // A click brings the keyboard back from the stage, and
                     // keeps it from the window, which takes it otherwise.
+                    // What was selected in the conversation is let go, so
+                    // that the keys copy from the input.
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |_, _, window, cx| {
+                        cx.listener(move |view, _, window, cx| {
                             window.focus(&input.focus_handle(cx));
                             window.prevent_default();
+                            if view.selection.take().is_some() {
+                                cx.notify();
+                            }
                         }),
                     )
                     .child(prompt)
@@ -371,7 +506,7 @@ impl Render for SessionView {
             .flex()
             .bg(rgb(0x1e_1e1e))
             .text_color(rgb(0xe0_e0e0))
-            .font_family("monospace")
+            .font_family(FONT)
             .text_size(px(14.));
         match self.stage.clone() {
             Some(stage) => root
