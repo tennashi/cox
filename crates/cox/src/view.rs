@@ -1,15 +1,33 @@
 //! One session in the window: draws its conversation, with its stage
-//! beside it, and turns keystrokes and clicks into input for it.
+//! beside it, and turns keystrokes and clicks into input for it. Escape in
+//! the conversation, or its Stop button, stops the turn the agent is
+//! taking.
 
 use gpui::{
-    AnyView, App, Context, Entity, FocusHandle, Focusable, MouseButton, ScrollHandle, SharedString,
-    Subscription, Task, Window, div, prelude::*, px, rgb,
+    AnyView, App, Context, Entity, FocusHandle, Focusable, KeyBinding, MouseButton, ScrollHandle,
+    SharedString, Subscription, Task, Window, actions, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::{Agent, AgentThread};
 use crate::conversation::{Command, Conversation, Entry, State};
 use crate::input::{LineInput, Submitted};
+
+actions!(
+    cox,
+    [
+        /// Stops the turn the agent is taking.
+        Stop,
+    ]
+);
+
+const KEY_CONTEXT: &str = "Conversation";
+
+/// Binds the keys of the conversation. Escape is the stage's while the
+/// stage has the keyboard, and the input method's while it composes.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new("escape", Stop, Some(KEY_CONTEXT))]);
+}
 
 /// How wide the conversation is when the stage sits beside it.
 const CONVERSATION_WIDTH: f32 = 420.;
@@ -114,6 +132,13 @@ impl SessionView {
         }
     }
 
+    fn stop(&mut self, cx: &mut Context<Self>) {
+        if let Some(command) = self.conversation.cancel() {
+            self.send(command);
+            cx.notify();
+        }
+    }
+
     fn send(&self, command: Command) {
         // The agent side is gone once the connection closes, which the
         // conversation shows when the `Closed` event arrives.
@@ -151,7 +176,9 @@ impl SessionView {
                 options,
                 chosen,
             } => {
-                let asking = chosen.is_none() && index + 1 == self.conversation.entries().len();
+                let asking = self.conversation.state() == State::Asking
+                    && chosen.is_none()
+                    && index + 1 == self.conversation.entries().len();
                 div()
                     .flex()
                     .flex_col()
@@ -196,8 +223,10 @@ impl SessionView {
             State::Idle => "> ",
             State::Busy => "… ",
             State::Asking => "choose> ",
+            State::Stopping => "stopping… ",
             State::Closed => "closed ",
         };
+        let running = matches!(self.conversation.state(), State::Busy | State::Asking);
         let entries: Vec<_> = self
             .conversation
             .entries()
@@ -207,6 +236,8 @@ impl SessionView {
             .collect();
         let input = self.input.clone();
         div()
+            .key_context(KEY_CONTEXT)
+            .on_action(cx.listener(|view, _: &Stop, _, cx| view.stop(cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -229,15 +260,33 @@ impl SessionView {
                     .p_3()
                     .border_t_1()
                     .border_color(rgb(0x40_4040))
-                    // A click brings the keyboard back from the stage.
+                    // A click brings the keyboard back from the stage, and
+                    // keeps it from the window, which takes it otherwise.
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |_, _, window, cx| {
                             window.focus(&input.focus_handle(cx));
+                            window.prevent_default();
                         }),
                     )
                     .child(prompt)
-                    .child(self.input.clone()),
+                    .child(div().flex_1().min_w_0().child(self.input.clone()))
+                    .when(running, |bar| {
+                        bar.child(
+                            div()
+                                .id("stop")
+                                .debug_selector(|| "stop".to_owned())
+                                .flex_shrink_0()
+                                .ml_2()
+                                .px_2()
+                                .rounded_sm()
+                                .bg(rgb(0x30_3030))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(0x40_4040)))
+                                .child("Stop")
+                                .on_click(cx.listener(|view, _, _, cx| view.stop(cx))),
+                        )
+                    }),
             )
     }
 }

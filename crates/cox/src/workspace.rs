@@ -272,7 +272,7 @@ impl Workspace {
     fn render_row(&self, index: usize, session: &Session, cx: &mut Context<Self>) -> Stateful<Div> {
         let (mark, color) = match session.view.read(cx).conversation().state() {
             State::Idle => ("", rgb(0xa0_a0a0)),
-            State::Busy => ("…", rgb(0xa0_a0a0)),
+            State::Busy | State::Stopping => ("…", rgb(0xa0_a0a0)),
             State::Asking => ("?", rgb(0xd0_a040)),
             State::Closed => ("closed", rgb(0x80_8080)),
         };

@@ -3,7 +3,7 @@
 //! [`connect`] opens a [`Session`] with an agent, handing it the
 //! [`McpServer`]s whose tools it may use. Each [`Session::send`] starts a
 //! [`Turn`], which hands over what the agent sends as [`Update`]s until the
-//! turn ends.
+//! turn ends, and which [`Turn::cancel`] asks the agent to end early.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -12,8 +12,8 @@ use std::pin::Pin;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, InitializeRequest, McpServer as AcpMcpServer, McpServerStdio,
-    NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
+    CancelNotification, ContentBlock, ContentChunk, InitializeRequest, McpServer as AcpMcpServer,
+    McpServerStdio, NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate,
     StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall, ToolCallId, ToolCallStatus,
@@ -194,6 +194,8 @@ impl Session {
         );
         self.tool_calls.clear();
         Turn {
+            cx: &self.cx,
+            session: &self.id,
             received: &mut self.received,
             tool_calls: &mut self.tool_calls,
             response: Box::pin(self.cx.send_request(prompt).block_task()),
@@ -204,6 +206,8 @@ impl Session {
 
 /// One prompt and everything the agent does in answer to it.
 pub struct Turn<'s> {
+    cx: &'s ConnectionTo<Agent>,
+    session: &'s SessionId,
     received: &'s mut UnboundedReceiver<Received>,
     tool_calls: &'s mut HashMap<ToolCallId, Option<String>>,
     response: Pin<Box<dyn Future<Output = agent_client_protocol::Result<PromptResponse>> + Send>>,
@@ -213,11 +217,22 @@ pub struct Turn<'s> {
 
 impl Turn<'_> {
     /// The next thing the agent sends in this turn, or `None` once the turn
-    /// has ended.
+    /// has ended. When the turn ends cancelled, each tool call it left
+    /// running ends then, as [`ToolCallResult::Cancelled`].
     pub async fn next(&mut self) -> Option<Update> {
         loop {
-            if self.answer.is_some() {
-                return None;
+            if let Some(answer) = &self.answer {
+                let cancelled = matches!(
+                    answer,
+                    Ok(PromptResponse {
+                        stop_reason: AcpStopReason::Cancelled,
+                        ..
+                    })
+                );
+                return cancelled
+                    .then(|| self.drop_tool_call())
+                    .flatten()
+                    .map(Update::ToolCall);
             }
             // The agent sends a turn's updates before answering the prompt,
             // and they are delivered in that order, so take every waiting
@@ -227,7 +242,7 @@ impl Turn<'_> {
                 Some(received) = self.received.recv() => received,
                 answer = &mut self.response => {
                     self.answer = Some(answer);
-                    return None;
+                    continue;
                 }
             };
             match received {
@@ -239,6 +254,18 @@ impl Turn<'_> {
                 }
             }
         }
+    }
+
+    /// Forgets one of the tool calls that have not ended, if any is left,
+    /// and returns it as cancelled.
+    fn drop_tool_call(&mut self) -> Option<ToolCall> {
+        let id = self.tool_calls.keys().next()?.clone();
+        let title = self.tool_calls.remove(&id).flatten();
+        Some(ToolCall {
+            id: id.to_string(),
+            title,
+            result: Some(ToolCallResult::Cancelled),
+        })
     }
 
     /// Records news of a tool call, and returns the call when there is
@@ -274,6 +301,21 @@ impl Turn<'_> {
             title: known.clone(),
             result: None,
         })
+    }
+
+    /// Asks the agent to end the turn early. The turn goes on until the
+    /// agent has stopped, which it tells with [`StopReason::Cancelled`];
+    /// until then, updates still arrive, and a permission request waiting
+    /// for an answer, or one that arrives after this, is to be answered
+    /// with [`PermissionAnswer::Cancel`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection fails.
+    pub fn cancel(&self) -> anyhow::Result<()> {
+        self.cx
+            .send_notification(CancelNotification::new(self.session.clone()))?;
+        Ok(())
     }
 
     /// Waits for the turn to end, and returns why it ended. Updates not taken
@@ -319,6 +361,8 @@ pub struct ToolCall {
 pub enum ToolCallResult {
     Completed,
     Failed,
+    /// The turn was cancelled before the call ended.
+    Cancelled,
 }
 
 /// A request from the agent for permission to run a tool call. Answer it with

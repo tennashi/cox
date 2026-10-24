@@ -105,6 +105,7 @@ fn main() {
 
     Application::new().run(move |cx: &mut App| {
         cox::input::bind_keys(cx);
+        cox::view::bind_keys(cx);
         cox::workspace::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         #[cfg(target_os = "macos")]

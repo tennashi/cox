@@ -124,7 +124,8 @@ async fn run<T: Transport + 'static>(
     let transport = connect()?;
     cox_acp::connect(transport, cwd, mcp_servers, async |mut session| {
         while let Some(command) = commands.recv().await {
-            // An answer with no permission request waiting has nothing to answer.
+            // An answer with no permission request waiting has nothing to
+            // answer, and a cancel with no turn running nothing to stop.
             if let Command::Prompt(text) = command {
                 take_turn(&mut session, text, &mut commands, events).await?;
             }
@@ -144,7 +145,30 @@ async fn take_turn(
         let _ = events.send(event);
     };
     let mut turn = session.send(text);
-    while let Some(update) = turn.next().await {
+    // Whether the human has asked to stop the turn.
+    let mut cancelled = false;
+    loop {
+        let update = tokio::select! {
+            update = turn.next() => update,
+            command = commands.recv() => {
+                match command {
+                    Some(Command::Cancel) if !cancelled => {
+                        cancelled = true;
+                        turn.cancel()?;
+                    }
+                    // The window sends no prompt while a turn runs, no
+                    // answer while no permission request waits, and one
+                    // cancel at most.
+                    Some(_) => {}
+                    // The window is gone, and the agent goes with it.
+                    None => return Ok(()),
+                }
+                continue;
+            }
+        };
+        let Some(update) = update else {
+            break;
+        };
         match update {
             Update::ReplyText(text) => send(AgentEvent::ReplyText(text)),
             Update::ToolCall(call) => send(AgentEvent::ToolCall {
@@ -152,6 +176,11 @@ async fn take_turn(
                 title: call.title,
                 result: call.result,
             }),
+            // Once the human has asked to stop, the agent is told no
+            // without asking them.
+            Update::PermissionRequest(request) if cancelled => {
+                request.answer(PermissionAnswer::Cancel)?;
+            }
             Update::PermissionRequest(request) => {
                 send(AgentEvent::PermissionRequest {
                     title: request.title().map(str::to_owned),
@@ -160,6 +189,11 @@ async fn take_turn(
                 let answer = loop {
                     match commands.recv().await {
                         Some(Command::Answer(answer)) => break answer,
+                        Some(Command::Cancel) => {
+                            cancelled = true;
+                            turn.cancel()?;
+                            break PermissionAnswer::Cancel;
+                        }
                         // The window sends no prompt while a turn runs.
                         Some(Command::Prompt(_)) => {}
                         None => break PermissionAnswer::Cancel,

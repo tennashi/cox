@@ -31,7 +31,10 @@ fn open_with(
     // The agent side runs on a thread of its own, so the test waits for it
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
-    cx.update(cox::input::bind_keys);
+    cx.update(|cx| {
+        cox::input::bind_keys(cx);
+        cox::view::bind_keys(cx);
+    });
     let agent = Arc::new(FakeAgent::default());
     let fake = Arc::clone(&agent);
     let (view, cx) = cx.add_window_view(|_, cx| {
@@ -279,6 +282,55 @@ async fn answers_a_permission_request_with_a_click(cx: &mut TestAppContext) {
     assert_eq!(
         tool_call(cx, &view),
         ("touch x.txt".to_owned(), Some(ToolCallResult::Completed))
+    );
+}
+
+#[gpui::test]
+async fn stops_a_turn_with_escape_and_sends_the_next_line(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open(cx);
+
+    cx.simulate_input("wait");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("escape");
+    wait_for(cx, &view, State::Idle).await;
+    assert_eq!(agent.cancels(), 1);
+
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+
+    assert_eq!(agent.prompts(), ["wait", "hello"]);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.conversation().entries(),
+            [
+                Entry::Human("wait".to_owned()),
+                Entry::Reply("waiting".to_owned()),
+                Entry::Note("[Cancelled]".to_owned()),
+                Entry::Human("hello".to_owned()),
+                Entry::Reply("echo: hello".to_owned()),
+                Entry::Note("[EndTurn]".to_owned()),
+            ]
+        );
+    });
+}
+
+#[gpui::test]
+async fn stops_a_turn_that_asks_permission_with_the_stop_button(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open(cx);
+
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Asking).await;
+    let stop = cx.debug_bounds("stop").expect("the stop button is drawn");
+    cx.simulate_click(stop.center(), Modifiers::none());
+    wait_for(cx, &view, State::Idle).await;
+
+    assert_eq!(agent.cancels(), 1);
+    assert_eq!(agent.answers(), [RequestPermissionOutcome::Cancelled]);
+    assert_eq!(
+        tool_call(cx, &view),
+        ("touch x.txt".to_owned(), Some(ToolCallResult::Cancelled))
     );
 }
 

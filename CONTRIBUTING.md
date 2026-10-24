@@ -40,7 +40,9 @@ folder…" (Command-O, Control-O) opens one in a folder of your choice.
 Each session starts its own `<agent command>` working there, and has a
 stage of its own, showing `<url>` first. The list on the left of the
 window switches between sessions (Control-Tab and Control-Shift-Tab do
-too) and closes them.
+too) and closes them. Escape in a session's conversation, or its Stop
+button, stops the turn its agent is taking; the conversation stays, and
+the next line can be sent once the agent has stopped.
 
 CEF opens the Chrome DevTools Protocol on a port that is free when Cox
 starts, so two Cox can run side by side, and Cox hands each session's

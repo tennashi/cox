@@ -3,21 +3,25 @@
 //! "permission", it first announces a tool call to run `touch x.txt`, asks
 //! permission to run it, and then reports it done. When the
 //! prompt mentions "fail", it answers with an error instead. When the prompt
-//! mentions "tool", it first runs `ls` as a tool call that completes. It records
-//! what Cox asked of it and answered so tests can check what Cox did.
+//! mentions "tool", it first runs `ls` as a tool call that completes. When the
+//! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
+//! turn. A turn cancelled, or whose permission request Cox answers as cancelled,
+//! ends as cancelled. It records what Cox asked of it and answered so tests can
+//! check what Cox did.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
-    McpServer, NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind,
-    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields,
+    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, InitializeRequest,
+    InitializeResponse, McpServer, NewSessionRequest, NewSessionResponse, PermissionOption,
+    PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate, StopReason,
+    TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result};
+use tokio::sync::Notify;
 
 #[derive(Default)]
 pub struct FakeAgent {
@@ -26,6 +30,15 @@ pub struct FakeAgent {
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Vec<String>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
+    cancels: Arc<Cancels>,
+}
+
+/// The cancels Cox has sent.
+#[derive(Default)]
+struct Cancels {
+    count: AtomicUsize,
+    /// Wakes the turn that waits to be cancelled.
+    wake: Notify,
 }
 
 impl FakeAgent {
@@ -39,6 +52,7 @@ impl FakeAgent {
             Arc::clone(&self.mcp_servers),
             Arc::clone(&self.prompts),
             Arc::clone(&self.answers),
+            Arc::clone(&self.cancels),
         ));
         cox_end
     }
@@ -67,6 +81,11 @@ impl FakeAgent {
     pub fn answers(&self) -> Vec<RequestPermissionOutcome> {
         self.answers.lock().unwrap().clone()
     }
+
+    /// How many times Cox has asked to cancel a turn.
+    pub fn cancels(&self) -> usize {
+        self.cancels.count.load(Ordering::SeqCst)
+    }
 }
 
 async fn serve(
@@ -76,7 +95,9 @@ async fn serve(
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Vec<String>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
+    cancels: Arc<Cancels>,
 ) -> Result<()> {
+    let waits = Arc::clone(&cancels);
     Agent
         .builder()
         .name("fake-agent")
@@ -103,6 +124,7 @@ async fn serve(
                 let text = text_of(&request.prompt);
                 prompts.lock().unwrap().push(text.clone());
                 let answers = Arc::clone(&answers);
+                let cancels = Arc::clone(&waits);
                 let turn = cx.clone();
                 // Asking permission waits for Cox's answer, which arrives
                 // through the loop that runs this handler, so wait elsewhere.
@@ -114,9 +136,17 @@ async fn serve(
                     if text.contains("tool") {
                         run_tool(&turn, &request.session_id)?;
                     }
+                    if text.contains("wait") {
+                        say(&turn, &request.session_id, "waiting")?;
+                        cancels.wake.notified().await;
+                        return responder.respond(PromptResponse::new(StopReason::Cancelled));
+                    }
                     if text.contains("permission") {
                         let answer = ask_permission(&turn, &request.session_id).await?;
-                        answers.lock().unwrap().push(answer);
+                        answers.lock().unwrap().push(answer.clone());
+                        if answer == RequestPermissionOutcome::Cancelled {
+                            return responder.respond(PromptResponse::new(StopReason::Cancelled));
+                        }
                         finish(&turn, &request.session_id, "call-1")?;
                     }
                     for word in format!("echo: {text}").split_inclusive(' ') {
@@ -126,6 +156,14 @@ async fn serve(
                 })
             },
             agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_notification(
+            async move |_: CancelNotification, _cx| {
+                cancels.count.fetch_add(1, Ordering::SeqCst);
+                cancels.wake.notify_one();
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
         )
         .connect_to(transport)
         .await
