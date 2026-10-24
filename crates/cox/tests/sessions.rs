@@ -32,6 +32,7 @@ fn open_window(
     cx.executor().allow_parking();
     cx.update(|cx| {
         cox::input::bind_keys(cx);
+        cox::view::bind_keys(cx);
         cox::workspace::bind_keys(cx);
     });
     let agents = Agents::default();
@@ -90,13 +91,18 @@ async fn say(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, text: &s
     let view = shown(cx, workspace);
     cx.simulate_input(text);
     cx.simulate_keystrokes("enter");
+    wait_for_turn(cx, &view).await;
+}
+
+/// Waits until a turn of the session `view` has ended.
+async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<SessionView>) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(5));
         let _ = timed_out.send(());
     });
     tokio::select! {
-        () = cx.condition(&view, |view, _| {
+        () = cx.condition(view, |view, _| {
             view.conversation().state() == State::Idle && !view.conversation().entries().is_empty()
         }) => {}
         _ = timeout => panic!("the agent never answered"),
@@ -190,4 +196,21 @@ fn closing_a_session_shows_the_next_and_lets_it_go(cx: &mut TestAppContext) {
     click(cx, "close-1");
     let shown_any = workspace.read_with(cx, |workspace, _| workspace.shown().is_some());
     assert!(!shown_any);
+}
+
+#[gpui::test]
+async fn stopping_with_the_button_leaves_the_keyboard_in_the_input(cx: &mut TestAppContext) {
+    let (agents, workspace, cx) = open_window(cx, scratch("stop"));
+    click(cx, "new-session");
+    let view = shown(cx, &workspace);
+
+    cx.simulate_input("wait");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    click(cx, "stop");
+    wait_for_turn(cx, &view).await;
+    cx.simulate_input("next");
+
+    assert_eq!(agents.borrow()[0].cancels(), 1);
+    assert_eq!(input_text(cx, &view), "next");
 }

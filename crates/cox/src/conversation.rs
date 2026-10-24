@@ -16,7 +16,7 @@ pub enum AgentEvent {
         result: Option<ToolCallResult>,
     },
     /// The agent asks permission for a tool call; the turn waits for an
-    /// [`Command::Answer`].
+    /// [`Command::Answer`], or for a [`Command::Cancel`].
     PermissionRequest {
         title: Option<String>,
         options: Vec<String>,
@@ -35,6 +35,8 @@ pub enum AgentEvent {
 pub enum Command {
     Prompt(String),
     Answer(PermissionAnswer),
+    /// Asks the agent to stop the turn it is taking.
+    Cancel,
 }
 
 /// One thing shown in the conversation.
@@ -70,6 +72,9 @@ pub enum State {
     /// The agent waits for the human to choose one of the options of the
     /// last [`Entry::Permission`].
     Asking,
+    /// The human asked the agent to stop the turn, and it has not ended
+    /// yet.
+    Stopping,
     /// The connection has closed; nothing more can be sent.
     Closed,
 }
@@ -123,7 +128,7 @@ impl Conversation {
                 let number: usize = input.trim().parse().ok()?;
                 self.choose(number.checked_sub(1)?)
             }
-            State::Busy | State::Closed => None,
+            State::Busy | State::Stopping | State::Closed => None,
         }
     }
 
@@ -145,6 +150,20 @@ impl Conversation {
         *chosen = Some(index);
         self.state = State::Busy;
         Some(Command::Answer(PermissionAnswer::Select(index)))
+    }
+
+    /// Asks the agent to stop the turn it is taking, if one is running and
+    /// the human has not asked already, and returns the command to send. The
+    /// conversation stays: once the turn ends, the human can send the next
+    /// line.
+    pub fn cancel(&mut self) -> Option<Command> {
+        match self.state {
+            State::Busy | State::Asking => {
+                self.state = State::Stopping;
+                Some(Command::Cancel)
+            }
+            State::Idle | State::Stopping | State::Closed => None,
+        }
     }
 
     /// Shows news of a tool call: in place of the call's entry once it has
@@ -195,7 +214,11 @@ impl Conversation {
                     options,
                     chosen: None,
                 });
-                self.state = State::Asking;
+                // Asked before the agent heard it is to stop: the agent
+                // side answers it as cancelled, without the human.
+                if self.state != State::Stopping {
+                    self.state = State::Asking;
+                }
             }
             AgentEvent::TurnEnded(reason) => {
                 self.entries.push(Entry::Note(format!("[{reason:?}]")));
@@ -303,5 +326,53 @@ mod tests {
             Some(Command::Answer(PermissionAnswer::Select(1)))
         );
         assert_eq!(conversation.state(), State::Busy);
+    }
+
+    #[test]
+    fn stops_a_turn_and_takes_the_next_line_once_it_has_ended() {
+        let mut conversation = Conversation::new();
+        assert_eq!(conversation.cancel(), None);
+        conversation.submit("wait");
+        conversation.apply(AgentEvent::ReplyText("waiting".to_owned()));
+
+        assert_eq!(conversation.cancel(), Some(Command::Cancel));
+        assert_eq!(conversation.state(), State::Stopping);
+        assert_eq!(conversation.cancel(), None);
+        assert_eq!(conversation.submit("again"), None);
+
+        conversation.apply(AgentEvent::TurnEnded(StopReason::Cancelled));
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            conversation.submit("again"),
+            Some(Command::Prompt("again".to_owned()))
+        );
+        assert_eq!(
+            conversation.entries(),
+            [
+                Entry::Human("wait".to_owned()),
+                Entry::Reply("waiting".to_owned()),
+                Entry::Note("[Cancelled]".to_owned()),
+                Entry::Human("again".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn stops_a_turn_that_waits_for_permission() {
+        let mut conversation = Conversation::new();
+        conversation.submit("permission");
+        let request = || AgentEvent::PermissionRequest {
+            title: Some("touch x.txt".to_owned()),
+            options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
+        };
+        conversation.apply(request());
+
+        assert_eq!(conversation.cancel(), Some(Command::Cancel));
+        assert_eq!(conversation.choose(0), None);
+
+        // A request the agent made before it heard it is to stop.
+        conversation.apply(request());
+        assert_eq!(conversation.state(), State::Stopping);
+        assert_eq!(conversation.submit("1"), None);
     }
 }
