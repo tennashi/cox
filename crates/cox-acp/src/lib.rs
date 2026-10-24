@@ -12,12 +12,12 @@ use std::pin::Pin;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, ContentChunk, InitializeRequest, McpServer as AcpMcpServer,
-    McpServerStdio, NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate,
-    StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall, ToolCallId, ToolCallStatus,
-    ToolCallUpdate,
+    CancelNotification, Content, ContentBlock, ContentChunk, Diff, InitializeRequest,
+    McpServer as AcpMcpServer, McpServerStdio, NewSessionRequest, PermissionOptionKind,
+    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
+    SessionUpdate, StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall,
+    ToolCallContent as AcpToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectTo, ConnectionTo, Responder};
 use anyhow::Context;
@@ -135,6 +135,7 @@ enum Received {
     ToolCall {
         id: ToolCallId,
         title: Option<String>,
+        content: Option<Vec<ToolCallContent>>,
         status: Option<ToolCallStatus>,
     },
 }
@@ -156,11 +157,13 @@ fn translate(update: SessionUpdate) -> Option<Received> {
         SessionUpdate::ToolCall(AcpToolCall {
             tool_call_id,
             title,
+            content,
             status,
             ..
         }) => Some(Received::ToolCall {
             id: tool_call_id,
             title: Some(title),
+            content: Some(translate_content(content)),
             status: Some(status),
         }),
         SessionUpdate::ToolCallUpdate(ToolCallUpdate {
@@ -170,10 +173,36 @@ fn translate(update: SessionUpdate) -> Option<Received> {
         }) => Some(Received::ToolCall {
             id: tool_call_id,
             title: fields.title,
+            content: fields.content.map(translate_content),
             status: fields.status,
         }),
         _ => None,
     }
+}
+
+/// The parts of a tool call's content Cox shows: text and changes to files.
+/// Images, resources and terminals are left out.
+fn translate_content(content: Vec<AcpToolCallContent>) -> Vec<ToolCallContent> {
+    content
+        .into_iter()
+        .filter_map(|content| match content {
+            AcpToolCallContent::Content(Content {
+                content: ContentBlock::Text(text),
+                ..
+            }) => Some(ToolCallContent::Text(text.text)),
+            AcpToolCallContent::Diff(Diff {
+                path,
+                old_text,
+                new_text,
+                ..
+            }) => Some(ToolCallContent::Diff {
+                path,
+                old_text,
+                new_text,
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A conversation with an agent.
@@ -247,8 +276,13 @@ impl Turn<'_> {
             };
             match received {
                 Received::Update(update) => return Some(update),
-                Received::ToolCall { id, title, status } => {
-                    if let Some(call) = self.follow_tool_call(id, title, status) {
+                Received::ToolCall {
+                    id,
+                    title,
+                    content,
+                    status,
+                } => {
+                    if let Some(call) = self.follow_tool_call(id, title, content, status) {
                         return Some(Update::ToolCall(call));
                     }
                 }
@@ -264,16 +298,19 @@ impl Turn<'_> {
         Some(ToolCall {
             id: id.to_string(),
             title,
+            content: None,
             result: Some(ToolCallResult::Cancelled),
         })
     }
 
     /// Records news of a tool call, and returns the call when there is
-    /// something new to show: it started, its title changed, or it ended.
+    /// something new to show: it started, its title or content changed, or it
+    /// ended.
     fn follow_tool_call(
         &mut self,
         id: ToolCallId,
         title: Option<String>,
+        content: Option<Vec<ToolCallContent>>,
         status: Option<ToolCallStatus>,
     ) -> Option<ToolCall> {
         let result = match status {
@@ -287,6 +324,7 @@ impl Turn<'_> {
             return Some(ToolCall {
                 id: shown_id,
                 title: title.or(known),
+                content,
                 result,
             });
         }
@@ -296,9 +334,10 @@ impl Turn<'_> {
         if retitled {
             *known = title;
         }
-        (started || retitled).then(|| ToolCall {
+        (started || retitled || content.is_some()).then(|| ToolCall {
             id: shown_id,
             title: known.clone(),
+            content,
             result: None,
         })
     }
@@ -341,7 +380,8 @@ pub enum Update {
     ReplyText(String),
     /// The agent asks to be allowed to run a tool call.
     PermissionRequest(PermissionRequest),
-    /// A tool call the agent made started, was retitled, or ended.
+    /// A tool call the agent made started, was retitled, changed what it
+    /// shows, or ended.
     ToolCall(ToolCall),
 }
 
@@ -352,8 +392,25 @@ pub struct ToolCall {
     pub id: String,
     /// The title the agent gave the call, if any.
     pub title: Option<String>,
+    /// What the call shows from now on, in place of what it showed before,
+    /// or `None` when that stays as it was.
+    pub content: Option<Vec<ToolCallContent>>,
     /// How the call ended, or `None` while it runs.
     pub result: Option<ToolCallResult>,
+}
+
+/// Something a tool call shows: what it is about to do, such as a change to
+/// a file, or what it did, such as a command's output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolCallContent {
+    Text(String),
+    /// A change to the file at `path`, from `old_text` to `new_text`.
+    /// Without `old_text`, the file is new.
+    Diff {
+        path: PathBuf,
+        old_text: Option<String>,
+        new_text: String,
+    },
 }
 
 /// How a tool call ended.
@@ -394,10 +451,28 @@ impl PermissionRequest {
         }
     }
 
+    /// The id of the tool call, the same as in its [`ToolCall`]s.
+    #[must_use]
+    pub fn tool_call_id(&self) -> String {
+        self.request.tool_call.tool_call_id.to_string()
+    }
+
     /// The title of the tool call, if the agent gave one.
     #[must_use]
     pub fn title(&self) -> Option<&str> {
         self.request.tool_call.fields.title.as_deref()
+    }
+
+    /// What the tool call is about to do, if the agent tells it here; it
+    /// may have told it in the call's [`ToolCall`]s instead.
+    #[must_use]
+    pub fn content(&self) -> Option<Vec<ToolCallContent>> {
+        self.request
+            .tool_call
+            .fields
+            .content
+            .clone()
+            .map(translate_content)
     }
 
     /// The answers the agent offers.

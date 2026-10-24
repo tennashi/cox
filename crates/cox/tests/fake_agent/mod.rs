@@ -1,9 +1,11 @@
 //! An ACP agent for tests, connected to Cox in memory. It replies to each
 //! prompt with `echo: <prompt>`, a word at a time. When the prompt mentions
-//! "permission", it first announces a tool call to run `touch x.txt`, asks
-//! permission to run it, and then reports it done. When the
+//! "permission", it first announces a tool call to edit `x.txt`, showing the
+//! change, asks permission to make it with the change shown again, the way
+//! `claude-agent-acp` does, and then reports it done. When the
 //! prompt mentions "fail", it answers with an error instead. When the prompt
-//! mentions "tool", it first runs `ls` as a tool call that completes. When the
+//! mentions "tool", it first runs `ls` as a tool call that completes, showing
+//! what it printed. When the
 //! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
 //! turn. A turn cancelled, or whose permission request Cox answers as cancelled,
 //! ends as cancelled. It records what Cox asked of it and answered so tests can
@@ -14,11 +16,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, InitializeRequest,
+    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Diff, InitializeRequest,
     InitializeResponse, McpServer, NewSessionRequest, NewSessionResponse, PermissionOption,
     PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate, StopReason,
-    TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    TextContent, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result};
 use tokio::sync::Notify;
@@ -190,19 +192,37 @@ fn say(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()>
     ))
 }
 
-/// Announces a tool call to run `touch x.txt` and asks permission to run
-/// it, offering to allow or reject it once.
+/// The change the tool call that asks permission makes: the second of the
+/// three lines of `x.txt`.
+pub const OLD_TEXT: &str = "one\ntwo\nthree\n";
+pub const NEW_TEXT: &str = "one\n2\nthree\n";
+
+/// What `ls` prints.
+pub const LS_OUTPUT: &str = "x.txt\ny.txt";
+
+/// Announces a tool call to edit `x.txt`, showing the change, and asks
+/// permission to make it, offering to allow or reject it once.
 async fn ask_permission(
     cx: &ConnectionTo<Client>,
     session: &SessionId,
 ) -> Result<RequestPermissionOutcome> {
+    let change = || {
+        vec![ToolCallContent::Diff(
+            Diff::new("/work/x.txt", NEW_TEXT).old_text(OLD_TEXT),
+        )]
+    };
     cx.send_notification(SessionNotification::new(
         session.clone(),
-        SessionUpdate::ToolCall(ToolCall::new("call-1", "touch x.txt")),
+        SessionUpdate::ToolCall(ToolCall::new("call-1", "Edit x.txt").content(change())),
     ))?;
     let request = RequestPermissionRequest::new(
         session.clone(),
-        ToolCallUpdate::new("call-1", ToolCallUpdateFields::new().title("touch x.txt")),
+        ToolCallUpdate::new(
+            "call-1",
+            ToolCallUpdateFields::new()
+                .title("Edit x.txt")
+                .content(change()),
+        ),
         vec![
             PermissionOption::new("allow", "Allow once", PermissionOptionKind::AllowOnce),
             PermissionOption::new("reject", "Reject once", PermissionOptionKind::RejectOnce),
@@ -223,15 +243,19 @@ fn finish(cx: &ConnectionTo<Client>, session: &SessionId, id: &str) -> Result<()
     ))
 }
 
-/// Runs `ls` as a tool call: announces it, then reports it running and done.
+/// Runs `ls` as a tool call: announces it, then reports it running, and
+/// done with what it printed.
 fn run_tool(cx: &ConnectionTo<Client>, session: &SessionId) -> Result<()> {
     let update = |update| cx.send_notification(SessionNotification::new(session.clone(), update));
     update(SessionUpdate::ToolCall(ToolCall::new("call-2", "ls")))?;
-    for status in [ToolCallStatus::InProgress, ToolCallStatus::Completed] {
-        update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-            "call-2",
-            ToolCallUpdateFields::new().status(status),
-        )))?;
-    }
-    Ok(())
+    update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        "call-2",
+        ToolCallUpdateFields::new().status(ToolCallStatus::InProgress),
+    )))?;
+    update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        "call-2",
+        ToolCallUpdateFields::new()
+            .status(ToolCallStatus::Completed)
+            .content(vec![LS_OUTPUT.into()]),
+    )))
 }

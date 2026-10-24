@@ -8,7 +8,8 @@ use std::time::Duration;
 use agent_client_protocol::schema::v1::{
     McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
 };
-use cox::conversation::{Entry, State};
+use cox::conversation::{Content, Entry, State};
+use cox::diff::Line;
 use cox::input::LineInput;
 use cox::view::SessionView;
 use cox_acp::{McpServer, ToolCallResult};
@@ -266,7 +267,7 @@ async fn answers_a_permission_request_with_a_click(cx: &mut TestAppContext) {
     cx.simulate_input("permission");
     cx.simulate_keystrokes("enter");
     wait_for(cx, &view, State::Asking).await;
-    assert_eq!(tool_call(cx, &view), ("touch x.txt".to_owned(), None));
+    assert_eq!(tool_call(cx, &view), ("Edit x.txt".to_owned(), None));
     let option = cx
         .debug_bounds("option-1")
         .expect("the first option is drawn");
@@ -281,7 +282,7 @@ async fn answers_a_permission_request_with_a_click(cx: &mut TestAppContext) {
     );
     assert_eq!(
         tool_call(cx, &view),
-        ("touch x.txt".to_owned(), Some(ToolCallResult::Completed))
+        ("Edit x.txt".to_owned(), Some(ToolCallResult::Completed))
     );
 }
 
@@ -330,8 +331,52 @@ async fn stops_a_turn_that_asks_permission_with_the_stop_button(cx: &mut TestApp
     assert_eq!(agent.answers(), [RequestPermissionOutcome::Cancelled]);
     assert_eq!(
         tool_call(cx, &view),
-        ("touch x.txt".to_owned(), Some(ToolCallResult::Cancelled))
+        ("Edit x.txt".to_owned(), Some(ToolCallResult::Cancelled))
     );
+}
+
+#[gpui::test]
+async fn shows_the_change_a_permission_request_asks_for(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Asking).await;
+
+    let change = Content::Diff {
+        path: "/work/x.txt".to_owned(),
+        lines: vec![
+            Line::Same("one".to_owned()),
+            Line::Removed("two".to_owned()),
+            Line::Added("2".to_owned()),
+            Line::Same("three".to_owned()),
+        ],
+    };
+    view.read_with(cx, |view, _| {
+        let entries = view.conversation().entries();
+        assert!(
+            matches!(&entries[1], Entry::ToolCall { content, .. } if content.is_empty()),
+            "the change shows once, with the request"
+        );
+        assert!(matches!(&entries[2], Entry::Permission { content, .. } if *content == [change]));
+    });
+}
+
+#[gpui::test]
+async fn shows_what_a_tool_call_printed(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("tool");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+
+    view.read_with(cx, |view, _| {
+        assert!(matches!(
+            &view.conversation().entries()[1],
+            Entry::ToolCall { content, result: Some(ToolCallResult::Completed), .. }
+                if *content == [Content::Text(fake_agent::LS_OUTPUT.to_owned())]
+        ));
+    });
 }
 
 /// The title and result of the first tool call in the conversation.

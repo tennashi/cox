@@ -10,7 +10,8 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::{Agent, AgentThread};
-use crate::conversation::{Command, Conversation, Entry, State};
+use crate::conversation::{Command, Content, Conversation, Entry, State};
+use crate::diff::Line;
 use crate::input::{LineInput, Submitted};
 
 actions!(
@@ -31,6 +32,14 @@ pub fn bind_keys(cx: &mut App) {
 
 /// How wide the conversation is when the stage sits beside it.
 const CONVERSATION_WIDTH: f32 = 420.;
+
+/// How tall what a tool call shows grows before it scrolls on its own.
+const CONTENT_HEIGHT: f32 = 320.;
+
+/// The colors of a change's lines.
+const REMOVED: u32 = 0xf0_8080;
+const ADDED: u32 = 0x80_d080;
+const DIM: u32 = 0xa0_a0a0;
 
 pub struct SessionView {
     conversation: Conversation,
@@ -157,14 +166,26 @@ impl SessionView {
                 .child(format!("> {text}"))
                 .into_any_element(),
             Entry::Reply(text) => div().child(text.clone()).into_any_element(),
-            Entry::ToolCall { title, result, .. } => {
+            Entry::ToolCall {
+                title,
+                content,
+                result,
+                ..
+            } => {
                 let state = match result {
                     Some(result) => format!("{result:?}"),
                     None => "running".to_owned(),
                 };
                 div()
-                    .text_color(rgb(0xa0_a0a0))
-                    .child(format!("[tool: {title} … {state}]"))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_color(rgb(DIM))
+                            .child(format!("[tool: {title} … {state}]")),
+                    )
+                    .children(render_content(index, content))
                     .into_any_element()
             }
             Entry::Note(text) => div()
@@ -173,8 +194,10 @@ impl SessionView {
                 .into_any_element(),
             Entry::Permission {
                 title,
+                content,
                 options,
                 chosen,
+                ..
             } => {
                 let asking = self.conversation.state() == State::Asking
                     && chosen.is_none()
@@ -187,6 +210,7 @@ impl SessionView {
                     .border_1()
                     .border_color(rgb(0xd0_a040))
                     .child(format!("[permission: {title}]"))
+                    .children(render_content(index, content))
                     .children(options.iter().enumerate().map(|(i, name)| {
                         let label: SharedString = format!("{}. {name}", i + 1).into();
                         let mut option = div()
@@ -209,6 +233,54 @@ impl SessionView {
             }
         }
     }
+}
+
+/// What a tool call or a permission request shows, under its title, or
+/// `None` when it shows nothing. It scrolls on its own once it is tall,
+/// such as a long output or a change to a large file.
+fn render_content(index: usize, content: &[Content]) -> Option<gpui::AnyElement> {
+    if content.is_empty() {
+        return None;
+    }
+    let content = div()
+        .id(("content", index))
+        .max_h(px(CONTENT_HEIGHT))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pl_2()
+        .border_l_1()
+        .border_color(rgb(0x40_4040))
+        .text_size(px(12.))
+        .children(content.iter().map(|content| {
+            match content {
+                Content::Text(text) => div().child(text.clone()),
+                Content::Diff { path, lines } => div()
+                    .flex()
+                    .flex_col()
+                    .child(div().text_color(rgb(DIM)).child(path.clone()))
+                    .children(lines.iter().map(render_line)),
+            }
+        }));
+    Some(content.into_any_element())
+}
+
+/// One line of a change, its mark in a column of its own, so that a line
+/// too long for the conversation wraps clear of it.
+fn render_line(line: &Line) -> gpui::Div {
+    let (color, mark, text) = match line {
+        Line::Same(text) => (DIM, "", text.clone()),
+        Line::Removed(text) => (REMOVED, "-", text.clone()),
+        Line::Added(text) => (ADDED, "+", text.clone()),
+        Line::Skipped(1) => (DIM, "", "⋯ 1 line".to_owned()),
+        Line::Skipped(count) => (DIM, "", format!("⋯ {count} lines")),
+    };
+    div()
+        .flex()
+        .text_color(rgb(color))
+        .child(div().flex_shrink_0().w(px(14.)).child(mark))
+        .child(div().flex_1().min_w_0().child(text))
 }
 
 impl Focusable for SessionView {

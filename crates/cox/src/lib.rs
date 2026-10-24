@@ -5,7 +5,8 @@
 //! - [`workspace`] is the window: the sessions open in it, and the one
 //!   shown. [`session`] starts a session's agent and stage.
 //! - [`conversation`] holds what the window shows and decides what the human's
-//!   input means, in plain Rust, so it is tested without GPUI.
+//!   input means, in plain Rust, so it is tested without GPUI. [`diff`]
+//!   works out the lines a change to a file shows.
 //! - [`agent`] runs the ACP connection on a tokio runtime of its own, and talks
 //!   to the window over channels.
 //! - [`input`] is the text the human types into, which an input method can
@@ -29,6 +30,7 @@ pub mod agent;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod browser;
 pub mod conversation;
+pub mod diff;
 pub mod input;
 #[cfg(target_os = "macos")]
 pub mod macos;
