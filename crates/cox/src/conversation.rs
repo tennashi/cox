@@ -1,24 +1,34 @@
 //! What the window shows, and what the human's input means, without GPUI.
 
-use cox_acp::{PermissionAnswer, StopReason, ToolCallResult};
+use cox_acp::{PermissionAnswer, StopReason, ToolCallContent, ToolCallResult};
+
+use crate::diff;
 
 /// What the agent side tells the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentEvent {
     /// A piece of the agent's reply.
     ReplyText(String),
-    /// A tool call the agent made started, was retitled, or ended.
+    /// A tool call the agent made started, was retitled, changed what it
+    /// shows, or ended.
     ToolCall {
         /// The same for every event of one call.
         id: String,
         title: Option<String>,
+        /// What the call shows from now on, or `None` when that stays as it
+        /// was.
+        content: Option<Vec<Content>>,
         /// How the call ended, or `None` while it runs.
         result: Option<ToolCallResult>,
     },
     /// The agent asks permission for a tool call; the turn waits for an
     /// [`Command::Answer`], or for a [`Command::Cancel`].
     PermissionRequest {
+        /// The id of the tool call, as in its [`AgentEvent::ToolCall`]s.
+        id: String,
         title: Option<String>,
+        /// What the call is about to do, if the request tells it.
+        content: Option<Vec<Content>>,
         options: Vec<String>,
     },
     /// The turn ended.
@@ -50,16 +60,52 @@ pub enum Entry {
     ToolCall {
         id: String,
         title: String,
+        /// What the call shows, less what a permission request for it shows
+        /// already.
+        content: Vec<Content>,
         result: Option<ToolCallResult>,
     },
     Permission {
+        /// The id of the tool call the agent asks to run.
+        id: String,
         title: String,
+        /// What the call is about to do, for the human to read before
+        /// choosing.
+        content: Vec<Content>,
         options: Vec<String>,
         /// The option the human chose, once they have.
         chosen: Option<usize>,
     },
     /// A note from Cox: how a turn ended, an error, or the connection closing.
     Note(String),
+}
+
+/// Something a tool call or a permission request shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Content {
+    /// Text, such as what a command printed.
+    Text(String),
+    /// A change to the file at `path`.
+    Diff {
+        path: String,
+        lines: Vec<diff::Line>,
+    },
+}
+
+impl From<ToolCallContent> for Content {
+    fn from(content: ToolCallContent) -> Self {
+        match content {
+            ToolCallContent::Text(text) => Self::Text(text),
+            ToolCallContent::Diff {
+                path,
+                old_text,
+                new_text,
+            } => Self::Diff {
+                path: path.display().to_string(),
+                lines: diff::lines(old_text.as_deref(), &new_text),
+            },
+        }
+    }
 }
 
 /// Whose move it is.
@@ -166,35 +212,89 @@ impl Conversation {
         }
     }
 
+    /// The index of the entry of tool call `id`, if it has one.
+    fn tool_call_entry(&self, id: &str) -> Option<usize> {
+        self.entries.iter().rposition(
+            |entry| matches!(entry, Entry::ToolCall { id: shown_id, .. } if shown_id == id),
+        )
+    }
+
     /// Shows news of a tool call: in place of the call's entry once it has
-    /// one, so a call shows as running until it ends.
+    /// one, so a call shows as running until it ends. What a permission
+    /// request for the call shows already, the call does not show again.
     fn show_tool_call(
         &mut self,
         id: String,
         title: Option<String>,
+        content: Option<Vec<Content>>,
         result: Option<ToolCallResult>,
     ) {
-        let shown = self.entries.iter_mut().rev().find_map(|entry| match entry {
-            Entry::ToolCall {
-                id: shown_id,
-                title,
-                result,
-            } if *shown_id == id => Some((title, result)),
-            _ => None,
-        });
-        match shown {
-            Some((shown_title, shown_result)) => {
-                if let Some(title) = title {
-                    *shown_title = title;
-                }
-                *shown_result = result;
-            }
-            None => self.entries.push(Entry::ToolCall {
+        let Some(index) = self.tool_call_entry(&id) else {
+            self.entries.push(Entry::ToolCall {
                 id,
                 title: title.unwrap_or_else(|| "a tool call".to_owned()),
+                content: content.unwrap_or_default(),
                 result,
-            }),
+            });
+            return;
+        };
+        let content = content.map(|content| {
+            let asked = self.entries[index + 1..].iter().any(|entry| {
+                matches!(entry, Entry::Permission { id: asked_id, content: asked, .. }
+                    if *asked_id == id && *asked == content)
+            });
+            if asked { Vec::new() } else { content }
+        });
+        if let Entry::ToolCall {
+            title: shown_title,
+            content: shown_content,
+            result: shown_result,
+            ..
+        } = &mut self.entries[index]
+        {
+            if let Some(title) = title {
+                *shown_title = title;
+            }
+            if let Some(content) = content {
+                *shown_content = content;
+            }
+            *shown_result = result;
         }
+    }
+
+    /// Shows a permission request with what its tool call is about to do:
+    /// what the request tells, or else what the call shows, which then
+    /// shows only here.
+    fn ask(
+        &mut self,
+        id: String,
+        title: Option<String>,
+        content: Option<Vec<Content>>,
+        options: Vec<String>,
+    ) {
+        let call = self
+            .tool_call_entry(&id)
+            .and_then(|index| match &mut self.entries[index] {
+                Entry::ToolCall { content, .. } => Some(content),
+                _ => None,
+            });
+        let content = match call {
+            Some(shown) => {
+                let content = content.unwrap_or_else(|| shown.clone());
+                if *shown == content {
+                    shown.clear();
+                }
+                content
+            }
+            None => content.unwrap_or_default(),
+        };
+        self.entries.push(Entry::Permission {
+            id,
+            title: title.unwrap_or_else(|| "a tool call".to_owned()),
+            content,
+            options,
+            chosen: None,
+        });
     }
 
     /// Shows what the agent side sent.
@@ -207,13 +307,19 @@ impl Conversation {
                     self.entries.push(Entry::Reply(text));
                 }
             }
-            AgentEvent::ToolCall { id, title, result } => self.show_tool_call(id, title, result),
-            AgentEvent::PermissionRequest { title, options } => {
-                self.entries.push(Entry::Permission {
-                    title: title.unwrap_or_else(|| "a tool call".to_owned()),
-                    options,
-                    chosen: None,
-                });
+            AgentEvent::ToolCall {
+                id,
+                title,
+                content,
+                result,
+            } => self.show_tool_call(id, title, content, result),
+            AgentEvent::PermissionRequest {
+                id,
+                title,
+                content,
+                options,
+            } => {
+                self.ask(id, title, content, options);
                 // Asked before the agent heard it is to stop: the agent
                 // side answers it as cancelled, without the human.
                 if self.state != State::Stopping {
@@ -283,6 +389,7 @@ mod tests {
         let tool_call = |title: Option<&str>, result| AgentEvent::ToolCall {
             id: "call-1".to_owned(),
             title: title.map(str::to_owned),
+            content: None,
             result,
         };
 
@@ -292,6 +399,7 @@ mod tests {
             Entry::ToolCall {
                 id: "call-1".to_owned(),
                 title: "ls".to_owned(),
+                content: Vec::new(),
                 result: None,
             }
         );
@@ -304,9 +412,121 @@ mod tests {
                 Entry::ToolCall {
                     id: "call-1".to_owned(),
                     title: "ls".to_owned(),
+                    content: Vec::new(),
                     result: Some(ToolCallResult::Completed),
                 },
                 Entry::Reply("listing".to_owned()),
+            ]
+        );
+    }
+
+    /// News of tool call `call-1`, showing `content` when it is given.
+    fn tool_call(content: Option<Vec<Content>>, result: Option<ToolCallResult>) -> AgentEvent {
+        AgentEvent::ToolCall {
+            id: "call-1".to_owned(),
+            title: Some("cargo xtask ci".to_owned()),
+            content,
+            result,
+        }
+    }
+
+    /// What tool call `call-1` and the permission requests for it show.
+    fn shown(conversation: &Conversation) -> Vec<(&'static str, Vec<Content>)> {
+        conversation
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::ToolCall { content, .. } => Some(("call", content.clone())),
+                Entry::Permission { content, .. } => Some(("permission", content.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn text(text: &str) -> Content {
+        Content::Text(text.to_owned())
+    }
+
+    fn permission(content: Option<Vec<Content>>) -> AgentEvent {
+        AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
+            title: Some("cargo xtask ci".to_owned()),
+            content,
+            options: vec!["Allow once".to_owned()],
+        }
+    }
+
+    #[test]
+    fn replaces_what_a_tool_call_shows_when_it_changes() {
+        let mut conversation = Conversation::new();
+        conversation.submit("tool");
+
+        conversation.apply(tool_call(Some(vec![text("Run the checks")]), None));
+        conversation.apply(tool_call(None, None));
+        assert_eq!(
+            shown(&conversation),
+            [("call", vec![text("Run the checks")])]
+        );
+
+        conversation.apply(tool_call(
+            Some(vec![text("error: 1 test failed")]),
+            Some(ToolCallResult::Failed),
+        ));
+        assert_eq!(
+            shown(&conversation),
+            [("call", vec![text("error: 1 test failed")])]
+        );
+    }
+
+    #[test]
+    fn shows_what_a_permission_request_asks_for_only_there() {
+        let mut conversation = Conversation::new();
+        conversation.submit("permission");
+        let change = || {
+            vec![Content::from(ToolCallContent::Diff {
+                path: "/work/x.txt".into(),
+                old_text: Some("one\n".to_owned()),
+                new_text: "1\n".to_owned(),
+            })]
+        };
+
+        conversation.apply(tool_call(Some(change()), None));
+        conversation.apply(permission(Some(change())));
+        assert_eq!(
+            shown(&conversation),
+            [("call", Vec::new()), ("permission", change())]
+        );
+
+        conversation.choose(0);
+        // Told again, the change still shows only where it was asked for.
+        conversation.apply(tool_call(Some(change()), None));
+        assert_eq!(
+            shown(&conversation),
+            [("call", Vec::new()), ("permission", change())]
+        );
+        conversation.apply(tool_call(
+            Some(vec![text("done")]),
+            Some(ToolCallResult::Completed),
+        ));
+        assert_eq!(
+            shown(&conversation),
+            [("call", vec![text("done")]), ("permission", change())]
+        );
+    }
+
+    #[test]
+    fn a_permission_request_that_tells_nothing_shows_what_its_call_shows() {
+        let mut conversation = Conversation::new();
+        conversation.submit("permission");
+
+        conversation.apply(tool_call(Some(vec![text("Run the checks")]), None));
+        conversation.apply(permission(None));
+
+        assert_eq!(
+            shown(&conversation),
+            [
+                ("call", Vec::new()),
+                ("permission", vec![text("Run the checks")])
             ]
         );
     }
@@ -316,7 +536,9 @@ mod tests {
         let mut conversation = Conversation::new();
         conversation.submit("permission");
         conversation.apply(AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
             title: Some("touch x.txt".to_owned()),
+            content: None,
             options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
         });
 
@@ -362,7 +584,9 @@ mod tests {
         let mut conversation = Conversation::new();
         conversation.submit("permission");
         let request = || AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
             title: Some("touch x.txt".to_owned()),
+            content: None,
             options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
         };
         conversation.apply(request());

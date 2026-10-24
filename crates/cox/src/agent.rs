@@ -7,11 +7,11 @@ use std::path::PathBuf;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use cox_acp::{McpServer, PermissionAnswer, Session, Transport, Update};
+use cox_acp::{McpServer, PermissionAnswer, Session, ToolCallContent, Transport, Update};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::conversation::{AgentEvent, Command};
+use crate::conversation::{AgentEvent, Command, Content};
 
 /// The window's ends of the channels to the agent side.
 pub struct Agent {
@@ -174,6 +174,7 @@ async fn take_turn(
             Update::ToolCall(call) => send(AgentEvent::ToolCall {
                 id: call.id,
                 title: call.title,
+                content: call.content.map(shown),
                 result: call.result,
             }),
             // Once the human has asked to stop, the agent is told no
@@ -183,7 +184,9 @@ async fn take_turn(
             }
             Update::PermissionRequest(request) => {
                 send(AgentEvent::PermissionRequest {
+                    id: request.tool_call_id(),
                     title: request.title().map(str::to_owned),
+                    content: request.content().map(shown),
                     options: request.options().iter().map(|o| o.name.clone()).collect(),
                 });
                 let answer = loop {
@@ -208,6 +211,12 @@ async fn take_turn(
         Err(error) => send(AgentEvent::TurnFailed(format!("{error:#}"))),
     }
     Ok(())
+}
+
+/// What a tool call shows, made ready for the window here, on the agent
+/// side, where working out a large change does not hold up the window.
+fn shown(content: Vec<ToolCallContent>) -> Vec<Content> {
+    content.into_iter().map(Content::from).collect()
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]

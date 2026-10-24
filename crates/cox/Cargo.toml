@@ -28,6 +28,8 @@ gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 # The version gpui uses, to hand it the browser's frames.
 image = "0.25.10"
 log = "0.4.29"
+# Working out the change an edit makes, to show it: see `src/diff.rs`.
+similar = "3.2.0"
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 unicode-segmentation = "1.12.0"
 
