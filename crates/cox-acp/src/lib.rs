@@ -19,7 +19,7 @@ use agent_client_protocol::schema::v1::{
     StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall, ToolCallId, ToolCallStatus,
     ToolCallUpdate,
 };
-use agent_client_protocol::{AcpAgent, Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
+use agent_client_protocol::{AcpAgent, Agent, Client, ConnectTo, ConnectionTo, Responder};
 use anyhow::Context;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -55,7 +55,7 @@ impl From<McpServer> for AcpMcpServer {
     }
 }
 
-/// Connects to `agent`, opens a session in the current directory with
+/// Connects to `agent`, opens a session working in `cwd` with
 /// `mcp_servers` for the agent to use, and runs `talk` with it. The
 /// connection closes when `talk` returns.
 ///
@@ -65,6 +65,7 @@ impl From<McpServer> for AcpMcpServer {
 /// the agent refuses to open a session.
 pub async fn connect<T>(
     agent: impl Transport,
+    cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     talk: impl AsyncFnOnce(Session) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
@@ -94,7 +95,7 @@ pub async fn connect<T>(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
-            let id = start(&cx, mcp_servers).await?;
+            let id = start(&cx, cwd, mcp_servers).await?;
             let session = Session {
                 cx,
                 id,
@@ -108,15 +109,15 @@ pub async fn connect<T>(
     outcome.context("the connection closed before the session started")?
 }
 
-/// Initializes the connection and opens a session in the current directory.
+/// Initializes the connection and opens a session working in `cwd`.
 async fn start(
     cx: &ConnectionTo<Agent>,
+    cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
 ) -> agent_client_protocol::Result<SessionId> {
     cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
         .block_task()
         .await?;
-    let cwd = std::env::current_dir().map_err(Error::into_internal_error)?;
     let session = cx
         .send_request(
             NewSessionRequest::new(cwd)

@@ -33,16 +33,27 @@ its own, through the [cef](https://crates.io/crates/cef) crate. The crate's
 build downloads the matching CEF distribution from the official builds
 (about 200 MB, once per target directory).
 
-`cox --stage <url> <agent command>` shows `<url>` on the stage. CEF opens
-the Chrome DevTools Protocol on a port that is free when Cox starts, so
-two Cox can run side by side, and Cox hands the agent the
+`cox [--stage <url>] [--home <dir>] <agent command>` opens a window with
+no session in it. "New session" (Command-N on macOS, Control-N
+elsewhere) opens one working in `<dir>`, `~/Cox` unless given, and "Open
+folder…" (Command-O, Control-O) opens one in a folder of your choice.
+Each session starts its own `<agent command>` working there, and has a
+stage of its own, showing `<url>` first. The list on the left of the
+window switches between sessions (Control-Tab and Control-Shift-Tab do
+too) and closes them.
+
+CEF opens the Chrome DevTools Protocol on a port that is free when Cox
+starts, so two Cox can run side by side, and Cox hands each session's
+agent the
 [Chrome DevTools MCP server](https://www.npmjs.com/package/chrome-devtools-mcp)
-connected to it, so the agent reads and drives the page the human sees.
-The server runs through `npx`, so Node has to be on `PATH`; without it,
-the agent gets no tools for the stage. The server connects through a
-relay in Cox, which passes everything on and tells the stage where the
-agent points, clicks and types, so the stage can draw the agent's
-pointer over the page.
+connected to it, so the agent reads and drives the page the human sees
+in that session. The server runs through `npx`, so Node has to be on
+`PATH`; without it, the agent gets no tools for the stage. The server
+connects through a relay in Cox, one for each session, which passes
+everything on but keeps the agent to its session's page: the agent hears
+nothing of other sessions' pages and cannot open pages of its own. The
+relay also tells the stage where the agent points, clicks and types, so
+the stage can draw the agent's pointer over the page.
 
 The stage keeps its cookies, logins and storage in a profile that lasts
 across runs, one for each place Cox runs from. The Cox that
@@ -63,7 +74,7 @@ which needs `cmake` and `ninja` (`brew install cmake ninja`).
 
 ```sh
 cargo xtask bundle            # or: cargo xtask bundle --release
-target/debug/Cox.app/Contents/MacOS/Cox --stage <url> <agent command>
+target/debug/Cox.app/Contents/MacOS/Cox <agent command>
 ```
 
 `cargo xtask bundle` builds `cox` and `cox-helper`, then lays them out as
@@ -79,7 +90,7 @@ The Cox in use runs from where `cargo xtask install` puts it, so that
 building and trying a change in `target/` leaves it be:
 
 - On macOS, `~/Applications/Cox.app`: run
-  `~/Applications/Cox.app/Contents/MacOS/Cox --stage <url> <agent command>`.
+  `~/Applications/Cox.app/Contents/MacOS/Cox <agent command>`.
 - On Linux, `~/.local/bin/cox`, with what it needs of CEF in
   `~/.local/lib/cox`.
 

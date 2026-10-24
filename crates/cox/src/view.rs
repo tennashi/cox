@@ -1,5 +1,5 @@
-//! The window: draws the conversation and turns keystrokes and clicks into
-//! input for it.
+//! One session in the window: draws its conversation, with its stage
+//! beside it, and turns keystrokes and clicks into input for it.
 
 use gpui::{
     AnyView, App, Context, Entity, FocusHandle, Focusable, MouseButton, ScrollHandle, SharedString,
@@ -14,7 +14,7 @@ use crate::input::{LineInput, Submitted};
 /// How wide the conversation is when the stage sits beside it.
 const CONVERSATION_WIDTH: f32 = 420.;
 
-pub struct CoxView {
+pub struct SessionView {
     conversation: Conversation,
     /// Where the conversation is scrolled to.
     scroll: ScrollHandle,
@@ -29,7 +29,7 @@ pub struct CoxView {
     _submitted: Subscription,
 }
 
-impl CoxView {
+impl SessionView {
     /// Opens on `agent`, with `stage` beside the conversation when there is
     /// one.
     pub fn new(agent: Agent, stage: Option<impl Into<AnyView>>, cx: &mut Context<Self>) -> Self {
@@ -184,13 +184,13 @@ impl CoxView {
     }
 }
 
-impl Focusable for CoxView {
+impl Focusable for SessionView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.input.focus_handle(cx)
     }
 }
 
-impl CoxView {
+impl SessionView {
     fn render_conversation(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let prompt = match self.conversation.state() {
             State::Idle => "> ",
@@ -242,7 +242,7 @@ impl CoxView {
     }
 }
 
-impl Render for CoxView {
+impl Render for SessionView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let conversation = self.render_conversation(cx).into_any_element();
         let root = div()

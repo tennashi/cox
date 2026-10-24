@@ -1460,6 +1460,7 @@ dependencies = [
  "libc",
  "log",
  "objc2",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",

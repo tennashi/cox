@@ -1,9 +1,11 @@
-//! The browser behind the stage: CEF (Chromium) rendering a page with no
-//! window of its own. CEF hands each painted picture to [`Shared`], and the
-//! stage hands mouse, keys and input-method text back through [`Browser`].
-//! CEF's remote debugging port stays on, so an agent can drive the same
-//! page over CDP meanwhile. The port is one that is free when Cox starts,
-//! so that two Cox can run side by side.
+//! The browsers behind the stages: CEF (Chromium) rendering pages with no
+//! window of their own. [`Cef`] runs once for the whole app, and opens a
+//! [`Browser`] for each session's stage. CEF hands each painted picture to
+//! the browser's [`Shared`], and the stage hands mouse, keys and
+//! input-method text back through the [`Browser`]. CEF's remote debugging
+//! port stays on, so agents can drive the same pages over CDP meanwhile.
+//! The port is one that is free when Cox starts, so that two Cox can run
+//! side by side.
 //!
 //! CEF runs its own threads: the browser is created and painted on CEF's UI
 //! thread, while GPUI owns the main thread. Everything the two sides share
@@ -12,26 +14,31 @@
 //! [`Browser::pump`]).
 
 use std::os::raw::c_int;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use cef::args::Args;
 use cef::sys::{
     cef_event_flags_t, cef_key_event_type_t, cef_mouse_button_type_t, cef_paint_element_type_t,
+    cef_thread_id_t,
 };
 // The `wrap_*` macros name these without a path, so they have to be in scope.
 use cef::rc::Rc as _;
 use cef::{
     App, BrowserHost, BrowserProcessHandler, BrowserSettings, CefString, Client, CommandLine,
-    CompositionUnderline, DisplayHandler, ImplApp, ImplBrowser, ImplBrowserHost,
-    ImplBrowserProcessHandler, ImplClient, ImplCommandLine, ImplDisplayHandler, ImplFrame,
-    ImplLifeSpanHandler, ImplLoadHandler, ImplRenderHandler, KeyEvent, KeyEventType,
-    LifeSpanHandler, LoadHandler, MouseButtonType, MouseEvent, RenderHandler, Settings, WindowInfo,
-    WrapApp, WrapBrowserProcessHandler, WrapClient, WrapDisplayHandler, WrapLifeSpanHandler,
-    WrapLoadHandler, WrapRenderHandler, wrap_app, wrap_browser_process_handler, wrap_client,
-    wrap_display_handler, wrap_life_span_handler, wrap_load_handler, wrap_render_handler,
+    CompositionUnderline, DevToolsMessageObserver, DisplayHandler, ImplApp, ImplBrowser,
+    ImplBrowserHost, ImplBrowserProcessHandler, ImplClient, ImplCommandLine,
+    ImplDevToolsMessageObserver, ImplDisplayHandler, ImplFrame, ImplLifeSpanHandler,
+    ImplLoadHandler, ImplRenderHandler, ImplTask, KeyEvent, KeyEventType, LifeSpanHandler,
+    LoadHandler, MouseButtonType, MouseEvent, Registration, RenderHandler, Settings, Task,
+    ThreadId, WindowInfo, WrapApp, WrapBrowserProcessHandler, WrapClient,
+    WrapDevToolsMessageObserver, WrapDisplayHandler, WrapLifeSpanHandler, WrapLoadHandler,
+    WrapRenderHandler, WrapTask, wrap_app, wrap_browser_process_handler, wrap_client,
+    wrap_dev_tools_message_observer, wrap_display_handler, wrap_life_span_handler,
+    wrap_load_handler, wrap_render_handler, wrap_task,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::watch;
 
 use crate::profile::Profile;
 
@@ -214,11 +221,72 @@ struct Shared {
     popup: Option<PopupRect>,
     popup_frame: Option<Frame>,
     host: Option<BrowserHost>,
+    /// Keeps CEF telling the browser's `DevTools` answers to the observer
+    /// that learns the page's target id.
+    devtools: Option<Registration>,
     caret: Option<Caret>,
     navigation: Navigation,
 }
 
+impl Shared {
+    fn new(url: &str) -> Self {
+        // CEF is told the stage's size once it is laid out.
+        let initial = Viewport {
+            width: 800,
+            height: 600,
+            scale: 1.0,
+        };
+        Self {
+            wanted: initial,
+            reported: initial,
+            resizing: None,
+            painted: None,
+            frame: None,
+            popup: None,
+            popup_frame: None,
+            host: None,
+            devtools: None,
+            caret: None,
+            navigation: Navigation {
+                url: url.to_owned(),
+                ..Default::default()
+            },
+        }
+    }
+}
+
 type SharedRef = Arc<Mutex<Shared>>;
+
+/// The id `DevTools` knows a page by, as a target of the Chrome `DevTools`
+/// Protocol, once CEF has told it: `None` until then.
+pub type TargetId = watch::Receiver<Option<String>>;
+
+/// What it takes to create a browser on CEF's UI thread.
+struct NewBrowser {
+    shared: SharedRef,
+    events: UnboundedSender<Event>,
+    target: Arc<watch::Sender<Option<String>>>,
+    url: String,
+}
+
+/// The browsers of the app, as far as CEF's start and end are concerned.
+#[derive(Default)]
+struct Browsers {
+    /// Whether CEF is ready to create browsers.
+    ready: bool,
+    /// The browsers asked for before then.
+    waiting: Vec<NewBrowser>,
+    /// Every browser that is still around, to close them all when Cox
+    /// quits.
+    all: Vec<Weak<Mutex<Shared>>>,
+}
+
+type BrowsersRef = Arc<Mutex<Browsers>>;
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    // A panic on CEF's thread leaves the state usable; carry on with it.
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// CEF's "no range" (`CefRange::InvalidRange()`): the C API ignores a null
 /// range, so "replace nothing" has to be spelled out.
@@ -272,19 +340,25 @@ pub fn load_framework(process: Process) {
     );
 }
 
-/// The stage's handle to the browser. Cloning it shares the same browser.
+/// CEF, running for the whole app. Cloning it shares the same CEF.
 #[derive(Clone)]
-pub struct Browser {
-    shared: SharedRef,
-    /// Where CEF keeps cookies, logins and the like.
+pub struct Cef {
+    browsers: BrowsersRef,
+    /// Where CEF keeps cookies, logins and the like, for every browser.
     profile: Arc<Profile>,
-    /// The port an agent connects to with the Chrome `DevTools` Protocol
-    /// (CDP), if one was free.
+    /// The port agents connect to with the Chrome `DevTools` Protocol (CDP),
+    /// if one was free.
     devtools_port: Option<u16>,
 }
 
-/// Starts CEF and the browser showing `url`, and returns the handle to it
-/// with the events CEF will send.
+/// A stage's handle to its browser. Cloning it shares the same browser.
+#[derive(Clone)]
+pub struct Browser {
+    shared: SharedRef,
+    target: TargetId,
+}
+
+/// Starts CEF, and returns the handle to it.
 ///
 /// Call this before anything else, on the main thread. On Linux, CEF's
 /// helper processes (renderer, GPU, ...) run this same executable, and exit
@@ -294,40 +368,20 @@ pub struct Browser {
 ///
 /// When CEF does not load or initialize.
 #[must_use]
-pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
+pub fn start() -> Cef {
     #[cfg(target_os = "macos")]
     load_framework(Process::Main);
     // The bindings were generated for this API version; tell CEF before
     // anything else.
     cef::api_hash(cef::sys::CEF_API_VERSION, 0);
 
-    let initial = Viewport {
-        width: 800,
-        height: 600,
-        scale: 1.0,
-    };
-    let shared = Arc::new(Mutex::new(Shared {
-        wanted: initial,
-        reported: initial,
-        resizing: None,
-        painted: None,
-        frame: None,
-        popup: None,
-        popup_frame: None,
-        host: None,
-        caret: None,
-        navigation: Navigation {
-            url: url.clone(),
-            ..Default::default()
-        },
-    }));
-    let (events, receiver) = unbounded_channel();
+    let browsers = BrowsersRef::default();
 
     let args = Args::new();
     let command_line = args.as_cmd_line().expect("CEF reads the command line");
     let is_helper = command_line.has_switch(Some(&CefString::from("type"))) == 1;
 
-    let mut app = handlers::StageApp::new(Arc::clone(&shared), events, url);
+    let mut app = handlers::StageApp::new(Arc::clone(&browsers));
     let code = cef::execute_process(
         Some(args.as_main_args()),
         Some(&mut app),
@@ -377,14 +431,11 @@ pub fn start(url: String) -> (Browser, UnboundedReceiver<Event>) {
     );
     assert_eq!(initialized, 1, "CEF initializes");
 
-    (
-        Browser {
-            shared,
-            profile: Arc::new(profile),
-            devtools_port,
-        },
-        receiver,
-    )
+    Cef {
+        browsers,
+        profile: Arc::new(profile),
+        devtools_port,
+    }
 }
 
 /// A port no one listens on right now. Chromium wants a port number, not
@@ -395,21 +446,96 @@ fn free_port() -> std::io::Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
+impl Cef {
+    /// The port agents connect to with the Chrome `DevTools` Protocol
+    /// (CDP), or `None` when none was free.
+    #[must_use]
+    pub fn devtools_port(&self) -> Option<u16> {
+        self.devtools_port
+    }
+
+    /// Opens a browser showing `url`, and returns the handle to it with the
+    /// events CEF will send. The browser lives until [`Browser::close`].
+    #[must_use]
+    pub fn open(&self, url: &str) -> (Browser, UnboundedReceiver<Event>) {
+        let shared = Arc::new(Mutex::new(Shared::new(url)));
+        let (events, receiver) = unbounded_channel();
+        let (target, target_id) = watch::channel(None);
+        let new = NewBrowser {
+            shared: Arc::clone(&shared),
+            events,
+            target: Arc::new(target),
+            url: url.to_owned(),
+        };
+        let mut browsers = lock(&self.browsers);
+        browsers.all.retain(|browser| browser.strong_count() > 0);
+        browsers.all.push(Arc::downgrade(&shared));
+        if browsers.ready {
+            drop(browsers);
+            // CEF creates browsers on its UI thread.
+            let mut task = handlers::CreateBrowser::new(Arc::new(Mutex::new(Some(new))));
+            cef::post_task(ThreadId::from(cef_thread_id_t::TID_UI), Some(&mut task));
+        } else {
+            browsers.waiting.push(new);
+        }
+        (
+            Browser {
+                shared,
+                target: target_id,
+            },
+            receiver,
+        )
+    }
+
+    /// Gives CEF's UI thread a turn. Call it on the main thread, often: a
+    /// few times per frame keeps the pages responsive, and nothing happens
+    /// on CEF's side between calls. Linux does not need it.
+    #[cfg(target_os = "macos")]
+    pub fn pump(&self) {
+        crate::macos::cef_turn(cef::do_message_loop_work);
+    }
+
+    /// Closes every browser, waits for CEF to let go of them, and shuts
+    /// CEF down. Call once GPUI is done, on the main thread.
+    pub fn shutdown(self) {
+        let open: Vec<SharedRef> = lock(&self.browsers)
+            .all
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect();
+        let host = |shared: &SharedRef| lock(shared).host.clone();
+        for host in open.iter().filter_map(host) {
+            host.close_browser(1);
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while open.iter().any(|shared| host(shared).is_some()) && Instant::now() < deadline {
+            // Closing happens on CEF's UI thread, which on macOS is this one.
+            #[cfg(target_os = "macos")]
+            self.pump();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // A browser that did not close in time is past using.
+        for shared in &open {
+            lock(shared).host = None;
+        }
+        cef::shutdown();
+        self.profile.discard();
+    }
+}
+
 impl Browser {
     fn shared(&self) -> MutexGuard<'_, Shared> {
-        // A panic on CEF's thread leaves the state usable; carry on with it.
-        self.shared.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.shared)
     }
 
     fn host(&self) -> Option<BrowserHost> {
         self.shared().host.clone()
     }
 
-    /// The port an agent connects to with the Chrome `DevTools` Protocol
-    /// (CDP), or `None` when none was free.
+    /// The id `DevTools` knows the page by, once CEF has told it.
     #[must_use]
-    pub fn devtools_port(&self) -> Option<u16> {
-        self.devtools_port
+    pub fn target_id(&self) -> TargetId {
+        self.target.clone()
     }
 
     /// Whether the browser exists and takes input.
@@ -497,14 +623,6 @@ impl Browser {
                 cef_paint_element_type_t::PET_VIEW,
             )),
         }
-    }
-
-    /// Gives CEF's UI thread a turn. Call it on the main thread, often: a
-    /// few times per frame keeps the page responsive, and nothing happens on
-    /// CEF's side between calls. Linux does not need it.
-    #[cfg(target_os = "macos")]
-    pub fn pump(&self) {
-        crate::macos::cef_turn(cef::do_message_loop_work);
     }
 
     /// The newest picture CEF painted since the last call, if any.
@@ -707,21 +825,11 @@ impl Browser {
         self.shared().caret
     }
 
-    /// Closes the browser, waits for CEF to let go of it, and shuts CEF
-    /// down. Call once GPUI is done, on the main thread.
-    pub fn shutdown(self) {
+    /// Closes the browser. CEF lets go of it on its own time.
+    pub fn close(&self) {
         if let Some(host) = self.host() {
             host.close_browser(1);
         }
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while self.is_open() && Instant::now() < deadline {
-            // Closing happens on CEF's UI thread, which on macOS is this one.
-            #[cfg(target_os = "macos")]
-            self.pump();
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        cef::shutdown();
-        self.profile.discard();
     }
 }
 
@@ -906,9 +1014,7 @@ mod handlers {
 
     wrap_app! {
         pub(super) struct StageApp {
-            shared: SharedRef,
-            events: UnboundedSender<Event>,
-            url: String,
+            browsers: BrowsersRef,
         }
 
         impl App {
@@ -941,55 +1047,117 @@ mod handlers {
             }
 
             fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
-                Some(StageProcessHandler::new(
-                    Arc::clone(&self.shared),
-                    self.events.clone(),
-                    self.url.clone(),
-                ))
+                Some(StageProcessHandler::new(Arc::clone(&self.browsers)))
             }
         }
     }
 
     wrap_browser_process_handler! {
         struct StageProcessHandler {
-            shared: SharedRef,
-            events: UnboundedSender<Event>,
-            url: String,
+            browsers: BrowsersRef,
         }
 
         impl BrowserProcessHandler {
-            /// CEF is ready: create the windowless browser.
+            /// CEF is ready: create the browsers asked for so far.
             fn on_context_initialized(&self) {
-                let (width, height) = {
-                    let shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
-                    (shared.reported.width, shared.reported.height)
+                let waiting = {
+                    let mut browsers = lock(&self.browsers);
+                    browsers.ready = true;
+                    std::mem::take(&mut browsers.waiting)
                 };
-                let window_info = WindowInfo {
-                    windowless_rendering_enabled: 1,
-                    bounds: cef::Rect { x: 0, y: 0, width, height },
-                    ..Default::default()
-                };
-                let mut client = StageClient::new(
-                    StageRenderHandler::new(Arc::clone(&self.shared), self.events.clone()),
-                    StageLifeSpanHandler::new(Arc::clone(&self.shared), self.events.clone()),
-                    StageLoadHandler::new(Arc::clone(&self.shared), self.events.clone()),
-                    StageDisplayHandler::new(Arc::clone(&self.shared), self.events.clone()),
-                );
-                let settings = BrowserSettings {
-                    windowless_frame_rate: 60,
-                    ..Default::default()
-                };
-                let url = CefString::from(self.url.as_str());
-                let created = cef::browser_host_create_browser(
-                    Some(&window_info),
-                    Some(&mut client),
-                    Some(&url),
-                    Some(&settings),
-                    None,
-                    None,
-                );
-                if created != 1 {
-                    log::error!("CEF did not create the browser");
+                for new in waiting {
+                    create(new);
+                }
+            }
+        }
+    }
+
+    wrap_task! {
+        pub(super) struct CreateBrowser {
+            // A task can be copied; only the first run creates the browser.
+            new: Arc<Mutex<Option<NewBrowser>>>,
+        }
+
+        impl Task {
+            fn execute(&self) {
+                if let Some(new) = lock(&self.new).take() {
+                    create(new);
+                }
+            }
+        }
+    }
+
+    /// Creates the windowless browser `new` asks for. Call it on CEF's UI
+    /// thread.
+    fn create(new: NewBrowser) {
+        let NewBrowser {
+            shared,
+            events,
+            target,
+            url,
+        } = new;
+        let (width, height) = {
+            let shared = lock(&shared);
+            (shared.reported.width, shared.reported.height)
+        };
+        let window_info = WindowInfo {
+            windowless_rendering_enabled: 1,
+            bounds: cef::Rect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            ..Default::default()
+        };
+        let mut client = StageClient::new(
+            StageRenderHandler::new(Arc::clone(&shared), events.clone()),
+            StageLifeSpanHandler::new(Arc::clone(&shared), events.clone(), target),
+            StageLoadHandler::new(Arc::clone(&shared), events.clone()),
+            StageDisplayHandler::new(Arc::clone(&shared), events),
+        );
+        let settings = BrowserSettings {
+            windowless_frame_rate: 60,
+            ..Default::default()
+        };
+        let url = CefString::from(url.as_str());
+        let created = cef::browser_host_create_browser(
+            Some(&window_info),
+            Some(&mut client),
+            Some(&url),
+            Some(&settings),
+            None,
+            None,
+        );
+        if created != 1 {
+            log::error!("CEF did not create a browser");
+        }
+    }
+
+    wrap_dev_tools_message_observer! {
+        struct TargetObserver {
+            target: Arc<watch::Sender<Option<String>>>,
+        }
+
+        impl DevToolsMessageObserver {
+            /// The answer to `Target.getTargetInfo`, the only method Cox
+            /// calls through CEF, which names the page's target.
+            fn on_dev_tools_method_result(
+                &self,
+                _browser: Option<&mut cef::Browser>,
+                _message_id: c_int,
+                success: c_int,
+                result: Option<&[u8]>,
+            ) {
+                let target = result
+                    .filter(|_| success == 1)
+                    .and_then(|result| serde_json::from_slice::<serde_json::Value>(result).ok())
+                    .and_then(|result| result["targetInfo"]["targetId"].as_str().map(str::to_owned));
+                match target {
+                    Some(target) => {
+                        self.target.send_replace(Some(target));
+                    }
+                    None => log::error!("CEF did not name the page's target, so its agent cannot reach it"),
                 }
             }
         }
@@ -1039,7 +1207,7 @@ mod handlers {
                 can_go_forward: c_int,
             ) {
                 {
-                    let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+                    let mut shared = lock(&self.shared);
                     shared.navigation.loading = is_loading == 1;
                     shared.navigation.can_go_back = can_go_back == 1;
                     shared.navigation.can_go_forward = can_go_forward == 1;
@@ -1066,11 +1234,7 @@ mod handlers {
             ) {
                 let is_main = frame.is_some_and(|frame| frame.is_main() == 1);
                 if let (true, Some(url)) = (is_main, url) {
-                    self.shared
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .navigation
-                        .url = url.to_string();
+                    lock(&self.shared).navigation.url = url.to_string();
                     let _ = self.events.send(Event::Navigated);
                 }
             }
@@ -1081,6 +1245,7 @@ mod handlers {
         struct StageLifeSpanHandler {
             shared: SharedRef,
             events: UnboundedSender<Event>,
+            target: Arc<watch::Sender<Option<String>>>,
         }
 
         impl LifeSpanHandler {
@@ -1116,20 +1281,37 @@ mod handlers {
                 1
             }
 
+            /// The browser exists: it takes input now, and `DevTools` is
+            /// asked for the page's target, which the page's agent is
+            /// kept to.
             fn on_after_created(&self, browser: Option<&mut cef::Browser>) {
                 if let Some(browser) = browser {
                     let host = browser.host();
+                    let mut devtools = None;
                     if let Some(host) = &host {
                         host.was_resized();
                         host.set_focus(1);
+                        let mut observer = TargetObserver::new(Arc::clone(&self.target));
+                        devtools = host.add_dev_tools_message_observer(Some(&mut observer));
+                        host.execute_dev_tools_method(
+                            0,
+                            Some(&CefString::from("Target.getTargetInfo")),
+                            None,
+                        );
                     }
-                    self.shared.lock().unwrap_or_else(PoisonError::into_inner).host = host;
+                    let mut shared = lock(&self.shared);
+                    shared.host = host;
+                    shared.devtools = devtools;
+                    drop(shared);
                     let _ = self.events.send(Event::Created);
                 }
             }
 
             fn on_before_close(&self, _browser: Option<&mut cef::Browser>) {
-                self.shared.lock().unwrap_or_else(PoisonError::into_inner).host = None;
+                let mut shared = lock(&self.shared);
+                shared.host = None;
+                shared.devtools = None;
+                drop(shared);
                 let _ = self.events.send(Event::Closed);
             }
         }
@@ -1144,7 +1326,7 @@ mod handlers {
         impl RenderHandler {
             /// CEF asks how big the view is, in logical pixels.
             fn view_rect(&self, _browser: Option<&mut cef::Browser>, rect: Option<&mut cef::Rect>) {
-                let shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+                let shared = lock(&self.shared);
                 if let Some(rect) = rect {
                     *rect = cef::Rect {
                         x: 0,
@@ -1162,7 +1344,7 @@ mod handlers {
                 _browser: Option<&mut cef::Browser>,
                 screen_info: Option<&mut cef::ScreenInfo>,
             ) -> c_int {
-                let shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+                let shared = lock(&self.shared);
                 if let Some(info) = screen_info {
                     let rect = cef::Rect {
                         x: 0,
@@ -1203,7 +1385,7 @@ mod handlers {
                     height,
                     bgra,
                 });
-                let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut shared = lock(&self.shared);
                 match *type_.as_ref() {
                     cef_paint_element_type_t::PET_VIEW => {
                         shared.painted = Some((width, height));
@@ -1228,7 +1410,7 @@ mod handlers {
             /// `on_popup_size`, before the first paint.
             fn on_popup_show(&self, _browser: Option<&mut cef::Browser>, show: c_int) {
                 if show == 0 {
-                    let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+                    let mut shared = lock(&self.shared);
                     shared.popup = None;
                     shared.popup_frame = None;
                     drop(shared);
@@ -1238,7 +1420,7 @@ mod handlers {
 
             fn on_popup_size(&self, _browser: Option<&mut cef::Browser>, rect: Option<&cef::Rect>) {
                 if let Some(rect) = rect {
-                    self.shared.lock().unwrap_or_else(PoisonError::into_inner).popup =
+                    lock(&self.shared).popup =
                         Some(PopupRect {
                             x: rect.x,
                             y: rect.y,
@@ -1262,7 +1444,7 @@ mod handlers {
                     width: rect.width,
                     height: rect.height,
                 });
-                self.shared.lock().unwrap_or_else(PoisonError::into_inner).caret = caret;
+                lock(&self.shared).caret = caret;
             }
         }
     }

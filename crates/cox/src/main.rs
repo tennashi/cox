@@ -1,9 +1,14 @@
-//! `cox [--stage <url>] <agent command> [args...]` starts the agent and opens
-//! a window to talk to it, with the stage showing `<url>`. The agent can
-//! read and drive the stage too.
+//! `cox [--stage <url>] [--home <dir>] <agent command> [args...]` opens a
+//! window where the human opens sessions with `<agent command>`, each
+//! working in a folder of the human's choice or in `<dir>`, `~/Cox`
+//! unless asked. Each session has a stage of its own, showing `<url>`
+//! first, which its agent can read and drive too.
 //!
 //! On macOS, run it from inside the bundle `cargo xtask bundle` makes, as
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
+
+use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui::{
     App, Application, Bounds, Focusable, WindowBounds, WindowOptions, actions, prelude::*, px, size,
@@ -11,14 +16,16 @@ use gpui::{
 
 actions!(cox, [Quit]);
 
-const USAGE: &str = "Usage: cox [--stage <url>] <agent command> [args...]";
+const USAGE: &str = "Usage: cox [--stage <url>] [--home <dir>] <agent command> [args...]";
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
-    /// The page the stage shows.
+    /// The page each session's stage shows first.
     stage: String,
-    /// The agent to start, and its arguments.
+    /// Where sessions with no folder work, if not in `~/Cox`.
+    home: Option<PathBuf>,
+    /// The agent each session starts, and its arguments.
     command: Vec<String>,
 }
 
@@ -26,16 +33,37 @@ impl Args {
     fn parse(args: impl IntoIterator<Item = String>) -> Self {
         let mut args = args.into_iter().peekable();
         let mut stage = "about:blank".to_owned();
-        if args.peek().is_some_and(|arg| arg == "--stage")
-            && let Some(url) = args.nth(1)
-        {
-            stage = url;
+        let mut home = None;
+        loop {
+            match args.peek().map(String::as_str) {
+                Some("--stage") => {
+                    args.next();
+                    stage = args.next().unwrap_or(stage);
+                }
+                Some("--home") => {
+                    args.next();
+                    home = args.next().map(PathBuf::from).or(home);
+                }
+                _ => break,
+            }
         }
         Self {
             stage,
+            home,
             command: args.collect(),
         }
     }
+}
+
+/// Where sessions with no folder work: `home`, or `~/Cox`, as an absolute
+/// path, which the agent needs.
+fn home_for_sessions(home: Option<PathBuf>) -> PathBuf {
+    let home = home.unwrap_or_else(|| {
+        std::env::var_os("HOME")
+            .map_or_else(std::env::temp_dir, PathBuf::from)
+            .join("Cox")
+    });
+    std::path::absolute(&home).unwrap_or(home)
 }
 
 /// How often GPUI gives CEF's UI thread a turn on macOS: a little above
@@ -55,47 +83,38 @@ fn main() {
     // CEF first: on Linux, its helper processes run this same executable
     // with arguments of their own, and exit inside `start`.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let (browser, events) = cox::browser::start(args.stage.clone());
-    // Elsewhere the option still parses, and does nothing.
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let _ = &args.stage;
+    let cef = cox::browser::start();
     // In place of CEF's handlers, which quit without the app's quit handlers.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Err(error) = cox::quit::on_signals() {
-        log::error!("signals will end Cox without stopping the agent: {error}");
+        log::error!("signals will end Cox without stopping the agents: {error}");
     }
 
     if args.command.is_empty() {
         eprintln!("{USAGE}");
         std::process::exit(2);
     }
-    let command = args.command;
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let (relay_port, agent_input) = relay(&browser);
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let mut stage_input = Some((events, agent_input));
+    let home = home_for_sessions(args.home);
+    let launcher = cox::session::Launcher {
+        command: args.command,
+        stage: args.stage,
+        path: std::env::var_os("PATH").unwrap_or_default(),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        cef: cef.clone(),
+    };
 
     Application::new().run(move |cx: &mut App| {
         cox::input::bind_keys(cx);
+        cox::workspace::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         #[cfg(target_os = "macos")]
         cx.bind_keys([gpui::KeyBinding::new("cmd-q", Quit, None)]);
-        // The agent gets the page the human sees.
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let tools = relay_port
-            .and_then(|port| cox::tools::stage(port, &std::env::var_os("PATH").unwrap_or_default()))
-            .into_iter()
-            .collect();
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        let tools = Vec::new();
-        let agent = cox::agent::spawn(move || cox_acp::launch(command), tools);
 
         #[cfg(target_os = "macos")]
         {
-            // Before the browser exists: CEF asks the app about itself.
+            // Before any browser exists: CEF asks the app about itself.
             cox::macos::adopt_cef_app_protocol();
-            let pumped = browser.clone();
+            let pumped = cef.clone();
             cx.spawn(async move |cx| {
                 loop {
                     cx.background_executor().timer(PUMP_INTERVAL).await;
@@ -115,11 +134,10 @@ fn main() {
         })
         .detach();
         // Quitting ends the app's run loop, or on macOS the whole process,
-        // so the browser goes before either. The agent goes with the
-        // window.
+        // so the browsers go before either. The agents go with the window.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            let closing = browser.clone();
+            let closing = cef.clone();
             cx.on_app_quit(move |_| {
                 closing.clone().shutdown();
                 async {}
@@ -127,61 +145,32 @@ fn main() {
             .detach();
         }
 
-        let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
+        let open: cox::workspace::Open =
+            Rc::new(move |cwd, window, cx| launcher.open(cwd, window, cx));
+        let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
         let window = cx
             .open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
-                |window, cx| {
-                    #[cfg(any(target_os = "linux", target_os = "macos"))]
-                    let stage = Some(cx.new(|cx| {
-                        let (events, agent_input) =
-                            stage_input.take().expect("the window opens once");
-                        cox::stage::Stage::new(browser.clone(), events, agent_input, window, cx)
-                    }));
-                    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-                    let _ = window;
-                    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-                    let stage = None::<gpui::AnyView>;
-                    cx.new(|cx| cox::view::CoxView::new(agent, stage, cx))
-                },
+                |_, cx| cx.new(|cx| cox::workspace::Workspace::new(home, open, cx)),
             )
             .expect("the window opens");
         window
-            .update(cx, |view, window, cx| window.focus(&view.focus_handle(cx)))
+            .update(cx, |workspace, window, cx| {
+                window.focus(&workspace.focus_handle(cx));
+            })
             .expect("the window is open");
         cx.on_window_closed(|cx| cx.quit()).detach();
         cx.activate(true);
     });
 }
 
-/// Starts the relay that the agent's browser tools go through, which tells
-/// the stage where the agent points, clicks and types. Answers its port,
-/// or `None` when it did not start, and the input the agent sends.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn relay(
-    browser: &cox::browser::Browser,
-) -> (
-    Option<u16>,
-    tokio::sync::mpsc::UnboundedReceiver<cox::relay::AgentInput>,
-) {
-    match browser
-        .devtools_port()
-        .ok_or_else(|| anyhow::anyhow!("the browser has no DevTools port"))
-        .and_then(cox::relay::start)
-    {
-        Ok((port, input)) => (Some(port), input),
-        Err(error) => {
-            log::error!("no relay to the stage, so the agent gets no tools for it: {error:#}");
-            (None, tokio::sync::mpsc::unbounded_channel().1)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::Args;
 
     fn args(words: &[&str]) -> Args {
@@ -191,22 +180,43 @@ mod tests {
     #[test]
     fn the_command_is_everything_after_the_options() {
         assert_eq!(
-            args(&["--stage", "http://localhost:3000/", "node", "agent.mjs"]),
+            args(&[
+                "--stage",
+                "http://localhost:3000/",
+                "--home",
+                "/tmp/cox",
+                "node",
+                "agent.mjs"
+            ]),
             Args {
                 stage: "http://localhost:3000/".to_owned(),
+                home: Some(PathBuf::from("/tmp/cox")),
                 command: vec!["node".to_owned(), "agent.mjs".to_owned()],
             }
         );
     }
 
     #[test]
-    fn the_stage_is_blank_unless_asked() {
+    fn the_stage_is_blank_and_home_is_the_default_unless_asked() {
         assert_eq!(
             args(&["node", "agent.mjs"]),
             Args {
                 stage: "about:blank".to_owned(),
+                home: None,
                 command: vec!["node".to_owned(), "agent.mjs".to_owned()],
             }
         );
+    }
+
+    #[test]
+    fn sessions_with_no_folder_work_in_cox_in_the_home_directory() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        assert_eq!(
+            super::home_for_sessions(None),
+            PathBuf::from(home).join("Cox")
+        );
+        assert!(super::home_for_sessions(Some("relative".into())).is_absolute());
     }
 }

@@ -10,7 +10,7 @@ use agent_client_protocol::schema::v1::{
 };
 use cox::conversation::{Entry, State};
 use cox::input::LineInput;
-use cox::view::CoxView;
+use cox::view::SessionView;
 use cox_acp::{McpServer, ToolCallResult};
 use fake_agent::FakeAgent;
 use gpui::{
@@ -19,7 +19,7 @@ use gpui::{
 };
 
 /// Opens the window, talking to a fake agent, with the input focused.
-fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<CoxView>, &mut VisualTestContext) {
+fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<SessionView>, &mut VisualTestContext) {
     open_with(cx, Vec::new())
 }
 
@@ -27,7 +27,7 @@ fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<CoxView>, &mut Visua
 fn open_with(
     cx: &mut TestAppContext,
     mcp_servers: Vec<McpServer>,
-) -> (Arc<FakeAgent>, Entity<CoxView>, &mut VisualTestContext) {
+) -> (Arc<FakeAgent>, Entity<SessionView>, &mut VisualTestContext) {
     // The agent side runs on a thread of its own, so the test waits for it
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
@@ -35,8 +35,12 @@ fn open_with(
     let agent = Arc::new(FakeAgent::default());
     let fake = Arc::clone(&agent);
     let (view, cx) = cx.add_window_view(|_, cx| {
-        CoxView::new(
-            cox::agent::spawn(move || Ok(fake.connect()), mcp_servers),
+        SessionView::new(
+            cox::agent::spawn(
+                move || Ok(fake.connect()),
+                std::env::temp_dir(),
+                mcp_servers,
+            ),
             None::<gpui::AnyView>,
             cx,
         )
@@ -48,7 +52,7 @@ fn open_with(
 /// Waits until the conversation is in `state`. The agent side runs in real
 /// time, outside GPUI's clock, so a real timer ends the wait if it never
 /// comes.
-async fn wait_for(cx: &mut VisualTestContext, view: &Entity<CoxView>, state: State) {
+async fn wait_for(cx: &mut VisualTestContext, view: &Entity<SessionView>, state: State) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(5));
@@ -70,6 +74,7 @@ async fn sends_what_the_human_types_and_shows_the_reply(cx: &mut TestAppContext)
     wait_for(cx, &view, State::Idle).await;
 
     assert_eq!(agent.sessions_opened(), 1);
+    assert_eq!(agent.cwd(), Some(std::env::temp_dir()));
     assert_eq!(agent.prompts(), ["hello"]);
     view.read_with(cx, |view, _| {
         assert_eq!(
@@ -247,7 +252,7 @@ fn clipboard(cx: &mut VisualTestContext) -> Option<String> {
     cx.read_from_clipboard().and_then(|item| item.text())
 }
 
-fn input_text(cx: &mut VisualTestContext, view: &Entity<CoxView>) -> String {
+fn input_text(cx: &mut VisualTestContext, view: &Entity<SessionView>) -> String {
     view.read_with(cx, |view, cx| view.input().read(cx).text().to_owned())
 }
 
@@ -280,7 +285,7 @@ async fn answers_a_permission_request_with_a_click(cx: &mut TestAppContext) {
 /// The title and result of the first tool call in the conversation.
 fn tool_call(
     cx: &mut VisualTestContext,
-    view: &Entity<CoxView>,
+    view: &Entity<SessionView>,
 ) -> (String, Option<ToolCallResult>) {
     view.read_with(cx, |view, _| {
         view.conversation()
