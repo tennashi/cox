@@ -158,9 +158,15 @@ impl Stage {
         let Some(url) = address_to_url(address.read(cx).text()) else {
             return;
         };
-        address.update(cx, |address, cx| address.set_text(&url, cx));
-        self.address_shown.clone_from(&url);
-        self.browser.load(&url);
+        self.open(&url, window, cx);
+    }
+
+    /// Opens `url`, and gives the page the keyboard.
+    pub fn open(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.address
+            .update(cx, |address, cx| address.set_text(url, cx));
+        url.clone_into(&mut self.address_shown);
+        self.browser.load(url);
         cx.focus_self(window);
         cx.notify();
     }

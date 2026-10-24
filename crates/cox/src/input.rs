@@ -260,8 +260,12 @@ impl LineInput {
         }
     }
 
+    /// Copies the selection, or with nothing selected leaves the keys to
+    /// what holds the input, such as a conversation with text selected.
     fn copy(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
-        self.copy_selection(cx);
+        if !self.copy_selection(cx) {
+            cx.propagate();
+        }
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
@@ -304,6 +308,11 @@ impl LineInput {
 
     fn mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
         self.selecting = false;
+    }
+
+    /// Leaves the cursor where it is, with nothing selected.
+    pub fn deselect(&mut self, cx: &mut Context<Self>) {
+        self.move_to(self.cursor(), cx);
     }
 
     /// Where the cursor is: the end of the selection it moves.

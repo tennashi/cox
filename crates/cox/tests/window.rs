@@ -2,6 +2,8 @@
 
 mod fake_agent;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,19 +17,24 @@ use cox::view::SessionView;
 use cox_acp::{McpServer, ToolCallResult};
 use fake_agent::FakeAgent;
 use gpui::{
-    ClipboardItem, Entity, EntityInputHandler, Focusable, Modifiers, TestAppContext,
-    VisualTestContext,
+    Bounds, ClipboardItem, Entity, EntityInputHandler, Focusable, Modifiers, MouseButton,
+    MouseDownEvent, MouseUpEvent, Pixels, TestAppContext, VisualTestContext, point, px,
 };
 
 /// Opens the window, talking to a fake agent, with the input focused.
 fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<SessionView>, &mut VisualTestContext) {
-    open_with(cx, Vec::new())
+    open_with(cx, Vec::new(), Opened::default())
 }
 
-/// Opens the window like [`open`], handing the agent `mcp_servers`.
+/// The links the human opened, in order.
+type Opened = Rc<RefCell<Vec<String>>>;
+
+/// Opens the window like [`open`], handing the agent `mcp_servers`, and
+/// noting in `opened` the links the human opens.
 fn open_with(
     cx: &mut TestAppContext,
     mcp_servers: Vec<McpServer>,
+    opened: Opened,
 ) -> (Arc<FakeAgent>, Entity<SessionView>, &mut VisualTestContext) {
     // The agent side runs on a thread of its own, so the test waits for it
     // in real time instead of only running GPUI's own tasks.
@@ -46,6 +53,7 @@ fn open_with(
                 mcp_servers,
             ),
             None::<gpui::AnyView>,
+            Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
             cx,
         )
     });
@@ -117,7 +125,7 @@ async fn hands_the_agent_its_tools(cx: &mut TestAppContext) {
         command: "/usr/bin/npx".into(),
         args: vec!["-y".to_owned(), "chrome-devtools-mcp".to_owned()],
     };
-    let (agent, view, cx) = open_with(cx, vec![stage]);
+    let (agent, view, cx) = open_with(cx, vec![stage], Opened::default());
 
     cx.simulate_input("hello");
     cx.simulate_keystrokes("enter");
@@ -394,4 +402,92 @@ fn tool_call(
             })
             .expect("a tool call is shown")
     })
+}
+
+/// Sends `line` and waits for the turn to end.
+async fn say(cx: &mut VisualTestContext, view: &Entity<SessionView>, line: &str) {
+    cx.simulate_input(line);
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, view, State::Idle).await;
+}
+
+/// Where the reply at entry 1 is drawn.
+fn first_reply(cx: &mut VisualTestContext) -> Bounds<Pixels> {
+    cx.debug_bounds("reply-1").expect("the reply is drawn")
+}
+
+/// How wide a character is in the tests, whose text is laid out as if
+/// every character were as wide as the font is tall times 0.6.
+const CHARACTER: f32 = 14. * 0.6;
+
+#[gpui::test]
+async fn shows_a_reply_as_markdown_and_copies_what_the_human_selects(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+    say(cx, &view, "**bold** text").await;
+
+    let reply = first_reply(cx);
+    cx.simulate_mouse_down(reply.origin, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(reply.bottom_right(), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(reply.bottom_right(), MouseButton::Left, Modifiers::none());
+    cx.simulate_keystrokes("secondary-c");
+
+    assert_eq!(clipboard(cx), Some("echo: bold text".to_owned()));
+    // The keyboard is still the input's.
+    cx.simulate_input("x");
+    assert_eq!(input_text(cx, &view), "x");
+}
+
+#[gpui::test]
+async fn selects_a_word_with_a_double_click(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+    say(cx, &view, "hello world").await;
+
+    let reply = first_reply(cx);
+    // On the "o" of "world": "echo: hello w" comes before it.
+    let world = point(
+        reply.origin.x + px(CHARACTER * 13.5),
+        reply.origin.y + px(5.),
+    );
+    for click_count in [1, 2] {
+        cx.simulate_event(MouseDownEvent {
+            position: world,
+            modifiers: Modifiers::none(),
+            button: MouseButton::Left,
+            click_count,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            position: world,
+            modifiers: Modifiers::none(),
+            button: MouseButton::Left,
+            click_count,
+        });
+    }
+
+    assert_eq!(view.read_with(cx, |view, _| view.selected_text()), "world");
+}
+
+#[gpui::test]
+async fn opens_a_link_the_human_clicks(cx: &mut TestAppContext) {
+    let opened = Opened::default();
+    let (_agent, view, cx) = open_with(cx, Vec::new(), Rc::clone(&opened));
+    say(cx, &view, "see https://example.com/x").await;
+
+    let reply = first_reply(cx);
+    let at = |column: f32| {
+        point(
+            reply.origin.x + px(CHARACTER * column),
+            reply.origin.y + px(5.),
+        )
+    };
+    // On "echo", then on the address, which starts at the eleventh
+    // character.
+    cx.simulate_click(at(1.5), Modifiers::none());
+    cx.simulate_click(at(15.5), Modifiers::none());
+    // Dragging over the address selects it instead.
+    cx.simulate_mouse_down(at(12.5), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(at(20.5), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(at(20.5), MouseButton::Left, Modifiers::none());
+
+    assert_eq!(*opened.borrow(), ["https://example.com/x"]);
 }

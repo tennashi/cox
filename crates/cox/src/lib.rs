@@ -12,7 +12,9 @@
 //! - [`input`] is the text the human types into, which an input method can
 //!   compose into.
 //! - [`view`] draws a session's conversation with GPUI and turns keystrokes
-//!   and clicks into input.
+//!   and clicks into input. [`text`] draws the conversation's text so that
+//!   the human can select it and click its links, replies as the Markdown
+//!   that [`markdown`] reads; [`selection`] is what the human selected.
 //! - [`browser`] runs CEF, which renders a page for each session with no
 //!   window of its own, and [`stage`] shows that page in the window and
 //!   sends the human's input to it. The session's agent drives the same
@@ -34,6 +36,7 @@ pub mod diff;
 pub mod input;
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod markdown;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod pointer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -42,9 +45,11 @@ pub mod profile;
 pub mod quit;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod relay;
+pub mod selection;
 pub mod session;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod stage;
+pub mod text;
 pub mod tools;
 pub mod view;
 pub mod workspace;
