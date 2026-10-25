@@ -34,27 +34,32 @@ build downloads the matching CEF distribution from the official builds
 (about 200 MB, once per target directory).
 
 `cox [--stage <url>] [--home <dir>] <agent command>` opens a window with
-no session in it. "New session" (Command-N on macOS, Control-N
-elsewhere) opens one working in `<dir>`, `~/Cox` unless given, and "Open
-folder…" (Command-O, Control-O) opens one in a folder of your choice.
-Each session starts its own `<agent command>` working there, and has a
-stage of its own, showing `<url>` first. The list on the left of the
-window switches between sessions (Control-Tab and Control-Shift-Tab do
-too) and closes them. Escape in a session's conversation, or its Stop
-button, stops the turn its agent is taking; the conversation stays, and
-the next line can be sent once the agent has stopped. A click on a link
-in a session's conversation opens it on that session's stage.
+no chat in it. The list on the left of the window shows the chats under
+the projects they are in. A project is a folder: "Open folder…"
+(Command-O on macOS, Control-O elsewhere) opens a chat in the project of a
+folder of your choice, and the + beside a project opens another chat in
+it. "New chat" (Command-N, Control-N) opens one in no project, which
+works in `<dir>`, `~/Cox` unless given. Each chat starts its own
+`<agent command>` working in its project's folder, and has a stage of its
+own, showing `<url>` first. When the folder has a `COX.md`, the agent gets
+what it says ahead of the first line sent in the chat, and the chat says
+so at its top. The list switches between chats (Control-Tab and
+Control-Shift-Tab do too) and closes them. Escape in a chat's
+conversation, or its Stop button, stops the turn its agent is taking; the
+conversation stays, and the next line can be sent once the agent has
+stopped. A click on a link in a chat's conversation opens it on that
+chat's stage.
 
 CEF opens the Chrome DevTools Protocol on a port that is free when Cox
-starts, so two Cox can run side by side, and Cox hands each session's
+starts, so two Cox can run side by side, and Cox hands each chat's
 agent the
 [Chrome DevTools MCP server](https://www.npmjs.com/package/chrome-devtools-mcp)
 connected to it, so the agent reads and drives the page the human sees
-in that session. The server runs through `npx`, so Node has to be on
+in that chat. The server runs through `npx`, so Node has to be on
 `PATH`; without it, the agent gets no tools for the stage. The server
-connects through a relay in Cox, one for each session, which passes
-everything on but keeps the agent to its session's page: the agent hears
-nothing of other sessions' pages and cannot open pages of its own. The
+connects through a relay in Cox, one for each chat, which passes
+everything on but keeps the agent to its chat's page: the agent hears
+nothing of other chats' pages and cannot open pages of its own. The
 relay also tells the stage where the agent points, clicks and types, so
 the stage can draw the agent's pointer over the page.
 

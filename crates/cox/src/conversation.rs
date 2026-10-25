@@ -76,7 +76,8 @@ pub enum Entry {
         /// The option the human chose, once they have.
         chosen: Option<usize>,
     },
-    /// A note from Cox: how a turn ended, an error, or the connection closing.
+    /// A note from Cox: the instructions the agent gets, how a turn ended,
+    /// an error, or the connection closing.
     Note(String),
 }
 
@@ -143,6 +144,15 @@ impl Conversation {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            state: State::Idle,
+        }
+    }
+
+    /// A conversation that opens with `note`, a note from Cox.
+    #[must_use]
+    pub fn noting(note: String) -> Self {
+        Self {
+            entries: vec![Entry::Note(note)],
             state: State::Idle,
         }
     }

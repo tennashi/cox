@@ -215,11 +215,15 @@ pub struct Session {
 }
 
 impl Session {
-    /// Sends `text` to the agent as a prompt, starting a turn.
-    pub fn send(&mut self, text: String) -> Turn<'_> {
+    /// Sends `texts` to the agent as a prompt, each a block of its own,
+    /// starting a turn.
+    pub fn send(&mut self, texts: impl IntoIterator<Item = String>) -> Turn<'_> {
         let prompt = PromptRequest::new(
             self.id.clone(),
-            vec![ContentBlock::Text(TextContent::new(text))],
+            texts
+                .into_iter()
+                .map(|text| ContentBlock::Text(TextContent::new(text)))
+                .collect(),
         );
         self.tool_calls.clear();
         Turn {

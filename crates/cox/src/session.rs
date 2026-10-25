@@ -1,5 +1,5 @@
-//! What opening a session starts: the agent, working in the session's
-//! directory, and on Linux and macOS the session's own page on the stage,
+//! What opening a chat starts: the agent's session, working in the chat's
+//! directory, and on Linux and macOS the chat's own page on the stage,
 //! which the agent reaches through a relay of its own.
 
 use std::ffi::OsString;
@@ -8,13 +8,14 @@ use std::rc::Rc;
 
 use gpui::{App, Entity, Window, prelude::*};
 
+use crate::instructions::Instructions;
 use crate::view::{OpenLink, SessionView};
 
-/// Opens sessions, each with an agent of the same command.
+/// Opens chats, each with an agent of the same command.
 pub struct Launcher {
     /// The agent to start, and its arguments.
     pub command: Vec<String>,
-    /// The page each session's stage shows first.
+    /// The page each chat's stage shows first.
     pub stage: String,
     /// The `PATH` the agent's tools are found on.
     pub path: OsString,
@@ -23,9 +24,15 @@ pub struct Launcher {
 }
 
 impl Launcher {
-    /// Starts a session working in `cwd`, an absolute path, and returns its
-    /// view.
-    pub fn open(&self, cwd: PathBuf, window: &mut Window, cx: &mut App) -> Entity<SessionView> {
+    /// Starts a chat working in `cwd`, an absolute path, whose agent gets
+    /// `instructions`, and returns its view.
+    pub fn open(
+        &self,
+        cwd: PathBuf,
+        instructions: Option<Instructions>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<SessionView> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let (stage, tools, open_link) = {
             let (browser, events) = self.cef.open(&self.stage);
@@ -37,7 +44,7 @@ impl Launcher {
                 .collect();
             let stage =
                 cx.new(|cx| crate::stage::Stage::new(browser, events, agent_input, window, cx));
-            // Links in the conversation open on the session's stage.
+            // Links in the conversation open on the chat's stage.
             let shown = stage.clone();
             let open_link: OpenLink = Rc::new(move |url, window, cx| {
                 shown.update(cx, |stage, cx| stage.open(url, window, cx));
@@ -52,7 +59,7 @@ impl Launcher {
             (None::<gpui::AnyView>, Vec::new(), open_link)
         };
         let command = self.command.clone();
-        let agent = crate::agent::spawn(move || cox_acp::launch(command), cwd, tools);
+        let agent = crate::agent::spawn(move || cox_acp::launch(command), cwd, tools, instructions);
         cx.new(|cx| SessionView::new(agent, stage, open_link, cx))
     }
 

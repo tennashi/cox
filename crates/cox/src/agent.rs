@@ -12,11 +12,15 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::conversation::{AgentEvent, Command, Content};
+use crate::instructions::Instructions;
 
 /// The window's ends of the channels to the agent side.
 pub struct Agent {
     pub commands: UnboundedSender<Command>,
     pub events: UnboundedReceiver<AgentEvent>,
+    /// Where the instructions the agent gets with the first prompt come
+    /// from, if it gets any.
+    pub instructions: Option<PathBuf>,
     /// Stops the agent when dropped.
     pub thread: AgentThread,
 }
@@ -49,12 +53,20 @@ impl Drop for AgentThread {
 
 /// Starts the agent side on a thread of its own. `connect` runs on its
 /// runtime and returns the transport to the agent, which works in `cwd`, an
-/// absolute path, and gets the tools of `mcp_servers`.
+/// absolute path, gets the tools of `mcp_servers`, and gets `instructions`
+/// ahead of the first prompt.
 pub fn spawn<T: Transport + 'static>(
     connect: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
+    instructions: Option<Instructions>,
 ) -> Agent {
+    let (source, prompt) = instructions
+        .map(|instructions| {
+            let prompt = instructions.prompt();
+            (instructions.path, prompt)
+        })
+        .unzip();
     let (commands, received) = unbounded_channel();
     let (sent, events) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
@@ -68,7 +80,7 @@ pub fn spawn<T: Transport + 'static>(
             .and_then(|runtime| {
                 let outcome = runtime.block_on(async {
                     tokio::select! {
-                        outcome = run(connect, cwd, mcp_servers, received, &sent) => outcome,
+                        outcome = run(connect, cwd, mcp_servers, prompt, received, &sent) => outcome,
                         // Dropping the connection kills the agent.
                         _ = stopped => Ok(()),
                     }
@@ -82,6 +94,7 @@ pub fn spawn<T: Transport + 'static>(
     Agent {
         commands,
         events,
+        instructions: source,
         thread: AgentThread {
             stop: Some(stop),
             thread: Some(thread),
@@ -118,6 +131,7 @@ async fn run<T: Transport + 'static>(
     connect: impl FnOnce() -> anyhow::Result<T>,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
+    mut instructions: Option<String>,
     mut commands: UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
@@ -127,7 +141,9 @@ async fn run<T: Transport + 'static>(
             // An answer with no permission request waiting has nothing to
             // answer, and a cancel with no turn running nothing to stop.
             if let Command::Prompt(text) = command {
-                take_turn(&mut session, text, &mut commands, events).await?;
+                // The instructions go once, ahead of the first prompt.
+                let prompt = instructions.take().into_iter().chain([text]);
+                take_turn(&mut session, prompt, &mut commands, events).await?;
             }
         }
         Ok(())
@@ -137,14 +153,14 @@ async fn run<T: Transport + 'static>(
 
 async fn take_turn(
     session: &mut Session,
-    text: String,
+    prompt: impl IntoIterator<Item = String>,
     commands: &mut UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
     let send = |event| {
         let _ = events.send(event);
     };
-    let mut turn = session.send(text);
+    let mut turn = session.send(prompt);
     // Whether the human has asked to stop the turn.
     let mut cancelled = false;
     loop {
@@ -258,6 +274,7 @@ mod tests {
             move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
             std::env::temp_dir(),
             Vec::new(),
+            None,
         );
         let mut pid = String::new();
         assert!(wait_until(|| {
@@ -291,6 +308,7 @@ mod tests {
             move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
             std::env::temp_dir(),
             Vec::new(),
+            None,
         );
         let mut seen = String::new();
         assert!(wait_until(|| {

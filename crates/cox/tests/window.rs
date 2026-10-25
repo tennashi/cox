@@ -1,5 +1,6 @@
 //! A human using the window, with the agent faked in memory.
 
+#[expect(dead_code, reason = "these tests use only part of the fake agent")]
 mod fake_agent;
 
 use std::cell::RefCell;
@@ -51,6 +52,7 @@ fn open_with(
                 move || Ok(fake.connect()),
                 std::env::temp_dir(),
                 mcp_servers,
+                None,
             ),
             None::<gpui::AnyView>,
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
