@@ -11,7 +11,7 @@ use cox_acp::{McpServer, PermissionAnswer, Session, ToolCallContent, Transport, 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::conversation::{AgentEvent, Command, Content};
+use crate::conversation::{AgentEvent, Command, Content, ToolCallResult};
 use crate::instructions::Instructions;
 
 /// The window's ends of the channels to the agent side.
@@ -192,7 +192,7 @@ async fn take_turn(
                 id: call.id,
                 title: call.title,
                 content: call.content.map(shown),
-                result: call.result,
+                result: call.result.map(ended),
             }),
             // Once the human has asked to stop, the agent is told no
             // without asking them.
@@ -233,7 +233,29 @@ async fn take_turn(
 /// What a tool call shows, made ready for the window here, on the agent
 /// side, where working out a large change does not hold up the window.
 fn shown(content: Vec<ToolCallContent>) -> Vec<Content> {
-    content.into_iter().map(Content::from).collect()
+    content
+        .into_iter()
+        .map(|content| match content {
+            ToolCallContent::Text(text) => Content::Text(text),
+            ToolCallContent::Diff {
+                path,
+                old_text,
+                new_text,
+            } => Content::Diff {
+                path: path.display().to_string(),
+                lines: cox_core::diff::lines(old_text.as_deref(), &new_text),
+            },
+        })
+        .collect()
+}
+
+/// How a tool call ended, as the conversation keeps it.
+fn ended(result: cox_acp::ToolCallResult) -> ToolCallResult {
+    match result {
+        cox_acp::ToolCallResult::Completed => ToolCallResult::Completed,
+        cox_acp::ToolCallResult::Failed => ToolCallResult::Failed,
+        cox_acp::ToolCallResult::Cancelled => ToolCallResult::Cancelled,
+    }
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]

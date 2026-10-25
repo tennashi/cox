@@ -1,14 +1,18 @@
 //! What opening a chat starts: the agent's session, working in the chat's
 //! directory, and on Linux and macOS the chat's own stage, whose pages the
 //! agent reaches through a relay of its own, and the server of Cox's own
-//! tools for the agent, which reach the stage too.
+//! tools for the agent, which reach the stage too. A closed chat, opened to
+//! read, starts none of them but a stage on the pages it had.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use cox_core::store::Record;
+use cox_core::tabs::Tabs;
 use gpui::{App, Entity, Window, prelude::*};
 
+use crate::conversation::Entry;
 use crate::instructions::Instructions;
 use crate::view::{OpenLink, SessionView};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -31,11 +35,12 @@ pub struct Launcher {
 
 impl Launcher {
     /// Starts a chat working in `cwd`, an absolute path, whose agent gets
-    /// `instructions`, and returns its view.
+    /// `instructions`, kept in `record`, and returns its view.
     pub fn open(
         &self,
         cwd: PathBuf,
         instructions: Option<Instructions>,
+        record: Option<Record>,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<SessionView> {
@@ -63,19 +68,12 @@ impl Launcher {
                     relay,
                     server.map(|(_, server)| server.requests),
                     panel.clone(),
+                    record.clone(),
                     window,
                     cx,
                 )
             });
-            // Links in the conversation open on the chat's stage.
-            let shown = stage.clone();
-            let open_link: OpenLink = Rc::new(move |url, window, cx| {
-                shown.update(cx, |stage, cx| stage.open(url, window, cx));
-            });
-            let stage = StageView {
-                view: stage.into(),
-                panel,
-            };
+            let (stage, open_link) = shown(stage, panel);
             (Some(stage), tools, open_link)
         };
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -87,7 +85,43 @@ impl Launcher {
         };
         let command = self.command.clone();
         let agent = crate::agent::spawn(move || cox_acp::launch(command), cwd, tools, instructions);
-        cx.new(|cx| SessionView::new(agent, stage, open_link, cx))
+        cx.new(|cx| SessionView::new(agent, stage, open_link, record, cx))
+    }
+
+    /// The view of a closed chat that worked in `cwd`, which showed
+    /// `entries`, with a stage on the pages and files of `tabs`.
+    pub fn read(
+        &self,
+        cwd: PathBuf,
+        entries: Vec<Entry>,
+        tabs: Option<Tabs>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<SessionView> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let (stage, open_link) = {
+            let panel = cx.new(|_| Panel::default());
+            let stage = cx.new(|cx| {
+                crate::stage::Stage::reading(
+                    self.cef.clone(),
+                    cwd,
+                    tabs,
+                    &self.stage,
+                    panel.clone(),
+                    window,
+                    cx,
+                )
+            });
+            let (stage, open_link) = shown(stage, panel);
+            (Some(stage), open_link)
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let (stage, open_link) = {
+            let _ = (cwd, tabs, window);
+            let open_link: OpenLink = Rc::new(|url, _, cx| cx.open_url(url));
+            (None, open_link)
+        };
+        cx.new(|cx| SessionView::closed(entries, stage, open_link, cx))
     }
 
     /// Starts the server of Cox's own tools for a chat working in `cwd`,
@@ -124,4 +158,19 @@ impl Launcher {
             }
         }
     }
+}
+
+/// `stage`, as its chat's conversation shows it, open when `panel` is, and
+/// what opens the links of the conversation: the stage.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn shown(stage: Entity<crate::stage::Stage>, panel: Entity<Panel>) -> (StageView, OpenLink) {
+    let opens = stage.clone();
+    let open_link: OpenLink = Rc::new(move |url, window, cx| {
+        opens.update(cx, |stage, cx| stage.open(url, window, cx));
+    });
+    let stage = StageView {
+        view: stage.into(),
+        panel,
+    };
+    (stage, open_link)
 }

@@ -11,11 +11,11 @@ use std::time::Duration;
 use agent_client_protocol::schema::v1::{
     McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
 };
-use cox::conversation::{Content, Entry, State};
-use cox::diff::Line;
+use cox::conversation::{Content, Entry, State, ToolCallResult};
 use cox::input::LineInput;
 use cox::view::{Panel, SessionView, StageView};
-use cox_acp::{McpServer, ToolCallResult};
+use cox_acp::McpServer;
+use cox_core::diff::Line;
 use fake_agent::FakeAgent;
 use gpui::{
     AppContext as _, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, Focusable,
@@ -81,6 +81,7 @@ fn open_with_stage(
             ),
             stage,
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
+            None,
             cx,
         )
     });

@@ -6,8 +6,9 @@
 //!   and the chat shown. [`session`] starts a chat's agent and stage, and
 //!   [`instructions`] reads what the agent gets told of the project.
 //! - [`conversation`] holds what the window shows and decides what the human's
-//!   input means, in plain Rust, so it is tested without GPUI. [`diff`]
-//!   works out the lines a change to a file shows.
+//!   input means, in plain Rust, so it is tested without GPUI. `cox-core`
+//!   keeps what it shows, and the chats, where [`place`] says this Cox
+//!   keeps what lasts across its runs.
 //! - [`agent`] runs the ACP connection on a tokio runtime of its own, and talks
 //!   to the window over channels.
 //! - [`input`] is the text the human types into, which an input method can
@@ -37,7 +38,6 @@ pub mod agent;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod browser;
 pub mod conversation;
-pub mod diff;
 pub mod document;
 pub mod input;
 pub mod instructions;
@@ -48,6 +48,7 @@ pub mod markdown;
 pub mod mcp;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod page;
+pub mod place;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod pointer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

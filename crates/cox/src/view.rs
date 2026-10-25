@@ -15,6 +15,8 @@
 
 use std::rc::Rc;
 
+use cox_core::diff::Line;
+use cox_core::store::Record;
 use gpui::{
     AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, SharedString, Subscription, Task,
@@ -24,7 +26,6 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::{Agent, AgentThread};
 use crate::conversation::{Command, Content, Conversation, Entry, State};
-use crate::diff::Line;
 use crate::input::{LineInput, Submitted};
 use crate::text::{Reading, Writer};
 use crate::workspace::shortened;
@@ -120,9 +121,12 @@ pub struct SessionView {
     open_link: OpenLink,
     /// The conversation's text, and what the human selects of it.
     reading: Reading,
+    /// Where the conversation is kept as it changes, if it is.
+    record: Option<Record>,
     commands: UnboundedSender<Command>,
-    /// The agent lives as long as the window: dropping this stops it.
-    _agent: AgentThread,
+    /// The agent lives as long as the chat stays open: dropping this stops
+    /// it. A closed chat has none.
+    _agent: Option<AgentThread>,
     _events: Task<()>,
     _submitted: Subscription,
     /// Redraws the chat as its stage opens and closes.
@@ -131,11 +135,13 @@ pub struct SessionView {
 
 impl SessionView {
     /// Opens on `agent`, with `stage` beside the conversation when there is
-    /// one and it is open. Links the human clicks go to `open_link`.
+    /// one and it is open, keeping the conversation in `record` when there
+    /// is one. Links the human clicks go to `open_link`.
     pub fn new(
         agent: Agent,
         stage: Option<StageView>,
         open_link: OpenLink,
+        record: Option<Record>,
         cx: &mut Context<Self>,
     ) -> Self {
         let Agent {
@@ -152,6 +158,7 @@ impl SessionView {
             while let Some(event) = events.recv().await {
                 let shown = this.update(cx, |view, cx| {
                     view.follow(|conversation| conversation.apply(event));
+                    view.keep();
                     cx.notify();
                 });
                 if shown.is_err() {
@@ -159,6 +166,48 @@ impl SessionView {
                 }
             }
         });
+        let mut view = Self {
+            record,
+            _agent: Some(thread),
+            ..Self::with(conversation, stage, open_link, commands, task, cx)
+        };
+        view.keep();
+        view
+    }
+
+    /// A chat that has closed, which showed `entries`, for the human to
+    /// read, with `stage` beside it when there is one and it is open.
+    pub fn closed(
+        entries: Vec<Entry>,
+        stage: Option<StageView>,
+        open_link: OpenLink,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // Nothing is sent, nor heard.
+        let (commands, _) = tokio::sync::mpsc::unbounded_channel();
+        let conversation = Conversation::closed(entries);
+        let view = Self::with(
+            conversation,
+            stage,
+            open_link,
+            commands,
+            Task::ready(()),
+            cx,
+        );
+        view.scroll.scroll_to_bottom();
+        view
+    }
+
+    /// The view of `conversation`, whose commands go to `commands`, and
+    /// whose agent's events `events` hears, if it has an agent.
+    fn with(
+        conversation: Conversation,
+        stage: Option<StageView>,
+        open_link: OpenLink,
+        commands: UnboundedSender<Command>,
+        events: Task<()>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let input = cx.new(LineInput::wrapping);
         let submitted = cx.subscribe(&input, |view, input, Submitted, cx| {
             view.submit(&input, cx);
@@ -178,11 +227,26 @@ impl SessionView {
             stage,
             open_link,
             reading: Reading::default(),
+            record: None,
             commands,
-            _agent: thread,
-            _events: task,
+            _agent: None,
+            _events: events,
             _submitted: submitted,
             _panel_changes: panel_changes,
+        }
+    }
+
+    /// Keeps the entries that changed since this was last called.
+    fn keep(&mut self) {
+        let changed = self.conversation.take_changed();
+        let Some(record) = &self.record else {
+            return;
+        };
+        for index in changed {
+            if let Err(error) = record.entry(index, &self.conversation.entries()[index]) {
+                log::error!("the chat is not kept as it goes: {error:#}");
+                break;
+            }
         }
     }
 
@@ -283,6 +347,7 @@ impl SessionView {
     fn submit(&mut self, input: &Entity<LineInput>, cx: &mut Context<Self>) {
         let text = input.read(cx).text().to_owned();
         if let Some(command) = self.follow(|conversation| conversation.submit(&text)) {
+            self.keep();
             self.send(command);
             input.update(cx, LineInput::clear);
             cx.notify();
@@ -293,6 +358,7 @@ impl SessionView {
 
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(command) = self.conversation.choose(index) {
+            self.keep();
             self.send(command);
             cx.notify();
         }

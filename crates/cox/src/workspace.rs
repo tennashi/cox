@@ -1,18 +1,24 @@
-//! The window: the chats open in it, listed down its left side under the
-//! projects they are in, and the one shown beside the list. A project is a
-//! folder the human opened: each chat in it works there, and its agent gets
-//! the instructions in the folder's `COX.md`. Chats in no project work in
+//! The window: the chats, listed down its left side under the projects
+//! they are in, and the one shown beside the list. A project is a folder
+//! the human opened: each chat in it works there, and its agent gets the
+//! instructions in the folder's `COX.md`. Chats in no project work in
 //! Cox's home, with the instructions there.
+//!
+//! The projects and chats are kept as they go (see [`cox_core::store`]).
+//! A chat's agent runs until Cox quits; the chats of earlier runs stay in
+//! the list, closed, for the human to read what they showed.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use cox_core::store::{ChatId, ProjectId, Record, Store};
+use cox_core::tabs::Tabs;
 use gpui::{
     App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, PathPromptOptions, SharedString,
     Stateful, Subscription, Window, actions, div, prelude::*, px, rgb,
 };
 
-use crate::conversation::State;
+use crate::conversation::{Entry, State};
 use crate::instructions::Instructions;
 use crate::view::SessionView;
 
@@ -45,12 +51,29 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 /// Starts a chat's agent working in the directory given, with the
-/// instructions given, and returns the chat's view.
-pub type Open =
-    Rc<dyn Fn(PathBuf, Option<Instructions>, &mut Window, &mut App) -> Entity<SessionView>>;
+/// instructions given, keeping the chat in the record given, if any, and
+/// returns the chat's view.
+pub type Open = Rc<
+    dyn Fn(
+        PathBuf,
+        Option<Instructions>,
+        Option<Record>,
+        &mut Window,
+        &mut App,
+    ) -> Entity<SessionView>,
+>;
 
-/// A folder, and the chats open in it.
+/// Returns the view of a closed chat, which worked in the directory given,
+/// for the human to read: the entries it showed, and the tabs its stage
+/// had, if it had a stage.
+pub type Read =
+    Rc<dyn Fn(PathBuf, Vec<Entry>, Option<Tabs>, &mut Window, &mut App) -> Entity<SessionView>>;
+
+/// A folder, and the chats in it.
 pub struct Project {
+    /// How it is kept, or `None` for no project, or a project that could
+    /// not be kept.
+    id: Option<ProjectId>,
     name: SharedString,
     folder: PathBuf,
     chats: Vec<Chat>,
@@ -59,8 +82,9 @@ pub struct Project {
 }
 
 impl Project {
-    fn new(name: impl Into<SharedString>, folder: PathBuf) -> Self {
+    fn new(id: Option<ProjectId>, name: impl Into<SharedString>, folder: PathBuf) -> Self {
         Self {
+            id,
             name: name.into(),
             folder,
             chats: Vec::new(),
@@ -85,23 +109,46 @@ impl Project {
     }
 }
 
-/// A chat open in the window.
+/// A chat in the list: open, with its agent, or closed, from an earlier
+/// run, for the human to read.
 pub struct Chat {
+    /// How it is kept, or `None` when it could not be.
+    kept: Option<ChatId>,
     name: SharedString,
-    view: Entity<SessionView>,
-    /// Redraws the list as the chat's state changes.
-    _changes: Subscription,
+    /// Whether its agent runs.
+    open: bool,
+    /// Its view, or `None` for a closed chat the human has not read yet.
+    view: Option<Entity<SessionView>>,
+    /// Redraws the list as an open chat's state changes.
+    _changes: Option<Subscription>,
 }
 
 impl Chat {
+    /// A closed chat, kept as `kept`, which the human has not read yet.
+    fn closed(kept: ChatId, name: impl Into<SharedString>) -> Self {
+        Self {
+            kept: Some(kept),
+            name: name.into(),
+            open: false,
+            view: None,
+            _changes: None,
+        }
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     #[must_use]
-    pub fn view(&self) -> &Entity<SessionView> {
-        &self.view
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Its view, once it has been shown.
+    #[must_use]
+    pub fn view(&self) -> Option<&Entity<SessionView>> {
+        self.view.as_ref()
     }
 }
 
@@ -113,23 +160,55 @@ pub struct Place {
 }
 
 pub struct Workspace {
-    /// The projects, in the order they were opened, after no project,
-    /// which comes first.
+    /// The projects, in the order they were first opened, after no
+    /// project, which comes first.
     projects: Vec<Project>,
-    /// Where the chat shown is, if any is open.
+    /// Where the chat shown is, if any is.
     shown: Option<Place>,
     open: Open,
+    read: Read,
+    store: Rc<Store>,
     focus_handle: FocusHandle,
 }
 
 impl Workspace {
-    /// A window with no chat open yet. `open` starts chats, and chats in no
+    /// A window with no chat open, listing the chats kept in `store`.
+    /// `open` starts chats, `read` shows closed ones, and chats in no
     /// project work in `home`.
-    pub fn new(home: PathBuf, open: Open, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        home: PathBuf,
+        store: Rc<Store>,
+        open: Open,
+        read: Read,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut projects = vec![Project::new(None, NO_PROJECT, home)];
+        match store.projects().and_then(|kept| Ok((kept, store.chats()?))) {
+            Ok((kept, chats)) => {
+                projects.extend(
+                    kept.into_iter().map(|project| {
+                        Project::new(Some(project.id), project.name, project.folder)
+                    }),
+                );
+                for chat in chats {
+                    let Some(project) = projects
+                        .iter_mut()
+                        .find(|project| project.id == chat.project)
+                    else {
+                        continue;
+                    };
+                    project.opened += 1;
+                    project.chats.push(Chat::closed(chat.id, chat.name));
+                }
+            }
+            Err(error) => log::error!("the chats kept cannot be listed: {error:#}"),
+        }
         Self {
-            projects: vec![Project::new(NO_PROJECT, home)],
+            projects,
             shown: None,
             open,
+            read,
+            store,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -140,7 +219,7 @@ impl Workspace {
         &self.projects
     }
 
-    /// The chat shown, if any is open.
+    /// The chat shown, if any is.
     #[must_use]
     pub fn shown(&self) -> Option<&Chat> {
         let place = self.shown?;
@@ -161,7 +240,12 @@ impl Workspace {
             || folder.to_string_lossy().into_owned(),
             |name| name.to_string_lossy().into_owned(),
         );
-        self.projects.push(Project::new(name, folder));
+        let id = self
+            .store
+            .project(&folder, &name)
+            .inspect_err(|error| log::error!("the project is not kept: {error:#}"))
+            .ok();
+        self.projects.push(Project::new(id, name, folder));
         self.projects.len() - 1
     }
 
@@ -178,16 +262,24 @@ impl Workspace {
             }
         }
         let instructions = Instructions::read(&project.folder);
-        let view = (self.open)(project.folder.clone(), instructions, window, cx);
-        let changes = cx.observe(&view, |_, _, cx| cx.notify());
-        let project = &mut self.projects[index];
         project.opened += 1;
-        project.chats.push(Chat {
-            name: format!("Chat {}", project.opened).into(),
-            view,
-            _changes: changes,
+        let name = format!("Chat {}", project.opened);
+        let kept = self
+            .store
+            .add_chat(project.id, &name)
+            .inspect_err(|error| log::error!("the chat is not kept: {error:#}"))
+            .ok();
+        let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
+        let view = (self.open)(project.folder.clone(), instructions, record, window, cx);
+        let changes = cx.observe(&view, |_, _, cx| cx.notify());
+        self.projects[index].chats.push(Chat {
+            kept,
+            name: name.into(),
+            open: true,
+            view: Some(view),
+            _changes: Some(changes),
         });
-        let chat = project.chats.len() - 1;
+        let chat = self.projects[index].chats.len() - 1;
         self.show(
             Place {
                 project: index,
@@ -223,7 +315,7 @@ impl Workspace {
         .detach();
     }
 
-    /// Every open chat's place, in the order of the list.
+    /// Every chat's place, in the order of the list.
     fn places(&self) -> Vec<Place> {
         self.projects
             .iter()
@@ -239,33 +331,32 @@ impl Workspace {
         if !self.places().contains(&place) {
             return;
         }
+        self.read(place, window, cx);
         self.shown = Some(place);
         window.focus(&self.focus_handle(cx));
         cx.notify();
     }
 
-    /// Closes the chat at `place`, which stops its agent and closes its
-    /// page, and shows the one after it in the list, or before it if it
-    /// was the last. Its project stays, to open chats in.
-    pub fn close(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
-        let places = self.places();
-        let Some(closed) = places.iter().position(|&open| open == place) else {
+    /// Gives the closed chat at `place` its view, from what is kept of it,
+    /// unless it has one.
+    fn read(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
+        let project = &self.projects[place.project];
+        let chat = &project.chats[place.chat];
+        let (Some(kept), None) = (chat.kept, &chat.view) else {
             return;
         };
-        let shown = self
-            .shown
-            .and_then(|shown| places.iter().position(|&open| open == shown));
-        self.projects[place.project].chats.remove(place.chat);
-        let places = self.places();
-        let shown = match shown {
-            _ if places.is_empty() => None,
-            Some(shown) if shown > closed => Some(shown - 1),
-            Some(shown) => Some(shown.min(places.len() - 1)),
-            None => None,
-        };
-        self.shown = shown.map(|shown| places[shown]);
-        window.focus(&self.focus_handle(cx));
-        cx.notify();
+        let entries = self.store.entries(kept).unwrap_or_else(|error| {
+            log::error!("the chat cannot be read: {error:#}");
+            vec![Entry::Note(format!("[cannot read this chat: {error:#}]"))]
+        });
+        let tabs = self
+            .store
+            .tabs(kept)
+            .inspect_err(|error| log::error!("the chat's tabs cannot be read: {error:#}"))
+            .ok()
+            .flatten();
+        let view = (self.read)(project.folder.clone(), entries, tabs, window, cx);
+        self.projects[place.project].chats[place.chat].view = Some(view);
     }
 
     /// Shows the chat `step` places along the list, going round.
@@ -417,11 +508,16 @@ impl Workspace {
         chat: &Chat,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let (mark, color) = match chat.view.read(cx).conversation().state() {
-            State::Idle => ("", rgb(0xa0_a0a0)),
-            State::Busy | State::Stopping => ("…", rgb(0xa0_a0a0)),
-            State::Asking => ("?", rgb(0xd0_a040)),
-            State::Closed => ("closed", rgb(0x80_8080)),
+        let state = chat
+            .view
+            .as_ref()
+            .filter(|_| chat.open)
+            .map(|view| view.read(cx).conversation().state());
+        let (mark, color) = match state {
+            Some(State::Idle) | None => ("", rgb(0xa0_a0a0)),
+            Some(State::Busy | State::Stopping) => ("…", rgb(0xa0_a0a0)),
+            Some(State::Asking) => ("?", rgb(0xd0_a040)),
+            Some(State::Closed) => ("closed", rgb(0x80_8080)),
         };
         let mut row = div()
             .id(("chat", number))
@@ -436,22 +532,16 @@ impl Workspace {
             .on_click(
                 cx.listener(move |workspace, _, window, cx| workspace.show(place, window, cx)),
             )
-            .child(div().flex_1().min_w_0().truncate().child(chat.name.clone()))
-            .child(div().text_color(color).child(mark))
             .child(
                 div()
-                    .id(("close", number))
-                    .debug_selector(move || format!("close-{number}"))
-                    .px_1()
-                    .rounded_sm()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x40_4040)).text_color(rgb(0xe0_e0e0)))
-                    .child("×")
-                    .on_click(cx.listener(move |workspace, _, window, cx| {
-                        cx.stop_propagation();
-                        workspace.close(place, window, cx);
-                    })),
-            );
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    // A closed chat is there to read.
+                    .when(!chat.open, |name| name.text_color(rgb(0x80_8080)))
+                    .child(chat.name.clone()),
+            )
+            .child(div().text_color(color).child(mark));
         if self.shown == Some(place) {
             row = row.bg(rgb(0x2a_2a2a));
         } else {
@@ -475,8 +565,8 @@ pub fn shortened(path: &Path) -> String {
 impl Focusable for Workspace {
     /// The shown chat's input, or the window itself while none is open.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match self.shown() {
-            Some(chat) => chat.view.focus_handle(cx),
+        match self.shown().and_then(Chat::view) {
+            Some(view) => view.focus_handle(cx),
             None => self.focus_handle.clone(),
         }
     }
@@ -484,8 +574,8 @@ impl Focusable for Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let shown = match self.shown() {
-            Some(chat) => chat.view.clone().into_any_element(),
+        let shown = match self.shown().and_then(Chat::view) {
+            Some(view) => view.clone().into_any_element(),
             None => div()
                 .size_full()
                 .flex()

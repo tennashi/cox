@@ -21,6 +21,7 @@ path = "src/bin/helper.rs"
 [dependencies]
 anyhow.workspace = true
 cox-acp.workspace = true
+cox-core.workspace = true
 env_logger = "0.11.11"
 # runtime_shaders: compile the Metal shaders when the app starts, so a Mac
 # with only the Command Line Tools (no Xcode, no `metal` compiler) can build.
@@ -30,8 +31,6 @@ image = "0.25.10"
 log = "0.4.29"
 # Reading the agent's replies as Markdown: see `src/markdown.rs`.
 pulldown-cmark = { version = "0.13.5", default-features = false }
-# Working out the change an edit makes, to show it: see `src/diff.rs`.
-similar = "3.2.0"
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 unicode-segmentation = "1.12.0"
 
