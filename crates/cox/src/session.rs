@@ -1,6 +1,7 @@
 //! What opening a chat starts: the agent's session, working in the chat's
 //! directory, and on Linux and macOS the chat's own stage, whose pages the
-//! agent reaches through a relay of its own.
+//! agent reaches through a relay of its own, and the server of Cox's own
+//! tools for the agent, which reach the stage too.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -21,6 +22,9 @@ pub struct Launcher {
     pub stage: String,
     /// The `PATH` the agent's tools are found on.
     pub path: OsString,
+    /// The `cox` that runs, which the agent runs to reach Cox's own tools,
+    /// if it is known.
+    pub exe: Option<PathBuf>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub cef: crate::browser::Cef,
 }
@@ -38,11 +42,17 @@ impl Launcher {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let (stage, tools, open_link) = {
             let relay = self.relay();
-            // The agent gets the pages the human sees.
+            let server = self.server(&cwd);
+            // The agent gets the pages the human sees, and Cox's own tools.
             let tools = relay
                 .as_ref()
                 .and_then(|relay| crate::tools::stage(relay.port, &self.path))
                 .into_iter()
+                .chain(
+                    server
+                        .as_ref()
+                        .map(|(exe, server)| crate::tools::cox(exe.clone(), &server.socket)),
+                )
                 .collect();
             let panel = cx.new(|_| Panel::default());
             let stage = cx.new(|cx| {
@@ -50,6 +60,7 @@ impl Launcher {
                     self.cef.clone(),
                     &self.stage,
                     relay,
+                    server.map(|(_, server)| server.requests),
                     panel.clone(),
                     window,
                     cx,
@@ -68,7 +79,7 @@ impl Launcher {
         };
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let (stage, tools, open_link) = {
-            let _ = (window, &self.stage, &self.path);
+            let _ = (window, &self.stage, &self.path, &self.exe);
             // With no stage, links open in the human's browser.
             let open_link: OpenLink = Rc::new(|url, _, cx| cx.open_url(url));
             (None, Vec::new(), open_link)
@@ -76,6 +87,21 @@ impl Launcher {
         let command = self.command.clone();
         let agent = crate::agent::spawn(move || cox_acp::launch(command), cwd, tools, instructions);
         cx.new(|cx| SessionView::new(agent, stage, open_link, cx))
+    }
+
+    /// Starts the server of Cox's own tools for a chat working in `cwd`,
+    /// and answers it with the `cox` the agent runs to reach it, or `None`
+    /// when it did not start.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn server(&self, cwd: &std::path::Path) -> Option<(PathBuf, crate::mcp::Server)> {
+        let exe = self.exe.clone()?;
+        match crate::mcp::start(cwd.to_owned()) {
+            Ok(server) => Some((exe, server)),
+            Err(error) => {
+                log::error!("the agent gets no tools of Cox's own: {error:#}");
+                None
+            }
+        }
     }
 
     /// Starts the relay that the agent's browser tools go through, kept to

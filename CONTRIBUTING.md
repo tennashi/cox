@@ -59,6 +59,16 @@ tabs opens another, and a page that asks for a window of its own, as a
 link with `target="_blank"` does, gets a tab instead. A link from the
 conversation gets a tab of its own, unless a tab shows it already.
 
+A tab can show a Markdown file too, drawn as the conversation draws the
+agent's replies, for the human to read: the agent opens it with Cox's
+`show_markdown` tool. The tab follows the file as it changes, and the
+agent showing the same file again brings its tab to the front.
+
+Cox hands each chat's agent its own tools as an MCP server, which is
+`cox` itself run as `cox --mcp <socket>`: the agent starts it, and it
+carries what the agent says to the chat on a Unix socket of the chat's
+own, which Cox answers. An agent reaches only its own chat that way.
+
 CEF opens the Chrome DevTools Protocol on a port that is free when Cox
 starts, so two Cox can run side by side, and Cox hands each chat's
 agent the

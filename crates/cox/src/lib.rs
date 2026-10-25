@@ -21,13 +21,15 @@
 //!   conversation when they are used, and each tab's [`page`] shows its
 //!   page in the window and sends the human's input to it. The chat's
 //!   agent drives the same pages over CDP. On Linux and macOS; on macOS,
-//!   inside the app bundle `cargo xtask bundle` makes. [`profile`] is
-//!   where the browser keeps logins and the like.
+//!   inside the app bundle `cargo xtask bundle` makes. A tab can show a
+//!   Markdown file as a [`document`] instead. [`profile`] is where the
+//!   browser keeps logins and the like.
 //! - [`relay`] stands between a chat's agent's browser tools and the
 //!   browser, keeps the agent to its chat's pages, opens and closes tabs
 //!   for it, and tells the stage where the agent points, clicks and types,
 //!   which [`pointer`] turns into what the tab draws over the page.
-//! - [`tools`] says which MCP servers the agent gets: the stage's.
+//! - [`tools`] says which MCP servers the agent gets: the stage's, and
+//!   Cox's own, which [`mcp`] serves to each chat's agent.
 //! - [`quit`] lets signals, and CEF on macOS, ask the app to quit.
 
 pub mod agent;
@@ -35,11 +37,14 @@ pub mod agent;
 pub mod browser;
 pub mod conversation;
 pub mod diff;
+pub mod document;
 pub mod input;
 pub mod instructions;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod markdown;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod mcp;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod page;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

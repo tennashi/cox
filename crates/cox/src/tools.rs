@@ -1,12 +1,17 @@
 //! The tools Cox hands the agent, as MCP servers the agent starts for the
 //! session.
 //!
-//! For the stage, that is the Chrome `DevTools` MCP server, connected to the
-//! stage's remote debugging port through the relay: the agent reads and
-//! drives the page the human sees, and the stage shows where. It runs on Node through `npx`, which fetches it the first
-//! time.
+//! For the stage's pages, that is the Chrome `DevTools` MCP server,
+//! connected to the stage's remote debugging port through the relay: the
+//! agent reads and drives the page the human sees, and the stage shows
+//! where. It runs on Node through `npx`, which fetches it the first time.
+//!
+//! The rest are Cox's own tools, which Cox itself serves (see
+//! [`crate::mcp`]).
 
 use std::ffi::OsStr;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::path::Path;
 use std::path::PathBuf;
 
 use cox_acp::McpServer;
@@ -39,6 +44,21 @@ pub fn stage(relay_port: u16, path: &OsStr) -> Option<McpServer> {
             "--no-performance-crux".to_owned(),
         ],
     })
+}
+
+/// The MCP server of Cox's own tools for one chat: `exe`, the `cox` that
+/// runs, as the bridge to the chat's server on `socket`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[must_use]
+pub fn cox(exe: PathBuf, socket: &Path) -> McpServer {
+    McpServer {
+        name: "cox".to_owned(),
+        command: exe,
+        args: vec![
+            crate::mcp::OPTION.to_owned(),
+            socket.to_string_lossy().into_owned(),
+        ],
+    }
 }
 
 /// The first `program` in the directories of `path`.
