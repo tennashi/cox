@@ -26,8 +26,7 @@ use crate::agent::{Agent, AgentThread};
 use crate::conversation::{Command, Content, Conversation, Entry, State};
 use crate::diff::Line;
 use crate::input::{LineInput, Submitted};
-use crate::selection::Selection;
-use crate::text::{Painted, Writer};
+use crate::text::{Reading, Writer};
 use crate::workspace::shortened;
 
 actions!(
@@ -119,13 +118,8 @@ pub struct SessionView {
     /// conversation.
     stage: Option<StageView>,
     open_link: OpenLink,
-    /// The conversation's text as the last frame laid it out.
-    painted: Painted,
-    /// The text the human selected in the conversation, if any.
-    selection: Option<Selection>,
-    /// Whether a mouse button went down on the conversation and is still
-    /// held.
-    selecting: bool,
+    /// The conversation's text, and what the human selects of it.
+    reading: Reading,
     commands: UnboundedSender<Command>,
     /// The agent lives as long as the window: dropping this stops it.
     _agent: AgentThread,
@@ -183,9 +177,7 @@ impl SessionView {
             input,
             stage,
             open_link,
-            painted: Painted::default(),
-            selection: None,
-            selecting: false,
+            reading: Reading::default(),
             commands,
             _agent: thread,
             _events: task,
@@ -234,9 +226,7 @@ impl SessionView {
     /// The text the human selected in the conversation.
     #[must_use]
     pub fn selected_text(&self) -> String {
-        self.selection
-            .map(|selection| self.painted.copy(&selection))
-            .unwrap_or_default()
+        self.reading.selected_text()
     }
 
     /// A button went down on the conversation: start selecting there, a
@@ -247,31 +237,12 @@ impl SessionView {
         window.focus(&self.input.focus_handle(cx));
         window.prevent_default();
         self.input.update(cx, LineInput::deselect);
-        let spot = self.painted.spot_at(event.position);
-        self.selection = spot.map(|spot| match event.click_count {
-            1 => match self.selection {
-                Some(selection) if event.modifiers.shift => Selection {
-                    head: spot,
-                    ..selection
-                },
-                _ => Selection::at(spot),
-            },
-            2 => self.painted.word_at(spot),
-            _ => self.painted.piece_at(spot),
-        });
-        self.selecting = self.selection.is_some();
+        self.reading.press(event);
         cx.notify();
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selecting {
-            return;
-        }
-        if let (Some(selection), Some(spot)) =
-            (&mut self.selection, self.painted.spot_at(event.position))
-            && selection.head != spot
-        {
-            selection.head = spot;
+        if self.reading.drag(event.position) {
             cx.notify();
         }
     }
@@ -279,9 +250,7 @@ impl SessionView {
     /// The button came up: a click that selected nothing opens the link
     /// under it.
     fn mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let clicked = std::mem::take(&mut self.selecting)
-            && self.selection.is_none_or(|selection| selection.is_empty());
-        if clicked && let Some(url) = self.painted.link_at(event.position) {
+        if let Some(url) = self.reading.release(event.position) {
             if let Some(stage) = &self.stage {
                 stage.panel.update(cx, Panel::open);
             }
@@ -348,7 +317,7 @@ impl SessionView {
         entry: &Entry,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let mut writer = Writer::new(&self.painted, self.selection, index);
+        let mut writer = self.reading.writer(index);
         match entry {
             Entry::Human(text) => div()
                 .flex()
@@ -501,7 +470,7 @@ impl SessionView {
         };
         let running = matches!(self.conversation.state(), State::Busy | State::Asking);
         // The frame lays the text out again.
-        self.painted.clear();
+        self.reading.clear();
         let entries: Vec<_> = self
             .conversation
             .entries()
@@ -528,7 +497,7 @@ impl SessionView {
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                     .on_mouse_up_out(
                         MouseButton::Left,
-                        cx.listener(|view, _, _, _| view.selecting = false),
+                        cx.listener(|view, _, _, _| view.reading.stop()),
                     )
                     .p_3()
                     .flex()
@@ -552,7 +521,7 @@ impl SessionView {
                         cx.listener(move |view, _, window, cx| {
                             window.focus(&input.focus_handle(cx));
                             window.prevent_default();
-                            if view.selection.take().is_some() {
+                            if view.reading.deselect() {
                                 cx.notify();
                             }
                         }),
