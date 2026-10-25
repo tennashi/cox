@@ -1,5 +1,6 @@
-//! The stage: the part of the window where the browser's picture is shown,
-//! and where the human's mouse, keys and input-method text go to the page.
+//! The page on the stage: the part of the window where the browser's
+//! picture is shown, and where the human's mouse, keys and input-method
+//! text go to the page.
 //! A toolbar above the picture holds the address and the history buttons.
 //!
 //! The picture arrives from CEF as BGRA pixels whenever the page changes;
@@ -34,7 +35,7 @@ use crate::relay::AgentInput;
 /// How many logical pixels one line of a wheel scroll moves the page.
 const LINE_HEIGHT: f32 = 40.;
 
-pub struct Stage {
+pub struct Page {
     browser: Browser,
     focus_handle: FocusHandle,
     /// The picture currently uploaded to the GPU.
@@ -65,7 +66,7 @@ pub struct Stage {
 /// How often the stage checks on a resize the browser has not answered.
 const TICK: Duration = Duration::from_millis(250);
 
-impl Stage {
+impl Page {
     pub fn new(
         browser: Browser,
         mut events: UnboundedReceiver<Event>,
@@ -414,14 +415,14 @@ fn clicks(count: usize) -> i32 {
     i32::try_from(count).unwrap_or(i32::MAX)
 }
 
-impl Drop for Stage {
+impl Drop for Page {
     /// The page goes with its stage.
     fn drop(&mut self) {
         self.browser.close();
     }
 }
 
-impl Focusable for Stage {
+impl Focusable for Page {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
@@ -430,7 +431,7 @@ impl Focusable for Stage {
 /// What an input method, or GPUI itself for plain typing, tells the stage.
 /// The page keeps the text, so the stage only remembers what is being
 /// composed.
-impl EntityInputHandler for Stage {
+impl EntityInputHandler for Page {
     fn text_for_range(
         &mut self,
         _range_utf16: Range<usize>,
@@ -561,7 +562,7 @@ fn address_to_url(typed: &str) -> Option<String> {
     })
 }
 
-impl Stage {
+impl Page {
     /// Works out how the agent's pointer looks now, and arranges to render
     /// again when that changes on its own: the stage's paint asks for the
     /// next frame while it moves, and a timer wakes it for what comes
@@ -607,7 +608,7 @@ impl Stage {
     }
 }
 
-impl Render for Stage {
+impl Render for Page {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_look(cx);
         div()
@@ -704,7 +705,7 @@ fn paint_agent(look: &Look, bounds: Bounds<Pixels>, window: &mut Window) {
 
 /// Paints the browser's picture and sends mouse events over it to the page.
 struct StageElement {
-    stage: Entity<Stage>,
+    stage: Entity<Page>,
 }
 
 impl StageElement {

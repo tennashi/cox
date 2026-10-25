@@ -43,7 +43,7 @@ impl Launcher {
                 .into_iter()
                 .collect();
             let stage =
-                cx.new(|cx| crate::stage::Stage::new(browser, events, agent_input, window, cx));
+                cx.new(|cx| crate::page::Page::new(browser, events, agent_input, window, cx));
             // Links in the conversation open on the chat's stage.
             let shown = stage.clone();
             let open_link: OpenLink = Rc::new(move |url, window, cx| {

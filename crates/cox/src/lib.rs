@@ -17,7 +17,7 @@
 //!   the human can select it and click its links, replies as the Markdown
 //!   that [`markdown`] reads; [`selection`] is what the human selected.
 //! - [`browser`] runs CEF, which renders a page for each chat with no
-//!   window of its own, and [`stage`] shows that page in the window and
+//!   window of its own, and [`page`] shows that page in the window and
 //!   sends the human's input to it. The chat's agent drives the same
 //!   page over CDP. On Linux and macOS; on macOS, inside the app bundle
 //!   `cargo xtask bundle` makes. [`profile`] is where the browser keeps
@@ -40,6 +40,8 @@ pub mod instructions;
 pub mod macos;
 pub mod markdown;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod page;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod pointer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod profile;
@@ -49,8 +51,6 @@ pub mod quit;
 pub mod relay;
 pub mod selection;
 pub mod session;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub mod stage;
 pub mod text;
 pub mod tools;
 pub mod view;
