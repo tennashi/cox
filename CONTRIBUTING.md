@@ -49,6 +49,10 @@ keeps each chat's conversation, and its stage's tabs, as they change,
 and lists the chats of earlier runs too, greyed and closed, for the
 human to read what they showed. A closed chat's stage opens again on
 the pages and Markdown files it had; its terminals do not start again.
+A line sent in a closed chat starts its agent again, which goes on with
+the chat's session when it can (ACP's `session/resume`, or else
+`session/load`); otherwise the agent starts a new session, and gets the
+conversation so far, as Cox kept it, ahead of that line.
 Escape in a chat's
 conversation, or its Stop button, stops the turn its agent is taking; the
 conversation stays, and the next line can be sent once the agent has

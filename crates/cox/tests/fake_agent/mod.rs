@@ -8,7 +8,8 @@
 //! what it printed. When the
 //! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
 //! turn. A turn cancelled, or whose permission request Cox answers as cancelled,
-//! ends as cancelled. It records what Cox asked of it and answered so tests can
+//! ends as cancelled. It goes on with a session it opened before as
+//! [`Resumes`] says. It records what Cox asked of it and answered so tests can
 //! check what Cox did.
 
 use std::path::PathBuf;
@@ -17,16 +18,35 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Diff, InitializeRequest,
-    InitializeResponse, McpServer, NewSessionRequest, NewSessionResponse, PermissionOption,
-    PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate, StopReason,
-    TextContent, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpServer, NewSessionRequest,
+    NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, ResumeSessionRequest,
+    ResumeSessionResponse, SessionCapabilities, SessionId, SessionNotification,
+    SessionResumeCapabilities, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent,
+    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result};
 use tokio::sync::Notify;
 
+/// How the agent goes on with a session it opened before.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Resumes {
+    /// It cannot.
+    #[default]
+    Never,
+    /// It loads the session, telling Cox what the session said before.
+    Load,
+    /// It resumes the session, telling nothing.
+    Resume,
+    /// It says it can resume a session, and refuses to.
+    Refuse,
+}
+
 #[derive(Default)]
 pub struct FakeAgent {
+    resumes: Resumes,
+    /// The sessions Cox asked to go on with, in order.
+    asked_to_resume: Arc<Mutex<Vec<String>>>,
     sessions_opened: Arc<AtomicUsize>,
     cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
@@ -44,11 +64,22 @@ struct Cancels {
 }
 
 impl FakeAgent {
+    /// An agent that goes on with a session it opened before as `resumes`
+    /// says.
+    pub fn resuming(resumes: Resumes) -> Self {
+        Self {
+            resumes,
+            ..Self::default()
+        }
+    }
+
     /// Starts serving and returns the end of the connection to give Cox.
     pub fn connect(&self) -> Channel {
         let (cox_end, agent_end) = Channel::duplex();
         tokio::spawn(serve(
             agent_end,
+            self.resumes,
+            Arc::clone(&self.asked_to_resume),
             Arc::clone(&self.sessions_opened),
             Arc::clone(&self.cwd),
             Arc::clone(&self.mcp_servers),
@@ -57,6 +88,11 @@ impl FakeAgent {
             Arc::clone(&self.cancels),
         ));
         cox_end
+    }
+
+    /// The sessions Cox asked to go on with, in order.
+    pub fn resumed(&self) -> Vec<String> {
+        self.asked_to_resume.lock().unwrap().clone()
     }
 
     /// How many sessions Cox has opened.
@@ -100,8 +136,14 @@ impl FakeAgent {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "what the agent records, each once"
+)]
 async fn serve(
     transport: Channel,
+    resumes: Resumes,
+    asked_to_resume: Arc<Mutex<Vec<String>>>,
     sessions_opened: Arc<AtomicUsize>,
     cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
@@ -110,15 +152,38 @@ async fn serve(
     cancels: Arc<Cancels>,
 ) -> Result<()> {
     let waits = Arc::clone(&cancels);
+    let loaded = Arc::clone(&asked_to_resume);
     Agent
         .builder()
         .name("fake-agent")
         .on_receive_request(
-            async |request: InitializeRequest, responder, _cx| {
+            async move |request: InitializeRequest, responder, _cx| {
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
-                        .agent_capabilities(AgentCapabilities::new()),
+                        .agent_capabilities(capabilities(resumes)),
                 )
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: ResumeSessionRequest, responder, _cx| {
+                asked_to_resume
+                    .lock()
+                    .unwrap()
+                    .push(request.session_id.to_string());
+                if resumes == Resumes::Refuse {
+                    return responder.respond_with_error(Error::new(-32002, "no such session"));
+                }
+                responder.respond(ResumeSessionResponse::new())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: LoadSessionRequest, responder, cx: ConnectionTo<Client>| {
+                loaded.lock().unwrap().push(request.session_id.to_string());
+                // What the session said before, which Cox shows already.
+                say(&cx, &request.session_id, "said before")?;
+                responder.respond(LoadSessionResponse::new())
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -180,6 +245,17 @@ async fn serve(
         )
         .connect_to(transport)
         .await
+}
+
+/// What the agent says it can do: go on with a session as `resumes` says.
+fn capabilities(resumes: Resumes) -> AgentCapabilities {
+    match resumes {
+        Resumes::Never => AgentCapabilities::new(),
+        Resumes::Load => AgentCapabilities::new().load_session(true),
+        Resumes::Resume | Resumes::Refuse => AgentCapabilities::new().session_capabilities(
+            SessionCapabilities::new().resume(SessionResumeCapabilities::new()),
+        ),
+    }
 }
 
 /// The text blocks of a prompt.

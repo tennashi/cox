@@ -3,7 +3,7 @@
 //! over channels. Tokio's channels do not need a tokio runtime to wait on,
 //! so the window awaits events on GPUI's executor.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ use cox_acp::{McpServer, PermissionAnswer, Session, ToolCallContent, Transport, 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::conversation::{AgentEvent, Command, Content, ToolCallResult};
+use crate::conversation::{AgentEvent, Command, Content, Entry, Opened, ToolCallResult};
 use crate::instructions::Instructions;
 
 /// The window's ends of the channels to the agent side.
@@ -23,6 +23,38 @@ pub struct Agent {
     pub instructions: Option<PathBuf>,
     /// Stops the agent when dropped.
     pub thread: AgentThread,
+}
+
+/// How a chat's agent starts.
+pub enum Start {
+    /// For a new chat: the agent gets `instructions`, if any, ahead of the
+    /// first prompt.
+    New(Option<Instructions>),
+    /// For a closed chat the human sends to again: the agent goes on with
+    /// the chat's `session`, when the chat had one and the agent can.
+    /// Otherwise it opens a new session, which gets `instructions`, if
+    /// any, and is told `earlier`, what the chat showed, ahead of the first
+    /// prompt.
+    Again {
+        session: Option<String>,
+        instructions: Option<Instructions>,
+        earlier: Vec<Entry>,
+    },
+}
+
+impl Start {
+    /// How the agent of a closed chat that worked in `cwd`, and showed
+    /// `earlier`, starts again: going on with `session` if it can, or else
+    /// told what the chat showed, with the project's instructions as they
+    /// are now.
+    #[must_use]
+    pub fn again(cwd: &Path, session: Option<String>, earlier: &[Entry]) -> Self {
+        Self::Again {
+            session,
+            instructions: Instructions::read(cwd),
+            earlier: earlier.to_vec(),
+        }
+    }
 }
 
 /// How long the agent side's tasks get to end once the agent is stopped.
@@ -53,20 +85,18 @@ impl Drop for AgentThread {
 
 /// Starts the agent side on a thread of its own. `connect` runs on its
 /// runtime and returns the transport to the agent, which works in `cwd`, an
-/// absolute path, gets the tools of `mcp_servers`, and gets `instructions`
-/// ahead of the first prompt.
+/// absolute path, gets the tools of `mcp_servers`, and starts as `start`
+/// says.
 pub fn spawn<T: Transport + 'static>(
     connect: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
-    instructions: Option<Instructions>,
+    start: Start,
 ) -> Agent {
-    let (source, prompt) = instructions
-        .map(|instructions| {
-            let prompt = instructions.prompt();
-            (instructions.path, prompt)
-        })
-        .unzip();
+    let source = match &start {
+        Start::New(instructions) => instructions.as_ref().map(|i| i.path.clone()),
+        Start::Again { .. } => None,
+    };
     let (commands, received) = unbounded_channel();
     let (sent, events) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
@@ -80,7 +110,7 @@ pub fn spawn<T: Transport + 'static>(
             .and_then(|runtime| {
                 let outcome = runtime.block_on(async {
                     tokio::select! {
-                        outcome = run(connect, cwd, mcp_servers, prompt, received, &sent) => outcome,
+                        outcome = run(connect, cwd, mcp_servers, start, received, &sent) => outcome,
                         // Dropping the connection kills the agent.
                         _ = stopped => Ok(()),
                     }
@@ -132,24 +162,62 @@ async fn run<T: Transport + 'static>(
     connect: impl FnOnce() -> anyhow::Result<T>,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
-    mut instructions: Option<String>,
+    start: Start,
     mut commands: UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
     let transport = connect()?;
-    cox_acp::connect(transport, cwd, mcp_servers, async |mut session| {
+    let resume = match &start {
+        Start::New(_) => None,
+        Start::Again { session, .. } => session.clone(),
+    };
+    cox_acp::connect(transport, cwd, mcp_servers, resume, async |mut session| {
+        let (how, mut ahead) = opened(start, session.resumed());
+        let _ = events.send(AgentEvent::Opened {
+            id: session.id(),
+            how,
+        });
         while let Some(command) = commands.recv().await {
             // An answer with no permission request waiting has nothing to
             // answer, and a cancel with no turn running nothing to stop.
             if let Command::Prompt(text) = command {
-                // The instructions go once, ahead of the first prompt.
-                let prompt = instructions.take().into_iter().chain([text]);
+                // What goes ahead of the first prompt goes once.
+                let prompt = std::mem::take(&mut ahead).into_iter().chain([text]);
                 take_turn(&mut session, prompt, &mut commands, events).await?;
             }
         }
         Ok(())
     })
     .await
+}
+
+/// How the session opened, for an agent that started as `start`, and
+/// whether it `resumed` a session, with what goes ahead of the first
+/// prompt: the instructions, and what the chat showed, when a session
+/// starts anew for a chat that had one.
+fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
+    match start {
+        Start::New(instructions) => (
+            Opened::New,
+            instructions.map(|i| i.prompt()).into_iter().collect(),
+        ),
+        Start::Again { .. } if resumed => (Opened::Resumed, Vec::new()),
+        Start::Again {
+            instructions,
+            earlier,
+            ..
+        } => {
+            let how = Opened::Retold {
+                instructions: instructions.as_ref().map(|i| i.path.clone()),
+            };
+            let ahead = instructions
+                .map(|i| i.prompt())
+                .into_iter()
+                .chain([crate::conversation::retold(&earlier)])
+                .collect();
+            (how, ahead)
+        }
+    }
 }
 
 async fn take_turn(
@@ -297,7 +365,7 @@ mod tests {
             move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
             std::env::temp_dir(),
             Vec::new(),
-            None,
+            Start::New(None),
         );
         let mut pid = String::new();
         assert!(wait_until(|| {
@@ -331,7 +399,7 @@ mod tests {
             move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
             std::env::temp_dir(),
             Vec::new(),
-            None,
+            Start::New(None),
         );
         let mut seen = String::new();
         assert!(wait_until(|| {

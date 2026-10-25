@@ -77,7 +77,7 @@ fn open_with_stage(
                 move || Ok(fake.connect()),
                 std::env::temp_dir(),
                 mcp_servers,
-                None,
+                cox::agent::Start::New(None),
             ),
             stage,
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),

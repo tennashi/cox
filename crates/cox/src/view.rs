@@ -25,7 +25,7 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::{Agent, AgentThread};
-use crate::conversation::{Command, Content, Conversation, Entry, State};
+use crate::conversation::{AgentEvent, Command, Content, Conversation, Entry, State};
 use crate::input::{LineInput, Submitted};
 use crate::text::{Reading, Writer};
 use crate::workspace::shortened;
@@ -55,6 +55,14 @@ pub fn bind_keys(cx: &mut App) {
 /// Opens a link the human clicked: on the session's stage, where it has
 /// one.
 pub type OpenLink = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
+/// Starts the agent of a closed chat again, when the human sends to it,
+/// telling it what the chat showed, in case it cannot go on with its
+/// session.
+pub type Again = Box<dyn FnOnce(&[Entry], &mut Window, &mut App) -> Agent>;
+
+/// A closed chat's agent started again.
+pub struct Reopened;
 
 /// The font the window is drawn in: a monospaced family the system has.
 /// A generic name such as `monospace` finds no font, and GPUI then falls
@@ -124,10 +132,11 @@ pub struct SessionView {
     /// Where the conversation is kept as it changes, if it is.
     record: Option<Record>,
     commands: UnboundedSender<Command>,
-    /// The agent lives as long as the chat stays open: dropping this stops
-    /// it. A closed chat has none.
-    _agent: Option<AgentThread>,
-    _events: Task<()>,
+    /// What starts the agent of a closed chat again, until it has.
+    again: Option<Again>,
+    /// The agent, and what hears it. The agent lives as long as the chat
+    /// stays open: dropping this stops it. A closed chat has none.
+    agent: Option<(AgentThread, Task<()>)>,
     _submitted: Subscription,
     /// Redraws the chat as its stage opens and closes.
     _panel_changes: Option<Subscription>,
@@ -144,74 +153,66 @@ impl SessionView {
         record: Option<Record>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let Agent {
-            commands,
-            mut events,
-            instructions,
-            thread,
-        } = agent;
         // The human sees which instructions the agent gets.
-        let conversation = instructions.map_or_else(Conversation::new, |path| {
-            Conversation::noting(format!("[instructions: {}]", shortened(&path)))
-        });
-        let task = cx.spawn(async move |this, cx| {
-            while let Some(event) = events.recv().await {
-                let shown = this.update(cx, |view, cx| {
-                    view.follow(|conversation| conversation.apply(event));
-                    view.keep();
-                    cx.notify();
-                });
-                if shown.is_err() {
-                    break;
-                }
-            }
-        });
+        let conversation = agent
+            .instructions
+            .as_ref()
+            .map_or_else(Conversation::new, |path| {
+                Conversation::noting(format!("[instructions: {}]", shortened(path)))
+            });
         let mut view = Self {
             record,
-            _agent: Some(thread),
-            ..Self::with(conversation, stage, open_link, commands, task, cx)
+            ..Self::with(conversation, stage, open_link, None, cx)
         };
+        view.attach(agent, cx);
         view.keep();
         view
     }
 
     /// A chat that has closed, which showed `entries`, for the human to
-    /// read, with `stage` beside it when there is one and it is open.
+    /// read, with `stage` beside it when there is one and it is open. When
+    /// the human sends to it, `again` starts its agent again, if it can,
+    /// and the chat goes on, kept in `record` when there is one.
     pub fn closed(
         entries: Vec<Entry>,
         stage: Option<StageView>,
         open_link: OpenLink,
+        record: Option<Record>,
+        again: Option<Again>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Nothing is sent, nor heard.
-        let (commands, _) = tokio::sync::mpsc::unbounded_channel();
         let conversation = Conversation::closed(entries);
-        let view = Self::with(
-            conversation,
-            stage,
-            open_link,
-            commands,
-            Task::ready(()),
-            cx,
-        );
+        let view = Self {
+            record,
+            again,
+            ..Self::with(conversation, stage, open_link, Some(window), cx)
+        };
         view.scroll.scroll_to_bottom();
         view
     }
 
-    /// The view of `conversation`, whose commands go to `commands`, and
-    /// whose agent's events `events` hears, if it has an agent.
+    /// The view of `conversation`, with no agent. Given the `window`, the
+    /// view can start the agent of a closed chat again.
     fn with(
         conversation: Conversation,
         stage: Option<StageView>,
         open_link: OpenLink,
-        commands: UnboundedSender<Command>,
-        events: Task<()>,
+        window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(LineInput::wrapping);
-        let submitted = cx.subscribe(&input, |view, input, Submitted, cx| {
-            view.submit(&input, cx);
-        });
+        let submitted = match window {
+            // Starting the agent again needs the window, for the stage.
+            Some(window) => {
+                cx.subscribe_in(&input, window, |view, input, Submitted, window, cx| {
+                    view.submit_again(input, window, cx);
+                })
+            }
+            None => cx.subscribe(&input, |view, input, Submitted, cx| {
+                view.submit(&input, cx);
+            }),
+        };
         // The conversation's width changes, and its end stays in view if
         // it was.
         let panel_changes = stage.as_ref().map(|stage| {
@@ -220,6 +221,8 @@ impl SessionView {
                 cx.notify();
             })
         });
+        // Nothing is sent, nor heard, until there is an agent.
+        let (commands, _) = tokio::sync::mpsc::unbounded_channel();
         Self {
             conversation,
             scroll: ScrollHandle::new(),
@@ -229,11 +232,53 @@ impl SessionView {
             reading: Reading::default(),
             record: None,
             commands,
-            _agent: None,
-            _events: events,
+            again: None,
+            agent: None,
             _submitted: submitted,
             _panel_changes: panel_changes,
         }
+    }
+
+    /// Talks to `agent` from now on: sends it what the human asks, and
+    /// shows what it tells.
+    fn attach(&mut self, agent: Agent, cx: &mut Context<Self>) {
+        let Agent {
+            commands,
+            mut events,
+            thread,
+            ..
+        } = agent;
+        let hears = cx.spawn(async move |this, cx| {
+            while let Some(event) = events.recv().await {
+                let shown = this.update(cx, |view, cx| {
+                    view.hear(event);
+                    cx.notify();
+                });
+                if shown.is_err() {
+                    break;
+                }
+            }
+        });
+        self.commands = commands;
+        self.agent = Some((thread, hears));
+    }
+
+    /// Shows what the agent side told, and keeps it.
+    fn hear(&mut self, event: AgentEvent) {
+        if let (AgentEvent::Opened { id, .. }, Some(record)) = (&event, &self.record)
+            && let Err(error) = record.session(id)
+        {
+            log::error!("the agent's session is not kept, to resume: {error:#}");
+        }
+        self.follow(|conversation| conversation.apply(event));
+        self.keep();
+    }
+
+    /// Whether the chat's agent runs: it was opened in this run, or the
+    /// human sent to it again.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        self.agent.is_some()
     }
 
     /// Keeps the entries that changed since this was last called.
@@ -354,6 +399,27 @@ impl SessionView {
         }
         // Otherwise the text stays: a turn is running, or the number was
         // not one of the options.
+    }
+
+    /// The human pressed Enter in a chat that may be closed: start its
+    /// agent again first, if it is closed and can be, then send.
+    fn submit_again(
+        &mut self,
+        input: &Entity<LineInput>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sending = !input.read(cx).text().trim().is_empty();
+        if sending
+            && self.conversation.state() == State::Closed
+            && let Some(again) = self.again.take()
+        {
+            let agent = again(self.conversation.entries(), window, cx);
+            self.attach(agent, cx);
+            self.conversation.reopen();
+            cx.emit(Reopened);
+        }
+        self.submit(input, cx);
     }
 
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -519,6 +585,8 @@ fn render_line(line: &Line, writer: &mut Writer) -> gpui::Div {
         .child(div().flex_1().min_w_0().child(writer.plain(&text, "\n")))
 }
 
+impl gpui::EventEmitter<Reopened> for SessionView {}
+
 impl Focusable for SessionView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.input.focus_handle(cx)
@@ -532,6 +600,9 @@ impl SessionView {
             State::Busy => "… ",
             State::Asking => "choose> ",
             State::Stopping => "stopping… ",
+            // A closed chat whose agent can start again takes the next
+            // line as an open one does.
+            State::Closed if self.again.is_some() => "> ",
             State::Closed => "closed ",
         };
         let running = matches!(self.conversation.state(), State::Busy | State::Asking);
