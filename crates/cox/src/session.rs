@@ -58,6 +58,7 @@ impl Launcher {
             let stage = cx.new(|cx| {
                 crate::stage::Stage::new(
                     self.cef.clone(),
+                    cwd.clone(),
                     &self.stage,
                     relay,
                     server.map(|(_, server)| server.requests),

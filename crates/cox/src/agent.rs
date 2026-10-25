@@ -103,11 +103,12 @@ pub fn spawn<T: Transport + 'static>(
 }
 
 /// Marks every file Cox has open to close when a program starts, so the
-/// agent, started next, gets none of them. Rust opens its files that way
-/// already, but CEF opens the stage's `DevTools` port without: an agent
-/// that outlived Cox would keep the port from the next Cox.
+/// program started next, the agent or a terminal's, gets none of them.
+/// Rust opens its files that way already, but CEF opens the stage's
+/// `DevTools` port without: an agent that outlived Cox would keep the port
+/// from the next Cox.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn close_on_exec() {
+pub(crate) fn close_on_exec() {
     let Ok(entries) = std::fs::read_dir("/dev/fd") else {
         return;
     };

@@ -22,8 +22,9 @@
 //!   page in the window and sends the human's input to it. The chat's
 //!   agent drives the same pages over CDP. On Linux and macOS; on macOS,
 //!   inside the app bundle `cargo xtask bundle` makes. A tab can show a
-//!   Markdown file as a [`document`] instead. [`profile`] is where the
-//!   browser keeps logins and the like.
+//!   Markdown file as a [`document`] instead, or be a [`terminal`], which
+//!   the human types into, and the agent runs commands in. [`profile`] is
+//!   where the browser keeps logins and the like.
 //! - [`relay`] stands between a chat's agent's browser tools and the
 //!   browser, keeps the agent to its chat's pages, opens and closes tabs
 //!   for it, and tells the stage where the agent points, clicks and types,
@@ -59,6 +60,8 @@ pub mod selection;
 pub mod session;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod stage;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod terminal;
 pub mod text;
 pub mod tools;
 pub mod view;

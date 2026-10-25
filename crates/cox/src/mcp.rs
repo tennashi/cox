@@ -10,8 +10,12 @@
 //! and no other. The socket goes when the chat does.
 //!
 //! What goes over the socket is MCP as it goes over standard input and
-//! output: JSON-RPC messages, one to a line.
+//! output: JSON-RPC messages, one to a line. The server answers each
+//! request as it is done, so a command that runs long holds up nothing
+//! else, and stops the command when the agent cancels the request.
 
+use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
@@ -26,16 +30,59 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
+use tokio::task::AbortHandle;
 
 /// The option that runs `cox` as the bridge, followed by the socket.
 pub const OPTION: &str = "--mcp";
 
 /// What the agent's tools ask of its chat.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Request {
     /// Show the human the Markdown file at `path`, an absolute path,
     /// which says `text`, on a tab of the stage.
     ShowMarkdown { path: PathBuf, text: String },
+    /// Run `command` in a terminal on the stage, working in `cwd`, and
+    /// answer how it went, or why it could not start, once it ends. The
+    /// agent no longer waits for the answer once `answer` is closed: the
+    /// command is to stop.
+    RunCommand {
+        command: String,
+        cwd: PathBuf,
+        answer: oneshot::Sender<Result<Ran, String>>,
+    },
+}
+
+/// How a command the agent ran went.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ran {
+    /// What its terminal shows, with what scrolled off.
+    pub output: String,
+    pub ended: Ended,
+}
+
+/// How a command ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ended {
+    /// It exited with this code.
+    Exited(i32),
+    /// This signal ended it.
+    Signal(i32),
+    /// It ended, but how could not be learned.
+    Unknown,
+    /// The human closed its terminal while it ran.
+    Closed,
+}
+
+impl fmt::Display for Ended {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exited(code) => write!(f, "exit code {code}"),
+            Self::Signal(signal) => write!(f, "ended by signal {signal}"),
+            Self::Unknown => f.write_str("ended, with no exit code"),
+            Self::Closed => f.write_str("stopped: the human closed its terminal"),
+        }
+    }
 }
 
 /// One chat's server, as the chat holds it.
@@ -52,6 +99,11 @@ pub struct Server {
 const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 const SHOW_MARKDOWN: &str = "show_markdown";
+const RUN_COMMAND: &str = "run_command";
+
+/// The most of a command's output the agent gets: the end of it, where a
+/// build or a test run says how it went.
+const OUTPUT_LENGTH: usize = 30_000;
 
 /// JSON-RPC's codes for what went wrong with a request.
 const PARSE_ERROR: i64 = -32700;
@@ -143,28 +195,69 @@ async fn talk(
     requests: &UnboundedSender<Request>,
 ) -> anyhow::Result<()> {
     let (heard, mut said) = stream.into_split();
+    // Answers go out as they are ready, in whatever order that is.
+    let (answers, mut ready) = unbounded_channel::<Value>();
+    let sending = tokio::spawn(async move {
+        while let Some(answer) = ready.recv().await {
+            let mut line = answer.to_string();
+            line.push('\n');
+            said.write_all(line.as_bytes()).await?;
+        }
+        anyhow::Ok(())
+    });
+    // The requests not yet answered, by their ids, to cancel.
+    let mut answering: HashMap<String, AbortHandle> = HashMap::new();
     let mut lines = BufReader::new(heard).lines();
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
         }
-        let answer = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => answer(&message, cwd, requests),
-            Err(error) => Some(failure(&Value::Null, PARSE_ERROR, &error.to_string())),
+        let message = match serde_json::from_str::<Value>(&line) {
+            Ok(message) => message,
+            Err(error) => {
+                let _ = answers.send(failure(&Value::Null, PARSE_ERROR, &error.to_string()));
+                continue;
+            }
         };
-        if let Some(answer) = answer {
-            let mut line = answer.to_string();
-            line.push('\n');
-            said.write_all(line.as_bytes()).await?;
+        if let Some(id) = cancelled(&message) {
+            // Dropping the answer's future lets go of what it waits on.
+            if let Some(answer) = answering.remove(&id.to_string()) {
+                answer.abort();
+            }
+            continue;
+        }
+        let id = message.get("id").map(Value::to_string);
+        let (cwd, requests, answers) = (cwd.to_owned(), requests.clone(), answers.clone());
+        let answer = tokio::spawn(async move {
+            if let Some(answer) = answer(&message, &cwd, &requests).await {
+                let _ = answers.send(answer);
+            }
+        });
+        if let Some(id) = id {
+            answering.retain(|_, answer| !answer.is_finished());
+            answering.insert(id, answer.abort_handle());
         }
     }
-    Ok(())
+    // What is still being answered goes unanswered: the agent hung up.
+    for answer in answering.into_values() {
+        answer.abort();
+    }
+    drop(answers);
+    sending.await?
+}
+
+/// The id of the request `message` cancels, if it is the notice that does.
+fn cancelled(message: &Value) -> Option<&Value> {
+    if message.get("method")?.as_str()? != "notifications/cancelled" {
+        return None;
+    }
+    message.get("params")?.get("requestId")
 }
 
 /// The answer to `message`, or `None` when it needs none: a
 /// notification, or an answer to a request, which the server makes none
 /// of.
-fn answer(message: &Value, cwd: &Path, requests: &UnboundedSender<Request>) -> Option<Value> {
+async fn answer(message: &Value, cwd: &Path, requests: &UnboundedSender<Request>) -> Option<Value> {
     let id = message.get("id")?;
     let method = message.get("method")?.as_str()?;
     let params = message.get("params").unwrap_or(&Value::Null);
@@ -172,7 +265,7 @@ fn answer(message: &Value, cwd: &Path, requests: &UnboundedSender<Request>) -> O
         "initialize" => Ok(initialize(params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools() })),
-        "tools/call" => call(params, cwd, requests),
+        "tools/call" => call(params, cwd, requests).await,
         _ => Err((METHOD_NOT_FOUND, format!("no method {method}"))),
     };
     Some(match result {
@@ -201,7 +294,8 @@ fn initialize(params: &Value) -> Value {
 
 /// The tools, as the agent learns of them.
 fn tools() -> Value {
-    json!([{
+    json!([
+    {
         "name": SHOW_MARKDOWN,
         "description": "Shows the human a Markdown file, drawn as Markdown, on a tab of the \
             stage beside the conversation, where they read it while you talk. Use it for \
@@ -218,12 +312,34 @@ fn tools() -> Value {
             },
             "required": ["path"],
         },
-    }])
+    },
+    {
+        "name": RUN_COMMAND,
+        "description": "Runs a shell command in a terminal on the stage beside the \
+            conversation, where the human watches it run, and can type into it. Use it for \
+            the commands the human should see, such as builds and tests. It runs in the \
+            working directory with the human's shell (`$SHELL -c`), afresh each time, so a \
+            `cd` does not carry over to the next. It waits until the command ends, and \
+            answers what the terminal shows, cut to the end when long, and the exit code. \
+            A command that waits for input waits for the human; one that never ends, such \
+            as a server, holds you until the human stops it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The command, as the shell reads it.",
+                },
+            },
+            "required": ["command"],
+        },
+    },
+    ])
 }
 
 /// Calls the tool `params` names, and answers what it did, or the error
 /// the agent made in calling it.
-fn call(
+async fn call(
     params: &Value,
     cwd: &Path,
     requests: &UnboundedSender<Request>,
@@ -232,6 +348,7 @@ fn call(
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
     let done = match name {
         SHOW_MARKDOWN => show_markdown(arguments, cwd, requests),
+        RUN_COMMAND => run_command(arguments, cwd, requests).await,
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
     let (text, is_error) = match done {
@@ -262,6 +379,59 @@ fn show_markdown(
         .send(Request::ShowMarkdown { path, text })
         .map_err(|_| "the chat has closed".to_owned())?;
     Ok(shown)
+}
+
+/// Asks the chat to run the command `arguments` holds, and waits for it to
+/// end: answers what it printed and how it ended, an error unless it
+/// exited with 0.
+async fn run_command(
+    arguments: &Value,
+    cwd: &Path,
+    requests: &UnboundedSender<Request>,
+) -> Result<String, String> {
+    let command = arguments
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|command| !command.trim().is_empty())
+        .ok_or("no command: give the command to run as `command`")?;
+    let (answer, ran) = oneshot::channel();
+    requests
+        .send(Request::RunCommand {
+            command: command.to_owned(),
+            cwd: cwd.to_owned(),
+            answer,
+        })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let ran = ran
+        .await
+        .map_err(|_| "the chat closed while the command ran".to_owned())??;
+    let told = told(&ran);
+    if ran.ended == Ended::Exited(0) {
+        Ok(told)
+    } else {
+        Err(told)
+    }
+}
+
+/// What the agent is told of a command that ran: its output, or the end
+/// of it, and how it ended.
+fn told(ran: &Ran) -> String {
+    let output = ran.output.trim_end();
+    let output = match output.char_indices().rev().nth(OUTPUT_LENGTH - 1) {
+        // Cut at a line, past the cut.
+        Some((cut, _)) => {
+            let kept = &output[cut..];
+            let kept = kept.split_once('\n').map_or(kept, |(_, rest)| rest);
+            let cut = output[..output.len() - kept.len()].lines().count();
+            format!("[the first {cut} lines are cut]\n{kept}")
+        }
+        None => output.to_owned(),
+    };
+    if output.is_empty() {
+        format!("[no output, {}]", ran.ended)
+    } else {
+        format!("{output}\n\n[{}]", ran.ended)
+    }
 }
 
 /// Runs `cox` as the bridge between the agent, on standard input and
@@ -320,6 +490,18 @@ mod tests {
         json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params })
     }
 
+    /// The answer to `message`, for a request answered right away.
+    fn answer_now(
+        message: &Value,
+        cwd: &Path,
+        requests: &UnboundedSender<Request>,
+    ) -> Option<Value> {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(answer(message, cwd, requests))
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let directory = std::env::temp_dir().join(format!("cox-mcp-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
@@ -332,7 +514,7 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let speaks = |asked: &str| {
-            answer(
+            answer_now(
                 &ask("initialize", &json!({ "protocolVersion": asked })),
                 cwd,
                 &sent,
@@ -349,8 +531,8 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-        assert_eq!(answer(&initialized, cwd, &sent), None);
-        let missing = answer(&ask("resources/list", &json!({})), cwd, &sent).unwrap();
+        assert_eq!(answer_now(&initialized, cwd, &sent), None);
+        let missing = answer_now(&ask("resources/list", &json!({})), cwd, &sent).unwrap();
         assert_eq!(missing["id"], 7);
         assert_eq!(missing["error"]["code"], METHOD_NOT_FOUND);
     }
@@ -358,8 +540,9 @@ mod tests {
     #[test]
     fn lists_the_tools() {
         let (sent, _requests) = unbounded_channel();
-        let listed = answer(&ask("tools/list", &json!({})), Path::new("/"), &sent).unwrap();
+        let listed = answer_now(&ask("tools/list", &json!({})), Path::new("/"), &sent).unwrap();
         assert_eq!(listed["result"]["tools"][0]["name"], SHOW_MARKDOWN);
+        assert_eq!(listed["result"]["tools"][1]["name"], RUN_COMMAND);
     }
 
     #[test]
@@ -368,7 +551,7 @@ mod tests {
         fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
         let (sent, mut requests) = unbounded_channel();
 
-        let shown = answer(
+        let shown = answer_now(
             &ask(
                 "tools/call",
                 &json!({ "name": SHOW_MARKDOWN, "arguments": { "path": "plan.md" } }),
@@ -379,13 +562,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(shown["result"]["isError"], false);
-        assert_eq!(
-            requests.try_recv().unwrap(),
-            Request::ShowMarkdown {
-                path: cwd.join("plan.md"),
-                text: "# Plan\n".to_owned()
+        match requests.try_recv().unwrap() {
+            Request::ShowMarkdown { path, text } => {
+                assert_eq!(path, cwd.join("plan.md"));
+                assert_eq!(text, "# Plan\n");
             }
-        );
+            request @ Request::RunCommand { .. } => panic!("asked {request:?}"),
+        }
         fs::remove_dir_all(cwd).unwrap();
     }
 
@@ -394,7 +577,7 @@ mod tests {
         let cwd = scratch("missing");
         let (sent, mut requests) = unbounded_channel();
 
-        let shown = answer(
+        let shown = answer_now(
             &ask(
                 "tools/call",
                 &json!({ "name": SHOW_MARKDOWN, "arguments": { "path": "missing.md" } }),
@@ -409,6 +592,94 @@ mod tests {
         assert!(text.starts_with("cannot read"), "{text}");
         assert!(requests.try_recv().is_err());
         fs::remove_dir_all(cwd).unwrap();
+    }
+
+    /// Calls `run_command` with `arguments`, and answers the request the
+    /// chat gets with `ran`.
+    async fn run(arguments: Value, ran: Result<Ran, String>) -> Value {
+        let (sent, mut requests) = unbounded_channel();
+        let chat = tokio::spawn(async move {
+            match requests.recv().await {
+                Some(Request::RunCommand {
+                    command,
+                    cwd,
+                    answer,
+                }) => {
+                    assert_eq!(cwd, Path::new("/work"));
+                    answer.send(ran).unwrap();
+                    Some(command)
+                }
+                _ => None,
+            }
+        });
+        let message = ask(
+            "tools/call",
+            &json!({ "name": RUN_COMMAND, "arguments": arguments }),
+        );
+        let answered = answer(&message, Path::new("/work"), &sent).await.unwrap();
+        drop(sent);
+        let asked = chat.await.unwrap();
+        assert_eq!(
+            asked.as_deref(),
+            message["params"]["arguments"]["command"].as_str()
+        );
+        answered["result"].clone()
+    }
+
+    #[tokio::test]
+    async fn answers_what_a_command_printed_and_how_it_ended() {
+        let ran = Ran {
+            output: "ok\n\n".to_owned(),
+            ended: Ended::Exited(0),
+        };
+        let result = run(json!({ "command": "true" }), Ok(ran)).await;
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["content"][0]["text"], "ok\n\n[exit code 0]");
+
+        let ran = Ran {
+            output: "error: no\n".to_owned(),
+            ended: Ended::Exited(2),
+        };
+        let result = run(json!({ "command": "false" }), Ok(ran)).await;
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["content"][0]["text"], "error: no\n\n[exit code 2]");
+    }
+
+    #[tokio::test]
+    async fn tells_the_agent_a_command_did_not_start() {
+        let result = run(json!({ "command": "true" }), Err("no pty".to_owned())).await;
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["content"][0]["text"], "no pty");
+    }
+
+    #[tokio::test]
+    async fn asks_for_a_command() {
+        let (sent, mut requests) = unbounded_channel();
+        let message = ask(
+            "tools/call",
+            &json!({ "name": RUN_COMMAND, "arguments": { "command": " " } }),
+        );
+        let answered = answer(&message, Path::new("/"), &sent).await.unwrap();
+        assert_eq!(answered["result"]["isError"], true);
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn keeps_the_end_of_a_long_output() {
+        let output = (0..10_000).fold(String::new(), |output, line| {
+            output + &format!("line {line}\n")
+        });
+        let told = told(&Ran {
+            output,
+            ended: Ended::Signal(2),
+        });
+        assert!(told.len() < OUTPUT_LENGTH + 100, "{}", told.len());
+        let (cut, rest) = told.split_once('\n').unwrap();
+        let first: usize = rest.lines().next().unwrap()["line ".len()..]
+            .parse()
+            .unwrap();
+        assert_eq!(cut, format!("[the first {first} lines are cut]"));
+        assert!(told.ends_with("line 9999\n\n[ended by signal 2]"), "{told}");
     }
 
     #[test]
