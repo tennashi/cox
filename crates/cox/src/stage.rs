@@ -1,23 +1,29 @@
 //! The stage: where the human and the agent of one chat work together,
 //! beside the chat's conversation. It holds tabs, each showing a page of
-//! the browser (see [`crate::page`]). The first shows the page the stage
-//! starts on; the human opens more and closes them, and so does the agent,
-//! through the chat's relay. A page that asks for a window of its own gets
-//! a tab instead.
+//! the browser (see [`crate::page`]), or a Markdown file (see
+//! [`crate::document`]). The first shows the page the stage starts on; the
+//! human opens more pages and closes tabs, and so does the agent, through
+//! the chat's relay. A page that asks for a window of its own gets a tab
+//! instead. The agent shows the human Markdown files with Cox's own tools
+//! (see [`crate::mcp`]), a tab for each file.
 //!
 //! The stage tells the relay of every page it opens, so that the agent sees
-//! each of its chat's tabs, whoever opened it. When the agent works on a
-//! page, the stage shows that page's tab, and opens beside the
+//! each of its chat's pages, whoever opened it. When the agent works on a
+//! page, or shows a file, the stage shows that tab, and opens beside the
 //! conversation if it was closed.
 
+use std::path::PathBuf;
+
 use gpui::{
-    App, Context, Div, Entity, Focusable, Stateful, Subscription, Task, Window, div, prelude::*,
-    px, rgb,
+    AnyView, App, Context, Div, Entity, FocusHandle, Focusable, Stateful, Subscription, Task,
+    Window, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::browser::{Cef, TargetId};
+use crate::document::{Document, LinkClicked};
 use crate::input::LineInput;
+use crate::mcp::Request;
 use crate::page::{OpenTab, Page};
 use crate::relay::{FromAgent, Pages, Relay};
 use crate::view::Panel;
@@ -42,26 +48,59 @@ pub struct Stage {
     /// Whether the stage is open beside the conversation.
     panel: Entity<Panel>,
     _from_agent: Option<Task<()>>,
+    _from_tools: Option<Task<()>>,
 }
 
-/// A tab, and the page it shows.
+/// A tab, and what it shows.
 struct Tab {
-    page: Entity<Page>,
-    /// The page's id, which the relay names it by.
-    target: TargetId,
-    /// Redraws the tab as the page's title changes.
+    shown: Shown,
+    /// Redraws the tab as the title of what it shows changes.
     _changes: Subscription,
-    /// Opens the tabs the page asks for.
-    _popups: Subscription,
+    /// Opens the tabs that what it shows asks for.
+    _opens: Subscription,
+}
+
+enum Shown {
+    Page {
+        page: Entity<Page>,
+        /// The page's id, which the relay names it by.
+        target: TargetId,
+    },
+    Document(Entity<Document>),
+}
+
+impl Shown {
+    fn page(&self) -> Option<&Entity<Page>> {
+        match self {
+            Self::Page { page, .. } => Some(page),
+            Self::Document(_) => None,
+        }
+    }
+
+    fn view(&self) -> AnyView {
+        match self {
+            Self::Page { page, .. } => page.clone().into(),
+            Self::Document(document) => document.clone().into(),
+        }
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        match self {
+            Self::Page { page, .. } => page.focus_handle(cx),
+            Self::Document(document) => document.focus_handle(cx),
+        }
+    }
 }
 
 impl Stage {
     /// A stage of one tab showing `url`, which tells `relay` of the pages
-    /// it opens, and opens `panel` when the agent works on it.
+    /// it opens, carries out what the agent's tools ask in `from_tools`,
+    /// and opens `panel` when the agent works on it.
     pub fn new(
         cef: Cef,
         url: &str,
         relay: Option<Relay>,
+        from_tools: Option<UnboundedReceiver<Request>>,
         panel: Entity<Panel>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -71,6 +110,7 @@ impl Stage {
             None => (None, None),
         };
         let from_agent = from_agent.map(|from_agent| Self::hear(from_agent, window, cx));
+        let from_tools = from_tools.map(|from_tools| Self::hear_tools(from_tools, window, cx));
         let mut stage = Self {
             cef,
             tabs: Vec::new(),
@@ -78,6 +118,7 @@ impl Stage {
             pages,
             panel,
             _from_agent: from_agent,
+            _from_tools: from_tools,
         };
         stage.open_tab(url, true, window, cx);
         stage
@@ -119,6 +160,58 @@ impl Stage {
         })
     }
 
+    /// Carries out what the agent's tools ask.
+    fn hear_tools(
+        mut from_tools: UnboundedReceiver<Request>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(request) = from_tools.recv().await {
+                let done = this.update_in(cx, |stage, window, cx| match request {
+                    Request::ShowMarkdown { path, text } => {
+                        stage.show_document(path, text, window, cx);
+                    }
+                });
+                if done.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+
+    /// Shows the file at `path`, which says `text`: on the tab that shows
+    /// it already, or a new one. The stage opens if it was closed.
+    fn show_document(
+        &mut self,
+        path: PathBuf,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let showing = self.tabs.iter().position(|tab| match &tab.shown {
+            Shown::Document(document) => document.read(cx).path() == path,
+            Shown::Page { .. } => false,
+        });
+        if let Some(index) = showing {
+            if let Shown::Document(document) = &self.tabs[index].shown {
+                document.update(cx, |document, cx| document.show(text, cx));
+            }
+            self.shown = index;
+            cx.notify();
+        } else {
+            let document = cx.new(|cx| Document::new(path, text, cx));
+            let changes = cx.observe(&document, |_, _, cx| cx.notify());
+            let opens = cx.subscribe_in(
+                &document,
+                window,
+                |stage, _, LinkClicked(url), window, cx| stage.open(url, window, cx),
+            );
+            self.push(Shown::Document(document), changes, opens, true, cx);
+        }
+        self.show_panel(cx);
+    }
+
     /// The agent worked on `page`, sending it `input` if any: show its tab,
     /// and the stage.
     fn worked(
@@ -135,10 +228,10 @@ impl Stage {
             cx.notify();
         }
         self.show_panel(cx);
-        if let Some(input) = input {
-            self.tabs[index]
-                .page
-                .update(cx, |page, cx| page.see(input, cx));
+        if let Some(input) = input
+            && let Some(page) = self.tabs[index].shown.page()
+        {
+            page.update(cx, |page, cx| page.see(input, cx));
         }
     }
 
@@ -148,9 +241,10 @@ impl Stage {
 
     /// The index of the tab showing `page`.
     fn index_of(&self, page: &str) -> Option<usize> {
-        self.tabs
-            .iter()
-            .position(|tab| tab.target.borrow().as_deref() == Some(page))
+        self.tabs.iter().position(|tab| match &tab.shown {
+            Shown::Page { target, .. } => target.borrow().as_deref() == Some(page),
+            Shown::Document(_) => false,
+        })
     }
 
     /// Opens a tab showing `url` after the others, shown if `show` is, and
@@ -174,17 +268,32 @@ impl Stage {
         let popups = cx.subscribe_in(&page, window, |stage, _, OpenTab(url), window, cx| {
             stage.open_tab(url, true, window, cx);
         });
-        self.tabs.push(Tab {
+        let shown = Shown::Page {
             page,
             target: target.clone(),
+        };
+        self.push(shown, changes, popups, show, cx);
+        target
+    }
+
+    /// Puts a tab after the others, shown if `show` is.
+    fn push(
+        &mut self,
+        shown: Shown,
+        changes: Subscription,
+        opens: Subscription,
+        show: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.tabs.push(Tab {
+            shown,
             _changes: changes,
-            _popups: popups,
+            _opens: opens,
         });
         if show {
             self.shown = self.tabs.len() - 1;
         }
         cx.notify();
-        target
     }
 
     /// Closes the tab at `index`, which closes its page, and shows the one
@@ -203,7 +312,7 @@ impl Stage {
             return Err("The stage keeps its last tab open");
         }
         let had_focus = self.tabs[self.shown]
-            .page
+            .shown
             .focus_handle(cx)
             .contains_focused(window, cx);
         self.tabs.remove(index);
@@ -225,16 +334,17 @@ impl Stage {
     }
 
     fn focus_shown(&self, window: &mut Window, cx: &App) {
-        window.focus(&self.tabs[self.shown].page.focus_handle(cx));
+        window.focus(&self.tabs[self.shown].shown.focus_handle(cx));
     }
 
     /// Opens `url`, a link the human clicked: on the tab that shows it
     /// already, or a new one.
     pub fn open(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let showing = self
-            .tabs
-            .iter()
-            .position(|tab| tab.page.read(cx).navigation().url == url);
+        let showing = self.tabs.iter().position(|tab| {
+            tab.shown
+                .page()
+                .is_some_and(|page| page.read(cx).navigation().url == url)
+        });
         if let Some(index) = showing {
             self.show(index, window, cx);
         } else {
@@ -247,19 +357,25 @@ impl Stage {
     /// where what they type replaces the address.
     fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_tab(BLANK, true, window, cx);
-        let address = self.tabs[self.shown].page.read(cx).address().clone();
-        window.focus(&address.focus_handle(cx));
-        address.update(cx, LineInput::select_whole);
+        if let Some(page) = self.tabs[self.shown].shown.page() {
+            let address = page.read(cx).address().clone();
+            window.focus(&address.focus_handle(cx));
+            address.update(cx, LineInput::select_whole);
+        }
     }
 
     fn render_tab(&self, index: usize, tab: &Tab, cx: &mut Context<Self>) -> Stateful<Div> {
         let number = index + 1;
-        let page = tab.page.read(cx);
-        let navigation = page.navigation();
-        let title = if navigation.title.is_empty() {
-            &navigation.url
-        } else {
-            &navigation.title
+        let title = match &tab.shown {
+            Shown::Page { page, .. } => {
+                let navigation = page.read(cx).navigation();
+                if navigation.title.is_empty() {
+                    navigation.url.clone()
+                } else {
+                    navigation.title.clone()
+                }
+            }
+            Shown::Document(document) => document.read(cx).title(),
         };
         let title: String = title.chars().take(TITLE_LENGTH).collect();
         let mut tab = div()
@@ -354,7 +470,7 @@ impl Render for Stage {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .child(self.tabs[self.shown].page.clone()),
+                    .child(self.tabs[self.shown].shown.view()),
             )
     }
 }

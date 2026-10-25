@@ -7,6 +7,9 @@
 //!
 //! On macOS, run it from inside the bundle `cargo xtask bundle` makes, as
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
+//!
+//! The agents run `cox` too, as `cox --mcp <socket>`, the MCP server of
+//! Cox's own tools that `cox::mcp` hands them.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -79,7 +82,17 @@ const QUIT_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_milli
 
 fn main() {
     env_logger::init();
-    let args = Args::parse(std::env::args().skip(1));
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Before CEF, since the bridge runs no browser.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if let Some(socket) = cox::mcp::bridge_to(&args) {
+        if let Err(error) = cox::mcp::bridge(&socket) {
+            eprintln!("cox: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let args = Args::parse(args);
 
     // CEF first: on Linux, its helper processes run this same executable
     // with arguments of their own, and exit inside `start`.
@@ -100,6 +113,11 @@ fn main() {
         command: args.command,
         stage: args.stage,
         path: std::env::var_os("PATH").unwrap_or_default(),
+        exe: std::env::current_exe()
+            .inspect_err(|error| {
+                log::error!("the agents get no tools of Cox's own: {error}");
+            })
+            .ok(),
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         cef: cef.clone(),
     };
@@ -107,6 +125,7 @@ fn main() {
     Application::new().run(move |cx: &mut App| {
         cox::input::bind_keys(cx);
         cox::view::bind_keys(cx);
+        cox::document::bind_keys(cx);
         cox::workspace::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         #[cfg(target_os = "macos")]

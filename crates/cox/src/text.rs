@@ -1,11 +1,13 @@
-//! The conversation's text, drawn so that the human can select and copy
-//! it and click its links: replies as Markdown, the rest as it came.
+//! Text drawn so that the human can select and copy it and click its
+//! links, as in the conversation: replies as Markdown, the rest as it
+//! came.
 //!
 //! Each piece of text is a [`SelectableText`]. When it is laid out, it
 //! notes in [`Painted`] what it says and where it went, which is how the
-//! conversation finds the text under the mouse and what a selection
-//! copies. Every frame draws the pieces again, so `Painted` holds those of
-//! the last frame.
+//! view finds the text under the mouse and what a selection copies. Every
+//! frame draws the pieces again, so `Painted` holds those of the last
+//! frame. [`Reading`] turns the human's mouse into what they select of
+//! it, and the links they click.
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -14,8 +16,8 @@ use std::rc::Rc;
 use gpui::{
     App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Element, ElementId, FontStyle,
     FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
-    IntoElement, LayoutId, MouseMoveEvent, Pixels, Point, SharedString, StrikethroughStyle,
-    StyledText, TextLayout, UnderlineStyle, Window, div, prelude::*, px, rgb,
+    IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, Pixels, Point, SharedString,
+    StrikethroughStyle, StyledText, TextLayout, UnderlineStyle, Window, div, prelude::*, px, rgb,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -144,6 +146,90 @@ impl Painted {
             text: &text.text,
             joined: text.joined,
         }))
+    }
+}
+
+/// A view's text as the human reads it: as the last frame laid it out,
+/// what they selected of it, and whether they are selecting still.
+#[derive(Default)]
+pub struct Reading {
+    painted: Painted,
+    selection: Option<Selection>,
+    /// Whether a mouse button went down on the text and is still held.
+    selecting: bool,
+}
+
+impl Reading {
+    /// Forgets how the text was laid out, before a frame lays it out
+    /// again.
+    pub fn clear(&self) {
+        self.painted.clear();
+    }
+
+    /// Writes entry `entry` of the text, showing what of it is selected.
+    #[must_use]
+    pub fn writer(&self, entry: usize) -> Writer<'_> {
+        Writer::new(&self.painted, self.selection, entry)
+    }
+
+    /// A button went down: start selecting there, a word or a whole piece
+    /// of text at a time on a double or triple click, or with Shift, move
+    /// the end of what is selected there.
+    pub fn press(&mut self, event: &MouseDownEvent) {
+        let spot = self.painted.spot_at(event.position);
+        self.selection = spot.map(|spot| match event.click_count {
+            1 => match self.selection {
+                Some(selection) if event.modifiers.shift => Selection {
+                    head: spot,
+                    ..selection
+                },
+                _ => Selection::at(spot),
+            },
+            2 => self.painted.word_at(spot),
+            _ => self.painted.piece_at(spot),
+        });
+        self.selecting = self.selection.is_some();
+    }
+
+    /// The mouse moved to `position`: answers whether that changed what is
+    /// selected.
+    pub fn drag(&mut self, position: Point<Pixels>) -> bool {
+        if !self.selecting {
+            return false;
+        }
+        if let (Some(selection), Some(spot)) = (&mut self.selection, self.painted.spot_at(position))
+            && selection.head != spot
+        {
+            selection.head = spot;
+            return true;
+        }
+        false
+    }
+
+    /// The button came up at `position`: answers where the link there
+    /// goes, when the press was a click that selected nothing.
+    pub fn release(&mut self, position: Point<Pixels>) -> Option<SharedString> {
+        let clicked = std::mem::take(&mut self.selecting)
+            && self.selection.is_none_or(|selection| selection.is_empty());
+        clicked.then(|| self.painted.link_at(position)).flatten()
+    }
+
+    /// The button came up away from the text.
+    pub fn stop(&mut self) {
+        self.selecting = false;
+    }
+
+    /// Lets go of what is selected: answers whether something was.
+    pub fn deselect(&mut self) -> bool {
+        self.selection.take().is_some()
+    }
+
+    /// The text selected.
+    #[must_use]
+    pub fn selected_text(&self) -> String {
+        self.selection
+            .map(|selection| self.painted.copy(&selection))
+            .unwrap_or_default()
     }
 }
 
@@ -315,8 +401,8 @@ impl IntoElement for SelectableText {
     }
 }
 
-/// Makes the pieces of text of one entry of the conversation, numbering
-/// them in order.
+/// Makes the pieces of text of one entry of a view's text, such as one of
+/// the conversation, numbering them in order.
 pub struct Writer<'a> {
     painted: &'a Painted,
     selection: Option<Selection>,
@@ -374,10 +460,12 @@ impl<'a> Writer<'a> {
 
     /// `markdown`, block by block.
     pub fn markdown(&mut self, markdown: &str) -> gpui::Div {
-        let blocks: Vec<_> = markdown::parse(markdown)
-            .iter()
-            .map(|block| self.block(block))
-            .collect();
+        self.blocks(&markdown::parse(markdown))
+    }
+
+    /// The `blocks` of some Markdown.
+    pub fn blocks(&mut self, blocks: &[Block]) -> gpui::Div {
+        let blocks: Vec<_> = blocks.iter().map(|block| self.block(block)).collect();
         div().flex().flex_col().gap_2().children(blocks)
     }
 
