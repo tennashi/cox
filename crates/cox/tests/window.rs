@@ -14,12 +14,13 @@ use agent_client_protocol::schema::v1::{
 use cox::conversation::{Content, Entry, State};
 use cox::diff::Line;
 use cox::input::LineInput;
-use cox::view::SessionView;
+use cox::view::{Panel, SessionView, StageView};
 use cox_acp::{McpServer, ToolCallResult};
 use fake_agent::FakeAgent;
 use gpui::{
-    Bounds, ClipboardItem, Entity, EntityInputHandler, Focusable, Modifiers, MouseButton,
-    MouseDownEvent, MouseUpEvent, Pixels, TestAppContext, VisualTestContext, point, px,
+    AppContext as _, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, Focusable,
+    IntoElement, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels,
+    Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
 };
 
 /// Opens the window, talking to a fake agent, with the input focused.
@@ -37,6 +38,26 @@ fn open_with(
     mcp_servers: Vec<McpServer>,
     opened: Opened,
 ) -> (Arc<FakeAgent>, Entity<SessionView>, &mut VisualTestContext) {
+    open_with_stage(cx, mcp_servers, opened, false)
+}
+
+/// A stand-in for the stage, which needs CEF.
+struct FakeStage;
+
+impl Render for FakeStage {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child("stage")
+    }
+}
+
+/// Opens the window like [`open_with`], with a stand-in for the stage
+/// beside the conversation if `stage` is true, closed.
+fn open_with_stage(
+    cx: &mut TestAppContext,
+    mcp_servers: Vec<McpServer>,
+    opened: Opened,
+    stage: bool,
+) -> (Arc<FakeAgent>, Entity<SessionView>, &mut VisualTestContext) {
     // The agent side runs on a thread of its own, so the test waits for it
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
@@ -47,6 +68,10 @@ fn open_with(
     let agent = Arc::new(FakeAgent::default());
     let fake = Arc::clone(&agent);
     let (view, cx) = cx.add_window_view(|_, cx| {
+        let stage = stage.then(|| StageView {
+            view: cx.new(|_| FakeStage).into(),
+            panel: cx.new(|_| Panel::default()),
+        });
         SessionView::new(
             cox::agent::spawn(
                 move || Ok(fake.connect()),
@@ -54,7 +79,7 @@ fn open_with(
                 mcp_servers,
                 None,
             ),
-            None::<gpui::AnyView>,
+            stage,
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
             cx,
         )
@@ -492,4 +517,57 @@ async fn opens_a_link_the_human_clicks(cx: &mut TestAppContext) {
     cx.simulate_mouse_up(at(20.5), MouseButton::Left, Modifiers::none());
 
     assert_eq!(*opened.borrow(), ["https://example.com/x"]);
+}
+
+fn stage_is_open(cx: &mut VisualTestContext, view: &Entity<SessionView>) -> bool {
+    view.read_with(cx, SessionView::stage_is_open)
+}
+
+#[gpui::test]
+fn opens_and_closes_the_stage_with_its_button(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Opened::default(), true);
+
+    assert!(!stage_is_open(cx, &view));
+    assert!(cx.debug_bounds("stage-panel").is_none());
+    let toggle = cx
+        .debug_bounds("toggle-stage")
+        .expect("the button is drawn");
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    assert!(stage_is_open(cx, &view));
+    assert!(cx.debug_bounds("stage-panel").is_some());
+
+    let toggle = cx
+        .debug_bounds("toggle-stage")
+        .expect("the button is drawn");
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    assert!(!stage_is_open(cx, &view));
+    // The keyboard is back in the input.
+    cx.simulate_input("x");
+    assert_eq!(input_text(cx, &view), "x");
+}
+
+#[gpui::test]
+async fn opens_the_stage_for_a_link_the_human_clicks(cx: &mut TestAppContext) {
+    let opened = Opened::default();
+    let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Rc::clone(&opened), true);
+    say(cx, &view, "see https://example.com/x").await;
+
+    let reply = first_reply(cx);
+    cx.simulate_click(
+        point(
+            reply.origin.x + px(CHARACTER * 15.5),
+            reply.origin.y + px(5.),
+        ),
+        Modifiers::none(),
+    );
+
+    assert!(stage_is_open(cx, &view));
+    assert_eq!(*opened.borrow(), ["https://example.com/x"]);
+}
+
+#[gpui::test]
+fn a_chat_with_no_stage_has_no_button_for_it(cx: &mut TestAppContext) {
+    let (_agent, _view, cx) = open(cx);
+
+    assert!(cx.debug_bounds("toggle-stage").is_none());
 }

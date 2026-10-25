@@ -68,16 +68,21 @@ pub enum Event {
     Created,
     /// The browser is gone.
     Closed,
-    /// The page moved, or started or finished loading: see
-    /// [`Browser::navigation`].
+    /// The page moved, started or finished loading, or changed its title:
+    /// see [`Browser::navigation`].
     Navigated,
+    /// The page asks for a window of its own, showing this address.
+    Popup(String),
 }
 
-/// Where the browser is in its history, as the toolbar shows it.
+/// Where the browser is in its history, as the toolbar shows it, and what
+/// the page is called, as its tab shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Navigation {
     /// The address of the page being shown, or being loaded.
     pub url: String,
+    /// The page's title, empty until it has one.
+    pub title: String,
     pub loading: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
@@ -1391,6 +1396,17 @@ mod handlers {
                     let _ = self.events.send(Event::Navigated);
                 }
             }
+
+            /// The page's title changed, which its tab shows.
+            fn on_title_change(
+                &self,
+                _browser: Option<&mut cef::Browser>,
+                title: Option<&CefString>,
+            ) {
+                lock(&self.shared).navigation.title =
+                    title.map(ToString::to_string).unwrap_or_default();
+                let _ = self.events.send(Event::Navigated);
+            }
         }
     }
 
@@ -1403,11 +1419,11 @@ mod handlers {
 
         impl LifeSpanHandler {
             /// The page wants a window of its own, for a link with
-            /// `target="_blank"` or `window.open`. The stage is the only
-            /// window there is, so the page goes there instead.
+            /// `target="_blank"` or `window.open`. The stage opens a tab
+            /// for it instead.
             fn on_before_popup(
                 &self,
-                browser: Option<&mut cef::Browser>,
+                _browser: Option<&mut cef::Browser>,
                 _frame: Option<&mut cef::Frame>,
                 _popup_id: c_int,
                 target_url: Option<&CefString>,
@@ -1421,14 +1437,11 @@ mod handlers {
                 _extra_info: Option<&mut Option<cef::DictionaryValue>>,
                 _no_javascript_access: Option<&mut c_int>,
             ) -> c_int {
-                let frame = browser.and_then(|browser| browser.main_frame());
-                match (frame, target_url) {
-                    (Some(frame), Some(url)) if !url.to_string().is_empty() => {
-                        frame.load_url(Some(url));
-                    }
-                    // `window.open()` with no address opens a blank page
-                    // for the script to fill; there is nowhere to show it.
-                    _ => {}
+                let url = target_url.map(ToString::to_string).unwrap_or_default();
+                // `window.open()` with no address opens a blank page for
+                // the script to fill, which a tab of the stage cannot be.
+                if !url.is_empty() {
+                    let _ = self.events.send(Event::Popup(url));
                 }
                 // 1: no popup.
                 1

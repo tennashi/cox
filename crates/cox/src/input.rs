@@ -250,6 +250,11 @@ impl LineInput {
     }
 
     fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+        self.select_whole(cx);
+    }
+
+    /// Selects the whole text, so that typing replaces it.
+    pub fn select_whole(&mut self, cx: &mut Context<Self>) {
         self.move_to(0, cx);
         self.select_to(self.content.len(), cx);
     }

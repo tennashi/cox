@@ -15,9 +15,7 @@ use cox::instructions::Instructions;
 use cox::view::SessionView;
 use cox::workspace::{Open, Workspace};
 use fake_agent::FakeAgent;
-use gpui::{
-    AnyView, AppContext as _, Entity, Focusable, Modifiers, TestAppContext, VisualTestContext,
-};
+use gpui::{AppContext as _, Entity, Focusable, Modifiers, TestAppContext, VisualTestContext};
 
 /// The agent of each chat opened, in the order they were opened.
 type Agents = Rc<RefCell<Vec<Arc<FakeAgent>>>>;
@@ -41,7 +39,7 @@ fn open_window(
         let agent = Arc::new(FakeAgent::default());
         opened.borrow_mut().push(Arc::clone(&agent));
         let agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), instructions);
-        cx.new(|cx| SessionView::new(agent, None::<AnyView>, Rc::new(|_, _, _| {}), cx))
+        cx.new(|cx| SessionView::new(agent, None, Rc::new(|_, _, _| {}), cx))
     });
     let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, open, cx));
     cx.update(|window, cx| window.focus(&workspace.focus_handle(cx)));

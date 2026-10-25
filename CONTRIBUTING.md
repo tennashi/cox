@@ -50,18 +50,28 @@ conversation stays, and the next line can be sent once the agent has
 stopped. A click on a link in a chat's conversation opens it on that
 chat's stage.
 
+A chat's stage holds pages in tabs, and opens beside the conversation
+only when it is used: "Show stage" above the conversation opens it, and
+it opens on its own when a link opens on it, or when the agent works on
+a page there (navigates it, clicks or types in it, or opens a tab),
+showing that page's tab. Closed, it keeps its tabs. The + beside the
+tabs opens another, and a page that asks for a window of its own, as a
+link with `target="_blank"` does, gets a tab instead. A link from the
+conversation gets a tab of its own, unless a tab shows it already.
+
 CEF opens the Chrome DevTools Protocol on a port that is free when Cox
 starts, so two Cox can run side by side, and Cox hands each chat's
 agent the
 [Chrome DevTools MCP server](https://www.npmjs.com/package/chrome-devtools-mcp)
-connected to it, so the agent reads and drives the page the human sees
+connected to it, so the agent reads and drives the pages the human sees
 in that chat. The server runs through `npx`, so Node has to be on
 `PATH`; without it, the agent gets no tools for the stage. The server
 connects through a relay in Cox, one for each chat, which passes
-everything on but keeps the agent to its chat's page: the agent hears
-nothing of other chats' pages and cannot open pages of its own. The
-relay also tells the stage where the agent points, clicks and types, so
-the stage can draw the agent's pointer over the page.
+everything on but keeps the agent to its chat's pages: the agent hears
+nothing of other chats' pages, and the pages it opens and closes are
+tabs of its chat's stage. The relay also tells the stage where the agent
+points, clicks and types, so the stage can draw the agent's pointer over
+the page.
 
 The stage keeps its cookies, logins and storage in a profile that lasts
 across runs, one for each place Cox runs from. The Cox that
