@@ -1,4 +1,4 @@
-//! One session in the window: draws its conversation, with its stage
+//! One chat in the window: draws its conversation, with its stage
 //! beside it, and turns keystrokes and clicks into input for it. Escape in
 //! the conversation, or its Stop button, stops the turn the agent is
 //! taking.
@@ -23,6 +23,7 @@ use crate::diff::Line;
 use crate::input::{LineInput, Submitted};
 use crate::selection::Selection;
 use crate::text::{Painted, Writer};
+use crate::workspace::shortened;
 
 actions!(
     cox,
@@ -104,8 +105,13 @@ impl SessionView {
         let Agent {
             commands,
             mut events,
+            instructions,
             thread,
         } = agent;
+        // The human sees which instructions the agent gets.
+        let conversation = instructions.map_or_else(Conversation::new, |path| {
+            Conversation::noting(format!("[instructions: {}]", shortened(&path)))
+        });
         let task = cx.spawn(async move |this, cx| {
             while let Some(event) = events.recv().await {
                 let shown = this.update(cx, |view, cx| {
@@ -122,7 +128,7 @@ impl SessionView {
             view.submit(&input, cx);
         });
         Self {
-            conversation: Conversation::new(),
+            conversation,
             scroll: ScrollHandle::new(),
             input,
             stage: stage.map(Into::into),

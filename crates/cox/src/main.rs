@@ -1,8 +1,9 @@
 //! `cox [--stage <url>] [--home <dir>] <agent command> [args...]` opens a
-//! window where the human opens sessions with `<agent command>`, each
-//! working in a folder of the human's choice or in `<dir>`, `~/Cox`
-//! unless asked. Each session has a stage of its own, showing `<url>`
-//! first, which its agent can read and drive too.
+//! window where the human opens chats with `<agent command>`, each in the
+//! project of a folder of the human's choice, working there, or in no
+//! project, working in `<dir>`, `~/Cox` unless asked. Each chat has a stage
+//! of its own, showing `<url>` first, which its agent can read and drive
+//! too.
 //!
 //! On macOS, run it from inside the bundle `cargo xtask bundle` makes, as
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
@@ -21,9 +22,9 @@ const USAGE: &str = "Usage: cox [--stage <url>] [--home <dir>] <agent command> [
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
-    /// The page each session's stage shows first.
+    /// The page each chat's stage shows first.
     stage: String,
-    /// Where sessions with no folder work, if not in `~/Cox`.
+    /// Where chats in no project work, if not in `~/Cox`.
     home: Option<PathBuf>,
     /// The agent each session starts, and its arguments.
     command: Vec<String>,
@@ -55,7 +56,7 @@ impl Args {
     }
 }
 
-/// Where sessions with no folder work: `home`, or `~/Cox`, as an absolute
+/// Where chats in no project work: `home`, or `~/Cox`, as an absolute
 /// path, which the agent needs.
 fn home_for_sessions(home: Option<PathBuf>) -> PathBuf {
     let home = home.unwrap_or_else(|| {
@@ -146,8 +147,9 @@ fn main() {
             .detach();
         }
 
-        let open: cox::workspace::Open =
-            Rc::new(move |cwd, window, cx| launcher.open(cwd, window, cx));
+        let open: cox::workspace::Open = Rc::new(move |cwd, instructions, window, cx| {
+            launcher.open(cwd, instructions, window, cx)
+        });
         let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
         let window = cx
             .open_window(
@@ -210,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_with_no_folder_work_in_cox_in_the_home_directory() {
+    fn chats_in_no_project_work_in_cox_in_the_home_directory() {
         let Some(home) = std::env::var_os("HOME") else {
             return;
         };

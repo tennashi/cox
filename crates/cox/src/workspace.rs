@@ -1,7 +1,8 @@
-//! The window: the sessions open in it, listed down its left side, and the
-//! one shown beside the list. Each session works in a directory of its
-//! own: a folder the human chose, or Cox's home for sessions with no
-//! folder.
+//! The window: the chats open in it, listed down its left side under the
+//! projects they are in, and the one shown beside the list. A project is a
+//! folder the human opened: each chat in it works there, and its agent gets
+//! the instructions in the folder's `COX.md`. Chats in no project work in
+//! Cox's home, with the instructions there.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -12,55 +13,90 @@ use gpui::{
 };
 
 use crate::conversation::State;
+use crate::instructions::Instructions;
 use crate::view::SessionView;
 
 actions!(
     cox,
     [
-        /// Opens a session in Cox's home.
-        NewSession,
-        /// Asks for a folder, and opens a session in it.
+        /// Opens a chat in no project.
+        NewChat,
+        /// Asks for a folder, and opens a chat in its project.
         OpenFolder,
-        NextSession,
-        PreviousSession,
+        NextChat,
+        PreviousChat,
     ]
 );
 
-/// How wide the list of sessions is.
-const LIST_WIDTH: f32 = 200.;
+/// How wide the list of chats is.
+const LIST_WIDTH: f32 = 220.;
 
-/// Binds the keys that open sessions and move between them.
+/// What the project of chats with no folder is called.
+const NO_PROJECT: &str = "No project";
+
+/// Binds the keys that open chats and move between them.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("secondary-n", NewSession, Some("Workspace")),
+        KeyBinding::new("secondary-n", NewChat, Some("Workspace")),
         KeyBinding::new("secondary-o", OpenFolder, Some("Workspace")),
-        KeyBinding::new("ctrl-tab", NextSession, Some("Workspace")),
-        KeyBinding::new("ctrl-shift-tab", PreviousSession, Some("Workspace")),
+        KeyBinding::new("ctrl-tab", NextChat, Some("Workspace")),
+        KeyBinding::new("ctrl-shift-tab", PreviousChat, Some("Workspace")),
     ]);
 }
 
-/// Starts a session working in the directory given, and returns its view.
-pub type Open = Rc<dyn Fn(PathBuf, &mut Window, &mut App) -> Entity<SessionView>>;
+/// Starts a chat's agent working in the directory given, with the
+/// instructions given, and returns the chat's view.
+pub type Open =
+    Rc<dyn Fn(PathBuf, Option<Instructions>, &mut Window, &mut App) -> Entity<SessionView>>;
 
-/// A session open in the window.
-pub struct Session {
+/// A folder, and the chats open in it.
+pub struct Project {
     name: SharedString,
-    cwd: PathBuf,
-    view: Entity<SessionView>,
-    /// Redraws the list as the session's state changes.
-    _changes: Subscription,
+    folder: PathBuf,
+    chats: Vec<Chat>,
+    /// How many chats have been opened in it, to name the next.
+    opened: usize,
 }
 
-impl Session {
+impl Project {
+    fn new(name: impl Into<SharedString>, folder: PathBuf) -> Self {
+        Self {
+            name: name.into(),
+            folder,
+            chats: Vec::new(),
+            opened: 0,
+        }
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// The directory the session works in.
+    /// The directory its chats work in.
     #[must_use]
-    pub fn cwd(&self) -> &Path {
-        &self.cwd
+    pub fn folder(&self) -> &Path {
+        &self.folder
+    }
+
+    #[must_use]
+    pub fn chats(&self) -> &[Chat] {
+        &self.chats
+    }
+}
+
+/// A chat open in the window.
+pub struct Chat {
+    name: SharedString,
+    view: Entity<SessionView>,
+    /// Redraws the list as the chat's state changes.
+    _changes: Subscription,
+}
+
+impl Chat {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     #[must_use]
@@ -69,73 +105,100 @@ impl Session {
     }
 }
 
+/// Where a chat is: the index of its project, and its own in the project.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Place {
+    pub project: usize,
+    pub chat: usize,
+}
+
 pub struct Workspace {
-    sessions: Vec<Session>,
-    /// The index of the session shown, if any is open.
-    shown: Option<usize>,
-    /// Where sessions with no folder work.
-    home: PathBuf,
-    /// How many sessions with no folder have been opened, to name the next.
-    unnamed: usize,
+    /// The projects, in the order they were opened, after no project,
+    /// which comes first.
+    projects: Vec<Project>,
+    /// Where the chat shown is, if any is open.
+    shown: Option<Place>,
     open: Open,
     focus_handle: FocusHandle,
 }
 
 impl Workspace {
-    /// A window with no session open yet. `open` starts sessions, and
-    /// sessions with no folder work in `home`.
+    /// A window with no chat open yet. `open` starts chats, and chats in no
+    /// project work in `home`.
     pub fn new(home: PathBuf, open: Open, cx: &mut Context<Self>) -> Self {
         Self {
-            sessions: Vec::new(),
+            projects: vec![Project::new(NO_PROJECT, home)],
             shown: None,
-            home,
-            unnamed: 0,
             open,
             focus_handle: cx.focus_handle(),
         }
     }
 
+    /// The projects, no project first.
     #[must_use]
-    pub fn sessions(&self) -> &[Session] {
-        &self.sessions
+    pub fn projects(&self) -> &[Project] {
+        &self.projects
     }
 
-    /// The session shown, if any is open.
+    /// The chat shown, if any is open.
     #[must_use]
-    pub fn shown(&self) -> Option<&Session> {
-        self.sessions.get(self.shown?)
+    pub fn shown(&self) -> Option<&Chat> {
+        let place = self.shown?;
+        self.projects.get(place.project)?.chats.get(place.chat)
     }
 
-    /// Opens a session working in `folder`, or in Cox's home when there is
-    /// none, and shows it.
+    /// The index of the project of `folder`, opened first if it is not
+    /// open. Cox's home is no project's.
+    fn project(&mut self, folder: PathBuf) -> usize {
+        if let Some(index) = self
+            .projects
+            .iter()
+            .position(|project| project.folder == folder)
+        {
+            return index;
+        }
+        let name = folder.file_name().map_or_else(
+            || folder.to_string_lossy().into_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        self.projects.push(Project::new(name, folder));
+        self.projects.len() - 1
+    }
+
+    /// Opens a chat in the project of `folder`, or in no project when there
+    /// is none, and shows it.
     pub fn open(&mut self, folder: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
-        let (name, cwd) = if let Some(folder) = folder {
-            let name = folder.file_name().map_or_else(
-                || folder.to_string_lossy().into_owned(),
-                |name| name.to_string_lossy().into_owned(),
-            );
-            (name, folder)
-        } else {
+        let index = folder.map_or(0, |folder| self.project(folder));
+        let project = &mut self.projects[index];
+        if index == 0 {
             // The agent's session fails to open, and says so, if the home
             // cannot be made.
-            if let Err(error) = std::fs::create_dir_all(&self.home) {
-                log::error!("cannot make {}: {error}", self.home.display());
+            if let Err(error) = std::fs::create_dir_all(&project.folder) {
+                log::error!("cannot make {}: {error}", project.folder.display());
             }
-            self.unnamed += 1;
-            (format!("Session {}", self.unnamed), self.home.clone())
-        };
-        let view = (self.open)(cwd.clone(), window, cx);
+        }
+        let instructions = Instructions::read(&project.folder);
+        let view = (self.open)(project.folder.clone(), instructions, window, cx);
         let changes = cx.observe(&view, |_, _, cx| cx.notify());
-        self.sessions.push(Session {
-            name: name.into(),
-            cwd,
+        let project = &mut self.projects[index];
+        project.opened += 1;
+        project.chats.push(Chat {
+            name: format!("Chat {}", project.opened).into(),
             view,
             _changes: changes,
         });
-        self.show(self.sessions.len() - 1, window, cx);
+        let chat = project.chats.len() - 1;
+        self.show(
+            Place {
+                project: index,
+                chat,
+            },
+            window,
+            cx,
+        );
     }
 
-    /// Asks the human for a folder, and opens a session in it.
+    /// Asks the human for a folder, and opens a chat in its project.
     pub fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let chosen = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -160,54 +223,83 @@ impl Workspace {
         .detach();
     }
 
-    /// Shows the session at `index`, with the keyboard in its input.
-    pub fn show(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index >= self.sessions.len() {
+    /// Every open chat's place, in the order of the list.
+    fn places(&self) -> Vec<Place> {
+        self.projects
+            .iter()
+            .enumerate()
+            .flat_map(|(project, open)| {
+                (0..open.chats.len()).map(move |chat| Place { project, chat })
+            })
+            .collect()
+    }
+
+    /// Shows the chat at `place`, with the keyboard in its input.
+    pub fn show(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.places().contains(&place) {
             return;
         }
-        self.shown = Some(index);
+        self.shown = Some(place);
         window.focus(&self.focus_handle(cx));
         cx.notify();
     }
 
-    /// Closes the session at `index`, which stops its agent and closes its
-    /// page, and shows the one after it, or before it if it was the last.
-    pub fn close(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index >= self.sessions.len() {
+    /// Closes the chat at `place`, which stops its agent and closes its
+    /// page, and shows the one after it in the list, or before it if it
+    /// was the last. Its project stays, to open chats in.
+    pub fn close(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
+        let places = self.places();
+        let Some(closed) = places.iter().position(|&open| open == place) else {
             return;
-        }
-        self.sessions.remove(index);
-        let shown = match self.shown {
-            _ if self.sessions.is_empty() => None,
-            Some(shown) if shown > index => Some(shown - 1),
-            Some(shown) => Some(shown.min(self.sessions.len() - 1)),
+        };
+        let shown = self
+            .shown
+            .and_then(|shown| places.iter().position(|&open| open == shown));
+        self.projects[place.project].chats.remove(place.chat);
+        let places = self.places();
+        let shown = match shown {
+            _ if places.is_empty() => None,
+            Some(shown) if shown > closed => Some(shown - 1),
+            Some(shown) => Some(shown.min(places.len() - 1)),
             None => None,
         };
-        self.shown = shown;
+        self.shown = shown.map(|shown| places[shown]);
         window.focus(&self.focus_handle(cx));
         cx.notify();
     }
 
-    /// Shows the session `step` places along the list, going round.
+    /// Shows the chat `step` places along the list, going round.
     fn step(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(shown), Ok(count)) = (self.shown, isize::try_from(self.sessions.len())) else {
+        let places = self.places();
+        let Some(shown) = self
+            .shown
+            .and_then(|shown| places.iter().position(|&open| open == shown))
+        else {
             return;
         };
-        let Ok(shown) = isize::try_from(shown) else {
+        let (Ok(shown), Ok(count)) = (isize::try_from(shown), isize::try_from(places.len())) else {
             return;
         };
         if let Ok(index) = usize::try_from((shown + step).rem_euclid(count)) {
-            self.show(index, window, cx);
+            self.show(places[index], window, cx);
         }
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows: Vec<_> = self
-            .sessions
-            .iter()
-            .enumerate()
-            .map(|(index, session)| self.render_row(index, session, cx))
-            .collect();
+        // Chats are numbered down the whole list, from 1.
+        let mut number = 0;
+        let mut rows = Vec::new();
+        for (index, project) in self.projects.iter().enumerate() {
+            rows.push(Self::render_project(index, project, cx));
+            for (chat, open) in project.chats.iter().enumerate() {
+                number += 1;
+                let place = Place {
+                    project: index,
+                    chat,
+                };
+                rows.push(self.render_chat(place, number, open, cx));
+            }
+        }
         div()
             .w(px(LIST_WIDTH))
             .h_full()
@@ -225,8 +317,8 @@ impl Workspace {
                     .border_b_1()
                     .border_color(rgb(0x40_4040))
                     .child(Self::button(
-                        "new-session",
-                        "+ New session",
+                        "new-chat",
+                        "+ New chat",
                         cx,
                         |workspace, window, cx| {
                             workspace.open(None, window, cx);
@@ -243,7 +335,7 @@ impl Workspace {
             )
             .child(
                 div()
-                    .id("sessions")
+                    .id("chats")
                     .flex_1()
                     .overflow_y_scroll()
                     .flex()
@@ -269,45 +361,87 @@ impl Workspace {
             .on_click(cx.listener(move |workspace, _, window, cx| action(workspace, window, cx)))
     }
 
-    fn render_row(&self, index: usize, session: &Session, cx: &mut Context<Self>) -> Stateful<Div> {
-        let (mark, color) = match session.view.read(cx).conversation().state() {
-            State::Idle => ("", rgb(0xa0_a0a0)),
-            State::Busy | State::Stopping => ("…", rgb(0xa0_a0a0)),
-            State::Asking => ("?", rgb(0xd0_a040)),
-            State::Closed => ("closed", rgb(0x80_8080)),
-        };
-        let mut row = div()
-            .id(("session", index))
-            .debug_selector(|| format!("session-{}", index + 1))
+    /// The heading of the project at `index`, with a button that opens a
+    /// chat in it.
+    fn render_project(index: usize, project: &Project, cx: &mut Context<Self>) -> Stateful<Div> {
+        let folder = project.folder.clone();
+        div()
+            .id(("project", index))
             .flex()
             .items_center()
             .gap_1()
             .px_2()
-            .py_1()
-            .cursor_pointer()
-            .on_click(
-                cx.listener(move |workspace, _, window, cx| workspace.show(index, window, cx)),
-            )
+            .pt_3()
+            .pb_1()
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(div().truncate().child(session.name.clone()))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_color(rgb(0xa0_a0a0))
+                            .child(project.name.clone()),
+                    )
                     .child(
                         div()
                             .truncate()
                             .text_xs()
                             .text_color(rgb(0x80_8080))
-                            .child(shortened(&session.cwd)),
+                            .child(shortened(&project.folder)),
                     ),
             )
+            .child(
+                div()
+                    .id(("new-chat-in", index))
+                    .debug_selector(move || format!("new-chat-in-{}", index + 1))
+                    .px_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(rgb(0x80_8080))
+                    .hover(|style| style.bg(rgb(0x40_4040)).text_color(rgb(0xe0_e0e0)))
+                    .child("+")
+                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                        workspace.open(Some(folder.clone()), window, cx);
+                    })),
+            )
+    }
+
+    /// The row of the chat at `place`, the `number`th in the list.
+    fn render_chat(
+        &self,
+        place: Place,
+        number: usize,
+        chat: &Chat,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let (mark, color) = match chat.view.read(cx).conversation().state() {
+            State::Idle => ("", rgb(0xa0_a0a0)),
+            State::Busy | State::Stopping => ("…", rgb(0xa0_a0a0)),
+            State::Asking => ("?", rgb(0xd0_a040)),
+            State::Closed => ("closed", rgb(0x80_8080)),
+        };
+        let mut row = div()
+            .id(("chat", number))
+            .debug_selector(move || format!("chat-{number}"))
+            .flex()
+            .items_center()
+            .gap_1()
+            .pl_4()
+            .pr_2()
+            .py_1()
+            .cursor_pointer()
+            .on_click(
+                cx.listener(move |workspace, _, window, cx| workspace.show(place, window, cx)),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(chat.name.clone()))
             .child(div().text_color(color).child(mark))
             .child(
                 div()
-                    .id(("close", index))
-                    .debug_selector(|| format!("close-{}", index + 1))
+                    .id(("close", number))
+                    .debug_selector(move || format!("close-{number}"))
                     .px_1()
                     .rounded_sm()
                     .text_color(rgb(0x80_8080))
@@ -315,10 +449,10 @@ impl Workspace {
                     .child("×")
                     .on_click(cx.listener(move |workspace, _, window, cx| {
                         cx.stop_propagation();
-                        workspace.close(index, window, cx);
+                        workspace.close(place, window, cx);
                     })),
             );
-        if self.shown == Some(index) {
+        if self.shown == Some(place) {
             row = row.bg(rgb(0x2a_2a2a));
         } else {
             row = row.hover(|style| style.bg(rgb(0x26_2626)));
@@ -328,7 +462,8 @@ impl Workspace {
 }
 
 /// `path`, with the home directory as `~`.
-fn shortened(path: &Path) -> String {
+#[must_use]
+pub fn shortened(path: &Path) -> String {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_owned)) {
         Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
@@ -338,10 +473,10 @@ fn shortened(path: &Path) -> String {
 }
 
 impl Focusable for Workspace {
-    /// The shown session's input, or the window itself while none is open.
+    /// The shown chat's input, or the window itself while none is open.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         match self.shown() {
-            Some(session) => session.view.focus_handle(cx),
+            Some(chat) => chat.view.focus_handle(cx),
             None => self.focus_handle.clone(),
         }
     }
@@ -350,29 +485,29 @@ impl Focusable for Workspace {
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let shown = match self.shown() {
-            Some(session) => session.view.clone().into_any_element(),
+            Some(chat) => chat.view.clone().into_any_element(),
             None => div()
                 .size_full()
                 .flex()
                 .items_center()
                 .justify_center()
                 .text_color(rgb(0x80_8080))
-                .child("Open a session from the list on the left.")
+                .child("Open a chat from the list on the left.")
                 .into_any_element(),
         };
         div()
             .track_focus(&self.focus_handle)
             .key_context("Workspace")
-            .on_action(cx.listener(|workspace, _: &NewSession, window, cx| {
+            .on_action(cx.listener(|workspace, _: &NewChat, window, cx| {
                 workspace.open(None, window, cx);
             }))
             .on_action(cx.listener(|workspace, _: &OpenFolder, window, cx| {
                 workspace.choose_folder(window, cx);
             }))
-            .on_action(cx.listener(|workspace, _: &NextSession, window, cx| {
+            .on_action(cx.listener(|workspace, _: &NextChat, window, cx| {
                 workspace.step(1, window, cx);
             }))
-            .on_action(cx.listener(|workspace, _: &PreviousSession, window, cx| {
+            .on_action(cx.listener(|workspace, _: &PreviousChat, window, cx| {
                 workspace.step(-1, window, cx);
             }))
             .size_full()

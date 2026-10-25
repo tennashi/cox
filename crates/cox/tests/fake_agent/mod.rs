@@ -30,7 +30,7 @@ pub struct FakeAgent {
     sessions_opened: Arc<AtomicUsize>,
     cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
-    prompts: Arc<Mutex<Vec<String>>>,
+    prompts: Arc<Mutex<Vec<Vec<String>>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
     cancels: Arc<Cancels>,
 }
@@ -76,6 +76,16 @@ impl FakeAgent {
 
     /// The text of each prompt Cox has sent, in order.
     pub fn prompts(&self) -> Vec<String> {
+        self.prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|blocks| blocks.concat())
+            .collect()
+    }
+
+    /// The text blocks of each prompt Cox has sent, in order.
+    pub fn prompt_blocks(&self) -> Vec<Vec<String>> {
         self.prompts.lock().unwrap().clone()
     }
 
@@ -95,7 +105,7 @@ async fn serve(
     sessions_opened: Arc<AtomicUsize>,
     cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
-    prompts: Arc<Mutex<Vec<String>>>,
+    prompts: Arc<Mutex<Vec<Vec<String>>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
     cancels: Arc<Cancels>,
 ) -> Result<()> {
@@ -123,8 +133,9 @@ async fn serve(
         )
         .on_receive_request(
             async move |request: PromptRequest, responder, cx: ConnectionTo<Client>| {
-                let text = text_of(&request.prompt);
-                prompts.lock().unwrap().push(text.clone());
+                let blocks = texts_of(&request.prompt);
+                let text = blocks.concat();
+                prompts.lock().unwrap().push(blocks);
                 let answers = Arc::clone(&answers);
                 let cancels = Arc::clone(&waits);
                 let turn = cx.clone();
@@ -171,12 +182,12 @@ async fn serve(
         .await
 }
 
-/// The text blocks of a prompt, joined.
-fn text_of(prompt: &[ContentBlock]) -> String {
+/// The text blocks of a prompt.
+fn texts_of(prompt: &[ContentBlock]) -> Vec<String> {
     prompt
         .iter()
         .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
+            ContentBlock::Text(text) => Some(text.text.clone()),
             _ => None,
         })
         .collect()
