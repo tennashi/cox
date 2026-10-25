@@ -1,14 +1,13 @@
-//! The page on the stage: the part of the window where the browser's
-//! picture is shown, and where the human's mouse, keys and input-method
-//! text go to the page.
+//! One tab of the stage: where the browser's picture of a page is shown,
+//! and where the human's mouse, keys and input-method text go to the page.
 //! A toolbar above the picture holds the address and the history buttons.
 //!
 //! The picture arrives from CEF as BGRA pixels whenever the page changes;
-//! the stage uploads it as a GPUI image and paints it over its bounds. The
+//! the tab uploads it as a GPUI image and paints it over its bounds. The
 //! dropdown of a `<select>` arrives as a picture of its own, painted over
 //! the page where CEF says it goes.
 //!
-//! Over the page, the stage draws the agent's pointer: where the agent
+//! Over the page, the tab draws the agent's pointer: where the agent
 //! points, clicks and types, as the relay saw it.
 
 use std::ops::Range;
@@ -17,16 +16,17 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     App, BorderStyle, Bounds, ContentMask, Context, Corners, DispatchPhase, Div, Element,
-    ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable,
-    GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, KeyDownEvent,
-    KeyUpEvent, Keystroke, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
-    Pixels, Point, RenderImage, ScrollDelta, ScrollWheelEvent, Stateful, Style, Subscription, Task,
-    UTF16Selection, Window, div, fill, point, prelude::*, px, quad, relative, rgb, size, white,
+    ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement,
+    KeyDownEvent, KeyUpEvent, Keystroke, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PathBuilder, Pixels, Point, RenderImage, ScrollDelta, ScrollWheelEvent, Stateful, Style,
+    Subscription, Task, UTF16Selection, Window, div, fill, point, prelude::*, px, quad, relative,
+    rgb, size, white,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::browser::{
-    Browser, Caret, EditCommand, Event, Frame, Modifiers, MouseButton, Navigation,
+    Browser, Caret, EditCommand, Event, Frame, Modifiers, MouseButton, Navigation, TargetId,
 };
 use crate::input::{LineInput, Submitted};
 use crate::pointer::{AgentPointer, Look, Rect, Spot};
@@ -54,44 +54,39 @@ pub struct Page {
     /// The agent's pointer, and how it looks as of the last render.
     pointer: AgentPointer,
     look: Option<Look>,
-    /// Renders the stage again when the pointer's look next changes.
+    /// Renders the tab again when the pointer's look next changes.
     _pointer_changes: Option<Task<()>>,
     _events: Task<()>,
-    _agent_input: Task<()>,
     /// Checks now and then that the browser answered the last resize.
     _ticks: Task<()>,
     _submitted: Subscription,
 }
 
-/// How often the stage checks on a resize the browser has not answered.
+/// The page asks for a tab of its own, showing this address: for a link
+/// with `target="_blank"`, or `window.open`.
+pub struct OpenTab(pub String);
+
+impl EventEmitter<OpenTab> for Page {}
+
+/// How often the tab checks on a resize the browser has not answered.
 const TICK: Duration = Duration::from_millis(250);
 
 impl Page {
     pub fn new(
         browser: Browser,
         mut events: UnboundedReceiver<Event>,
-        mut agent_input: UnboundedReceiver<AgentInput>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let task = cx.spawn(async move |this, cx| {
-            // Painted, created or closed: the stage looks different either way.
+            // Painted, created or closed: the tab looks different either way.
             while let Some(event) = events.recv().await {
-                let shown = this.update(cx, |stage, cx| {
-                    if event == Event::Navigated {
-                        stage.navigated(cx);
+                let shown = this.update(cx, |page, cx| {
+                    match event {
+                        Event::Navigated => page.navigated(cx),
+                        Event::Popup(url) => cx.emit(OpenTab(url)),
+                        _ => {}
                     }
-                    cx.notify();
-                });
-                if shown.is_err() {
-                    break;
-                }
-            }
-        });
-        let agent_task = cx.spawn(async move |this, cx| {
-            while let Some(input) = agent_input.recv().await {
-                let shown = this.update(cx, |stage, cx| {
-                    stage.pointer.see(input, Instant::now());
                     cx.notify();
                 });
                 if shown.is_err() {
@@ -112,8 +107,8 @@ impl Page {
         let address = cx.new(LineInput::new);
         address.update(cx, |address, cx| address.set_text(&navigation.url, cx));
         let submitted =
-            cx.subscribe_in(&address, window, |stage, address, Submitted, window, cx| {
-                stage.go(address, window, cx);
+            cx.subscribe_in(&address, window, |page, address, Submitted, window, cx| {
+                page.go(address, window, cx);
             });
         Self {
             browser,
@@ -128,7 +123,6 @@ impl Page {
             look: None,
             _pointer_changes: None,
             _events: task,
-            _agent_input: agent_task,
             _ticks: ticks,
             _submitted: submitted,
         }
@@ -140,8 +134,26 @@ impl Page {
         &self.address
     }
 
-    /// The browser moved: show where, unless the human is in the middle of
-    /// typing an address of their own.
+    /// The id `DevTools` knows the page by, once CEF has told it.
+    #[must_use]
+    pub fn target_id(&self) -> TargetId {
+        self.browser.target_id()
+    }
+
+    /// Where the browser is, and what the page is called.
+    #[must_use]
+    pub fn navigation(&self) -> &Navigation {
+        &self.navigation
+    }
+
+    /// The agent sent `input` to the page.
+    pub fn see(&mut self, input: AgentInput, cx: &mut Context<Self>) {
+        self.pointer.see(input, Instant::now());
+        cx.notify();
+    }
+
+    /// The browser moved, or the page's title changed: show where, unless
+    /// the human is in the middle of typing an address of their own.
     fn navigated(&mut self, cx: &mut Context<Self>) {
         self.navigation = self.browser.navigation();
         let url = self.navigation.url.clone();
@@ -416,7 +428,7 @@ fn clicks(count: usize) -> i32 {
 }
 
 impl Drop for Page {
-    /// The page goes with its stage.
+    /// The page goes with its tab.
     fn drop(&mut self) {
         self.browser.close();
     }

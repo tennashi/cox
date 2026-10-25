@@ -16,16 +16,17 @@
 //!   and clicks into input. [`text`] draws the conversation's text so that
 //!   the human can select it and click its links, replies as the Markdown
 //!   that [`markdown`] reads; [`selection`] is what the human selected.
-//! - [`browser`] runs CEF, which renders a page for each chat with no
-//!   window of its own, and [`page`] shows that page in the window and
-//!   sends the human's input to it. The chat's agent drives the same
-//!   page over CDP. On Linux and macOS; on macOS, inside the app bundle
-//!   `cargo xtask bundle` makes. [`profile`] is where the browser keeps
-//!   logins and the like.
+//! - [`browser`] runs CEF, which renders pages with no window of their
+//!   own. Each chat's [`stage`] holds tabs of them, which open beside the
+//!   conversation when they are used, and each tab's [`page`] shows its
+//!   page in the window and sends the human's input to it. The chat's
+//!   agent drives the same pages over CDP. On Linux and macOS; on macOS,
+//!   inside the app bundle `cargo xtask bundle` makes. [`profile`] is
+//!   where the browser keeps logins and the like.
 //! - [`relay`] stands between a chat's agent's browser tools and the
-//!   browser, keeps the agent to its chat's page, and tells the stage
-//!   where the agent points, clicks and types, which [`pointer`] turns
-//!   into what the stage draws over the page.
+//!   browser, keeps the agent to its chat's pages, opens and closes tabs
+//!   for it, and tells the stage where the agent points, clicks and types,
+//!   which [`pointer`] turns into what the tab draws over the page.
 //! - [`tools`] says which MCP servers the agent gets: the stage's.
 //! - [`quit`] lets signals, and CEF on macOS, ask the app to quit.
 
@@ -51,6 +52,8 @@ pub mod quit;
 pub mod relay;
 pub mod selection;
 pub mod session;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod stage;
 pub mod text;
 pub mod tools;
 pub mod view;

@@ -1,7 +1,12 @@
-//! One chat in the window: draws its conversation, with its stage
-//! beside it, and turns keystrokes and clicks into input for it. Escape in
-//! the conversation, or its Stop button, stops the turn the agent is
-//! taking.
+//! One chat in the window: draws its conversation, with its stage beside
+//! it while the stage is open, and turns keystrokes and clicks into input
+//! for it. Escape in the conversation, or its Stop button, stops the turn
+//! the agent is taking.
+//!
+//! The stage opens only when it is used: the human opens and closes it
+//! with the button above the conversation, and it opens on its own when a
+//! link opens on it, or the agent works on it. Closed, it keeps its tabs,
+//! and the conversation has the window to itself.
 //!
 //! The human selects the conversation's text with the mouse, a word with
 //! a double click and a whole paragraph or block with a triple click, and
@@ -62,6 +67,9 @@ pub const FONT: &str = "DejaVu Sans Mono";
 /// How wide the conversation is when the stage sits beside it.
 const CONVERSATION_WIDTH: f32 = 420.;
 
+/// How wide the conversation grows, at most, while the stage is closed.
+const CONVERSATION_MAX_WIDTH: f32 = 800.;
+
 /// How tall what a tool call shows grows before it scrolls on its own.
 const CONTENT_HEIGHT: f32 = 320.;
 
@@ -70,14 +78,46 @@ const REMOVED: u32 = 0xf0_8080;
 const ADDED: u32 = 0x80_d080;
 const DIM: u32 = 0xa0_a0a0;
 
+/// Whether a chat's stage is open beside its conversation.
+#[derive(Debug, Default)]
+pub struct Panel {
+    open: bool,
+}
+
+impl Panel {
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub fn open(&mut self, cx: &mut Context<Self>) {
+        self.set(true, cx);
+    }
+
+    pub fn set(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.open != open {
+            self.open = open;
+            cx.notify();
+        }
+    }
+}
+
+/// A chat's stage, as its conversation shows it: the view, and whether it
+/// is open.
+pub struct StageView {
+    pub view: AnyView,
+    pub panel: Entity<Panel>,
+}
+
 pub struct SessionView {
     conversation: Conversation,
     /// Where the conversation is scrolled to.
     scroll: ScrollHandle,
     /// The line the human is typing.
     input: Entity<LineInput>,
-    /// The page the agent and the human work on, beside the conversation.
-    stage: Option<AnyView>,
+    /// Where the agent and the human work together, beside the
+    /// conversation.
+    stage: Option<StageView>,
     open_link: OpenLink,
     /// The conversation's text as the last frame laid it out.
     painted: Painted,
@@ -91,14 +131,16 @@ pub struct SessionView {
     _agent: AgentThread,
     _events: Task<()>,
     _submitted: Subscription,
+    /// Redraws the chat as its stage opens and closes.
+    _panel_changes: Option<Subscription>,
 }
 
 impl SessionView {
     /// Opens on `agent`, with `stage` beside the conversation when there is
-    /// one. Links the human clicks go to `open_link`.
+    /// one and it is open. Links the human clicks go to `open_link`.
     pub fn new(
         agent: Agent,
-        stage: Option<impl Into<AnyView>>,
+        stage: Option<StageView>,
         open_link: OpenLink,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -127,11 +169,19 @@ impl SessionView {
         let submitted = cx.subscribe(&input, |view, input, Submitted, cx| {
             view.submit(&input, cx);
         });
+        // The conversation's width changes, and its end stays in view if
+        // it was.
+        let panel_changes = stage.as_ref().map(|stage| {
+            cx.observe(&stage.panel, |view, _, cx| {
+                view.follow(|_| ());
+                cx.notify();
+            })
+        });
         Self {
             conversation,
             scroll: ScrollHandle::new(),
             input,
-            stage: stage.map(Into::into),
+            stage,
             open_link,
             painted: Painted::default(),
             selection: None,
@@ -140,6 +190,28 @@ impl SessionView {
             _agent: thread,
             _events: task,
             _submitted: submitted,
+            _panel_changes: panel_changes,
+        }
+    }
+
+    /// Whether the stage is open beside the conversation.
+    #[must_use]
+    pub fn stage_is_open(&self, cx: &App) -> bool {
+        self.stage
+            .as_ref()
+            .is_some_and(|stage| stage.panel.read(cx).is_open())
+    }
+
+    /// Opens the stage, or closes it and brings the keyboard back to the
+    /// input.
+    fn toggle_stage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(stage) = &self.stage else {
+            return;
+        };
+        let open = !stage.panel.read(cx).is_open();
+        stage.panel.update(cx, |panel, cx| panel.set(open, cx));
+        if !open {
+            window.focus(&self.input.focus_handle(cx));
         }
     }
 
@@ -210,6 +282,9 @@ impl SessionView {
         let clicked = std::mem::take(&mut self.selecting)
             && self.selection.is_none_or(|selection| selection.is_empty());
         if clicked && let Some(url) = self.painted.link_at(event.position) {
+            if let Some(stage) = &self.stage {
+                stage.panel.update(cx, Panel::open);
+            }
             (self.open_link)(&url, window, cx);
         }
     }
@@ -504,9 +579,42 @@ impl SessionView {
     }
 }
 
+impl SessionView {
+    /// The bar above the conversation, with the button that opens and
+    /// closes the stage, when there is one.
+    fn render_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let stage = self.stage.as_ref()?;
+        let label = if stage.panel.read(cx).is_open() {
+            "Hide stage"
+        } else {
+            "Show stage"
+        };
+        Some(
+            div().flex().justify_end().px_3().pt_2().child(
+                div()
+                    .id("toggle-stage")
+                    .debug_selector(|| "toggle-stage".to_owned())
+                    .px_2()
+                    .rounded_sm()
+                    .text_color(rgb(DIM))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .child(label)
+                    .on_click(cx.listener(|view, _, window, cx| view.toggle_stage(window, cx))),
+            ),
+        )
+    }
+}
+
 impl Render for SessionView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let conversation = self.render_conversation(cx).into_any_element();
+        let bar = self.render_bar(cx);
+        let conversation = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .children(bar)
+            .child(div().flex_1().min_h_0().child(self.render_conversation(cx)));
         let root = div()
             .size_full()
             .flex()
@@ -514,8 +622,8 @@ impl Render for SessionView {
             .text_color(rgb(0xe0_e0e0))
             .font_family(FONT)
             .text_size(px(14.));
-        match self.stage.clone() {
-            Some(stage) => root
+        match &self.stage {
+            Some(stage) if stage.panel.read(cx).is_open() => root
                 .child(
                     div()
                         .w(px(CONVERSATION_WIDTH))
@@ -525,8 +633,21 @@ impl Render for SessionView {
                         .border_color(rgb(0x40_4040))
                         .child(conversation),
                 )
-                .child(div().flex_1().h_full().child(stage)),
-            None => root.child(conversation),
+                .child(
+                    div()
+                        .debug_selector(|| "stage-panel".to_owned())
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .child(stage.view.clone()),
+                ),
+            _ => root.justify_center().child(
+                div()
+                    .flex_1()
+                    .max_w(px(CONVERSATION_MAX_WIDTH))
+                    .h_full()
+                    .child(conversation),
+            ),
         }
     }
 }
