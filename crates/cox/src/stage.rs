@@ -14,9 +14,15 @@
 //! each of its chat's pages, whoever opened it. When the agent works on a
 //! page, shows a file or runs a command, the stage shows that tab, and
 //! opens beside the conversation if it was closed.
+//!
+//! An open chat's stage keeps its tabs as they change. A closed chat's
+//! stage opens again on the pages and files kept, for the human to look
+//! at; its terminals are not started again.
 
 use std::path::PathBuf;
 
+use cox_core::store::Record;
+use cox_core::tabs::{Tab as KeptTab, Tabs};
 use gpui::{
     AnyView, App, Context, Div, Entity, FocusHandle, Focusable, Stateful, Subscription, Task,
     Window, div, prelude::*, px, rgb,
@@ -54,6 +60,10 @@ pub struct Stage {
     pages: Option<Pages>,
     /// Whether the stage is open beside the conversation.
     panel: Entity<Panel>,
+    /// Where the tabs are kept as they change, if they are.
+    record: Option<Record>,
+    /// The tabs as they were last kept.
+    kept: Option<Tabs>,
     _from_agent: Option<Task<()>>,
     _from_tools: Option<Task<()>>,
 }
@@ -116,8 +126,8 @@ impl Shown {
 impl Stage {
     /// A stage of one tab showing `url`, for a chat working in `cwd`, which
     /// tells `relay` of the pages it opens, carries out what the agent's
-    /// tools ask in `from_tools`, and opens `panel` when the agent works on
-    /// it.
+    /// tools ask in `from_tools`, opens `panel` when the agent works on
+    /// it, and keeps its tabs in `record`.
     #[expect(
         clippy::too_many_arguments,
         reason = "what a chat hands its stage, each once"
@@ -129,6 +139,7 @@ impl Stage {
         relay: Option<Relay>,
         from_tools: Option<UnboundedReceiver<Request>>,
         panel: Entity<Panel>,
+        record: Option<Record>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -145,11 +156,111 @@ impl Stage {
             shown: 0,
             pages,
             panel,
+            record,
+            kept: None,
             _from_agent: from_agent,
             _from_tools: from_tools,
         };
         stage.open_tab(url, true, window, cx);
         stage
+    }
+
+    /// The stage of a closed chat that worked in `cwd`, on the pages and
+    /// files of `kept`, or of one tab showing `url` when none of them is
+    /// left. Nothing of it is kept.
+    pub fn reading(
+        cef: Cef,
+        cwd: PathBuf,
+        kept: Option<Tabs>,
+        url: &str,
+        panel: Entity<Panel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut stage = Self {
+            cef,
+            cwd,
+            tabs: Vec::new(),
+            shown: 0,
+            pages: None,
+            panel,
+            record: None,
+            kept: None,
+            _from_agent: None,
+            _from_tools: None,
+        };
+        let Tabs { tabs, shown } = kept.unwrap_or_default();
+        // The tab shown is the one that was, or else the last before it
+        // that opens again.
+        let mut shown_now = None;
+        for (index, tab) in tabs.into_iter().enumerate() {
+            let opened = match tab {
+                KeptTab::Page { url, .. } => {
+                    stage.open_tab(&url, false, window, cx);
+                    true
+                }
+                KeptTab::Markdown { path } => {
+                    // What the file says now; the tab says so if it cannot
+                    // be read.
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    stage.push_document(path, text, false, window, cx);
+                    true
+                }
+                KeptTab::Terminal { .. } => false,
+            };
+            if opened && (index <= shown || shown_now.is_none()) {
+                shown_now = Some(stage.tabs.len() - 1);
+            }
+        }
+        match shown_now {
+            Some(shown) => stage.shown = shown,
+            None => {
+                stage.open_tab(url, true, window, cx);
+            }
+        }
+        stage
+    }
+
+    /// The tabs, as they are kept.
+    fn tabs(&self, cx: &App) -> Tabs {
+        let tabs = self
+            .tabs
+            .iter()
+            .map(|tab| match &tab.shown {
+                Shown::Page { page, .. } => {
+                    let navigation = page.read(cx).navigation();
+                    KeptTab::Page {
+                        url: navigation.url.clone(),
+                        title: navigation.title.clone(),
+                    }
+                }
+                Shown::Document(document) => KeptTab::Markdown {
+                    path: document.read(cx).path().to_owned(),
+                },
+                Shown::Terminal(terminal) => KeptTab::Terminal {
+                    title: terminal.read(cx).title(),
+                },
+            })
+            .collect();
+        Tabs {
+            tabs,
+            shown: self.shown,
+        }
+    }
+
+    /// The tabs, or what one of them shows, changed: keep them, if they are
+    /// kept, and draw them again.
+    fn changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(record) = &self.record {
+            let tabs = self.tabs(cx);
+            if self.kept.as_ref() != Some(&tabs) {
+                if let Err(error) = record.tabs(&tabs) {
+                    log::error!("the stage's tabs are not kept: {error:#}");
+                }
+                self.kept = Some(tabs);
+            }
+        }
+        cx.notify();
     }
 
     /// Carries out what the relay tells the stage for the agent.
@@ -231,18 +342,31 @@ impl Stage {
                 document.update(cx, |document, cx| document.show(text, cx));
             }
             self.shown = index;
-            cx.notify();
+            self.changed(cx);
         } else {
-            let document = cx.new(|cx| Document::new(path, text, cx));
-            let changes = cx.observe(&document, |_, _, cx| cx.notify());
-            let opens = cx.subscribe_in(
-                &document,
-                window,
-                |stage, _, LinkClicked(url), window, cx| stage.open(url, window, cx),
-            );
-            self.push(Shown::Document(document), changes, Some(opens), true, cx);
+            self.push_document(path, text, true, window, cx);
         }
         self.show_panel(cx);
+    }
+
+    /// Puts a tab showing the file at `path`, which says `text`, after the
+    /// others, shown if `show` is.
+    fn push_document(
+        &mut self,
+        path: PathBuf,
+        text: String,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let document = cx.new(|cx| Document::new(path, text, cx));
+        let changes = cx.observe(&document, |stage, _, cx| stage.changed(cx));
+        let opens = cx.subscribe_in(
+            &document,
+            window,
+            |stage, _, LinkClicked(url), window, cx| stage.open(url, window, cx),
+        );
+        self.push(Shown::Document(document), changes, Some(opens), show, cx);
     }
 
     /// Runs `command`, which the agent asked for, in `cwd`, and answers
@@ -264,7 +388,7 @@ impl Stage {
             }
         };
         let terminal = cx.new(|cx| Terminal::new(running, Some(answer), cx));
-        let changes = cx.observe(&terminal, |_, _, cx| cx.notify());
+        let changes = cx.observe(&terminal, |stage, _, cx| stage.changed(cx));
         let ended = self
             .tabs
             .iter()
@@ -283,7 +407,7 @@ impl Stage {
             if had_focus {
                 self.focus_shown(window, cx);
             }
-            cx.notify();
+            self.changed(cx);
         } else {
             self.push(Shown::Terminal(terminal), changes, None, true, cx);
         }
@@ -300,7 +424,7 @@ impl Stage {
             }
         };
         let terminal = cx.new(|cx| Terminal::new(running, None, cx));
-        let changes = cx.observe(&terminal, |_, _, cx| cx.notify());
+        let changes = cx.observe(&terminal, |stage, _, cx| stage.changed(cx));
         self.push(Shown::Terminal(terminal), changes, None, true, cx);
         self.focus_shown(window, cx);
     }
@@ -318,7 +442,7 @@ impl Stage {
             .unwrap_or(self.shown);
         if index != self.shown {
             self.shown = index;
-            cx.notify();
+            self.changed(cx);
         }
         self.show_panel(cx);
         if let Some(input) = input
@@ -357,7 +481,7 @@ impl Stage {
             opening.is(target.clone());
         }
         let page = cx.new(|cx| Page::new(browser, events, window, cx));
-        let changes = cx.observe(&page, |_, _, cx| cx.notify());
+        let changes = cx.observe(&page, |stage, _, cx| stage.changed(cx));
         let popups = cx.subscribe_in(&page, window, |stage, _, OpenTab(url), window, cx| {
             stage.open_tab(url, true, window, cx);
         });
@@ -386,7 +510,7 @@ impl Stage {
         if show {
             self.shown = self.tabs.len() - 1;
         }
-        cx.notify();
+        self.changed(cx);
     }
 
     /// Closes the tab at `index`, which closes its page, and shows the one
@@ -413,7 +537,7 @@ impl Stage {
         if had_focus {
             self.focus_shown(window, cx);
         }
-        cx.notify();
+        self.changed(cx);
         Ok(())
     }
 
@@ -422,7 +546,7 @@ impl Stage {
         if index < self.tabs.len() {
             self.shown = index;
             self.focus_shown(window, cx);
-            cx.notify();
+            self.changed(cx);
         }
     }
 

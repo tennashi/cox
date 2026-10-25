@@ -44,7 +44,12 @@ works in `<dir>`, `~/Cox` unless given. Each chat starts its own
 own, showing `<url>` first. When the folder has a `COX.md`, the agent gets
 what it says ahead of the first line sent in the chat, and the chat says
 so at its top. The list switches between chats (Control-Tab and
-Control-Shift-Tab do too) and closes them. Escape in a chat's
+Control-Shift-Tab do too). A chat's agent runs until Cox quits. Cox
+keeps each chat's conversation, and its stage's tabs, as they change,
+and lists the chats of earlier runs too, greyed and closed, for the
+human to read what they showed. A closed chat's stage opens again on
+the pages and Markdown files it had; its terminals do not start again.
+Escape in a chat's
 conversation, or its Stop button, stops the turn its agent is taking; the
 conversation stays, and the next line can be sent once the agent has
 stopped. A click on a link in a chat's conversation opens it on that
@@ -103,7 +108,10 @@ across runs, one for each place Cox runs from. The Cox that
 `~/.local/share/cox/stage` on Linux; any other, such as
 `target/debug/Cox.app`, keeps its own in `cox-stage` beside it, as in
 `target/debug/cox-stage`. Only one Cox at a time can use a profile; a
-second Cox from the same place gets a profile for that run only.
+second Cox from the same place gets a profile for that run only. The
+chats are kept the same way, in a SQLite database: `chats.sqlite` beside
+the installed Cox's `stage`, and `cox-chats.sqlite` beside any other, as
+in `target/debug/cox-chats.sqlite`.
 
 On Linux, `cargo run` is enough: CEF is linked into `cox`, and its helper
 processes run `cox` again.

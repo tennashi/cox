@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use similar::{ChangeTag, TextDiff};
 
 /// How many unchanged lines show on each side of a change.
@@ -14,7 +15,8 @@ const CONTEXT: usize = 3;
 const TIMEOUT: Duration = Duration::from_millis(500);
 
 /// One line of a change, as shown.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Line {
     /// An unchanged line near a change.
     Same(String),

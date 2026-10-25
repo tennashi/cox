@@ -3,7 +3,7 @@
 //! project of a folder of the human's choice, working there, or in no
 //! project, working in `<dir>`, `~/Cox` unless asked. Each chat has a stage
 //! of its own, showing `<url>` first, which its agent can read and drive
-//! too.
+//! too. The chats are kept as they go, to read after Cox starts again.
 //!
 //! On macOS, run it from inside the bundle `cargo xtask bundle` makes, as
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
@@ -70,6 +70,32 @@ fn home_for_sessions(home: Option<PathBuf>) -> PathBuf {
     std::path::absolute(&home).unwrap_or(home)
 }
 
+/// The store of the chats this Cox keeps, or one for this run only when
+/// that cannot be opened.
+fn open_store() -> cox_core::store::Store {
+    let kept = cox::place::kept("chats.sqlite")
+        .ok_or_else(|| anyhow::anyhow!("there is no place to keep them"))
+        .and_then(|path| cox_core::store::Store::open(&path));
+    kept.or_else(|error| {
+        log::error!("the chats last for this run only: {error:#}");
+        cox_core::store::Store::in_memory()
+    })
+    .expect("SQLite opens a database in memory")
+}
+
+/// What opens chats with `launcher`, and what shows closed ones.
+fn chats(launcher: cox::session::Launcher) -> (cox::workspace::Open, cox::workspace::Read) {
+    let launcher = Rc::new(launcher);
+    let opens = Rc::clone(&launcher);
+    let open: cox::workspace::Open = Rc::new(move |cwd, instructions, record, window, cx| {
+        opens.open(cwd, instructions, record, window, cx)
+    });
+    let read: cox::workspace::Read = Rc::new(move |cwd, entries, tabs, window, cx| {
+        launcher.read(cwd, entries, tabs, window, cx)
+    });
+    (open, read)
+}
+
 /// How often GPUI gives CEF's UI thread a turn on macOS: a little above
 /// the stage's frame rate, so a frame never waits for the next turn.
 #[cfg(target_os = "macos")]
@@ -109,6 +135,7 @@ fn main() {
         std::process::exit(2);
     }
     let home = home_for_sessions(args.home);
+    let store = Rc::new(open_store());
     let launcher = cox::session::Launcher {
         command: args.command,
         stage: args.stage,
@@ -169,9 +196,7 @@ fn main() {
             .detach();
         }
 
-        let open: cox::workspace::Open = Rc::new(move |cwd, instructions, window, cx| {
-            launcher.open(cwd, instructions, window, cx)
-        });
+        let (open, read) = chats(launcher);
         let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
         let window = cx
             .open_window(
@@ -179,7 +204,7 @@ fn main() {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| cox::workspace::Workspace::new(home, open, cx)),
+                |_, cx| cx.new(|cx| cox::workspace::Workspace::new(home, store, open, read, cx)),
             )
             .expect("the window opens");
         window

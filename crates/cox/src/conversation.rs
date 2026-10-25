@@ -1,8 +1,9 @@
 //! What the window shows, and what the human's input means, without GPUI.
 
-use cox_acp::{PermissionAnswer, StopReason, ToolCallContent, ToolCallResult};
+use std::collections::BTreeSet;
 
-use crate::diff;
+use cox_acp::{PermissionAnswer, StopReason};
+pub use cox_core::entry::{Content, Entry, ToolCallResult};
 
 /// What the agent side tells the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,66 +50,6 @@ pub enum Command {
     Cancel,
 }
 
-/// One thing shown in the conversation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Entry {
-    /// A line the human sent.
-    Human(String),
-    /// The agent's reply, as much of it as has arrived.
-    Reply(String),
-    /// A tool call, running until it has a result.
-    ToolCall {
-        id: String,
-        title: String,
-        /// What the call shows, less what a permission request for it shows
-        /// already.
-        content: Vec<Content>,
-        result: Option<ToolCallResult>,
-    },
-    Permission {
-        /// The id of the tool call the agent asks to run.
-        id: String,
-        title: String,
-        /// What the call is about to do, for the human to read before
-        /// choosing.
-        content: Vec<Content>,
-        options: Vec<String>,
-        /// The option the human chose, once they have.
-        chosen: Option<usize>,
-    },
-    /// A note from Cox: the instructions the agent gets, how a turn ended,
-    /// an error, or the connection closing.
-    Note(String),
-}
-
-/// Something a tool call or a permission request shows.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Content {
-    /// Text, such as what a command printed.
-    Text(String),
-    /// A change to the file at `path`.
-    Diff {
-        path: String,
-        lines: Vec<diff::Line>,
-    },
-}
-
-impl From<ToolCallContent> for Content {
-    fn from(content: ToolCallContent) -> Self {
-        match content {
-            ToolCallContent::Text(text) => Self::Text(text),
-            ToolCallContent::Diff {
-                path,
-                old_text,
-                new_text,
-            } => Self::Diff {
-                path: path.display().to_string(),
-                lines: diff::lines(old_text.as_deref(), &new_text),
-            },
-        }
-    }
-}
-
 /// Whose move it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -131,6 +72,9 @@ pub enum State {
 pub struct Conversation {
     entries: Vec<Entry>,
     state: State,
+    /// The indexes of the entries added or changed since they were last
+    /// taken, to keep.
+    changed: BTreeSet<usize>,
 }
 
 impl Default for Conversation {
@@ -145,15 +89,26 @@ impl Conversation {
         Self {
             entries: Vec::new(),
             state: State::Idle,
+            changed: BTreeSet::new(),
         }
     }
 
     /// A conversation that opens with `note`, a note from Cox.
     #[must_use]
     pub fn noting(note: String) -> Self {
+        let mut conversation = Self::new();
+        conversation.push(Entry::Note(note));
+        conversation
+    }
+
+    /// The conversation of a chat that has closed, which showed `entries`,
+    /// for the human to read.
+    #[must_use]
+    pub fn closed(entries: Vec<Entry>) -> Self {
         Self {
-            entries: vec![Entry::Note(note)],
-            state: State::Idle,
+            entries,
+            state: State::Closed,
+            changed: BTreeSet::new(),
         }
     }
 
@@ -167,6 +122,17 @@ impl Conversation {
         self.state
     }
 
+    /// The indexes of the entries added or changed since this was last
+    /// called, in order.
+    pub fn take_changed(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.changed).into_iter().collect()
+    }
+
+    fn push(&mut self, entry: Entry) {
+        self.changed.insert(self.entries.len());
+        self.entries.push(entry);
+    }
+
     /// Takes what the human entered, and returns what to ask of the agent,
     /// if anything: a prompt when idle, or the answer to a permission request
     /// when the input is the number of one of its options.
@@ -176,7 +142,7 @@ impl Conversation {
                 if input.trim().is_empty() {
                     return None;
                 }
-                self.entries.push(Entry::Human(input.to_owned()));
+                self.push(Entry::Human(input.to_owned()));
                 self.state = State::Busy;
                 Some(Command::Prompt(input.to_owned()))
             }
@@ -204,6 +170,7 @@ impl Conversation {
             return None;
         }
         *chosen = Some(index);
+        self.changed.insert(self.entries.len() - 1);
         self.state = State::Busy;
         Some(Command::Answer(PermissionAnswer::Select(index)))
     }
@@ -240,7 +207,7 @@ impl Conversation {
         result: Option<ToolCallResult>,
     ) {
         let Some(index) = self.tool_call_entry(&id) else {
-            self.entries.push(Entry::ToolCall {
+            self.push(Entry::ToolCall {
                 id,
                 title: title.unwrap_or_else(|| "a tool call".to_owned()),
                 content: content.unwrap_or_default(),
@@ -255,6 +222,7 @@ impl Conversation {
             });
             if asked { Vec::new() } else { content }
         });
+        self.changed.insert(index);
         if let Entry::ToolCall {
             title: shown_title,
             content: shown_content,
@@ -282,23 +250,23 @@ impl Conversation {
         content: Option<Vec<Content>>,
         options: Vec<String>,
     ) {
-        let call = self
-            .tool_call_entry(&id)
-            .and_then(|index| match &mut self.entries[index] {
-                Entry::ToolCall { content, .. } => Some(content),
-                _ => None,
-            });
-        let content = match call {
+        let call = self.tool_call_entry(&id);
+        let shown = call.and_then(|index| match &mut self.entries[index] {
+            Entry::ToolCall { content, .. } => Some(content),
+            _ => None,
+        });
+        let content = match shown {
             Some(shown) => {
                 let content = content.unwrap_or_else(|| shown.clone());
                 if *shown == content {
                     shown.clear();
+                    self.changed.extend(call);
                 }
                 content
             }
             None => content.unwrap_or_default(),
         };
-        self.entries.push(Entry::Permission {
+        self.push(Entry::Permission {
             id,
             title: title.unwrap_or_else(|| "a tool call".to_owned()),
             content,
@@ -313,8 +281,9 @@ impl Conversation {
             AgentEvent::ReplyText(text) => {
                 if let Some(Entry::Reply(reply)) = self.entries.last_mut() {
                     reply.push_str(&text);
+                    self.changed.insert(self.entries.len() - 1);
                 } else {
-                    self.entries.push(Entry::Reply(text));
+                    self.push(Entry::Reply(text));
                 }
             }
             AgentEvent::ToolCall {
@@ -337,11 +306,11 @@ impl Conversation {
                 }
             }
             AgentEvent::TurnEnded(reason) => {
-                self.entries.push(Entry::Note(format!("[{reason:?}]")));
+                self.push(Entry::Note(format!("[{reason:?}]")));
                 self.state = State::Idle;
             }
             AgentEvent::TurnFailed(error) => {
-                self.entries.push(Entry::Note(format!("[error: {error}]")));
+                self.push(Entry::Note(format!("[error: {error}]")));
                 self.state = State::Idle;
             }
             AgentEvent::Closed(error) => {
@@ -349,7 +318,7 @@ impl Conversation {
                     Some(error) => format!("[closed: {error}]"),
                     None => "[closed]".to_owned(),
                 };
-                self.entries.push(Entry::Note(note));
+                self.push(Entry::Note(note));
                 self.state = State::Closed;
             }
         }
@@ -493,11 +462,10 @@ mod tests {
         let mut conversation = Conversation::new();
         conversation.submit("permission");
         let change = || {
-            vec![Content::from(ToolCallContent::Diff {
-                path: "/work/x.txt".into(),
-                old_text: Some("one\n".to_owned()),
-                new_text: "1\n".to_owned(),
-            })]
+            vec![Content::Diff {
+                path: "/work/x.txt".to_owned(),
+                lines: cox_core::diff::lines(Some("one\n"), "1\n"),
+            }]
         };
 
         conversation.apply(tool_call(Some(change()), None));
@@ -608,5 +576,45 @@ mod tests {
         conversation.apply(request());
         assert_eq!(conversation.state(), State::Stopping);
         assert_eq!(conversation.submit("1"), None);
+    }
+
+    #[test]
+    fn tells_which_entries_changed_to_keep_them() {
+        let mut conversation = Conversation::noting("[instructions: ~/cox/COX.md]".to_owned());
+        assert_eq!(conversation.take_changed(), [0]);
+        assert_eq!(conversation.take_changed(), Vec::<usize>::new());
+
+        conversation.submit("hello");
+        conversation.apply(AgentEvent::ReplyText("echo".to_owned()));
+        assert_eq!(conversation.take_changed(), [1, 2]);
+        conversation.apply(AgentEvent::ReplyText(": hello".to_owned()));
+        assert_eq!(conversation.take_changed(), [2]);
+
+        conversation.apply(tool_call(Some(vec![text("Run the checks")]), None));
+        conversation.apply(AgentEvent::ReplyText("Running".to_owned()));
+        assert_eq!(conversation.take_changed(), [3, 4]);
+        // The request shows what the call showed, which the call then does
+        // not.
+        conversation.apply(permission(None));
+        assert_eq!(conversation.take_changed(), [3, 5]);
+        conversation.choose(0);
+        assert_eq!(conversation.take_changed(), [5]);
+        conversation.apply(tool_call(None, Some(ToolCallResult::Completed)));
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        assert_eq!(conversation.take_changed(), [3, 6]);
+    }
+
+    #[test]
+    fn a_closed_chats_conversation_is_for_reading() {
+        let mut conversation = Conversation::closed(vec![
+            Entry::Human("hello".to_owned()),
+            Entry::Reply("echo: hello".to_owned()),
+        ]);
+
+        assert_eq!(conversation.state(), State::Closed);
+        assert_eq!(conversation.submit("again"), None);
+        assert_eq!(conversation.cancel(), None);
+        assert_eq!(conversation.entries().len(), 2);
+        assert_eq!(conversation.take_changed(), Vec::<usize>::new());
     }
 }

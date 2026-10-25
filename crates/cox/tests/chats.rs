@@ -1,5 +1,5 @@
-//! A human opening chats in projects, moving between them and closing them,
-//! with each chat's agent faked in memory.
+//! A human opening chats in projects, moving between them, closing them and
+//! reading them again, with each chat's agent faked in memory.
 
 #[expect(dead_code, reason = "these tests use only part of the fake agent")]
 mod fake_agent;
@@ -13,17 +13,46 @@ use std::time::Duration;
 use cox::conversation::{Entry, State};
 use cox::instructions::Instructions;
 use cox::view::SessionView;
-use cox::workspace::{Open, Workspace};
+use cox::workspace::{Chat, Open, Place, Read, Workspace};
+use cox_core::store::Store;
 use fake_agent::FakeAgent;
 use gpui::{AppContext as _, Entity, Focusable, Modifiers, TestAppContext, VisualTestContext};
 
 /// The agent of each chat opened, in the order they were opened.
 type Agents = Rc<RefCell<Vec<Arc<FakeAgent>>>>;
 
-/// Opens the window with no chat, chats in no project working in `home`.
+/// Opens the window with no chat, chats in no project working in `home`,
+/// keeping them in memory.
 fn open_window(
     cx: &mut TestAppContext,
     home: PathBuf,
+) -> (Agents, Entity<Workspace>, &mut VisualTestContext) {
+    open_window_keeping(cx, home, Rc::new(Store::in_memory().unwrap()))
+}
+
+/// Starts each chat's agent, faked, and adds it to `agents`.
+fn opener(agents: &Agents) -> Open {
+    let opened = Rc::clone(agents);
+    Rc::new(move |cwd, instructions, record, _, cx| {
+        let agent = Arc::new(FakeAgent::default());
+        opened.borrow_mut().push(Arc::clone(&agent));
+        let agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), instructions);
+        cx.new(|cx| SessionView::new(agent, None, Rc::new(|_, _, _| {}), record, cx))
+    })
+}
+
+/// Shows closed chats, with no stage.
+fn reader() -> Read {
+    Rc::new(|_, entries, _, _, cx| {
+        cx.new(|cx| SessionView::closed(entries, None, Rc::new(|_, _, _| {}), cx))
+    })
+}
+
+/// Opens the window like [`open_window`], keeping the chats in `store`.
+fn open_window_keeping(
+    cx: &mut TestAppContext,
+    home: PathBuf,
+    store: Rc<Store>,
 ) -> (Agents, Entity<Workspace>, &mut VisualTestContext) {
     // The agents run on threads of their own, so the test waits for them
     // in real time instead of only running GPUI's own tasks.
@@ -34,14 +63,9 @@ fn open_window(
         cox::workspace::bind_keys(cx);
     });
     let agents = Agents::default();
-    let opened = Rc::clone(&agents);
-    let open: Open = Rc::new(move |cwd, instructions, _, cx| {
-        let agent = Arc::new(FakeAgent::default());
-        opened.borrow_mut().push(Arc::clone(&agent));
-        let agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), instructions);
-        cx.new(|cx| SessionView::new(agent, None, Rc::new(|_, _, _| {}), cx))
-    });
-    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, open, cx));
+    let open = opener(&agents);
+    let (workspace, cx) =
+        cx.add_window_view(|_, cx| Workspace::new(home, store, open, reader(), cx));
     cx.update(|window, cx| window.focus(&workspace.focus_handle(cx)));
     (agents, workspace, cx)
 }
@@ -62,7 +86,8 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
 
 fn shown(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Entity<SessionView> {
     workspace.read_with(cx, |workspace, _| {
-        workspace.shown().expect("a chat is shown").view().clone()
+        let chat = workspace.shown().expect("a chat is shown");
+        chat.view().expect("the chat shown has a view").clone()
     })
 }
 
@@ -257,51 +282,145 @@ async fn switching_keeps_each_chats_conversation_and_draft(cx: &mut TestAppConte
     assert_eq!(agents.borrow()[1].prompts(), Vec::<String>::new());
 }
 
+/// The entries of the chat `view` shows.
+fn entries(cx: &mut VisualTestContext, view: &Entity<SessionView>) -> Vec<Entry> {
+    view.read_with(cx, |view, _| view.conversation().entries().to_vec())
+}
+
+/// The entries of the chat shown.
+fn shown_entries(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Vec<Entry> {
+    let view = shown(cx, workspace);
+    entries(cx, &view)
+}
+
+/// Whether each chat of each project is open.
+fn opened(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Vec<Vec<bool>> {
+    workspace.read_with(cx, |workspace, _| {
+        workspace
+            .projects()
+            .iter()
+            .map(|project| project.chats().iter().map(Chat::is_open).collect())
+            .collect()
+    })
+}
+
 #[gpui::test]
-fn closing_a_chat_shows_the_next_and_lets_it_go(cx: &mut TestAppContext) {
-    let folder = scratch("closing-folder");
-    std::fs::create_dir_all(&folder).unwrap();
-    let (_agents, workspace, cx) = open_window(cx, scratch("closing"));
-    for _ in 0..2 {
-        cx.simulate_keystrokes("secondary-n");
+fn a_closed_chat_is_there_to_read(cx: &mut TestAppContext) {
+    let store = Rc::new(Store::in_memory().unwrap());
+    let kept = store.add_chat(None, "Chat 1").unwrap();
+    let said = [
+        Entry::Human("hello".to_owned()),
+        Entry::Reply("echo: hello".to_owned()),
+        Entry::Note("[EndTurn]".to_owned()),
+    ];
+    for (number, entry) in said.iter().enumerate() {
+        store.keep_entry(kept, number, entry).unwrap();
     }
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch("closed"), store);
+    cx.simulate_keystrokes("secondary-n");
+
+    click(cx, "chat-1");
+    let closed = shown(cx, &workspace);
+    assert_eq!(shown_entries(cx, &workspace), said);
+    assert_eq!(
+        closed.read_with(cx, |view, _| view.conversation().state()),
+        State::Closed
+    );
+    cx.simulate_input("again");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(shown_entries(cx, &workspace), said);
+    assert_eq!(agents.borrow().len(), 1, "a closed chat starts no agent");
+
+    // Moving away and back reads it as it was.
+    click(cx, "chat-2");
+    click(cx, "chat-1");
+    assert_eq!(shown(cx, &workspace), closed);
+    assert_eq!(opened(cx, &workspace), [vec![false, true]]);
+}
+
+#[gpui::test]
+async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) {
+    let home = scratch("again-home");
+    let folder = scratch("again-folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    let kept = scratch("again-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), store);
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.open(Some(folder.clone()), window, cx);
     });
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    let view = shown(cx, &workspace);
+    cx.condition(&view, |view, _| {
+        view.conversation().state() == State::Asking
+    })
+    .await;
+    click(cx, "option-1");
+    wait_for_turn(cx, &view).await;
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+    let first = shown_entries(cx, &workspace);
     click(cx, "chat-2");
-    let closed = shown(cx, &workspace).downgrade();
+    let second = shown_entries(cx, &workspace);
 
-    // The next in the list is in the next project.
-    click(cx, "close-2");
-    cx.run_until_parked();
-
+    // As Cox opens its window when it starts again, with every chat
+    // closed.
+    let again = cx.update(|_, cx| {
+        let store = Rc::new(Store::open(&kept).unwrap());
+        cx.new(|cx| Workspace::new(home.clone(), store, opener(&agents), reader(), cx))
+    });
     let name = folder.file_name().unwrap().to_string_lossy().into_owned();
     assert_eq!(
-        names(cx, &workspace),
+        names(cx, &again),
         listed(&[("No project", &["Chat 1"]), (&name, &["Chat 1"])])
     );
-    let shown_project = workspace.read_with(cx, |workspace, _| {
-        let shown = workspace.shown().map(|chat| chat.view().clone());
-        workspace.projects().iter().position(|project| {
-            project
-                .chats()
-                .iter()
-                .any(|chat| Some(chat.view()) == shown.as_ref())
-        })
-    });
-    assert_eq!(shown_project, Some(1));
-    assert!(closed.upgrade().is_none(), "the closed chat is gone");
-
-    // The projects stay, with no chat in them.
-    click(cx, "close-2");
-    click(cx, "close-1");
-    let shown_any = workspace.read_with(cx, |workspace, _| workspace.shown().is_some());
-    assert!(!shown_any);
+    assert_eq!(opened(cx, &again), [vec![false], vec![false]]);
+    let read = |cx: &mut VisualTestContext, place| {
+        again.update_in(cx, |workspace, window, cx| {
+            workspace.show(place, window, cx);
+        });
+        shown_entries(cx, &again)
+    };
     assert_eq!(
-        names(cx, &workspace),
-        listed(&[("No project", &[]), (&name, &[])])
+        read(
+            cx,
+            Place {
+                project: 0,
+                chat: 0
+            }
+        ),
+        first
     );
+    let read_second = read(
+        cx,
+        Place {
+            project: 1,
+            chat: 0,
+        },
+    );
+    assert_eq!(read_second, second);
+    // The change the agent asked to make shows, with the option chosen.
+    assert!(
+        read_second.iter().any(|entry| matches!(
+            entry,
+            Entry::Permission { chosen: Some(0), content, .. } if !content.is_empty()
+        )),
+        "{read_second:?}"
+    );
+
+    // A new chat in a project kept goes under it, named after those kept.
+    again.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(folder.clone()), window, cx);
+    });
+    assert_eq!(
+        names(cx, &again),
+        listed(&[("No project", &["Chat 1"]), (&name, &["Chat 1", "Chat 2"])])
+    );
+    let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&folder);
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }
 
 #[gpui::test]
