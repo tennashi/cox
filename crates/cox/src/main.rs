@@ -127,6 +127,9 @@ fn main() {
         cox::view::bind_keys(cx);
         cox::document::bind_keys(cx);
         cox::workspace::bind_keys(cx);
+        // After the window's, which a terminal's own keys stand before.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        cox::terminal::bind_keys(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         #[cfg(target_os = "macos")]
         cx.bind_keys([gpui::KeyBinding::new("cmd-q", Quit, None)]);

@@ -1,16 +1,19 @@
 //! The stage: where the human and the agent of one chat work together,
 //! beside the chat's conversation. It holds tabs, each showing a page of
-//! the browser (see [`crate::page`]), or a Markdown file (see
-//! [`crate::document`]). The first shows the page the stage starts on; the
-//! human opens more pages and closes tabs, and so does the agent, through
-//! the chat's relay. A page that asks for a window of its own gets a tab
-//! instead. The agent shows the human Markdown files with Cox's own tools
-//! (see [`crate::mcp`]), a tab for each file.
+//! the browser (see [`crate::page`]), a Markdown file (see
+//! [`crate::document`]), or a terminal (see [`crate::terminal`]). The
+//! first shows the page the stage starts on; the human opens more pages
+//! and terminals and closes tabs, and the agent opens and closes pages
+//! too, through the chat's relay. A page that asks for a window of its own
+//! gets a tab instead. With Cox's own tools (see [`crate::mcp`]), the
+//! agent shows the human Markdown files, a tab for each file, and runs
+//! commands in terminals: a command gets the tab of the agent's last one
+//! that ended, or a new one.
 //!
 //! The stage tells the relay of every page it opens, so that the agent sees
 //! each of its chat's pages, whoever opened it. When the agent works on a
-//! page, or shows a file, the stage shows that tab, and opens beside the
-//! conversation if it was closed.
+//! page, shows a file or runs a command, the stage shows that tab, and
+//! opens beside the conversation if it was closed.
 
 use std::path::PathBuf;
 
@@ -23,9 +26,11 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::browser::{Cef, TargetId};
 use crate::document::{Document, LinkClicked};
 use crate::input::LineInput;
+use crate::mcp::Ran;
 use crate::mcp::Request;
 use crate::page::{OpenTab, Page};
 use crate::relay::{FromAgent, Pages, Relay};
+use crate::terminal::{Program, Running, Terminal};
 use crate::view::Panel;
 
 /// What a new tab shows when the human opens it.
@@ -39,6 +44,8 @@ const TITLE_LENGTH: usize = 40;
 
 pub struct Stage {
     cef: Cef,
+    /// Where the chat works, which its terminals start in.
+    cwd: PathBuf,
     tabs: Vec<Tab>,
     /// The index of the tab shown. There is always one: closing the last
     /// tab is refused.
@@ -56,8 +63,8 @@ struct Tab {
     shown: Shown,
     /// Redraws the tab as the title of what it shows changes.
     _changes: Subscription,
-    /// Opens the tabs that what it shows asks for.
-    _opens: Subscription,
+    /// Opens the tabs that what it shows asks for, if it asks for any.
+    _opens: Option<Subscription>,
 }
 
 enum Shown {
@@ -67,13 +74,14 @@ enum Shown {
         target: TargetId,
     },
     Document(Entity<Document>),
+    Terminal(Entity<Terminal>),
 }
 
 impl Shown {
     fn page(&self) -> Option<&Entity<Page>> {
         match self {
             Self::Page { page, .. } => Some(page),
-            Self::Document(_) => None,
+            Self::Document(_) | Self::Terminal(_) => None,
         }
     }
 
@@ -81,6 +89,7 @@ impl Shown {
         match self {
             Self::Page { page, .. } => page.clone().into(),
             Self::Document(document) => document.clone().into(),
+            Self::Terminal(terminal) => terminal.clone().into(),
         }
     }
 
@@ -88,16 +97,34 @@ impl Shown {
         match self {
             Self::Page { page, .. } => page.focus_handle(cx),
             Self::Document(document) => document.focus_handle(cx),
+            Self::Terminal(terminal) => terminal.focus_handle(cx),
+        }
+    }
+
+    /// Whether it is a terminal where a command of the agent's ended.
+    fn is_agents_ended(&self, cx: &App) -> bool {
+        match self {
+            Self::Terminal(terminal) => {
+                let terminal = terminal.read(cx);
+                matches!(terminal.program(), Program::Command(_)) && terminal.ended().is_some()
+            }
+            Self::Page { .. } | Self::Document(_) => false,
         }
     }
 }
 
 impl Stage {
-    /// A stage of one tab showing `url`, which tells `relay` of the pages
-    /// it opens, carries out what the agent's tools ask in `from_tools`,
-    /// and opens `panel` when the agent works on it.
+    /// A stage of one tab showing `url`, for a chat working in `cwd`, which
+    /// tells `relay` of the pages it opens, carries out what the agent's
+    /// tools ask in `from_tools`, and opens `panel` when the agent works on
+    /// it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "what a chat hands its stage, each once"
+    )]
     pub fn new(
         cef: Cef,
+        cwd: PathBuf,
         url: &str,
         relay: Option<Relay>,
         from_tools: Option<UnboundedReceiver<Request>>,
@@ -113,6 +140,7 @@ impl Stage {
         let from_tools = from_tools.map(|from_tools| Self::hear_tools(from_tools, window, cx));
         let mut stage = Self {
             cef,
+            cwd,
             tabs: Vec::new(),
             shown: 0,
             pages,
@@ -172,6 +200,11 @@ impl Stage {
                     Request::ShowMarkdown { path, text } => {
                         stage.show_document(path, text, window, cx);
                     }
+                    Request::RunCommand {
+                        command,
+                        cwd,
+                        answer,
+                    } => stage.run_command(command, &cwd, answer, window, cx),
                 });
                 if done.is_err() {
                     break;
@@ -191,7 +224,7 @@ impl Stage {
     ) {
         let showing = self.tabs.iter().position(|tab| match &tab.shown {
             Shown::Document(document) => document.read(cx).path() == path,
-            Shown::Page { .. } => false,
+            Shown::Page { .. } | Shown::Terminal(_) => false,
         });
         if let Some(index) = showing {
             if let Shown::Document(document) = &self.tabs[index].shown {
@@ -207,9 +240,69 @@ impl Stage {
                 window,
                 |stage, _, LinkClicked(url), window, cx| stage.open(url, window, cx),
             );
-            self.push(Shown::Document(document), changes, opens, true, cx);
+            self.push(Shown::Document(document), changes, Some(opens), true, cx);
         }
         self.show_panel(cx);
+    }
+
+    /// Runs `command`, which the agent asked for, in `cwd`, and answers
+    /// `answer` once it ends: on the tab of the agent's last command if
+    /// that ended, or a new one. The stage opens if it was closed.
+    fn run_command(
+        &mut self,
+        command: String,
+        cwd: &std::path::Path,
+        answer: tokio::sync::oneshot::Sender<Result<Ran, String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let running = match Running::start(Program::Command(command), cwd) {
+            Ok(running) => running,
+            Err(error) => {
+                let _ = answer.send(Err(format!("cannot start a terminal: {error}")));
+                return;
+            }
+        };
+        let terminal = cx.new(|cx| Terminal::new(running, Some(answer), cx));
+        let changes = cx.observe(&terminal, |_, _, cx| cx.notify());
+        let ended = self
+            .tabs
+            .iter()
+            .rposition(|tab| tab.shown.is_agents_ended(cx));
+        if let Some(index) = ended {
+            let had_focus = self.tabs[index]
+                .shown
+                .focus_handle(cx)
+                .contains_focused(window, cx);
+            self.tabs[index] = Tab {
+                shown: Shown::Terminal(terminal),
+                _changes: changes,
+                _opens: None,
+            };
+            self.shown = index;
+            if had_focus {
+                self.focus_shown(window, cx);
+            }
+            cx.notify();
+        } else {
+            self.push(Shown::Terminal(terminal), changes, None, true, cx);
+        }
+        self.show_panel(cx);
+    }
+
+    /// A terminal the human opens, with the keyboard in it.
+    fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let running = match Running::start(Program::Shell, &self.cwd) {
+            Ok(running) => running,
+            Err(error) => {
+                log::error!("cannot start a terminal: {error}");
+                return;
+            }
+        };
+        let terminal = cx.new(|cx| Terminal::new(running, None, cx));
+        let changes = cx.observe(&terminal, |_, _, cx| cx.notify());
+        self.push(Shown::Terminal(terminal), changes, None, true, cx);
+        self.focus_shown(window, cx);
     }
 
     /// The agent worked on `page`, sending it `input` if any: show its tab,
@@ -243,7 +336,7 @@ impl Stage {
     fn index_of(&self, page: &str) -> Option<usize> {
         self.tabs.iter().position(|tab| match &tab.shown {
             Shown::Page { target, .. } => target.borrow().as_deref() == Some(page),
-            Shown::Document(_) => false,
+            Shown::Document(_) | Shown::Terminal(_) => false,
         })
     }
 
@@ -272,7 +365,7 @@ impl Stage {
             page,
             target: target.clone(),
         };
-        self.push(shown, changes, popups, show, cx);
+        self.push(shown, changes, Some(popups), show, cx);
         target
     }
 
@@ -281,7 +374,7 @@ impl Stage {
         &mut self,
         shown: Shown,
         changes: Subscription,
-        opens: Subscription,
+        opens: Option<Subscription>,
         show: bool,
         cx: &mut Context<Self>,
     ) {
@@ -376,6 +469,7 @@ impl Stage {
                 }
             }
             Shown::Document(document) => document.read(cx).title(),
+            Shown::Terminal(terminal) => terminal.read(cx).title(),
         };
         let title: String = title.chars().take(TITLE_LENGTH).collect();
         let mut tab = div()
@@ -444,6 +538,19 @@ impl Stage {
                     .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
                     .child("+")
                     .on_click(cx.listener(|stage, _, window, cx| stage.new_tab(window, cx))),
+            )
+            .child(
+                div()
+                    .id("new-terminal")
+                    .debug_selector(|| "new-terminal".to_owned())
+                    .flex_shrink_0()
+                    .px_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(rgb(0x80_8080))
+                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .child(">_")
+                    .on_click(cx.listener(|stage, _, window, cx| stage.new_terminal(window, cx))),
             )
     }
 }

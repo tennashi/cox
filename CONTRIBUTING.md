@@ -64,6 +64,19 @@ agent's replies, for the human to read: the agent opens it with Cox's
 `show_markdown` tool. The tab follows the file as it changes, and the
 agent showing the same file again brings its tab to the front.
 
+A tab can be a terminal too, through
+[alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
+`>_` beside the tabs opens one with the human's shell, working in the
+chat's folder. The agent runs a command in one with Cox's `run_command`
+tool: the stage shows it running, the human can type into it, as to
+answer what it asks, and the agent gets what the terminal shows and the
+exit code once it ends. A command gets the tab of the agent's last one
+that ended, or a new tab. When the agent stops waiting for it, as when
+the human stops the turn, the command gets Control-C. Copying and
+pasting in a terminal is Command-C and Command-V on macOS, and
+Control-Shift-C and Control-Shift-V elsewhere, where Control-N and
+Control-O go to the terminal too.
+
 Cox hands each chat's agent its own tools as an MCP server, which is
 `cox` itself run as `cox --mcp <socket>`: the agent starts it, and it
 carries what the agent says to the chat on a Unix socket of the chat's
