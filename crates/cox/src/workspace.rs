@@ -6,7 +6,8 @@
 //!
 //! The projects and chats are kept as they go (see [`cox_core::store`]).
 //! A chat's agent runs until Cox quits; the chats of earlier runs stay in
-//! the list, closed, for the human to read what they showed.
+//! the list, closed, for the human to read what they showed, and to send
+//! to again, which starts the chat's agent again.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -20,7 +21,7 @@ use gpui::{
 
 use crate::conversation::{Entry, State};
 use crate::instructions::Instructions;
-use crate::view::SessionView;
+use crate::view::{Reopened, SessionView};
 
 actions!(
     cox,
@@ -63,11 +64,23 @@ pub type Open = Rc<
     ) -> Entity<SessionView>,
 >;
 
-/// Returns the view of a closed chat, which worked in the directory given,
-/// for the human to read: the entries it showed, and the tabs its stage
-/// had, if it had a stage.
-pub type Read =
-    Rc<dyn Fn(PathBuf, Vec<Entry>, Option<Tabs>, &mut Window, &mut App) -> Entity<SessionView>>;
+/// Returns the view of a closed chat, from what is kept of it, for the
+/// human to read, and to send to again.
+pub type Read = Rc<dyn Fn(Closed, &mut Window, &mut App) -> Entity<SessionView>>;
+
+/// What is kept of a closed chat.
+pub struct Closed {
+    /// The directory it worked in.
+    pub cwd: PathBuf,
+    /// What it showed.
+    pub entries: Vec<Entry>,
+    /// The tabs its stage had, if it had a stage.
+    pub tabs: Option<Tabs>,
+    /// The id its agent gave its session, to go on with, if it had one.
+    pub session: Option<String>,
+    /// Where it is kept, to go on keeping it once the human sends to it.
+    pub record: Option<Record>,
+}
 
 /// A folder, and the chats in it.
 pub struct Project {
@@ -110,7 +123,7 @@ impl Project {
 }
 
 /// A chat in the list: open, with its agent, or closed, from an earlier
-/// run, for the human to read.
+/// run, for the human to read, until they send to it.
 pub struct Chat {
     /// How it is kept, or `None` when it could not be.
     kept: Option<ChatId>,
@@ -119,8 +132,9 @@ pub struct Chat {
     open: bool,
     /// Its view, or `None` for a closed chat the human has not read yet.
     view: Option<Entity<SessionView>>,
-    /// Redraws the list as an open chat's state changes.
-    _changes: Option<Subscription>,
+    /// Redraws the list as the chat's state changes, and hears a closed
+    /// chat's agent start again.
+    _changes: Vec<Subscription>,
 }
 
 impl Chat {
@@ -131,7 +145,7 @@ impl Chat {
             name: name.into(),
             open: false,
             view: None,
-            _changes: None,
+            _changes: Vec::new(),
         }
     }
 
@@ -277,7 +291,7 @@ impl Workspace {
             name: name.into(),
             open: true,
             view: Some(view),
-            _changes: Some(changes),
+            _changes: vec![changes],
         });
         let chat = self.projects[index].chats.len() - 1;
         self.show(
@@ -338,7 +352,7 @@ impl Workspace {
     }
 
     /// Gives the closed chat at `place` its view, from what is kept of it,
-    /// unless it has one.
+    /// unless it has one. Once the human sends to it, it is open.
     fn read(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
         let project = &self.projects[place.project];
         let chat = &project.chats[place.chat];
@@ -355,8 +369,33 @@ impl Workspace {
             .inspect_err(|error| log::error!("the chat's tabs cannot be read: {error:#}"))
             .ok()
             .flatten();
-        let view = (self.read)(project.folder.clone(), entries, tabs, window, cx);
-        self.projects[place.project].chats[place.chat].view = Some(view);
+        let session = self
+            .store
+            .session(kept)
+            .inspect_err(|error| log::error!("the chat's session cannot be read: {error:#}"))
+            .ok()
+            .flatten();
+        let closed = Closed {
+            cwd: project.folder.clone(),
+            entries,
+            tabs,
+            session,
+            record: Some(Record::new(Rc::clone(&self.store), kept)),
+        };
+        let view = (self.read)(closed, window, cx);
+        let changes = cx.observe(&view, |_, _, cx| cx.notify());
+        let reopened = cx.subscribe(&view, move |workspace, _, Reopened, cx| {
+            workspace.projects[place.project].chats[place.chat].open = true;
+            cx.notify();
+        });
+        let chat = &mut self.projects[place.project].chats[place.chat];
+        *chat = Chat {
+            kept: Some(kept),
+            name: chat.name.clone(),
+            open: false,
+            view: Some(view),
+            _changes: vec![changes, reopened],
+        };
     }
 
     /// Shows the chat `step` places along the list, going round.

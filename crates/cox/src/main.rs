@@ -3,7 +3,8 @@
 //! project of a folder of the human's choice, working there, or in no
 //! project, working in `<dir>`, `~/Cox` unless asked. Each chat has a stage
 //! of its own, showing `<url>` first, which its agent can read and drive
-//! too. The chats are kept as they go, to read after Cox starts again.
+//! too. The chats are kept as they go, to read after Cox starts again, and
+//! to go on with.
 //!
 //! On macOS, run it from inside the bundle `cargo xtask bundle` makes, as
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
@@ -90,9 +91,8 @@ fn chats(launcher: cox::session::Launcher) -> (cox::workspace::Open, cox::worksp
     let open: cox::workspace::Open = Rc::new(move |cwd, instructions, record, window, cx| {
         opens.open(cwd, instructions, record, window, cx)
     });
-    let read: cox::workspace::Read = Rc::new(move |cwd, entries, tabs, window, cx| {
-        launcher.read(cwd, entries, tabs, window, cx)
-    });
+    let read: cox::workspace::Read =
+        Rc::new(move |closed, window, cx| launcher.read(closed, window, cx));
     (open, read)
 }
 

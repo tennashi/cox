@@ -2,23 +2,27 @@
 //! directory, and on Linux and macOS the chat's own stage, whose pages the
 //! agent reaches through a relay of its own, and the server of Cox's own
 //! tools for the agent, which reach the stage too. A closed chat, opened to
-//! read, starts none of them but a stage on the pages it had.
+//! read, starts none of them but a stage on the pages it had, until the
+//! human sends to it: then its agent starts again, going on with its
+//! session if it can, and the stage works with it.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use cox_acp::McpServer;
 use cox_core::store::Record;
-use cox_core::tabs::Tabs;
 use gpui::{App, Entity, Window, prelude::*};
 
-use crate::conversation::Entry;
+use crate::agent::{Agent, Start};
 use crate::instructions::Instructions;
-use crate::view::{OpenLink, SessionView};
+use crate::view::{Again, OpenLink, SessionView};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::view::{Panel, StageView};
+use crate::workspace::Closed;
 
 /// Opens chats, each with an agent of the same command.
+#[derive(Clone)]
 pub struct Launcher {
     /// The agent to start, and its arguments.
     pub command: Vec<String>,
@@ -44,67 +48,54 @@ impl Launcher {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<SessionView> {
+        let start = Start::New(instructions);
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let (stage, tools, open_link) = {
-            let relay = self.relay();
-            let server = self.server(&cwd);
-            // The agent gets the pages the human sees, and Cox's own tools.
-            let tools = relay
-                .as_ref()
-                .and_then(|relay| crate::tools::stage(relay.port, &self.path))
-                .into_iter()
-                .chain(
-                    server
-                        .as_ref()
-                        .map(|(exe, server)| crate::tools::cox(exe.clone(), &server.socket)),
-                )
-                .collect();
+        let (stage, agent, open_link) = {
             let panel = cx.new(|_| Panel::default());
             let stage = cx.new(|cx| {
                 crate::stage::Stage::new(
                     self.cef.clone(),
                     cwd.clone(),
                     &self.stage,
-                    relay,
-                    server.map(|(_, server)| server.requests),
                     panel.clone(),
-                    record.clone(),
                     window,
                     cx,
                 )
             });
+            let agent = self.start(&stage, cwd, record.clone(), start, window, cx);
             let (stage, open_link) = shown(stage, panel);
-            (Some(stage), tools, open_link)
+            (Some(stage), agent, open_link)
         };
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        let (stage, tools, open_link) = {
-            let _ = (window, &self.stage, &self.path, &self.exe);
+        let (stage, agent, open_link) = {
+            let _ = window;
             // With no stage, links open in the human's browser.
             let open_link: OpenLink = Rc::new(|url, _, cx| cx.open_url(url));
-            (None, Vec::new(), open_link)
+            (None, self.spawn(cwd, Vec::new(), start), open_link)
         };
-        let command = self.command.clone();
-        let agent = crate::agent::spawn(move || cox_acp::launch(command), cwd, tools, instructions);
         cx.new(|cx| SessionView::new(agent, stage, open_link, record, cx))
     }
 
-    /// The view of a closed chat that worked in `cwd`, which showed
-    /// `entries`, with a stage on the pages and files of `tabs`.
-    pub fn read(
-        &self,
-        cwd: PathBuf,
-        entries: Vec<Entry>,
-        tabs: Option<Tabs>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<SessionView> {
+    /// The view of `closed`, a chat that has closed, with a stage on the
+    /// pages and files it had. When the human sends to it, its agent
+    /// starts again, going on with its session if it can.
+    pub fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView> {
+        let Closed {
+            cwd,
+            entries,
+            tabs,
+            session,
+            record,
+        } = closed;
+        let launcher = self.clone();
+        let kept = record.clone();
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let (stage, open_link) = {
+        let (stage, again, open_link) = {
             let panel = cx.new(|_| Panel::default());
             let stage = cx.new(|cx| {
                 crate::stage::Stage::reading(
                     self.cef.clone(),
-                    cwd,
+                    cwd.clone(),
                     tabs,
                     &self.stage,
                     panel.clone(),
@@ -112,16 +103,64 @@ impl Launcher {
                     cx,
                 )
             });
+            let works = stage.clone();
+            let again: Again = Box::new(move |entries, window, cx| {
+                let start = Start::again(&cwd, session, entries);
+                launcher.start(&works, cwd, kept, start, window, cx)
+            });
             let (stage, open_link) = shown(stage, panel);
-            (Some(stage), open_link)
+            (Some(stage), again, open_link)
         };
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        let (stage, open_link) = {
-            let _ = (cwd, tabs, window);
+        let (stage, again, open_link) = {
+            let _ = (tabs, kept, window);
+            let again: Again = Box::new(move |entries, _, _| {
+                let start = Start::again(&cwd, session, entries);
+                launcher.spawn(cwd, Vec::new(), start)
+            });
             let open_link: OpenLink = Rc::new(|url, _, cx| cx.open_url(url));
-            (None, open_link)
+            (None, again, open_link)
         };
-        cx.new(|cx| SessionView::closed(entries, stage, open_link, cx))
+        cx.new(|cx| SessionView::closed(entries, stage, open_link, record, Some(again), window, cx))
+    }
+
+    /// Starts the agent of a chat working in `cwd`, as `start` says, with
+    /// tools for `stage`, which from then on works with the agent, keeping
+    /// its tabs in `record`.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn start(
+        &self,
+        stage: &Entity<crate::stage::Stage>,
+        cwd: PathBuf,
+        record: Option<Record>,
+        start: Start,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Agent {
+        let relay = self.relay();
+        let server = self.server(&cwd);
+        // The agent gets the pages the human sees, and Cox's own tools.
+        let tools = relay
+            .as_ref()
+            .and_then(|relay| crate::tools::stage(relay.port, &self.path))
+            .into_iter()
+            .chain(
+                server
+                    .as_ref()
+                    .map(|(exe, server)| crate::tools::cox(exe.clone(), &server.socket)),
+            )
+            .collect();
+        let requests = server.map(|(_, server)| server.requests);
+        stage.update(cx, |stage, cx| {
+            stage.work(relay, requests, record, window, cx);
+        });
+        self.spawn(cwd, tools, start)
+    }
+
+    /// Starts the agent working in `cwd` with `tools`, as `start` says.
+    fn spawn(&self, cwd: PathBuf, tools: Vec<McpServer>, start: Start) -> Agent {
+        let command = self.command.clone();
+        crate::agent::spawn(move || cox_acp::launch(command), cwd, tools, start)
     }
 
     /// Starts the server of Cox's own tools for a chat working in `cwd`,

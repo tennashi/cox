@@ -1,6 +1,7 @@
 //! What the window shows, and what the human's input means, without GPUI.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use cox_acp::{PermissionAnswer, StopReason};
 pub use cox_core::entry::{Content, Entry, ToolCallResult};
@@ -8,6 +9,8 @@ pub use cox_core::entry::{Content, Entry, ToolCallResult};
 /// What the agent side tells the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentEvent {
+    /// The agent opened the session `id`, to resume later, as `how` says.
+    Opened { id: String, how: Opened },
     /// A piece of the agent's reply.
     ReplyText(String),
     /// A tool call the agent made started, was retitled, changed what it
@@ -39,6 +42,19 @@ pub enum AgentEvent {
     /// The connection to the agent closed, with the error that closed it, if
     /// any.
     Closed(Option<String>),
+}
+
+/// How the agent's session opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Opened {
+    /// A new session, for a new chat.
+    New,
+    /// The session the chat had before, which the agent went on with.
+    Resumed,
+    /// A new session for a chat that had one before, which the agent
+    /// could not go on with, so the agent gets told the conversation so
+    /// far, along with the instructions in `instructions`, if any.
+    Retold { instructions: Option<PathBuf> },
 }
 
 /// What the window asks of the agent side.
@@ -109,6 +125,14 @@ impl Conversation {
             entries,
             state: State::Closed,
             changed: BTreeSet::new(),
+        }
+    }
+
+    /// Opens the conversation of a chat that has closed again, for the
+    /// human to go on with it once its agent starts again.
+    pub fn reopen(&mut self) {
+        if self.state == State::Closed {
+            self.state = State::Idle;
         }
     }
 
@@ -278,6 +302,26 @@ impl Conversation {
     /// Shows what the agent side sent.
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
+            AgentEvent::Opened { how, .. } => match how {
+                Opened::New => {}
+                Opened::Resumed => {
+                    self.push(Entry::Note(
+                        "[resumed: the agent goes on from here]".to_owned(),
+                    ));
+                }
+                Opened::Retold { instructions } => {
+                    self.push(Entry::Note(
+                        "[the agent could not resume its session: a new one is told the conversation so far]"
+                            .to_owned(),
+                    ));
+                    if let Some(path) = instructions {
+                        self.push(Entry::Note(format!(
+                            "[instructions: {}]",
+                            crate::workspace::shortened(&path)
+                        )));
+                    }
+                }
+            },
             AgentEvent::ReplyText(text) => {
                 if let Some(Entry::Reply(reply)) = self.entries.last_mut() {
                     reply.push_str(&text);
@@ -325,9 +369,125 @@ impl Conversation {
     }
 }
 
+/// The most of the conversation so far that a new session is told, in
+/// characters: past it, the start is left out.
+const RETOLD_LENGTH: usize = 100_000;
+
+/// What a new session of a chat's agent is told of the conversation so
+/// far, `entries`, when the agent could not go on with the chat's own: what
+/// the human said, what the agent replied, and the tool calls it made, by
+/// their titles. Cox's notes are left out.
+#[must_use]
+pub fn retold(entries: &[Entry]) -> String {
+    let told: Vec<String> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Human(text) => Some(format!("[human]\n{text}")),
+            Entry::Reply(text) => Some(format!("[you]\n{text}")),
+            Entry::ToolCall { title, result, .. } => {
+                let result = result.map_or_else(|| "not ended".to_owned(), |r| format!("{r:?}"));
+                Some(format!("[your tool call: {title} … {result}]"))
+            }
+            Entry::Permission {
+                title,
+                options,
+                chosen,
+                ..
+            } => {
+                let chosen = chosen
+                    .and_then(|chosen| options.get(chosen))
+                    .map_or("nothing", String::as_str);
+                Some(format!(
+                    "[you asked permission for: {title}; the human chose: {chosen}]"
+                ))
+            }
+            Entry::Note(_) => None,
+        })
+        .collect();
+    let mut told = told.join("\n\n");
+    let length = told.chars().count();
+    if length > RETOLD_LENGTH {
+        let kept: String = told.chars().skip(length - RETOLD_LENGTH).collect();
+        told = format!("[… the start is left out]\n{kept}");
+    }
+    format!(
+        "This chat goes on from an earlier session of yours, which could not be resumed. \
+         This is the conversation so far, as Cox kept it; go on from its end.\n\n{told}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_closed_conversation_reopens_to_go_on() {
+        let mut conversation = Conversation::closed(vec![
+            Entry::Human("hello".to_owned()),
+            Entry::Reply("echo: hello".to_owned()),
+        ]);
+        assert_eq!(conversation.submit("again"), None);
+
+        conversation.reopen();
+        assert_eq!(
+            conversation.submit("again"),
+            Some(Command::Prompt("again".to_owned()))
+        );
+        conversation.apply(AgentEvent::Opened {
+            id: "session-1".to_owned(),
+            how: Opened::Resumed,
+        });
+        assert_eq!(conversation.take_changed(), [2, 3]);
+        assert_eq!(
+            conversation.entries()[2..],
+            [
+                Entry::Human("again".to_owned()),
+                Entry::Note("[resumed: the agent goes on from here]".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_new_session_is_told_the_conversation_so_far() {
+        let entries = [
+            Entry::Note("[instructions: ~/cox/COX.md]".to_owned()),
+            Entry::Human("edit".to_owned()),
+            Entry::ToolCall {
+                id: "call-1".to_owned(),
+                title: "Edit x.txt".to_owned(),
+                content: Vec::new(),
+                result: Some(ToolCallResult::Completed),
+            },
+            Entry::Permission {
+                id: "call-1".to_owned(),
+                title: "Edit x.txt".to_owned(),
+                content: Vec::new(),
+                options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
+                chosen: Some(0),
+            },
+            Entry::Reply("Done".to_owned()),
+            Entry::Note("[EndTurn]".to_owned()),
+        ];
+        let told = retold(&entries);
+        assert!(
+            told.ends_with(
+                "\n\n[human]\nedit\n\n\
+                 [your tool call: Edit x.txt … Completed]\n\n\
+                 [you asked permission for: Edit x.txt; the human chose: Allow once]\n\n\
+                 [you]\nDone"
+            ),
+            "{told}"
+        );
+        assert!(!told.contains("EndTurn"), "{told}");
+    }
+
+    #[test]
+    fn a_long_conversation_is_told_from_its_end() {
+        let long = "あ".repeat(RETOLD_LENGTH);
+        let told = retold(&[Entry::Human("first".to_owned()), Entry::Reply(long.clone())]);
+        assert!(told.ends_with(&format!("[… the start is left out]\n{long}")));
+        assert!(!told.contains("first"));
+    }
 
     #[test]
     fn sends_a_line_when_idle_and_waits_for_the_turn() {

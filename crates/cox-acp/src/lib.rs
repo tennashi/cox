@@ -1,7 +1,8 @@
 //! Talking to an agent over the Agent Client Protocol (ACP), in Cox's terms.
 //!
 //! [`connect`] opens a [`Session`] with an agent, handing it the
-//! [`McpServer`]s whose tools it may use. Each [`Session::send`] starts a
+//! [`McpServer`]s whose tools it may use, or resumes one the agent had
+//! opened before, when it can. Each [`Session::send`] starts a
 //! [`Turn`], which hands over what the agent sends as [`Update`]s until the
 //! turn ends, and which [`Turn::cancel`] asks the agent to end early.
 
@@ -12,11 +13,12 @@ use std::pin::Pin;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, Content, ContentBlock, ContentChunk, Diff, InitializeRequest,
-    McpServer as AcpMcpServer, McpServerStdio, NewSessionRequest, PermissionOptionKind,
-    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
-    SessionUpdate, StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall,
+    AgentCapabilities, CancelNotification, Content, ContentBlock, ContentChunk, Diff,
+    InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio,
+    NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate,
+    StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall,
     ToolCallContent as AcpToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
 };
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectTo, ConnectionTo, Responder};
@@ -59,6 +61,11 @@ impl From<McpServer> for AcpMcpServer {
 /// `mcp_servers` for the agent to use, and runs `talk` with it. The
 /// connection closes when `talk` returns.
 ///
+/// With `resume`, the id of a session the agent opened before, the agent
+/// goes on with that session instead, when it can: [`Session::resumed`]
+/// tells whether it did. What the agent tells of the session's past while
+/// it resumes it is left out: the session starts from there.
+///
 /// # Errors
 ///
 /// Returns the error `talk` returns, or an error if the connection fails or
@@ -67,6 +74,7 @@ pub async fn connect<T>(
     agent: impl Transport,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
+    resume: Option<String>,
     talk: impl AsyncFnOnce(Session) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     let (updates, received) = unbounded_channel();
@@ -95,10 +103,17 @@ pub async fn connect<T>(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
-            let id = start(&cx, cwd, mcp_servers).await?;
+            let (id, resumed) = start(&cx, cwd, mcp_servers, resume).await?;
+            let mut received = received;
+            if resumed {
+                // The agent tells what it heard of the session's past before
+                // it answers, so all of it has arrived.
+                while received.try_recv().is_ok() {}
+            }
             let session = Session {
                 cx,
                 id,
+                resumed,
                 received,
                 tool_calls: HashMap::new(),
             };
@@ -109,23 +124,61 @@ pub async fn connect<T>(
     outcome.context("the connection closed before the session started")?
 }
 
-/// Initializes the connection and opens a session working in `cwd`.
+/// Initializes the connection and opens a session working in `cwd`, or
+/// resumes the session `resume` when the agent can, and returns the
+/// session's id, with whether it was resumed.
 async fn start(
     cx: &ConnectionTo<Agent>,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
-) -> agent_client_protocol::Result<SessionId> {
-    cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+    resume: Option<String>,
+) -> agent_client_protocol::Result<(SessionId, bool)> {
+    let initialized = cx
+        .send_request(InitializeRequest::new(ProtocolVersion::V1))
         .block_task()
         .await?;
-    let session = cx
-        .send_request(
-            NewSessionRequest::new(cwd)
-                .mcp_servers(mcp_servers.into_iter().map(Into::into).collect()),
+    let mcp_servers: Vec<AcpMcpServer> = mcp_servers.into_iter().map(Into::into).collect();
+    if let Some(id) = resume
+        && resumed(
+            cx,
+            &initialized.agent_capabilities,
+            SessionId::new(id.clone()),
+            &cwd,
+            &mcp_servers,
         )
+        .await
+    {
+        return Ok((SessionId::new(id), true));
+    }
+    let session = cx
+        .send_request(NewSessionRequest::new(cwd).mcp_servers(mcp_servers))
         .block_task()
         .await?;
-    Ok(session.session_id)
+    Ok((session.session_id, false))
+}
+
+/// Asks the agent to go on with session `id`, working in `cwd` with
+/// `mcp_servers`, and returns whether it does. An agent that can resume a
+/// session without telling its past is asked to, since the past is not
+/// shown again; one that can only load it, telling its past, is asked to
+/// load it. An agent that can do neither, or refuses, does not go on with
+/// it.
+async fn resumed(
+    cx: &ConnectionTo<Agent>,
+    capabilities: &AgentCapabilities,
+    id: SessionId,
+    cwd: &std::path::Path,
+    mcp_servers: &[AcpMcpServer],
+) -> bool {
+    if capabilities.session_capabilities.resume.is_some() {
+        let request = ResumeSessionRequest::new(id, cwd).mcp_servers(mcp_servers.to_vec());
+        cx.send_request(request).block_task().await.is_ok()
+    } else if capabilities.load_session {
+        let request = LoadSessionRequest::new(id, cwd).mcp_servers(mcp_servers.to_vec());
+        cx.send_request(request).block_task().await.is_ok()
+    } else {
+        false
+    }
 }
 
 /// What the connection hands to the turn that is running: an update ready to
@@ -209,12 +262,26 @@ fn translate_content(content: Vec<AcpToolCallContent>) -> Vec<ToolCallContent> {
 pub struct Session {
     cx: ConnectionTo<Agent>,
     id: SessionId,
+    resumed: bool,
     received: UnboundedReceiver<Received>,
     /// The title of each tool call of the turn that has not ended yet.
     tool_calls: HashMap<ToolCallId, Option<String>>,
 }
 
 impl Session {
+    /// The id the agent gave the session, to resume it with later.
+    #[must_use]
+    pub fn id(&self) -> String {
+        self.id.to_string()
+    }
+
+    /// Whether the agent went on with a session it had opened before,
+    /// rather than opening a new one.
+    #[must_use]
+    pub fn resumed(&self) -> bool {
+        self.resumed
+    }
+
     /// Sends `texts` to the agent as a prompt, each a block of its own,
     /// starting a turn.
     pub fn send(&mut self, texts: impl IntoIterator<Item = String>) -> Turn<'_> {

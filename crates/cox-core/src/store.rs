@@ -1,6 +1,7 @@
-//! Where Cox keeps the projects, the chats in them, and what each chat
-//! showed: a `SQLite` database, written as the chats go, so that they last
-//! past their closing, and past Cox quitting, however it quits.
+//! Where Cox keeps the projects, the chats in them, what each chat
+//! showed, and the session its agent had, to go on with: a `SQLite`
+//! database, written as the chats go, so that they last past their
+//! closing, and past Cox quitting, however it quits.
 //!
 //! A chat's entries are kept one row each, written as they arrive. An
 //! entry that is still changing, such as a reply still arriving or a tool
@@ -18,7 +19,7 @@ use crate::entry::Entry;
 use crate::tabs::Tabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 1;
+const VERSION: i64 = 2;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -34,7 +35,9 @@ CREATE TABLE chats (
     -- When the chat was opened, in milliseconds since the epoch.
     created INTEGER NOT NULL,
     -- Its stage's tabs, as JSON, once it has a stage.
-    tabs TEXT
+    tabs TEXT,
+    -- The id its agent gave its session, once the agent has opened one.
+    session TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -47,6 +50,10 @@ CREATE TABLE entries (
     PRIMARY KEY (chat, number)
 ) WITHOUT ROWID;
 ";
+
+/// What makes the tables of each earlier version into those of the next:
+/// the first of version 1, and so on.
+const UPGRADES: &[&str] = &["ALTER TABLE chats ADD COLUMN session TEXT;"];
 
 /// How long a write waits for another Cox writing the same database.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -116,6 +123,15 @@ impl Store {
                 connection.pragma_update(None, "user_version", VERSION)?;
             }
             VERSION => {}
+            1..VERSION => {
+                // From the version kept on, in one go, so that a Cox
+                // stopped halfway leaves the tables as they were.
+                let from = usize::try_from(version - 1)?;
+                let upgrades = UPGRADES[from..].concat();
+                connection.execute_batch(&format!(
+                    "BEGIN; {upgrades} PRAGMA user_version = {VERSION}; COMMIT;"
+                ))?;
+            }
             _ => bail!("the chats were kept by a newer Cox (version {version})"),
         }
         Ok(Self { connection })
@@ -259,6 +275,32 @@ impl Store {
         )?;
         Ok(())
     }
+
+    /// The id the agent of `chat` gave its session, if it opened one.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn session(&self, chat: ChatId) -> anyhow::Result<Option<String>> {
+        Ok(self.connection.query_row(
+            "SELECT session FROM chats WHERE id = ?1",
+            [chat.0],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Keeps `session` as the id of the session of `chat`'s agent.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_session(&self, chat: ChatId, session: &str) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET session = ?2 WHERE id = ?1",
+            params![chat.0, session],
+        )?;
+        Ok(())
+    }
 }
 
 /// Where one chat is kept: what its conversation and stage write to as
@@ -291,6 +333,15 @@ impl Record {
     /// When the database cannot be written.
     pub fn tabs(&self, tabs: &Tabs) -> anyhow::Result<()> {
         self.store.keep_tabs(self.chat, tabs)
+    }
+
+    /// Keeps `session` as the id of the session of the chat's agent.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn session(&self, session: &str) -> anyhow::Result<()> {
+        self.store.keep_session(self.chat, session)
     }
 }
 
@@ -445,6 +496,65 @@ mod tests {
         };
         store.keep_tabs(chat, &tabs).unwrap();
         assert_eq!(store.tabs(chat).unwrap(), Some(tabs));
+    }
+
+    #[test]
+    fn keeps_the_session_of_a_chats_agent() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        assert_eq!(store.session(chat).unwrap(), None);
+
+        store.keep_session(chat, "session-1").unwrap();
+        assert_eq!(store.session(chat).unwrap().as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn a_database_from_an_earlier_cox_is_upgraded() {
+        let directory = scratch("earlier");
+        let path = directory.join("chats.sqlite");
+        std::fs::create_dir_all(&directory).unwrap();
+        {
+            // The tables as the first Cox to keep chats made them.
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE projects (
+                        id INTEGER PRIMARY KEY,
+                        folder TEXT NOT NULL UNIQUE,
+                        name TEXT NOT NULL
+                    );
+                    CREATE TABLE chats (
+                        id INTEGER PRIMARY KEY,
+                        project INTEGER REFERENCES projects (id),
+                        name TEXT NOT NULL,
+                        created INTEGER NOT NULL,
+                        tabs TEXT
+                    );
+                    CREATE TABLE entries (
+                        chat INTEGER NOT NULL REFERENCES chats (id),
+                        number INTEGER NOT NULL,
+                        at INTEGER NOT NULL,
+                        entry TEXT NOT NULL,
+                        PRIMARY KEY (chat, number)
+                    ) WITHOUT ROWID;
+                    INSERT INTO chats (name, created) VALUES ('Chat 1', 0);
+                    PRAGMA user_version = 1;",
+                )
+                .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        let chats = store.chats().unwrap();
+        assert_eq!(chats.len(), 1);
+        assert_eq!(store.session(chats[0].id).unwrap(), None);
+        store.keep_session(chats[0].id, "session-1").unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.session(chats[0].id).unwrap().as_deref(),
+            Some("session-1")
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]

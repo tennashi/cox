@@ -17,7 +17,8 @@
 //!
 //! An open chat's stage keeps its tabs as they change. A closed chat's
 //! stage opens again on the pages and files kept, for the human to look
-//! at; its terminals are not started again.
+//! at; its terminals are not started again. Once the human sends to the
+//! chat again, its agent works on those pages.
 
 use std::path::PathBuf;
 
@@ -64,8 +65,9 @@ pub struct Stage {
     record: Option<Record>,
     /// The tabs as they were last kept.
     kept: Option<Tabs>,
-    _from_agent: Option<Task<()>>,
-    _from_tools: Option<Task<()>>,
+    /// What carries out what the relay and the agent's tools ask, once
+    /// the stage works with the agent.
+    heard: Vec<Task<()>>,
 }
 
 /// A tab, and what it shows.
@@ -125,49 +127,67 @@ impl Shown {
 
 impl Stage {
     /// A stage of one tab showing `url`, for a chat working in `cwd`, which
-    /// tells `relay` of the pages it opens, carries out what the agent's
-    /// tools ask in `from_tools`, opens `panel` when the agent works on
-    /// it, and keeps its tabs in `record`.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "what a chat hands its stage, each once"
-    )]
+    /// opens `panel` when the agent works on it. Until it [works](Self::work)
+    /// with the chat's agent, nothing of it is kept.
     pub fn new(
         cef: Cef,
         cwd: PathBuf,
         url: &str,
-        relay: Option<Relay>,
-        from_tools: Option<UnboundedReceiver<Request>>,
         panel: Entity<Panel>,
-        record: Option<Record>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (pages, from_agent) = match relay {
-            Some(relay) => (Some(relay.pages), Some(relay.from_agent)),
-            None => (None, None),
-        };
-        let from_agent = from_agent.map(|from_agent| Self::hear(from_agent, window, cx));
-        let from_tools = from_tools.map(|from_tools| Self::hear_tools(from_tools, window, cx));
-        let mut stage = Self {
-            cef,
-            cwd,
-            tabs: Vec::new(),
-            shown: 0,
-            pages,
-            panel,
-            record,
-            kept: None,
-            _from_agent: from_agent,
-            _from_tools: from_tools,
-        };
+        let mut stage = Self::empty(cef, cwd, panel);
         stage.open_tab(url, true, window, cx);
         stage
     }
 
+    /// A stage with no tab yet.
+    fn empty(cef: Cef, cwd: PathBuf, panel: Entity<Panel>) -> Self {
+        Self {
+            cef,
+            cwd,
+            tabs: Vec::new(),
+            shown: 0,
+            pages: None,
+            panel,
+            record: None,
+            kept: None,
+            heard: Vec::new(),
+        }
+    }
+
+    /// The chat's agent starts: from now on, the stage tells `relay` of
+    /// its pages, those open and those it opens, carries out what the
+    /// agent's tools ask in `from_tools`, and keeps its tabs in `record`.
+    pub fn work(
+        &mut self,
+        relay: Option<Relay>,
+        from_tools: Option<UnboundedReceiver<Request>>,
+        record: Option<Record>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(relay) = relay {
+            for tab in &self.tabs {
+                if let Shown::Page { target, .. } = &tab.shown {
+                    relay.pages.opening().is(target.clone());
+                }
+            }
+            self.pages = Some(relay.pages);
+            self.heard.push(Self::hear(relay.from_agent, window, cx));
+        }
+        if let Some(from_tools) = from_tools {
+            self.heard.push(Self::hear_tools(from_tools, window, cx));
+        }
+        self.record = record;
+        self.changed(cx);
+    }
+
     /// The stage of a closed chat that worked in `cwd`, on the pages and
     /// files of `kept`, or of one tab showing `url` when none of them is
-    /// left. Nothing of it is kept.
+    /// left. Nothing of it is kept, until it [works](Self::work) with the
+    /// chat's agent started again.
     pub fn reading(
         cef: Cef,
         cwd: PathBuf,
@@ -177,18 +197,7 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut stage = Self {
-            cef,
-            cwd,
-            tabs: Vec::new(),
-            shown: 0,
-            pages: None,
-            panel,
-            record: None,
-            kept: None,
-            _from_agent: None,
-            _from_tools: None,
-        };
+        let mut stage = Self::empty(cef, cwd, panel);
         let Tabs { tabs, shown } = kept.unwrap_or_default();
         // The tab shown is the one that was, or else the last before it
         // that opens again.
