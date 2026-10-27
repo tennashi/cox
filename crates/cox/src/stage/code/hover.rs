@@ -15,9 +15,9 @@ use gpui::{
 };
 
 use super::{Code, MENU, MENU_BORDER};
-use crate::markdown::{self, Block};
-use crate::text::Reading;
 use crate::ui::LinkClicked;
+use crate::ui::markdown::{self, Block};
+use crate::ui::text::Reading;
 use crate::ui::theme::FOREGROUND;
 
 /// How long the mouse rests on a name before the server is asked of it.

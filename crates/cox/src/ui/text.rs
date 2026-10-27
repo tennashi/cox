@@ -21,8 +21,8 @@ use gpui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::markdown::{self, Block, Kind};
-use crate::selection::{Piece, Selection, Spot, TextId};
+use crate::ui::markdown::{self, Block, Kind};
+use crate::ui::selection::{Piece, Selection, Spot, TextId};
 use crate::ui::theme::{DIM, LINK};
 
 const SELECTED: u32 = 0x26_4f78;

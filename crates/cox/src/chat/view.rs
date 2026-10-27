@@ -25,11 +25,11 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::{Agent, AgentThread};
-use crate::conversation::{AgentEvent, Command, Content, Conversation, Entry, State};
-use crate::input::{LineInput, Submitted};
-use crate::text::{Reading, Writer};
+use crate::chat::conversation::{AgentEvent, Command, Content, Conversation, Entry, State};
 use crate::ui::Copy;
+use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
+use crate::ui::text::{Reading, Writer};
 use crate::ui::theme::{DIM, FONT};
 
 actions!(

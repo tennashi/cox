@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::relay::AgentInput;
+use crate::browser::relay::AgentInput;
 
 /// How long the pointer takes to glide to where the agent moved it.
 const GLIDE: Duration = Duration::from_millis(350);

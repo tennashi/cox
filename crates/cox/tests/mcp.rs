@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use cox::mcp::{Ended, Ran, Request, Server};
+use cox::agent::mcp::{Ended, Ran, Request, Server};
 use serde_json::{Value, json};
 
 fn scratch(name: &str) -> PathBuf {
@@ -28,7 +28,7 @@ impl Agent {
     /// session.
     fn start(server: &Server) -> Self {
         let mut bridge = Command::new(env!("CARGO_BIN_EXE_cox"))
-            .args([cox::mcp::OPTION, server.socket.to_str().unwrap()])
+            .args([cox::agent::mcp::OPTION, server.socket.to_str().unwrap()])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -76,7 +76,7 @@ impl Agent {
 fn the_agent_shows_a_file_on_its_chats_stage() {
     let cwd = scratch("show");
     std::fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
-    let server = cox::mcp::start(cwd.clone()).unwrap();
+    let server = cox::agent::mcp::start(cwd.clone()).unwrap();
     let mut agent = Agent::start(&server);
     let Server {
         socket,
@@ -108,7 +108,7 @@ fn the_agent_shows_a_file_on_its_chats_stage() {
 #[test]
 fn the_agent_runs_a_command_on_its_chats_stage_and_can_cancel_it() {
     let cwd = scratch("run");
-    let server = cox::mcp::start(cwd.clone()).unwrap();
+    let server = cox::agent::mcp::start(cwd.clone()).unwrap();
     let mut agent = Agent::start(&server);
     let mut requests = server.requests;
 

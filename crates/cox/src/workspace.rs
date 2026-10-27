@@ -19,11 +19,11 @@ use gpui::{
     Stateful, Subscription, Window, actions, div, prelude::*, px, rgb,
 };
 
-use crate::conversation::{Entry, State};
-use crate::instructions::Instructions;
+use crate::chat::conversation::{Entry, State};
+use crate::chat::instructions::Instructions;
+use crate::chat::view::{Reopened, SessionView};
 use crate::ui::paths::shortened;
 use crate::ui::theme::FONT;
-use crate::view::{Reopened, SessionView};
 
 actions!(
     cox,
@@ -53,7 +53,7 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// What opens the window's chats: the [`Launcher`](crate::session::Launcher)
+/// What opens the window's chats: the [`Launcher`](crate::chat::session::Launcher)
 /// of the agents, or a fake one in tests.
 pub trait Opens {
     /// Starts a chat's agent working in `cwd`, an absolute path, with

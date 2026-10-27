@@ -2,6 +2,14 @@
 //! of its own, since GPUI runs its own executor, and talks to the window
 //! over channels. Tokio's channels do not need a tokio runtime to wait on,
 //! so the window awaits events on GPUI's executor.
+//!
+//! - [`mcp`] serves Cox's own tools to each chat's agent, and is the
+//!   bridge the agent runs to reach them.
+//! - [`tools`] says which MCP servers the agent gets: the stage's, and
+//!   Cox's own.
+
+pub mod mcp;
+pub mod tools;
 
 use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
@@ -11,8 +19,8 @@ use cox_acp::{McpServer, PermissionAnswer, Session, ToolCallContent, Transport, 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::conversation::{AgentEvent, Command, Content, Entry, Opened, ToolCallResult};
-use crate::instructions::Instructions;
+use crate::chat::conversation::{AgentEvent, Command, Content, Entry, Opened, ToolCallResult};
+use crate::chat::instructions::Instructions;
 
 /// The window's ends of the channels to the agent side.
 pub struct Agent {
@@ -211,7 +219,7 @@ fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
             let ahead = instructions
                 .map(|i| i.prompt())
                 .into_iter()
-                .chain([crate::conversation::retold(&earlier)])
+                .chain([crate::chat::conversation::retold(&earlier)])
                 .collect();
             (how, ahead)
         }

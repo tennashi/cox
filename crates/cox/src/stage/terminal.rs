@@ -1,6 +1,6 @@
 //! A tab of the stage that is a terminal: a shell the human types into,
 //! or a command the agent runs with Cox's tool for that (see
-//! [`crate::mcp`]), which the human watches run, and can type into too.
+//! [`crate::agent::mcp`]), which the human watches run, and can type into too.
 //!
 //! The terminal is `alacritty_terminal`'s: it runs the program on a
 //! pseudoterminal, reads what the program writes on a thread of its own,
@@ -46,9 +46,9 @@ use gpui::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::input::Paste;
-use crate::mcp::{Ended, Ran};
+use crate::agent::mcp::{Ended, Ran};
 use crate::ui::Copy;
+use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{BACKGROUND, DIM, FAILED, FONT, SELECTION};
 

@@ -15,8 +15,8 @@ use cox_core::store::Record;
 use gpui::{App, Entity, Window, prelude::*};
 
 use crate::agent::{Agent, Start};
-use crate::instructions::Instructions;
-use crate::view::{Again, OpenLink, Panel, SessionView, StageView};
+use crate::chat::instructions::Instructions;
+use crate::chat::view::{Again, OpenLink, Panel, SessionView, StageView};
 use crate::workspace::{Closed, Opens};
 
 /// Opens chats, each with an agent of the same command.
@@ -125,12 +125,12 @@ impl Launcher {
         // The agent gets the pages the human sees, and Cox's own tools.
         let tools = relay
             .as_ref()
-            .and_then(|relay| crate::tools::stage(relay.port, &self.path))
+            .and_then(|relay| crate::agent::tools::stage(relay.port, &self.path))
             .into_iter()
             .chain(
                 server
                     .as_ref()
-                    .map(|(exe, server)| crate::tools::cox(exe.clone(), &server.socket)),
+                    .map(|(exe, server)| crate::agent::tools::cox(exe.clone(), &server.socket)),
             )
             .collect();
         let requests = server.map(|(_, server)| server.requests);
@@ -149,9 +149,9 @@ impl Launcher {
     /// Starts the server of Cox's own tools for a chat working in `cwd`,
     /// and answers it with the `cox` the agent runs to reach it, or `None`
     /// when it did not start.
-    fn server(&self, cwd: &std::path::Path) -> Option<(PathBuf, crate::mcp::Server)> {
+    fn server(&self, cwd: &std::path::Path) -> Option<(PathBuf, crate::agent::mcp::Server)> {
         let exe = self.exe.clone()?;
-        match crate::mcp::start(cwd.to_owned()) {
+        match crate::agent::mcp::start(cwd.to_owned()) {
             Ok(server) => Some((exe, server)),
             Err(error) => {
                 log::error!("the agent gets no tools of Cox's own: {error:#}");
@@ -164,12 +164,12 @@ impl Launcher {
     /// the chat's pages, which tells the stage where the agent points,
     /// clicks and types, and opens and closes its tabs for the agent.
     /// Answers `None` when it did not start.
-    fn relay(&self) -> Option<crate::relay::Relay> {
+    fn relay(&self) -> Option<crate::browser::relay::Relay> {
         match self
             .cef
             .devtools_port()
             .ok_or_else(|| anyhow::anyhow!("the browser has no DevTools port"))
-            .and_then(crate::relay::start)
+            .and_then(crate::browser::relay::start)
         {
             Ok(relay) => Some(relay),
             Err(error) => {

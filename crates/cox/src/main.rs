@@ -10,7 +10,7 @@
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
 //!
 //! The agents run `cox` too, as `cox --mcp <socket>`, the MCP server of
-//! Cox's own tools that `cox::mcp` hands them. And on Linux, CEF runs
+//! Cox's own tools that `cox::agent::mcp` hands them. And on Linux, CEF runs
 //! `cox` for its helper processes, which `cox::browser` tells apart.
 
 use std::process::ExitCode;
@@ -21,7 +21,7 @@ fn main() -> ExitCode {
     env_logger::init();
     match Program::parse(std::env::args().skip(1)) {
         Program::App(settings) => app::run(settings),
-        Program::Bridge(socket) => match cox::mcp::bridge(&socket) {
+        Program::Bridge(socket) => match cox::agent::mcp::bridge(&socket) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("cox: {error:#}");

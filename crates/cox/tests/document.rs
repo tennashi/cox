@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::document::Document;
+use cox::stage::document::Document;
 use cox::ui::LinkClicked;
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 
@@ -23,7 +23,7 @@ fn open<'a>(
     path: PathBuf,
     text: &str,
 ) -> (Entity<Document>, &'a mut VisualTestContext) {
-    cx.update(cox::document::bind_keys);
+    cx.update(cox::stage::document::bind_keys);
     let text = text.to_owned();
     let (document, cx) = cx.add_window_view(|_, cx| Document::new(path, text, cx));
     cx.run_until_parked();

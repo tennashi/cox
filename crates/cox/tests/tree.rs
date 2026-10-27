@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::tree::{Chosen, Tree};
+use cox::stage::tree::{Chosen, Tree};
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
 /// A folder of its own for a test, with the files `paths`, empty.

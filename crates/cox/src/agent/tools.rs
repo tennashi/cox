@@ -7,7 +7,7 @@
 //! where. It runs on Node through `npx`, which fetches it the first time.
 //!
 //! The rest are Cox's own tools, which Cox itself serves (see
-//! [`crate::mcp`]).
+//! [`crate::agent::mcp`]).
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -53,7 +53,7 @@ pub fn cox(exe: PathBuf, socket: &Path) -> McpServer {
         name: "cox".to_owned(),
         command: exe,
         args: vec![
-            crate::mcp::OPTION.to_owned(),
+            crate::agent::mcp::OPTION.to_owned(),
             socket.to_string_lossy().into_owned(),
         ],
     }

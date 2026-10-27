@@ -29,8 +29,8 @@ use gpui::{
 };
 
 use crate::browser::Cef;
-use crate::servers::Servers;
-use crate::session::Launcher;
+use crate::chat::session::Launcher;
+use crate::stage::servers::Servers;
 use crate::workspace::Workspace;
 
 actions!(cox, [Quit]);
@@ -43,7 +43,7 @@ pub enum Program {
     /// The app, as `cox [--stage <url>] [--home <dir>] <agent command>`.
     App(Settings),
     /// The bridge between an agent and the server of its chat's tools on
-    /// the socket given, as `cox --mcp <socket>` (see [`crate::mcp`]).
+    /// the socket given, as `cox --mcp <socket>` (see [`crate::agent::mcp`]).
     Bridge(PathBuf),
     /// Neither: the usage is to be shown.
     Usage,
@@ -65,7 +65,7 @@ impl Program {
     /// for.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Self {
         let args: Vec<String> = args.into_iter().collect();
-        if let Some(socket) = crate::mcp::bridge_to(&args) {
+        if let Some(socket) = crate::agent::mcp::bridge_to(&args) {
             return Self::Bridge(socket);
         }
         let settings = Settings::parse(args);
@@ -109,7 +109,7 @@ pub fn run(settings: Settings) -> ExitCode {
     // with arguments of their own, and exit inside `start`.
     let cef = crate::browser::start();
     // In place of CEF's handlers, which quit without the app's quit handlers.
-    if let Err(error) = crate::quit::on_signals() {
+    if let Err(error) = crate::browser::quit::on_signals() {
         log::error!("signals will end Cox without stopping the agents: {error}");
     }
     let store = Rc::new(open_store());
@@ -164,13 +164,13 @@ fn open_store() -> Store {
 
 /// Binds the keys of every part of the window, and of quitting.
 fn bind_keys(cx: &mut App) {
-    crate::input::bind_keys(cx);
-    crate::view::bind_keys(cx);
-    crate::document::bind_keys(cx);
-    crate::code::bind_keys(cx);
+    crate::ui::input::bind_keys(cx);
+    crate::chat::view::bind_keys(cx);
+    crate::stage::document::bind_keys(cx);
+    crate::stage::code::bind_keys(cx);
     crate::workspace::bind_keys(cx);
     // After the window's, which a terminal's own keys stand before.
-    crate::terminal::bind_keys(cx);
+    crate::stage::terminal::bind_keys(cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
     #[cfg(target_os = "macos")]
     cx.bind_keys([gpui::KeyBinding::new("cmd-q", Quit, None)]);
@@ -182,7 +182,7 @@ fn bind_keys(cx: &mut App) {
 const PUMP_INTERVAL: Duration = Duration::from_millis(8);
 
 /// How often the app looks whether it was asked to quit from where it
-/// could not quit right away (see [`crate::quit`]).
+/// could not quit right away (see [`crate::browser::quit`]).
 const QUIT_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Gives CEF what it needs of the app while the app runs: on macOS, the
@@ -191,7 +191,7 @@ const QUIT_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(target_os = "macos")]
 fn serve_browser(cef: &Cef, cx: &mut App) {
     // Before any browser exists: CEF asks the app about itself.
-    crate::macos::adopt_cef_app_protocol();
+    crate::browser::macos::adopt_cef_app_protocol();
     let pumped = cef.clone();
     cx.spawn(async move |cx| {
         loop {
@@ -210,7 +210,7 @@ fn quit_when_asked(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(QUIT_CHECK_INTERVAL).await;
-            if crate::quit::take_asked() {
+            if crate::browser::quit::take_asked() {
                 let _ = cx.update(|cx| cx.quit());
             }
         }

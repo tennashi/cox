@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cox::agent::Start;
-use cox::conversation::{Entry, State};
-use cox::instructions::Instructions;
-use cox::view::{Again, SessionView};
+use cox::chat::conversation::{Entry, State};
+use cox::chat::instructions::Instructions;
+use cox::chat::view::{Again, SessionView};
 use cox::workspace::{Chat, Closed, Opens, Place, Workspace};
 use cox_core::store::{Record, Store};
 use fake_agent::{FakeAgent, Resumes};
@@ -109,8 +109,8 @@ fn open_window_resuming(
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
     cx.update(|cx| {
-        cox::input::bind_keys(cx);
-        cox::view::bind_keys(cx);
+        cox::ui::input::bind_keys(cx);
+        cox::chat::view::bind_keys(cx);
         cox::workspace::bind_keys(cx);
     });
     let agents = Agents::default();
