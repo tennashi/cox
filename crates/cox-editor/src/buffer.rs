@@ -5,6 +5,10 @@
 //! A line is the text between line breaks, without them: only `\n` breaks
 //! a line, and a `\r` before it is left out too. A file that ends with a
 //! line break has an empty line after it, where the next line would go.
+//!
+//! The text changes as a whole, as the file does, but the buffer works out
+//! the one stretch of it that changed, an [`Edit`], so that what is worked
+//! out from the text, such as its syntax, follows only that.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -31,6 +35,18 @@ impl Point {
     }
 }
 
+/// A stretch of the text that changed, in bytes of the whole text and in
+/// places: it went from `start` to `old_end`, and goes to `new_end` now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Edit {
+    pub start: usize,
+    pub old_end: usize,
+    pub new_end: usize,
+    pub start_point: Point,
+    pub old_end_point: Point,
+    pub new_end_point: Point,
+}
+
 impl Buffer {
     #[must_use]
     pub fn new(text: &str) -> Self {
@@ -43,6 +59,95 @@ impl Buffer {
     #[must_use]
     pub fn text(&self) -> String {
         self.rope.to_string()
+    }
+
+    /// How long the whole text is, in bytes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.rope.len_bytes()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rope.len_bytes() == 0
+    }
+
+    /// Makes the text `text`, and says what stretch of it changed, if any.
+    pub fn set_text(&mut self, text: &str) -> Option<Edit> {
+        let old_len = self.len();
+        let same_start = self
+            .rope
+            .bytes()
+            .zip(text.bytes())
+            .take_while(|(old, new)| old == new)
+            .count();
+        let mut start = same_start;
+        if start == old_len && start == text.len() {
+            return None;
+        }
+        // The same bytes, so a character starts there in both.
+        while !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        let most_end = (old_len - start).min(text.len() - start);
+        let same_end = self
+            .rope
+            .bytes_at(old_len)
+            .reversed()
+            .zip(text.bytes().rev())
+            .take(most_end)
+            .take_while(|(old, new)| old == new)
+            .count();
+        let mut end = same_end;
+        while !text.is_char_boundary(text.len() - end) {
+            end -= 1;
+        }
+        let (old_end, new_end) = (old_len - end, text.len() - end);
+        let start_point = self.point_of(start);
+        let old_end_point = self.point_of(old_end);
+        let removed = self.rope.byte_to_char(start)..self.rope.byte_to_char(old_end);
+        self.rope.remove(removed.clone());
+        self.rope.insert(removed.start, &text[start..new_end]);
+        Some(Edit {
+            start,
+            old_end,
+            new_end,
+            start_point,
+            old_end_point,
+            new_end_point: self.point_of(new_end),
+        })
+    }
+
+    /// The text from `byte` on, as much of it as the rope holds in one
+    /// piece there, or nothing at the end of the text.
+    #[must_use]
+    pub fn chunk_at(&self, byte: usize) -> &str {
+        if byte >= self.len() {
+            return "";
+        }
+        let (chunk, start, _, _) = self.rope.chunk_at_byte(byte);
+        &chunk[byte - start..]
+    }
+
+    /// The text of the bytes in `range`, in the pieces the rope holds it in.
+    pub fn chunks(&self, range: Range<usize>) -> impl Iterator<Item = &str> {
+        self.rope.byte_slice(range).chunks()
+    }
+
+    /// The byte of the whole text that `line` starts at, or the end of the
+    /// text past the last line.
+    #[must_use]
+    pub fn line_start(&self, line: usize) -> usize {
+        if line >= self.lines() {
+            return self.len();
+        }
+        self.rope.line_to_byte(line)
+    }
+
+    /// The place of the byte `byte` of the whole text.
+    fn point_of(&self, byte: usize) -> Point {
+        let line = self.rope.byte_to_line(byte);
+        Point::new(line, byte - self.rope.line_to_byte(line))
     }
 
     /// How many lines there are: one more than line breaks.
@@ -164,6 +269,60 @@ mod tests {
         // Inside 本, which starts at byte 3.
         assert_eq!(buffer.clip(Point::new(1, 4)), Point::new(1, 3));
         assert_eq!(buffer.clip(Point::new(7, 1)), Point::new(2, 0));
+    }
+
+    #[test]
+    fn works_out_what_changed() {
+        let mut buffer = Buffer::new("fn main() {\n    old();\n}\n");
+        assert_eq!(buffer.set_text("fn main() {\n    old();\n}\n"), None);
+        let edit = buffer.set_text("fn main() {\n    new();\n    old();\n}\n");
+        assert_eq!(buffer.text(), "fn main() {\n    new();\n    old();\n}\n");
+        // From `old` on the second line, which `new();\n    ` goes before.
+        assert_eq!(
+            edit,
+            Some(Edit {
+                start: 16,
+                old_end: 16,
+                new_end: 27,
+                start_point: Point::new(1, 4),
+                old_end_point: Point::new(1, 4),
+                new_end_point: Point::new(2, 4),
+            })
+        );
+        let edit = buffer.set_text("").unwrap();
+        assert_eq!((edit.start, edit.old_end, edit.new_end), (0, 36, 0));
+        assert_eq!(edit.old_end_point, Point::new(4, 0));
+    }
+
+    #[test]
+    fn changes_whole_characters() {
+        // 日, 本 and 文 all start with the same byte.
+        let mut buffer = Buffer::new("日本");
+        let edit = buffer.set_text("本本").unwrap();
+        assert_eq!((edit.start, edit.old_end, edit.new_end), (0, 3, 3));
+        let edit = buffer.set_text("本文本").unwrap();
+        assert_eq!((edit.start, edit.old_end, edit.new_end), (3, 3, 6));
+        assert_eq!(buffer.text(), "本文本");
+    }
+
+    #[test]
+    fn reads_the_text_in_pieces() {
+        let line = "日本語のコメント ".repeat(400);
+        let buffer = Buffer::new(&format!("first\n{line}\n"));
+        let mut text = String::new();
+        let mut at = 0;
+        while at < buffer.len() {
+            let chunk = buffer.chunk_at(at);
+            text.push_str(chunk);
+            at += chunk.len();
+        }
+        assert_eq!(text, buffer.text());
+        assert_eq!(
+            buffer.chunks(6..buffer.len()).collect::<String>(),
+            format!("{line}\n")
+        );
+        assert_eq!(buffer.line_start(1), 6);
+        assert_eq!(buffer.line_start(9), buffer.len());
     }
 
     #[test]

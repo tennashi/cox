@@ -5,21 +5,28 @@
 //! it too.
 //!
 //! The tab draws only the lines in sight, so that a long file scrolls as a
-//! short one does, each with its number beside it. It follows the file as
-//! it changes (see [`crate::follow`]). The wheel scrolls it down and
-//! across, and a drag selects text to copy: a double click selects a
-//! word, and a triple click a line.
+//! short one does, each with its number beside it, in colors as its syntax
+//! says, when its language is one the editor knows (see
+//! [`cox_editor::language`]). It follows the file as it changes (see
+//! [`crate::follow`]), and parses it again in the background, keeping its
+//! colors until then. The wheel scrolls it down and across, and a drag
+//! selects text to copy: a double click selects a word, and a triple click
+//! a line.
 
+use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use cox_core::tabs::Lines;
 use cox_editor::buffer::{Buffer, Point as Place};
+use cox_editor::language::{Highlight, Language};
+use cox_editor::syntax::Syntax;
 use gpui::{
     App, Bounds, ClipboardItem, ContentMask, Context, Element, ElementId, Entity, FocusHandle,
-    Focusable, GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyBinding, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent,
-    ShapedLine, SharedString, Style, Task, TextRun, Window, div, fill, font, point, prelude::*, px,
-    relative, rgb, size,
+    Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement,
+    KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollWheelEvent, ShapedLine, SharedString, Style, Task, TextRun, Window, div, fill, font,
+    point, prelude::*, px, relative, rgb, size,
 };
 
 use crate::follow::{self, Follows, Stamp};
@@ -57,6 +64,42 @@ const SELECTION: u32 = 0x3a_4a6a;
 const DIM: u32 = 0xa0_a0a0;
 const FAILED: u32 = 0xf0_8080;
 
+/// How code that is nothing in particular is drawn.
+const PLAIN: (u32, FontWeight, FontStyle) = (FOREGROUND, FontWeight::NORMAL, FontStyle::Normal);
+
+/// How code is drawn, by what its syntax says it is: its color, and
+/// whether it is bold or italic.
+fn style(highlight: Highlight) -> (u32, FontWeight, FontStyle) {
+    let color = match highlight {
+        Highlight::Keyword
+        | Highlight::VariableBuiltin
+        | Highlight::Tag
+        | Highlight::Heading
+        | Highlight::PunctuationSpecial => 0x56_9cd6,
+        Highlight::Function => 0xdc_dcaa,
+        Highlight::Type | Highlight::TypeBuiltin | Highlight::Constructor => 0x4e_c9b0,
+        Highlight::String | Highlight::Literal => 0xce_9178,
+        Highlight::StringSpecial | Highlight::Escape => 0xd7_ba7d,
+        Highlight::Number | Highlight::ConstantBuiltin => 0xb5_cea8,
+        Highlight::Comment => 0x6a_9955,
+        Highlight::Constant | Highlight::Uri => 0x4f_c1ff,
+        Highlight::Property | Highlight::Variable | Highlight::Link => 0x9c_dcfe,
+        Highlight::Attribute | Highlight::Label => 0xc5_86c0,
+        Highlight::Operator | Highlight::Punctuation | Highlight::Emphasis | Highlight::Strong => {
+            FOREGROUND
+        }
+    };
+    let weight = match highlight {
+        Highlight::Heading | Highlight::Strong => FontWeight::BOLD,
+        _ => FontWeight::NORMAL,
+    };
+    let style = match highlight {
+        Highlight::Emphasis => FontStyle::Italic,
+        _ => FontStyle::Normal,
+    };
+    (color, weight, style)
+}
+
 /// Binds the keys of the tab.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT))]);
@@ -69,6 +112,15 @@ pub struct Code {
     /// How many characters the longest line has, which says how far the
     /// tab scrolls across.
     longest: usize,
+    /// The language of the file, if the editor knows it.
+    language: Option<&'static Language>,
+    /// The syntax of the text, once parsed: until it is parsed again, as
+    /// the text changes, it is only edited as the text changed.
+    syntax: Option<Syntax>,
+    /// What the stretches of the lines drawn so far are, by line, as the
+    /// syntax says, until the text or the syntax changes: a line coming
+    /// into sight is the only one worked out.
+    highlighted: HashMap<usize, Spans>,
     /// The file's, as the tab last read it, or `None` until the tab looks
     /// at the file.
     stamp: Option<Stamp>,
@@ -89,7 +141,11 @@ pub struct Code {
     laid: Option<Laid>,
     focus_handle: FocusHandle,
     _follow: Task<()>,
+    _parse: Task<()>,
 }
+
+/// The stretches of a line, each as bytes of it with what it is, in order.
+type Spans = Vec<(Range<usize>, Highlight)>;
 
 /// How a frame laid the text out, to find what is under the mouse.
 struct Laid {
@@ -115,9 +171,12 @@ impl Code {
     /// `text`, at `lines` if any.
     pub fn new(path: PathBuf, text: &str, lines: Option<Lines>, cx: &mut Context<Self>) -> Self {
         let buffer = Buffer::new(text);
-        Self {
+        let mut code = Self {
             longest: buffer.longest_line(),
             buffer,
+            language: Language::of_path(&path),
+            syntax: None,
+            highlighted: HashMap::new(),
             path,
             stamp: None,
             unread: None,
@@ -129,7 +188,10 @@ impl Code {
             laid: None,
             focus_handle: cx.focus_handle(),
             _follow: follow::follow(cx),
-        }
+            _parse: Task::ready(()),
+        };
+        code.parse(cx);
+        code
     }
 
     #[must_use]
@@ -168,6 +230,15 @@ impl Code {
         }
     }
 
+    /// What the stretches of `line`, from 0, are, as bytes of it, as the
+    /// syntax says once parsed.
+    #[must_use]
+    pub fn highlights(&self, line: usize) -> Vec<(Range<usize>, Highlight)> {
+        self.syntax.as_ref().map_or_else(Vec::new, |syntax| {
+            syntax.highlights(&self.buffer, line, LINE_LENGTH)
+        })
+    }
+
     /// The text selected.
     #[must_use]
     pub fn selected_text(&self) -> String {
@@ -183,19 +254,64 @@ impl Code {
         // The tab looks at the file again, which may have changed since.
         self.stamp = None;
         self.unread = None;
-        self.set_text(text);
+        self.set_text(text, cx);
         self.marked = lines;
         self.reveal = lines.map(|lines| lines.first - 1);
         cx.notify();
     }
 
-    fn set_text(&mut self, text: &str) {
-        if text != self.buffer.text() {
-            self.buffer = Buffer::new(text);
+    fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if let Some(edit) = self.buffer.set_text(text) {
             self.longest = self.buffer.longest_line();
             // What was selected may be gone.
             self.selection = None;
             self.selecting = false;
+            if let Some(syntax) = &mut self.syntax {
+                syntax.edit(&edit);
+            }
+            self.highlighted.clear();
+            self.parse(cx);
+        }
+    }
+
+    /// Parses the text in the background, with what did not change since
+    /// it was last parsed, and draws it so once parsed.
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the parse is only held: dropping it leaves its syntax unused"
+    )]
+    fn parse(&mut self, cx: &mut Context<Self>) {
+        let Some(language) = self.language else {
+            return;
+        };
+        let buffer = self.buffer.clone();
+        let old = self.syntax.clone();
+        // A parse of the text before, if not done yet, is left to end.
+        self._parse = cx.spawn(async move |code, cx| {
+            let syntax = cx
+                .background_executor()
+                .spawn(async move { Syntax::parse(language, &buffer, old.as_ref()) })
+                .await;
+            code.update(cx, |code, cx| {
+                code.syntax = syntax;
+                code.highlighted.clear();
+                cx.notify();
+            })
+            .ok();
+        });
+    }
+
+    /// What the stretches of `line` are, as the last frames worked out, or
+    /// else worked out now and added to `highlighted`, for the tab to keep.
+    fn highlights_at(&self, line: usize, highlighted: &mut Vec<(usize, Spans)>) -> Spans {
+        match (self.highlighted.get(&line), &self.syntax) {
+            (Some(highlights), _) => highlights.clone(),
+            (None, Some(syntax)) => {
+                let highlights = syntax.highlights(&self.buffer, line, LINE_LENGTH);
+                highlighted.push((line, highlights.clone()));
+                highlights
+            }
+            (None, None) => Vec::new(),
         }
     }
 
@@ -364,7 +480,7 @@ impl Follows for Code {
             Ok((stamp, text)) => {
                 self.stamp = Some(stamp);
                 self.unread = None;
-                self.set_text(&text);
+                self.set_text(&text, cx);
             }
             Err(error) => self.unread = Some(error.to_string()),
         }
@@ -456,6 +572,33 @@ impl Shown {
         }
     }
 
+    /// The stretches of the text drawn, in order, each with how long it is
+    /// and what it is, from `highlights`, what the stretches of the line
+    /// are.
+    fn runs(&self, highlights: &Spans) -> Vec<(usize, Option<Highlight>)> {
+        let mut runs: Vec<(usize, Option<Highlight>)> = Vec::new();
+        let mut highlights = highlights.iter().peekable();
+        for (at, &(shown, column)) in self.starts.iter().enumerate() {
+            let end = self
+                .starts
+                .get(at + 1)
+                .map_or(self.text.len(), |&(end, _)| end);
+            while highlights
+                .next_if(|(range, _)| range.end <= column)
+                .is_some()
+            {}
+            let highlight = highlights
+                .peek()
+                .filter(|(range, _)| range.start <= column)
+                .map(|&&(_, highlight)| highlight);
+            match runs.last_mut() {
+                Some((len, last)) if *last == highlight => *len += end - shown,
+                _ => runs.push((end - shown, highlight)),
+            }
+        }
+        runs
+    }
+
     /// The index of the text drawn that `column` of the line is at.
     fn index_of(&self, column: usize) -> usize {
         self.starts
@@ -504,18 +647,12 @@ impl Text {
             .advance(text_system.resolve_font(&font), font_size, 'm')
             .map_or(px(8.), |advance| advance.width);
         let line_height = (font_size * LINE_HEIGHT).round();
-        let shape = |text: &str, color: u32, window: &Window| {
+        let run = |len, style| text_run(&font, len, style);
+        let shape = |text: &str, runs: &[TextRun], window: &Window| {
             window.text_system().shape_line(
                 SharedString::from(text.to_owned()),
                 font_size,
-                &[TextRun {
-                    len: text.len(),
-                    font: font.clone(),
-                    color: Hsla::from(rgb(color)),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                }],
+                runs,
                 None,
             )
         };
@@ -556,6 +693,7 @@ impl Text {
             .selection
             .map(|(anchor, head)| (anchor.min(head), anchor.max(head)));
 
+        let mut highlighted = Vec::new();
         let mut painted = Painted {
             text_bounds,
             line_height,
@@ -564,7 +702,8 @@ impl Text {
         for line in first..after.min(lines) {
             let y = top + line_height * line as f32;
             let shown = Shown::of(&code.buffer.line(line));
-            let shaped = shape(&shown.text, FOREGROUND, window);
+            let highlights = code.highlights_at(line, &mut highlighted);
+            let shaped = shape(&shown.text, &text_runs(&font, &shown, &highlights), window);
             let is_marked = marked.contains(&line);
             if is_marked {
                 painted.marked.push(Bounds::new(
@@ -581,7 +720,11 @@ impl Text {
             }
             let number = (line + 1).to_string();
             let color = if is_marked { NUMBER_MARKED } else { NUMBER };
-            let number = shape(&number, color, window);
+            let number = shape(
+                &number,
+                &[run(number.len(), (color, PLAIN.1, PLAIN.2))],
+                window,
+            );
             let x = bounds.origin.x + gutter - px(PADDING) - number.width;
             painted.numbers.push((point(x, y), number));
             painted.text.push((point(left, y), shaped.clone()));
@@ -596,8 +739,44 @@ impl Text {
             code.reveal = None;
             code.scroll = scroll;
             code.laid = Some(laid);
+            code.highlighted.extend(highlighted);
         });
         painted
+    }
+}
+
+/// The runs of `shown` in `font`, drawn as `highlights`, what the
+/// stretches of its line are, say.
+fn text_runs(font: &Font, shown: &Shown, highlights: &Spans) -> Vec<TextRun> {
+    let mut runs: Vec<TextRun> = shown
+        .runs(highlights)
+        .into_iter()
+        .map(|(len, highlight)| text_run(font, len, highlight.map_or(PLAIN, style)))
+        .collect();
+    // Even an empty line is shaped with a run.
+    if runs.is_empty() {
+        runs.push(text_run(font, 0, PLAIN));
+    }
+    runs
+}
+
+/// A run of `len` bytes of text in `font`, drawn as `style` says.
+fn text_run(
+    font: &Font,
+    len: usize,
+    (color, weight, style): (u32, FontWeight, FontStyle),
+) -> TextRun {
+    TextRun {
+        len,
+        font: Font {
+            weight,
+            style,
+            ..font.clone()
+        },
+        color: Hsla::from(rgb(color)),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
     }
 }
 
@@ -718,6 +897,24 @@ mod tests {
         assert_eq!(shown.column_of(9), 5);
         assert_eq!(shown.index_of(3), 6);
         assert_eq!(shown.index_of(5), 9);
+    }
+
+    #[test]
+    fn draws_each_stretch_of_a_line_as_its_syntax_says() {
+        // The tab stands for four spaces, and `x` is within no stretch.
+        let shown = Shown::of("\tlet x = 1;");
+        let highlights = vec![(1..4, Highlight::Keyword), (9..10, Highlight::Number)];
+        assert_eq!(
+            shown.runs(&highlights),
+            [
+                (4, None),
+                (3, Some(Highlight::Keyword)),
+                (5, None),
+                (1, Some(Highlight::Number)),
+                (1, None),
+            ]
+        );
+        assert_eq!(Shown::of("").runs(&highlights).first(), None);
     }
 
     #[test]

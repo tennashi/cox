@@ -80,7 +80,12 @@ and scrolls to. A click on a path in the conversation, as the agent
 writes `src/main.rs:12`, opens the file the same way, or as Markdown when
 it is a Markdown file and the path names no lines. The tab draws only the
 lines in sight, so a long file scrolls as a short one does, and follows
-the file as it changes.
+the file as it changes. It draws the code in colors, as its syntax says,
+through [tree-sitter](https://crates.io/crates/tree-sitter)'s grammars
+for Rust, TOML, Markdown, JSON, YAML, shell scripts, JavaScript,
+TypeScript and Python, with the code within the code too, as a Markdown
+code block's or a Rust macro's. It parses the file in the background,
+again only where it changed, keeping the colors it had until then.
 
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The

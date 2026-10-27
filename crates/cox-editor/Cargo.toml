@@ -12,3 +12,15 @@ workspace = true
 # The text, as a rope: see `src/buffer.rs`. Only `\n` breaks lines, as in
 # the files Cox edits; a `\r` before it stays out of the line.
 ropey = { version = "1.6.1", default-features = false, features = ["simd"] }
+# The syntax of the text, to draw it in colors: see `src/syntax.rs`, and
+# `src/language.rs` for the grammars.
+tree-sitter = "0.27.1"
+tree-sitter-bash = "0.25.1"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-json = "0.24.8"
+tree-sitter-md = "0.5.4"
+tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
+tree-sitter-toml-ng = "0.7.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-yaml = "0.7.2"
