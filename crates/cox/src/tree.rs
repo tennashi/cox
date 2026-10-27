@@ -1,0 +1,307 @@
+//! A tab of the stage that shows the files of the chat's project as a
+//! tree, for the human to find one and open it: a click on a folder opens
+//! or closes it, and a click on a file opens it on a tab of its own, as a
+//! link to it would (see [`crate::stage`]). What Git ignores is left out
+//! (see [`cox_editor::files`]).
+//!
+//! The tab looks now and then at the folders open in it, so that it shows
+//! the files the agent writes, and no longer those it removes.
+
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use cox_editor::files::{self, Entry};
+use gpui::{
+    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, ScrollHandle, Task, Window,
+    div, prelude::*, px, rgb,
+};
+
+use crate::workspace::shortened;
+
+/// How often the tab looks at the folders open in it.
+const LOOK_EVERY: Duration = Duration::from_secs(1);
+
+/// How far in a folder's files and folders are from it.
+const INDENT: f32 = 16.;
+
+const FOREGROUND: u32 = 0xd4_d4d4;
+const BACKGROUND: u32 = 0x1e_1e1e;
+const DIM: u32 = 0xa0_a0a0;
+const FAILED: u32 = 0xf0_8080;
+const HOVER: u32 = 0x2a_2d2e;
+const CHOSEN: u32 = 0x04_395e;
+
+/// The human chose the file at this path, to open it.
+pub struct Chosen(pub PathBuf);
+
+pub struct Tree {
+    /// The project's folder, which is always open.
+    root: PathBuf,
+    /// The folders open in it besides, by their absolute paths.
+    open: BTreeSet<PathBuf>,
+    /// What is in each folder open, as the tab last listed it, or why it
+    /// could not be listed.
+    listed: HashMap<PathBuf, Result<Vec<Entry>, String>>,
+    /// The file the human chose last, which the tab marks.
+    chosen: Option<PathBuf>,
+    scroll: ScrollHandle,
+    focus_handle: FocusHandle,
+    _follow: Task<()>,
+}
+
+impl EventEmitter<Chosen> for Tree {}
+
+impl Tree {
+    /// A tab showing the files under `root`, an absolute path, with the
+    /// folders `open` open.
+    pub fn new(root: PathBuf, open: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
+        let open: BTreeSet<PathBuf> = open.into_iter().filter(|path| *path != root).collect();
+        let listed = std::iter::once(&root)
+            .chain(&open)
+            .map(|folder| (folder.clone(), list(folder)))
+            .collect();
+        Self {
+            root,
+            open,
+            listed,
+            chosen: None,
+            scroll: ScrollHandle::new(),
+            focus_handle: cx.focus_handle(),
+            _follow: follow(cx),
+        }
+    }
+
+    /// The name the tab goes by: the project's folder's.
+    #[must_use]
+    pub fn title(&self) -> String {
+        let name = self.root.file_name().map_or_else(
+            || self.root.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        format!("{name}/")
+    }
+
+    /// The folders open, besides the project's.
+    #[must_use]
+    pub fn open(&self) -> Vec<PathBuf> {
+        self.open.iter().cloned().collect()
+    }
+
+    /// The folders whose files the tab shows: the project's, and the ones
+    /// open.
+    fn folders(&self) -> Vec<PathBuf> {
+        std::iter::once(&self.root)
+            .chain(&self.open)
+            .cloned()
+            .collect()
+    }
+
+    /// Opens the folder at `path`, or closes it if it is open.
+    fn toggle(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if !self.open.remove(path) {
+            self.listed.insert(path.to_owned(), list(path));
+            self.open.insert(path.to_owned());
+        }
+        cx.notify();
+    }
+
+    fn choose(&mut self, path: &Path, cx: &mut Context<Self>) {
+        self.chosen = Some(path.to_owned());
+        cx.emit(Chosen(path.to_owned()));
+        cx.notify();
+    }
+
+    /// The tab looked at its folders again, and found what is in them now:
+    /// draws them again if that changed.
+    fn looked(
+        &mut self,
+        listed: HashMap<PathBuf, Result<Vec<Entry>, String>>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        for (folder, now) in listed {
+            if self.listed.get(&folder) != Some(&now) {
+                self.listed.insert(folder, now);
+                changed = true;
+            }
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// The paths of the files and folders the tab shows, in order: what
+    /// is in the project's folder, and in the folders open in it.
+    #[must_use]
+    pub fn shown(&self) -> Vec<PathBuf> {
+        let mut rows = Vec::new();
+        self.rows(&self.root, 0, &mut rows);
+        rows.into_iter()
+            .filter_map(|row| match row {
+                Row::Entry { entry, .. } => Some(entry.path.clone()),
+                Row::Unread { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Adds the rows of what is in `folder`, `depth` folders under the
+    /// project's, and of the folders open in it, to `rows`.
+    fn rows<'a>(&'a self, folder: &Path, depth: u16, rows: &mut Vec<Row<'a>>) {
+        match self.listed.get(folder) {
+            Some(Ok(entries)) => {
+                for entry in entries {
+                    let open = entry.is_folder && self.open.contains(&entry.path);
+                    rows.push(Row::Entry { entry, depth, open });
+                    if open {
+                        self.rows(&entry.path, depth + 1, rows);
+                    }
+                }
+            }
+            Some(Err(error)) => rows.push(Row::Unread { error, depth }),
+            None => {}
+        }
+    }
+
+    fn render_row(&self, number: usize, row: &Row<'_>, cx: &mut Context<Self>) -> AnyElement {
+        let (entry, depth, open) = match *row {
+            Row::Entry { entry, depth, open } => (entry, depth, open),
+            Row::Unread { error, depth } => {
+                return div()
+                    .pl(indent(depth))
+                    .text_color(rgb(FAILED))
+                    .child(format!("cannot read: {error}"))
+                    .into_any_element();
+            }
+        };
+        let marker = match (entry.is_folder, open) {
+            (true, true) => "▾",
+            (true, false) => "▸",
+            (false, _) => " ",
+        };
+        let path = entry.path.clone();
+        let is_folder = entry.is_folder;
+        let row = div()
+            .id(("entry", number))
+            .debug_selector(move || format!("entry-{number}"))
+            .flex()
+            .gap_1()
+            .pl(indent(depth))
+            .pr_2()
+            .cursor_pointer()
+            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(marker))
+            .child(div().min_w_0().truncate().child(entry.name.clone()))
+            .on_click(cx.listener(move |tree, _, _, cx| {
+                if is_folder {
+                    tree.toggle(&path, cx);
+                } else {
+                    tree.choose(&path, cx);
+                }
+            }));
+        if self.chosen.as_ref() == Some(&entry.path) {
+            row.bg(rgb(CHOSEN)).into_any_element()
+        } else {
+            row.hover(|style| style.bg(rgb(HOVER))).into_any_element()
+        }
+    }
+}
+
+/// A row of the tab: a file or folder, `depth` folders under the
+/// project's, open if it is a folder that is, or why a folder open could
+/// not be listed.
+enum Row<'a> {
+    Entry {
+        entry: &'a Entry,
+        depth: u16,
+        open: bool,
+    },
+    Unread {
+        error: &'a str,
+        depth: u16,
+    },
+}
+
+/// How far in a row `depth` folders under the project's is drawn.
+fn indent(depth: u16) -> gpui::Pixels {
+    px(8. + INDENT * f32::from(depth))
+}
+
+/// What is in `folder`, or why it could not be listed.
+fn list(folder: &Path) -> Result<Vec<Entry>, String> {
+    files::list(folder).map_err(|error| error.to_string())
+}
+
+/// Looks at the folders of the tab of `cx` now and then, for as long as
+/// the tab is.
+fn follow(cx: &mut Context<Tree>) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        loop {
+            cx.background_executor().timer(LOOK_EVERY).await;
+            let Ok(folders) = this.read_with(cx, |tree, _| tree.folders()) else {
+                break;
+            };
+            let listed = cx
+                .background_executor()
+                .spawn(async move {
+                    folders
+                        .into_iter()
+                        .map(|folder| {
+                            let listed = list(&folder);
+                            (folder, listed)
+                        })
+                        .collect()
+                })
+                .await;
+            if this.update(cx, |tree, cx| tree.looked(listed, cx)).is_err() {
+                break;
+            }
+        }
+    })
+}
+
+impl Focusable for Tree {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for Tree {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut rows = Vec::new();
+        self.rows(&self.root, 0, &mut rows);
+        let rows: Vec<_> = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| self.render_row(index + 1, row, cx))
+            .collect();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .track_focus(&self.focus_handle)
+            .bg(rgb(BACKGROUND))
+            .text_color(rgb(FOREGROUND))
+            .child(
+                div()
+                    .debug_selector(|| "tree-path".to_owned())
+                    .px_3()
+                    .py_1()
+                    .border_b_1()
+                    .border_color(rgb(0x40_4040))
+                    .text_color(rgb(DIM))
+                    .truncate()
+                    .child(shortened(&self.root)),
+            )
+            .child(
+                div()
+                    .id("tree")
+                    .debug_selector(|| "tree".to_owned())
+                    .flex_1()
+                    .min_h_0()
+                    .py_1()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .children(rows),
+            )
+    }
+}

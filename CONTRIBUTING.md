@@ -101,6 +101,12 @@ that file: the ‹ and › beside its path go back and forward between the
 places it went to, as Command-[ and Command-] do (Alt-Left and
 Alt-Right, and Control off macOS), and the mouse's buttons for that.
 
+"Files" beside the tabs opens a tab of the project's files as a tree,
+without what Git ignores, for the human to open one: a click on a
+folder opens or closes it, and a click on a file opens it, as a link to
+it does. The tab follows the folders open in it as files come and go,
+and a closed chat's stage opens it again with the same folders open.
+
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
 `>_` beside the tabs opens one with the human's shell, working in the

@@ -1,6 +1,7 @@
 //! What Cox keeps of a chat's stage: the tabs it had open, in their
 //! order, and which was shown. Not what runs in them: a page is kept by its
-//! address, a file by its path, and a terminal only as having been there.
+//! address, a file by its path, the tree of the project's files by the
+//! folders open in it, and a terminal only as having been there.
 
 use std::path::PathBuf;
 
@@ -27,6 +28,9 @@ pub enum Tab {
     /// A file shown as it is written, such as code, by its absolute path,
     /// with the lines it was shown at, if any.
     File { path: PathBuf, lines: Option<Lines> },
+    /// The project's files as a tree, with the folders open in it, by
+    /// their absolute paths.
+    Files { open: Vec<PathBuf> },
 }
 
 /// Lines of a file, as people number them: from 1, the last included.

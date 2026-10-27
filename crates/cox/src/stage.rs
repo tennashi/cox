@@ -2,16 +2,18 @@
 //! beside the chat's conversation. It holds tabs, each showing a page of
 //! the browser (see [`crate::page`]), a Markdown file (see
 //! [`crate::document`]), a file as it is written, such as code (see
-//! [`crate::code`]), or a terminal (see [`crate::terminal`]). The
-//! first shows the page the stage starts on; the human opens more pages
-//! and terminals and closes tabs, and the agent opens and closes pages
+//! [`crate::code`]), the project's files as a tree (see [`crate::tree`]),
+//! or a terminal (see [`crate::terminal`]). The first shows the page the
+//! stage starts on; the human opens more pages and terminals, and the
+//! tree, and closes tabs, and the agent opens and closes pages
 //! too, through the chat's relay. A page that asks for a window of its own
 //! gets a tab instead. With Cox's own tools (see [`crate::mcp`]), the
 //! agent shows the human Markdown files and code, a tab for each file, and
 //! runs commands in terminals: a command gets the tab of the agent's last
 //! one that ended, or a new one. A link to a file opens it on a tab too:
 //! as Markdown if it is a Markdown file and the link names no lines, and
-//! as it is written otherwise.
+//! as it is written otherwise. A click on a file in the tree opens it the
+//! same way.
 //!
 //! The stage tells the relay of every page it opens, so that the agent sees
 //! each of its chat's pages, whoever opened it. When the agent works on a
@@ -44,6 +46,7 @@ use crate::page::{OpenTab, Page};
 use crate::relay::{FromAgent, Pages, Relay};
 use crate::servers::Servers;
 use crate::terminal::{Program, Running, Terminal};
+use crate::tree::{Chosen, Tree};
 use crate::view::Panel;
 
 /// What a new tab shows when the human opens it.
@@ -93,6 +96,7 @@ enum Shown {
     },
     Document(Entity<Document>),
     Code(Entity<Code>),
+    Tree(Entity<Tree>),
     Terminal(Entity<Terminal>),
 }
 
@@ -100,7 +104,7 @@ impl Shown {
     fn page(&self) -> Option<&Entity<Page>> {
         match self {
             Self::Page { page, .. } => Some(page),
-            Self::Document(_) | Self::Code(_) | Self::Terminal(_) => None,
+            Self::Document(_) | Self::Code(_) | Self::Tree(_) | Self::Terminal(_) => None,
         }
     }
 
@@ -109,6 +113,7 @@ impl Shown {
             Self::Page { page, .. } => page.clone().into(),
             Self::Document(document) => document.clone().into(),
             Self::Code(code) => code.clone().into(),
+            Self::Tree(tree) => tree.clone().into(),
             Self::Terminal(terminal) => terminal.clone().into(),
         }
     }
@@ -118,6 +123,7 @@ impl Shown {
             Self::Page { page, .. } => page.focus_handle(cx),
             Self::Document(document) => document.focus_handle(cx),
             Self::Code(code) => code.focus_handle(cx),
+            Self::Tree(tree) => tree.focus_handle(cx),
             Self::Terminal(terminal) => terminal.focus_handle(cx),
         }
     }
@@ -129,7 +135,7 @@ impl Shown {
                 let terminal = terminal.read(cx);
                 matches!(terminal.program(), Program::Command(_)) && terminal.ended().is_some()
             }
-            Self::Page { .. } | Self::Document(_) | Self::Code(_) => false,
+            Self::Page { .. } | Self::Document(_) | Self::Code(_) | Self::Tree(_) => false,
         }
     }
 }
@@ -229,6 +235,10 @@ impl Stage {
                     stage.push_code(path, &text, lines, false, window, cx);
                     true
                 }
+                KeptTab::Files { open } => {
+                    stage.push_tree(open, false, window, cx);
+                    true
+                }
                 KeptTab::Terminal { .. } => false,
             };
             if opened && (index <= shown || shown_now.is_none()) {
@@ -267,6 +277,9 @@ impl Stage {
                         lines: code.marked(),
                     }
                 }
+                Shown::Tree(tree) => KeptTab::Files {
+                    open: tree.read(cx).open(),
+                },
                 Shown::Terminal(terminal) => KeptTab::Terminal {
                     title: terminal.read(cx).title(),
                 },
@@ -368,7 +381,7 @@ impl Stage {
     ) {
         let showing = self.tabs.iter().position(|tab| match &tab.shown {
             Shown::Document(document) => document.read(cx).path() == path,
-            Shown::Page { .. } | Shown::Code(_) | Shown::Terminal(_) => false,
+            Shown::Page { .. } | Shown::Code(_) | Shown::Tree(_) | Shown::Terminal(_) => false,
         });
         if let Some(index) = showing {
             if let Shown::Document(document) = &self.tabs[index].shown {
@@ -420,7 +433,7 @@ impl Stage {
     ) {
         let showing = self.tabs.iter().position(|tab| match &tab.shown {
             Shown::Code(code) => code.read(cx).path() == path,
-            Shown::Page { .. } | Shown::Document(_) | Shown::Terminal(_) => false,
+            Shown::Page { .. } | Shown::Document(_) | Shown::Tree(_) | Shown::Terminal(_) => false,
         });
         if let Some(index) = showing {
             if let Shown::Code(code) = &self.tabs[index].shown {
@@ -556,7 +569,7 @@ impl Stage {
     fn index_of(&self, page: &str) -> Option<usize> {
         self.tabs.iter().position(|tab| match &tab.shown {
             Shown::Page { target, .. } => target.borrow().as_deref() == Some(page),
-            Shown::Document(_) | Shown::Code(_) | Shown::Terminal(_) => false,
+            Shown::Document(_) | Shown::Code(_) | Shown::Tree(_) | Shown::Terminal(_) => false,
         })
     }
 
@@ -691,24 +704,71 @@ impl Stage {
             (Some(rest), Some(home)) => Path::new(&home).join(rest),
             _ => from.join(link.path),
         };
-        let read = std::fs::canonicalize(&path)
-            .and_then(|path| Ok((std::fs::read_to_string(&path)?, path)));
-        let (text, path) = match read {
-            Ok(read) => read,
-            Err(error) => {
-                log::warn!("cannot open {}: {error}", path.display());
-                return;
-            }
-        };
+        if let Err(error) = self.open_path(&path, link.lines, window, cx) {
+            log::warn!("cannot open {}: {error}", path.display());
+        }
+    }
+
+    /// Opens the file at `path`, at `lines` if any, with the keyboard in
+    /// its tab: as Markdown if it is a Markdown file and no lines are
+    /// given, and as it is written otherwise. Opens nothing if the file
+    /// cannot be read.
+    fn open_path(
+        &mut self,
+        path: &Path,
+        lines: Option<Lines>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<()> {
+        let path = std::fs::canonicalize(path)?;
+        let text = std::fs::read_to_string(&path)?;
         let is_markdown = path
             .extension()
             .is_some_and(|extension| extension == "md" || extension == "markdown");
-        if is_markdown && link.lines.is_none() {
+        if is_markdown && lines.is_none() {
             self.show_document(path, text, window, cx);
         } else {
-            self.show_code(path, &text, link.lines, window, cx);
+            self.show_code(path, &text, lines, window, cx);
         }
         self.focus_shown(window, cx);
+        Ok(())
+    }
+
+    /// Shows the tree of the project's files: on its tab, or a new one,
+    /// with the keyboard in it.
+    fn show_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let showing = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab.shown, Shown::Tree(_)));
+        if let Some(index) = showing {
+            self.show(index, window, cx);
+        } else {
+            self.push_tree(Vec::new(), true, window, cx);
+            self.focus_shown(window, cx);
+        }
+    }
+
+    /// Puts a tab showing the tree of the project's files, with the
+    /// folders `open` open, after the others, shown if `show` is.
+    fn push_tree(
+        &mut self,
+        open: Vec<PathBuf>,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tree = cx.new(|cx| Tree::new(self.cwd.clone(), open, cx));
+        let changes = cx.observe(&tree, |stage, _, cx| stage.changed(cx));
+        let opens = cx.subscribe_in(&tree, window, |stage, _, Chosen(path), window, cx| {
+            // A file that cannot be read gets a tab all the same, which
+            // says why.
+            if stage.open_path(path, None, window, cx).is_err() {
+                stage.show_code(path.clone(), "", None, window, cx);
+                stage.focus_shown(window, cx);
+            }
+        });
+        self.push(Shown::Tree(tree), changes, Some(opens), show, cx);
     }
 
     /// A tab the human opens: blank, with the keyboard in its address line,
@@ -735,6 +795,7 @@ impl Stage {
             }
             Shown::Document(document) => document.read(cx).title(),
             Shown::Code(code) => code.read(cx).title(),
+            Shown::Tree(tree) => tree.read(cx).title(),
             Shown::Terminal(terminal) => terminal.read(cx).title(),
         };
         let title: String = title.chars().take(TITLE_LENGTH).collect();
@@ -817,6 +878,19 @@ impl Stage {
                     .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
                     .child(">_")
                     .on_click(cx.listener(|stage, _, window, cx| stage.new_terminal(window, cx))),
+            )
+            .child(
+                div()
+                    .id("show-tree")
+                    .debug_selector(|| "show-tree".to_owned())
+                    .flex_shrink_0()
+                    .px_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(rgb(0x80_8080))
+                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .child("Files")
+                    .on_click(cx.listener(|stage, _, window, cx| stage.show_tree(window, cx))),
             )
     }
 }

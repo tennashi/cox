@@ -495,6 +495,9 @@ mod tests {
                     path: "/work/src/main.rs".into(),
                     lines: Some(Lines { first: 3, last: 9 }),
                 },
+                Tab::Files {
+                    open: vec!["/work/src".into()],
+                },
             ],
             shown: 1,
         };
