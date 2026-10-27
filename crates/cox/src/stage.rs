@@ -37,7 +37,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::browser::{Cef, TargetId};
 use crate::code::Code;
-use crate::document::{Document, LinkClicked};
+use crate::document::Document;
 use crate::input::LineInput;
 use crate::markdown::FileLink;
 use crate::mcp::Ran;
@@ -47,6 +47,7 @@ use crate::relay::{FromAgent, Pages, Relay};
 use crate::servers::Servers;
 use crate::terminal::{Program, Running, Terminal};
 use crate::tree::{Chosen, Tree};
+use crate::ui::LinkClicked;
 use crate::view::Panel;
 
 /// What a new tab shows when the human opens it.

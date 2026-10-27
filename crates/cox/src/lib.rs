@@ -40,6 +40,8 @@
 //! - [`tools`] says which MCP servers the agent gets: the stage's, and
 //!   Cox's own, which [`mcp`] serves to each chat's agent.
 //! - [`quit`] lets signals, and CEF on macOS, ask the app to quit.
+//! - [`ui`] is what all of the window's parts share: how they look, how
+//!   they write paths, and what they tell the window alike.
 
 pub mod agent;
 pub mod app;
@@ -68,5 +70,6 @@ pub mod terminal;
 pub mod text;
 pub mod tools;
 pub mod tree;
+pub mod ui;
 pub mod view;
 pub mod workspace;

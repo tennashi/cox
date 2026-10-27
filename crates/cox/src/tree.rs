@@ -17,7 +17,8 @@ use gpui::{
     div, prelude::*, px, rgb,
 };
 
-use crate::workspace::shortened;
+use crate::ui::paths::shortened;
+use crate::ui::theme::{BACKGROUND, DIM, FAILED, FOREGROUND};
 
 /// How often the tab looks at the folders open in it.
 const LOOK_EVERY: Duration = Duration::from_secs(1);
@@ -25,10 +26,6 @@ const LOOK_EVERY: Duration = Duration::from_secs(1);
 /// How far in a folder's files and folders are from it.
 const INDENT: f32 = 16.;
 
-const FOREGROUND: u32 = 0xd4_d4d4;
-const BACKGROUND: u32 = 0x1e_1e1e;
-const DIM: u32 = 0xa0_a0a0;
-const FAILED: u32 = 0xf0_8080;
 const HOVER: u32 = 0x2a_2d2e;
 const CHOSEN: u32 = 0x04_395e;
 

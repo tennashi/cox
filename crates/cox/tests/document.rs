@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::document::{Document, LinkClicked};
+use cox::document::Document;
+use cox::ui::LinkClicked;
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 
 fn scratch(name: &str) -> PathBuf {

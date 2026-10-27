@@ -21,6 +21,8 @@ use gpui::{
 
 use crate::conversation::{Entry, State};
 use crate::instructions::Instructions;
+use crate::ui::paths::shortened;
+use crate::ui::theme::FONT;
 use crate::view::{Reopened, SessionView};
 
 actions!(
@@ -590,17 +592,6 @@ impl Workspace {
     }
 }
 
-/// `path`, with the home directory as `~`.
-#[must_use]
-pub fn shortened(path: &Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_owned)) {
-        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Some(rest) => format!("~/{}", rest.display()),
-        None => path.display().to_string(),
-    }
-}
-
 impl Focusable for Workspace {
     /// The shown chat's input, or the window itself while none is open.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -643,24 +634,9 @@ impl Render for Workspace {
             .flex()
             .bg(rgb(0x1e_1e1e))
             .text_color(rgb(0xe0_e0e0))
-            .font_family(crate::view::FONT)
+            .font_family(FONT)
             .text_size(px(14.))
             .child(self.render_list(cx))
             .child(div().flex_1().min_w_0().h_full().child(shown))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn paths_in_home_are_shortened() {
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-            return;
-        };
-        assert_eq!(shortened(&home), "~");
-        assert_eq!(shortened(&home.join("Cox")), "~/Cox");
-        assert_eq!(shortened(Path::new("/elsewhere")), "/elsewhere");
     }
 }

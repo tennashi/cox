@@ -23,12 +23,11 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::markdown::{self, Block, Kind};
 use crate::selection::{Piece, Selection, Spot, TextId};
+use crate::ui::theme::{DIM, LINK};
 
 const SELECTED: u32 = 0x26_4f78;
-const LINK: u32 = 0x7f_b4ff;
 const CODE: u32 = 0xe0_b080;
 const CODE_BACKGROUND: u32 = 0x2a_2a2a;
-const DIM: u32 = 0xa0_a0a0;
 const LINE: u32 = 0x40_4040;
 
 /// How far each list a block is in moves it right.

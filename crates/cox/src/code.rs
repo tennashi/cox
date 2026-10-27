@@ -44,11 +44,11 @@ use gpui::{
     actions, anchored, deferred, div, fill, font, point, prelude::*, px, relative, rgb, size,
 };
 
-use crate::document::LinkClicked;
 use crate::follow::{self, Follows, Stamp};
 use crate::servers::LanguageServer;
-use crate::view::{Copy, FONT};
-use crate::workspace::shortened;
+use crate::ui::paths::shortened;
+use crate::ui::theme::{BACKGROUND, DIM, FAILED, FONT, FOREGROUND, LINK, SELECTION};
+use crate::ui::{Copy, LinkClicked};
 
 actions!(
     code,
@@ -85,16 +85,9 @@ const WHEEL_LINES: f32 = 3.;
 /// height.
 const REVEAL_AT: f32 = 1. / 3.;
 
-const FOREGROUND: u32 = 0xd4_d4d4;
-const BACKGROUND: u32 = 0x1e_1e1e;
 const NUMBER: u32 = 0x6e_6e6e;
 const NUMBER_MARKED: u32 = 0xd0_d0d0;
 const MARKED: u32 = 0x33_3322;
-const SELECTION: u32 = 0x3a_4a6a;
-const DIM: u32 = 0xa0_a0a0;
-const FAILED: u32 = 0xf0_8080;
-/// What a click with Command held goes to the definition of.
-const LINK: u32 = 0x7f_b4ff;
 /// The name the server says something of.
 const HOVERED: u32 = 0x2c_3a4a;
 const MENU: u32 = 0x25_2526;

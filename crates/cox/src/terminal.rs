@@ -48,8 +48,9 @@ use tokio::sync::oneshot;
 
 use crate::input::Paste;
 use crate::mcp::{Ended, Ran};
-use crate::view::{Copy, FONT};
-use crate::workspace::shortened;
+use crate::ui::Copy;
+use crate::ui::paths::shortened;
+use crate::ui::theme::{BACKGROUND, DIM, FAILED, FONT, SELECTION};
 
 const KEY_CONTEXT: &str = "Terminal";
 
@@ -72,12 +73,9 @@ const START_SIZE: Size = Size {
     lines: 24,
 };
 
+/// Brighter than the window's, as a terminal's text is.
 const FOREGROUND: u32 = 0xe0_e0e0;
-const BACKGROUND: u32 = 0x1e_1e1e;
 const CURSOR: u32 = 0xc0_c0c0;
-const SELECTION: u32 = 0x3a_4a6a;
-const DIM: u32 = 0xa0_a0a0;
-const FAILED: u32 = 0xf0_8080;
 const SUCCEEDED: u32 = 0x80_d080;
 
 /// The sixteen colors programs name: black, red, green, yellow, blue,

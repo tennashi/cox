@@ -317,7 +317,7 @@ impl Conversation {
                     if let Some(path) = instructions {
                         self.push(Entry::Note(format!(
                             "[instructions: {}]",
-                            crate::workspace::shortened(&path)
+                            crate::ui::paths::shortened(&path)
                         )));
                     }
                 }

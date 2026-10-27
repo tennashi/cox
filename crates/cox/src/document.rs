@@ -18,23 +18,19 @@ use gpui::{
 use crate::follow::{self, Follows, Stamp};
 use crate::markdown::{self, Block};
 use crate::text::Reading;
-use crate::view::Copy;
-use crate::workspace::shortened;
+use crate::ui::paths::shortened;
+use crate::ui::theme::DIM;
+use crate::ui::{Copy, LinkClicked};
 
 const KEY_CONTEXT: &str = "Document";
 
 /// How wide the text grows, at most.
 const TEXT_WIDTH: f32 = 760.;
 
-const DIM: u32 = 0xa0_a0a0;
-
 /// Binds the keys of the tab.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT))]);
 }
-
-/// The human clicked a link to the address it holds.
-pub struct LinkClicked(pub String);
 
 impl EventEmitter<LinkClicked> for Document {}
 
