@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use cox::code::Code;
 use cox_core::tabs::Lines;
+use cox_editor::language::Highlight;
 use gpui::{
     Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ScrollDelta, ScrollWheelEvent,
     TestAppContext, TouchPhase, VisualTestContext, point, px,
@@ -136,6 +137,33 @@ fn follows_the_file_as_it_changes(cx: &mut TestAppContext) {
         code.read_with(cx, |code, _| code.text()),
         "fn main() {\n    run();\n}\n"
     );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[gpui::test]
+fn colors_the_code_as_it_changes(cx: &mut TestAppContext) {
+    let directory = scratch("colors");
+    let path = directory.join("main.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let (code, cx) = open(cx, path.clone(), "fn main() {}\n", None);
+    let highlights = |code: &Entity<Code>, cx: &mut VisualTestContext, line| {
+        code.read_with(cx, |code, _| code.highlights(line))
+    };
+    assert!(highlights(&code, cx, 0).contains(&(0..2, Highlight::Keyword)));
+
+    std::fs::write(&path, "// Runs.\nfn main() {}\n").unwrap();
+    look(cx);
+    assert_eq!(
+        highlights(&code, cx, 0),
+        [(0.."// Runs.".len(), Highlight::Comment)]
+    );
+    assert!(highlights(&code, cx, 1).contains(&(0..2, Highlight::Keyword)));
+
+    // A file in a language the editor does not know is plain.
+    let path = directory.join("notes.txt");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let (code, cx) = open(cx, path, "fn main() {}\n", None);
+    assert_eq!(highlights(&code, cx, 0).first(), None);
     std::fs::remove_dir_all(directory).unwrap();
 }
 
