@@ -53,22 +53,25 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// Starts a chat's agent working in the directory given, with the
-/// instructions given, keeping the chat in the record given, if any, and
-/// returns the chat's view.
-pub type Open = Rc<
-    dyn Fn(
-        PathBuf,
-        Option<Instructions>,
-        Option<Record>,
-        &mut Window,
-        &mut App,
-    ) -> Entity<SessionView>,
->;
+/// What opens the window's chats: the [`Launcher`](crate::session::Launcher)
+/// of the agents, or a fake one in tests.
+pub trait Opens {
+    /// Starts a chat's agent working in `cwd`, an absolute path, with
+    /// `instructions`, keeping the chat in `record` if given, and returns
+    /// the chat's view.
+    fn open(
+        &self,
+        cwd: PathBuf,
+        instructions: Option<Instructions>,
+        record: Option<Record>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<SessionView>;
 
-/// Returns the view of a closed chat, from what is kept of it, for the
-/// human to read, and to send to again.
-pub type Read = Rc<dyn Fn(Closed, &mut Window, &mut App) -> Entity<SessionView>>;
+    /// Returns the view of `closed`, a chat that has closed, from what is
+    /// kept of it, for the human to read, and to send to again.
+    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView>;
+}
 
 /// What is kept of a closed chat.
 pub struct Closed {
@@ -181,21 +184,18 @@ pub struct Workspace {
     projects: Vec<Project>,
     /// Where the chat shown is, if any is.
     shown: Option<Place>,
-    open: Open,
-    read: Read,
+    opens: Rc<dyn Opens>,
     store: Rc<Store>,
     focus_handle: FocusHandle,
 }
 
 impl Workspace {
     /// A window with no chat open, listing the chats kept in `store`.
-    /// `open` starts chats, `read` shows closed ones, and chats in no
-    /// project work in `home`.
+    /// `opens` opens chats, and chats in no project work in `home`.
     pub fn new(
         home: PathBuf,
         store: Rc<Store>,
-        open: Open,
-        read: Read,
+        opens: Rc<dyn Opens>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut projects = vec![Project::new(None, NO_PROJECT, home)];
@@ -222,8 +222,7 @@ impl Workspace {
         Self {
             projects,
             shown: None,
-            open,
-            read,
+            opens,
             store,
             focus_handle: cx.focus_handle(),
         }
@@ -286,7 +285,9 @@ impl Workspace {
             .inspect_err(|error| log::error!("the chat is not kept: {error:#}"))
             .ok();
         let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
-        let view = (self.open)(project.folder.clone(), instructions, record, window, cx);
+        let view = self
+            .opens
+            .open(project.folder.clone(), instructions, record, window, cx);
         let changes = cx.observe(&view, |_, _, cx| cx.notify());
         self.projects[index].chats.push(Chat {
             kept,
@@ -384,7 +385,7 @@ impl Workspace {
             session,
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };
-        let view = (self.read)(closed, window, cx);
+        let view = self.opens.read(closed, window, cx);
         let changes = cx.observe(&view, |_, _, cx| cx.notify());
         let reopened = cx.subscribe(&view, move |workspace, _, Reopened, cx| {
             workspace.projects[place.project].chats[place.chat].open = true;

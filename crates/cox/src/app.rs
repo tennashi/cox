@@ -31,7 +31,7 @@ use gpui::{
 use crate::browser::Cef;
 use crate::servers::Servers;
 use crate::session::Launcher;
-use crate::workspace::{self, Workspace};
+use crate::workspace::Workspace;
 
 actions!(cox, [Quit]);
 
@@ -233,7 +233,7 @@ fn shut_down_on_quit(cef: Cef, cx: &mut App) {
 /// `store`, where `launcher` opens chats, and chats in no project work in
 /// `home`. The app quits when the window closes.
 fn open_window(home: PathBuf, store: Rc<Store>, launcher: Launcher, cx: &mut App) {
-    let (open, read) = chats(launcher);
+    let opens = Rc::new(launcher);
     let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
     let window = cx
         .open_window(
@@ -241,7 +241,7 @@ fn open_window(home: PathBuf, store: Rc<Store>, launcher: Launcher, cx: &mut App
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| Workspace::new(home, store, open, read, cx)),
+            |_, cx| cx.new(|cx| Workspace::new(home, store, opens, cx)),
         )
         .expect("the window opens");
     window
@@ -251,18 +251,6 @@ fn open_window(home: PathBuf, store: Rc<Store>, launcher: Launcher, cx: &mut App
         .expect("the window is open");
     cx.on_window_closed(|cx| cx.quit()).detach();
     cx.activate(true);
-}
-
-/// What opens chats with `launcher`, and what shows closed ones.
-fn chats(launcher: Launcher) -> (workspace::Open, workspace::Read) {
-    let launcher = Rc::new(launcher);
-    let opens = Rc::clone(&launcher);
-    let open: workspace::Open = Rc::new(move |cwd, instructions, record, window, cx| {
-        opens.open(cwd, instructions, record, window, cx)
-    });
-    let read: workspace::Read =
-        Rc::new(move |closed, window, cx| launcher.read(closed, window, cx));
-    (open, read)
 }
 
 #[cfg(test)]

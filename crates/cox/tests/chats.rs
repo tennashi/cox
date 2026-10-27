@@ -15,10 +15,12 @@ use cox::agent::Start;
 use cox::conversation::{Entry, State};
 use cox::instructions::Instructions;
 use cox::view::{Again, SessionView};
-use cox::workspace::{Chat, Closed, Open, Place, Read, Workspace};
-use cox_core::store::Store;
+use cox::workspace::{Chat, Closed, Opens, Place, Workspace};
+use cox_core::store::{Record, Store};
 use fake_agent::{FakeAgent, Resumes};
-use gpui::{AppContext as _, Entity, Focusable, Modifiers, TestAppContext, VisualTestContext};
+use gpui::{
+    App, AppContext as _, Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, Window,
+};
 
 /// The agent of each chat opened, in the order they were opened.
 type Agents = Rc<RefCell<Vec<Arc<FakeAgent>>>>;
@@ -32,24 +34,31 @@ fn open_window(
     open_window_keeping(cx, home, Rc::new(Store::in_memory().unwrap()))
 }
 
-/// Starts each chat's agent, faked, and adds it to `agents`.
-fn opener(agents: &Agents) -> Open {
-    let opened = Rc::clone(agents);
-    Rc::new(move |cwd, instructions, record, _, cx| {
+/// Opens chats with no stage, each with its agent faked, added to
+/// `agents`. Sent to, a closed chat's agent starts again, faked, going on
+/// with its session as `resumes` says.
+struct FakeOpens {
+    agents: Agents,
+    resumes: Resumes,
+}
+
+impl Opens for FakeOpens {
+    fn open(
+        &self,
+        cwd: PathBuf,
+        instructions: Option<Instructions>,
+        record: Option<Record>,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Entity<SessionView> {
         let agent = Arc::new(FakeAgent::default());
-        opened.borrow_mut().push(Arc::clone(&agent));
+        self.agents.borrow_mut().push(Arc::clone(&agent));
         let start = Start::New(instructions);
         let agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
         cx.new(|cx| SessionView::new(agent, None, Rc::new(|_, _, _| {}), record, cx))
-    })
-}
+    }
 
-/// Shows closed chats, with no stage. Sent to, a chat's agent starts
-/// again, faked, going on with its session as `resumes` says, and is added
-/// to `agents`.
-fn reader(agents: &Agents, resumes: Resumes) -> Read {
-    let opened = Rc::clone(agents);
-    Rc::new(move |closed, window, cx| {
+    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView> {
         let Closed {
             cwd,
             entries,
@@ -57,15 +66,25 @@ fn reader(agents: &Agents, resumes: Resumes) -> Read {
             record,
             ..
         } = closed;
-        let opened = Rc::clone(&opened);
+        let opened = Rc::clone(&self.agents);
+        let resumes = self.resumes;
         let again: Again = Box::new(move |entries, _, _| {
             let agent = Arc::new(FakeAgent::resuming(resumes));
             opened.borrow_mut().push(Arc::clone(&agent));
             let start = Start::again(&cwd, session, entries);
             cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start)
         });
-        let link = Rc::new(|_: &str, _: &mut gpui::Window, _: &mut gpui::App| {});
+        let link = Rc::new(|_: &str, _: &mut Window, _: &mut App| {});
         cx.new(|cx| SessionView::closed(entries, None, link, record, Some(again), window, cx))
+    }
+}
+
+/// What opens the chats of a test's window, with their agents added to
+/// `agents`.
+fn opens(agents: &Agents, resumes: Resumes) -> Rc<dyn Opens> {
+    Rc::new(FakeOpens {
+        agents: Rc::clone(agents),
+        resumes,
     })
 }
 
@@ -95,9 +114,8 @@ fn open_window_resuming(
         cox::workspace::bind_keys(cx);
     });
     let agents = Agents::default();
-    let open = opener(&agents);
-    let read = reader(&agents, resumes);
-    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, store, open, read, cx));
+    let opens = opens(&agents, resumes);
+    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, store, opens, cx));
     cx.update(|window, cx| window.focus(&workspace.focus_handle(cx)));
     (agents, workspace, cx)
 }
@@ -400,8 +418,8 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     // closed.
     let again = cx.update(|_, cx| {
         let store = Rc::new(Store::open(&kept).unwrap());
-        let read = reader(&agents, Resumes::Resume);
-        cx.new(|cx| Workspace::new(home.clone(), store, opener(&agents), read, cx))
+        let opens = opens(&agents, Resumes::Resume);
+        cx.new(|cx| Workspace::new(home.clone(), store, opens, cx))
     });
     let name = folder.file_name().unwrap().to_string_lossy().into_owned();
     assert_eq!(

@@ -17,7 +17,7 @@ use gpui::{App, Entity, Window, prelude::*};
 use crate::agent::{Agent, Start};
 use crate::instructions::Instructions;
 use crate::view::{Again, OpenLink, Panel, SessionView, StageView};
-use crate::workspace::Closed;
+use crate::workspace::{Closed, Opens};
 
 /// Opens chats, each with an agent of the same command.
 #[derive(Clone)]
@@ -34,10 +34,10 @@ pub struct Launcher {
     pub cef: crate::browser::Cef,
 }
 
-impl Launcher {
+impl Opens for Launcher {
     /// Starts a chat working in `cwd`, an absolute path, whose agent gets
     /// `instructions`, kept in `record`, and returns its view.
-    pub fn open(
+    fn open(
         &self,
         cwd: PathBuf,
         instructions: Option<Instructions>,
@@ -65,7 +65,7 @@ impl Launcher {
     /// The view of `closed`, a chat that has closed, with a stage on the
     /// pages and files it had. When the human sends to it, its agent
     /// starts again, going on with its session if it can.
-    pub fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView> {
+    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView> {
         let Closed {
             cwd,
             entries,
@@ -105,7 +105,9 @@ impl Launcher {
             )
         })
     }
+}
 
+impl Launcher {
     /// Starts the agent of a chat working in `cwd`, as `start` says, with
     /// tools for `stage`, which from then on works with the agent, keeping
     /// its tabs in `record`.
