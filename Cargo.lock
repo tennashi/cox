@@ -1523,7 +1523,10 @@ dependencies = [
 name = "cox-editor"
 version = "0.0.0"
 dependencies = [
+ "log",
  "ropey",
+ "serde_json",
+ "tokio",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-javascript",
@@ -1534,6 +1537,7 @@ dependencies = [
  "tree-sitter-toml-ng",
  "tree-sitter-typescript",
  "tree-sitter-yaml",
+ "url",
 ]
 
 [[package]]
