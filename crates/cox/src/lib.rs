@@ -26,8 +26,9 @@
 //!   Markdown file as a [`document`] instead, or a file as it is written,
 //!   such as code, as [`code`]: both [`follow`] the file as it changes.
 //!   A tab of code asks the project's language server, of [`servers`],
-//!   what the code means. Or a tab is a [`terminal`], which the human types
-//!   into, and the agent runs commands in. [`profile`] is where the
+//!   what the code means. A [`tree`] of the project's files opens them
+//!   on tabs for the human. Or a tab is a [`terminal`], which the human
+//!   types into, and the agent runs commands in. [`profile`] is where the
 //!   browser keeps logins and the like.
 //! - [`relay`] stands between a chat's agent's browser tools and the
 //!   browser, keeps the agent to its chat's pages, opens and closes tabs
@@ -71,5 +72,6 @@ pub mod stage;
 pub mod terminal;
 pub mod text;
 pub mod tools;
+pub mod tree;
 pub mod view;
 pub mod workspace;
