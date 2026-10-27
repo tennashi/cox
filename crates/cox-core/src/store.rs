@@ -387,7 +387,7 @@ mod tests {
     use super::*;
     use crate::diff::Line;
     use crate::entry::{Content, ToolCallResult};
-    use crate::tabs::Tab;
+    use crate::tabs::{Lines, Tab};
 
     fn scratch(name: &str) -> PathBuf {
         let directory =
@@ -490,6 +490,10 @@ mod tests {
                 },
                 Tab::Terminal {
                     title: "cargo test".to_owned(),
+                },
+                Tab::File {
+                    path: "/work/src/main.rs".into(),
+                    lines: Some(Lines { first: 3, last: 9 }),
                 },
             ],
             shown: 1,

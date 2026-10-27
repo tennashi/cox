@@ -153,6 +153,7 @@ fn main() {
         cox::input::bind_keys(cx);
         cox::view::bind_keys(cx);
         cox::document::bind_keys(cx);
+        cox::code::bind_keys(cx);
         cox::workspace::bind_keys(cx);
         // After the window's, which a terminal's own keys stand before.
         #[cfg(any(target_os = "linux", target_os = "macos"))]

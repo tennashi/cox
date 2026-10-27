@@ -3,11 +3,14 @@
 //!
 //! Text keeps the line breaks the agent wrote, rather than joining lines
 //! into one as Markdown does: a reply reads as the agent laid it out, and
-//! lines of Japanese do not gain spaces between them. Web addresses in the
-//! text are links even where the agent did not mark them as such, as in
-//! what a command printed.
+//! lines of Japanese do not gain spaces between them. Web addresses and
+//! paths of files in the text are links even where the agent did not mark
+//! them as such, as in what a command printed, or a place in the code the
+//! agent names, such as `src/main.rs:12`.
 
 use std::ops::Range;
+
+use cox_core::tabs::Lines;
 
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -58,9 +61,10 @@ pub struct Style {
     pub strikethrough: bool,
     /// Code within a line.
     pub code: bool,
-    /// Where the text links to: an address on the web. Links elsewhere,
-    /// such as to a file of the repository, have nowhere to open and stay
-    /// plain text.
+    /// Where the text links to: an address on the web, or a file, by its
+    /// path as written, with the lines to show after it if any (see
+    /// [`file_link`]). Links elsewhere, such as to an email address, have
+    /// nowhere to open and stay plain text.
     pub link: Option<String>,
 }
 
@@ -78,10 +82,18 @@ impl Text {
         }
     }
 
-    /// Makes the web addresses in the text that link nowhere yet links to
-    /// themselves.
-    fn link_addresses(&mut self) {
-        for address in addresses(&self.text) {
+    /// Makes the web addresses and the paths of files in the text that
+    /// link nowhere yet links to themselves.
+    fn link_bare(&mut self) {
+        let addresses = addresses(&self.text);
+        let paths = paths(&self.text).into_iter().filter(|path| {
+            !addresses
+                .iter()
+                .any(|address| address.start < path.end && path.start < address.end)
+        });
+        let mut bare: Vec<_> = paths.chain(addresses.iter().cloned()).collect();
+        bare.sort_by_key(|range| range.start);
+        for address in bare {
             let url = self.text[address.clone()].to_owned();
             let mut runs = Vec::with_capacity(self.runs.len() + 2);
             for (range, style) in self.runs.drain(..) {
@@ -108,19 +120,157 @@ impl Text {
         }
     }
 
-    /// The text with its web addresses linked, and no other style.
+    /// The text with its web addresses and paths of files linked, and no
+    /// other style.
     #[must_use]
     pub fn plain(text: &str) -> Self {
         let mut plain = Self::default();
         plain.push(text, &Style::default());
-        plain.link_addresses();
+        plain.link_bare();
         plain
     }
 }
 
 /// Whether `url` is an address on the web, which the stage can open.
-fn is_on_the_web(url: &str) -> bool {
+#[must_use]
+pub fn is_on_the_web(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
+}
+
+/// A link to a file, and to lines of it if it names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileLink<'a> {
+    /// The file's path, as written: absolute, or from where the link is.
+    pub path: &'a str,
+    pub lines: Option<Lines>,
+}
+
+/// The file `link` links to, if it links to one: a path, or a `file://`
+/// address, maybe with lines after it, as in `src/main.rs:12`,
+/// `src/main.rs:12-20`, `src/main.rs:12:5` (at a column of line 12) or
+/// `src/main.rs#L12-L20`.
+#[must_use]
+pub fn file_link(link: &str) -> Option<FileLink<'_>> {
+    if link.is_empty() || link.starts_with('#') || is_on_the_web(link) {
+        return None;
+    }
+    let link = link.strip_prefix("file://").unwrap_or(link);
+    if let Some((path, anchor)) = link.split_once('#') {
+        return (!path.is_empty()).then(|| FileLink {
+            path,
+            lines: anchor_lines(anchor),
+        });
+    }
+    let (path, lines) = match link.find(':') {
+        Some(colon) => {
+            let (lines, len) = suffix_lines(&link[colon..])?;
+            if colon + len != link.len() {
+                // A scheme, as in `mailto:`, or something after the lines.
+                return None;
+            }
+            (&link[..colon], Some(lines))
+        }
+        None => (link, None),
+    };
+    (!path.is_empty()).then_some(FileLink { path, lines })
+}
+
+/// The lines that `anchor`, after the `#` of a link, names, as in `L12` or
+/// `L12-L20`.
+fn anchor_lines(anchor: &str) -> Option<Lines> {
+    let anchor = anchor.strip_prefix('L')?;
+    let (first, last) = match anchor.split_once('-') {
+        Some((first, last)) => (first, last.strip_prefix('L').unwrap_or(last)),
+        None => (anchor, anchor),
+    };
+    lines(first.parse().ok()?, last.parse().ok()?)
+}
+
+/// The lines that the start of `text` names after a path, as in `:12`,
+/// `:12-20` or `:12:5`, and how long that is.
+fn suffix_lines(text: &str) -> Option<(Lines, usize)> {
+    let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
+    let rest = text.strip_prefix(':')?;
+    let first_len = digits(rest);
+    let first = rest[..first_len].parse().ok()?;
+    let mut len = 1 + first_len;
+    let mut last = first;
+    let after = &text[len..];
+    if let Some(more) = after.strip_prefix('-').or_else(|| after.strip_prefix(':')) {
+        let more_len = digits(more);
+        if more_len > 0 {
+            if after.starts_with('-') {
+                last = more[..more_len].parse().ok()?;
+            }
+            len += 1 + more_len;
+        }
+    }
+    Some((lines(first, last)?, len))
+}
+
+/// Lines from `first` to `last`, as people number them.
+fn lines(first: usize, last: usize) -> Option<Lines> {
+    (first > 0).then(|| Lines {
+        first,
+        last: last.max(first),
+    })
+}
+
+/// Where paths of files are in `text`, with the lines after them, if any:
+/// a path of letters, digits and `_-./~` whose file name has an extension,
+/// and that has a `/` in it, or lines after it. So `src/main.rs` and
+/// `main.rs:12` are paths, and `main.rs`, `e.g.` and `v0.2.2` are not.
+#[must_use]
+pub fn paths(text: &str) -> Vec<Range<usize>> {
+    let bytes = text.as_bytes();
+    let in_path = |byte: u8| byte.is_ascii_alphanumeric() || b"_-./~".contains(&byte);
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if !in_path(bytes[at]) {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < bytes.len() && in_path(bytes[at]) {
+            at += 1;
+        }
+        // A sentence may end right after a path.
+        let mut end = at;
+        while end > start && matches!(bytes[end - 1], b'.' | b'-' | b'~') {
+            end -= 1;
+        }
+        let lines = if end == at {
+            suffix_lines(&text[at..]).map(|(_, len)| len)
+        } else {
+            None
+        };
+        // After a `:`, it is part of something else, as of `std::fs` or
+        // an address.
+        let after_colon = start > 0 && bytes[start - 1] == b':';
+        if !after_colon && is_a_file(&text[start..end], lines.is_some()) {
+            let end = end + lines.unwrap_or(0);
+            found.push(start..end);
+            at = end;
+        }
+    }
+    found
+}
+
+/// Whether `path`, followed by lines if `with_lines`, reads as the path of
+/// a file.
+fn is_a_file(path: &str, with_lines: bool) -> bool {
+    if path.starts_with("//") {
+        return false;
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    let extension_reads = extension.len() <= 10
+        && extension.starts_with(|c: char| c.is_ascii_alphabetic())
+        && extension.chars().all(|c| c.is_ascii_alphanumeric());
+    !stem.is_empty() && extension_reads && (path.contains('/') || with_lines)
 }
 
 /// Where web addresses are in `text`: from `http://` or `https://` up to a
@@ -244,7 +394,7 @@ impl Blocks {
         let Some((open, mut text)) = self.open.take() else {
             return;
         };
-        text.link_addresses();
+        text.link_bare();
         let kind = match open {
             Open::Paragraph => Kind::Paragraph(text),
             Open::Heading(level) => Kind::Heading(level, text),
@@ -369,7 +519,7 @@ impl Blocks {
             Tag::Strong => self.push_style(|style| style.strong = true),
             Tag::Strikethrough => self.push_style(|style| style.strikethrough = true),
             Tag::Link { dest_url, .. } => self.push_style(|style| {
-                if is_on_the_web(&dest_url) {
+                if is_on_the_web(&dest_url) || file_link(&dest_url).is_some() {
                     style.link = Some(dest_url.into_string());
                 }
             }),
@@ -416,7 +566,7 @@ impl Blocks {
                 if let Some((rows, cell)) = &mut self.table
                     && let Some(mut cell) = cell.take()
                 {
-                    cell.link_addresses();
+                    cell.link_bare();
                     if let Some(row) = rows.last_mut() {
                         row.push(cell);
                     }
@@ -543,13 +693,16 @@ mod tests {
     }
 
     #[test]
-    fn links_only_to_the_web() {
+    fn links_to_the_web_and_to_files() {
         let [
             Block {
                 kind: Kind::Paragraph(text),
                 ..
             },
-        ] = &parse("[PR](https://github.com/tennashi/cox/pull/1) and [file](src/main.rs)")[..]
+        ] = &parse(
+            "[PR](https://github.com/tennashi/cox/pull/1), [file](src/main.rs) \
+             and [mail](mailto:a@example.com)",
+        )[..]
         else {
             panic!("one paragraph");
         };
@@ -563,7 +716,9 @@ mod tests {
             links,
             [
                 ("PR", Some("https://github.com/tennashi/cox/pull/1")),
-                (" and file", None),
+                (", ", None),
+                ("file", Some("src/main.rs")),
+                (" and mail", None),
             ]
         );
     }
@@ -584,6 +739,51 @@ mod tests {
                 ("http://x.test/", "http://x.test/"),
             ]
         );
+    }
+
+    #[test]
+    fn links_paths_of_files_in_text_and_code() {
+        let text = Text::plain(
+            "see crates/cox/src/stage.rs:52を, main.rs:3-9, src/a.rs. \
+             not main.rs, e.g. v0.2.2 std::fs and/or https://x.test/a.rs",
+        );
+
+        let links: Vec<_> = text
+            .runs
+            .iter()
+            .filter_map(|(range, style)| Some((&text.text[range.clone()], style.link.as_deref()?)))
+            .collect();
+        assert_eq!(
+            links,
+            [
+                ("crates/cox/src/stage.rs:52", "crates/cox/src/stage.rs:52"),
+                ("main.rs:3-9", "main.rs:3-9"),
+                ("src/a.rs", "src/a.rs"),
+                ("https://x.test/a.rs", "https://x.test/a.rs"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_the_lines_a_link_to_a_file_names() {
+        let link = |first, last| Some(Lines { first, last });
+        let cases = [
+            ("src/main.rs", None),
+            ("src/main.rs:12", link(12, 12)),
+            ("src/main.rs:12-20", link(12, 20)),
+            ("src/main.rs:12:5", link(12, 12)),
+            ("src/main.rs#L12-L20", link(12, 20)),
+            ("file:///work/src/main.rs#L3", link(3, 3)),
+            ("src/main.rs#intro", None),
+        ];
+        for (written, lines) in cases {
+            let read = file_link(written).expect("a link to a file");
+            assert_eq!(read.lines, lines, "{written}");
+            assert!(read.path.ends_with("src/main.rs"), "{written}");
+        }
+        for not_a_file in ["", "#intro", "mailto:a@example.com", "https://x.test/"] {
+            assert_eq!(file_link(not_a_file), None, "{not_a_file}");
+        }
     }
 
     #[test]
