@@ -3,6 +3,8 @@
 //! project's folder, with its project's instructions. It runs on Linux
 //! and macOS, where CEF does.
 //!
+//! - [`app`] is where it all starts, in order: what the command line
+//!   asks for, what the app depends on, the app's parts, and the window.
 //! - [`workspace`] is the window: the projects and the chats open in them,
 //!   and the chat shown. [`session`] starts a chat's agent and stage, and
 //!   [`instructions`] reads what the agent gets told of the project.
@@ -40,6 +42,7 @@
 //! - [`quit`] lets signals, and CEF on macOS, ask the app to quit.
 
 pub mod agent;
+pub mod app;
 pub mod browser;
 pub mod code;
 pub mod conversation;
