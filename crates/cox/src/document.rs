@@ -3,29 +3,25 @@
 //! conversation. The agent opens it with Cox's tool for that (see
 //! [`crate::mcp`]).
 //!
-//! The tab follows the file: it looks now and then whether the file
-//! changed, and reads it again when it did, so that the human reads what
-//! the agent writes as it writes it. The human selects and copies its text
+//! The tab follows the file as it changes (see [`crate::follow`]). The
+//! human selects and copies its text
 //! as in the conversation, and a click on a link asks for the link to open
 //! on the stage.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use gpui::{
     App, Context, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ScrollHandle, Task, Window, div, prelude::*, px, rgb,
 };
 
+use crate::follow::{self, Follows, Stamp};
 use crate::markdown::{self, Block};
 use crate::text::Reading;
 use crate::view::Copy;
 use crate::workspace::shortened;
 
 const KEY_CONTEXT: &str = "Document";
-
-/// How often the tab looks whether its file changed.
-const LOOK_EVERY: Duration = Duration::from_millis(500);
 
 /// How wide the text grows, at most.
 const TEXT_WIDTH: f32 = 760.;
@@ -41,24 +37,6 @@ pub fn bind_keys(cx: &mut App) {
 pub struct LinkClicked(pub String);
 
 impl EventEmitter<LinkClicked> for Document {}
-
-/// When the file last changed, and how long it was, as the tab last read
-/// it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Stamp {
-    modified: SystemTime,
-    len: u64,
-}
-
-impl Stamp {
-    fn of(path: &Path) -> std::io::Result<Self> {
-        let metadata = std::fs::metadata(path)?;
-        Ok(Self {
-            modified: metadata.modified()?,
-            len: metadata.len(),
-        })
-    }
-}
 
 pub struct Document {
     /// The file, as an absolute path.
@@ -81,27 +59,6 @@ impl Document {
     /// A tab showing the file at `path`, an absolute path, which says
     /// `text`.
     pub fn new(path: PathBuf, text: String, cx: &mut Context<Self>) -> Self {
-        let follow = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(LOOK_EVERY).await;
-                let Ok((path, stamp)) =
-                    this.read_with(cx, |document, _| (document.path.clone(), document.stamp))
-                else {
-                    break;
-                };
-                let changed = cx
-                    .background_executor()
-                    .spawn(async move { read_if_changed(&path, stamp) })
-                    .await;
-                if let Some(changed) = changed
-                    && this
-                        .update(cx, |document, cx| document.looked(changed, cx))
-                        .is_err()
-                {
-                    break;
-                }
-            }
-        });
         Self {
             blocks: markdown::parse(&text),
             path,
@@ -111,7 +68,7 @@ impl Document {
             reading: Reading::default(),
             scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
-            _follow: follow,
+            _follow: follow::follow(cx),
         }
     }
 
@@ -147,19 +104,6 @@ impl Document {
         self.stamp = None;
         self.unread = None;
         self.set_text(text);
-        cx.notify();
-    }
-
-    /// The tab looked at the file, which changed since it last did.
-    fn looked(&mut self, looked: std::io::Result<(Stamp, String)>, cx: &mut Context<Self>) {
-        match looked {
-            Ok((stamp, text)) => {
-                self.stamp = Some(stamp);
-                self.unread = None;
-                self.set_text(text);
-            }
-            Err(error) => self.unread = Some(error.to_string()),
-        }
         cx.notify();
     }
 
@@ -199,17 +143,22 @@ impl Document {
     }
 }
 
-/// What the file at `path` says, with its stamp, if it changed since
-/// `stamp`, or why it could not be read.
-fn read_if_changed(path: &Path, stamp: Option<Stamp>) -> Option<std::io::Result<(Stamp, String)>> {
-    let now = match Stamp::of(path) {
-        Ok(now) => now,
-        Err(error) => return Some(Err(error)),
-    };
-    if stamp == Some(now) {
-        return None;
+impl Follows for Document {
+    fn followed(&self) -> (PathBuf, Option<Stamp>) {
+        (self.path.clone(), self.stamp)
     }
-    Some(std::fs::read_to_string(path).map(|text| (now, text)))
+
+    fn looked(&mut self, looked: std::io::Result<(Stamp, String)>, cx: &mut Context<Self>) {
+        match looked {
+            Ok((stamp, text)) => {
+                self.stamp = Some(stamp);
+                self.unread = None;
+                self.set_text(text);
+            }
+            Err(error) => self.unread = Some(error.to_string()),
+        }
+        cx.notify();
+    }
 }
 
 impl Focusable for Document {
