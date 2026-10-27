@@ -87,6 +87,20 @@ TypeScript and Python, with the code within the code too, as a Markdown
 code block's or a Rust macro's. It parses the file in the background,
 again only where it changed, keeping the colors it had until then.
 
+A tab of Rust code asks `rust-analyzer` what the code means, which has to
+be on `PATH` (`rustup component add rust-analyzer`). Each project gets
+one, started when a tab first needs it and shared by the tabs of all its
+chats, until Cox quits; it builds what it needs in `target/rust-analyzer`,
+so that it does not hold up the project's builds. The mouse resting on a
+name shows what the server says of it, its type and documentation. A
+click on a name with Command held, Control off macOS, goes to where it
+is defined, as "Go to definition" in the menu of the right button does;
+"Find references" there lists, under the code, where the name is used,
+to go to each in turn. Going to a place in another file, the tab shows
+that file: the ‹ and › beside its path go back and forward between the
+places it went to, as Command-[ and Command-] do (Alt-Left and
+Alt-Right, and Control off macOS), and the mouse's buttons for that.
+
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
 `>_` beside the tabs opens one with the human's shell, working in the

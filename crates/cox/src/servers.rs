@@ -1,0 +1,190 @@
+//! The language servers that the tabs showing code ask what the code
+//! means (see [`cox_editor::lsp`]): one for each project and server,
+//! started when a tab first needs it, and shared by the tabs of every chat
+//! in the project, until Cox quits. The app holds them as a global, which
+//! the stages find them in.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::rc::Rc;
+
+use cox_editor::language::Language;
+use cox_editor::lsp::{Client, Error, Server, Status};
+use gpui::{App, AppContext as _, Context, Entity, Global, Task};
+
+/// What starts a server in a project's folder, and answers it once it is
+/// ready.
+pub type Start = Rc<
+    dyn Fn(&'static Server, PathBuf) -> Pin<Box<dyn Future<Output = Result<Client, Error>> + Send>>,
+>;
+
+/// The language servers of every project.
+#[derive(Clone)]
+pub struct Servers {
+    running: Rc<RefCell<Running>>,
+    start: Start,
+}
+
+/// The servers started, by the folder each works in, and its program.
+type Running = HashMap<(PathBuf, &'static str), Entity<LanguageServer>>;
+
+impl Global for Servers {}
+
+impl Default for Servers {
+    /// Servers started as programs, found on `PATH`.
+    fn default() -> Self {
+        Self::new(Rc::new(|server, root| {
+            Box::pin(async move { Client::start(server, &root).await })
+        }))
+    }
+}
+
+impl Servers {
+    /// Servers that `start` starts.
+    #[must_use]
+    pub fn new(start: Start) -> Self {
+        Self {
+            running: Rc::default(),
+            start,
+        }
+    }
+
+    /// The server that knows the code of the file at `path`, an absolute
+    /// path, for a chat working in `cwd`: started if it was not, if the
+    /// editor knows a server for the file's language.
+    ///
+    /// The server works in `cwd`, the chat's project's folder, when the
+    /// file is in it. Otherwise, it works in the outermost folder above the
+    /// file that is a project of the file's language, as one with a
+    /// `Cargo.toml` is for Rust, or else in the file's own folder.
+    pub fn of(&self, cwd: &Path, path: &Path, cx: &mut App) -> Option<Entity<LanguageServer>> {
+        let server = Language::of_path(path)?.server()?;
+        let root = if path.starts_with(cwd) {
+            cwd.to_owned()
+        } else {
+            let folder = path.parent()?;
+            folder
+                .ancestors()
+                .filter(|folder| {
+                    server
+                        .markers
+                        .iter()
+                        .any(|marker| folder.join(marker).exists())
+                })
+                .last()
+                .unwrap_or(folder)
+                .to_owned()
+        };
+        let key = (root, server.program);
+        if let Some(running) = self.running.borrow().get(&key) {
+            return Some(running.clone());
+        }
+        let started = (self.start)(server, key.0.clone());
+        let running = cx.new(|cx| LanguageServer::new(server, started, cx));
+        self.running.borrow_mut().insert(key, running.clone());
+        Some(running)
+    }
+}
+
+/// A project's language server, as the tabs see it.
+pub struct LanguageServer {
+    server: &'static Server,
+    state: State,
+    /// What it says it is doing, once it runs.
+    status: Status,
+    _task: Task<()>,
+}
+
+enum State {
+    Starting,
+    Running(Client),
+    /// It could not be started, for the reason given.
+    Failed(String),
+}
+
+impl LanguageServer {
+    /// `server`, which `started` answers once it is ready.
+    fn new(
+        server: &'static Server,
+        started: Pin<Box<dyn Future<Output = Result<Client, Error>> + Send>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let task = cx.spawn(async move |this, cx| {
+            let started = cx.background_executor().spawn(started).await;
+            let status = started.as_ref().ok().map(Client::status);
+            if this
+                .update(cx, |this, cx| this.started(started, cx))
+                .is_err()
+            {
+                return;
+            }
+            let Some(mut status) = status else {
+                return;
+            };
+            // The status changes as the server says, until it stops.
+            loop {
+                let now = status.borrow_and_update().clone();
+                let stopped = now == Status::Stopped;
+                if this
+                    .update(cx, |this, cx| {
+                        this.status = now;
+                        cx.notify();
+                    })
+                    .is_err()
+                    || stopped
+                    || status.changed().await.is_err()
+                {
+                    break;
+                }
+            }
+        });
+        Self {
+            server,
+            state: State::Starting,
+            status: Status::Ready,
+            _task: task,
+        }
+    }
+
+    fn started(&mut self, started: Result<Client, Error>, cx: &mut Context<Self>) {
+        self.state = match started {
+            Ok(client) => State::Running(client),
+            Err(error) => {
+                log::warn!("{} did not start: {error}", self.server.program);
+                State::Failed(error.to_string())
+            }
+        };
+        cx.notify();
+    }
+
+    /// The server's program.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        self.server.program
+    }
+
+    /// The server, once it is ready to be asked, until it stops.
+    #[must_use]
+    pub fn client(&self) -> Option<&Client> {
+        match &self.state {
+            State::Running(client) if self.status != Status::Stopped => Some(client),
+            State::Running(_) | State::Starting | State::Failed(_) => None,
+        }
+    }
+
+    /// What the tabs say of the server, if anything: nothing while it is
+    /// ready.
+    #[must_use]
+    pub fn said(&self) -> Option<String> {
+        let name = self.server.program;
+        match (&self.state, &self.status) {
+            (State::Starting, _) => Some(format!("{name}: starting")),
+            (State::Failed(error), _) => Some(format!("{name} did not start: {error}")),
+            (State::Running(_), Status::Ready) => None,
+            (State::Running(_), Status::Working(work)) => Some(format!("{name}: {work}")),
+            (State::Running(_), Status::Stopped) => Some(format!("{name} stopped")),
+        }
+    }
+}

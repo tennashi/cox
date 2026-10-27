@@ -42,6 +42,7 @@ use crate::mcp::Ran;
 use crate::mcp::Request;
 use crate::page::{OpenTab, Page};
 use crate::relay::{FromAgent, Pages, Relay};
+use crate::servers::Servers;
 use crate::terminal::{Program, Running, Terminal};
 use crate::view::Panel;
 
@@ -225,7 +226,7 @@ impl Stage {
                 }
                 KeptTab::File { path, lines } => {
                     let text = std::fs::read_to_string(&path).unwrap_or_default();
-                    stage.push_code(path, &text, lines, false, cx);
+                    stage.push_code(path, &text, lines, false, window, cx);
                     true
                 }
                 KeptTab::Terminal { .. } => false,
@@ -341,7 +342,7 @@ impl Stage {
                         stage.show_document(path, text, window, cx);
                     }
                     Request::ShowFile { path, text, lines } => {
-                        stage.show_code(path, &text, lines, cx);
+                        stage.show_code(path, &text, lines, window, cx);
                     }
                     Request::RunCommand {
                         command,
@@ -414,6 +415,7 @@ impl Stage {
         path: PathBuf,
         text: &str,
         lines: Option<Lines>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let showing = self.tabs.iter().position(|tab| match &tab.shown {
@@ -427,7 +429,7 @@ impl Stage {
             self.shown = index;
             self.changed(cx);
         } else {
-            self.push_code(path, text, lines, true, cx);
+            self.push_code(path, text, lines, true, window, cx);
         }
         self.show_panel(cx);
     }
@@ -440,11 +442,27 @@ impl Stage {
         text: &str,
         lines: Option<Lines>,
         show: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let code = cx.new(|cx| Code::new(path, text, lines, cx));
+        // The project's server for the file's language, when Cox has them.
+        let server = cx
+            .try_global::<Servers>()
+            .cloned()
+            .and_then(|servers| servers.of(&self.cwd, &path, cx));
+        let code = cx.new(|cx| Code::new(path, text, lines, server, cx));
         let changes = cx.observe(&code, |stage, _, cx| stage.changed(cx));
-        self.push(Shown::Code(code), changes, None, show, cx);
+        let opens = cx.subscribe_in(
+            &code,
+            window,
+            |stage, code, LinkClicked(url), window, cx| {
+                // A link to a file is from where the file is.
+                let path = code.read(cx).path();
+                let from = path.parent().unwrap_or(path).to_owned();
+                stage.open_from(url, &from, window, cx);
+            },
+        );
+        self.push(Shown::Code(code), changes, Some(opens), show, cx);
     }
 
     /// Runs `command`, which the agent asked for, in `cwd`, and answers
@@ -688,7 +706,7 @@ impl Stage {
         if is_markdown && link.lines.is_none() {
             self.show_document(path, text, window, cx);
         } else {
-            self.show_code(path, &text, link.lines, cx);
+            self.show_code(path, &text, link.lines, window, cx);
         }
         self.focus_shown(window, cx);
     }

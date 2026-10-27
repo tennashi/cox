@@ -1,16 +1,21 @@
 //! A human reading a file of code on a tab of the stage, at the lines the
-//! agent shows it at.
+//! agent shows it at, and asking the language server what the code means.
+
+mod fake_lsp;
 
 use std::fmt::Write as _;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
-use cox::code::Code;
+use cox::code::{Back, Code, Forward};
+use cox::servers::{LanguageServer, Servers};
 use cox_core::tabs::Lines;
 use cox_editor::language::Highlight;
 use gpui::{
-    Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ScrollDelta, ScrollWheelEvent,
-    TestAppContext, TouchPhase, VisualTestContext, point, px,
+    Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Point, ScrollDelta,
+    ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext, point, px,
 };
 
 fn scratch(name: &str) -> PathBuf {
@@ -38,7 +43,7 @@ fn open<'a>(
 ) -> (Entity<Code>, &'a mut VisualTestContext) {
     cx.update(cox::code::bind_keys);
     let text = text.to_owned();
-    let (code, cx) = cx.add_window_view(|_, cx| Code::new(path, &text, lines, cx));
+    let (code, cx) = cx.add_window_view(|_, cx| Code::new(path, &text, lines, None, cx));
     cx.run_until_parked();
     (code, cx)
 }
@@ -217,5 +222,187 @@ fn selects_lines_to_copy(cx: &mut TestAppContext) {
             .as_deref(),
         Some("run_all")
     );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// Opens a tab showing `main.rs` of the fake server's project in
+/// `directory`, asking a server of `servers`, once it is ready.
+fn open_project<'a>(
+    cx: &'a mut TestAppContext,
+    directory: &Path,
+    servers: &Servers,
+) -> (Entity<Code>, &'a mut VisualTestContext) {
+    fake_lsp::write_project(directory);
+    cx.update(cox::code::bind_keys);
+    let path = directory.join("main.rs");
+    let server: Entity<LanguageServer> = cx
+        .update(|cx| servers.of(directory, &path, cx))
+        .expect("the editor knows Rust's server");
+    let ready = server.clone();
+    let (code, cx) =
+        cx.add_window_view(|_, cx| Code::new(path, fake_lsp::MAIN, None, Some(server), cx));
+    wait_until(cx, |cx| {
+        ready.read_with(cx, |server, _| server.client().is_some())
+    });
+    (code, cx)
+}
+
+/// Lets the server answer until `done` holds, which it must before long.
+fn wait_until(cx: &mut VisualTestContext, mut done: impl FnMut(&mut VisualTestContext) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        if done(cx) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the server took too long");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Where the tab draws `column` of `line`.
+fn at(
+    code: &Entity<Code>,
+    cx: &mut VisualTestContext,
+    line: usize,
+    column: usize,
+) -> Point<gpui::Pixels> {
+    code.read_with(cx, |code, _| code.point_of(line, column))
+        .expect("the line is in sight")
+}
+
+fn hover(code: &Entity<Code>, cx: &mut VisualTestContext) -> Option<String> {
+    code.read_with(cx, |code, _| code.hover().map(str::to_owned))
+}
+
+fn shown(code: &Entity<Code>, cx: &mut VisualTestContext) -> (String, Option<Lines>) {
+    code.read_with(cx, |code, _| {
+        let name = code
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        (name, code.marked())
+    })
+}
+
+#[gpui::test]
+fn shares_a_projects_server_between_its_files(cx: &mut TestAppContext) {
+    let directory = scratch("shared");
+    let started = Arc::new(AtomicUsize::new(0));
+    let servers = Servers::new(fake_lsp::start(Arc::clone(&started)));
+    let elsewhere = scratch("elsewhere");
+    cx.update(|cx| {
+        let main = servers
+            .of(&directory, &directory.join("main.rs"), cx)
+            .unwrap();
+        let lib = servers
+            .of(&directory, &directory.join("lib.rs"), cx)
+            .unwrap();
+        assert_eq!(main.entity_id(), lib.entity_id());
+        // A file outside the project gets a server of its own, and a file
+        // in a language with no server none.
+        let outside = servers
+            .of(&directory, &elsewhere.join("main.rs"), cx)
+            .unwrap();
+        assert_ne!(main.entity_id(), outside.entity_id());
+        assert!(
+            servers
+                .of(&directory, &directory.join("Cargo.toml"), cx)
+                .is_none()
+        );
+    });
+    assert_eq!(started.load(Ordering::Relaxed), 2);
+    std::fs::remove_dir_all(directory).unwrap();
+    std::fs::remove_dir_all(elsewhere).unwrap();
+}
+
+#[gpui::test]
+fn shows_what_the_server_says_of_the_name_the_mouse_rests_on(cx: &mut TestAppContext) {
+    let directory = scratch("hover");
+    let servers = Servers::new(fake_lsp::start(Arc::default()));
+    let (code, cx) = open_project(cx, &directory, &servers);
+
+    // On `helper`, the mouse rests a while before the server is asked.
+    let helper = at(&code, cx, 1, 6);
+    cx.simulate_mouse_move(helper, None, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(hover(&code, cx), None);
+    cx.executor().advance_clock(Duration::from_millis(400));
+    wait_until(cx, |cx| hover(&code, cx).is_some());
+    assert_eq!(hover(&code, cx).as_deref(), Some(fake_lsp::HOVER));
+    let shown = cx.debug_bounds("code-hover").unwrap();
+    assert!(shown.top() > helper.y, "{shown:?} is under {helper:?}");
+
+    // It stays while the mouse moves along the name, and goes once the
+    // mouse leaves it.
+    let along = at(&code, cx, 1, 8);
+    cx.simulate_mouse_move(along, None, Modifiers::none());
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(hover(&code, cx).is_some());
+    // To the spaces before it, which are no name.
+    let away = at(&code, cx, 1, 1);
+    cx.simulate_mouse_move(away, None, Modifiers::none());
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(hover(&code, cx), None);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[gpui::test]
+fn goes_to_the_definition_and_back(cx: &mut TestAppContext) {
+    let directory = scratch("definition");
+    let servers = Servers::new(fake_lsp::start(Arc::default()));
+    let (code, cx) = open_project(cx, &directory, &servers);
+
+    let helper = at(&code, cx, 1, 6);
+    cx.simulate_mouse_down(helper, MouseButton::Left, Modifiers::secondary_key());
+    cx.simulate_mouse_up(helper, MouseButton::Left, Modifiers::secondary_key());
+    wait_until(cx, |cx| shown(&code, cx).0 == "lib.rs");
+    assert_eq!(shown(&code, cx).1, Some(Lines { first: 1, last: 1 }));
+    assert_eq!(code.read_with(cx, |code, _| code.selected_text()), "helper");
+    assert_eq!(code.read_with(cx, |code, _| code.text()), fake_lsp::LIB);
+
+    cx.dispatch_action(Back);
+    assert_eq!(shown(&code, cx), ("main.rs".to_owned(), None));
+    assert_eq!(code.read_with(cx, |code, _| code.text()), fake_lsp::MAIN);
+    cx.dispatch_action(Forward);
+    assert_eq!(shown(&code, cx).0, "lib.rs");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[gpui::test]
+fn lists_where_a_name_is_used_to_go_to_each(cx: &mut TestAppContext) {
+    let directory = scratch("references");
+    let servers = Servers::new(fake_lsp::start(Arc::default()));
+    let (code, cx) = open_project(cx, &directory, &servers);
+
+    let helper = at(&code, cx, 1, 6);
+    cx.simulate_mouse_down(helper, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    let find = cx.debug_bounds("find-references").expect("the menu opens");
+    cx.simulate_click(find.center(), Modifiers::none());
+    wait_until(cx, |cx| cx.debug_bounds("code-places").is_some());
+
+    // By file: `lib.rs`, then `main.rs`, each with its place.
+    assert!(cx.debug_bounds("code-place-0").is_none());
+    let place = cx.debug_bounds("code-place-1").unwrap();
+    cx.simulate_click(place.center(), Modifiers::none());
+    assert_eq!(
+        shown(&code, cx),
+        ("lib.rs".to_owned(), Some(Lines { first: 1, last: 1 }))
+    );
+    let place = cx.debug_bounds("code-place-3").unwrap();
+    cx.simulate_click(place.center(), Modifiers::none());
+    assert_eq!(
+        shown(&code, cx),
+        ("main.rs".to_owned(), Some(Lines { first: 2, last: 2 }))
+    );
+    // The list stays, and back goes through the places it went to.
+    assert!(cx.debug_bounds("code-places").is_some());
+    cx.dispatch_action(Back);
+    assert_eq!(shown(&code, cx).0, "lib.rs");
     std::fs::remove_dir_all(directory).unwrap();
 }

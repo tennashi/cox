@@ -12,6 +12,19 @@
 //! colors until then. The wheel scrolls it down and across, and a drag
 //! selects text to copy: a double click selects a word, and a triple click
 //! a line.
+//!
+//! When the editor knows a server for the file's language, the tab asks
+//! the project's (see [`crate::servers`]) what the code means. The mouse
+//! resting on a name shows what the server says of it, its type and its
+//! documentation (see [`hover`]). A click on a name with Command held, or
+//! Control off macOS, goes to where the name is defined, and the menu of
+//! the right button goes there too, or lists where the name is used (see
+//! [`places`]). Going to a place in another file, the tab shows that file,
+//! as a page goes to another: back and forward go between the places the
+//! tab went to.
+
+mod hover;
+mod places;
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -20,18 +33,35 @@ use std::path::{Path, PathBuf};
 use cox_core::tabs::Lines;
 use cox_editor::buffer::{Buffer, Point as Place};
 use cox_editor::language::{Highlight, Language};
+use cox_editor::lsp::{Client, Document, Encoding, Position};
 use cox_editor::syntax::Syntax;
 use gpui::{
-    App, Bounds, ClipboardItem, ContentMask, Context, Element, ElementId, Entity, FocusHandle,
-    Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement,
-    KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    ScrollWheelEvent, ShapedLine, SharedString, Style, Task, TextRun, Window, div, fill, font,
-    point, prelude::*, px, relative, rgb, size,
+    App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, Element, ElementId, Entity,
+    EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hitbox,
+    HitboxBehavior, Hsla, InspectorElementId, IntoElement, KeyBinding, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, Point,
+    ScrollWheelEvent, ShapedLine, SharedString, Style, Subscription, Task, TextRun, Window,
+    actions, anchored, deferred, div, fill, font, point, prelude::*, px, relative, rgb, size,
 };
 
+use crate::document::LinkClicked;
 use crate::follow::{self, Follows, Stamp};
+use crate::servers::LanguageServer;
 use crate::view::{Copy, FONT};
 use crate::workspace::shortened;
+
+actions!(
+    code,
+    [
+        /// Goes back to where the tab was before it went to a place.
+        Back,
+        /// Goes forward again to where the tab went back from.
+        Forward,
+        /// Closes the menu, or else what the server says of a name, or
+        /// else the list of places.
+        Dismiss,
+    ]
+);
 
 const KEY_CONTEXT: &str = "Code";
 
@@ -63,6 +93,13 @@ const MARKED: u32 = 0x33_3322;
 const SELECTION: u32 = 0x3a_4a6a;
 const DIM: u32 = 0xa0_a0a0;
 const FAILED: u32 = 0xf0_8080;
+/// What a click with Command held goes to the definition of.
+const LINK: u32 = 0x7f_b4ff;
+/// The name the server says something of.
+const HOVERED: u32 = 0x2c_3a4a;
+const MENU: u32 = 0x25_2526;
+const MENU_BORDER: u32 = 0x45_4545;
+const MENU_HOVER: u32 = 0x04_395e;
 
 /// How code that is nothing in particular is drawn.
 const PLAIN: (u32, FontWeight, FontStyle) = (FOREGROUND, FontWeight::NORMAL, FontStyle::Normal);
@@ -102,7 +139,14 @@ fn style(highlight: Highlight) -> (u32, FontWeight, FontStyle) {
 
 /// Binds the keys of the tab.
 pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT))]);
+    cx.bind_keys([
+        KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT)),
+        KeyBinding::new("secondary-[", Back, Some(KEY_CONTEXT)),
+        KeyBinding::new("secondary-]", Forward, Some(KEY_CONTEXT)),
+        KeyBinding::new("alt-left", Back, Some(KEY_CONTEXT)),
+        KeyBinding::new("alt-right", Forward, Some(KEY_CONTEXT)),
+        KeyBinding::new("escape", Dismiss, Some(KEY_CONTEXT)),
+    ]);
 }
 
 pub struct Code {
@@ -139,9 +183,49 @@ pub struct Code {
     selecting: bool,
     /// How the last frame laid the text out.
     laid: Option<Laid>,
+    /// The project's server that knows the language of the file, if the
+    /// editor knows one.
+    server: Option<Entity<LanguageServer>>,
+    /// The file, open on the server once it is ready.
+    document: Option<Document>,
+    /// Where the tab was before it went to a place, the latest last.
+    back: Vec<Visit>,
+    /// Where the tab went back from, the latest last.
+    forward: Vec<Visit>,
+    /// The word the mouse rests on, as its line and the bytes of it.
+    pointed: Option<(usize, Range<usize>)>,
+    /// Whether the key that makes a click go to a definition is held.
+    linking: bool,
+    /// What the server says of the name the mouse rests on, once it says.
+    hover: Option<hover::Hovered>,
+    /// The menu of the right button, where it opened in the window, for
+    /// the word at the place given.
+    menu: Option<(Point<Pixels>, Place)>,
+    /// The places the server found last, listed under the code.
+    places: Option<places::Places>,
+    /// What the tab says of what the human asked, such as that the server
+    /// found nothing.
+    notice: Option<String>,
     focus_handle: FocusHandle,
     _follow: Task<()>,
     _parse: Task<()>,
+    /// Waits for the mouse to rest, then asks the server of the name.
+    _hovering: Task<()>,
+    /// Hides what the server says of a name once the mouse leaves it.
+    _unhovering: Task<()>,
+    /// Asks the server what the human asked.
+    _asking: Task<()>,
+    _server_changes: Option<Subscription>,
+}
+
+/// Where the tab was: the file, what it marked and selected there, and
+/// how far it was scrolled.
+#[derive(Clone, Debug, PartialEq)]
+struct Visit {
+    path: PathBuf,
+    marked: Option<Lines>,
+    selection: Option<(Place, Place)>,
+    scroll: Point<Pixels>,
 }
 
 /// The stretches of a line, each as bytes of it with what it is, in order.
@@ -157,6 +241,18 @@ struct Laid {
     rows: Vec<Row>,
 }
 
+impl Laid {
+    /// Where `range`, bytes of `line`, is drawn, if the line is in sight.
+    fn stretch(&self, line: usize, range: &Range<usize>) -> Option<Bounds<Pixels>> {
+        let row = self.rows.iter().find(|row| row.line == line)?;
+        let x = |column| row.shaped.x_for_index(row.shown.index_of(column));
+        Some(Bounds::new(
+            row.origin + point(x(range.start), px(0.)),
+            size(x(range.end) - x(range.start), self.line_height),
+        ))
+    }
+}
+
 /// A line in sight, as drawn.
 struct Row {
     line: usize,
@@ -166,11 +262,27 @@ struct Row {
     shown: Shown,
 }
 
+impl EventEmitter<LinkClicked> for Code {}
+
 impl Code {
     /// A tab showing the file at `path`, an absolute path, which says
-    /// `text`, at `lines` if any.
-    pub fn new(path: PathBuf, text: &str, lines: Option<Lines>, cx: &mut Context<Self>) -> Self {
+    /// `text`, at `lines` if any, which asks `server` what the code means,
+    /// if given.
+    pub fn new(
+        path: PathBuf,
+        text: &str,
+        lines: Option<Lines>,
+        server: Option<Entity<LanguageServer>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let buffer = Buffer::new(text);
+        // Once the server is ready, it gets the file.
+        let server_changes = server.as_ref().map(|server| {
+            cx.observe(server, |code, _, cx| {
+                code.open_on_server(cx);
+                cx.notify();
+            })
+        });
         let mut code = Self {
             longest: buffer.longest_line(),
             buffer,
@@ -186,11 +298,26 @@ impl Code {
             selection: None,
             selecting: false,
             laid: None,
+            server,
+            document: None,
+            back: Vec::new(),
+            forward: Vec::new(),
+            pointed: None,
+            linking: false,
+            hover: None,
+            menu: None,
+            places: None,
+            notice: None,
             focus_handle: cx.focus_handle(),
             _follow: follow::follow(cx),
             _parse: Task::ready(()),
+            _hovering: Task::ready(()),
+            _unhovering: Task::ready(()),
+            _asking: Task::ready(()),
+            _server_changes: server_changes,
         };
         code.parse(cx);
+        code.open_on_server(cx);
         code
     }
 
@@ -230,6 +357,23 @@ impl Code {
         }
     }
 
+    /// What the server says of the name the mouse rests on, as Markdown,
+    /// while it shows.
+    #[must_use]
+    pub fn hover(&self) -> Option<&str> {
+        self.hover.as_ref().map(hover::Hovered::markdown)
+    }
+
+    /// Where in the window the middle of the character at `column` of
+    /// `line`, both from 0, is drawn, as the last frame drew it, if the
+    /// line was in sight.
+    #[must_use]
+    pub fn point_of(&self, line: usize, column: usize) -> Option<Point<Pixels>> {
+        let laid = self.laid.as_ref()?;
+        let at = laid.stretch(line, &(column..column + 1))?;
+        Some(at.center())
+    }
+
     /// What the stretches of `line`, from 0, are, as bytes of it, as the
     /// syntax says once parsed.
     #[must_use]
@@ -251,6 +395,11 @@ impl Code {
     /// Shows `text`, which the file says now, at `lines` if any, which the
     /// tab scrolls to.
     pub fn show(&mut self, text: &str, lines: Option<Lines>, cx: &mut Context<Self>) {
+        // Back goes to where the human was reading.
+        if lines.is_some() && lines != self.marked {
+            self.back.push(self.visit());
+            self.forward.clear();
+        }
         // The tab looks at the file again, which may have changed since.
         self.stamp = None;
         self.unread = None;
@@ -271,7 +420,183 @@ impl Code {
             }
             self.highlighted.clear();
             self.parse(cx);
+            // What the server said of the text before may not hold.
+            self.hover = None;
+            self.menu = None;
+            if let Some(document) = &self.document {
+                document.change(text);
+            }
         }
+    }
+
+    /// Opens the file on the server, once the server is ready, if it is
+    /// in the server's language.
+    fn open_on_server(&mut self, cx: &mut Context<Self>) {
+        if self.document.is_some() {
+            return;
+        }
+        let Some(server) = self.server.clone() else {
+            return;
+        };
+        let server = server.read(cx);
+        let Some(client) = server.client() else {
+            return;
+        };
+        let Some(language) = self.language.filter(|language| {
+            language.server().map(|server| server.program) == Some(server.name())
+        }) else {
+            return;
+        };
+        self.document = client.open(&self.path, language.protocol_name(), &self.buffer.text());
+    }
+
+    /// The server, once it is ready to be asked.
+    fn client<'a>(&self, cx: &'a App) -> Option<&'a Client> {
+        self.server.as_ref()?.read(cx).client()
+    }
+
+    /// What the server counts a line in.
+    fn encoding(&self, cx: &App) -> Encoding {
+        self.client(cx)
+            .map_or_else(Encoding::default, Client::encoding)
+    }
+
+    /// Asks the server `request` of `place` in the file, once the server
+    /// is ready and has the file open: what to wait on for its answer.
+    fn ask<F>(
+        &self,
+        place: Place,
+        request: impl FnOnce(&Client, &Document, Position) -> F,
+        cx: &App,
+    ) -> Option<F> {
+        let client = self.client(cx)?;
+        let document = self.document.as_ref()?;
+        let position = client.encoding().position(&self.buffer, place);
+        Some(request(client, document, position))
+    }
+
+    /// Where the tab is now.
+    fn visit(&self) -> Visit {
+        Visit {
+            path: self.path.clone(),
+            marked: self.marked,
+            selection: self.selection,
+            scroll: self.scroll,
+        }
+    }
+
+    /// Shows the file at `path`, an absolute path, from its start, unless
+    /// the tab shows it already: answers whether it does now.
+    fn open(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
+        if path == self.path {
+            return true;
+        }
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => {
+                self.notice = Some(format!("cannot read {}: {error}", shortened(path)));
+                return false;
+            }
+        };
+        path.clone_into(&mut self.path);
+        self.buffer = Buffer::new(&text);
+        self.longest = self.buffer.longest_line();
+        self.language = Language::of_path(path);
+        self.syntax = None;
+        self.highlighted.clear();
+        self.stamp = None;
+        self.unread = None;
+        self.marked = None;
+        self.reveal = None;
+        self.scroll = Point::default();
+        self.selection = None;
+        self.selecting = false;
+        self.hover = None;
+        self.menu = None;
+        self.document = None;
+        self.parse(cx);
+        self.open_on_server(cx);
+        true
+    }
+
+    /// Goes to `range` of the file at `path`, as the server counts it,
+    /// which it selects and marks: back goes to where the tab was.
+    fn go_to(&mut self, path: &Path, range: Range<Position>, cx: &mut Context<Self>) {
+        let here = self.visit();
+        let in_sight = self.in_sight();
+        let same_file = path == self.path;
+        if !self.open(path, cx) {
+            return;
+        }
+        let encoding = self.encoding(cx);
+        let start = encoding.point(&self.buffer, range.start);
+        let end = encoding.point(&self.buffer, range.end).max(start);
+        self.selection = Some((start, end));
+        self.marked = Some(Lines {
+            first: start.line + 1,
+            last: end.line + 1,
+        });
+        // A line in sight stays where it is.
+        if !(same_file && in_sight.contains(&start.line)) {
+            self.reveal = Some(start.line);
+        }
+        if self.visit() != here {
+            self.back.push(here);
+            self.forward.clear();
+        }
+        cx.notify();
+    }
+
+    /// Goes to where the tab was at `visit`: answers whether it could.
+    fn revisit(&mut self, visit: &Visit, cx: &mut Context<Self>) -> bool {
+        if !self.open(&visit.path, cx) {
+            return false;
+        }
+        self.marked = visit.marked;
+        self.selection = visit.selection;
+        self.scroll = visit.scroll;
+        self.reveal = None;
+        self.hover = None;
+        self.notice = None;
+        cx.notify();
+        true
+    }
+
+    fn back(&mut self, _: &Back, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_back(cx);
+    }
+
+    fn forward(&mut self, _: &Forward, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_forward(cx);
+    }
+
+    /// Goes back to where the tab was before it went to a place.
+    pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        let Some(visit) = self.back.pop() else {
+            return;
+        };
+        let here = self.visit();
+        if self.revisit(&visit, cx) {
+            self.forward.push(here);
+        }
+    }
+
+    /// Goes forward again to where the tab went back from.
+    pub fn go_forward(&mut self, cx: &mut Context<Self>) {
+        let Some(visit) = self.forward.pop() else {
+            return;
+        };
+        let here = self.visit();
+        if self.revisit(&visit, cx) {
+            self.back.push(here);
+        }
+    }
+
+    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if self.menu.take().is_none() && self.hover.take().is_none() {
+            self.places = None;
+        }
+        cx.notify();
     }
 
     /// Parses the text in the background, with what did not change since
@@ -333,6 +658,60 @@ impl Code {
         Some(Place::new(row.line, row.shown.column_of(index)))
     }
 
+    /// The word under `position`, as its line and the bytes of it, if the
+    /// mouse is on one.
+    fn word_at(&self, position: Point<Pixels>) -> Option<(usize, Range<usize>)> {
+        let laid = self.laid.as_ref()?;
+        let row = laid.rows.iter().find(|row| {
+            row.origin.y <= position.y && position.y < row.origin.y + laid.line_height
+        })?;
+        if !laid.text.contains(&position) || position.x < row.origin.x {
+            return None;
+        }
+        let index = row.shaped.index_for_x(position.x - row.origin.x)?;
+        let line = self.buffer.line(row.line);
+        let word = word_around(&line, row.shown.column_of(index));
+        line[word.clone()]
+            .starts_with(is_word)
+            .then_some((row.line, word))
+    }
+
+    /// The text of the word at `place`.
+    fn word_text(&self, place: Place) -> String {
+        let line = self.buffer.line(place.line);
+        line[word_around(&line, place.column.min(line.len()))].to_owned()
+    }
+
+    /// Where in the window the bottom left of `column` of `line` is, if the
+    /// line is in sight.
+    fn below(&self, line: usize, column: usize) -> Option<Point<Pixels>> {
+        self.laid
+            .as_ref()?
+            .stretch(line, &(column..column))
+            .map(|at| at.bottom_left())
+    }
+
+    /// Where the name the server says something of is, and the line under
+    /// the name a click goes to the definition of, laid out as `laid`.
+    fn names(&self, laid: &Laid) -> (Option<Bounds<Pixels>>, Option<Bounds<Pixels>>) {
+        let hovered = self
+            .hover
+            .as_ref()
+            .and_then(|hovered| laid.stretch(hovered.line, &hovered.range));
+        let link = self
+            .pointed
+            .as_ref()
+            .filter(|_| self.linking)
+            .and_then(|(line, word)| laid.stretch(*line, word))
+            .map(|at| {
+                Bounds::new(
+                    at.bottom_left() - point(px(0.), px(2.)),
+                    size(at.size.width, px(1.)),
+                )
+            });
+        (hovered, link)
+    }
+
     /// How far the text scrolls, at most, laid out as `laid`.
     fn most_scroll(&self, laid: &Laid) -> Point<Pixels> {
         #[expect(
@@ -348,6 +727,15 @@ impl Code {
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);
+        self.unhover();
+        self.notice = None;
+        if event.modifiers.secondary()
+            && let Some((line, word)) = self.word_at(event.position)
+        {
+            self.selection = None;
+            self.go_to_definition(Place::new(line, word.start), cx);
+            return;
+        }
         let Some(place) = self.place_at(event.position) else {
             return;
         };
@@ -367,7 +755,28 @@ impl Code {
         cx.notify();
     }
 
+    /// The right button opens the menu for the word under the mouse.
+    fn right_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus_handle);
+        self.unhover();
+        self.menu = self
+            .word_at(event.position)
+            .map(|(line, word)| (event.position, Place::new(line, word.start)));
+        cx.notify();
+    }
+
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.link(event.modifiers.secondary(), cx);
+        if event.pressed_button.is_none() {
+            let word = self.word_at(event.position);
+            self.rest_on(word, cx);
+            return;
+        }
         if !self.selecting || event.pressed_button != Some(MouseButton::Left) {
             return;
         }
@@ -389,7 +798,17 @@ impl Code {
         }
     }
 
+    /// Whether the key that makes a click go to a definition is held.
+    fn link(&mut self, linking: bool, cx: &mut Context<Self>) {
+        if linking != self.linking {
+            self.linking = linking;
+            cx.notify();
+        }
+    }
+
     fn scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.hover = None;
+        self.menu = None;
         let Some(laid) = &self.laid else {
             return;
         };
@@ -407,13 +826,18 @@ impl Code {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let text = self.selected_text();
+        let text = self
+            .hover
+            .as_ref()
+            .map(hover::Hovered::selected_text)
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| self.selected_text());
         if !text.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
-    fn render_bar(&self) -> impl IntoElement {
+    fn render_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let lines = self.marked.map(|lines| {
             if lines.first == lines.last {
                 format!("line {}", lines.first)
@@ -421,14 +845,48 @@ impl Code {
                 format!("lines {}–{}", lines.first, lines.last)
             }
         });
+        let server = self
+            .server
+            .as_ref()
+            .and_then(|server| server.read(cx).said());
+        let button = |id: &'static str, label: &'static str, enabled: bool| {
+            div()
+                .id(id)
+                .debug_selector(move || id.to_owned())
+                .flex_shrink_0()
+                .px_1()
+                .rounded_sm()
+                .map(|button| {
+                    if enabled {
+                        button
+                            .cursor_pointer()
+                            .text_color(rgb(FOREGROUND))
+                            .hover(|style| style.bg(rgb(0x40_4040)))
+                    } else {
+                        button.text_color(rgb(0x55_5555))
+                    }
+                })
+                .child(label)
+        };
         div()
             .flex()
+            .items_center()
             .gap_2()
             .px_3()
             .py_1()
             .border_b_1()
             .border_color(rgb(0x40_4040))
             .text_color(rgb(DIM))
+            .when(!self.back.is_empty() || !self.forward.is_empty(), |bar| {
+                bar.child(
+                    button("code-back", "‹", !self.back.is_empty())
+                        .on_click(cx.listener(|code, _, _, cx| code.go_back(cx))),
+                )
+                .child(
+                    button("code-forward", "›", !self.forward.is_empty())
+                        .on_click(cx.listener(|code, _, _, cx| code.go_forward(cx))),
+                )
+            })
             .child(
                 div()
                     .debug_selector(|| "code-path".to_owned())
@@ -438,6 +896,20 @@ impl Code {
                     .child(shortened(&self.path)),
             )
             .children(lines.map(|lines| div().flex_shrink_0().child(lines)))
+            .children(self.notice.as_ref().map(|notice| {
+                div()
+                    .debug_selector(|| "code-notice".to_owned())
+                    .flex_shrink_0()
+                    .child(notice.clone())
+            }))
+            .children(server.map(|server| {
+                div()
+                    .debug_selector(|| "code-server".to_owned())
+                    .min_w_0()
+                    .max_w(px(240.))
+                    .truncate()
+                    .child(server)
+            }))
             .children(self.unread.as_ref().map(|error| {
                 div()
                     .flex_shrink_0()
@@ -445,12 +917,72 @@ impl Code {
                     .child(format!("cannot read: {error}"))
             }))
     }
+
+    /// The menu of the right button, if it is open.
+    fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (at, place) = self.menu?;
+        let click = if cfg!(target_os = "macos") {
+            "⌘-click"
+        } else {
+            "Ctrl-click"
+        };
+        let item = |id: &'static str, label: &'static str, key: &'static str| {
+            div()
+                .id(id)
+                .debug_selector(move || id.to_owned())
+                .flex()
+                .justify_between()
+                .gap_4()
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(MENU_HOVER)))
+                .child(label)
+                .child(div().text_color(rgb(DIM)).child(key))
+        };
+        let menu = div()
+            .occlude()
+            .min_w(px(220.))
+            .p_1()
+            .bg(rgb(MENU))
+            .border_1()
+            .border_color(rgb(MENU_BORDER))
+            .rounded_md()
+            .shadow_md()
+            .text_color(rgb(FOREGROUND))
+            .on_mouse_down_out(cx.listener(|code, _, _, cx| {
+                code.menu = None;
+                cx.notify();
+            }))
+            .child(
+                item("go-to-definition", "Go to definition", click).on_click(cx.listener(
+                    move |code, _, _, cx| {
+                        code.menu = None;
+                        code.go_to_definition(place, cx);
+                    },
+                )),
+            )
+            .child(
+                item("find-references", "Find references", "").on_click(cx.listener(
+                    move |code, _, _, cx| {
+                        code.menu = None;
+                        code.find_references(place, cx);
+                    },
+                )),
+            );
+        Some(deferred(anchored().position(at).child(menu)).with_priority(2))
+    }
+}
+
+/// Whether `c` is of a word: a letter, a digit, or `_`.
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 /// The bytes of the word around `column` of `line`: letters, digits and
 /// `_`, or else the one character there.
 fn word_around(line: &str, column: usize) -> std::ops::Range<usize> {
-    let is_word = |c: char| c.is_alphanumeric() || c == '_';
     let Some(here) = line[column..].chars().next() else {
         return column..column;
     };
@@ -500,7 +1032,13 @@ impl Render for Code {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.render_bar())
+            .track_focus(&self.focus_handle)
+            .key_context(KEY_CONTEXT)
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::back))
+            .on_action(cx.listener(Self::forward))
+            .on_action(cx.listener(Self::dismiss))
+            .child(self.render_bar(cx))
             .child(
                 div()
                     .id("code")
@@ -508,19 +1046,33 @@ impl Render for Code {
                     .flex_1()
                     .min_h_0()
                     .bg(rgb(BACKGROUND))
-                    .track_focus(&self.focus_handle)
-                    .key_context(KEY_CONTEXT)
-                    .on_action(cx.listener(Self::copy))
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                    .on_mouse_down(MouseButton::Right, cx.listener(Self::right_mouse_down))
+                    .on_mouse_down(
+                        MouseButton::Navigate(NavigationDirection::Back),
+                        cx.listener(|code, _, _, cx| code.go_back(cx)),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Navigate(NavigationDirection::Forward),
+                        cx.listener(|code, _, _, cx| code.go_forward(cx)),
+                    )
                     .on_mouse_move(cx.listener(Self::mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                     .on_mouse_up_out(
                         MouseButton::Left,
                         cx.listener(|code, _, _, _| code.selecting = false),
                     )
+                    .on_hover(cx.listener(|code, hovered: &bool, _, cx| {
+                        if !*hovered {
+                            code.rest_on(None, cx);
+                        }
+                    }))
                     .on_scroll_wheel(cx.listener(Self::scroll))
-                    .child(Text { code: cx.entity() }),
+                    .child(Text { code: cx.entity() })
+                    .children(self.render_hover(cx))
+                    .children(self.render_menu(cx)),
             )
+            .children(self.render_places(cx))
     }
 }
 
@@ -620,6 +1172,11 @@ struct Painted {
     marked: Vec<Bounds<Pixels>>,
     /// Under the text, within it.
     selection: Vec<Bounds<Pixels>>,
+    /// The name the server says something of, under the text.
+    hovered: Option<Bounds<Pixels>>,
+    /// The line under the name a click goes to the definition of, over
+    /// the text.
+    link: Option<Bounds<Pixels>>,
     /// The lines in sight, at their top left.
     text: Vec<(Point<Pixels>, ShapedLine)>,
     /// Their numbers, at their top left.
@@ -627,6 +1184,9 @@ struct Painted {
     /// Where the text shows, which it is cut to.
     text_bounds: Bounds<Pixels>,
     line_height: Pixels,
+    /// Where the mouse points with the pointing hand, over a name a click
+    /// goes to the definition of.
+    pointing: Option<Hitbox>,
 }
 
 impl Text {
@@ -692,7 +1252,6 @@ impl Text {
         let selection = code
             .selection
             .map(|(anchor, head)| (anchor.min(head), anchor.max(head)));
-
         let mut highlighted = Vec::new();
         let mut painted = Painted {
             text_bounds,
@@ -735,6 +1294,7 @@ impl Text {
                 shown,
             });
         }
+        (painted.hovered, painted.link) = code.names(&laid);
         self.code.update(cx, |code, _| {
             code.reveal = None;
             code.scroll = scroll;
@@ -847,7 +1407,11 @@ impl Element for Text {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        self.lay_out(bounds, window, cx)
+        let mut painted = self.lay_out(bounds, window, cx);
+        if painted.link.is_some() {
+            painted.pointing = Some(window.insert_hitbox(bounds, HitboxBehavior::Normal));
+        }
+        painted
     }
 
     fn paint(
@@ -861,6 +1425,15 @@ impl Element for Text {
         cx: &mut App,
     ) {
         let line_height = painted.line_height;
+        if let Some(hitbox) = &painted.pointing {
+            window.set_cursor_style(CursorStyle::PointingHand, hitbox);
+        }
+        // The key that makes a click go to a definition underlines the name
+        // under the mouse as it goes down, and stops as it comes up.
+        let code = self.code.clone();
+        window.on_modifiers_changed(move |event, _, cx| {
+            code.update(cx, |code, cx| code.link(event.modifiers.secondary(), cx));
+        });
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             for at in &painted.marked {
                 window.paint_quad(fill(*at, rgb(MARKED)));
@@ -872,11 +1445,17 @@ impl Element for Text {
                 bounds: painted.text_bounds,
             };
             window.with_content_mask(Some(text), |window| {
+                if let Some(at) = painted.hovered {
+                    window.paint_quad(fill(at, rgb(HOVERED)));
+                }
                 for at in &painted.selection {
                     window.paint_quad(fill(*at, rgb(SELECTION)));
                 }
                 for (origin, line) in &painted.text {
                     line.paint(*origin, line_height, window, cx).ok();
+                }
+                if let Some(at) = painted.link {
+                    window.paint_quad(fill(at, rgb(LINK)));
                 }
             });
         });
