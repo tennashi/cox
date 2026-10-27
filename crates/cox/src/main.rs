@@ -103,14 +103,12 @@ const PUMP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
 
 /// How often the app looks whether it was asked to quit from where it
 /// could not quit right away (see `cox::quit`).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 const QUIT_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
 fn main() {
     env_logger::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Before CEF, since the bridge runs no browser.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(socket) = cox::mcp::bridge_to(&args) {
         if let Err(error) = cox::mcp::bridge(&socket) {
             eprintln!("cox: {error:#}");
@@ -122,10 +120,8 @@ fn main() {
 
     // CEF first: on Linux, its helper processes run this same executable
     // with arguments of their own, and exit inside `start`.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let cef = cox::browser::start();
     // In place of CEF's handlers, which quit without the app's quit handlers.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Err(error) = cox::quit::on_signals() {
         log::error!("signals will end Cox without stopping the agents: {error}");
     }
@@ -145,7 +141,6 @@ fn main() {
                 log::error!("the agents get no tools of Cox's own: {error}");
             })
             .ok(),
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         cef: cef.clone(),
     };
 
@@ -156,7 +151,6 @@ fn main() {
         cox::code::bind_keys(cx);
         cox::workspace::bind_keys(cx);
         // After the window's, which a terminal's own keys stand before.
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         cox::terminal::bind_keys(cx);
         cx.set_global(cox::servers::Servers::default());
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -176,7 +170,6 @@ fn main() {
             })
             .detach();
         }
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         cx.spawn(async move |cx| {
             loop {
                 cx.background_executor().timer(QUIT_CHECK_INTERVAL).await;
@@ -188,7 +181,6 @@ fn main() {
         .detach();
         // Quitting ends the app's run loop, or on macOS the whole process,
         // so the browsers go before either. The agents go with the window.
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let closing = cef.clone();
             cx.on_app_quit(move |_| {

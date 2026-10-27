@@ -35,9 +35,8 @@ pulldown-cmark = { version = "0.13.5", default-features = false }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 unicode-segmentation = "1.12.0"
 
-# The stage runs on Linux and macOS. On macOS, CEF lives in an app bundle
-# that `cargo xtask bundle` assembles; see CONTRIBUTING.md.
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+# Cox runs on Linux and macOS: the stage is CEF, which on macOS lives in
+# an app bundle that `cargo xtask bundle` assembles; see CONTRIBUTING.md.
 cef = { version = "=152.3.0", default-features = false }
 # cef accepts any 152.x of its sys crate, and the newest expects a newer
 # CEF than the one these bindings were generated from; pin the pair that

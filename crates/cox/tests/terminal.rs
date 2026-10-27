@@ -1,8 +1,6 @@
 //! A terminal on a tab of the stage: the human types into it, and a
 //! command the agent runs there answers how it went.
 
-#![cfg(any(target_os = "linux", target_os = "macos"))]
-
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

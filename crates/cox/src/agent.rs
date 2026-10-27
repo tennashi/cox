@@ -101,7 +101,6 @@ pub fn spawn<T: Transport + 'static>(
     let (sent, events) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
     let thread = thread::spawn(move || {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         close_on_exec();
         let outcome = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -137,7 +136,6 @@ pub fn spawn<T: Transport + 'static>(
 /// Rust opens its files that way already, but CEF opens the stage's
 /// `DevTools` port without: an agent that outlived Cox would keep the port
 /// from the next Cox.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn close_on_exec() {
     let Ok(entries) = std::fs::read_dir("/dev/fd") else {
         return;
@@ -326,7 +324,7 @@ fn ended(result: cox_acp::ToolCallResult) -> ToolCallResult {
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[cfg(test)]
 mod tests {
     use std::process::Command;
     use std::time::Instant;

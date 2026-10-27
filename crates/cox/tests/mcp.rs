@@ -1,8 +1,6 @@
 //! An agent reaching its chat's tools through `cox --mcp`, as it starts
 //! the MCP server Cox hands it.
 
-#![cfg(any(target_os = "linux", target_os = "macos"))]
-
 use std::io::{BufRead as _, BufReader, Lines, Write as _};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};

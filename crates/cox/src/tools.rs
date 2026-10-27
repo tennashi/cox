@@ -10,7 +10,6 @@
 //! [`crate::mcp`]).
 
 use std::ffi::OsStr;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -48,7 +47,6 @@ pub fn stage(relay_port: u16, path: &OsStr) -> Option<McpServer> {
 
 /// The MCP server of Cox's own tools for one chat: `exe`, the `cox` that
 /// runs, as the bridge to the chat's server on `socket`.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[must_use]
 pub fn cox(exe: PathBuf, socket: &Path) -> McpServer {
     McpServer {
