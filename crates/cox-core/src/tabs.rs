@@ -1,7 +1,6 @@
 //! What Cox keeps of a chat's stage: the tabs it had open, in their
 //! order, and which was shown. Not what runs in them: a page is kept by its
-//! address, a Markdown file by its path, and a terminal only as having
-//! been there.
+//! address, a file by its path, and a terminal only as having been there.
 
 use std::path::PathBuf;
 
@@ -25,4 +24,14 @@ pub enum Tab {
     Markdown { path: PathBuf },
     /// A terminal, with the title it last had.
     Terminal { title: String },
+    /// A file shown as it is written, such as code, by its absolute path,
+    /// with the lines it was shown at, if any.
+    File { path: PathBuf, lines: Option<Lines> },
+}
+
+/// Lines of a file, as people number them: from 1, the last included.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lines {
+    pub first: usize,
+    pub last: usize,
 }

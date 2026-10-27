@@ -22,6 +22,7 @@ path = "src/bin/helper.rs"
 anyhow.workspace = true
 cox-acp.workspace = true
 cox-core.workspace = true
+cox-editor.workspace = true
 env_logger = "0.11.11"
 # runtime_shaders: compile the Metal shaders when the app starts, so a Mac
 # with only the Command Line Tools (no Xcode, no `metal` compiler) can build.

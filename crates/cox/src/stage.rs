@@ -1,14 +1,17 @@
 //! The stage: where the human and the agent of one chat work together,
 //! beside the chat's conversation. It holds tabs, each showing a page of
 //! the browser (see [`crate::page`]), a Markdown file (see
-//! [`crate::document`]), or a terminal (see [`crate::terminal`]). The
+//! [`crate::document`]), a file as it is written, such as code (see
+//! [`crate::code`]), or a terminal (see [`crate::terminal`]). The
 //! first shows the page the stage starts on; the human opens more pages
 //! and terminals and closes tabs, and the agent opens and closes pages
 //! too, through the chat's relay. A page that asks for a window of its own
 //! gets a tab instead. With Cox's own tools (see [`crate::mcp`]), the
-//! agent shows the human Markdown files, a tab for each file, and runs
-//! commands in terminals: a command gets the tab of the agent's last one
-//! that ended, or a new one.
+//! agent shows the human Markdown files and code, a tab for each file, and
+//! runs commands in terminals: a command gets the tab of the agent's last
+//! one that ended, or a new one. A link to a file opens it on a tab too:
+//! as Markdown if it is a Markdown file and the link names no lines, and
+//! as it is written otherwise.
 //!
 //! The stage tells the relay of every page it opens, so that the agent sees
 //! each of its chat's pages, whoever opened it. When the agent works on a
@@ -20,10 +23,10 @@
 //! at; its terminals are not started again. Once the human sends to the
 //! chat again, its agent works on those pages.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cox_core::store::Record;
-use cox_core::tabs::{Tab as KeptTab, Tabs};
+use cox_core::tabs::{Lines, Tab as KeptTab, Tabs};
 use gpui::{
     AnyView, App, Context, Div, Entity, FocusHandle, Focusable, Stateful, Subscription, Task,
     Window, div, prelude::*, px, rgb,
@@ -31,8 +34,10 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::browser::{Cef, TargetId};
+use crate::code::Code;
 use crate::document::{Document, LinkClicked};
 use crate::input::LineInput;
+use crate::markdown::FileLink;
 use crate::mcp::Ran;
 use crate::mcp::Request;
 use crate::page::{OpenTab, Page};
@@ -86,6 +91,7 @@ enum Shown {
         target: TargetId,
     },
     Document(Entity<Document>),
+    Code(Entity<Code>),
     Terminal(Entity<Terminal>),
 }
 
@@ -93,7 +99,7 @@ impl Shown {
     fn page(&self) -> Option<&Entity<Page>> {
         match self {
             Self::Page { page, .. } => Some(page),
-            Self::Document(_) | Self::Terminal(_) => None,
+            Self::Document(_) | Self::Code(_) | Self::Terminal(_) => None,
         }
     }
 
@@ -101,6 +107,7 @@ impl Shown {
         match self {
             Self::Page { page, .. } => page.clone().into(),
             Self::Document(document) => document.clone().into(),
+            Self::Code(code) => code.clone().into(),
             Self::Terminal(terminal) => terminal.clone().into(),
         }
     }
@@ -109,6 +116,7 @@ impl Shown {
         match self {
             Self::Page { page, .. } => page.focus_handle(cx),
             Self::Document(document) => document.focus_handle(cx),
+            Self::Code(code) => code.focus_handle(cx),
             Self::Terminal(terminal) => terminal.focus_handle(cx),
         }
     }
@@ -120,7 +128,7 @@ impl Shown {
                 let terminal = terminal.read(cx);
                 matches!(terminal.program(), Program::Command(_)) && terminal.ended().is_some()
             }
-            Self::Page { .. } | Self::Document(_) => false,
+            Self::Page { .. } | Self::Document(_) | Self::Code(_) => false,
         }
     }
 }
@@ -215,6 +223,11 @@ impl Stage {
                     stage.push_document(path, text, false, window, cx);
                     true
                 }
+                KeptTab::File { path, lines } => {
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    stage.push_code(path, &text, lines, false, cx);
+                    true
+                }
                 KeptTab::Terminal { .. } => false,
             };
             if opened && (index <= shown || shown_now.is_none()) {
@@ -246,6 +259,13 @@ impl Stage {
                 Shown::Document(document) => KeptTab::Markdown {
                     path: document.read(cx).path().to_owned(),
                 },
+                Shown::Code(code) => {
+                    let code = code.read(cx);
+                    KeptTab::File {
+                        path: code.path().to_owned(),
+                        lines: code.marked(),
+                    }
+                }
                 Shown::Terminal(terminal) => KeptTab::Terminal {
                     title: terminal.read(cx).title(),
                 },
@@ -320,6 +340,9 @@ impl Stage {
                     Request::ShowMarkdown { path, text } => {
                         stage.show_document(path, text, window, cx);
                     }
+                    Request::ShowFile { path, text, lines } => {
+                        stage.show_code(path, &text, lines, cx);
+                    }
                     Request::RunCommand {
                         command,
                         cwd,
@@ -344,7 +367,7 @@ impl Stage {
     ) {
         let showing = self.tabs.iter().position(|tab| match &tab.shown {
             Shown::Document(document) => document.read(cx).path() == path,
-            Shown::Page { .. } | Shown::Terminal(_) => false,
+            Shown::Page { .. } | Shown::Code(_) | Shown::Terminal(_) => false,
         });
         if let Some(index) = showing {
             if let Shown::Document(document) = &self.tabs[index].shown {
@@ -373,9 +396,55 @@ impl Stage {
         let opens = cx.subscribe_in(
             &document,
             window,
-            |stage, _, LinkClicked(url), window, cx| stage.open(url, window, cx),
+            |stage, document, LinkClicked(url), window, cx| {
+                // A link to a file is from where the document is.
+                let path = document.read(cx).path();
+                let from = path.parent().unwrap_or(path).to_owned();
+                stage.open_from(url, &from, window, cx);
+            },
         );
         self.push(Shown::Document(document), changes, Some(opens), show, cx);
+    }
+
+    /// Shows the file at `path`, which says `text`, as it is written, at
+    /// `lines` if any: on the tab that shows it already, or a new one. The
+    /// stage opens if it was closed.
+    fn show_code(
+        &mut self,
+        path: PathBuf,
+        text: &str,
+        lines: Option<Lines>,
+        cx: &mut Context<Self>,
+    ) {
+        let showing = self.tabs.iter().position(|tab| match &tab.shown {
+            Shown::Code(code) => code.read(cx).path() == path,
+            Shown::Page { .. } | Shown::Document(_) | Shown::Terminal(_) => false,
+        });
+        if let Some(index) = showing {
+            if let Shown::Code(code) = &self.tabs[index].shown {
+                code.update(cx, |code, cx| code.show(text, lines, cx));
+            }
+            self.shown = index;
+            self.changed(cx);
+        } else {
+            self.push_code(path, text, lines, true, cx);
+        }
+        self.show_panel(cx);
+    }
+
+    /// Puts a tab showing the file at `path`, which says `text`, as it is
+    /// written, at `lines` if any, after the others, shown if `show` is.
+    fn push_code(
+        &mut self,
+        path: PathBuf,
+        text: &str,
+        lines: Option<Lines>,
+        show: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let code = cx.new(|cx| Code::new(path, text, lines, cx));
+        let changes = cx.observe(&code, |stage, _, cx| stage.changed(cx));
+        self.push(Shown::Code(code), changes, None, show, cx);
     }
 
     /// Runs `command`, which the agent asked for, in `cwd`, and answers
@@ -469,7 +538,7 @@ impl Stage {
     fn index_of(&self, page: &str) -> Option<usize> {
         self.tabs.iter().position(|tab| match &tab.shown {
             Shown::Page { target, .. } => target.borrow().as_deref() == Some(page),
-            Shown::Document(_) | Shown::Terminal(_) => false,
+            Shown::Document(_) | Shown::Code(_) | Shown::Terminal(_) => false,
         })
     }
 
@@ -564,8 +633,20 @@ impl Stage {
     }
 
     /// Opens `url`, a link the human clicked: on the tab that shows it
-    /// already, or a new one.
+    /// already, or a new one. A link to a file is from where the chat
+    /// works.
     pub fn open(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let cwd = self.cwd.clone();
+        self.open_from(url, &cwd, window, cx);
+    }
+
+    /// Opens `url`, a link the human clicked in what is in `from`, which a
+    /// link to a file is from.
+    fn open_from(&mut self, url: &str, from: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(link) = crate::markdown::file_link(url) {
+            self.open_file(link, from, window, cx);
+            return;
+        }
         let showing = self.tabs.iter().position(|tab| {
             tab.shown
                 .page()
@@ -577,6 +658,39 @@ impl Stage {
             self.open_tab(url, true, window, cx);
             self.focus_shown(window, cx);
         }
+    }
+
+    /// Opens the file `link` links to, from `from`, with the keyboard in
+    /// its tab.
+    fn open_file(
+        &mut self,
+        link: FileLink<'_>,
+        from: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let path = match (link.path.strip_prefix("~/"), std::env::var_os("HOME")) {
+            (Some(rest), Some(home)) => Path::new(&home).join(rest),
+            _ => from.join(link.path),
+        };
+        let read = std::fs::canonicalize(&path)
+            .and_then(|path| Ok((std::fs::read_to_string(&path)?, path)));
+        let (text, path) = match read {
+            Ok(read) => read,
+            Err(error) => {
+                log::warn!("cannot open {}: {error}", path.display());
+                return;
+            }
+        };
+        let is_markdown = path
+            .extension()
+            .is_some_and(|extension| extension == "md" || extension == "markdown");
+        if is_markdown && link.lines.is_none() {
+            self.show_document(path, text, window, cx);
+        } else {
+            self.show_code(path, &text, link.lines, cx);
+        }
+        self.focus_shown(window, cx);
     }
 
     /// A tab the human opens: blank, with the keyboard in its address line,
@@ -602,6 +716,7 @@ impl Stage {
                 }
             }
             Shown::Document(document) => document.read(cx).title(),
+            Shown::Code(code) => code.read(cx).title(),
             Shown::Terminal(terminal) => terminal.read(cx).title(),
         };
         let title: String = title.chars().take(TITLE_LENGTH).collect();

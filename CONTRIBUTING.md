@@ -73,6 +73,15 @@ agent's replies, for the human to read: the agent opens it with Cox's
 `show_markdown` tool. The tab follows the file as it changes, and the
 agent showing the same file again brings its tab to the front.
 
+A tab can show a file as it is written too, such as code, with the
+numbers of its lines, for the human to read: the agent opens it with
+Cox's `show_file` tool, at the lines it talks about, which the tab marks
+and scrolls to. A click on a path in the conversation, as the agent
+writes `src/main.rs:12`, opens the file the same way, or as Markdown when
+it is a Markdown file and the path names no lines. The tab draws only the
+lines in sight, so a long file scrolls as a short one does, and follows
+the file as it changes.
+
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
 `>_` beside the tabs opens one with the human's shell, working in the

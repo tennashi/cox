@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 use anyhow::Context as _;
+use cox_core::tabs::Lines;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -42,6 +43,13 @@ pub enum Request {
     /// Show the human the Markdown file at `path`, an absolute path,
     /// which says `text`, on a tab of the stage.
     ShowMarkdown { path: PathBuf, text: String },
+    /// Show the human the file at `path`, an absolute path, which says
+    /// `text`, as it is written, at `lines` if any, on a tab of the stage.
+    ShowFile {
+        path: PathBuf,
+        text: String,
+        lines: Option<Lines>,
+    },
     /// Run `command` in a terminal on the stage, working in `cwd`, and
     /// answer how it went, or why it could not start, once it ends. The
     /// agent no longer waits for the answer once `answer` is closed: the
@@ -99,6 +107,7 @@ pub struct Server {
 const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 const SHOW_MARKDOWN: &str = "show_markdown";
+const SHOW_FILE: &str = "show_file";
 const RUN_COMMAND: &str = "run_command";
 
 /// The most of a command's output the agent gets: the end of it, where a
@@ -314,6 +323,36 @@ fn tools() -> Value {
         },
     },
     {
+        "name": SHOW_FILE,
+        "description": "Shows the human a file as it is written, such as code, on a tab of \
+            the stage beside the conversation, at the lines you name, which the tab marks \
+            and scrolls to. Use it to point the human at the code you talk about, rather \
+            than quoting it. The tab follows the file as it changes. A file shown already \
+            comes back to the front, at the lines named now. For a plan or notes the human \
+            should read as Markdown, use show_markdown instead.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The file, absolute or from the working directory.",
+                },
+                "first_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The first line to show, counted from 1.",
+                },
+                "last_line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The last line to show, counted from 1: the first line \
+                        unless given.",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": RUN_COMMAND,
         "description": "Runs a shell command in a terminal on the stage beside the \
             conversation, where the human watches it run, and can type into it. Use it for \
@@ -348,6 +387,7 @@ async fn call(
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
     let done = match name {
         SHOW_MARKDOWN => show_markdown(arguments, cwd, requests),
+        SHOW_FILE => show_file(arguments, cwd, requests),
         RUN_COMMAND => run_command(arguments, cwd, requests).await,
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
@@ -377,6 +417,66 @@ fn show_markdown(
     let shown = format!("{} is on the stage, for the human to read.", path.display());
     requests
         .send(Request::ShowMarkdown { path, text })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    Ok(shown)
+}
+
+/// Reads the file `arguments` names, and asks the chat to show it at the
+/// lines they name.
+fn show_file(
+    arguments: &Value,
+    cwd: &Path,
+    requests: &UnboundedSender<Request>,
+) -> Result<String, String> {
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("no path: give the file to show as `path`")?;
+    let line = |name: &str| match arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(line) => line
+            .as_u64()
+            .and_then(|line| usize::try_from(line).ok())
+            .filter(|&line| line > 0)
+            .map(Some)
+            .ok_or(format!("{name} is to be a line number, from 1")),
+    };
+    let lines = match (line("first_line")?, line("last_line")?) {
+        (Some(first), last) => Some(Lines {
+            first,
+            last: last.unwrap_or(first),
+        }),
+        (None, Some(_)) => return Err("last_line needs a first_line".to_owned()),
+        (None, None) => None,
+    };
+    let path = cwd.join(path);
+    let read = fs::canonicalize(&path).and_then(|path| Ok((fs::read_to_string(&path)?, path)));
+    let (text, path) = read.map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let count = text.split('\n').count();
+    let lines = match lines {
+        Some(lines) if lines.last < lines.first => {
+            return Err("last_line comes before first_line".to_owned());
+        }
+        Some(lines) if lines.first > count => {
+            return Err(format!("{} has {count} lines", path.display()));
+        }
+        Some(lines) => Some(Lines {
+            last: lines.last.min(count),
+            ..lines
+        }),
+        None => None,
+    };
+    let shown = match lines {
+        Some(lines) => format!(
+            "{} is on the stage at lines {}-{}, for the human to read.",
+            path.display(),
+            lines.first,
+            lines.last,
+        ),
+        None => format!("{} is on the stage, for the human to read.", path.display()),
+    };
+    requests
+        .send(Request::ShowFile { path, text, lines })
         .map_err(|_| "the chat has closed".to_owned())?;
     Ok(shown)
 }
@@ -542,7 +642,8 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let listed = answer_now(&ask("tools/list", &json!({})), Path::new("/"), &sent).unwrap();
         assert_eq!(listed["result"]["tools"][0]["name"], SHOW_MARKDOWN);
-        assert_eq!(listed["result"]["tools"][1]["name"], RUN_COMMAND);
+        assert_eq!(listed["result"]["tools"][1]["name"], SHOW_FILE);
+        assert_eq!(listed["result"]["tools"][2]["name"], RUN_COMMAND);
     }
 
     #[test]
@@ -567,8 +668,89 @@ mod tests {
                 assert_eq!(path, cwd.join("plan.md"));
                 assert_eq!(text, "# Plan\n");
             }
-            request @ Request::RunCommand { .. } => panic!("asked {request:?}"),
+            request => panic!("asked {request:?}"),
         }
+        fs::remove_dir_all(cwd).unwrap();
+    }
+
+    /// Calls `show_file` in `cwd` with `arguments`, and answers what it
+    /// answers, with what the chat is asked.
+    fn show_file(cwd: &Path, arguments: &Value) -> (Value, Option<Request>) {
+        let (sent, mut requests) = unbounded_channel();
+        let shown = answer_now(
+            &ask(
+                "tools/call",
+                &json!({ "name": SHOW_FILE, "arguments": arguments }),
+            ),
+            cwd,
+            &sent,
+        )
+        .unwrap();
+        (shown["result"].clone(), requests.try_recv().ok())
+    }
+
+    #[test]
+    fn shows_a_file_at_the_lines_named() {
+        let cwd = scratch("show-file");
+        fs::write(cwd.join("main.rs"), "fn main() {\n}\n").unwrap();
+
+        let (shown, asked) = show_file(
+            &cwd,
+            &json!({ "path": "main.rs", "first_line": 2, "last_line": 9 }),
+        );
+
+        assert_eq!(shown["isError"], false);
+        assert_eq!(
+            shown["content"][0]["text"],
+            format!(
+                "{} is on the stage at lines 2-3, for the human to read.",
+                cwd.join("main.rs").display()
+            )
+        );
+        match asked {
+            Some(Request::ShowFile { path, text, lines }) => {
+                assert_eq!(path, cwd.join("main.rs"));
+                assert_eq!(text, "fn main() {\n}\n");
+                assert_eq!(lines, Some(Lines { first: 2, last: 3 }));
+            }
+            request => panic!("asked {request:?}"),
+        }
+
+        let (_, asked) = show_file(&cwd, &json!({ "path": "main.rs", "first_line": 1 }));
+        assert!(
+            matches!(
+                asked,
+                Some(Request::ShowFile {
+                    lines: Some(Lines { first: 1, last: 1 }),
+                    ..
+                })
+            ),
+            "{asked:?}"
+        );
+        fs::remove_dir_all(cwd).unwrap();
+    }
+
+    #[test]
+    fn tells_the_agent_of_lines_that_are_not_there() {
+        let cwd = scratch("show-file-lines");
+        fs::write(cwd.join("main.rs"), "fn main() {}\n").unwrap();
+        let fails = |arguments: Value| {
+            let (shown, asked) = show_file(&cwd, &arguments);
+            assert_eq!(shown["isError"], true);
+            assert!(asked.is_none());
+            shown["content"][0]["text"].as_str().unwrap().to_owned()
+        };
+
+        assert!(fails(json!({ "path": "main.rs", "first_line": 5 })).ends_with("has 2 lines"));
+        assert_eq!(
+            fails(json!({ "path": "main.rs", "first_line": 2, "last_line": 1 })),
+            "last_line comes before first_line"
+        );
+        assert_eq!(
+            fails(json!({ "path": "main.rs", "first_line": 0 })),
+            "first_line is to be a line number, from 1"
+        );
+        assert!(fails(json!({ "path": "gone.rs" })).starts_with("cannot read"));
         fs::remove_dir_all(cwd).unwrap();
     }
 

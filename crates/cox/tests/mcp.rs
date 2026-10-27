@@ -94,7 +94,7 @@ fn the_agent_shows_a_file_on_its_chats_stage() {
             assert_eq!(path, cwd.join("plan.md"));
             assert_eq!(text, "# Plan\n");
         }
-        request @ Request::RunCommand { .. } => panic!("asked {request:?}"),
+        request => panic!("asked {request:?}"),
     }
 
     // The chat closes: the bridge ends, and the socket goes.
