@@ -9,6 +9,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# Listing a project's files as Git sees them: see
+# `src/files.rs`.
+ignore = "0.4.33"
 # What the language servers say, for the logs: see `src/lsp.rs`.
 log = "0.4.29"
 # The text, as a rope: see `src/buffer.rs`. Only `\n` breaks lines, as in
