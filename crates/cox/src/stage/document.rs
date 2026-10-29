@@ -10,12 +10,14 @@
 
 use std::path::{Path, PathBuf};
 
+use cox_core::tabs::Tab as Kept;
 use gpui::{
     App, Context, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ScrollHandle, Task, Window, div, prelude::*, px, rgb,
 };
 
 use crate::stage::follow::{self, Follows, Stamp};
+use crate::stage::tab::Content;
 use crate::ui::markdown::{self, Block};
 use crate::ui::paths::shortened;
 use crate::ui::text::Reading;
@@ -71,15 +73,6 @@ impl Document {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// The name the tab goes by: the file's.
-    #[must_use]
-    pub fn title(&self) -> String {
-        self.path.file_name().map_or_else(
-            || self.path.display().to_string(),
-            |name| name.to_string_lossy().into_owned(),
-        )
     }
 
     /// The text shown.
@@ -154,6 +147,22 @@ impl Follows for Document {
             Err(error) => self.unread = Some(error.to_string()),
         }
         cx.notify();
+    }
+}
+
+impl Content for Document {
+    /// The file's name.
+    fn title(&self) -> String {
+        self.path.file_name().map_or_else(
+            || self.path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    }
+
+    fn kept(&self) -> Kept {
+        Kept::Markdown {
+            path: self.path.clone(),
+        }
     }
 }
 

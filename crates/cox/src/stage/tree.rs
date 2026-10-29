@@ -11,12 +11,14 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use cox_core::tabs::Tab as Kept;
 use cox_editor::files::{self, Entry};
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, ScrollHandle, Task, Window,
     div, prelude::*, px, rgb,
 };
 
+use crate::stage::tab::Content;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{BACKGROUND, DIM, FAILED, FOREGROUND};
 
@@ -67,16 +69,6 @@ impl Tree {
             focus_handle: cx.focus_handle(),
             _follow: follow(cx),
         }
-    }
-
-    /// The name the tab goes by: the project's folder's.
-    #[must_use]
-    pub fn title(&self) -> String {
-        let name = self.root.file_name().map_or_else(
-            || self.root.display().to_string(),
-            |name| name.to_string_lossy().into_owned(),
-        );
-        format!("{name}/")
     }
 
     /// The folders open, besides the project's.
@@ -254,6 +246,21 @@ fn follow(cx: &mut Context<Tree>) -> Task<()> {
             }
         }
     })
+}
+
+impl Content for Tree {
+    /// The project's folder's name.
+    fn title(&self) -> String {
+        let name = self.root.file_name().map_or_else(
+            || self.root.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        format!("{name}/")
+    }
+
+    fn kept(&self) -> Kept {
+        Kept::Files { open: self.open() }
+    }
 }
 
 impl Focusable for Tree {

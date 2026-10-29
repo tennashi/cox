@@ -35,6 +35,7 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
+use cox_core::tabs::Tab as Kept;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, FontStyle, FontWeight, GlobalElementId, Hsla,
@@ -47,6 +48,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::agent::mcp::{Ended, Ran};
+use crate::stage::tab::Content;
 use crate::ui::Copy;
 use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
@@ -395,20 +397,6 @@ impl Terminal {
         self.ended
     }
 
-    /// The name the tab goes by: the command, or what the shell calls its
-    /// terminal.
-    #[must_use]
-    pub fn title(&self) -> String {
-        match &self.program {
-            Program::Command(command) => command.lines().next().unwrap_or_default().to_owned(),
-            Program::Shell => self
-                .title
-                .clone()
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or_else(|| "Terminal".to_owned()),
-        }
-    }
-
     /// What the terminal shows, with what scrolled off, as text: a line
     /// the terminal wrapped is one line.
     #[must_use]
@@ -692,6 +680,26 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         self.answer(Ended::Closed);
         let _ = self.pty.send(Msg::Shutdown);
+    }
+}
+
+impl Content for Terminal {
+    /// The command, or what the shell calls its terminal.
+    fn title(&self) -> String {
+        match &self.program {
+            Program::Command(command) => command.lines().next().unwrap_or_default().to_owned(),
+            Program::Shell => self
+                .title
+                .clone()
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| "Terminal".to_owned()),
+        }
+    }
+
+    fn kept(&self) -> Kept {
+        Kept::Terminal {
+            title: self.title(),
+        }
     }
 }
 

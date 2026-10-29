@@ -14,6 +14,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use cox_core::tabs::Tab as Kept;
 use gpui::{
     App, BorderStyle, Bounds, ContentMask, Context, Corners, DispatchPhase, Div, Element,
     ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
@@ -30,6 +31,7 @@ use crate::browser::relay::AgentInput;
 use crate::browser::{
     Browser, Caret, EditCommand, Event, Frame, Modifiers, MouseButton, Navigation, TargetId,
 };
+use crate::stage::tab::Content;
 use crate::ui::input::{LineInput, Submitted};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
@@ -431,6 +433,24 @@ impl Drop for Page {
     /// The page goes with its tab.
     fn drop(&mut self) {
         self.browser.close();
+    }
+}
+
+impl Content for Page {
+    /// The page's title, or its address until it has one.
+    fn title(&self) -> String {
+        if self.navigation.title.is_empty() {
+            self.navigation.url.clone()
+        } else {
+            self.navigation.title.clone()
+        }
+    }
+
+    fn kept(&self) -> Kept {
+        Kept::Page {
+            url: self.navigation.url.clone(),
+            title: self.navigation.title.clone(),
+        }
     }
 }
 
