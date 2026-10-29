@@ -2,8 +2,8 @@
 //! their own. What the window shows of it, and what starts it: the window
 //! opens chats through [`Opens`], and reads a [`Closed`] one again.
 //!
-//! - [`session`] starts a chat: its agent, its stage, the relay and the
-//!   tools between them; and starts a closed chat again.
+//! - [`launcher`] starts a chat: its stage, the relay and the tools
+//!   between them, and its agent; and starts a closed chat again.
 //! - [`view`] draws a chat's conversation with GPUI, its stage beside it,
 //!   and turns keystrokes and clicks into input.
 //! - [`conversation`] holds what the view shows and decides what the
@@ -11,7 +11,7 @@
 //!   `cox-core` keeps what it shows.
 
 pub mod conversation;
-pub mod session;
+pub mod launcher;
 pub mod view;
 
 use std::path::PathBuf;
@@ -22,9 +22,9 @@ use gpui::{App, Entity, Window};
 
 use crate::agent::instructions::Instructions;
 use crate::chat::conversation::Entry;
-use crate::chat::view::SessionView;
+use crate::chat::view::ChatView;
 
-/// What opens chats for the window: the [`Launcher`](session::Launcher)
+/// What opens chats for the window: the [`Launcher`](launcher::Launcher)
 /// of the agents, or a fake one in tests.
 pub trait Opens {
     /// Starts a chat's agent working in `cwd`, an absolute path, with
@@ -37,11 +37,11 @@ pub trait Opens {
         record: Option<Record>,
         window: &mut Window,
         cx: &mut App,
-    ) -> Entity<SessionView>;
+    ) -> Entity<ChatView>;
 
     /// Returns the view of `closed`, a chat that has closed, from what is
     /// kept of it, for the human to read, and to send to again.
-    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView>;
+    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<ChatView>;
 }
 
 /// What is kept of a closed chat.

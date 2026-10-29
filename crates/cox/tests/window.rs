@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
     McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
 };
 use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
-use cox::chat::view::{SessionView, StageView};
+use cox::chat::view::{ChatView, StageView};
 use cox::ui::Panel;
 use cox::ui::input::LineInput;
 use cox_acp::McpServer;
@@ -25,7 +25,7 @@ use gpui::{
 };
 
 /// Opens the window, talking to a fake agent, with the input focused.
-fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<SessionView>, &mut VisualTestContext) {
+fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
     open_with(cx, Vec::new(), Opened::default())
 }
 
@@ -38,7 +38,7 @@ fn open_with(
     cx: &mut TestAppContext,
     mcp_servers: Vec<McpServer>,
     opened: Opened,
-) -> (Arc<FakeAgent>, Entity<SessionView>, &mut VisualTestContext) {
+) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
     open_with_stage(cx, mcp_servers, opened, false)
 }
 
@@ -58,7 +58,7 @@ fn open_with_stage(
     mcp_servers: Vec<McpServer>,
     opened: Opened,
     stage: bool,
-) -> (Arc<FakeAgent>, Entity<SessionView>, &mut VisualTestContext) {
+) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
     // The agent side runs on a thread of its own, so the test waits for it
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
@@ -73,7 +73,7 @@ fn open_with_stage(
             view: cx.new(|_| FakeStage).into(),
             panel: cx.new(|_| Panel::default()),
         });
-        SessionView::new(
+        ChatView::new(
             cox::agent::spawn(
                 move || Ok(fake.connect()),
                 std::env::temp_dir(),
@@ -93,7 +93,7 @@ fn open_with_stage(
 /// Waits until the conversation is in `state`. The agent side runs in real
 /// time, outside GPUI's clock, so a real timer ends the wait if it never
 /// comes.
-async fn wait_for(cx: &mut VisualTestContext, view: &Entity<SessionView>, state: State) {
+async fn wait_for(cx: &mut VisualTestContext, view: &Entity<ChatView>, state: State) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(5));
@@ -293,7 +293,7 @@ fn clipboard(cx: &mut VisualTestContext) -> Option<String> {
     cx.read_from_clipboard().and_then(|item| item.text())
 }
 
-fn input_text(cx: &mut VisualTestContext, view: &Entity<SessionView>) -> String {
+fn input_text(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> String {
     view.read_with(cx, |view, cx| view.input().read(cx).text().to_owned())
 }
 
@@ -419,7 +419,7 @@ async fn shows_what_a_tool_call_printed(cx: &mut TestAppContext) {
 /// The title and result of the first tool call in the conversation.
 fn tool_call(
     cx: &mut VisualTestContext,
-    view: &Entity<SessionView>,
+    view: &Entity<ChatView>,
 ) -> (String, Option<ToolCallResult>) {
     view.read_with(cx, |view, _| {
         view.conversation()
@@ -434,7 +434,7 @@ fn tool_call(
 }
 
 /// Sends `line` and waits for the turn to end.
-async fn say(cx: &mut VisualTestContext, view: &Entity<SessionView>, line: &str) {
+async fn say(cx: &mut VisualTestContext, view: &Entity<ChatView>, line: &str) {
     cx.simulate_input(line);
     cx.simulate_keystrokes("enter");
     wait_for(cx, view, State::Idle).await;
@@ -521,8 +521,8 @@ async fn opens_a_link_the_human_clicks(cx: &mut TestAppContext) {
     assert_eq!(*opened.borrow(), ["https://example.com/x"]);
 }
 
-fn stage_is_open(cx: &mut VisualTestContext, view: &Entity<SessionView>) -> bool {
-    view.read_with(cx, SessionView::stage_is_open)
+fn stage_is_open(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> bool {
+    view.read_with(cx, ChatView::stage_is_open)
 }
 
 #[gpui::test]

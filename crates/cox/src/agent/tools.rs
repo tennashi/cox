@@ -1,5 +1,5 @@
 //! The tools Cox hands the agent, as MCP servers the agent starts for the
-//! session.
+//! chat.
 //!
 //! For the stage's pages, that is the Chrome `DevTools` MCP server,
 //! connected to the stage's remote debugging port through the relay: the

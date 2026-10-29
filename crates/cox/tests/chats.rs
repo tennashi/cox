@@ -14,7 +14,7 @@ use std::time::Duration;
 use cox::agent::Start;
 use cox::agent::instructions::Instructions;
 use cox::chat::conversation::{Entry, State};
-use cox::chat::view::{Again, SessionView};
+use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
 use cox::workspace::{Chat, Place, Workspace};
 use cox_core::store::{Record, Store};
@@ -51,15 +51,15 @@ impl Opens for FakeOpens {
         record: Option<Record>,
         _: &mut Window,
         cx: &mut App,
-    ) -> Entity<SessionView> {
+    ) -> Entity<ChatView> {
         let agent = Arc::new(FakeAgent::default());
         self.agents.borrow_mut().push(Arc::clone(&agent));
         let start = Start::New(instructions);
         let agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
-        cx.new(|cx| SessionView::new(agent, None, Rc::new(|_, _, _| {}), record, cx))
+        cx.new(|cx| ChatView::new(agent, None, Rc::new(|_, _, _| {}), record, cx))
     }
 
-    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView> {
+    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<ChatView> {
         let Closed {
             cwd,
             entries,
@@ -76,7 +76,7 @@ impl Opens for FakeOpens {
             cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start)
         });
         let link = Rc::new(|_: &str, _: &mut Window, _: &mut App| {});
-        cx.new(|cx| SessionView::closed(entries, None, link, record, Some(again), window, cx))
+        cx.new(|cx| ChatView::closed(entries, None, link, record, Some(again), window, cx))
     }
 }
 
@@ -135,7 +135,7 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
     cx.simulate_click(bounds.center(), Modifiers::none());
 }
 
-fn shown(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Entity<SessionView> {
+fn shown(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Entity<ChatView> {
     workspace.read_with(cx, |workspace, _| {
         let chat = workspace.shown().expect("a chat is shown");
         chat.view().expect("the chat shown has a view").clone()
@@ -167,7 +167,7 @@ fn listed(names: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-fn input_text(cx: &mut VisualTestContext, view: &Entity<SessionView>) -> String {
+fn input_text(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> String {
     view.read_with(cx, |view, cx| view.input().read(cx).text().to_owned())
 }
 
@@ -180,7 +180,7 @@ async fn say(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, text: &s
 }
 
 /// Waits until a turn of the chat `view` has ended.
-async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<SessionView>) {
+async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(5));
@@ -315,7 +315,7 @@ async fn switching_keeps_each_chats_conversation_and_draft(cx: &mut TestAppConte
     cx.simulate_keystrokes("ctrl-tab");
     assert_eq!(shown(cx, &workspace), second);
     assert_eq!(input_text(cx, &second), "not sent yet");
-    let replies = |cx: &mut VisualTestContext, view: &Entity<SessionView>| {
+    let replies = |cx: &mut VisualTestContext, view: &Entity<ChatView>| {
         view.read_with(cx, |view, _| {
             view.conversation()
                 .entries()
@@ -334,7 +334,7 @@ async fn switching_keeps_each_chats_conversation_and_draft(cx: &mut TestAppConte
 }
 
 /// The entries of the chat `view` shows.
-fn entries(cx: &mut VisualTestContext, view: &Entity<SessionView>) -> Vec<Entry> {
+fn entries(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> Vec<Entry> {
     view.read_with(cx, |view, _| view.conversation().entries().to_vec())
 }
 

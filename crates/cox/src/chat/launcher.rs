@@ -13,7 +13,7 @@
 //!    servers it starts to reach the relay and the server
 //!    ([`Launcher::spawn`], [`Launcher::tools`]).
 //! 6. The view of the conversation, talking to the agent, with the stage
-//!    beside it ([`SessionView`]).
+//!    beside it ([`ChatView`]).
 //!
 //! Steps 2, 3 and 5 are each a thread of its own, with a tokio runtime;
 //! the stage and the view are GPUI entities on its thread, which talk to
@@ -39,7 +39,7 @@ use crate::agent::instructions::Instructions;
 use crate::agent::mcp::Server;
 use crate::agent::{Agent, Start};
 use crate::browser::relay::Relay;
-use crate::chat::view::{Again, OpenLink, SessionView, StageView};
+use crate::chat::view::{Again, ChatView, OpenLink, StageView};
 use crate::chat::{Closed, Opens};
 use crate::stage::Stage;
 use crate::ui::Panel;
@@ -70,7 +70,7 @@ impl Opens for Launcher {
         record: Option<Record>,
         window: &mut Window,
         cx: &mut App,
-    ) -> Entity<SessionView> {
+    ) -> Entity<ChatView> {
         // 1. The stage, on the page every chat starts on.
         let panel = cx.new(|_| Panel::default());
         let stage = cx.new(|cx| {
@@ -94,7 +94,7 @@ impl Opens for Launcher {
         );
         // 6. The view, talking to the agent, with the stage beside it.
         cx.new(|cx| {
-            SessionView::new(
+            ChatView::new(
                 agent,
                 Some(shown(&stage, panel)),
                 open_link(&stage),
@@ -107,7 +107,7 @@ impl Opens for Launcher {
     /// The view of `closed`, a chat that has closed, with a stage on the
     /// pages and files it had. When the human sends to it, its agent
     /// starts again, going on with its session if it can.
-    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView> {
+    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<ChatView> {
         let Closed {
             cwd,
             entries,
@@ -138,7 +138,7 @@ impl Opens for Launcher {
         });
         // 6. The view, with the stage beside it, and no agent yet.
         cx.new(|cx| {
-            SessionView::closed(
+            ChatView::closed(
                 entries,
                 Some(shown(&stage, panel)),
                 open_link(&stage),

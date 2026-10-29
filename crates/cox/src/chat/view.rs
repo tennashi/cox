@@ -11,7 +11,7 @@
 //! The human selects the conversation's text with the mouse, a word with
 //! a double click and a whole paragraph or block with a triple click, and
 //! copies it with the usual key while the input has nothing selected. A
-//! click on a link opens it on the session's stage.
+//! click on a link opens it on the chat's stage.
 
 use std::rc::Rc;
 
@@ -53,7 +53,7 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// Opens a link the human clicked: on the session's stage, where it has
+/// Opens a link the human clicked: on the chat's stage, where it has
 /// one.
 pub type OpenLink = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 
@@ -85,7 +85,7 @@ pub struct StageView {
     pub panel: Entity<Panel>,
 }
 
-pub struct SessionView {
+pub struct ChatView {
     conversation: Conversation,
     /// Where the conversation is scrolled to.
     scroll: ScrollHandle,
@@ -110,7 +110,7 @@ pub struct SessionView {
     _panel_changes: Option<Subscription>,
 }
 
-impl SessionView {
+impl ChatView {
     /// Opens on `agent`, with `stage` beside the conversation when there is
     /// one and it is open, keeping the conversation in `record` when there
     /// is one. Links the human clicks go to `open_link`.
@@ -553,15 +553,15 @@ fn render_line(line: &Line, writer: &mut Writer) -> gpui::Div {
         .child(div().flex_1().min_w_0().child(writer.plain(&text, "\n")))
 }
 
-impl gpui::EventEmitter<Reopened> for SessionView {}
+impl gpui::EventEmitter<Reopened> for ChatView {}
 
-impl Focusable for SessionView {
+impl Focusable for ChatView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.input.focus_handle(cx)
     }
 }
 
-impl SessionView {
+impl ChatView {
     fn render_conversation(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let prompt = match self.conversation.state() {
             State::Idle => "> ",
@@ -653,7 +653,7 @@ impl SessionView {
     }
 }
 
-impl SessionView {
+impl ChatView {
     /// The bar above the conversation, with the button that opens and
     /// closes the stage, when there is one.
     fn render_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -680,7 +680,7 @@ impl SessionView {
     }
 }
 
-impl Render for SessionView {
+impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bar = self.render_bar(cx);
         let conversation = div()

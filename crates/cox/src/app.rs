@@ -29,7 +29,7 @@ use gpui::{
 };
 
 use crate::browser::Cef;
-use crate::chat::session::Launcher;
+use crate::chat::launcher::Launcher;
 use crate::stage::servers::Servers;
 use crate::workspace::Workspace;
 
@@ -114,7 +114,7 @@ pub fn run(settings: Settings) -> ExitCode {
     }
     let store = Rc::new(open_store());
 
-    let home = home_for_sessions(settings.home);
+    let home = home_for_chats(settings.home);
     let launcher = Launcher {
         command: settings.command,
         stage: settings.stage,
@@ -140,7 +140,7 @@ pub fn run(settings: Settings) -> ExitCode {
 
 /// Where chats in no project work: `home`, or `~/Cox`, as an absolute
 /// path, which the agent needs.
-fn home_for_sessions(home: Option<PathBuf>) -> PathBuf {
+fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
     let home = home.unwrap_or_else(|| {
         std::env::var_os("HOME")
             .map_or_else(std::env::temp_dir, PathBuf::from)
@@ -313,10 +313,7 @@ mod tests {
         let Some(home) = std::env::var_os("HOME") else {
             return;
         };
-        assert_eq!(
-            super::home_for_sessions(None),
-            PathBuf::from(home).join("Cox")
-        );
-        assert!(super::home_for_sessions(Some("relative".into())).is_absolute());
+        assert_eq!(super::home_for_chats(None), PathBuf::from(home).join("Cox"));
+        assert!(super::home_for_chats(Some("relative".into())).is_absolute());
     }
 }

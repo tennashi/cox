@@ -20,7 +20,7 @@ use gpui::{
 
 use crate::agent::instructions::Instructions;
 use crate::chat::conversation::{Entry, State};
-use crate::chat::view::{Reopened, SessionView};
+use crate::chat::view::{ChatView, Reopened};
 use crate::chat::{Closed, Opens};
 use crate::ui::paths::shortened;
 use crate::ui::theme::FONT;
@@ -102,7 +102,7 @@ pub struct Chat {
     /// Whether its agent runs.
     open: bool,
     /// Its view, or `None` for a closed chat the human has not read yet.
-    view: Option<Entity<SessionView>>,
+    view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
     /// chat's agent start again.
     _changes: Vec<Subscription>,
@@ -132,7 +132,7 @@ impl Chat {
 
     /// Its view, once it has been shown.
     #[must_use]
-    pub fn view(&self) -> Option<&Entity<SessionView>> {
+    pub fn view(&self) -> Option<&Entity<ChatView>> {
         self.view.as_ref()
     }
 }
