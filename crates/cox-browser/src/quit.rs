@@ -2,7 +2,7 @@
 //!
 //! Quitting runs the app's quit handlers, which shut CEF down and stop the
 //! agent. A signal handler can do none of that, and neither can CEF's turn
-//! on the main thread on macOS (see [`crate::browser::macos`]). Those only [`ask`],
+//! on the main thread on macOS (see [`crate::macos`]). Those only [`ask`],
 //! and the app quits when it next looks ([`take_asked`]).
 
 use std::io;

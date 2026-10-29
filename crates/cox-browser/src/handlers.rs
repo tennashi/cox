@@ -1,0 +1,453 @@
+//! CEF's side of the stage: what CEF calls into on its own threads,
+//! and what it is told there.
+#![expect(
+    clippy::transmute_ptr_to_ptr,
+    reason = "the cef wrap macros cast the handler reference CEF passes back"
+)]
+
+use super::*;
+
+wrap_app! {
+    pub(super) struct StageApp {
+        browsers: BrowsersRef,
+    }
+
+    impl App {
+        /// Chromium's first-run flow would open a terms-of-service window
+        /// of its own and wait for it; Cox is not that kind of browser.
+        /// On macOS it would also ask for the login keychain, to keep the
+        /// key it encrypts cookies with, and ask again for each build of
+        /// Cox, which the keychain takes for a different app. So the
+        /// cookies Cox keeps are guarded by the permissions on their
+        /// directory alone.
+        ///
+        /// Going back would bring a page out of the back-forward cache
+        /// frozen at the size it was left at, and painted so until the
+        /// renderer gets around to the stage's size, seconds later;
+        /// loading the page again lays it out at the right size at once.
+        fn on_before_command_line_processing(
+            &self,
+            _process_type: Option<&CefString>,
+            command_line: Option<&mut CommandLine>,
+        ) {
+            if let Some(command_line) = command_line {
+                command_line.append_switch(Some(&CefString::from("no-first-run")));
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("disable-features")),
+                    Some(&CefString::from("BackForwardCache")),
+                );
+                #[cfg(target_os = "macos")]
+                command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
+            }
+        }
+
+        fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
+            Some(StageProcessHandler::new(Arc::clone(&self.browsers)))
+        }
+    }
+}
+
+wrap_browser_process_handler! {
+    struct StageProcessHandler {
+        browsers: BrowsersRef,
+    }
+
+    impl BrowserProcessHandler {
+        /// CEF is ready: create the browsers asked for so far.
+        fn on_context_initialized(&self) {
+            let waiting = {
+                let mut browsers = lock(&self.browsers);
+                browsers.ready = true;
+                std::mem::take(&mut browsers.waiting)
+            };
+            for new in waiting {
+                create(new);
+            }
+        }
+    }
+}
+
+wrap_task! {
+    pub(super) struct CreateBrowser {
+        // A task can be copied; only the first run creates the browser.
+        new: Arc<Mutex<Option<NewBrowser>>>,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            if let Some(new) = lock(&self.new).take() {
+                create(new);
+            }
+        }
+    }
+}
+
+/// Creates the windowless browser `new` asks for. Call it on CEF's UI
+/// thread.
+fn create(new: NewBrowser) {
+    let NewBrowser {
+        shared,
+        events,
+        target,
+        url,
+    } = new;
+    let (width, height) = {
+        let shared = lock(&shared);
+        (shared.reported.width, shared.reported.height)
+    };
+    let window_info = WindowInfo {
+        windowless_rendering_enabled: 1,
+        bounds: cef::Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        },
+        ..Default::default()
+    };
+    let mut client = StageClient::new(
+        StageRenderHandler::new(Arc::clone(&shared), events.clone()),
+        StageLifeSpanHandler::new(Arc::clone(&shared), events.clone(), target),
+        StageLoadHandler::new(Arc::clone(&shared), events.clone()),
+        StageDisplayHandler::new(Arc::clone(&shared), events),
+    );
+    let settings = BrowserSettings {
+        windowless_frame_rate: 60,
+        ..Default::default()
+    };
+    let url = CefString::from(url.as_str());
+    let created = cef::browser_host_create_browser(
+        Some(&window_info),
+        Some(&mut client),
+        Some(&url),
+        Some(&settings),
+        None,
+        None,
+    );
+    if created != 1 {
+        log::error!("CEF did not create a browser");
+    }
+}
+
+wrap_dev_tools_message_observer! {
+    struct TargetObserver {
+        target: Arc<watch::Sender<Option<String>>>,
+    }
+
+    impl DevToolsMessageObserver {
+        /// The answer to `Target.getTargetInfo`, the only method Cox
+        /// calls through CEF, which names the page's target.
+        fn on_dev_tools_method_result(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _message_id: c_int,
+            success: c_int,
+            result: Option<&[u8]>,
+        ) {
+            let target = result
+                .filter(|_| success == 1)
+                .and_then(|result| serde_json::from_slice::<serde_json::Value>(result).ok())
+                .and_then(|result| result["targetInfo"]["targetId"].as_str().map(str::to_owned));
+            match target {
+                Some(target) => {
+                    self.target.send_replace(Some(target));
+                }
+                None => log::error!("CEF did not name the page's target, so its agent cannot reach it"),
+            }
+        }
+    }
+}
+
+wrap_client! {
+    struct StageClient {
+        render: RenderHandler,
+        life_span: LifeSpanHandler,
+        load: LoadHandler,
+        display: DisplayHandler,
+    }
+
+    impl Client {
+        fn render_handler(&self) -> Option<RenderHandler> {
+            Some(self.render.clone())
+        }
+
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.life_span.clone())
+        }
+
+        fn load_handler(&self) -> Option<LoadHandler> {
+            Some(self.load.clone())
+        }
+
+        fn display_handler(&self) -> Option<DisplayHandler> {
+            Some(self.display.clone())
+        }
+    }
+}
+
+wrap_load_handler! {
+    struct StageLoadHandler {
+        shared: SharedRef,
+        events: UnboundedSender<Event>,
+    }
+
+    impl LoadHandler {
+        /// Loading started or finished somewhere in the page, and the
+        /// history may have moved.
+        fn on_loading_state_change(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            is_loading: c_int,
+            can_go_back: c_int,
+            can_go_forward: c_int,
+        ) {
+            {
+                let mut shared = lock(&self.shared);
+                shared.navigation.loading = is_loading == 1;
+                shared.navigation.can_go_back = can_go_back == 1;
+                shared.navigation.can_go_forward = can_go_forward == 1;
+            }
+            let _ = self.events.send(Event::Navigated);
+        }
+    }
+}
+
+wrap_display_handler! {
+    struct StageDisplayHandler {
+        shared: SharedRef,
+        events: UnboundedSender<Event>,
+    }
+
+    impl DisplayHandler {
+        /// The page's address changed. Frames inside the page have
+        /// addresses too; only the page's own counts.
+        fn on_address_change(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            frame: Option<&mut cef::Frame>,
+            url: Option<&CefString>,
+        ) {
+            let is_main = frame.is_some_and(|frame| frame.is_main() == 1);
+            if let (true, Some(url)) = (is_main, url) {
+                lock(&self.shared).navigation.url = url.to_string();
+                let _ = self.events.send(Event::Navigated);
+            }
+        }
+
+        /// The page's title changed, which its tab shows.
+        fn on_title_change(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            title: Option<&CefString>,
+        ) {
+            lock(&self.shared).navigation.title =
+                title.map(ToString::to_string).unwrap_or_default();
+            let _ = self.events.send(Event::Navigated);
+        }
+    }
+}
+
+wrap_life_span_handler! {
+    struct StageLifeSpanHandler {
+        shared: SharedRef,
+        events: UnboundedSender<Event>,
+        target: Arc<watch::Sender<Option<String>>>,
+    }
+
+    impl LifeSpanHandler {
+        /// The page wants a window of its own, for a link with
+        /// `target="_blank"` or `window.open`. The stage opens a tab
+        /// for it instead.
+        fn on_before_popup(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _popup_id: c_int,
+            target_url: Option<&CefString>,
+            _target_frame_name: Option<&CefString>,
+            _target_disposition: cef::WindowOpenDisposition,
+            _user_gesture: c_int,
+            _popup_features: Option<&cef::PopupFeatures>,
+            _window_info: Option<&mut WindowInfo>,
+            _client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<cef::DictionaryValue>>,
+            _no_javascript_access: Option<&mut c_int>,
+        ) -> c_int {
+            let url = target_url.map(ToString::to_string).unwrap_or_default();
+            // `window.open()` with no address opens a blank page for
+            // the script to fill, which a tab of the stage cannot be.
+            if !url.is_empty() {
+                let _ = self.events.send(Event::Popup(url));
+            }
+            // 1: no popup.
+            1
+        }
+
+        /// The browser exists: it takes input now, and `DevTools` is
+        /// asked for the page's target, which the page's agent is
+        /// kept to.
+        fn on_after_created(&self, browser: Option<&mut cef::Browser>) {
+            if let Some(browser) = browser {
+                let host = browser.host();
+                let mut devtools = None;
+                if let Some(host) = &host {
+                    host.was_resized();
+                    host.set_focus(1);
+                    let mut observer = TargetObserver::new(Arc::clone(&self.target));
+                    devtools = host.add_dev_tools_message_observer(Some(&mut observer));
+                    host.execute_dev_tools_method(
+                        0,
+                        Some(&CefString::from("Target.getTargetInfo")),
+                        None,
+                    );
+                }
+                let mut shared = lock(&self.shared);
+                shared.host = host;
+                shared.devtools = devtools;
+                drop(shared);
+                let _ = self.events.send(Event::Created);
+            }
+        }
+
+        fn on_before_close(&self, _browser: Option<&mut cef::Browser>) {
+            let mut shared = lock(&self.shared);
+            shared.host = None;
+            shared.devtools = None;
+            drop(shared);
+            let _ = self.events.send(Event::Closed);
+        }
+    }
+}
+
+wrap_render_handler! {
+    struct StageRenderHandler {
+        shared: SharedRef,
+        events: UnboundedSender<Event>,
+    }
+
+    impl RenderHandler {
+        /// CEF asks how big the view is, in logical pixels.
+        fn view_rect(&self, _browser: Option<&mut cef::Browser>, rect: Option<&mut cef::Rect>) {
+            let shared = lock(&self.shared);
+            if let Some(rect) = rect {
+                *rect = cef::Rect {
+                    x: 0,
+                    y: 0,
+                    width: shared.reported.width.max(1),
+                    height: shared.reported.height.max(1),
+                };
+            }
+        }
+
+        /// CEF asks about the screen: the scale factor decides how many
+        /// device pixels it paints per logical pixel.
+        fn screen_info(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            screen_info: Option<&mut cef::ScreenInfo>,
+        ) -> c_int {
+            let shared = lock(&self.shared);
+            if let Some(info) = screen_info {
+                let rect = cef::Rect {
+                    x: 0,
+                    y: 0,
+                    width: shared.reported.width.max(1),
+                    height: shared.reported.height.max(1),
+                };
+                info.device_scale_factor = shared.reported.scale;
+                info.rect = rect.clone();
+                info.available_rect = rect;
+            }
+            1
+        }
+
+        /// CEF painted the view or the popup: keep the picture and wake
+        /// the stage.
+        fn on_paint(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            type_: cef::PaintElementType,
+            _dirty_rects: Option<&[cef::Rect]>,
+            buffer: *const u8,
+            width: c_int,
+            height: c_int,
+        ) {
+            if buffer.is_null() {
+                return;
+            }
+            let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
+                return;
+            };
+            let len = width as usize * height as usize * 4;
+            // SAFETY: CEF gives `width * height` BGRA pixels, valid for the
+            // duration of this call; the copy outlives it.
+            let bgra = unsafe { std::slice::from_raw_parts(buffer, len) }.to_vec();
+            let frame = Some(Frame {
+                width,
+                height,
+                bgra,
+            });
+            let mut shared = lock(&self.shared);
+            match *type_.as_ref() {
+                cef_paint_element_type_t::PET_VIEW => {
+                    shared.painted = Some((width, height));
+                    if shared.resizing.is_some()
+                        && shared.reported.device_size() == (width, height)
+                    {
+                        // The picture CEF held its others back for: the
+                        // stage's next paint tells it of the next size,
+                        // if any.
+                        shared.resizing = None;
+                    }
+                    shared.frame = frame;
+                }
+                cef_paint_element_type_t::PET_POPUP => shared.popup_frame = frame,
+                _ => return,
+            }
+            drop(shared);
+            let _ = self.events.send(Event::Painted);
+        }
+
+        /// The popup opened or closed. Its place comes separately, in
+        /// `on_popup_size`, before the first paint.
+        fn on_popup_show(&self, _browser: Option<&mut cef::Browser>, show: c_int) {
+            if show == 0 {
+                let mut shared = lock(&self.shared);
+                shared.popup = None;
+                shared.popup_frame = None;
+                drop(shared);
+                let _ = self.events.send(Event::Painted);
+            }
+        }
+
+        fn on_popup_size(&self, _browser: Option<&mut cef::Browser>, rect: Option<&cef::Rect>) {
+            if let Some(rect) = rect {
+                lock(&self.shared).popup =
+                    Some(PopupRect {
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
+                    });
+            }
+        }
+
+        /// Where the composition is on the page, for placing the input
+        /// method's candidate window.
+        fn on_ime_composition_range_changed(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _selected_range: Option<&cef::Range>,
+            character_bounds: Option<&[cef::Rect]>,
+        ) {
+            let caret = character_bounds.and_then(<[_]>::first).map(|rect| Caret {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+            });
+            lock(&self.shared).caret = caret;
+        }
+    }
+}

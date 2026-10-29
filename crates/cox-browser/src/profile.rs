@@ -1,10 +1,10 @@
 //! Where the stage's browser keeps its state: cookies, logins, storage.
 //!
 //! Cox keeps one profile for all its runs, so a login on the stage lasts
-//! past a restart. Each place Cox runs from has a profile of its own (see
-//! [`crate::storage`]): the Cox `cargo xtask install` put in place keeps the
-//! human's logins, and the one being built in `target/` keeps its own
-//! beside it. Chromium lets only one process at a time use a profile, so a second
+//! past a restart. Each place Cox runs from has a profile of its own,
+//! which the app says where to keep: the Cox `cargo xtask install` put in
+//! place keeps the human's logins, and the one being built in `target/`
+//! keeps its own beside it. Chromium lets only one process at a time use a profile, so a second
 //! Cox from the same place gets a throwaway profile instead, gone when it
 //! quits.
 
@@ -27,16 +27,9 @@ pub enum Profile {
 }
 
 impl Profile {
-    /// Opens the profile this Cox keeps, or a throwaway one when another
-    /// Cox from the same place holds it, or there is none.
-    #[must_use]
-    pub fn open() -> Self {
-        Self::open_at(crate::storage::path("stage"))
-    }
-
-    /// Opens the profile at `kept`, or a throwaway one like [`open`] does.
-    ///
-    /// [`open`]: Self::open
+    /// Opens the profile at `kept`, the one this Cox keeps, or a throwaway
+    /// one when another Cox from the same place holds it, or there is
+    /// none to keep.
     #[must_use]
     pub fn open_at(kept: Option<PathBuf>) -> Self {
         let Some(path) = kept else {

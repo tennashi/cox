@@ -17,7 +17,7 @@ use gpui::{
 use super::Page;
 use super::agent::paint_agent;
 use super::keys::modifiers;
-use crate::browser::{Frame, MouseButton};
+use cox_browser::{Frame, MouseButton};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
 const LINE_HEIGHT: f32 = 40.;

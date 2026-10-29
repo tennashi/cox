@@ -11,7 +11,7 @@
 //!
 //! The agents run `cox` too, as `cox --mcp <socket>`, the MCP server of
 //! Cox's own tools that `cox::agent::mcp` hands them. And on Linux, CEF runs
-//! `cox` for its helper processes, which `cox::browser` tells apart.
+//! `cox` for its helper processes, which `cox_browser` tells apart.
 
 use std::process::ExitCode;
 

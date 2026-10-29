@@ -38,11 +38,11 @@ use gpui::{App, Entity, Window, prelude::*};
 use crate::agent::instructions::Instructions;
 use crate::agent::mcp::Server;
 use crate::agent::{Agent, Start};
-use crate::browser::relay::Relay;
 use crate::chat::view::{Again, ChatView, OpenLink, StageView};
 use crate::chat::{Closed, Opens};
 use crate::stage::Stage;
 use crate::ui::Panel;
+use cox_browser::relay::Relay;
 
 /// Opens chats, each with an agent of the same command: the [`Opens`] of
 /// the window when Cox runs.
@@ -57,7 +57,7 @@ pub struct Launcher {
     /// The `cox` that runs, which the agent runs to reach Cox's own tools,
     /// if it is known.
     pub exe: Option<PathBuf>,
-    pub cef: crate::browser::Cef,
+    pub cef: cox_browser::Cef,
 }
 
 impl Opens for Launcher {
@@ -188,7 +188,7 @@ impl Launcher {
             .cef
             .devtools_port()
             .ok_or_else(|| anyhow::anyhow!("the browser has no DevTools port"))
-            .and_then(crate::browser::relay::start)
+            .and_then(cox_browser::relay::start)
         {
             Ok(relay) => Some(relay),
             Err(error) => {

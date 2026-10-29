@@ -148,7 +148,7 @@ extern "C-unwind" fn send_event(this: &AnyObject, _cmd: Sel, event: *mut AnyObje
 extern "C-unwind" fn terminate(this: &AnyObject, _cmd: Sel, sender: *mut AnyObject) {
     if IN_CEF_TURN.load(Ordering::SeqCst) {
         log::info!("quitting once CEF's turn is over");
-        crate::browser::quit::ask();
+        crate::quit::ask();
         return;
     }
     // SAFETY: as in `send_event`, with the sender AppKit passed in.
