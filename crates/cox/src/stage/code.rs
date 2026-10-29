@@ -43,7 +43,7 @@ use cox_editor::buffer::{Point as Place, is_word, word_around};
 use cox_editor::history::History;
 use cox_editor::language::Highlight;
 use cox_editor::line::Shown;
-use cox_editor::lsp::{Client, Document, Encoding, Position};
+use cox_editor::lsp::{Client, Encoding, OpenFile, Position};
 use cox_editor::syntax::Syntax;
 
 use self::file::File;
@@ -104,7 +104,7 @@ pub struct Code {
     /// editor knows one.
     server: Option<Entity<LanguageServer>>,
     /// The file, open on the server once it is ready.
-    document: Option<Document>,
+    document: Option<OpenFile>,
     /// Where the tab was before it went to a place, to go back to, and
     /// where it went back from.
     history: History<Visit>,
@@ -378,7 +378,7 @@ impl Code {
     fn ask<F>(
         &self,
         place: Place,
-        request: impl FnOnce(&Client, &Document, Position) -> F,
+        request: impl FnOnce(&Client, &OpenFile, Position) -> F,
         cx: &App,
     ) -> Option<F> {
         let client = self.client(cx)?;
