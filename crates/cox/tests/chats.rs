@@ -15,7 +15,8 @@ use cox::agent::Start;
 use cox::agent::instructions::Instructions;
 use cox::chat::conversation::{Entry, State};
 use cox::chat::view::{Again, SessionView};
-use cox::workspace::{Chat, Closed, Opens, Place, Workspace};
+use cox::chat::{Closed, Opens};
+use cox::workspace::{Chat, Place, Workspace};
 use cox_core::store::{Record, Store};
 use fake_agent::{FakeAgent, Resumes};
 use gpui::{

@@ -17,8 +17,8 @@ use gpui::{App, Entity, Window, prelude::*};
 use crate::agent::instructions::Instructions;
 use crate::agent::{Agent, Start};
 use crate::chat::view::{Again, OpenLink, SessionView, StageView};
+use crate::chat::{Closed, Opens};
 use crate::ui::Panel;
-use crate::workspace::{Closed, Opens};
 
 /// Opens chats, each with an agent of the same command.
 #[derive(Clone)]

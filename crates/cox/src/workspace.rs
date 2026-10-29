@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cox_core::store::{ChatId, ProjectId, Record, Store};
-use cox_core::tabs::Tabs;
 use gpui::{
     App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, PathPromptOptions, SharedString,
     Stateful, Subscription, Window, actions, div, prelude::*, px, rgb,
@@ -22,6 +21,7 @@ use gpui::{
 use crate::agent::instructions::Instructions;
 use crate::chat::conversation::{Entry, State};
 use crate::chat::view::{Reopened, SessionView};
+use crate::chat::{Closed, Opens};
 use crate::ui::paths::shortened;
 use crate::ui::theme::FONT;
 
@@ -51,40 +51,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-tab", NextChat, Some("Workspace")),
         KeyBinding::new("ctrl-shift-tab", PreviousChat, Some("Workspace")),
     ]);
-}
-
-/// What opens the window's chats: the [`Launcher`](crate::chat::session::Launcher)
-/// of the agents, or a fake one in tests.
-pub trait Opens {
-    /// Starts a chat's agent working in `cwd`, an absolute path, with
-    /// `instructions`, keeping the chat in `record` if given, and returns
-    /// the chat's view.
-    fn open(
-        &self,
-        cwd: PathBuf,
-        instructions: Option<Instructions>,
-        record: Option<Record>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<SessionView>;
-
-    /// Returns the view of `closed`, a chat that has closed, from what is
-    /// kept of it, for the human to read, and to send to again.
-    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView>;
-}
-
-/// What is kept of a closed chat.
-pub struct Closed {
-    /// The directory it worked in.
-    pub cwd: PathBuf,
-    /// What it showed.
-    pub entries: Vec<Entry>,
-    /// The tabs its stage had, if it had a stage.
-    pub tabs: Option<Tabs>,
-    /// The id its agent gave its session, to go on with, if it had one.
-    pub session: Option<String>,
-    /// Where it is kept, to go on keeping it once the human sends to it.
-    pub record: Option<Record>,
 }
 
 /// A folder, and the chats in it.
