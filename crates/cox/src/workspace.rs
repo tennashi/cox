@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use cox_core::list::List;
 use cox_core::store::{ChatId, ProjectId, Record, Store};
 use gpui::{
     App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, PathPromptOptions, SharedString,
@@ -53,14 +54,14 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// A folder, and the chats in it.
+/// A folder the chats of a project work in. The chats themselves are in
+/// the window's list, under it.
 pub struct Project {
     /// How it is kept, or `None` for no project, or a project that could
     /// not be kept.
     id: Option<ProjectId>,
     name: SharedString,
     folder: PathBuf,
-    chats: Vec<Chat>,
     /// How many chats have been opened in it, to name the next.
     opened: usize,
 }
@@ -71,7 +72,6 @@ impl Project {
             id,
             name: name.into(),
             folder,
-            chats: Vec::new(),
             opened: 0,
         }
     }
@@ -86,16 +86,13 @@ impl Project {
     pub fn folder(&self) -> &Path {
         &self.folder
     }
-
-    #[must_use]
-    pub fn chats(&self) -> &[Chat] {
-        &self.chats
-    }
 }
 
 /// A chat in the list: open, with its agent, or closed, from an earlier
 /// run, for the human to read, until they send to it.
 pub struct Chat {
+    /// The index of its project.
+    project: usize,
     /// How it is kept, or `None` when it could not be.
     kept: Option<ChatId>,
     name: SharedString,
@@ -109,9 +106,11 @@ pub struct Chat {
 }
 
 impl Chat {
-    /// A closed chat, kept as `kept`, which the human has not read yet.
-    fn closed(kept: ChatId, name: impl Into<SharedString>) -> Self {
+    /// A closed chat of the project at `project`, kept as `kept`, which
+    /// the human has not read yet.
+    fn closed(project: usize, kept: ChatId, name: impl Into<SharedString>) -> Self {
         Self {
+            project,
             kept: Some(kept),
             name: name.into(),
             open: false,
@@ -137,19 +136,13 @@ impl Chat {
     }
 }
 
-/// Where a chat is: the index of its project, and its own in the project.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Position {
-    pub project: usize,
-    pub chat: usize,
-}
-
 pub struct Workspace {
     /// The projects, in the order they were first opened, after no
     /// project, which comes first.
     projects: Vec<Project>,
-    /// Where the chat shown is, if any is.
-    shown: Option<Position>,
+    /// The chats, in the order of the list: under their projects, each
+    /// after the ones opened before it; and which is shown, if any is.
+    chats: List<Chat>,
     opens: Rc<dyn Opens>,
     store: Rc<Store>,
     focus_handle: FocusHandle,
@@ -164,34 +157,50 @@ impl Workspace {
         opens: Rc<dyn Opens>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut projects = vec![Project::new(None, NO_PROJECT, home)];
-        match store.projects().and_then(|kept| Ok((kept, store.chats()?))) {
+        let mut workspace = Self {
+            projects: vec![Project::new(None, NO_PROJECT, home)],
+            chats: List::new(),
+            opens,
+            store,
+            focus_handle: cx.focus_handle(),
+        };
+        let kept = workspace
+            .store
+            .projects()
+            .and_then(|kept| Ok((kept, workspace.store.chats()?)));
+        match kept {
             Ok((kept, chats)) => {
-                projects.extend(
+                workspace.projects.extend(
                     kept.into_iter().map(|project| {
                         Project::new(Some(project.id), project.name, project.folder)
                     }),
                 );
                 for chat in chats {
-                    let Some(project) = projects
-                        .iter_mut()
-                        .find(|project| project.id == chat.project)
+                    let Some(index) = workspace
+                        .projects
+                        .iter()
+                        .position(|project| project.id == chat.project)
                     else {
                         continue;
                     };
-                    project.opened += 1;
-                    project.chats.push(Chat::closed(chat.id, chat.name));
+                    workspace.projects[index].opened += 1;
+                    workspace.add(Chat::closed(index, chat.id, chat.name));
                 }
             }
             Err(error) => log::error!("the chats kept cannot be listed: {error:#}"),
         }
-        Self {
-            projects,
-            shown: None,
-            opens,
-            store,
-            focus_handle: cx.focus_handle(),
-        }
+        workspace
+    }
+
+    /// Puts `chat` in the list after the other chats of its project, and
+    /// returns its index.
+    fn add(&mut self, chat: Chat) -> usize {
+        let after = self
+            .chats
+            .iter()
+            .rposition(|other| other.project <= chat.project)
+            .map_or(0, |index| index + 1);
+        self.chats.insert(after, chat, false)
     }
 
     /// The projects, no project first.
@@ -200,11 +209,17 @@ impl Workspace {
         &self.projects
     }
 
+    /// The chats of the project at `project`, in the order of the list.
+    pub fn chats(&self, project: usize) -> impl Iterator<Item = &Chat> {
+        self.chats
+            .iter()
+            .filter(move |chat| chat.project == project)
+    }
+
     /// The chat shown, if any is.
     #[must_use]
     pub fn shown(&self) -> Option<&Chat> {
-        let place = self.shown?;
-        self.projects.get(place.project)?.chats.get(place.chat)
+        self.chats.shown()
     }
 
     /// The index of the project of `folder`, opened first if it is not
@@ -255,22 +270,15 @@ impl Workspace {
             .opens
             .open(project.folder.clone(), instructions, record, window, cx);
         let changes = cx.observe(&view, |_, _, cx| cx.notify());
-        self.projects[index].chats.push(Chat {
+        let chat = self.add(Chat {
+            project: index,
             kept,
             name: name.into(),
             open: true,
             view: Some(view),
             _changes: vec![changes],
         });
-        let chat = self.projects[index].chats.len() - 1;
-        self.show(
-            Position {
-                project: index,
-                chat,
-            },
-            window,
-            cx,
-        );
+        self.show(chat, window, cx);
     }
 
     /// Asks the human for a folder, and opens a chat in its project.
@@ -298,33 +306,22 @@ impl Workspace {
         .detach();
     }
 
-    /// Every chat's place, in the order of the list.
-    fn positions(&self) -> Vec<Position> {
-        self.projects
-            .iter()
-            .enumerate()
-            .flat_map(|(project, open)| {
-                (0..open.chats.len()).map(move |chat| Position { project, chat })
-            })
-            .collect()
-    }
-
-    /// Shows the chat at `place`, with the keyboard in its input.
-    pub fn show(&mut self, place: Position, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.positions().contains(&place) {
+    /// Shows the chat at `index` in the list, with the keyboard in its
+    /// input.
+    pub fn show(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.chats.show(index) {
             return;
         }
-        self.read(place, window, cx);
-        self.shown = Some(place);
+        self.read(index, window, cx);
         window.focus(&self.focus_handle(cx));
         cx.notify();
     }
 
-    /// Gives the closed chat at `place` its view, from what is kept of it,
+    /// Gives the closed chat at `index` its view, from what is kept of it,
     /// unless it has one. Once the human sends to it, it is open.
-    fn read(&mut self, place: Position, window: &mut Window, cx: &mut Context<Self>) {
-        let project = &self.projects[place.project];
-        let chat = &project.chats[place.chat];
+    fn read(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let chat = &self.chats[index];
+        let project = &self.projects[chat.project];
         let (Some(kept), None) = (chat.kept, &chat.view) else {
             return;
         };
@@ -354,11 +351,19 @@ impl Workspace {
         let view = self.opens.read(closed, window, cx);
         let changes = cx.observe(&view, |_, _, cx| cx.notify());
         let reopened = cx.subscribe(&view, move |workspace, _, Reopened, cx| {
-            workspace.projects[place.project].chats[place.chat].open = true;
+            // The chat may have moved along the list since.
+            if let Some(chat) = workspace
+                .chats
+                .iter_mut()
+                .find(|chat| chat.kept == Some(kept))
+            {
+                chat.open = true;
+            }
             cx.notify();
         });
-        let chat = &mut self.projects[place.project].chats[place.chat];
+        let chat = &mut self.chats[index];
         *chat = Chat {
+            project: chat.project,
             kept: Some(kept),
             name: chat.name.clone(),
             open: false,
@@ -369,35 +374,18 @@ impl Workspace {
 
     /// Shows the chat `step` places along the list, going round.
     fn step(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let positions = self.positions();
-        let Some(shown) = self
-            .shown
-            .and_then(|shown| positions.iter().position(|&open| open == shown))
-        else {
-            return;
-        };
-        let (Ok(shown), Ok(count)) = (isize::try_from(shown), isize::try_from(positions.len()))
-        else {
-            return;
-        };
-        if let Ok(index) = usize::try_from((shown + step).rem_euclid(count)) {
-            self.show(positions[index], window, cx);
+        if let Some(index) = self.chats.along(step) {
+            self.show(index, window, cx);
         }
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Chats are numbered down the whole list, from 1.
-        let mut number = 0;
         let mut rows = Vec::new();
         for (index, project) in self.projects.iter().enumerate() {
             rows.push(Self::render_project(index, project, cx));
-            for (chat, open) in project.chats.iter().enumerate() {
-                number += 1;
-                let place = Position {
-                    project: index,
-                    chat,
-                };
-                rows.push(self.render_chat(place, number, open, cx));
+            let chats = self.chats.iter().enumerate();
+            for (chat, open) in chats.filter(|(_, chat)| chat.project == index) {
+                rows.push(self.render_chat(chat, open, cx));
             }
         }
         div()
@@ -509,14 +497,10 @@ impl Workspace {
             )
     }
 
-    /// The row of the chat at `place`, the `number`th in the list.
-    fn render_chat(
-        &self,
-        place: Position,
-        number: usize,
-        chat: &Chat,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    /// The row of the chat at `index` in the list, which numbers its
+    /// chats from 1.
+    fn render_chat(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Stateful<Div> {
+        let number = index + 1;
         let state = chat
             .view
             .as_ref()
@@ -539,7 +523,7 @@ impl Workspace {
             .py_1()
             .cursor_pointer()
             .on_click(
-                cx.listener(move |workspace, _, window, cx| workspace.show(place, window, cx)),
+                cx.listener(move |workspace, _, window, cx| workspace.show(index, window, cx)),
             )
             .child(
                 div()
@@ -551,7 +535,7 @@ impl Workspace {
                     .child(chat.name.clone()),
             )
             .child(div().text_color(color).child(mark));
-        if self.shown == Some(place) {
+        if self.chats.shown_index() == Some(index) {
             row = row.bg(rgb(0x2a_2a2a));
         } else {
             row = row.hover(|style| style.bg(rgb(0x26_2626)));

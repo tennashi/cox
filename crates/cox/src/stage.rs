@@ -47,6 +47,7 @@ pub mod tree;
 
 use std::path::{Path, PathBuf};
 
+use cox_core::list::List;
 use cox_core::store::Record;
 use cox_core::tabs::{KeptTab, KeptTabs, Lines};
 use gpui::{
@@ -83,10 +84,9 @@ pub struct Stage {
     cef: Cef,
     /// Where the chat works, which its terminals start in.
     cwd: PathBuf,
-    tabs: Vec<Tab>,
-    /// The index of the tab shown. There is always one: closing the last
-    /// tab is refused.
-    shown: usize,
+    /// The tabs, and which is shown. There is always one once the stage
+    /// has started: closing the last tab is refused.
+    tabs: List<Tab>,
     /// The chat's pages, as the relay knows them, if the relay started.
     pages: Option<Pages>,
     /// Whether the stage is open beside the conversation.
@@ -122,8 +122,7 @@ impl Stage {
         Self {
             cef,
             cwd,
-            tabs: Vec::new(),
-            shown: 0,
+            tabs: List::new(),
             pages: None,
             panel,
             record: None,
@@ -174,42 +173,32 @@ impl Stage {
     ) -> Self {
         let mut stage = Self::empty(cef, cwd, panel);
         let KeptTabs { tabs, shown } = kept.unwrap_or_default();
-        // The tab shown is the one that was, or else the last before it
-        // that opens again.
-        let mut shown_now = None;
         for (index, tab) in tabs.into_iter().enumerate() {
-            let opened = match tab {
+            // The tab shown is the one that was, or else the last before
+            // it that opens again, or else the first after it.
+            let show = index <= shown || stage.tabs.shown_index().is_none();
+            match tab {
                 KeptTab::Page { url, .. } => {
-                    stage.open_tab(&url, false, window, cx);
-                    true
+                    stage.open_tab(&url, show, window, cx);
                 }
                 KeptTab::Markdown { path } => {
                     // What the file says now; the tab says so if it cannot
                     // be read.
                     let text = std::fs::read_to_string(&path).unwrap_or_default();
-                    stage.push_file::<Document>(path, &text, None, false, window, cx);
-                    true
+                    stage.push_file::<Document>(path, &text, None, show, window, cx);
                 }
                 KeptTab::File { path, lines } => {
                     let text = std::fs::read_to_string(&path).unwrap_or_default();
-                    stage.push_file::<Code>(path, &text, lines, false, window, cx);
-                    true
+                    stage.push_file::<Code>(path, &text, lines, show, window, cx);
                 }
                 KeptTab::Files { open } => {
-                    stage.push_tree(open, false, window, cx);
-                    true
+                    stage.push_tree(open, show, window, cx);
                 }
-                KeptTab::Terminal { .. } => false,
-            };
-            if opened && (index <= shown || shown_now.is_none()) {
-                shown_now = Some(stage.tabs.len() - 1);
+                KeptTab::Terminal { .. } => {}
             }
         }
-        match shown_now {
-            Some(shown) => stage.shown = shown,
-            None => {
-                stage.open_tab(url, true, window, cx);
-            }
+        if stage.tabs.is_empty() {
+            stage.open_tab(url, true, window, cx);
         }
         stage
     }
@@ -218,7 +207,7 @@ impl Stage {
     fn tabs(&self, cx: &App) -> KeptTabs {
         KeptTabs {
             tabs: self.tabs.iter().map(|tab| tab.content.kept(cx)).collect(),
-            shown: self.shown,
+            shown: self.tabs.shown_index().unwrap_or(0),
         }
     }
 
@@ -320,7 +309,7 @@ impl Stage {
             if let Some(shown) = T::of(&self.tabs[index].content) {
                 shown.update(cx, |shown, cx| shown.show(text, lines, cx));
             }
-            self.shown = index;
+            self.tabs.show(index);
             self.changed(cx);
         } else {
             self.push_file::<T>(path, text, lines, true, window, cx);
@@ -388,7 +377,7 @@ impl Stage {
                 _changes: changes,
                 _opens: None,
             };
-            self.shown = index;
+            self.tabs.show(index);
             if had_focus {
                 self.focus_shown(window, cx);
             }
@@ -422,16 +411,15 @@ impl Stage {
         input: Option<cox_browser::relay::AgentInput>,
         cx: &mut Context<Self>,
     ) {
-        let index = page
-            .and_then(|page| self.index_of(&page))
-            .unwrap_or(self.shown);
-        if index != self.shown {
-            self.shown = index;
+        if let Some(index) = page.and_then(|page| self.index_of(&page))
+            && self.tabs.shown_index() != Some(index)
+        {
+            self.tabs.show(index);
             self.changed(cx);
         }
         self.show_panel(cx);
         if let Some(input) = input
-            && let Some(page) = self.tabs[index].content.page()
+            && let Some(page) = self.tabs.shown().and_then(|tab| tab.content.page())
         {
             page.update(cx, |page, cx| page.see(input, cx));
         }
@@ -490,14 +478,14 @@ impl Stage {
         show: bool,
         cx: &mut Context<Self>,
     ) {
-        self.tabs.push(Tab {
-            content,
-            _changes: changes,
-            _opens: opens,
-        });
-        if show {
-            self.shown = self.tabs.len() - 1;
-        }
+        self.tabs.push(
+            Tab {
+                content,
+                _changes: changes,
+                _opens: opens,
+            },
+            show,
+        );
         self.changed(cx);
     }
 
@@ -516,12 +504,8 @@ impl Stage {
         if self.tabs.len() <= 1 {
             return Err("The stage keeps its last tab open");
         }
-        let had_focus = self.tabs[self.shown]
-            .content
-            .focus_handle(cx)
-            .contains_focused(window, cx);
+        let had_focus = self.has_focus(window, cx);
         self.tabs.remove(index);
-        self.shown = after_closing(self.shown, index, self.tabs.len());
         if had_focus {
             self.focus_shown(window, cx);
         }
@@ -531,15 +515,23 @@ impl Stage {
 
     /// Shows the tab at `index`, with the keyboard in its page.
     fn show(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index < self.tabs.len() {
-            self.shown = index;
+        if self.tabs.show(index) {
             self.focus_shown(window, cx);
             self.changed(cx);
         }
     }
 
+    /// Whether the keyboard is in the tab shown.
+    fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.tabs
+            .shown()
+            .is_some_and(|tab| tab.content.focus_handle(cx).contains_focused(window, cx))
+    }
+
     fn focus_shown(&self, window: &mut Window, cx: &App) {
-        window.focus(&self.tabs[self.shown].content.focus_handle(cx));
+        if let Some(tab) = self.tabs.shown() {
+            window.focus(&tab.content.focus_handle(cx));
+        }
     }
 
     /// Opens `url`, a link the human clicked: on the tab that shows it
@@ -648,7 +640,7 @@ impl Stage {
     /// where what they type replaces the address.
     fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_tab(BLANK, true, window, cx);
-        if let Some(page) = self.tabs[self.shown].content.page() {
+        if let Some(page) = self.tabs.shown().and_then(|tab| tab.content.page()) {
             let address = page.read(cx).address().clone();
             window.focus(&address.focus_handle(cx));
             address.update(cx, LineInput::select_whole);
@@ -689,7 +681,7 @@ impl Stage {
                     })),
             );
         }
-        if index == self.shown {
+        if self.tabs.shown_index() == Some(index) {
             tab.bg(rgb(0x2a_2a2a))
         } else {
             tab.text_color(rgb(0xa0_a0a0))
@@ -789,17 +781,6 @@ impl FileTab {
     }
 }
 
-/// Which tab is shown once the tab at `closed` has gone, when the one at
-/// `shown` was, leaving `left` tabs: the same tab, unless it was the one
-/// closed, when it is the one after it, or before it if it was the last.
-fn after_closing(shown: usize, closed: usize, left: usize) -> usize {
-    if shown > closed {
-        shown - 1
-    } else {
-        shown.min(left.saturating_sub(1))
-    }
-}
-
 impl Render for Stage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -811,7 +792,7 @@ impl Render for Stage {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .child(self.tabs[self.shown].content.view()),
+                    .children(self.tabs.shown().map(|tab| tab.content.view())),
             )
     }
 }
@@ -822,7 +803,7 @@ mod tests {
 
     use cox_core::tabs::Lines;
 
-    use super::{FileTab, after_closing, linked};
+    use super::{FileTab, linked};
 
     #[test]
     fn a_link_to_a_file_is_from_where_the_link_is() {
@@ -875,19 +856,5 @@ mod tests {
             FileTab::of(Path::new("/a/main.rs"), lines),
             FileTab::Code(lines)
         );
-    }
-
-    #[test]
-    fn closing_another_tab_keeps_the_one_shown() {
-        // KeptTabs 0, 1, 2, with 1 shown.
-        assert_eq!(after_closing(1, 0, 2), 0);
-        assert_eq!(after_closing(1, 2, 2), 1);
-    }
-
-    #[test]
-    fn closing_the_tab_shown_shows_the_next_or_else_the_one_before() {
-        assert_eq!(after_closing(1, 1, 2), 1);
-        assert_eq!(after_closing(2, 2, 2), 1);
-        assert_eq!(after_closing(0, 0, 2), 0);
     }
 }

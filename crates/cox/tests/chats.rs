@@ -16,7 +16,7 @@ use cox::agent::instructions::Instructions;
 use cox::chat::conversation::{Entry, State};
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
-use cox::workspace::{Chat, Position, Workspace};
+use cox::workspace::{Chat, Workspace};
 use cox_core::store::{Record, Store};
 use fake_agent::{FakeAgent, Resumes};
 use gpui::{
@@ -148,8 +148,9 @@ fn names(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Vec<(Stri
         workspace
             .projects()
             .iter()
-            .map(|project| {
-                let chats = project.chats().iter().map(|chat| chat.name().to_owned());
+            .enumerate()
+            .map(|(index, project)| {
+                let chats = workspace.chats(index).map(|chat| chat.name().to_owned());
                 (project.name().to_owned(), chats.collect())
             })
             .collect()
@@ -347,10 +348,8 @@ fn shown_entries(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> V
 /// Whether each chat of each project is open.
 fn opened(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Vec<Vec<bool>> {
     workspace.read_with(cx, |workspace, _| {
-        workspace
-            .projects()
-            .iter()
-            .map(|project| project.chats().iter().map(Chat::is_open).collect())
+        (0..workspace.projects().len())
+            .map(|project| workspace.chats(project).map(Chat::is_open).collect())
             .collect()
     })
 }
@@ -434,23 +433,8 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
         });
         shown_entries(cx, &again)
     };
-    assert_eq!(
-        read(
-            cx,
-            Position {
-                project: 0,
-                chat: 0
-            }
-        ),
-        first
-    );
-    let read_second = read(
-        cx,
-        Position {
-            project: 1,
-            chat: 0,
-        },
-    );
+    assert_eq!(read(cx, 0), first);
+    let read_second = read(cx, 1);
     assert_eq!(read_second, second);
     // The change the agent asked to make shows, with the option chosen.
     assert!(
@@ -518,11 +502,9 @@ fn kept_chat(
     (store, kept)
 }
 
-/// The chat at the top of the first project, closed, after no project.
-const FIRST_KEPT: Position = Position {
-    project: 1,
-    chat: 0,
-};
+/// The chat kept, at the top of the list: the first project's only one,
+/// after no project, which has none.
+const FIRST_KEPT: usize = 0;
 
 #[gpui::test]
 async fn a_closed_chat_goes_on_with_its_session_when_the_human_sends_to_it(
