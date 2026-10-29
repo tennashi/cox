@@ -23,20 +23,22 @@
 //! as a page goes to another: back and forward go between the places the
 //! tab went to.
 
+mod file;
 mod hover;
 mod locations;
 
-use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use cox_core::tabs::Lines;
-use cox_editor::buffer::{Buffer, Point as Place, is_word, word_around};
+use cox_editor::buffer::{Point as Place, is_word, word_around};
 use cox_editor::history::History;
-use cox_editor::language::{Highlight, Language};
-use cox_editor::line::{LINE_LENGTH, Shown};
+use cox_editor::language::Highlight;
+use cox_editor::line::Shown;
 use cox_editor::lsp::{Client, Document, Encoding, Position};
 use cox_editor::syntax::Syntax;
+
+use self::file::{File, Spans};
 use gpui::{
     App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, Element, ElementId, Entity,
     EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hitbox,
@@ -138,39 +140,10 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 pub struct Code {
-    /// The file, as an absolute path.
-    path: PathBuf,
-    buffer: Buffer,
-    /// How many characters the longest line has, which says how far the
-    /// tab scrolls across.
-    longest: usize,
-    /// The language of the file, if the editor knows it.
-    language: Option<&'static Language>,
-    /// The syntax of the text, once parsed: until it is parsed again, as
-    /// the text changes, it is only edited as the text changed.
-    syntax: Option<Syntax>,
-    /// What the stretches of the lines drawn so far are, by line, as the
-    /// syntax says, until the text or the syntax changes: a line coming
-    /// into sight is the only one worked out.
-    highlighted: HashMap<usize, Spans>,
-    /// The file's, as the tab last read it, or `None` until the tab looks
-    /// at the file.
-    stamp: Option<Stamp>,
-    /// Why the file could not be read the last time the tab looked, if it
-    /// could not.
-    unread: Option<String>,
-    /// The lines the tab was last shown at, if any.
-    marked: Option<Lines>,
-    /// The line, from 0, to bring into sight once the tab is laid out.
-    reveal: Option<usize>,
-    /// How far the text is scrolled across and down.
-    scroll: Point<Pixels>,
-    /// Where the selection started, and where it goes to, if there is one.
-    selection: Option<(Place, Place)>,
-    /// Whether a drag is selecting.
-    selecting: bool,
-    /// How the last frame laid the text out.
-    laid: Option<Laid>,
+    /// The file shown, with what is worked out of it to draw it.
+    file: File,
+    /// How the tab looks at the file.
+    look: Look,
     /// The project's server that knows the language of the file, if the
     /// editor knows one.
     server: Option<Entity<LanguageServer>>,
@@ -205,6 +178,24 @@ pub struct Code {
     _server_changes: Option<Subscription>,
 }
 
+/// How the tab looks at its file: what it marks and selects, and how far
+/// it is scrolled. Another file is looked at afresh.
+#[derive(Default)]
+struct Look {
+    /// The lines the tab was last shown at, if any.
+    marked: Option<Lines>,
+    /// The line, from 0, to bring into sight once the tab is laid out.
+    reveal: Option<usize>,
+    /// How far the text is scrolled across and down.
+    scroll: Point<Pixels>,
+    /// Where the selection started, and where it goes to, if there is one.
+    selection: Option<(Place, Place)>,
+    /// Whether a drag is selecting.
+    selecting: bool,
+    /// How the last frame laid the text out.
+    laid: Option<Laid>,
+}
+
 /// Where the tab was: the file, what it marked and selected there, and
 /// how far it was scrolled.
 #[derive(Clone, Debug, PartialEq)]
@@ -214,9 +205,6 @@ struct Visit {
     selection: Option<(Place, Place)>,
     scroll: Point<Pixels>,
 }
-
-/// The stretches of a line, each as bytes of it with what it is, in order.
-type Spans = Vec<(Range<usize>, Highlight)>;
 
 /// How a frame laid the text out, to find what is under the mouse.
 struct Laid {
@@ -262,7 +250,6 @@ impl Code {
         server: Option<Entity<LanguageServer>>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let buffer = Buffer::new(text);
         // Once the server is ready, it gets the file.
         let server_changes = server.as_ref().map(|server| {
             cx.observe(server, |code, _, cx| {
@@ -271,20 +258,12 @@ impl Code {
             })
         });
         let mut code = Self {
-            longest: buffer.longest_line(),
-            buffer,
-            language: Language::of_path(&path),
-            syntax: None,
-            highlighted: HashMap::new(),
-            path,
-            stamp: None,
-            unread: None,
-            marked: lines,
-            reveal: lines.map(|lines| lines.first - 1),
-            scroll: Point::default(),
-            selection: None,
-            selecting: false,
-            laid: None,
+            file: File::new(path, text),
+            look: Look {
+                marked: lines,
+                reveal: lines.map(|lines| lines.first - 1),
+                ..Look::default()
+            },
             server,
             document: None,
             history: History::new(),
@@ -309,34 +288,35 @@ impl Code {
 
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.file.path
     }
 
     /// The name the tab goes by: the file's.
     #[must_use]
     pub fn title(&self) -> String {
-        self.path.file_name().map_or_else(
-            || self.path.display().to_string(),
-            |name| name.to_string_lossy().into_owned(),
-        )
+        self.file.title()
     }
 
     /// The text shown.
     #[must_use]
     pub fn text(&self) -> String {
-        self.buffer.text()
+        self.file.buffer.text()
     }
 
     /// The lines the tab was last shown at, if any.
     #[must_use]
     pub fn marked(&self) -> Option<Lines> {
-        self.marked
+        self.look.marked
     }
 
     /// The lines in sight, from 0, as the last frame drew them.
     #[must_use]
     pub fn in_sight(&self) -> std::ops::Range<usize> {
-        let rows = self.laid.as_ref().map_or(&[][..], |laid| &laid.rows[..]);
+        let rows = self
+            .look
+            .laid
+            .as_ref()
+            .map_or(&[][..], |laid| &laid.rows[..]);
         match (rows.first(), rows.last()) {
             (Some(first), Some(last)) => first.line..last.line + 1,
             _ => 0..0,
@@ -355,7 +335,7 @@ impl Code {
     /// line was in sight.
     #[must_use]
     pub fn point_of(&self, line: usize, column: usize) -> Option<Point<Pixels>> {
-        let laid = self.laid.as_ref()?;
+        let laid = self.look.laid.as_ref()?;
         let at = laid.stretch(line, &(column..column + 1))?;
         Some(at.center())
     }
@@ -364,16 +344,14 @@ impl Code {
     /// syntax says once parsed.
     #[must_use]
     pub fn highlights(&self, line: usize) -> Vec<(Range<usize>, Highlight)> {
-        self.syntax.as_ref().map_or_else(Vec::new, |syntax| {
-            syntax.highlights(&self.buffer, line, LINE_LENGTH)
-        })
+        self.file.highlights(line)
     }
 
     /// The text selected.
     #[must_use]
     pub fn selected_text(&self) -> String {
-        match self.selection {
-            Some((anchor, head)) => self.buffer.slice(anchor.min(head)..anchor.max(head)),
+        match self.look.selection {
+            Some((anchor, head)) => self.file.buffer.slice(anchor.min(head)..anchor.max(head)),
             None => String::new(),
         }
     }
@@ -382,28 +360,23 @@ impl Code {
     /// tab scrolls to.
     pub fn show(&mut self, text: &str, lines: Option<Lines>, cx: &mut Context<Self>) {
         // Back goes to where the human was reading.
-        if lines.is_some() && lines != self.marked {
+        if lines.is_some() && lines != self.look.marked {
             self.history.leave(self.visit());
         }
         // The tab looks at the file again, which may have changed since.
-        self.stamp = None;
-        self.unread = None;
+        self.file.stamp = None;
+        self.file.unread = None;
         self.set_text(text, cx);
-        self.marked = lines;
-        self.reveal = lines.map(|lines| lines.first - 1);
+        self.look.marked = lines;
+        self.look.reveal = lines.map(|lines| lines.first - 1);
         cx.notify();
     }
 
     fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        if let Some(edit) = self.buffer.set_text(text) {
-            self.longest = self.buffer.longest_line();
+        if self.file.set_text(text) {
             // What was selected may be gone.
-            self.selection = None;
-            self.selecting = false;
-            if let Some(syntax) = &mut self.syntax {
-                syntax.edit(&edit);
-            }
-            self.highlighted.clear();
+            self.look.selection = None;
+            self.look.selecting = false;
             self.parse(cx);
             // What the server said of the text before may not hold.
             self.hover = None;
@@ -427,12 +400,16 @@ impl Code {
         let Some(client) = server.client() else {
             return;
         };
-        let Some(language) = self.language.filter(|language| {
+        let Some(language) = self.file.language.filter(|language| {
             language.server().map(|server| server.program) == Some(server.name())
         }) else {
             return;
         };
-        self.document = client.open(&self.path, language.protocol_name(), &self.buffer.text());
+        self.document = client.open(
+            &self.file.path,
+            language.protocol_name(),
+            &self.file.buffer.text(),
+        );
     }
 
     /// The server, once it is ready to be asked.
@@ -456,46 +433,34 @@ impl Code {
     ) -> Option<F> {
         let client = self.client(cx)?;
         let document = self.document.as_ref()?;
-        let position = client.encoding().position(&self.buffer, place);
+        let position = client.encoding().position(&self.file.buffer, place);
         Some(request(client, document, position))
     }
 
     /// Where the tab is now.
     fn visit(&self) -> Visit {
         Visit {
-            path: self.path.clone(),
-            marked: self.marked,
-            selection: self.selection,
-            scroll: self.scroll,
+            path: self.file.path.clone(),
+            marked: self.look.marked,
+            selection: self.look.selection,
+            scroll: self.look.scroll,
         }
     }
 
     /// Shows the file at `path`, an absolute path, from its start, unless
     /// the tab shows it already: answers whether it does now.
     fn open(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
-        if path == self.path {
+        if path == self.file.path {
             return true;
         }
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
+        self.file = match File::read(path) {
+            Ok(file) => file,
             Err(error) => {
                 self.notice = Some(format!("cannot read {}: {error}", shortened(path)));
                 return false;
             }
         };
-        path.clone_into(&mut self.path);
-        self.buffer = Buffer::new(&text);
-        self.longest = self.buffer.longest_line();
-        self.language = Language::of_path(path);
-        self.syntax = None;
-        self.highlighted.clear();
-        self.stamp = None;
-        self.unread = None;
-        self.marked = None;
-        self.reveal = None;
-        self.scroll = Point::default();
-        self.selection = None;
-        self.selecting = false;
+        self.look = Look::default();
         self.hover = None;
         self.menu = None;
         self.document = None;
@@ -509,21 +474,21 @@ impl Code {
     fn go_to(&mut self, path: &Path, range: Range<Position>, cx: &mut Context<Self>) {
         let here = self.visit();
         let in_sight = self.in_sight();
-        let same_file = path == self.path;
+        let same_file = path == self.file.path;
         if !self.open(path, cx) {
             return;
         }
         let encoding = self.encoding(cx);
-        let start = encoding.point(&self.buffer, range.start);
-        let end = encoding.point(&self.buffer, range.end).max(start);
-        self.selection = Some((start, end));
-        self.marked = Some(Lines {
+        let start = encoding.point(&self.file.buffer, range.start);
+        let end = encoding.point(&self.file.buffer, range.end).max(start);
+        self.look.selection = Some((start, end));
+        self.look.marked = Some(Lines {
             first: start.line + 1,
             last: end.line + 1,
         });
         // A line in sight stays where it is.
         if !(same_file && in_sight.contains(&start.line)) {
-            self.reveal = Some(start.line);
+            self.look.reveal = Some(start.line);
         }
         if self.visit() != here {
             self.history.leave(here);
@@ -536,10 +501,10 @@ impl Code {
         if !self.open(&visit.path, cx) {
             return false;
         }
-        self.marked = visit.marked;
-        self.selection = visit.selection;
-        self.scroll = visit.scroll;
-        self.reveal = None;
+        self.look.marked = visit.marked;
+        self.look.selection = visit.selection;
+        self.look.scroll = visit.scroll;
+        self.look.reveal = None;
         self.hover = None;
         self.notice = None;
         cx.notify();
@@ -590,11 +555,11 @@ impl Code {
         reason = "the parse is only held: dropping it leaves its syntax unused"
     )]
     fn parse(&mut self, cx: &mut Context<Self>) {
-        let Some(language) = self.language else {
+        let Some(language) = self.file.language else {
             return;
         };
-        let buffer = self.buffer.clone();
-        let old = self.syntax.clone();
+        let buffer = self.file.buffer.clone();
+        let old = self.file.syntax.clone();
         // A parse of the text before, if not done yet, is left to end.
         self._parse = cx.spawn(async move |code, cx| {
             let syntax = cx
@@ -602,32 +567,18 @@ impl Code {
                 .spawn(async move { Syntax::parse(language, &buffer, old.as_ref()) })
                 .await;
             code.update(cx, |code, cx| {
-                code.syntax = syntax;
-                code.highlighted.clear();
+                code.file.syntax = syntax;
+                code.file.highlighted.clear();
                 cx.notify();
             })
             .ok();
         });
     }
 
-    /// What the stretches of `line` are, as the last frames worked out, or
-    /// else worked out now and added to `highlighted`, for the tab to keep.
-    fn highlights_at(&self, line: usize, highlighted: &mut Vec<(usize, Spans)>) -> Spans {
-        match (self.highlighted.get(&line), &self.syntax) {
-            (Some(highlights), _) => highlights.clone(),
-            (None, Some(syntax)) => {
-                let highlights = syntax.highlights(&self.buffer, line, LINE_LENGTH);
-                highlighted.push((line, highlights.clone()));
-                highlights
-            }
-            (None, None) => Vec::new(),
-        }
-    }
-
     /// The place in the text under `position`: on the nearest line in
     /// sight, at the nearest character.
     fn place_at(&self, position: Point<Pixels>) -> Option<Place> {
-        let laid = self.laid.as_ref()?;
+        let laid = self.look.laid.as_ref()?;
         let first = laid.rows.first()?;
         let last = laid.rows.last()?;
         let row = if position.y < first.origin.y {
@@ -645,7 +596,7 @@ impl Code {
     /// The word under `position`, as its line and the bytes of it, if the
     /// mouse is on one.
     fn word_at(&self, position: Point<Pixels>) -> Option<(usize, Range<usize>)> {
-        let laid = self.laid.as_ref()?;
+        let laid = self.look.laid.as_ref()?;
         let row = laid.rows.iter().find(|row| {
             row.origin.y <= position.y && position.y < row.origin.y + laid.line_height
         })?;
@@ -653,7 +604,7 @@ impl Code {
             return None;
         }
         let index = row.shaped.index_for_x(position.x - row.origin.x)?;
-        let line = self.buffer.line(row.line);
+        let line = self.file.buffer.line(row.line);
         let word = word_around(&line, row.shown.column_of(index));
         line[word.clone()]
             .starts_with(is_word)
@@ -662,14 +613,15 @@ impl Code {
 
     /// The text of the word at `place`.
     fn word_text(&self, place: Place) -> String {
-        let line = self.buffer.line(place.line);
+        let line = self.file.buffer.line(place.line);
         line[word_around(&line, place.column.min(line.len()))].to_owned()
     }
 
     /// Where in the window the bottom left of `column` of `line` is, if the
     /// line is in sight.
     fn below(&self, line: usize, column: usize) -> Option<Point<Pixels>> {
-        self.laid
+        self.look
+            .laid
             .as_ref()?
             .stretch(line, &(column..column))
             .map(|at| at.bottom_left())
@@ -702,7 +654,7 @@ impl Code {
             clippy::cast_precision_loss,
             reason = "line and character counts are far below what f32 keeps exactly"
         )]
-        let (lines, longest) = (self.buffer.lines() as f32, self.longest as f32);
+        let (lines, longest) = (self.file.buffer.lines() as f32, self.file.longest as f32);
         // The last line scrolls up to the middle.
         let down = laid.line_height * lines + px(PADDING) - laid.text.size.height / 2.;
         let across = laid.cell_width * longest + px(PADDING * 2.) - laid.text.size.width;
@@ -716,15 +668,15 @@ impl Code {
         if event.modifiers.secondary()
             && let Some((line, word)) = self.word_at(event.position)
         {
-            self.selection = None;
+            self.look.selection = None;
             self.go_to_definition(Place::new(line, word.start), cx);
             return;
         }
         let Some(place) = self.place_at(event.position) else {
             return;
         };
-        let line = self.buffer.line(place.line);
-        self.selection = Some(match event.click_count {
+        let line = self.file.buffer.line(place.line);
+        self.look.selection = Some(match event.click_count {
             1 => (place, place),
             2 => {
                 let word = word_around(&line, place.column);
@@ -735,7 +687,7 @@ impl Code {
             }
             _ => (Place::new(place.line, 0), Place::new(place.line + 1, 0)),
         });
-        self.selecting = event.click_count == 1;
+        self.look.selecting = event.click_count == 1;
         cx.notify();
     }
 
@@ -761,11 +713,11 @@ impl Code {
             self.rest_on(word, cx);
             return;
         }
-        if !self.selecting || event.pressed_button != Some(MouseButton::Left) {
+        if !self.look.selecting || event.pressed_button != Some(MouseButton::Left) {
             return;
         }
         if let Some(place) = self.place_at(event.position)
-            && let Some((_, head)) = &mut self.selection
+            && let Some((_, head)) = &mut self.look.selection
             && *head != place
         {
             *head = place;
@@ -774,10 +726,14 @@ impl Code {
     }
 
     fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.selecting = false;
+        self.look.selecting = false;
         // A click with no drag selects nothing.
-        if self.selection.is_some_and(|(anchor, head)| anchor == head) {
-            self.selection = None;
+        if self
+            .look
+            .selection
+            .is_some_and(|(anchor, head)| anchor == head)
+        {
+            self.look.selection = None;
             cx.notify();
         }
     }
@@ -793,17 +749,17 @@ impl Code {
     fn scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.hover = None;
         self.menu = None;
-        let Some(laid) = &self.laid else {
+        let Some(laid) = &self.look.laid else {
             return;
         };
         let delta = event.delta.pixel_delta(laid.line_height * WHEEL_LINES);
         let most = self.most_scroll(laid);
         let scroll = point(
-            (self.scroll.x - delta.x).clamp(px(0.), most.x),
-            (self.scroll.y - delta.y).clamp(px(0.), most.y),
+            (self.look.scroll.x - delta.x).clamp(px(0.), most.x),
+            (self.look.scroll.y - delta.y).clamp(px(0.), most.y),
         );
-        if scroll != self.scroll {
-            self.scroll = scroll;
+        if scroll != self.look.scroll {
+            self.look.scroll = scroll;
             cx.notify();
         }
         cx.stop_propagation();
@@ -822,7 +778,7 @@ impl Code {
     }
 
     fn render_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let lines = self.marked.map(|lines| {
+        let lines = self.look.marked.map(|lines| {
             if lines.first == lines.last {
                 format!("line {}", lines.first)
             } else {
@@ -880,7 +836,7 @@ impl Code {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .child(shortened(&self.path)),
+                    .child(shortened(&self.file.path)),
             )
             .children(lines.map(|lines| div().flex_shrink_0().child(lines)))
             .children(self.notice.as_ref().map(|notice| {
@@ -897,7 +853,7 @@ impl Code {
                     .truncate()
                     .child(server)
             }))
-            .children(self.unread.as_ref().map(|error| {
+            .children(self.file.unread.as_ref().map(|error| {
                 div()
                     .flex_shrink_0()
                     .text_color(rgb(FAILED))
@@ -964,17 +920,17 @@ impl Code {
 
 impl Follows for Code {
     fn followed(&self) -> (PathBuf, Option<Stamp>) {
-        (self.path.clone(), self.stamp)
+        (self.file.path.clone(), self.file.stamp)
     }
 
     fn looked(&mut self, looked: std::io::Result<(Stamp, String)>, cx: &mut Context<Self>) {
         match looked {
             Ok((stamp, text)) => {
-                self.stamp = Some(stamp);
-                self.unread = None;
+                self.file.stamp = Some(stamp);
+                self.file.unread = None;
                 self.set_text(&text, cx);
             }
-            Err(error) => self.unread = Some(error.to_string()),
+            Err(error) => self.file.unread = Some(error.to_string()),
         }
         cx.notify();
     }
@@ -1020,7 +976,7 @@ impl Render for Code {
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                     .on_mouse_up_out(
                         MouseButton::Left,
-                        cx.listener(|code, _, _, _| code.selecting = false),
+                        cx.listener(|code, _, _, _| code.look.selecting = false),
                     )
                     .on_hover(cx.listener(|code, hovered: &bool, _, cx| {
                         if !*hovered {
@@ -1076,13 +1032,7 @@ impl Text {
                   lines in sight are counted from a scroll that is not negative"
     )]
     fn lay_out(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) -> Painted {
-        let font = font(FONT);
-        let font_size = px(FONT_SIZE);
-        let text_system = window.text_system();
-        let cell_width = text_system
-            .advance(text_system.resolve_font(&font), font_size, 'm')
-            .map_or(px(8.), |advance| advance.width);
-        let line_height = (font_size * LINE_HEIGHT).round();
+        let (font, font_size, cell_width, line_height) = metrics(window);
         let run = |len, style| text_run(&font, len, style);
         let shape = |text: &str, runs: &[TextRun], window: &Window| {
             window.text_system().shape_line(
@@ -1094,7 +1044,7 @@ impl Text {
         };
 
         let code = self.code.read(cx);
-        let lines = code.buffer.lines();
+        let lines = code.file.buffer.lines();
         let digits = lines.to_string().len();
         let gutter = cell_width * digits as f32 + px(PADDING * 2.);
         let text_bounds = Bounds::new(
@@ -1109,8 +1059,8 @@ impl Text {
         };
         // Once the tab knows its size, the lines it is shown at come into
         // sight, and the scroll stays within the text.
-        let mut scroll = code.scroll;
-        if let Some(line) = code.reveal {
+        let mut scroll = code.look.scroll;
+        if let Some(line) = code.look.reveal {
             scroll.y = line_height * line as f32 - text_bounds.size.height * REVEAL_AT;
         }
         let most = code.most_scroll(&laid);
@@ -1123,9 +1073,11 @@ impl Text {
         let first = ((scroll.y - px(PADDING)).max(px(0.)) / line_height) as usize;
         let after = ((scroll.y + bounds.size.height) / line_height).ceil() as usize + 1;
         let marked = code
+            .look
             .marked
             .map_or(0..0, |lines| lines.first - 1..lines.last);
         let selection = code
+            .look
             .selection
             .map(|(anchor, head)| (anchor.min(head), anchor.max(head)));
         let mut highlighted = Vec::new();
@@ -1136,8 +1088,8 @@ impl Text {
         };
         for line in first..after.min(lines) {
             let y = top + line_height * line as f32;
-            let shown = Shown::of(&code.buffer.line(line));
-            let highlights = code.highlights_at(line, &mut highlighted);
+            let shown = Shown::of(&code.file.buffer.line(line));
+            let highlights = code.file.highlights_at(line, &mut highlighted);
             let shaped = shape(&shown.text, &text_runs(&font, &shown, &highlights), window);
             let is_marked = marked.contains(&line);
             if is_marked {
@@ -1172,13 +1124,26 @@ impl Text {
         }
         (painted.hovered, painted.link) = code.names(&laid);
         self.code.update(cx, |code, _| {
-            code.reveal = None;
-            code.scroll = scroll;
-            code.laid = Some(laid);
-            code.highlighted.extend(highlighted);
+            code.look.reveal = None;
+            code.look.scroll = scroll;
+            code.look.laid = Some(laid);
+            code.file.highlighted.extend(highlighted);
         });
         painted
     }
+}
+
+/// The font the code is drawn in, its size, how wide a character of it
+/// is, and how tall a line is.
+fn metrics(window: &Window) -> (Font, Pixels, Pixels, Pixels) {
+    let font = font(FONT);
+    let font_size = px(FONT_SIZE);
+    let text_system = window.text_system();
+    let cell_width = text_system
+        .advance(text_system.resolve_font(&font), font_size, 'm')
+        .map_or(px(8.), |advance| advance.width);
+    let line_height = (font_size * LINE_HEIGHT).round();
+    (font, font_size, cell_width, line_height)
 }
 
 /// The runs of `shown` in `font`, drawn as `highlights`, what the

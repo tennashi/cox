@@ -128,8 +128,8 @@ impl Code {
         let range = hover
             .range
             .map(|range| {
-                let start = encoding.point(&self.buffer, range.start);
-                let end = encoding.point(&self.buffer, range.end);
+                let start = encoding.point(&self.file.buffer, range.start);
+                let end = encoding.point(&self.file.buffer, range.end);
                 (start, end)
             })
             .filter(|(start, end)| {
