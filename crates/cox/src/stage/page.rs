@@ -6,12 +6,12 @@
 //!   it to the page.
 //! - [`keys`] sends the keys to the page, but for the browser's own
 //!   shortcuts.
-//! - [`agent`] draws the agent's pointer over the page: where the agent
+//! - [`pointer`] draws the agent's pointer over the page: where the agent
 //!   points, clicks and types, as the relay saw it.
 
-mod agent;
 mod keys;
 mod picture;
+mod pointer;
 
 use std::ops::Range;
 use std::sync::Arc;

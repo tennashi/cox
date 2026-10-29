@@ -15,8 +15,8 @@ use gpui::{
 };
 
 use super::Page;
-use super::agent::paint_agent;
 use super::keys::modifiers;
+use super::pointer::paint_agent;
 use cox_browser::{Frame, MouseButton};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
