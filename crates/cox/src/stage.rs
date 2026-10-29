@@ -56,7 +56,7 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::Ran;
-use crate::agent::mcp::Request;
+use crate::agent::mcp::ToolRequest;
 use cox_browser::relay::{FromAgent, Pages, Relay};
 use cox_browser::{Cef, TargetId};
 
@@ -138,7 +138,7 @@ impl Stage {
     pub fn work(
         &mut self,
         relay: Option<Relay>,
-        from_tools: Option<UnboundedReceiver<Request>>,
+        from_tools: Option<UnboundedReceiver<ToolRequest>>,
         record: Option<Record>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -275,20 +275,20 @@ impl Stage {
 
     /// Carries out what the agent's tools ask.
     fn hear_tools(
-        mut from_tools: UnboundedReceiver<Request>,
+        mut from_tools: UnboundedReceiver<ToolRequest>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         cx.spawn_in(window, async move |this, cx| {
             while let Some(request) = from_tools.recv().await {
                 let done = this.update_in(cx, |stage, window, cx| match request {
-                    Request::ShowMarkdown { path, text } => {
+                    ToolRequest::ShowMarkdown { path, text } => {
                         stage.show_file::<Document>(path, &text, None, window, cx);
                     }
-                    Request::ShowFile { path, text, lines } => {
+                    ToolRequest::ShowFile { path, text, lines } => {
                         stage.show_file::<Code>(path, &text, lines, window, cx);
                     }
-                    Request::RunCommand {
+                    ToolRequest::RunCommand {
                         command,
                         cwd,
                         answer,

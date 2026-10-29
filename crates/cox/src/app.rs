@@ -1,7 +1,7 @@
 //! Running Cox as the app, from what the command line says to the window
 //! open, in the order things start:
 //!
-//! 1. The command line says what to be ([`Program::parse`]): the app, with
+//! 1. The command line says what to be ([`Mode::parse`]): the app, with
 //!    its [`Settings`], or the bridge to a chat's tools, which `main`
 //!    runs instead.
 //! 2. What the app depends on starts: the browser, which is CEF (see
@@ -39,7 +39,7 @@ pub const USAGE: &str = "Usage: cox [--stage <url>] [--home <dir>] <agent comman
 
 /// What the command line asks `cox` to be.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Program {
+pub enum Mode {
     /// The app, as `cox [--stage <url>] [--home <dir>] <agent command>`.
     App(Settings),
     /// The bridge between an agent and the server of its chat's tools on
@@ -60,7 +60,7 @@ pub struct Settings {
     pub command: Vec<String>,
 }
 
-impl Program {
+impl Mode {
     /// What `args`, the command line without the program's name, asks
     /// for.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Self {
@@ -257,10 +257,10 @@ fn open_window(home: PathBuf, store: Rc<Store>, launcher: Launcher, cx: &mut App
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Program, Settings};
+    use super::{Mode, Settings};
 
-    fn parse(words: &[&str]) -> Program {
-        Program::parse(words.iter().map(|&word| word.to_owned()))
+    fn parse(words: &[&str]) -> Mode {
+        Mode::parse(words.iter().map(|&word| word.to_owned()))
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
                 "node",
                 "agent.mjs"
             ]),
-            Program::App(Settings {
+            Mode::App(Settings {
                 stage: "http://localhost:3000/".to_owned(),
                 home: Some(PathBuf::from("/tmp/cox")),
                 command: vec!["node".to_owned(), "agent.mjs".to_owned()],
@@ -286,7 +286,7 @@ mod tests {
     fn the_stage_is_blank_and_home_is_the_default_unless_asked() {
         assert_eq!(
             parse(&["node", "agent.mjs"]),
-            Program::App(Settings {
+            Mode::App(Settings {
                 stage: "about:blank".to_owned(),
                 home: None,
                 command: vec!["node".to_owned(), "agent.mjs".to_owned()],
@@ -296,15 +296,15 @@ mod tests {
 
     #[test]
     fn without_a_command_the_usage_is_asked_for() {
-        assert_eq!(parse(&[]), Program::Usage);
-        assert_eq!(parse(&["--stage", "about:blank"]), Program::Usage);
+        assert_eq!(parse(&[]), Mode::Usage);
+        assert_eq!(parse(&["--stage", "about:blank"]), Mode::Usage);
     }
 
     #[test]
     fn the_bridge_is_asked_for_with_its_socket() {
         assert_eq!(
             parse(&["--mcp", "/tmp/cox-1-0/mcp"]),
-            Program::Bridge(PathBuf::from("/tmp/cox-1-0/mcp"))
+            Mode::Bridge(PathBuf::from("/tmp/cox-1-0/mcp"))
         );
     }
 

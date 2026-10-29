@@ -4,7 +4,7 @@
 //! The agent starts its MCP servers itself, as programs that speak MCP on
 //! their standard input and output. So the server Cox hands the agent is
 //! Cox itself, run as `cox --mcp <socket>`: a [`bridge`] that only carries
-//! what the agent says to the chat's [`Server`], on a Unix socket, and the
+//! what the agent says to the chat's [`ToolServer`], on a Unix socket, and the
 //! answers back. Each chat has a socket of its own, in a directory that
 //! only the human's user can enter, so that an agent reaches its own chat
 //! and no other. The socket goes when the chat does.
@@ -39,7 +39,7 @@ pub const OPTION: &str = "--mcp";
 
 /// What the agent's tools ask of its chat.
 #[derive(Debug)]
-pub enum Request {
+pub enum ToolRequest {
     /// Show the human the Markdown file at `path`, an absolute path,
     /// which says `text`, on a tab of the stage.
     ShowMarkdown { path: PathBuf, text: String },
@@ -94,12 +94,12 @@ impl fmt::Display for Ended {
 }
 
 /// One chat's server, as the chat holds it.
-pub struct Server {
+pub struct ToolServer {
     /// Where the bridge reaches the server.
     pub socket: PathBuf,
     /// What the agent's tools ask. Dropping it stops the server, and
     /// removes the socket.
-    pub requests: UnboundedReceiver<Request>,
+    pub requests: UnboundedReceiver<ToolRequest>,
 }
 
 /// The versions of MCP the server speaks, newest first. Its tools work
@@ -128,7 +128,7 @@ static STARTED: AtomicU64 = AtomicU64::new(0);
 /// # Errors
 ///
 /// When the socket cannot be made.
-pub fn start(cwd: PathBuf) -> anyhow::Result<Server> {
+pub fn start(cwd: PathBuf) -> anyhow::Result<ToolServer> {
     let directory = private_directory()?;
     let socket = directory.join("mcp");
     let listener = StdUnixListener::bind(&socket)
@@ -154,7 +154,7 @@ pub fn start(cwd: PathBuf) -> anyhow::Result<Server> {
             log::warn!("{} is left behind: {error}", directory.display());
         }
     });
-    Ok(Server { socket, requests })
+    Ok(ToolServer { socket, requests })
 }
 
 /// Makes a new directory for a socket that only this user can enter.
@@ -177,7 +177,7 @@ fn private_directory() -> anyhow::Result<PathBuf> {
 async fn serve(
     listener: StdUnixListener,
     cwd: PathBuf,
-    requests: UnboundedSender<Request>,
+    requests: UnboundedSender<ToolRequest>,
 ) -> anyhow::Result<()> {
     let listener = UnixListener::from_std(listener)?;
     loop {
@@ -201,7 +201,7 @@ async fn serve(
 async fn talk(
     stream: UnixStream,
     cwd: &Path,
-    requests: &UnboundedSender<Request>,
+    requests: &UnboundedSender<ToolRequest>,
 ) -> anyhow::Result<()> {
     let (heard, mut said) = stream.into_split();
     // Answers go out as they are ready, in whatever order that is.
@@ -266,7 +266,11 @@ fn cancelled(message: &Value) -> Option<&Value> {
 /// The answer to `message`, or `None` when it needs none: a
 /// notification, or an answer to a request, which the server makes none
 /// of.
-async fn answer(message: &Value, cwd: &Path, requests: &UnboundedSender<Request>) -> Option<Value> {
+async fn answer(
+    message: &Value,
+    cwd: &Path,
+    requests: &UnboundedSender<ToolRequest>,
+) -> Option<Value> {
     let id = message.get("id")?;
     let method = message.get("method")?.as_str()?;
     let params = message.get("params").unwrap_or(&Value::Null);
@@ -381,7 +385,7 @@ fn tools() -> Value {
 async fn call(
     params: &Value,
     cwd: &Path,
-    requests: &UnboundedSender<Request>,
+    requests: &UnboundedSender<ToolRequest>,
 ) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
@@ -405,7 +409,7 @@ async fn call(
 fn show_markdown(
     arguments: &Value,
     cwd: &Path,
-    requests: &UnboundedSender<Request>,
+    requests: &UnboundedSender<ToolRequest>,
 ) -> Result<String, String> {
     let path = arguments
         .get("path")
@@ -416,7 +420,7 @@ fn show_markdown(
     let (text, path) = read.map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let shown = format!("{} is on the stage, for the human to read.", path.display());
     requests
-        .send(Request::ShowMarkdown { path, text })
+        .send(ToolRequest::ShowMarkdown { path, text })
         .map_err(|_| "the chat has closed".to_owned())?;
     Ok(shown)
 }
@@ -426,7 +430,7 @@ fn show_markdown(
 fn show_file(
     arguments: &Value,
     cwd: &Path,
-    requests: &UnboundedSender<Request>,
+    requests: &UnboundedSender<ToolRequest>,
 ) -> Result<String, String> {
     let path = arguments
         .get("path")
@@ -476,7 +480,7 @@ fn show_file(
         None => format!("{} is on the stage, for the human to read.", path.display()),
     };
     requests
-        .send(Request::ShowFile { path, text, lines })
+        .send(ToolRequest::ShowFile { path, text, lines })
         .map_err(|_| "the chat has closed".to_owned())?;
     Ok(shown)
 }
@@ -487,7 +491,7 @@ fn show_file(
 async fn run_command(
     arguments: &Value,
     cwd: &Path,
-    requests: &UnboundedSender<Request>,
+    requests: &UnboundedSender<ToolRequest>,
 ) -> Result<String, String> {
     let command = arguments
         .get("command")
@@ -496,7 +500,7 @@ async fn run_command(
         .ok_or("no command: give the command to run as `command`")?;
     let (answer, ran) = oneshot::channel();
     requests
-        .send(Request::RunCommand {
+        .send(ToolRequest::RunCommand {
             command: command.to_owned(),
             cwd: cwd.to_owned(),
             answer,
@@ -594,7 +598,7 @@ mod tests {
     fn answer_now(
         message: &Value,
         cwd: &Path,
-        requests: &UnboundedSender<Request>,
+        requests: &UnboundedSender<ToolRequest>,
     ) -> Option<Value> {
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -664,7 +668,7 @@ mod tests {
 
         assert_eq!(shown["result"]["isError"], false);
         match requests.try_recv().unwrap() {
-            Request::ShowMarkdown { path, text } => {
+            ToolRequest::ShowMarkdown { path, text } => {
                 assert_eq!(path, cwd.join("plan.md"));
                 assert_eq!(text, "# Plan\n");
             }
@@ -675,7 +679,7 @@ mod tests {
 
     /// Calls `show_file` in `cwd` with `arguments`, and answers what it
     /// answers, with what the chat is asked.
-    fn show_file(cwd: &Path, arguments: &Value) -> (Value, Option<Request>) {
+    fn show_file(cwd: &Path, arguments: &Value) -> (Value, Option<ToolRequest>) {
         let (sent, mut requests) = unbounded_channel();
         let shown = answer_now(
             &ask(
@@ -708,7 +712,7 @@ mod tests {
             )
         );
         match asked {
-            Some(Request::ShowFile { path, text, lines }) => {
+            Some(ToolRequest::ShowFile { path, text, lines }) => {
                 assert_eq!(path, cwd.join("main.rs"));
                 assert_eq!(text, "fn main() {\n}\n");
                 assert_eq!(lines, Some(Lines { first: 2, last: 3 }));
@@ -720,7 +724,7 @@ mod tests {
         assert!(
             matches!(
                 asked,
-                Some(Request::ShowFile {
+                Some(ToolRequest::ShowFile {
                     lines: Some(Lines { first: 1, last: 1 }),
                     ..
                 })
@@ -782,7 +786,7 @@ mod tests {
         let (sent, mut requests) = unbounded_channel();
         let chat = tokio::spawn(async move {
             match requests.recv().await {
-                Some(Request::RunCommand {
+                Some(ToolRequest::RunCommand {
                     command,
                     cwd,
                     answer,

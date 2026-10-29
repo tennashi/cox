@@ -16,7 +16,7 @@ use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 /// What starts a server in a project's folder, and answers it once it is
 /// ready.
-pub type Start = Rc<
+pub type Starter = Rc<
     dyn Fn(&'static Server, PathBuf) -> Pin<Box<dyn Future<Output = Result<Client, Error>> + Send>>,
 >;
 
@@ -24,7 +24,7 @@ pub type Start = Rc<
 #[derive(Clone)]
 pub struct Servers {
     running: Rc<RefCell<Running>>,
-    start: Start,
+    start: Starter,
 }
 
 /// The servers started, by the folder each works in, and its program.
@@ -44,7 +44,7 @@ impl Default for Servers {
 impl Servers {
     /// Servers that `start` starts.
     #[must_use]
-    pub fn new(start: Start) -> Self {
+    pub fn new(start: Starter) -> Self {
         Self {
             running: Rc::default(),
             start,
