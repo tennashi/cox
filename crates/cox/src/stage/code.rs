@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 
 use cox_core::tabs::Lines;
 use cox_editor::buffer::{Buffer, Point as Place, is_word, word_around};
+use cox_editor::history::History;
 use cox_editor::language::{Highlight, Language};
 use cox_editor::line::{LINE_LENGTH, Shown};
 use cox_editor::lsp::{Client, Document, Encoding, Position};
@@ -175,10 +176,9 @@ pub struct Code {
     server: Option<Entity<LanguageServer>>,
     /// The file, open on the server once it is ready.
     document: Option<Document>,
-    /// Where the tab was before it went to a place, the latest last.
-    back: Vec<Visit>,
-    /// Where the tab went back from, the latest last.
-    forward: Vec<Visit>,
+    /// Where the tab was before it went to a place, to go back to, and
+    /// where it went back from.
+    history: History<Visit>,
     /// The word the mouse rests on, as its line and the bytes of it.
     pointed: Option<(usize, Range<usize>)>,
     /// Whether the key that makes a click go to a definition is held.
@@ -287,8 +287,7 @@ impl Code {
             laid: None,
             server,
             document: None,
-            back: Vec::new(),
-            forward: Vec::new(),
+            history: History::new(),
             pointed: None,
             linking: false,
             hover: None,
@@ -384,8 +383,7 @@ impl Code {
     pub fn show(&mut self, text: &str, lines: Option<Lines>, cx: &mut Context<Self>) {
         // Back goes to where the human was reading.
         if lines.is_some() && lines != self.marked {
-            self.back.push(self.visit());
-            self.forward.clear();
+            self.history.leave(self.visit());
         }
         // The tab looks at the file again, which may have changed since.
         self.stamp = None;
@@ -528,8 +526,7 @@ impl Code {
             self.reveal = Some(start.line);
         }
         if self.visit() != here {
-            self.back.push(here);
-            self.forward.clear();
+            self.history.leave(here);
         }
         cx.notify();
     }
@@ -559,23 +556,23 @@ impl Code {
 
     /// Goes back to where the tab was before it went to a place.
     pub fn go_back(&mut self, cx: &mut Context<Self>) {
-        let Some(visit) = self.back.pop() else {
+        let Some(visit) = self.history.back() else {
             return;
         };
         let here = self.visit();
         if self.revisit(&visit, cx) {
-            self.forward.push(here);
+            self.history.went_back(here);
         }
     }
 
     /// Goes forward again to where the tab went back from.
     pub fn go_forward(&mut self, cx: &mut Context<Self>) {
-        let Some(visit) = self.forward.pop() else {
+        let Some(visit) = self.history.forward() else {
             return;
         };
         let here = self.visit();
         if self.revisit(&visit, cx) {
-            self.back.push(here);
+            self.history.went_forward(here);
         }
     }
 
@@ -864,16 +861,19 @@ impl Code {
             .border_b_1()
             .border_color(rgb(0x40_4040))
             .text_color(rgb(DIM))
-            .when(!self.back.is_empty() || !self.forward.is_empty(), |bar| {
-                bar.child(
-                    button("code-back", "‹", !self.back.is_empty())
-                        .on_click(cx.listener(|code, _, _, cx| code.go_back(cx))),
-                )
-                .child(
-                    button("code-forward", "›", !self.forward.is_empty())
-                        .on_click(cx.listener(|code, _, _, cx| code.go_forward(cx))),
-                )
-            })
+            .when(
+                self.history.has_back() || self.history.has_forward(),
+                |bar| {
+                    bar.child(
+                        button("code-back", "‹", self.history.has_back())
+                            .on_click(cx.listener(|code, _, _, cx| code.go_back(cx))),
+                    )
+                    .child(
+                        button("code-forward", "›", self.history.has_forward())
+                            .on_click(cx.listener(|code, _, _, cx| code.go_forward(cx))),
+                    )
+                },
+            )
             .child(
                 div()
                     .debug_selector(|| "code-path".to_owned())
