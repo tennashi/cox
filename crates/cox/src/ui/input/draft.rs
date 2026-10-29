@@ -1,0 +1,467 @@
+//! The text in an input as it is typed, without drawing it: what it says,
+//! what is selected, and what the input method is still composing.
+//!
+//! Offsets are in bytes of the text, but for those the input method gives
+//! and gets, which count UTF-16 units, as the platforms do.
+
+use std::ops::Range;
+
+use unicode_segmentation::UnicodeSegmentation;
+
+/// The text in an input, with its selection and composition.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Draft {
+    text: String,
+    /// Byte range of the selection; empty when it is just the cursor.
+    selected: Range<usize>,
+    /// Whether the cursor is at the start of the selection rather than its
+    /// end: the selection grew to the left.
+    reversed: bool,
+    /// Byte range the input method is composing.
+    marked: Option<Range<usize>>,
+}
+
+impl Draft {
+    /// An empty text, with the cursor at its start.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Byte range of the selection; empty when it is just the cursor.
+    #[must_use]
+    pub fn selected(&self) -> &Range<usize> {
+        &self.selected
+    }
+
+    #[must_use]
+    pub fn selected_text(&self) -> &str {
+        &self.text[self.selected.clone()]
+    }
+
+    /// Whether the cursor is at the start of the selection rather than its
+    /// end.
+    #[must_use]
+    pub fn is_reversed(&self) -> bool {
+        self.reversed
+    }
+
+    /// Where the cursor is: the end of the selection it moves.
+    #[must_use]
+    pub fn cursor(&self) -> usize {
+        if self.reversed {
+            self.selected.start
+        } else {
+            self.selected.end
+        }
+    }
+
+    /// Byte range the input method is composing, if it is.
+    #[must_use]
+    pub fn marked(&self) -> Option<&Range<usize>> {
+        self.marked.as_ref()
+    }
+
+    /// Whether an input method is composing text.
+    #[must_use]
+    pub fn is_composing(&self) -> bool {
+        self.marked.is_some()
+    }
+
+    /// Puts `text` in place of everything, with the cursor at its end.
+    pub fn set_text(&mut self, text: &str) {
+        self.text.clear();
+        self.text.push_str(text);
+        self.move_to(self.text.len());
+        self.marked = None;
+    }
+
+    /// Puts the cursor at `offset`, with nothing selected.
+    pub fn move_to(&mut self, offset: usize) {
+        self.selected = offset..offset;
+        self.reversed = false;
+    }
+
+    /// Moves the cursor to `offset`, keeping the other end of the selection
+    /// where it is.
+    pub fn select_to(&mut self, offset: usize) {
+        let anchor = if self.reversed {
+            self.selected.end
+        } else {
+            self.selected.start
+        };
+        self.reversed = offset < anchor;
+        self.selected = anchor.min(offset)..anchor.max(offset);
+    }
+
+    /// Selects the whole text, so that typing replaces it.
+    pub fn select_all(&mut self) {
+        self.move_to(0);
+        self.select_to(self.text.len());
+    }
+
+    /// Leaves the cursor where it is, with nothing selected.
+    pub fn deselect(&mut self) {
+        self.move_to(self.cursor());
+    }
+
+    /// Left: to the start of the selection, or a character back.
+    pub fn move_left(&mut self) {
+        let offset = if self.selected.is_empty() {
+            self.previous_boundary(self.selected.start)
+        } else {
+            self.selected.start
+        };
+        self.move_to(offset);
+    }
+
+    /// Right: to the end of the selection, or a character on.
+    pub fn move_right(&mut self) {
+        let offset = if self.selected.is_empty() {
+            self.next_boundary(self.selected.end)
+        } else {
+            self.selected.end
+        };
+        self.move_to(offset);
+    }
+
+    /// Shift+Left: the selection grows, or shrinks, a character to the left.
+    pub fn select_left(&mut self) {
+        self.select_to(self.previous_boundary(self.cursor()));
+    }
+
+    /// Shift+Right: the selection grows, or shrinks, a character to the
+    /// right.
+    pub fn select_right(&mut self) {
+        self.select_to(self.next_boundary(self.cursor()));
+    }
+
+    /// Backspace: takes out the selection, or the character before the
+    /// cursor.
+    pub fn delete_backward(&mut self) {
+        if self.selected.is_empty() {
+            let start = self.previous_boundary(self.selected.start);
+            self.selected = start..self.selected.end;
+        }
+        self.commit(None, "");
+    }
+
+    /// Delete: takes out the selection, or the character after the cursor.
+    pub fn delete_forward(&mut self) {
+        if self.selected.is_empty() {
+            let end = self.next_boundary(self.selected.end);
+            self.selected = self.selected.start..end;
+        }
+        self.commit(None, "");
+    }
+
+    /// Final text, typed or committed by the input method: `text` in place
+    /// of `range_utf16`, else the text being composed, else the selection,
+    /// with the cursor after it.
+    pub fn commit(&mut self, range_utf16: Option<&Range<usize>>, text: &str) {
+        let range = self.target_range(range_utf16);
+        let placed = self.replace(range, text);
+        self.move_to(placed.end);
+        self.marked = None;
+    }
+
+    /// Text the input method is still composing: `text` in place of
+    /// `range_utf16`, else the text being composed, else the selection,
+    /// which it marks, with `selected_utf16` of it selected, counted from
+    /// its start, or else the cursor after it.
+    pub fn compose(
+        &mut self,
+        range_utf16: Option<&Range<usize>>,
+        text: &str,
+        selected_utf16: Option<&Range<usize>>,
+    ) {
+        let range = self.target_range(range_utf16);
+        let placed = self.replace(range, text);
+        self.marked = (!text.is_empty()).then(|| placed.clone());
+        self.selected = match selected_utf16 {
+            Some(selected) => {
+                let offset = self.offset_to_utf16(placed.start);
+                self.range_from_utf16(&(selected.start + offset..selected.end + offset))
+            }
+            None => placed.end..placed.end,
+        };
+        self.reversed = false;
+    }
+
+    /// The input method stopped composing, leaving the text as it is.
+    pub fn unmark(&mut self) {
+        self.marked = None;
+    }
+
+    /// The text in `range_utf16`, and that range as it fits the text's
+    /// characters.
+    #[must_use]
+    pub fn text_in(&self, range_utf16: &Range<usize>) -> (String, Range<usize>) {
+        let range = self.range_from_utf16(range_utf16);
+        let adjusted = self.range_to_utf16(&range);
+        (self.text[range].to_owned(), adjusted)
+    }
+
+    /// The byte offset of the character at `offset` UTF-16 units in.
+    #[must_use]
+    pub fn offset_from_utf16(&self, offset: usize) -> usize {
+        let mut utf16 = 0;
+        let mut bytes = 0;
+        for ch in self.text.chars() {
+            if utf16 >= offset {
+                break;
+            }
+            utf16 += ch.len_utf16();
+            bytes += ch.len_utf8();
+        }
+        bytes
+    }
+
+    /// How many UTF-16 units in byte `offset` is.
+    #[must_use]
+    pub fn offset_to_utf16(&self, offset: usize) -> usize {
+        self.text[..offset].encode_utf16().count()
+    }
+
+    #[must_use]
+    pub fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
+        self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end)
+    }
+
+    #[must_use]
+    pub fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
+        self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
+    }
+
+    /// The start of the character before `offset`, or the start of the
+    /// text.
+    fn previous_boundary(&self, offset: usize) -> usize {
+        self.text
+            .grapheme_indices(true)
+            .rev()
+            .map(|(index, _)| index)
+            .find(|&index| index < offset)
+            .unwrap_or(0)
+    }
+
+    /// The start of the character after the one at `offset`, or the end of
+    /// the text.
+    fn next_boundary(&self, offset: usize) -> usize {
+        self.text
+            .grapheme_indices(true)
+            .map(|(index, _)| index)
+            .find(|&index| index > offset)
+            .unwrap_or(self.text.len())
+    }
+
+    /// The range a replacement applies to: the one given, else the text
+    /// being composed, else the selection.
+    fn target_range(&self, range_utf16: Option<&Range<usize>>) -> Range<usize> {
+        range_utf16
+            .map(|range| self.range_from_utf16(range))
+            .or_else(|| self.marked.clone())
+            .unwrap_or_else(|| self.selected.clone())
+    }
+
+    /// Puts `text` in place of `range`, and returns where it ended up.
+    fn replace(&mut self, range: Range<usize>, text: &str) -> Range<usize> {
+        self.text.replace_range(range.clone(), text);
+        range.start..range.start + text.len()
+    }
+}
+
+/// A pasted text as one line: each line break, of any kind, becomes a
+/// space.
+#[must_use]
+pub fn one_line(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\n', '\r'], " ")
+}
+
+/// A pasted text with each line break, of any kind, as `\n`.
+#[must_use]
+pub fn unix_line_breaks(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Draft, one_line, unix_line_breaks};
+
+    /// A draft saying `text`, with the cursor at its end.
+    fn draft(text: &str) -> Draft {
+        let mut draft = Draft::new();
+        draft.set_text(text);
+        draft
+    }
+
+    #[test]
+    fn typing_goes_in_at_the_cursor_and_in_place_of_the_selection() {
+        let mut draft = draft("ab");
+        draft.commit(None, "c");
+        assert_eq!(draft.text(), "abc");
+        assert_eq!(draft.cursor(), 3);
+        draft.move_to(1);
+        draft.commit(None, "X");
+        assert_eq!(draft.text(), "aXbc");
+        draft.move_to(0);
+        draft.select_to(2);
+        draft.commit(None, "Y");
+        assert_eq!(draft.text(), "Ybc");
+        assert_eq!(draft.cursor(), 1);
+    }
+
+    #[test]
+    fn the_cursor_moves_by_characters_not_bytes() {
+        // A flag, of two code points, and a family, joined of four.
+        let mut draft = draft("a🇯🇵👨‍👩‍👧‍👦");
+        assert_eq!(draft.cursor(), draft.text().len());
+        draft.move_left();
+        assert_eq!(draft.cursor(), "a🇯🇵".len());
+        draft.move_left();
+        assert_eq!(draft.cursor(), 1);
+        draft.move_left();
+        draft.move_left();
+        assert_eq!(draft.cursor(), 0);
+        draft.move_right();
+        draft.move_right();
+        assert_eq!(draft.cursor(), "a🇯🇵".len());
+    }
+
+    #[test]
+    fn backspace_and_delete_take_out_a_character_or_the_selection() {
+        let mut draft = draft("aé𝄞b");
+        draft.move_left();
+        draft.delete_backward();
+        assert_eq!(draft.text(), "aéb");
+        draft.move_to(0);
+        draft.delete_forward();
+        assert_eq!(draft.text(), "éb");
+        draft.select_all();
+        draft.delete_backward();
+        assert_eq!(draft.text(), "");
+        draft.delete_backward();
+        draft.delete_forward();
+        assert_eq!(draft.text(), "");
+    }
+
+    #[test]
+    fn a_selection_keeps_its_anchor_and_can_turn_around_it() {
+        let mut draft = draft("abcd");
+        draft.move_left();
+        draft.move_left();
+        draft.select_left();
+        assert_eq!(draft.selected(), &(1..2));
+        assert!(draft.is_reversed());
+        assert_eq!(draft.cursor(), 1);
+        draft.select_right();
+        draft.select_right();
+        draft.select_right();
+        assert_eq!(draft.selected(), &(2..4));
+        assert!(!draft.is_reversed());
+        assert_eq!(draft.selected_text(), "cd");
+        draft.move_left();
+        assert_eq!(draft.cursor(), 2);
+        assert!(draft.selected().is_empty());
+    }
+
+    #[test]
+    fn deselecting_leaves_the_cursor_where_it_is() {
+        let mut draft = draft("abc");
+        draft.move_to(0);
+        draft.select_to(2);
+        draft.deselect();
+        assert_eq!(draft.selected(), &(2..2));
+        draft.select_to(0);
+        draft.deselect();
+        assert_eq!(draft.selected(), &(0..0));
+    }
+
+    #[test]
+    fn a_composition_is_marked_until_it_is_committed() {
+        let mut draft = draft("a");
+        draft.compose(None, "k", None);
+        assert_eq!(draft.text(), "ak");
+        assert_eq!(draft.marked(), Some(&(1..2)));
+        assert!(draft.is_composing());
+        // The next piece replaces what is composed, not the selection.
+        draft.move_to(0);
+        draft.compose(None, "か", None);
+        assert_eq!(draft.text(), "aか");
+        assert_eq!(draft.marked(), Some(&(1..4)));
+        assert_eq!(draft.cursor(), 4);
+        draft.commit(None, "漢");
+        assert_eq!(draft.text(), "a漢");
+        assert!(!draft.is_composing());
+        assert_eq!(draft.cursor(), 4);
+    }
+
+    #[test]
+    fn a_composition_selects_within_itself_as_the_input_method_says() {
+        let mut draft = draft("𝄞");
+        draft.compose(None, "abc", Some(&(1..2)));
+        // From the composition's start, in UTF-16 units: after the clef's
+        // two.
+        assert_eq!(draft.selected(), &(5..6));
+        assert_eq!(draft.selected_text(), "b");
+        draft.compose(None, "", None);
+        assert_eq!(draft.text(), "𝄞");
+        assert!(!draft.is_composing());
+    }
+
+    #[test]
+    fn unmarking_keeps_the_text_as_composed() {
+        let mut draft = draft("");
+        draft.compose(None, "ab", None);
+        draft.unmark();
+        assert_eq!(draft.text(), "ab");
+        assert!(!draft.is_composing());
+        draft.commit(None, "c");
+        assert_eq!(draft.text(), "abc");
+    }
+
+    #[test]
+    fn the_input_method_counts_utf16_units() {
+        let draft = draft("a𝄞b");
+        assert_eq!(draft.offset_to_utf16(5), 3);
+        assert_eq!(draft.offset_from_utf16(3), 5);
+        assert_eq!(draft.range_to_utf16(&(1..5)), 1..3);
+        assert_eq!(draft.range_from_utf16(&(1..3)), 1..5);
+        // Past the end is the end.
+        assert_eq!(draft.offset_from_utf16(9), 6);
+        // Within the clef, the range widens to it.
+        assert_eq!(draft.text_in(&(1..2)), ("𝄞".to_owned(), 1..3));
+        assert_eq!(draft.text_in(&(0..4)), ("a𝄞b".to_owned(), 0..4));
+    }
+
+    #[test]
+    fn a_replacement_the_input_method_places_goes_where_it_says() {
+        let mut draft = draft("abcd");
+        draft.commit(Some(&(1..3)), "X");
+        assert_eq!(draft.text(), "aXd");
+        assert_eq!(draft.cursor(), 2);
+    }
+
+    #[test]
+    fn setting_the_text_puts_the_cursor_at_its_end_and_stops_composing() {
+        let mut draft = draft("");
+        draft.compose(None, "k", None);
+        draft.set_text("hello");
+        assert_eq!(draft.text(), "hello");
+        assert_eq!(draft.cursor(), 5);
+        assert!(!draft.is_composing());
+    }
+
+    #[test]
+    fn pasted_line_breaks_become_spaces_or_newlines() {
+        assert_eq!(one_line("one\ntwo\r\nthree\rfour"), "one two three four");
+        assert_eq!(
+            unix_line_breaks("one\ntwo\r\nthree\rfour"),
+            "one\ntwo\nthree\nfour"
+        );
+    }
+}

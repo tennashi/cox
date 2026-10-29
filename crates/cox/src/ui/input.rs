@@ -12,6 +12,11 @@
 //! copies and pastes with the usual keys. Enter submits. In an input that
 //! wraps, Shift+Enter starts a new line; in one that holds one line, a
 //! pasted line break becomes a space.
+//!
+//! [`draft`] is the text as it is typed, with its selection and
+//! composition, apart from drawing it.
+
+pub mod draft;
 
 use std::ops::Range;
 
