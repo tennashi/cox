@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cox::stage::document::Document;
+use cox::stage::tab::Content as _;
 use cox::ui::LinkClicked;
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 

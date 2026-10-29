@@ -10,12 +10,15 @@
 
 use std::path::{Path, PathBuf};
 
+use cox_core::tabs::{Lines, Tab as Kept};
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ScrollHandle, Task, Window, div, prelude::*, px, rgb,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, Task, Window, div, prelude::*, px,
+    rgb,
 };
 
 use crate::stage::follow::{self, Follows, Stamp};
+use crate::stage::tab::{Content, Shown, ShowsFile};
 use crate::ui::markdown::{self, Block};
 use crate::ui::paths::shortened;
 use crate::ui::text::Reading;
@@ -71,15 +74,6 @@ impl Document {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// The name the tab goes by: the file's.
-    #[must_use]
-    pub fn title(&self) -> String {
-        self.path.file_name().map_or_else(
-            || self.path.display().to_string(),
-            |name| name.to_string_lossy().into_owned(),
-        )
     }
 
     /// The text shown.
@@ -154,6 +148,47 @@ impl Follows for Document {
             Err(error) => self.unread = Some(error.to_string()),
         }
         cx.notify();
+    }
+}
+
+impl Content for Document {
+    /// The file's name.
+    fn title(&self) -> String {
+        self.path.file_name().map_or_else(
+            || self.path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    }
+
+    fn kept(&self) -> Kept {
+        Kept::Markdown {
+            path: self.path.clone(),
+        }
+    }
+}
+
+impl ShowsFile for Document {
+    fn open(_: &Path, path: PathBuf, text: &str, _: Option<Lines>, cx: &mut Context<Self>) -> Self {
+        Self::new(path, text.to_owned(), cx)
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn show(&mut self, text: &str, _: Option<Lines>, cx: &mut Context<Self>) {
+        self.show(text.to_owned(), cx);
+    }
+
+    fn shown(this: Entity<Self>) -> Shown {
+        Shown::Document(this)
+    }
+
+    fn of(shown: &Shown) -> Option<&Entity<Self>> {
+        match shown {
+            Shown::Document(document) => Some(document),
+            Shown::Page { .. } | Shown::Code(_) | Shown::Tree(_) | Shown::Terminal(_) => None,
+        }
     }
 }
 
