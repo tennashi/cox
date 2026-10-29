@@ -14,7 +14,8 @@ use gpui::{
     UniformListScrollHandle, div, prelude::*, px, relative, rgb, uniform_list,
 };
 
-use super::{Code, NUMBER};
+use super::Code;
+use super::text::NUMBER;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{DIM, FONT, FOREGROUND};
 

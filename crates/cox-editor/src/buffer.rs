@@ -231,6 +231,35 @@ fn without_break(line: &str) -> &str {
     line.strip_suffix('\r').unwrap_or(line)
 }
 
+/// Whether `c` is of a word: a letter, a digit, or `_`.
+#[must_use]
+pub fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// The bytes of the word around `column` of `line`: letters, digits and
+/// `_`, or else the one character there.
+#[must_use]
+pub fn word_around(line: &str, column: usize) -> Range<usize> {
+    let Some(here) = line[column..].chars().next() else {
+        return column..column;
+    };
+    if !is_word(here) {
+        return column..column + here.len_utf8();
+    }
+    let start = line[..column]
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| is_word(c))
+        .last()
+        .map_or(column, |(at, _)| at);
+    let end = line[column..]
+        .char_indices()
+        .find(|&(_, c)| !is_word(c))
+        .map_or(line.len(), |(at, _)| column + at);
+    start..end
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +363,15 @@ mod tests {
         );
         assert_eq!(buffer.slice(Point::new(1, 0)..Point::new(1, 9)), "two");
         assert_eq!(buffer.slice(Point::new(2, 1)..Point::new(0, 0)), "");
+    }
+
+    #[test]
+    fn finds_the_word_around_a_place() {
+        let line = "let 日本_x = a.b;";
+        let word = |column| &line[word_around(line, column)];
+        assert_eq!(word(0), "let");
+        assert_eq!(word("let ".len() + 3), "日本_x");
+        assert_eq!(word(line.find('=').unwrap()), "=");
+        assert_eq!(word(line.len()), "");
     }
 }
