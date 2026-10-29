@@ -18,7 +18,7 @@ use gpui::{
     div, prelude::*, px, rgb,
 };
 
-use crate::stage::tab::Content;
+use crate::stage::tab::Shows;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{BACKGROUND, DIM, FAILED, FOREGROUND};
 
@@ -248,7 +248,7 @@ fn follow(cx: &mut Context<Tree>) -> Task<()> {
     })
 }
 
-impl Content for Tree {
+impl Shows for Tree {
     /// The project's folder's name.
     fn title(&self) -> String {
         let name = self.root.file_name().map_or_else(

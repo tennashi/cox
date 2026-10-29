@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use cox::agent::mcp::{Ended, Ran};
-use cox::stage::tab::Content as _;
+use cox::stage::tab::Shows as _;
 use cox::stage::terminal::{Program, Running, Terminal};
 use gpui::{
     Entity, Focusable as _, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext,

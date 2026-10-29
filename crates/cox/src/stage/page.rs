@@ -26,7 +26,7 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use self::picture::Picture;
-use crate::stage::tab::Content;
+use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
 use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
@@ -260,7 +260,7 @@ impl Drop for Page {
     }
 }
 
-impl Content for Page {
+impl Shows for Page {
     /// The page's title, or its address until it has one.
     fn title(&self) -> String {
         if self.navigation.title.is_empty() {

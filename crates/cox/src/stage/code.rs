@@ -57,7 +57,7 @@ use gpui::{
 
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::servers::{LanguageServer, Servers};
-use crate::stage::tab::{self, Content, ShowsFile};
+use crate::stage::tab::{self, Shows, ShowsFile};
 use crate::ui::paths::shortened;
 use crate::ui::theme::BACKGROUND;
 use crate::ui::{Copy, LinkClicked};
@@ -746,7 +746,7 @@ impl Follows for Code {
     }
 }
 
-impl Content for Code {
+impl Shows for Code {
     /// The file's name.
     fn title(&self) -> String {
         self.file.title()
@@ -785,17 +785,17 @@ impl ShowsFile for Code {
         self.show(text, lines, cx);
     }
 
-    fn shown(this: Entity<Self>) -> tab::Shown {
-        tab::Shown::Code(this)
+    fn content(this: Entity<Self>) -> tab::TabContent {
+        tab::TabContent::Code(this)
     }
 
-    fn of(shown: &tab::Shown) -> Option<&Entity<Self>> {
-        match shown {
-            tab::Shown::Code(code) => Some(code),
-            tab::Shown::Page { .. }
-            | tab::Shown::Document(_)
-            | tab::Shown::Tree(_)
-            | tab::Shown::Terminal(_) => None,
+    fn of(content: &tab::TabContent) -> Option<&Entity<Self>> {
+        match content {
+            tab::TabContent::Code(code) => Some(code),
+            tab::TabContent::Page { .. }
+            | tab::TabContent::Document(_)
+            | tab::TabContent::Tree(_)
+            | tab::TabContent::Terminal(_) => None,
         }
     }
 }

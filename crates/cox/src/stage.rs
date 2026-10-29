@@ -63,7 +63,7 @@ use cox_browser::{Cef, TargetId};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::page::{OpenTab, Page};
-use crate::stage::tab::{Shown, ShowsFile, Tab};
+use crate::stage::tab::{ShowsFile, Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
 use crate::stage::tree::{Chosen, Tree};
 use crate::ui::input::LineInput;
@@ -145,7 +145,7 @@ impl Stage {
     ) {
         if let Some(relay) = relay {
             for tab in &self.tabs {
-                if let Shown::Page { target, .. } = &tab.shown {
+                if let TabContent::Page { target, .. } = &tab.content {
                     relay.pages.opening().is(target.clone());
                 }
             }
@@ -217,7 +217,7 @@ impl Stage {
     /// The tabs, as they are kept.
     fn tabs(&self, cx: &App) -> Tabs {
         Tabs {
-            tabs: self.tabs.iter().map(|tab| tab.shown.kept(cx)).collect(),
+            tabs: self.tabs.iter().map(|tab| tab.content.kept(cx)).collect(),
             shown: self.shown,
         }
     }
@@ -315,9 +315,9 @@ impl Stage {
         let showing = self
             .tabs
             .iter()
-            .position(|tab| T::of(&tab.shown).is_some_and(|shown| shown.read(cx).path() == path));
+            .position(|tab| T::of(&tab.content).is_some_and(|shown| shown.read(cx).path() == path));
         if let Some(index) = showing {
-            if let Some(shown) = T::of(&self.tabs[index].shown) {
+            if let Some(shown) = T::of(&self.tabs[index].content) {
                 shown.update(cx, |shown, cx| shown.show(text, lines, cx));
             }
             self.shown = index;
@@ -351,7 +351,7 @@ impl Stage {
                 stage.open_from(url, &from, window, cx);
             },
         );
-        self.push(T::shown(shown), changes, Some(opens), show, cx);
+        self.push(T::content(shown), changes, Some(opens), show, cx);
     }
 
     /// Runs `command`, which the agent asked for, in `cwd`, and answers
@@ -377,14 +377,14 @@ impl Stage {
         let ended = self
             .tabs
             .iter()
-            .rposition(|tab| tab.shown.is_agents_ended(cx));
+            .rposition(|tab| tab.content.is_agents_ended(cx));
         if let Some(index) = ended {
             let had_focus = self.tabs[index]
-                .shown
+                .content
                 .focus_handle(cx)
                 .contains_focused(window, cx);
             self.tabs[index] = Tab {
-                shown: Shown::Terminal(terminal),
+                content: TabContent::Terminal(terminal),
                 _changes: changes,
                 _opens: None,
             };
@@ -394,7 +394,7 @@ impl Stage {
             }
             self.changed(cx);
         } else {
-            self.push(Shown::Terminal(terminal), changes, None, true, cx);
+            self.push(TabContent::Terminal(terminal), changes, None, true, cx);
         }
         self.show_panel(cx);
     }
@@ -410,7 +410,7 @@ impl Stage {
         };
         let terminal = cx.new(|cx| Terminal::new(running, None, cx));
         let changes = cx.observe(&terminal, |stage, _, cx| stage.changed(cx));
-        self.push(Shown::Terminal(terminal), changes, None, true, cx);
+        self.push(TabContent::Terminal(terminal), changes, None, true, cx);
         self.focus_shown(window, cx);
     }
 
@@ -431,7 +431,7 @@ impl Stage {
         }
         self.show_panel(cx);
         if let Some(input) = input
-            && let Some(page) = self.tabs[index].shown.page()
+            && let Some(page) = self.tabs[index].content.page()
         {
             page.update(cx, |page, cx| page.see(input, cx));
         }
@@ -443,9 +443,12 @@ impl Stage {
 
     /// The index of the tab showing `page`.
     fn index_of(&self, page: &str) -> Option<usize> {
-        self.tabs.iter().position(|tab| match &tab.shown {
-            Shown::Page { target, .. } => target.borrow().as_deref() == Some(page),
-            Shown::Document(_) | Shown::Code(_) | Shown::Tree(_) | Shown::Terminal(_) => false,
+        self.tabs.iter().position(|tab| match &tab.content {
+            TabContent::Page { target, .. } => target.borrow().as_deref() == Some(page),
+            TabContent::Document(_)
+            | TabContent::Code(_)
+            | TabContent::Tree(_)
+            | TabContent::Terminal(_) => false,
         })
     }
 
@@ -470,25 +473,25 @@ impl Stage {
         let popups = cx.subscribe_in(&page, window, |stage, _, OpenTab(url), window, cx| {
             stage.open_tab(url, true, window, cx);
         });
-        let shown = Shown::Page {
+        let content = TabContent::Page {
             page,
             target: target.clone(),
         };
-        self.push(shown, changes, Some(popups), show, cx);
+        self.push(content, changes, Some(popups), show, cx);
         target
     }
 
     /// Puts a tab after the others, shown if `show` is.
     fn push(
         &mut self,
-        shown: Shown,
+        content: TabContent,
         changes: Subscription,
         opens: Option<Subscription>,
         show: bool,
         cx: &mut Context<Self>,
     ) {
         self.tabs.push(Tab {
-            shown,
+            content,
             _changes: changes,
             _opens: opens,
         });
@@ -514,7 +517,7 @@ impl Stage {
             return Err("The stage keeps its last tab open");
         }
         let had_focus = self.tabs[self.shown]
-            .shown
+            .content
             .focus_handle(cx)
             .contains_focused(window, cx);
         self.tabs.remove(index);
@@ -536,7 +539,7 @@ impl Stage {
     }
 
     fn focus_shown(&self, window: &mut Window, cx: &App) {
-        window.focus(&self.tabs[self.shown].shown.focus_handle(cx));
+        window.focus(&self.tabs[self.shown].content.focus_handle(cx));
     }
 
     /// Opens `url`, a link the human clicked: on the tab that shows it
@@ -555,7 +558,7 @@ impl Stage {
             return;
         }
         let showing = self.tabs.iter().position(|tab| {
-            tab.shown
+            tab.content
                 .page()
                 .is_some_and(|page| page.read(cx).navigation().url == url)
         });
@@ -596,9 +599,9 @@ impl Stage {
     ) -> std::io::Result<()> {
         let path = std::fs::canonicalize(path)?;
         let text = std::fs::read_to_string(&path)?;
-        match Opening::of(&path, lines) {
-            Opening::Markdown => self.show_file::<Document>(path, &text, None, window, cx),
-            Opening::Written(lines) => self.show_file::<Code>(path, &text, lines, window, cx),
+        match FileTab::of(&path, lines) {
+            FileTab::Document => self.show_file::<Document>(path, &text, None, window, cx),
+            FileTab::Code(lines) => self.show_file::<Code>(path, &text, lines, window, cx),
         }
         self.focus_shown(window, cx);
         Ok(())
@@ -610,7 +613,7 @@ impl Stage {
         let showing = self
             .tabs
             .iter()
-            .position(|tab| matches!(tab.shown, Shown::Tree(_)));
+            .position(|tab| matches!(tab.content, TabContent::Tree(_)));
         if let Some(index) = showing {
             self.show(index, window, cx);
         } else {
@@ -638,14 +641,14 @@ impl Stage {
                 stage.focus_shown(window, cx);
             }
         });
-        self.push(Shown::Tree(tree), changes, Some(opens), show, cx);
+        self.push(TabContent::Tree(tree), changes, Some(opens), show, cx);
     }
 
     /// A tab the human opens: blank, with the keyboard in its address line,
     /// where what they type replaces the address.
     fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_tab(BLANK, true, window, cx);
-        if let Some(page) = self.tabs[self.shown].shown.page() {
+        if let Some(page) = self.tabs[self.shown].content.page() {
             let address = page.read(cx).address().clone();
             window.focus(&address.focus_handle(cx));
             address.update(cx, LineInput::select_whole);
@@ -654,7 +657,7 @@ impl Stage {
 
     fn render_tab(&self, index: usize, tab: &Tab, cx: &mut Context<Self>) -> Stateful<Div> {
         let number = index + 1;
-        let title = tab.shown.title(cx);
+        let title = tab.content.title(cx);
         let title: String = title.chars().take(TITLE_LENGTH).collect();
         let mut tab = div()
             .id(("tab", number))
@@ -761,27 +764,27 @@ fn linked(path: &str, from: &Path, home: Option<&Path>) -> PathBuf {
     }
 }
 
-/// How a file opens from a link to it, or from the tree.
+/// Which tab a file opens on, from a link to it or from the tree.
 #[derive(Debug, PartialEq, Eq)]
-enum Opening {
-    /// As Markdown, drawn.
-    Markdown,
-    /// As it is written, at these lines if any.
-    Written(Option<Lines>),
+enum FileTab {
+    /// A tab showing it as Markdown, drawn.
+    Document,
+    /// A tab showing it as it is written, at these lines if any.
+    Code(Option<Lines>),
 }
 
-impl Opening {
-    /// How the file at `path` opens, at `lines` if the link names any: as
-    /// Markdown if it is a Markdown file and no lines are named, and as
-    /// it is written otherwise.
+impl FileTab {
+    /// Which tab the file at `path` opens on, at `lines` if the link names
+    /// any: as Markdown if it is a Markdown file and no lines are named,
+    /// and as it is written otherwise.
     fn of(path: &Path, lines: Option<Lines>) -> Self {
         let is_markdown = path
             .extension()
             .is_some_and(|extension| extension == "md" || extension == "markdown");
         if is_markdown && lines.is_none() {
-            Self::Markdown
+            Self::Document
         } else {
-            Self::Written(lines)
+            Self::Code(lines)
         }
     }
 }
@@ -808,7 +811,7 @@ impl Render for Stage {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .child(self.tabs[self.shown].shown.view()),
+                    .child(self.tabs[self.shown].content.view()),
             )
     }
 }
@@ -819,7 +822,7 @@ mod tests {
 
     use cox_core::tabs::Lines;
 
-    use super::{Opening, after_closing, linked};
+    use super::{FileTab, after_closing, linked};
 
     #[test]
     fn a_link_to_a_file_is_from_where_the_link_is() {
@@ -853,24 +856,24 @@ mod tests {
     fn a_markdown_file_opens_drawn_unless_lines_are_named() {
         let lines = Some(Lines { first: 3, last: 4 });
         assert_eq!(
-            Opening::of(Path::new("/a/README.md"), None),
-            Opening::Markdown
+            FileTab::of(Path::new("/a/README.md"), None),
+            FileTab::Document
         );
         assert_eq!(
-            Opening::of(Path::new("/a/notes.markdown"), None),
-            Opening::Markdown
+            FileTab::of(Path::new("/a/notes.markdown"), None),
+            FileTab::Document
         );
         assert_eq!(
-            Opening::of(Path::new("/a/README.md"), lines),
-            Opening::Written(lines)
+            FileTab::of(Path::new("/a/README.md"), lines),
+            FileTab::Code(lines)
         );
         assert_eq!(
-            Opening::of(Path::new("/a/main.rs"), None),
-            Opening::Written(None)
+            FileTab::of(Path::new("/a/main.rs"), None),
+            FileTab::Code(None)
         );
         assert_eq!(
-            Opening::of(Path::new("/a/main.rs"), lines),
-            Opening::Written(lines)
+            FileTab::of(Path::new("/a/main.rs"), lines),
+            FileTab::Code(lines)
         );
     }
 

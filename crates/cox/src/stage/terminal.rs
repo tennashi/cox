@@ -56,7 +56,7 @@ use self::keys::{key_bytes, pasted};
 use self::pty::{Listener, START_SIZE, Size};
 pub use self::pty::{Program, Running};
 use crate::agent::mcp::{Ended, Ran};
-use crate::stage::tab::Content;
+use crate::stage::tab::Shows;
 use crate::ui::Copy;
 use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
@@ -467,7 +467,7 @@ impl Drop for Terminal {
     }
 }
 
-impl Content for Terminal {
+impl Shows for Terminal {
     /// The command, or what the shell calls its terminal.
     fn title(&self) -> String {
         match &self.program {
