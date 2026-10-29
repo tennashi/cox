@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use cox::stage::servers::Start;
+use cox::stage::servers::Starter;
 use cox_editor::lsp::Client;
 use serde_json::{Value, json};
 
@@ -28,7 +28,7 @@ pub fn write_project(directory: &Path) {
 }
 
 /// What starts the server, counting in `started` how many it started.
-pub fn start(started: Arc<AtomicUsize>) -> Start {
+pub fn start(started: Arc<AtomicUsize>) -> Starter {
     Rc::new(move |_, root| {
         started.fetch_add(1, Ordering::Relaxed);
         let (output, writes) = std::io::pipe().unwrap();

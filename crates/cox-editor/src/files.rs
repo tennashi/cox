@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// A file or folder in a folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Entry {
+pub struct Listed {
     pub path: PathBuf,
     pub name: String,
     pub is_folder: bool,
@@ -22,7 +22,7 @@ pub struct Entry {
 /// # Errors
 ///
 /// When `folder` cannot be read.
-pub fn list(folder: &Path) -> std::io::Result<Vec<Entry>> {
+pub fn list(folder: &Path) -> std::io::Result<Vec<Listed>> {
     // The walk below says nothing of a folder it cannot read.
     std::fs::read_dir(folder)?;
     let walk = ignore::WalkBuilder::new(folder)
@@ -31,10 +31,10 @@ pub fn list(folder: &Path) -> std::io::Result<Vec<Entry>> {
         .require_git(false)
         .filter_entry(|entry| entry.file_name() != ".git")
         .build();
-    let mut entries: Vec<Entry> = walk
+    let mut entries: Vec<Listed> = walk
         .filter_map(Result::ok)
         .filter(|entry| entry.depth() == 1)
-        .map(|entry| Entry {
+        .map(|entry| Listed {
             name: entry.file_name().to_string_lossy().into_owned(),
             // A link to a folder is a folder, as the human sees it.
             is_folder: entry.path().is_dir(),
@@ -46,7 +46,7 @@ pub fn list(folder: &Path) -> std::io::Result<Vec<Entry>> {
 }
 
 /// Folders before files, then by name, whatever its case, then by case.
-fn order(a: &Entry, b: &Entry) -> Ordering {
+fn order(a: &Listed, b: &Listed) -> Ordering {
     b.is_folder
         .cmp(&a.is_folder)
         .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
@@ -69,7 +69,7 @@ mod tests {
         root
     }
 
-    fn names(entries: &[Entry]) -> Vec<&str> {
+    fn names(entries: &[Listed]) -> Vec<&str> {
         entries.iter().map(|entry| entry.name.as_str()).collect()
     }
 

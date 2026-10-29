@@ -24,14 +24,14 @@
 //!
 //! - [`scope`] decides, message by message, what the agent sees and what
 //!   is refused.
-//! - [`input`] sees the agent's input to a page in its messages, and
+//! - [`seen`] sees the agent's input to a page in its messages, and
 //!   asks the page where the agent types.
 //! - [`devtools`] talks to the browser's `DevTools` port on the relay's
 //!   own: its endpoint, and the tab that holds a page.
 
 mod devtools;
-mod input;
 mod scope;
+mod seen;
 
 use std::net::{Ipv4Addr, TcpListener as StdTcpListener};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,8 +47,8 @@ use tokio::sync::{oneshot, watch};
 use tokio_tungstenite::tungstenite::{self, Message};
 
 use self::devtools::{browser_endpoint, config, find_tab};
-use self::input::{Answer, OWN_IDS, answer, ask_focused, observe};
 use self::scope::{Ask, Reply, Request, Scope, let_go};
+use self::seen::{Answer, OWN_IDS, answer, ask_focused, observe};
 use crate::TargetId;
 
 /// Input the agent sent to the page. Positions are in CSS pixels of the

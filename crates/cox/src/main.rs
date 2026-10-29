@@ -15,20 +15,20 @@
 
 use std::process::ExitCode;
 
-use cox::app::{self, Program};
+use cox::app::{self, Mode};
 
 fn main() -> ExitCode {
     env_logger::init();
-    match Program::parse(std::env::args().skip(1)) {
-        Program::App(settings) => app::run(settings),
-        Program::Bridge(socket) => match cox::agent::mcp::bridge(&socket) {
+    match Mode::parse(std::env::args().skip(1)) {
+        Mode::App(settings) => app::run(settings),
+        Mode::Bridge(socket) => match cox::agent::mcp::bridge(&socket) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("cox: {error:#}");
                 ExitCode::from(1)
             }
         },
-        Program::Usage => {
+        Mode::Usage => {
             eprintln!("{}", app::USAGE);
             ExitCode::from(2)
         }

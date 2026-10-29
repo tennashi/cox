@@ -16,7 +16,7 @@ use anyhow::{Context as _, bail};
 use rusqlite::{Connection, OptionalExtension as _, params};
 
 use crate::entry::Entry;
-use crate::tabs::Tabs;
+use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
 const VERSION: i64 = 2;
@@ -254,7 +254,7 @@ impl Store {
     /// # Errors
     ///
     /// When the database cannot be read, or holds tabs this Cox cannot.
-    pub fn tabs(&self, chat: ChatId) -> anyhow::Result<Option<Tabs>> {
+    pub fn tabs(&self, chat: ChatId) -> anyhow::Result<Option<KeptTabs>> {
         let tabs: Option<String> =
             self.connection
                 .query_row("SELECT tabs FROM chats WHERE id = ?1", [chat.0], |row| {
@@ -268,7 +268,7 @@ impl Store {
     /// # Errors
     ///
     /// When the database cannot be written.
-    pub fn keep_tabs(&self, chat: ChatId, tabs: &Tabs) -> anyhow::Result<()> {
+    pub fn keep_tabs(&self, chat: ChatId, tabs: &KeptTabs) -> anyhow::Result<()> {
         self.connection.execute(
             "UPDATE chats SET tabs = ?2 WHERE id = ?1",
             params![chat.0, serde_json::to_string(tabs)?],
@@ -331,7 +331,7 @@ impl Record {
     /// # Errors
     ///
     /// When the database cannot be written.
-    pub fn tabs(&self, tabs: &Tabs) -> anyhow::Result<()> {
+    pub fn tabs(&self, tabs: &KeptTabs) -> anyhow::Result<()> {
         self.store.keep_tabs(self.chat, tabs)
     }
 
@@ -387,7 +387,7 @@ mod tests {
     use super::*;
     use crate::diff::Line;
     use crate::entry::{Content, ToolCallResult};
-    use crate::tabs::{Lines, Tab};
+    use crate::tabs::{KeptTab, Lines};
 
     fn scratch(name: &str) -> PathBuf {
         let directory =
@@ -479,23 +479,23 @@ mod tests {
         let chat = store.add_chat(None, "Chat 1").unwrap();
         assert_eq!(store.tabs(chat).unwrap(), None);
 
-        let tabs = Tabs {
+        let tabs = KeptTabs {
             tabs: vec![
-                Tab::Page {
+                KeptTab::Page {
                     url: "https://example.com/".to_owned(),
                     title: "Example Domain".to_owned(),
                 },
-                Tab::Markdown {
+                KeptTab::Markdown {
                     path: "/work/plan.md".into(),
                 },
-                Tab::Terminal {
+                KeptTab::Terminal {
                     title: "cargo test".to_owned(),
                 },
-                Tab::File {
+                KeptTab::File {
                     path: "/work/src/main.rs".into(),
                     lines: Some(Lines { first: 3, last: 9 }),
                 },
-                Tab::Files {
+                KeptTab::Files {
                     open: vec!["/work/src".into()],
                 },
             ],

@@ -38,12 +38,12 @@ mod text;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use cox_core::tabs::{Lines, Tab as Kept};
+use cox_core::tabs::{KeptTab, Lines};
 use cox_editor::buffer::{Point as Place, is_word, word_around};
 use cox_editor::history::History;
 use cox_editor::language::Highlight;
 use cox_editor::line::Shown;
-use cox_editor::lsp::{Client, Document, Encoding, Position};
+use cox_editor::lsp::{Client, Encoding, OpenFile, Position};
 use cox_editor::syntax::Syntax;
 
 use self::file::File;
@@ -57,7 +57,7 @@ use gpui::{
 
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::servers::{LanguageServer, Servers};
-use crate::stage::tab::{self, Content, ShowsFile};
+use crate::stage::tab::{self, Shows, ShowsFile};
 use crate::ui::paths::shortened;
 use crate::ui::theme::BACKGROUND;
 use crate::ui::{Copy, LinkClicked};
@@ -104,7 +104,7 @@ pub struct Code {
     /// editor knows one.
     server: Option<Entity<LanguageServer>>,
     /// The file, open on the server once it is ready.
-    document: Option<Document>,
+    document: Option<OpenFile>,
     /// Where the tab was before it went to a place, to go back to, and
     /// where it went back from.
     history: History<Visit>,
@@ -378,7 +378,7 @@ impl Code {
     fn ask<F>(
         &self,
         place: Place,
-        request: impl FnOnce(&Client, &Document, Position) -> F,
+        request: impl FnOnce(&Client, &OpenFile, Position) -> F,
         cx: &App,
     ) -> Option<F> {
         let client = self.client(cx)?;
@@ -746,14 +746,14 @@ impl Follows for Code {
     }
 }
 
-impl Content for Code {
+impl Shows for Code {
     /// The file's name.
     fn title(&self) -> String {
         self.file.title()
     }
 
-    fn kept(&self) -> Kept {
-        Kept::File {
+    fn kept(&self) -> KeptTab {
+        KeptTab::File {
             path: self.file.path.clone(),
             lines: self.look.marked,
         }
@@ -785,17 +785,17 @@ impl ShowsFile for Code {
         self.show(text, lines, cx);
     }
 
-    fn shown(this: Entity<Self>) -> tab::Shown {
-        tab::Shown::Code(this)
+    fn content(this: Entity<Self>) -> tab::TabContent {
+        tab::TabContent::Code(this)
     }
 
-    fn of(shown: &tab::Shown) -> Option<&Entity<Self>> {
-        match shown {
-            tab::Shown::Code(code) => Some(code),
-            tab::Shown::Page { .. }
-            | tab::Shown::Document(_)
-            | tab::Shown::Tree(_)
-            | tab::Shown::Terminal(_) => None,
+    fn of(content: &tab::TabContent) -> Option<&Entity<Self>> {
+        match content {
+            tab::TabContent::Code(code) => Some(code),
+            tab::TabContent::Page { .. }
+            | tab::TabContent::Document(_)
+            | tab::TabContent::Tree(_)
+            | tab::TabContent::Terminal(_) => None,
         }
     }
 }

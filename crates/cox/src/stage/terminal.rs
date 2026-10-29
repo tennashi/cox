@@ -41,7 +41,7 @@ use alacritty_terminal::index::{Column, Line, Point as Cell, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Term, TermMode};
-use cox_core::tabs::Tab as Kept;
+use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, IntoElement,
     KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
@@ -56,7 +56,7 @@ use self::keys::{key_bytes, pasted};
 use self::pty::{Listener, START_SIZE, Size};
 pub use self::pty::{Program, Running};
 use crate::agent::mcp::{Ended, Ran};
-use crate::stage::tab::Content;
+use crate::stage::tab::Shows;
 use crate::ui::Copy;
 use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
@@ -467,7 +467,7 @@ impl Drop for Terminal {
     }
 }
 
-impl Content for Terminal {
+impl Shows for Terminal {
     /// The command, or what the shell calls its terminal.
     fn title(&self) -> String {
         match &self.program {
@@ -480,8 +480,8 @@ impl Content for Terminal {
         }
     }
 
-    fn kept(&self) -> Kept {
-        Kept::Terminal {
+    fn kept(&self) -> KeptTab {
+        KeptTab::Terminal {
             title: self.title(),
         }
     }

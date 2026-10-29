@@ -6,18 +6,18 @@
 //!   it to the page.
 //! - [`keys`] sends the keys to the page, but for the browser's own
 //!   shortcuts.
-//! - [`agent`] draws the agent's pointer over the page: where the agent
+//! - [`pointer`] draws the agent's pointer over the page: where the agent
 //!   points, clicks and types, as the relay saw it.
 
-mod agent;
 mod keys;
 mod picture;
+mod pointer;
 
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cox_core::tabs::Tab as Kept;
+use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, Context, Div, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     IntoElement, Pixels, Point, RenderImage, Stateful, Subscription, Task, UTF16Selection, Window,
@@ -26,7 +26,7 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use self::picture::Picture;
-use crate::stage::tab::Content;
+use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
 use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
@@ -260,7 +260,7 @@ impl Drop for Page {
     }
 }
 
-impl Content for Page {
+impl Shows for Page {
     /// The page's title, or its address until it has one.
     fn title(&self) -> String {
         if self.navigation.title.is_empty() {
@@ -270,8 +270,8 @@ impl Content for Page {
         }
     }
 
-    fn kept(&self) -> Kept {
-        Kept::Page {
+    fn kept(&self) -> KeptTab {
+        KeptTab::Page {
             url: self.navigation.url.clone(),
             title: self.navigation.title.clone(),
         }

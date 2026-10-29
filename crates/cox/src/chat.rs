@@ -17,7 +17,7 @@ pub mod view;
 use std::path::PathBuf;
 
 use cox_core::store::Record;
-use cox_core::tabs::Tabs;
+use cox_core::tabs::KeptTabs;
 use gpui::{App, Entity, Window};
 
 use crate::agent::instructions::Instructions;
@@ -51,7 +51,7 @@ pub struct Closed {
     /// What it showed.
     pub entries: Vec<Entry>,
     /// The tabs its stage had, if it had a stage.
-    pub tabs: Option<Tabs>,
+    pub tabs: Option<KeptTabs>,
     /// The id its agent gave its session, to go on with, if it had one.
     pub session: Option<String>,
     /// Where it is kept, to go on keeping it once the human sends to it.

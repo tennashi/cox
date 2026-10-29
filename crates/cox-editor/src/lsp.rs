@@ -6,7 +6,7 @@
 //! JSON-RPC messages on the server's standard input and output.
 //!
 //! The server reads each file the editor shows as the editor holds it: the
-//! editor opens it on the server as a [`Document`], and tells the server of
+//! editor opens it on the server as an [`OpenFile`], and tells the server of
 //! the text each time it changes. It asks of a place in it, as a
 //! [`Position`], which counts the bytes of a line in UTF-8, or in UTF-16,
 //! as the server does (see [`Encoding`]).
@@ -205,7 +205,7 @@ type Answer = oneshot::Sender<Result<Value, Error>>;
 
 /// A document open on the server.
 struct Opened {
-    /// How many [`Document`]s hold it open.
+    /// How many [`OpenFile`]s hold it open.
     holders: usize,
     version: i64,
     text: String,
@@ -382,9 +382,9 @@ impl Client {
 
     /// Opens the file at `path`, an absolute path, in the language the
     /// protocol names `language`, as saying `text`. It stays open on the
-    /// server for as long as a [`Document`] of it is held.
+    /// server for as long as an [`OpenFile`] of it is held.
     #[must_use]
-    pub fn open(&self, path: &Path, language: &str, text: &str) -> Option<Document> {
+    pub fn open(&self, path: &Path, language: &str, text: &str) -> Option<OpenFile> {
         let uri = Url::from_file_path(path).ok()?;
         let mut documents = lock(&self.shared.documents);
         if let Some(opened) = documents.get_mut(&uri) {
@@ -411,7 +411,7 @@ impl Client {
             );
         }
         drop(documents);
-        let document = Document {
+        let document = OpenFile {
             shared: Arc::clone(&self.shared),
             uri,
         };
@@ -428,7 +428,7 @@ impl Client {
     /// When the server fails to answer, or stops.
     pub fn hover(
         &self,
-        document: &Document,
+        document: &OpenFile,
         position: Position,
     ) -> impl Future<Output = Result<Option<Hover>, Error>> + use<> {
         let answered = self
@@ -444,7 +444,7 @@ impl Client {
     /// When the server fails to answer, or stops.
     pub fn definition(
         &self,
-        document: &Document,
+        document: &OpenFile,
         position: Position,
     ) -> impl Future<Output = Result<Vec<Location>, Error>> + use<> {
         let answered = self
@@ -460,7 +460,7 @@ impl Client {
     /// When the server fails to answer, or stops.
     pub fn references(
         &self,
-        document: &Document,
+        document: &OpenFile,
         position: Position,
     ) -> impl Future<Output = Result<Vec<Location>, Error>> + use<> {
         let mut params = document.at(position);
@@ -493,12 +493,12 @@ impl Drop for Client {
 }
 
 /// A file open on the server, which reads it as the editor holds it.
-pub struct Document {
+pub struct OpenFile {
     shared: Arc<Shared>,
     uri: Url,
 }
 
-impl Document {
+impl OpenFile {
     /// Tells the server the file says `text` now.
     pub fn change(&self, text: &str) {
         let mut documents = lock(&self.shared.documents);
@@ -528,7 +528,7 @@ impl Document {
     }
 }
 
-impl Drop for Document {
+impl Drop for OpenFile {
     fn drop(&mut self) {
         let mut documents = lock(&self.shared.documents);
         let Some(opened) = documents.get_mut(&self.uri) else {

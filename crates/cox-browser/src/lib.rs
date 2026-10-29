@@ -19,13 +19,13 @@
 //!   types, which [`pointer`] turns into what the tab draws over the page.
 //! - [`profile`] is where the browser keeps logins and the like.
 //! - [`handlers`] is what CEF calls into on its threads, [`viewport`]
-//!   fits the page to the stage's size, and [`input`] makes CEF's mouse
+//!   fits the page to the stage's size, and [`events`] makes CEF's mouse
 //!   and key events of the stage's.
 //! - [`quit`] lets signals, and CEF on macOS, ask the app to quit, and
 //!   [`macos`] gives CEF what it expects of the app there.
 
+mod events;
 mod handlers;
-mod input;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod pointer;
@@ -58,7 +58,7 @@ use cef::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::watch;
 
-use crate::input::{
+use crate::events::{
     KeyKind, button_flag, button_type, event_flags, key_character, key_event, mouse_event,
 };
 use crate::profile::Profile;

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use cox::agent::mcp::{Ended, Ran, Request, Server};
+use cox::agent::mcp::{Ended, Ran, ToolRequest, ToolServer};
 use serde_json::{Value, json};
 
 fn scratch(name: &str) -> PathBuf {
@@ -26,7 +26,7 @@ struct Agent {
 impl Agent {
     /// Starts the bridge to `server`, as the agent does, and starts the
     /// session.
-    fn start(server: &Server) -> Self {
+    fn start(server: &ToolServer) -> Self {
         let mut bridge = Command::new(env!("CARGO_BIN_EXE_cox"))
             .args([cox::agent::mcp::OPTION, server.socket.to_str().unwrap()])
             .stdin(Stdio::piped())
@@ -78,7 +78,7 @@ fn the_agent_shows_a_file_on_its_chats_stage() {
     std::fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
     let server = cox::agent::mcp::start(cwd.clone()).unwrap();
     let mut agent = Agent::start(&server);
-    let Server {
+    let ToolServer {
         socket,
         mut requests,
     } = server;
@@ -88,7 +88,7 @@ fn the_agent_shows_a_file_on_its_chats_stage() {
     assert_eq!(shown["id"], 2);
     assert_eq!(shown["result"]["isError"], false);
     match requests.try_recv().unwrap() {
-        Request::ShowMarkdown { path, text } => {
+        ToolRequest::ShowMarkdown { path, text } => {
             assert_eq!(path, cwd.join("plan.md"));
             assert_eq!(text, "# Plan\n");
         }
@@ -114,7 +114,7 @@ fn the_agent_runs_a_command_on_its_chats_stage_and_can_cancel_it() {
 
     // A command answers once the chat says how it went.
     agent.call(2, "run_command", &json!({ "command": "make" }));
-    let Some(Request::RunCommand {
+    let Some(ToolRequest::RunCommand {
         command,
         cwd: working,
         answer,
@@ -142,7 +142,7 @@ fn the_agent_runs_a_command_on_its_chats_stage_and_can_cancel_it() {
 
     // The agent cancels a command: the chat hears it waits no longer.
     agent.call(4, "run_command", &json!({ "command": "sleep 60" }));
-    let Some(Request::RunCommand { answer, .. }) = requests.blocking_recv() else {
+    let Some(ToolRequest::RunCommand { answer, .. }) = requests.blocking_recv() else {
         panic!("asked to run no command");
     };
     agent.say(&json!({

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use cox::stage::code::{Back, Code, Forward};
 use cox::stage::servers::{LanguageServer, Servers};
-use cox::stage::tab::Content as _;
+use cox::stage::tab::Shows as _;
 use cox_core::tabs::Lines;
 use cox_editor::language::Highlight;
 use gpui::{

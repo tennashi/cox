@@ -11,14 +11,14 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use cox_core::tabs::Tab as Kept;
-use cox_editor::files::{self, Entry};
+use cox_core::tabs::KeptTab;
+use cox_editor::files::{self, Listed};
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, ScrollHandle, Task, Window,
     div, prelude::*, px, rgb,
 };
 
-use crate::stage::tab::Content;
+use crate::stage::tab::Shows;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{BACKGROUND, DIM, FAILED, FOREGROUND};
 
@@ -41,7 +41,7 @@ pub struct Tree {
     open: BTreeSet<PathBuf>,
     /// What is in each folder open, as the tab last listed it, or why it
     /// could not be listed.
-    listed: HashMap<PathBuf, Result<Vec<Entry>, String>>,
+    listed: HashMap<PathBuf, Result<Vec<Listed>, String>>,
     /// The file the human chose last, which the tab marks.
     chosen: Option<PathBuf>,
     scroll: ScrollHandle,
@@ -105,7 +105,7 @@ impl Tree {
     /// draws them again if that changed.
     fn looked(
         &mut self,
-        listed: HashMap<PathBuf, Result<Vec<Entry>, String>>,
+        listed: HashMap<PathBuf, Result<Vec<Listed>, String>>,
         cx: &mut Context<Self>,
     ) {
         let mut changed = false;
@@ -128,7 +128,7 @@ impl Tree {
         self.rows(&self.root, 0, &mut rows);
         rows.into_iter()
             .filter_map(|row| match row {
-                Row::Entry { entry, .. } => Some(entry.path.clone()),
+                Row::Listed { entry, .. } => Some(entry.path.clone()),
                 Row::Unread { .. } => None,
             })
             .collect()
@@ -141,7 +141,7 @@ impl Tree {
             Some(Ok(entries)) => {
                 for entry in entries {
                     let open = entry.is_folder && self.open.contains(&entry.path);
-                    rows.push(Row::Entry { entry, depth, open });
+                    rows.push(Row::Listed { entry, depth, open });
                     if open {
                         self.rows(&entry.path, depth + 1, rows);
                     }
@@ -154,7 +154,7 @@ impl Tree {
 
     fn render_row(&self, number: usize, row: &Row<'_>, cx: &mut Context<Self>) -> AnyElement {
         let (entry, depth, open) = match *row {
-            Row::Entry { entry, depth, open } => (entry, depth, open),
+            Row::Listed { entry, depth, open } => (entry, depth, open),
             Row::Unread { error, depth } => {
                 return div()
                     .pl(indent(depth))
@@ -199,8 +199,8 @@ impl Tree {
 /// project's, open if it is a folder that is, or why a folder open could
 /// not be listed.
 enum Row<'a> {
-    Entry {
-        entry: &'a Entry,
+    Listed {
+        entry: &'a Listed,
         depth: u16,
         open: bool,
     },
@@ -216,7 +216,7 @@ fn indent(depth: u16) -> gpui::Pixels {
 }
 
 /// What is in `folder`, or why it could not be listed.
-fn list(folder: &Path) -> Result<Vec<Entry>, String> {
+fn list(folder: &Path) -> Result<Vec<Listed>, String> {
     files::list(folder).map_err(|error| error.to_string())
 }
 
@@ -248,7 +248,7 @@ fn follow(cx: &mut Context<Tree>) -> Task<()> {
     })
 }
 
-impl Content for Tree {
+impl Shows for Tree {
     /// The project's folder's name.
     fn title(&self) -> String {
         let name = self.root.file_name().map_or_else(
@@ -258,8 +258,8 @@ impl Content for Tree {
         format!("{name}/")
     }
 
-    fn kept(&self) -> Kept {
-        Kept::Files { open: self.open() }
+    fn kept(&self) -> KeptTab {
+        KeptTab::Files { open: self.open() }
     }
 }
 

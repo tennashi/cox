@@ -36,7 +36,7 @@ use cox_core::store::Record;
 use gpui::{App, Entity, Window, prelude::*};
 
 use crate::agent::instructions::Instructions;
-use crate::agent::mcp::Server;
+use crate::agent::mcp::ToolServer;
 use crate::agent::{Agent, Start};
 use crate::chat::view::{Again, ChatView, OpenLink, StageView};
 use crate::chat::{Closed, Opens};
@@ -201,7 +201,7 @@ impl Launcher {
     /// Starts the server of Cox's own tools for a chat working in `cwd`,
     /// and answers it with the `cox` the agent runs to reach it, or `None`
     /// when it did not start.
-    fn server(&self, cwd: &std::path::Path) -> Option<(PathBuf, Server)> {
+    fn server(&self, cwd: &std::path::Path) -> Option<(PathBuf, ToolServer)> {
         let exe = self.exe.clone()?;
         match crate::agent::mcp::start(cwd.to_owned()) {
             Ok(server) => Some((exe, server)),
@@ -215,7 +215,11 @@ impl Launcher {
     /// The MCP servers the agent starts: one for the pages the human sees,
     /// through `relay`, and one for Cox's own tools, through `server`, each
     /// when it started.
-    fn tools(&self, relay: Option<&Relay>, server: Option<&(PathBuf, Server)>) -> Vec<McpServer> {
+    fn tools(
+        &self,
+        relay: Option<&Relay>,
+        server: Option<&(PathBuf, ToolServer)>,
+    ) -> Vec<McpServer> {
         relay
             .and_then(|relay| crate::agent::tools::stage(relay.port, &self.path))
             .into_iter()
