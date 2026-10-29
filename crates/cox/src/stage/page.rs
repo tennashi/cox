@@ -17,7 +17,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cox_core::tabs::Tab as Kept;
+use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, Context, Div, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     IntoElement, Pixels, Point, RenderImage, Stateful, Subscription, Task, UTF16Selection, Window,
@@ -270,8 +270,8 @@ impl Shows for Page {
         }
     }
 
-    fn kept(&self) -> Kept {
-        Kept::Page {
+    fn kept(&self) -> KeptTab {
+        KeptTab::Page {
             url: self.navigation.url.clone(),
             title: self.navigation.title.clone(),
         }

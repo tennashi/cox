@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 /// A stage's tabs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Tabs {
-    pub tabs: Vec<Tab>,
+pub struct KeptTabs {
+    pub tabs: Vec<KeptTab>,
     /// The index of the tab shown.
     pub shown: usize,
 }
@@ -18,7 +18,7 @@ pub struct Tabs {
 /// One tab, by what it shows.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Tab {
+pub enum KeptTab {
     /// A page of the browser.
     Page { url: String, title: String },
     /// A Markdown file, by its absolute path.

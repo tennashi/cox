@@ -48,7 +48,7 @@ pub mod tree;
 use std::path::{Path, PathBuf};
 
 use cox_core::store::Record;
-use cox_core::tabs::{Lines, Tab as KeptTab, Tabs};
+use cox_core::tabs::{KeptTab, KeptTabs, Lines};
 use gpui::{
     App, Context, Div, Entity, Focusable, Stateful, Subscription, Task, Window, div, prelude::*,
     px, rgb,
@@ -94,7 +94,7 @@ pub struct Stage {
     /// Where the tabs are kept as they change, if they are.
     record: Option<Record>,
     /// The tabs as they were last kept.
-    kept: Option<Tabs>,
+    kept: Option<KeptTabs>,
     /// What carries out what the relay and the agent's tools ask, once
     /// the stage works with the agent.
     heard: Vec<Task<()>>,
@@ -166,14 +166,14 @@ impl Stage {
     pub fn reading(
         cef: Cef,
         cwd: PathBuf,
-        kept: Option<Tabs>,
+        kept: Option<KeptTabs>,
         url: &str,
         panel: Entity<Panel>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut stage = Self::empty(cef, cwd, panel);
-        let Tabs { tabs, shown } = kept.unwrap_or_default();
+        let KeptTabs { tabs, shown } = kept.unwrap_or_default();
         // The tab shown is the one that was, or else the last before it
         // that opens again.
         let mut shown_now = None;
@@ -215,8 +215,8 @@ impl Stage {
     }
 
     /// The tabs, as they are kept.
-    fn tabs(&self, cx: &App) -> Tabs {
-        Tabs {
+    fn tabs(&self, cx: &App) -> KeptTabs {
+        KeptTabs {
             tabs: self.tabs.iter().map(|tab| tab.content.kept(cx)).collect(),
             shown: self.shown,
         }
@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn closing_another_tab_keeps_the_one_shown() {
-        // Tabs 0, 1, 2, with 1 shown.
+        // KeptTabs 0, 1, 2, with 1 shown.
         assert_eq!(after_closing(1, 0, 2), 0);
         assert_eq!(after_closing(1, 2, 2), 1);
     }

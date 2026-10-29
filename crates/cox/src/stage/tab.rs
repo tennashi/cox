@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use cox_core::tabs::{Lines, Tab as Kept};
+use cox_core::tabs::{KeptTab, Lines};
 use gpui::{
     AnyView, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Subscription,
 };
@@ -28,7 +28,7 @@ pub trait Shows: Render + Focusable + 'static {
     fn title(&self) -> String;
 
     /// The tab as it is kept, for a closed chat's stage to open again.
-    fn kept(&self) -> Kept;
+    fn kept(&self) -> KeptTab;
 }
 
 /// What a tab showing a file shows, as Markdown or as it is written: the
@@ -83,7 +83,7 @@ pub(super) enum TabContent {
 /// An entity that [`Shows`], asked as the stage asks of every kind alike.
 trait AnyShows {
     fn title(&self, cx: &App) -> String;
-    fn kept(&self, cx: &App) -> Kept;
+    fn kept(&self, cx: &App) -> KeptTab;
     fn focus_handle(&self, cx: &App) -> FocusHandle;
     fn view(&self) -> AnyView;
 }
@@ -93,7 +93,7 @@ impl<T: Shows> AnyShows for Entity<T> {
         self.read(cx).title()
     }
 
-    fn kept(&self, cx: &App) -> Kept {
+    fn kept(&self, cx: &App) -> KeptTab {
         self.read(cx).kept()
     }
 
@@ -124,7 +124,7 @@ impl TabContent {
     }
 
     /// The tab as it is kept.
-    pub(super) fn kept(&self, cx: &App) -> Kept {
+    pub(super) fn kept(&self, cx: &App) -> KeptTab {
         self.shows().kept(cx)
     }
 

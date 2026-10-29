@@ -38,7 +38,7 @@ mod text;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use cox_core::tabs::{Lines, Tab as Kept};
+use cox_core::tabs::{KeptTab, Lines};
 use cox_editor::buffer::{Point as Place, is_word, word_around};
 use cox_editor::history::History;
 use cox_editor::language::Highlight;
@@ -752,8 +752,8 @@ impl Shows for Code {
         self.file.title()
     }
 
-    fn kept(&self) -> Kept {
-        Kept::File {
+    fn kept(&self) -> KeptTab {
+        KeptTab::File {
             path: self.file.path.clone(),
             lines: self.look.marked,
         }

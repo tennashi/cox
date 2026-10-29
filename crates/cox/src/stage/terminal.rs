@@ -41,7 +41,7 @@ use alacritty_terminal::index::{Column, Line, Point as Cell, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Term, TermMode};
-use cox_core::tabs::Tab as Kept;
+use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, IntoElement,
     KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
@@ -480,8 +480,8 @@ impl Shows for Terminal {
         }
     }
 
-    fn kept(&self) -> Kept {
-        Kept::Terminal {
+    fn kept(&self) -> KeptTab {
+        KeptTab::Terminal {
             title: self.title(),
         }
     }

@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use cox_core::tabs::{Lines, Tab as Kept};
+use cox_core::tabs::{KeptTab, Lines};
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, Task, Window, div, prelude::*, px,
@@ -160,8 +160,8 @@ impl Shows for Document {
         )
     }
 
-    fn kept(&self) -> Kept {
-        Kept::Markdown {
+    fn kept(&self) -> KeptTab {
+        KeptTab::Markdown {
             path: self.path.clone(),
         }
     }

@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use cox_core::tabs::Tab as Kept;
+use cox_core::tabs::KeptTab;
 use cox_editor::files::{self, Entry};
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, ScrollHandle, Task, Window,
@@ -258,8 +258,8 @@ impl Shows for Tree {
         format!("{name}/")
     }
 
-    fn kept(&self) -> Kept {
-        Kept::Files { open: self.open() }
+    fn kept(&self) -> KeptTab {
+        KeptTab::Files { open: self.open() }
     }
 }
 
