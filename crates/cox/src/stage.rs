@@ -57,16 +57,16 @@ use crate::agent::mcp::Ran;
 use crate::agent::mcp::Request;
 use crate::browser::relay::{FromAgent, Pages, Relay};
 use crate::browser::{Cef, TargetId};
-use crate::chat::view::Panel;
+
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::page::{OpenTab, Page};
 use crate::stage::servers::Servers;
 use crate::stage::terminal::{Program, Running, Terminal};
 use crate::stage::tree::{Chosen, Tree};
-use crate::ui::LinkClicked;
 use crate::ui::input::LineInput;
 use crate::ui::markdown::FileLink;
+use crate::ui::{LinkClicked, Panel};
 
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";

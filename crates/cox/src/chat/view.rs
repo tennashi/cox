@@ -27,11 +27,11 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::agent::{Agent, AgentThread};
 use crate::agent::{AgentEvent, Command};
 use crate::chat::conversation::{Content, Conversation, Entry, State};
-use crate::ui::Copy;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::text::{Reading, Writer};
 use crate::ui::theme::{DIM, FONT};
+use crate::ui::{Copy, Panel};
 
 actions!(
     cox,
@@ -77,30 +77,6 @@ const CONTENT_HEIGHT: f32 = 320.;
 /// The colors of a change's lines.
 const REMOVED: u32 = 0xf0_8080;
 const ADDED: u32 = 0x80_d080;
-
-/// Whether a chat's stage is open beside its conversation.
-#[derive(Debug, Default)]
-pub struct Panel {
-    open: bool,
-}
-
-impl Panel {
-    #[must_use]
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    pub fn open(&mut self, cx: &mut Context<Self>) {
-        self.set(true, cx);
-    }
-
-    pub fn set(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.open != open {
-            self.open = open;
-            cx.notify();
-        }
-    }
-}
 
 /// A chat's stage, as its conversation shows it: the view, and whether it
 /// is open.

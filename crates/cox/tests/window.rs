@@ -12,7 +12,8 @@ use agent_client_protocol::schema::v1::{
     McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
 };
 use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
-use cox::chat::view::{Panel, SessionView, StageView};
+use cox::chat::view::{SessionView, StageView};
+use cox::ui::Panel;
 use cox::ui::input::LineInput;
 use cox_acp::McpServer;
 use cox_core::diff::Line;
