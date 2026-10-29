@@ -1,6 +1,6 @@
 //! The browsers behind the stages: CEF (Chromium) rendering pages with no
 //! window of their own. [`Cef`] runs once for the whole app, and opens a
-//! [`Browser`] for each session's stage. CEF hands each painted picture to
+//! [`Browser`] for each chat's stage. CEF hands each painted picture to
 //! the browser's [`Shared`], and the stage hands mouse, keys and
 //! input-method text back through the [`Browser`]. CEF's remote debugging
 //! port stays on, so agents can drive the same pages over CDP meanwhile.

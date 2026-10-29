@@ -19,12 +19,12 @@
 //! documentation (see [`hover`]). A click on a name with Command held, or
 //! Control off macOS, goes to where the name is defined, and the menu of
 //! the right button goes there too, or lists where the name is used (see
-//! [`places`]). Going to a place in another file, the tab shows that file,
+//! [`locations`]). Going to a place in another file, the tab shows that file,
 //! as a page goes to another: back and forward go between the places the
 //! tab went to.
 
 mod hover;
-mod places;
+mod locations;
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -195,7 +195,7 @@ pub struct Code {
     /// the word at the place given.
     menu: Option<(Point<Pixels>, Place)>,
     /// The places the server found last, listed under the code.
-    places: Option<places::Places>,
+    locations: Option<locations::Locations>,
     /// What the tab says of what the human asked, such as that the server
     /// found nothing.
     notice: Option<String>,
@@ -299,7 +299,7 @@ impl Code {
             linking: false,
             hover: None,
             menu: None,
-            places: None,
+            locations: None,
             notice: None,
             focus_handle: cx.focus_handle(),
             _follow: follow::follow(cx),
@@ -587,7 +587,7 @@ impl Code {
 
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
         if self.menu.take().is_none() && self.hover.take().is_none() {
-            self.places = None;
+            self.locations = None;
         }
         cx.notify();
     }
@@ -1065,7 +1065,7 @@ impl Render for Code {
                     .children(self.render_hover(cx))
                     .children(self.render_menu(cx)),
             )
-            .children(self.render_places(cx))
+            .children(self.render_locations(cx))
     }
 }
 

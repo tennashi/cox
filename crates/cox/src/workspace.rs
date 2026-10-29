@@ -13,15 +13,15 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cox_core::store::{ChatId, ProjectId, Record, Store};
-use cox_core::tabs::Tabs;
 use gpui::{
     App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, PathPromptOptions, SharedString,
     Stateful, Subscription, Window, actions, div, prelude::*, px, rgb,
 };
 
+use crate::agent::instructions::Instructions;
 use crate::chat::conversation::{Entry, State};
-use crate::chat::instructions::Instructions;
-use crate::chat::view::{Reopened, SessionView};
+use crate::chat::view::{ChatView, Reopened};
+use crate::chat::{Closed, Opens};
 use crate::ui::paths::shortened;
 use crate::ui::theme::FONT;
 
@@ -51,40 +51,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-tab", NextChat, Some("Workspace")),
         KeyBinding::new("ctrl-shift-tab", PreviousChat, Some("Workspace")),
     ]);
-}
-
-/// What opens the window's chats: the [`Launcher`](crate::chat::session::Launcher)
-/// of the agents, or a fake one in tests.
-pub trait Opens {
-    /// Starts a chat's agent working in `cwd`, an absolute path, with
-    /// `instructions`, keeping the chat in `record` if given, and returns
-    /// the chat's view.
-    fn open(
-        &self,
-        cwd: PathBuf,
-        instructions: Option<Instructions>,
-        record: Option<Record>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<SessionView>;
-
-    /// Returns the view of `closed`, a chat that has closed, from what is
-    /// kept of it, for the human to read, and to send to again.
-    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView>;
-}
-
-/// What is kept of a closed chat.
-pub struct Closed {
-    /// The directory it worked in.
-    pub cwd: PathBuf,
-    /// What it showed.
-    pub entries: Vec<Entry>,
-    /// The tabs its stage had, if it had a stage.
-    pub tabs: Option<Tabs>,
-    /// The id its agent gave its session, to go on with, if it had one.
-    pub session: Option<String>,
-    /// Where it is kept, to go on keeping it once the human sends to it.
-    pub record: Option<Record>,
 }
 
 /// A folder, and the chats in it.
@@ -136,7 +102,7 @@ pub struct Chat {
     /// Whether its agent runs.
     open: bool,
     /// Its view, or `None` for a closed chat the human has not read yet.
-    view: Option<Entity<SessionView>>,
+    view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
     /// chat's agent start again.
     _changes: Vec<Subscription>,
@@ -166,14 +132,14 @@ impl Chat {
 
     /// Its view, once it has been shown.
     #[must_use]
-    pub fn view(&self) -> Option<&Entity<SessionView>> {
+    pub fn view(&self) -> Option<&Entity<ChatView>> {
         self.view.as_ref()
     }
 }
 
 /// Where a chat is: the index of its project, and its own in the project.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Place {
+pub struct Position {
     pub project: usize,
     pub chat: usize,
 }
@@ -183,7 +149,7 @@ pub struct Workspace {
     /// project, which comes first.
     projects: Vec<Project>,
     /// Where the chat shown is, if any is.
-    shown: Option<Place>,
+    shown: Option<Position>,
     opens: Rc<dyn Opens>,
     store: Rc<Store>,
     focus_handle: FocusHandle,
@@ -298,7 +264,7 @@ impl Workspace {
         });
         let chat = self.projects[index].chats.len() - 1;
         self.show(
-            Place {
+            Position {
                 project: index,
                 chat,
             },
@@ -333,19 +299,19 @@ impl Workspace {
     }
 
     /// Every chat's place, in the order of the list.
-    fn places(&self) -> Vec<Place> {
+    fn positions(&self) -> Vec<Position> {
         self.projects
             .iter()
             .enumerate()
             .flat_map(|(project, open)| {
-                (0..open.chats.len()).map(move |chat| Place { project, chat })
+                (0..open.chats.len()).map(move |chat| Position { project, chat })
             })
             .collect()
     }
 
     /// Shows the chat at `place`, with the keyboard in its input.
-    pub fn show(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.places().contains(&place) {
+    pub fn show(&mut self, place: Position, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.positions().contains(&place) {
             return;
         }
         self.read(place, window, cx);
@@ -356,7 +322,7 @@ impl Workspace {
 
     /// Gives the closed chat at `place` its view, from what is kept of it,
     /// unless it has one. Once the human sends to it, it is open.
-    fn read(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
+    fn read(&mut self, place: Position, window: &mut Window, cx: &mut Context<Self>) {
         let project = &self.projects[place.project];
         let chat = &project.chats[place.chat];
         let (Some(kept), None) = (chat.kept, &chat.view) else {
@@ -403,18 +369,19 @@ impl Workspace {
 
     /// Shows the chat `step` places along the list, going round.
     fn step(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let places = self.places();
+        let positions = self.positions();
         let Some(shown) = self
             .shown
-            .and_then(|shown| places.iter().position(|&open| open == shown))
+            .and_then(|shown| positions.iter().position(|&open| open == shown))
         else {
             return;
         };
-        let (Ok(shown), Ok(count)) = (isize::try_from(shown), isize::try_from(places.len())) else {
+        let (Ok(shown), Ok(count)) = (isize::try_from(shown), isize::try_from(positions.len()))
+        else {
             return;
         };
         if let Ok(index) = usize::try_from((shown + step).rem_euclid(count)) {
-            self.show(places[index], window, cx);
+            self.show(positions[index], window, cx);
         }
     }
 
@@ -426,7 +393,7 @@ impl Workspace {
             rows.push(Self::render_project(index, project, cx));
             for (chat, open) in project.chats.iter().enumerate() {
                 number += 1;
-                let place = Place {
+                let place = Position {
                     project: index,
                     chat,
                 };
@@ -545,7 +512,7 @@ impl Workspace {
     /// The row of the chat at `place`, the `number`th in the list.
     fn render_chat(
         &self,
-        place: Place,
+        place: Position,
         number: usize,
         chat: &Chat,
         cx: &mut Context<Self>,
