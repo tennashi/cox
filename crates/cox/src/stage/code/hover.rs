@@ -14,7 +14,8 @@ use gpui::{
     ScrollHandle, Task, Window, anchored, deferred, div, prelude::*, px, rgb,
 };
 
-use super::{Code, MENU, MENU_BORDER};
+use super::Code;
+use super::menu::{MENU, MENU_BORDER};
 use crate::ui::LinkClicked;
 use crate::ui::markdown::{self, Block};
 use crate::ui::text::Reading;
