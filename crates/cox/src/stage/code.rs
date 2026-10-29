@@ -56,8 +56,8 @@ use gpui::{
 };
 
 use crate::stage::follow::{self, Follows, Stamp};
-use crate::stage::servers::LanguageServer;
-use crate::stage::tab::Content;
+use crate::stage::servers::{LanguageServer, Servers};
+use crate::stage::tab::{self, Content, ShowsFile};
 use crate::ui::paths::shortened;
 use crate::ui::theme::BACKGROUND;
 use crate::ui::{Copy, LinkClicked};
@@ -756,6 +756,46 @@ impl Content for Code {
         Kept::File {
             path: self.file.path.clone(),
             lines: self.look.marked,
+        }
+    }
+}
+
+impl ShowsFile for Code {
+    /// The project's server for the file's language, when Cox has them,
+    /// is asked what the code means.
+    fn open(
+        cwd: &Path,
+        path: PathBuf,
+        text: &str,
+        lines: Option<Lines>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let server = cx
+            .try_global::<Servers>()
+            .cloned()
+            .and_then(|servers| servers.of(cwd, &path, cx));
+        Self::new(path, text, lines, server, cx)
+    }
+
+    fn path(&self) -> &Path {
+        &self.file.path
+    }
+
+    fn show(&mut self, text: &str, lines: Option<Lines>, cx: &mut Context<Self>) {
+        self.show(text, lines, cx);
+    }
+
+    fn shown(this: Entity<Self>) -> tab::Shown {
+        tab::Shown::Code(this)
+    }
+
+    fn of(shown: &tab::Shown) -> Option<&Entity<Self>> {
+        match shown {
+            tab::Shown::Code(code) => Some(code),
+            tab::Shown::Page { .. }
+            | tab::Shown::Document(_)
+            | tab::Shown::Tree(_)
+            | tab::Shown::Terminal(_) => None,
         }
     }
 }

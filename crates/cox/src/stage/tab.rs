@@ -7,8 +7,12 @@
 //! asks of one kind alone, such as the page a tab shows, it asks of that
 //! kind, matching on [`Shown`].
 
-use cox_core::tabs::Tab as Kept;
-use gpui::{AnyView, App, Entity, FocusHandle, Focusable, Render, Subscription};
+use std::path::{Path, PathBuf};
+
+use cox_core::tabs::{Lines, Tab as Kept};
+use gpui::{
+    AnyView, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Subscription,
+};
 
 use super::code::Code;
 use super::document::Document;
@@ -16,6 +20,7 @@ use super::page::Page;
 use super::terminal::{Program, Terminal};
 use super::tree::Tree;
 use crate::browser::TargetId;
+use crate::ui::LinkClicked;
 
 /// What a tab shows, whichever kind it is.
 pub trait Content: Render + Focusable + 'static {
@@ -24,6 +29,33 @@ pub trait Content: Render + Focusable + 'static {
 
     /// The tab as it is kept, for a closed chat's stage to open again.
     fn kept(&self) -> Kept;
+}
+
+/// What a tab showing a file shows, as Markdown or as it is written: the
+/// stage shows a file the same way whichever it is, on the tab showing it
+/// already or a new one, and opens the links clicked in it.
+pub(super) trait ShowsFile: Content + EventEmitter<LinkClicked> {
+    /// A tab showing the file at `path`, an absolute path, which says
+    /// `text`, at `lines` if it shows lines, for a chat working in `cwd`.
+    fn open(
+        cwd: &Path,
+        path: PathBuf,
+        text: &str,
+        lines: Option<Lines>,
+        cx: &mut Context<Self>,
+    ) -> Self;
+
+    /// The file, as an absolute path.
+    fn path(&self) -> &Path;
+
+    /// Shows `text`, which the file says now, at `lines` if it shows lines.
+    fn show(&mut self, text: &str, lines: Option<Lines>, cx: &mut Context<Self>);
+
+    /// The tab showing `this`, as the stage holds it.
+    fn shown(this: Entity<Self>) -> Shown;
+
+    /// What `shown` shows, if it is one of these.
+    fn of(shown: &Shown) -> Option<&Entity<Self>>;
 }
 
 /// A tab, and what it shows.

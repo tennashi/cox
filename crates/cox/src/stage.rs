@@ -63,8 +63,7 @@ use crate::browser::{Cef, TargetId};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::page::{OpenTab, Page};
-use crate::stage::servers::Servers;
-use crate::stage::tab::{Shown, Tab};
+use crate::stage::tab::{Shown, ShowsFile, Tab};
 use crate::stage::terminal::{Program, Running, Terminal};
 use crate::stage::tree::{Chosen, Tree};
 use crate::ui::input::LineInput;
@@ -188,12 +187,12 @@ impl Stage {
                     // What the file says now; the tab says so if it cannot
                     // be read.
                     let text = std::fs::read_to_string(&path).unwrap_or_default();
-                    stage.push_document(path, text, false, window, cx);
+                    stage.push_file::<Document>(path, &text, None, false, window, cx);
                     true
                 }
                 KeptTab::File { path, lines } => {
                     let text = std::fs::read_to_string(&path).unwrap_or_default();
-                    stage.push_code(path, &text, lines, false, window, cx);
+                    stage.push_file::<Code>(path, &text, lines, false, window, cx);
                     true
                 }
                 KeptTab::Files { open } => {
@@ -284,10 +283,10 @@ impl Stage {
             while let Some(request) = from_tools.recv().await {
                 let done = this.update_in(cx, |stage, window, cx| match request {
                     Request::ShowMarkdown { path, text } => {
-                        stage.show_document(path, text, window, cx);
+                        stage.show_file::<Document>(path, &text, None, window, cx);
                     }
                     Request::ShowFile { path, text, lines } => {
-                        stage.show_code(path, &text, lines, window, cx);
+                        stage.show_file::<Code>(path, &text, lines, window, cx);
                     }
                     Request::RunCommand {
                         command,
@@ -302,60 +301,10 @@ impl Stage {
         })
     }
 
-    /// Shows the file at `path`, which says `text`: on the tab that shows
-    /// it already, or a new one. The stage opens if it was closed.
-    fn show_document(
-        &mut self,
-        path: PathBuf,
-        text: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let showing = self.tabs.iter().position(|tab| match &tab.shown {
-            Shown::Document(document) => document.read(cx).path() == path,
-            Shown::Page { .. } | Shown::Code(_) | Shown::Tree(_) | Shown::Terminal(_) => false,
-        });
-        if let Some(index) = showing {
-            if let Shown::Document(document) = &self.tabs[index].shown {
-                document.update(cx, |document, cx| document.show(text, cx));
-            }
-            self.shown = index;
-            self.changed(cx);
-        } else {
-            self.push_document(path, text, true, window, cx);
-        }
-        self.show_panel(cx);
-    }
-
-    /// Puts a tab showing the file at `path`, which says `text`, after the
-    /// others, shown if `show` is.
-    fn push_document(
-        &mut self,
-        path: PathBuf,
-        text: String,
-        show: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let document = cx.new(|cx| Document::new(path, text, cx));
-        let changes = cx.observe(&document, |stage, _, cx| stage.changed(cx));
-        let opens = cx.subscribe_in(
-            &document,
-            window,
-            |stage, document, LinkClicked(url), window, cx| {
-                // A link to a file is from where the document is.
-                let path = document.read(cx).path();
-                let from = path.parent().unwrap_or(path).to_owned();
-                stage.open_from(url, &from, window, cx);
-            },
-        );
-        self.push(Shown::Document(document), changes, Some(opens), show, cx);
-    }
-
-    /// Shows the file at `path`, which says `text`, as it is written, at
+    /// Shows the file at `path`, which says `text`, as a `T` shows it, at
     /// `lines` if any: on the tab that shows it already, or a new one. The
     /// stage opens if it was closed.
-    fn show_code(
+    fn show_file<T: ShowsFile>(
         &mut self,
         path: PathBuf,
         text: &str,
@@ -363,25 +312,25 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let showing = self.tabs.iter().position(|tab| match &tab.shown {
-            Shown::Code(code) => code.read(cx).path() == path,
-            Shown::Page { .. } | Shown::Document(_) | Shown::Tree(_) | Shown::Terminal(_) => false,
-        });
+        let showing = self
+            .tabs
+            .iter()
+            .position(|tab| T::of(&tab.shown).is_some_and(|shown| shown.read(cx).path() == path));
         if let Some(index) = showing {
-            if let Shown::Code(code) = &self.tabs[index].shown {
-                code.update(cx, |code, cx| code.show(text, lines, cx));
+            if let Some(shown) = T::of(&self.tabs[index].shown) {
+                shown.update(cx, |shown, cx| shown.show(text, lines, cx));
             }
             self.shown = index;
             self.changed(cx);
         } else {
-            self.push_code(path, text, lines, true, window, cx);
+            self.push_file::<T>(path, text, lines, true, window, cx);
         }
         self.show_panel(cx);
     }
 
-    /// Puts a tab showing the file at `path`, which says `text`, as it is
-    /// written, at `lines` if any, after the others, shown if `show` is.
-    fn push_code(
+    /// Puts a tab showing the file at `path`, which says `text`, as a `T`
+    /// shows it, at `lines` if any, after the others, shown if `show` is.
+    fn push_file<T: ShowsFile>(
         &mut self,
         path: PathBuf,
         text: &str,
@@ -390,24 +339,19 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // The project's server for the file's language, when Cox has them.
-        let server = cx
-            .try_global::<Servers>()
-            .cloned()
-            .and_then(|servers| servers.of(&self.cwd, &path, cx));
-        let code = cx.new(|cx| Code::new(path, text, lines, server, cx));
-        let changes = cx.observe(&code, |stage, _, cx| stage.changed(cx));
+        let shown = cx.new(|cx| T::open(&self.cwd, path, text, lines, cx));
+        let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
         let opens = cx.subscribe_in(
-            &code,
+            &shown,
             window,
-            |stage, code, LinkClicked(url), window, cx| {
+            |stage, shown, LinkClicked(url), window, cx| {
                 // A link to a file is from where the file is.
-                let path = code.read(cx).path();
+                let path = shown.read(cx).path();
                 let from = path.parent().unwrap_or(path).to_owned();
                 stage.open_from(url, &from, window, cx);
             },
         );
-        self.push(Shown::Code(code), changes, Some(opens), show, cx);
+        self.push(T::shown(shown), changes, Some(opens), show, cx);
     }
 
     /// Runs `command`, which the agent asked for, in `cwd`, and answers
@@ -632,10 +576,8 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let path = match (link.path.strip_prefix("~/"), std::env::var_os("HOME")) {
-            (Some(rest), Some(home)) => Path::new(&home).join(rest),
-            _ => from.join(link.path),
-        };
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let path = linked(link.path, from, home.as_deref());
         if let Err(error) = self.open_path(&path, link.lines, window, cx) {
             log::warn!("cannot open {}: {error}", path.display());
         }
@@ -654,13 +596,9 @@ impl Stage {
     ) -> std::io::Result<()> {
         let path = std::fs::canonicalize(path)?;
         let text = std::fs::read_to_string(&path)?;
-        let is_markdown = path
-            .extension()
-            .is_some_and(|extension| extension == "md" || extension == "markdown");
-        if is_markdown && lines.is_none() {
-            self.show_document(path, text, window, cx);
-        } else {
-            self.show_code(path, &text, lines, window, cx);
+        match Opening::of(&path, lines) {
+            Opening::Markdown => self.show_file::<Document>(path, &text, None, window, cx),
+            Opening::Written(lines) => self.show_file::<Code>(path, &text, lines, window, cx),
         }
         self.focus_shown(window, cx);
         Ok(())
@@ -696,7 +634,7 @@ impl Stage {
             // A file that cannot be read gets a tab all the same, which
             // says why.
             if stage.open_path(path, None, window, cx).is_err() {
-                stage.show_code(path.clone(), "", None, window, cx);
+                stage.show_file::<Code>(path.clone(), "", None, window, cx);
                 stage.focus_shown(window, cx);
             }
         });
@@ -814,6 +752,40 @@ impl Stage {
     }
 }
 
+/// The file a link to `path` is to, from `from`, where the link is: `~/`
+/// stands for `home`, when there is one.
+fn linked(path: &str, from: &Path, home: Option<&Path>) -> PathBuf {
+    match (path.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => from.join(path),
+    }
+}
+
+/// How a file opens from a link to it, or from the tree.
+#[derive(Debug, PartialEq, Eq)]
+enum Opening {
+    /// As Markdown, drawn.
+    Markdown,
+    /// As it is written, at these lines if any.
+    Written(Option<Lines>),
+}
+
+impl Opening {
+    /// How the file at `path` opens, at `lines` if the link names any: as
+    /// Markdown if it is a Markdown file and no lines are named, and as
+    /// it is written otherwise.
+    fn of(path: &Path, lines: Option<Lines>) -> Self {
+        let is_markdown = path
+            .extension()
+            .is_some_and(|extension| extension == "md" || extension == "markdown");
+        if is_markdown && lines.is_none() {
+            Self::Markdown
+        } else {
+            Self::Written(lines)
+        }
+    }
+}
+
 /// Which tab is shown once the tab at `closed` has gone, when the one at
 /// `shown` was, leaving `left` tabs: the same tab, unless it was the one
 /// closed, when it is the one after it, or before it if it was the last.
@@ -843,7 +815,64 @@ impl Render for Stage {
 
 #[cfg(test)]
 mod tests {
-    use super::after_closing;
+    use std::path::Path;
+
+    use cox_core::tabs::Lines;
+
+    use super::{Opening, after_closing, linked};
+
+    #[test]
+    fn a_link_to_a_file_is_from_where_the_link_is() {
+        let from = Path::new("/project/docs");
+        let home = Some(Path::new("/home/me"));
+        assert_eq!(
+            linked("notes.md", from, home),
+            Path::new("/project/docs/notes.md")
+        );
+        assert_eq!(
+            linked("../src/main.rs", from, home),
+            Path::new("/project/docs/../src/main.rs")
+        );
+        assert_eq!(linked("/etc/hosts", from, home), Path::new("/etc/hosts"));
+    }
+
+    #[test]
+    fn a_tilde_stands_for_home_when_there_is_one() {
+        let from = Path::new("/project");
+        assert_eq!(
+            linked("~/notes.md", from, Some(Path::new("/home/me"))),
+            Path::new("/home/me/notes.md")
+        );
+        assert_eq!(
+            linked("~/notes.md", from, None),
+            Path::new("/project/~/notes.md")
+        );
+    }
+
+    #[test]
+    fn a_markdown_file_opens_drawn_unless_lines_are_named() {
+        let lines = Some(Lines { first: 3, last: 4 });
+        assert_eq!(
+            Opening::of(Path::new("/a/README.md"), None),
+            Opening::Markdown
+        );
+        assert_eq!(
+            Opening::of(Path::new("/a/notes.markdown"), None),
+            Opening::Markdown
+        );
+        assert_eq!(
+            Opening::of(Path::new("/a/README.md"), lines),
+            Opening::Written(lines)
+        );
+        assert_eq!(
+            Opening::of(Path::new("/a/main.rs"), None),
+            Opening::Written(None)
+        );
+        assert_eq!(
+            Opening::of(Path::new("/a/main.rs"), lines),
+            Opening::Written(lines)
+        );
+    }
 
     #[test]
     fn closing_another_tab_keeps_the_one_shown() {

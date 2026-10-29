@@ -10,14 +10,15 @@
 
 use std::path::{Path, PathBuf};
 
-use cox_core::tabs::Tab as Kept;
+use cox_core::tabs::{Lines, Tab as Kept};
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ScrollHandle, Task, Window, div, prelude::*, px, rgb,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, Task, Window, div, prelude::*, px,
+    rgb,
 };
 
 use crate::stage::follow::{self, Follows, Stamp};
-use crate::stage::tab::Content;
+use crate::stage::tab::{Content, Shown, ShowsFile};
 use crate::ui::markdown::{self, Block};
 use crate::ui::paths::shortened;
 use crate::ui::text::Reading;
@@ -162,6 +163,31 @@ impl Content for Document {
     fn kept(&self) -> Kept {
         Kept::Markdown {
             path: self.path.clone(),
+        }
+    }
+}
+
+impl ShowsFile for Document {
+    fn open(_: &Path, path: PathBuf, text: &str, _: Option<Lines>, cx: &mut Context<Self>) -> Self {
+        Self::new(path, text.to_owned(), cx)
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn show(&mut self, text: &str, _: Option<Lines>, cx: &mut Context<Self>) {
+        self.show(text.to_owned(), cx);
+    }
+
+    fn shown(this: Entity<Self>) -> Shown {
+        Shown::Document(this)
+    }
+
+    fn of(shown: &Shown) -> Option<&Entity<Self>> {
+        match shown {
+            Shown::Document(document) => Some(document),
+            Shown::Page { .. } | Shown::Code(_) | Shown::Tree(_) | Shown::Terminal(_) => None,
         }
     }
 }
