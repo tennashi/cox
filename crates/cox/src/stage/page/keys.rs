@@ -5,7 +5,7 @@
 use gpui::{Context, Focusable as _, KeyDownEvent, KeyUpEvent, Keystroke, Window};
 
 use super::Page;
-use crate::browser::{EditCommand, Modifiers};
+use cox_browser::{EditCommand, Modifiers};
 
 impl Page {
     /// A key went down over the page. The browser's own shortcuts come

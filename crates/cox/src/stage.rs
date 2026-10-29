@@ -57,8 +57,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::Ran;
 use crate::agent::mcp::Request;
-use crate::browser::relay::{FromAgent, Pages, Relay};
-use crate::browser::{Cef, TargetId};
+use cox_browser::relay::{FromAgent, Pages, Relay};
+use cox_browser::{Cef, TargetId};
 
 use crate::stage::code::Code;
 use crate::stage::document::Document;
@@ -419,7 +419,7 @@ impl Stage {
     fn worked(
         &mut self,
         page: Option<String>,
-        input: Option<crate::browser::relay::AgentInput>,
+        input: Option<cox_browser::relay::AgentInput>,
         cx: &mut Context<Self>,
     ) {
         let index = page

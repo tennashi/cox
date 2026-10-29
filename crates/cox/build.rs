@@ -12,6 +12,12 @@
 //!
 //! macOS needs none of this: there, nothing links CEF at build time, and
 //! `cargo xtask bundle` puts the framework where the app loads it from.
+//!
+//! The browser is `cox-browser`'s, but the loader's path is the
+//! executables' to set: what a build script says of linking goes to its
+//! own package's executables only, so the script is here, and `cox`
+//! depends on `cef-dll-sys` as well, which tells the build scripts of its
+//! direct dependents where CEF is.
 
 use std::path::PathBuf;
 use std::{env, fs};

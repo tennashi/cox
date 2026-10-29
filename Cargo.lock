@@ -1479,23 +1479,20 @@ dependencies = [
  "agent-client-protocol",
  "alacritty_terminal",
  "anyhow",
- "cef",
  "cef-dll-sys",
  "cox-acp",
+ "cox-browser",
  "cox-core",
  "cox-editor",
  "env_logger",
- "futures-util",
  "gpui",
  "image",
  "libc",
  "log",
- "objc2",
  "pulldown-cmark",
  "serde",
  "serde_json",
  "tokio",
- "tokio-tungstenite",
  "unicode-segmentation",
 ]
 
@@ -1506,6 +1503,23 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "tokio",
+]
+
+[[package]]
+name = "cox-browser"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "cef",
+ "cef-dll-sys",
+ "futures-util",
+ "libc",
+ "log",
+ "objc2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

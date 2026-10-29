@@ -29,6 +29,7 @@ pub mod quit;
 pub mod relay;
 
 use std::os::raw::c_int;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -55,7 +56,7 @@ use cef::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::watch;
 
-use crate::browser::profile::Profile;
+use crate::profile::Profile;
 
 /// One picture CEF painted: the whole view, or the whole popup, in BGRA,
 /// in device pixels.
@@ -388,7 +389,7 @@ pub struct Browser {
 ///
 /// When CEF does not load or initialize.
 #[must_use]
-pub fn start() -> Cef {
+pub fn start(profile: Option<PathBuf>) -> Cef {
     #[cfg(target_os = "macos")]
     load_framework(Process::Main);
     // The bindings were generated for this API version; tell CEF before
@@ -412,7 +413,7 @@ pub fn start() -> Cef {
     }
     assert_eq!(code, -1, "the browser process carries on");
 
-    let profile = Profile::open();
+    let profile = Profile::open_at(profile);
     let profile_path = CefString::from(profile.path().to_string_lossy().as_ref());
     let devtools_port = match free_port() {
         Ok(port) => Some(port),
@@ -512,7 +513,7 @@ impl Cef {
     /// on CEF's side between calls. Linux does not need it.
     #[cfg(target_os = "macos")]
     pub fn pump(&self) {
-        crate::browser::macos::cef_turn(cef::do_message_loop_work);
+        crate::macos::cef_turn(cef::do_message_loop_work);
     }
 
     /// Closes every browser, waits for CEF to let go of them, and shuts

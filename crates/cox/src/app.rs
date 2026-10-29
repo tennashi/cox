@@ -5,7 +5,7 @@
 //!    its [`Settings`], or the bridge to a chat's tools, which `main`
 //!    runs instead.
 //! 2. What the app depends on starts: the browser, which is CEF (see
-//!    [`crate::browser`]), the signal handlers, and the store of the
+//!    [`cox_browser`]), the signal handlers, and the store of the
 //!    chats.
 //! 3. The app's own parts are made: the [`Launcher`] that opens chats.
 //! 4. GPUI runs the app: the keys are bound, the globals set, the loops
@@ -28,10 +28,10 @@ use gpui::{
     App, Application, Bounds, Focusable, WindowBounds, WindowOptions, actions, prelude::*, px, size,
 };
 
-use crate::browser::Cef;
 use crate::chat::launcher::Launcher;
 use crate::stage::servers::Servers;
 use crate::workspace::Workspace;
+use cox_browser::Cef;
 
 actions!(cox, [Quit]);
 
@@ -107,9 +107,9 @@ impl Settings {
 pub fn run(settings: Settings) -> ExitCode {
     // CEF first: on Linux, its helper processes run this same executable
     // with arguments of their own, and exit inside `start`.
-    let cef = crate::browser::start();
+    let cef = cox_browser::start(crate::storage::path("stage"));
     // In place of CEF's handlers, which quit without the app's quit handlers.
-    if let Err(error) = crate::browser::quit::on_signals() {
+    if let Err(error) = cox_browser::quit::on_signals() {
         log::error!("signals will end Cox without stopping the agents: {error}");
     }
     let store = Rc::new(open_store());
@@ -182,7 +182,7 @@ fn bind_keys(cx: &mut App) {
 const PUMP_INTERVAL: Duration = Duration::from_millis(8);
 
 /// How often the app looks whether it was asked to quit from where it
-/// could not quit right away (see [`crate::browser::quit`]).
+/// could not quit right away (see [`cox_browser::quit`]).
 const QUIT_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Gives CEF what it needs of the app while the app runs: on macOS, the
@@ -191,7 +191,7 @@ const QUIT_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(target_os = "macos")]
 fn serve_browser(cef: &Cef, cx: &mut App) {
     // Before any browser exists: CEF asks the app about itself.
-    crate::browser::macos::adopt_cef_app_protocol();
+    cox_browser::macos::adopt_cef_app_protocol();
     let pumped = cef.clone();
     cx.spawn(async move |cx| {
         loop {
@@ -210,7 +210,7 @@ fn quit_when_asked(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(QUIT_CHECK_INTERVAL).await;
-            if crate::browser::quit::take_asked() {
+            if cox_browser::quit::take_asked() {
                 let _ = cx.update(|cx| cx.quit());
             }
         }

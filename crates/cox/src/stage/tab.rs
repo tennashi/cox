@@ -19,8 +19,8 @@ use super::document::Document;
 use super::page::Page;
 use super::terminal::{Program, Terminal};
 use super::tree::Tree;
-use crate::browser::TargetId;
 use crate::ui::LinkClicked;
+use cox_browser::TargetId;
 
 /// What a tab shows, whichever kind it is.
 pub trait Content: Render + Focusable + 'static {

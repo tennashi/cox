@@ -26,11 +26,11 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use self::picture::Picture;
-use crate::browser::pointer::{AgentPointer, Look};
-use crate::browser::relay::AgentInput;
-use crate::browser::{Browser, Caret, Event, Navigation, TargetId};
 use crate::stage::tab::Content;
 use crate::ui::input::{LineInput, Submitted};
+use cox_browser::pointer::{AgentPointer, Look};
+use cox_browser::relay::AgentInput;
+use cox_browser::{Browser, Caret, Event, Navigation, TargetId};
 
 pub struct Page {
     browser: Browser,

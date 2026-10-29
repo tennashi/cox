@@ -15,16 +15,17 @@
 //!   files, a tree of the project's files, and terminals.
 //! - [`agent`] is a chat's agent: the ACP connection, and the tools Cox
 //!   hands the agent.
-//! - [`browser`] is CEF, which renders the stages' pages, and what keeps
-//!   the agent to its chat's pages.
 //! - [`ui`] is what all of the window's parts share: the text the human
 //!   types into, text that can be selected, Markdown, and how it all
 //!   looks.
 //! - [`storage`] says where this Cox keeps what lasts across its runs.
+//!
+//! Below them all is [`cox_browser`]: CEF, which renders the stages'
+//! pages, and what keeps the agent to its chat's pages. It is a crate of
+//! its own, with no GPUI in it.
 
 pub mod agent;
 pub mod app;
-pub mod browser;
 pub mod chat;
 pub mod stage;
 pub mod storage;

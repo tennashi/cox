@@ -1,7 +1,7 @@
 //! What the page draws for the agent: its pointer, as an arrow with a
 //! label saying whose it is, the ring of each click, and the outline of
 //! the field it types into, as the relay saw them (see
-//! [`crate::browser::pointer`]).
+//! [`cox_browser::pointer`]).
 
 use std::time::Instant;
 
@@ -11,7 +11,7 @@ use gpui::{
 };
 
 use super::Page;
-use crate::browser::pointer::{Look, Rect, Spot};
+use cox_browser::pointer::{Look, Rect, Spot};
 
 impl Page {
     /// Works out how the agent's pointer looks now, and arranges to render

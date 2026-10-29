@@ -11,7 +11,7 @@
 fn main() {
     use cef::args::Args;
 
-    cox::browser::load_framework(cox::browser::Process::Helper);
+    cox_browser::load_framework(cox_browser::Process::Helper);
     cef::api_hash(cef::sys::CEF_API_VERSION, 0);
     let args = Args::new();
     let code = cef::execute_process(

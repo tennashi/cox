@@ -41,7 +41,7 @@ use tokio::sync::{oneshot, watch};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{self, Message};
 
-use crate::browser::TargetId;
+use crate::TargetId;
 
 /// Input the agent sent to the page. Positions are in CSS pixels of the
 /// page's viewport, which are the stage's logical pixels.
