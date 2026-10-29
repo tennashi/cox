@@ -31,8 +31,9 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use cox_core::tabs::Lines;
-use cox_editor::buffer::{Buffer, Point as Place};
+use cox_editor::buffer::{Buffer, Point as Place, is_word, word_around};
 use cox_editor::language::{Highlight, Language};
+use cox_editor::line::{LINE_LENGTH, Shown};
 use cox_editor::lsp::{Client, Document, Encoding, Position};
 use cox_editor::syntax::Syntax;
 use gpui::{
@@ -70,13 +71,6 @@ const LINE_HEIGHT: f32 = 1.4;
 
 /// Room between the text and the tab's edges.
 const PADDING: f32 = 8.;
-
-/// How many columns apart the stops of a tab character are.
-const TAB_STOPS: usize = 4;
-
-/// The most of a line the tab draws, in bytes, so that a line as long as a
-/// minified file's does not hold up every frame.
-const LINE_LENGTH: usize = 4096;
 
 /// How many lines a turn of the wheel scrolls.
 const WHEEL_LINES: f32 = 3.;
@@ -968,33 +962,6 @@ impl Code {
     }
 }
 
-/// Whether `c` is of a word: a letter, a digit, or `_`.
-fn is_word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// The bytes of the word around `column` of `line`: letters, digits and
-/// `_`, or else the one character there.
-fn word_around(line: &str, column: usize) -> std::ops::Range<usize> {
-    let Some(here) = line[column..].chars().next() else {
-        return column..column;
-    };
-    if !is_word(here) {
-        return column..column + here.len_utf8();
-    }
-    let start = line[..column]
-        .char_indices()
-        .rev()
-        .take_while(|&(_, c)| is_word(c))
-        .last()
-        .map_or(column, |(at, _)| at);
-    let end = line[column..]
-        .char_indices()
-        .find(|&(_, c)| !is_word(c))
-        .map_or(line.len(), |(at, _)| column + at);
-    start..end
-}
-
 impl Follows for Code {
     fn followed(&self) -> (PathBuf, Option<Stamp>) {
         (self.path.clone(), self.stamp)
@@ -1066,90 +1033,6 @@ impl Render for Code {
                     .children(self.render_menu(cx)),
             )
             .children(self.render_locations(cx))
-    }
-}
-
-/// A line as it is drawn: with its tab characters as spaces to the next
-/// stop, and cut at [`LINE_LENGTH`].
-struct Shown {
-    text: String,
-    /// Where each character of the line starts, in the text drawn and in
-    /// the line, in order.
-    starts: Vec<(usize, usize)>,
-    /// How long the line is, in bytes.
-    len: usize,
-}
-
-impl Shown {
-    fn of(line: &str) -> Self {
-        let mut text = String::with_capacity(line.len().min(LINE_LENGTH));
-        let mut starts = Vec::with_capacity(line.len().min(LINE_LENGTH));
-        let mut columns = 0;
-        for (at, c) in line.char_indices() {
-            if text.len() >= LINE_LENGTH {
-                break;
-            }
-            starts.push((text.len(), at));
-            if c == '\t' {
-                let spaces = TAB_STOPS - columns % TAB_STOPS;
-                text.extend(std::iter::repeat_n(' ', spaces));
-                columns += spaces;
-            } else {
-                text.push(c);
-                columns += 1;
-            }
-        }
-        Self {
-            text,
-            starts,
-            len: line.len(),
-        }
-    }
-
-    /// The byte of the line that `index` of the text drawn is at.
-    fn column_of(&self, index: usize) -> usize {
-        match self.starts.iter().rposition(|&(shown, _)| shown <= index) {
-            Some(at) if self.starts[at].0 == index => self.starts[at].1,
-            // Past the last character drawn, or within a tab's spaces,
-            // which go to the next character.
-            Some(at) => self.starts.get(at + 1).map_or(self.len, |&(_, line)| line),
-            None => 0,
-        }
-    }
-
-    /// The stretches of the text drawn, in order, each with how long it is
-    /// and what it is, from `highlights`, what the stretches of the line
-    /// are.
-    fn runs(&self, highlights: &Spans) -> Vec<(usize, Option<Highlight>)> {
-        let mut runs: Vec<(usize, Option<Highlight>)> = Vec::new();
-        let mut highlights = highlights.iter().peekable();
-        for (at, &(shown, column)) in self.starts.iter().enumerate() {
-            let end = self
-                .starts
-                .get(at + 1)
-                .map_or(self.text.len(), |&(end, _)| end);
-            while highlights
-                .next_if(|(range, _)| range.end <= column)
-                .is_some()
-            {}
-            let highlight = highlights
-                .peek()
-                .filter(|(range, _)| range.start <= column)
-                .map(|&&(_, highlight)| highlight);
-            match runs.last_mut() {
-                Some((len, last)) if *last == highlight => *len += end - shown,
-                _ => runs.push((end - shown, highlight)),
-            }
-        }
-        runs
-    }
-
-    /// The index of the text drawn that `column` of the line is at.
-    fn index_of(&self, column: usize) -> usize {
-        self.starts
-            .iter()
-            .find(|&&(_, line)| line >= column)
-            .map_or(self.text.len(), |&(shown, _)| shown)
     }
 }
 
@@ -1452,57 +1335,5 @@ impl Element for Text {
                 }
             });
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn draws_tab_characters_as_spaces_to_the_next_stop() {
-        let shown = Shown::of("\tab\tc");
-        assert_eq!(shown.text, "    ab  c");
-        // In the spaces of the first tab, and right on `a`.
-        assert_eq!(shown.column_of(2), 1);
-        assert_eq!(shown.column_of(4), 1);
-        assert_eq!(shown.column_of(9), 5);
-        assert_eq!(shown.index_of(3), 6);
-        assert_eq!(shown.index_of(5), 9);
-    }
-
-    #[test]
-    fn draws_each_stretch_of_a_line_as_its_syntax_says() {
-        // The tab stands for four spaces, and `x` is within no stretch.
-        let shown = Shown::of("\tlet x = 1;");
-        let highlights = vec![(1..4, Highlight::Keyword), (9..10, Highlight::Number)];
-        assert_eq!(
-            shown.runs(&highlights),
-            [
-                (4, None),
-                (3, Some(Highlight::Keyword)),
-                (5, None),
-                (1, Some(Highlight::Number)),
-                (1, None),
-            ]
-        );
-        assert_eq!(Shown::of("").runs(&highlights).first(), None);
-    }
-
-    #[test]
-    fn cuts_a_long_line() {
-        let shown = Shown::of(&"x".repeat(LINE_LENGTH * 2));
-        assert_eq!(shown.text.len(), LINE_LENGTH);
-        assert_eq!(shown.column_of(LINE_LENGTH), LINE_LENGTH * 2);
-    }
-
-    #[test]
-    fn finds_the_word_around_a_place() {
-        let line = "let 日本_x = a.b;";
-        let word = |column| &line[word_around(line, column)];
-        assert_eq!(word(0), "let");
-        assert_eq!(word("let ".len() + 3), "日本_x");
-        assert_eq!(word(line.find('=').unwrap()), "=");
-        assert_eq!(word(line.len()), "");
     }
 }
