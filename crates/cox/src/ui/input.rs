@@ -6,7 +6,7 @@
 //! characters and committed compositions arrive as replacements, and text
 //! the input method is still composing arrives as marked text, which the
 //! input shows underlined. Offsets in that trait count UTF-16 units, as the
-//! platforms do, while `content` is indexed in bytes.
+//! platforms do, while the text is indexed in bytes.
 //!
 //! The human selects with the mouse or with Shift and the arrows, and cuts,
 //! copies and pastes with the usual keys. Enter submits. In an input that
@@ -28,7 +28,8 @@ use gpui::{
     TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill, point,
     prelude::*, px, relative, rgb, rgba, size,
 };
-use unicode_segmentation::UnicodeSegmentation;
+
+use self::draft::{Draft, one_line, unix_line_breaks};
 
 actions!(
     line_input,
@@ -90,16 +91,11 @@ pub struct Submitted;
 
 pub struct LineInput {
     focus_handle: FocusHandle,
-    content: String,
-    /// Byte range of the selection; empty when it is just the cursor.
-    selected_range: Range<usize>,
-    /// Whether the cursor is at the start of the selection rather than its
-    /// end: the selection grew to the left.
-    selection_reversed: bool,
+    /// The text, with its selection and what the input method is
+    /// composing, which is shown underlined.
+    draft: Draft,
     /// Whether a mouse button went down on the input and is still held.
     selecting: bool,
-    /// Byte range the input method is composing, shown underlined.
-    marked_range: Option<Range<usize>>,
     /// Whether lines wrap at the input's width, rather than the input
     /// holding one line.
     wraps: bool,
@@ -120,11 +116,8 @@ impl LineInput {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
-            content: String::new(),
-            selected_range: 0..0,
-            selection_reversed: false,
+            draft: Draft::new(),
             selecting: false,
-            marked_range: None,
             wraps: false,
             last_layout: None,
             last_bounds: None,
@@ -143,13 +136,13 @@ impl LineInput {
 
     #[must_use]
     pub fn text(&self) -> &str {
-        &self.content
+        self.draft.text()
     }
 
     /// Whether an input method is composing text.
     #[must_use]
     pub fn is_composing(&self) -> bool {
-        self.marked_range.is_some()
+        self.draft.is_composing()
     }
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
@@ -158,15 +151,18 @@ impl LineInput {
 
     /// Puts `text` in the input, with the cursor at its end.
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.content.clear();
-        self.content.push_str(text);
-        self.move_to(self.content.len(), cx);
-        self.marked_range = None;
+        self.edit(cx, |draft| draft.set_text(text));
+    }
+
+    /// Changes the text, or the selection, and draws it again.
+    fn edit(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Draft)) {
+        change(&mut self.draft);
+        cx.notify();
     }
 
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
         // Enter while composing belongs to the input method.
-        if self.marked_range.is_none() {
+        if !self.draft.is_composing() {
             cx.emit(Submitted);
         }
     }
@@ -175,83 +171,73 @@ impl LineInput {
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
         if !self.wraps {
             self.submit(&Submit, window, cx);
-        } else if self.marked_range.is_none() {
-            self.replace_text_in_range(None, "\n", window, cx);
+        } else if !self.draft.is_composing() {
+            self.edit(cx, |draft| draft.commit(None, "\n"));
         }
     }
 
-    fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            let start = self.previous_boundary(self.selected_range.start);
-            self.selected_range = start..self.selected_range.end;
-        }
-        self.replace_text_in_range(None, "", window, cx);
+    fn backspace(&mut self, _: &Backspace, _window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, Draft::delete_backward);
     }
 
-    fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            let end = self.next_boundary(self.selected_range.end);
-            self.selected_range = self.selected_range.start..end;
-        }
-        self.replace_text_in_range(None, "", window, cx);
+    fn delete(&mut self, _: &Delete, _window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, Draft::delete_forward);
     }
 
     fn left(&mut self, _: &Left, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = if self.selected_range.is_empty() {
-            self.previous_boundary(self.selected_range.start)
-        } else {
-            self.selected_range.start
-        };
-        self.move_to(offset, cx);
+        self.edit(cx, Draft::move_left);
     }
 
     fn right(&mut self, _: &Right, _window: &mut Window, cx: &mut Context<Self>) {
-        let offset = if self.selected_range.is_empty() {
-            self.next_boundary(self.selected_range.end)
-        } else {
-            self.selected_range.end
-        };
-        self.move_to(offset, cx);
+        self.edit(cx, Draft::move_right);
     }
 
     fn up(&mut self, _: &Up, _window: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.row_away(-1.), cx);
+        let offset = self.row_away(-1.);
+        self.edit(cx, |draft| draft.move_to(offset));
     }
 
     fn down(&mut self, _: &Down, _window: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.row_away(1.), cx);
+        let offset = self.row_away(1.);
+        self.edit(cx, |draft| draft.move_to(offset));
     }
 
     fn home(&mut self, _: &Home, _window: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.row_start(), cx);
+        let offset = self.row_start();
+        self.edit(cx, |draft| draft.move_to(offset));
     }
 
     fn end(&mut self, _: &End, _window: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.row_end(), cx);
+        let offset = self.row_end();
+        self.edit(cx, |draft| draft.move_to(offset));
     }
 
     fn select_left(&mut self, _: &SelectLeft, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.previous_boundary(self.cursor()), cx);
+        self.edit(cx, Draft::select_left);
     }
 
     fn select_right(&mut self, _: &SelectRight, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.next_boundary(self.cursor()), cx);
+        self.edit(cx, Draft::select_right);
     }
 
     fn select_up(&mut self, _: &SelectUp, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.row_away(-1.), cx);
+        let offset = self.row_away(-1.);
+        self.edit(cx, |draft| draft.select_to(offset));
     }
 
     fn select_down(&mut self, _: &SelectDown, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.row_away(1.), cx);
+        let offset = self.row_away(1.);
+        self.edit(cx, |draft| draft.select_to(offset));
     }
 
     fn select_to_home(&mut self, _: &SelectToHome, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.row_start(), cx);
+        let offset = self.row_start();
+        self.edit(cx, |draft| draft.select_to(offset));
     }
 
     fn select_to_end(&mut self, _: &SelectToEnd, _window: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.row_end(), cx);
+        let offset = self.row_end();
+        self.edit(cx, |draft| draft.select_to(offset));
     }
 
     fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
@@ -260,13 +246,12 @@ impl LineInput {
 
     /// Selects the whole text, so that typing replaces it.
     pub fn select_whole(&mut self, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
-        self.select_to(self.content.len(), cx);
+        self.edit(cx, Draft::select_all);
     }
 
-    fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+    fn cut(&mut self, _: &Cut, _window: &mut Window, cx: &mut Context<Self>) {
         if self.copy_selection(cx) {
-            self.replace_text_in_range(None, "", window, cx);
+            self.edit(cx, |draft| draft.commit(None, ""));
         }
     }
 
@@ -278,25 +263,25 @@ impl LineInput {
         }
     }
 
-    fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+    fn paste(&mut self, _: &Paste, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let text = if self.wraps {
                 unix_line_breaks(&text)
             } else {
                 one_line(&text)
             };
-            self.replace_text_in_range(None, &text, window, cx);
+            self.edit(cx, |draft| draft.commit(None, &text));
         }
     }
 
     /// Puts the selected text on the clipboard, and says whether there was
     /// any.
     fn copy_selection(&self, cx: &mut Context<Self>) -> bool {
-        if self.selected_range.is_empty() {
+        let text = self.draft.selected_text();
+        if text.is_empty() {
             return false;
         }
-        let text = self.content[self.selected_range.clone()].to_owned();
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
         true
     }
 
@@ -304,15 +289,16 @@ impl LineInput {
         self.selecting = true;
         let offset = self.offset_at(event.position);
         if event.modifiers.shift {
-            self.select_to(offset, cx);
+            self.edit(cx, |draft| draft.select_to(offset));
         } else {
-            self.move_to(offset, cx);
+            self.edit(cx, |draft| draft.move_to(offset));
         }
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.selecting {
-            self.select_to(self.offset_at(event.position), cx);
+            let offset = self.offset_at(event.position);
+            self.edit(cx, |draft| draft.select_to(offset));
         }
     }
 
@@ -322,35 +308,7 @@ impl LineInput {
 
     /// Leaves the cursor where it is, with nothing selected.
     pub fn deselect(&mut self, cx: &mut Context<Self>) {
-        self.move_to(self.cursor(), cx);
-    }
-
-    /// Where the cursor is: the end of the selection it moves.
-    fn cursor(&self) -> usize {
-        if self.selection_reversed {
-            self.selected_range.start
-        } else {
-            self.selected_range.end
-        }
-    }
-
-    fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.selected_range = offset..offset;
-        self.selection_reversed = false;
-        cx.notify();
-    }
-
-    /// Moves the cursor to `offset`, keeping the other end of the selection
-    /// where it is.
-    fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        let anchor = if self.selection_reversed {
-            self.selected_range.end
-        } else {
-            self.selected_range.start
-        };
-        self.selection_reversed = offset < anchor;
-        self.selected_range = anchor.min(offset)..anchor.max(offset);
-        cx.notify();
+        self.edit(cx, Draft::deselect);
     }
 
     /// The offset in the text closest to `position` in the window.
@@ -372,14 +330,14 @@ impl LineInput {
     /// the text, and below the last is its end.
     fn row_away(&self, rows: f32) -> usize {
         let Some(layout) = self.last_layout.as_ref() else {
-            return self.cursor();
+            return self.draft.cursor();
         };
-        let at = layout.position(self.cursor());
+        let at = layout.position(self.draft.cursor());
         let y = at.y + layout.line_height * (rows + 0.5);
         if y < px(0.) {
             0
         } else if y >= layout.height() {
-            self.content.len()
+            self.draft.text().len()
         } else {
             layout.index_at(point(at.x, y))
         }
@@ -398,16 +356,16 @@ impl LineInput {
     /// The offset nearest `x` on the cursor's row.
     fn on_cursor_row(&self, x: Pixels) -> usize {
         let Some(layout) = self.last_layout.as_ref() else {
-            return self.cursor();
+            return self.draft.cursor();
         };
-        let at = layout.position(self.cursor());
+        let at = layout.position(self.draft.cursor());
         layout.index_at(point(x, at.y + layout.line_height / 2.))
     }
 
     /// The text, and how to shape it: plain, but for the part being
     /// composed, which is underlined.
     fn styled(&self, window: &Window) -> (SharedString, Vec<TextRun>) {
-        let text = &self.content;
+        let text = self.draft.text();
         let style = window.text_style();
         let plain = TextRun {
             len: text.len(),
@@ -417,7 +375,7 @@ impl LineInput {
             underline: None,
             strikethrough: None,
         };
-        let runs = match &self.marked_range {
+        let runs = match self.draft.marked() {
             Some(marked) => vec![
                 TextRun {
                     len: marked.start,
@@ -442,64 +400,7 @@ impl LineInput {
             .collect(),
             None => vec![plain],
         };
-        (text.clone().into(), runs)
-    }
-
-    fn previous_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .rev()
-            .map(|(index, _)| index)
-            .find(|&index| index < offset)
-            .unwrap_or(0)
-    }
-
-    fn next_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .map(|(index, _)| index)
-            .find(|&index| index > offset)
-            .unwrap_or(self.content.len())
-    }
-
-    fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf16 = 0;
-        let mut bytes = 0;
-        for ch in self.content.chars() {
-            if utf16 >= offset {
-                break;
-            }
-            utf16 += ch.len_utf16();
-            bytes += ch.len_utf8();
-        }
-        bytes
-    }
-
-    fn offset_to_utf16(&self, offset: usize) -> usize {
-        self.content[..offset].encode_utf16().count()
-    }
-
-    fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end)
-    }
-
-    fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
-    }
-
-    /// The range a replacement applies to: the one given, else the text
-    /// being composed, else the selection.
-    fn target_range(&self, range_utf16: Option<&Range<usize>>) -> Range<usize> {
-        range_utf16
-            .map(|range| self.range_from_utf16(range))
-            .or_else(|| self.marked_range.clone())
-            .unwrap_or_else(|| self.selected_range.clone())
-    }
-
-    /// Puts `text` in place of `range`, and returns where it ended up.
-    fn replace(&mut self, range: Range<usize>, text: &str) -> Range<usize> {
-        self.content.replace_range(range.clone(), text);
-        range.start..range.start + text.len()
+        (text.to_owned().into(), runs)
     }
 }
 
@@ -519,9 +420,9 @@ impl EntityInputHandler for LineInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let range = self.range_from_utf16(&range_utf16);
-        *adjusted_range = Some(self.range_to_utf16(&range));
-        Some(self.content[range].to_owned())
+        let (text, adjusted) = self.draft.text_in(&range_utf16);
+        *adjusted_range = Some(adjusted);
+        Some(text)
     }
 
     fn selected_text_range(
@@ -531,8 +432,8 @@ impl EntityInputHandler for LineInput {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.range_to_utf16(&self.selected_range),
-            reversed: self.selection_reversed,
+            range: self.draft.range_to_utf16(self.draft.selected()),
+            reversed: self.draft.is_reversed(),
         })
     }
 
@@ -541,14 +442,13 @@ impl EntityInputHandler for LineInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        self.marked_range
-            .as_ref()
-            .map(|range| self.range_to_utf16(range))
+        self.draft
+            .marked()
+            .map(|range| self.draft.range_to_utf16(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.marked_range = None;
-        cx.notify();
+        self.edit(cx, Draft::unmark);
     }
 
     /// Final text: typed characters, or a composition the input method
@@ -560,10 +460,7 @@ impl EntityInputHandler for LineInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = self.target_range(range_utf16.as_ref());
-        let placed = self.replace(range, text);
-        self.move_to(placed.end, cx);
-        self.marked_range = None;
+        self.edit(cx, |draft| draft.commit(range_utf16.as_ref(), text));
     }
 
     /// Text the input method is still composing.
@@ -575,19 +472,13 @@ impl EntityInputHandler for LineInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = self.target_range(range_utf16.as_ref());
-        let placed = self.replace(range, new_text);
-        self.marked_range = (!new_text.is_empty()).then(|| placed.clone());
-        // The selection the input method gives is relative to the new text.
-        self.selected_range = match new_selected_range_utf16 {
-            Some(selected) => {
-                let offset = self.offset_to_utf16(placed.start);
-                self.range_from_utf16(&(selected.start + offset..selected.end + offset))
-            }
-            None => placed.end..placed.end,
-        };
-        self.selection_reversed = false;
-        cx.notify();
+        self.edit(cx, |draft| {
+            draft.compose(
+                range_utf16.as_ref(),
+                new_text,
+                new_selected_range_utf16.as_ref(),
+            );
+        });
     }
 
     fn bounds_for_range(
@@ -598,7 +489,7 @@ impl EntityInputHandler for LineInput {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let layout = self.last_layout.as_ref()?;
-        let range = self.range_from_utf16(&range_utf16);
+        let range = self.draft.range_from_utf16(&range_utf16);
         let origin = self.text_origin(element_bounds);
         let start = layout.position(range.start);
         let end = layout.position(range.end);
@@ -620,7 +511,7 @@ impl EntityInputHandler for LineInput {
             .last_layout
             .as_ref()?
             .index_at(point - self.text_origin(bounds));
-        Some(self.offset_to_utf16(index))
+        Some(self.draft.offset_to_utf16(index))
     }
 }
 
@@ -656,17 +547,6 @@ impl Render for LineInput {
             .w_full()
             .child(LineElement { input: cx.entity() })
     }
-}
-
-/// A pasted text as one line: each line break, of any kind, becomes a
-/// space.
-fn one_line(text: &str) -> String {
-    text.replace("\r\n", " ").replace(['\n', '\r'], " ")
-}
-
-/// A pasted text with each line break, of any kind, as `\n`.
-fn unix_line_breaks(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 /// How far to scroll a view `view` long over content `content` long, so
@@ -917,8 +797,8 @@ impl Element for LineElement {
         let input = self.input.read(cx);
         let (text, runs) = input.styled(window);
         let wraps = input.wraps;
-        let selected = input.selected_range.clone();
-        let cursor = input.cursor();
+        let selected = input.draft.selected().clone();
+        let cursor = input.draft.cursor();
         let scroll = input.scroll;
         let layout = shape(
             text,
