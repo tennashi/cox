@@ -25,7 +25,8 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::{Agent, AgentThread};
-use crate::chat::conversation::{AgentEvent, Command, Content, Conversation, Entry, State};
+use crate::agent::{AgentEvent, Command};
+use crate::chat::conversation::{Content, Conversation, Entry, State};
 use crate::ui::Copy;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;

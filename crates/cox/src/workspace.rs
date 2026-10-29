@@ -19,8 +19,8 @@ use gpui::{
     Stateful, Subscription, Window, actions, div, prelude::*, px, rgb,
 };
 
+use crate::agent::instructions::Instructions;
 use crate::chat::conversation::{Entry, State};
-use crate::chat::instructions::Instructions;
 use crate::chat::view::{Reopened, SessionView};
 use crate::ui::paths::shortened;
 use crate::ui::theme::FONT;

@@ -12,8 +12,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cox::agent::Start;
+use cox::agent::instructions::Instructions;
 use cox::chat::conversation::{Entry, State};
-use cox::chat::instructions::Instructions;
 use cox::chat::view::{Again, SessionView};
 use cox::workspace::{Chat, Closed, Opens, Place, Workspace};
 use cox_core::store::{Record, Store};

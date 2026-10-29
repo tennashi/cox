@@ -8,9 +8,7 @@
 //! - [`conversation`] holds what the view shows and decides what the
 //!   human's input means, in plain Rust, so it is tested without GPUI.
 //!   `cox-core` keeps what it shows.
-//! - [`instructions`] reads what the agent gets told of the project.
 
 pub mod conversation;
-pub mod instructions;
 pub mod session;
 pub mod view;

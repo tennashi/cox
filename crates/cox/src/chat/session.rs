@@ -14,8 +14,8 @@ use cox_acp::McpServer;
 use cox_core::store::Record;
 use gpui::{App, Entity, Window, prelude::*};
 
+use crate::agent::instructions::Instructions;
 use crate::agent::{Agent, Start};
-use crate::chat::instructions::Instructions;
 use crate::chat::view::{Again, OpenLink, Panel, SessionView, StageView};
 use crate::workspace::{Closed, Opens};
 
