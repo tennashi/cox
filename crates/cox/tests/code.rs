@@ -384,7 +384,7 @@ fn lists_where_a_name_is_used_to_go_to_each(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let find = cx.debug_bounds("find-references").expect("the menu opens");
     cx.simulate_click(find.center(), Modifiers::none());
-    wait_until(cx, |cx| cx.debug_bounds("code-places").is_some());
+    wait_until(cx, |cx| cx.debug_bounds("code-locations").is_some());
 
     // By file: `lib.rs`, then `main.rs`, each with its place.
     assert!(cx.debug_bounds("code-place-0").is_none());
@@ -401,7 +401,7 @@ fn lists_where_a_name_is_used_to_go_to_each(cx: &mut TestAppContext) {
         ("main.rs".to_owned(), Some(Lines { first: 2, last: 2 }))
     );
     // The list stays, and back goes through the places it went to.
-    assert!(cx.debug_bounds("code-places").is_some());
+    assert!(cx.debug_bounds("code-locations").is_some());
     cx.dispatch_action(Back);
     assert_eq!(shown(&code, cx).0, "lib.rs");
     std::fs::remove_dir_all(directory).unwrap();

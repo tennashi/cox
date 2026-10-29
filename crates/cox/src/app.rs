@@ -152,7 +152,7 @@ fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
 /// The store of the chats this Cox keeps, or one for this run only when
 /// that cannot be opened.
 fn open_store() -> Store {
-    let kept = crate::place::kept("chats.sqlite")
+    let kept = crate::storage::path("chats.sqlite")
         .ok_or_else(|| anyhow::anyhow!("there is no place to keep them"))
         .and_then(|path| Store::open(&path));
     kept.or_else(|error| {

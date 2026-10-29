@@ -20,13 +20,13 @@
 //! - [`ui`] is what all of the window's parts share: the text the human
 //!   types into, text that can be selected, Markdown, and how it all
 //!   looks.
-//! - [`place`] says where this Cox keeps what lasts across its runs.
+//! - [`storage`] says where this Cox keeps what lasts across its runs.
 
 pub mod agent;
 pub mod app;
 pub mod browser;
 pub mod chat;
-pub mod place;
 pub mod stage;
+pub mod storage;
 pub mod ui;
 pub mod workspace;

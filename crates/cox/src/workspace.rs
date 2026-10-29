@@ -139,7 +139,7 @@ impl Chat {
 
 /// Where a chat is: the index of its project, and its own in the project.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Place {
+pub struct Position {
     pub project: usize,
     pub chat: usize,
 }
@@ -149,7 +149,7 @@ pub struct Workspace {
     /// project, which comes first.
     projects: Vec<Project>,
     /// Where the chat shown is, if any is.
-    shown: Option<Place>,
+    shown: Option<Position>,
     opens: Rc<dyn Opens>,
     store: Rc<Store>,
     focus_handle: FocusHandle,
@@ -264,7 +264,7 @@ impl Workspace {
         });
         let chat = self.projects[index].chats.len() - 1;
         self.show(
-            Place {
+            Position {
                 project: index,
                 chat,
             },
@@ -299,19 +299,19 @@ impl Workspace {
     }
 
     /// Every chat's place, in the order of the list.
-    fn places(&self) -> Vec<Place> {
+    fn positions(&self) -> Vec<Position> {
         self.projects
             .iter()
             .enumerate()
             .flat_map(|(project, open)| {
-                (0..open.chats.len()).map(move |chat| Place { project, chat })
+                (0..open.chats.len()).map(move |chat| Position { project, chat })
             })
             .collect()
     }
 
     /// Shows the chat at `place`, with the keyboard in its input.
-    pub fn show(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.places().contains(&place) {
+    pub fn show(&mut self, place: Position, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.positions().contains(&place) {
             return;
         }
         self.read(place, window, cx);
@@ -322,7 +322,7 @@ impl Workspace {
 
     /// Gives the closed chat at `place` its view, from what is kept of it,
     /// unless it has one. Once the human sends to it, it is open.
-    fn read(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
+    fn read(&mut self, place: Position, window: &mut Window, cx: &mut Context<Self>) {
         let project = &self.projects[place.project];
         let chat = &project.chats[place.chat];
         let (Some(kept), None) = (chat.kept, &chat.view) else {
@@ -369,18 +369,19 @@ impl Workspace {
 
     /// Shows the chat `step` places along the list, going round.
     fn step(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let places = self.places();
+        let positions = self.positions();
         let Some(shown) = self
             .shown
-            .and_then(|shown| places.iter().position(|&open| open == shown))
+            .and_then(|shown| positions.iter().position(|&open| open == shown))
         else {
             return;
         };
-        let (Ok(shown), Ok(count)) = (isize::try_from(shown), isize::try_from(places.len())) else {
+        let (Ok(shown), Ok(count)) = (isize::try_from(shown), isize::try_from(positions.len()))
+        else {
             return;
         };
         if let Ok(index) = usize::try_from((shown + step).rem_euclid(count)) {
-            self.show(places[index], window, cx);
+            self.show(positions[index], window, cx);
         }
     }
 
@@ -392,7 +393,7 @@ impl Workspace {
             rows.push(Self::render_project(index, project, cx));
             for (chat, open) in project.chats.iter().enumerate() {
                 number += 1;
-                let place = Place {
+                let place = Position {
                     project: index,
                     chat,
                 };
@@ -511,7 +512,7 @@ impl Workspace {
     /// The row of the chat at `place`, the `number`th in the list.
     fn render_chat(
         &self,
-        place: Place,
+        place: Position,
         number: usize,
         chat: &Chat,
         cx: &mut Context<Self>,

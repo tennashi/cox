@@ -20,11 +20,11 @@ const INSTALLED: &str = if cfg!(target_os = "macos") {
 /// Where this Cox keeps what it calls `name`, or `None` when it cannot
 /// tell where it runs from.
 #[must_use]
-pub fn kept(name: &str) -> Option<PathBuf> {
+pub fn path(name: &str) -> Option<PathBuf> {
     // Without links, so the installed Cox is found however it was run.
     let exe = std::env::current_exe().and_then(fs::canonicalize).ok()?;
     let home = std::env::var_os("HOME").map(|home| fs::canonicalize(&home).unwrap_or(home.into()));
-    kept_path(
+    path_at(
         name,
         &exe,
         home.as_deref(),
@@ -37,7 +37,7 @@ pub fn kept(name: &str) -> Option<PathBuf> {
 /// `$XDG_DATA_HOME/cox`, by default `~/.local/share/cox`, elsewhere. Any
 /// other keeps it as `cox-<name>` beside it, or beside its app on macOS,
 /// which `cargo xtask bundle` makes anew each time.
-fn kept_path(
+fn path_at(
     name: &str,
     exe: &Path,
     home: Option<&Path>,
@@ -76,11 +76,11 @@ mod tests {
     fn a_cox_being_built_keeps_its_own_beside_it() {
         let home = Some(Path::new("/h"));
         assert_eq!(
-            kept_path("stage", Path::new("/src/cox/target/debug/cox"), home, None),
+            path_at("stage", Path::new("/src/cox/target/debug/cox"), home, None),
             Some("/src/cox/target/debug/cox-stage".into())
         );
         assert_eq!(
-            kept_path(
+            path_at(
                 "chats.sqlite",
                 Path::new("/src/cox/target/debug/Cox.app/Contents/MacOS/Cox"),
                 home,
@@ -89,7 +89,7 @@ mod tests {
             Some("/src/cox/target/debug/cox-chats.sqlite".into())
         );
         assert_eq!(
-            kept_path("stage", Path::new("/src/cox/target/debug/cox"), None, None),
+            path_at("stage", Path::new("/src/cox/target/debug/cox"), None, None),
             Some("/src/cox/target/debug/cox-stage".into())
         );
     }
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn the_installed_cox_keeps_its_own_in_application_support() {
         assert_eq!(
-            kept_path(
+            path_at(
                 "stage",
                 Path::new("/Users/h/Applications/Cox.app/Contents/MacOS/Cox"),
                 Some(Path::new("/Users/h")),
@@ -114,15 +114,15 @@ mod tests {
         let installed = Path::new("/home/h/.local/bin/cox");
         let home = Some(Path::new("/home/h"));
         assert_eq!(
-            kept_path("stage", installed, home, Some("/data".into())),
+            path_at("stage", installed, home, Some("/data".into())),
             Some("/data/cox/stage".into())
         );
         assert_eq!(
-            kept_path("stage", installed, home, Some("data".into())),
+            path_at("stage", installed, home, Some("data".into())),
             Some("/home/h/.local/share/cox/stage".into())
         );
         assert_eq!(
-            kept_path("chats.sqlite", installed, home, None),
+            path_at("chats.sqlite", installed, home, None),
             Some("/home/h/.local/share/cox/chats.sqlite".into())
         );
     }

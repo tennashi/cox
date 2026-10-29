@@ -34,7 +34,7 @@ enum Finding {
 }
 
 /// The places the server found, listed under the code.
-pub(super) struct Places {
+pub(super) struct Locations {
     /// What they are, as the list's heading says.
     title: String,
     found: Vec<Found>,
@@ -167,8 +167,8 @@ impl Code {
                 .spawn(async move { read_lines(&reading, encoding) })
                 .await;
             code.update(cx, |code, cx| {
-                if let Some(places) = &mut code.places {
-                    for (found, line) in places.found.iter_mut().zip(lines) {
+                if let Some(locations) = &mut code.locations {
+                    for (found, line) in locations.found.iter_mut().zip(lines) {
                         found.line = line;
                     }
                     cx.notify();
@@ -176,7 +176,7 @@ impl Code {
             })
             .ok();
         });
-        self.places = Some(Places {
+        self.locations = Some(Locations {
             title,
             found: found
                 .into_iter()
@@ -194,21 +194,24 @@ impl Code {
 
     /// Goes to the place at `index` of the list.
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(places) = &mut self.places else {
+        let Some(locations) = &mut self.locations else {
             return;
         };
-        let Some(found) = places.found.get(index) else {
+        let Some(found) = locations.found.get(index) else {
             return;
         };
-        places.chosen = Some(index);
+        locations.chosen = Some(index);
         let Location { path, range } = found.location.clone();
         self.notice = None;
         self.go_to(&path, range, cx);
     }
 
     /// The list of the places the server found last, if it is open.
-    pub(super) fn render_places(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let places = self.places.as_ref()?;
+    pub(super) fn render_locations(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let locations = self.locations.as_ref()?;
         let code = cx.entity();
         let heading = div()
             .flex()
@@ -222,37 +225,44 @@ impl Code {
             .text_color(rgb(DIM))
             .child(
                 div()
-                    .debug_selector(|| "code-places-title".to_owned())
+                    .debug_selector(|| "code-locations-title".to_owned())
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .child(places.title.clone()),
+                    .child(locations.title.clone()),
             )
             .child(
                 div()
-                    .id("close-places")
-                    .debug_selector(|| "close-places".to_owned())
+                    .id("close-locations")
+                    .debug_selector(|| "close-locations".to_owned())
                     .px_1()
                     .rounded_sm()
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(0x40_4040)).text_color(rgb(FOREGROUND)))
                     .child("×")
                     .on_click(cx.listener(|code, _, _, cx| {
-                        code.places = None;
+                        code.locations = None;
                         cx.notify();
                     })),
             );
-        let list = uniform_list("code-places", places.rows.len(), move |range, _, cx| {
-            let Some(places) = &code.read(cx).places else {
-                return Vec::new();
-            };
-            range
-                .filter_map(|row| places.rows.get(row).map(|&listed| (row, listed)))
-                .map(|(row, listed)| match listed {
-                    Listed::File(index) => file_row(&places.found[index].location.path),
-                    Listed::Place(index) => {
-                        let code = code.clone();
-                        place_row(row, &places.found[index], places.chosen == Some(index))
+        let list = uniform_list(
+            "code-locations",
+            locations.rows.len(),
+            move |range, _, cx| {
+                let Some(locations) = &code.read(cx).locations else {
+                    return Vec::new();
+                };
+                range
+                    .filter_map(|row| locations.rows.get(row).map(|&listed| (row, listed)))
+                    .map(|(row, listed)| match listed {
+                        Listed::File(index) => file_row(&locations.found[index].location.path),
+                        Listed::Place(index) => {
+                            let code = code.clone();
+                            place_row(
+                                row,
+                                &locations.found[index],
+                                locations.chosen == Some(index),
+                            )
                             .on_click(move |_, window, cx| {
                                 code.update(cx, |code, cx| {
                                     window.focus(&code.focus_handle);
@@ -260,16 +270,17 @@ impl Code {
                                 });
                             })
                             .into_any_element()
-                    }
-                })
-                .collect()
-        })
-        .track_scroll(places.scroll.clone())
+                        }
+                    })
+                    .collect()
+            },
+        )
+        .track_scroll(locations.scroll.clone())
         .flex_1()
         .min_h_0();
         Some(
             div()
-                .debug_selector(|| "code-places".to_owned())
+                .debug_selector(|| "code-locations".to_owned())
                 .flex_shrink_0()
                 .h(relative(HEIGHT))
                 .flex()

@@ -16,7 +16,7 @@ use cox::agent::instructions::Instructions;
 use cox::chat::conversation::{Entry, State};
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
-use cox::workspace::{Chat, Place, Workspace};
+use cox::workspace::{Chat, Position, Workspace};
 use cox_core::store::{Record, Store};
 use fake_agent::{FakeAgent, Resumes};
 use gpui::{
@@ -437,7 +437,7 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     assert_eq!(
         read(
             cx,
-            Place {
+            Position {
                 project: 0,
                 chat: 0
             }
@@ -446,7 +446,7 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     );
     let read_second = read(
         cx,
-        Place {
+        Position {
             project: 1,
             chat: 0,
         },
@@ -519,7 +519,7 @@ fn kept_chat(
 }
 
 /// The chat at the top of the first project, closed, after no project.
-const FIRST_KEPT: Place = Place {
+const FIRST_KEPT: Position = Position {
     project: 1,
     chat: 0,
 };
