@@ -25,18 +25,18 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::{Agent, AgentThread};
-use crate::conversation::{AgentEvent, Command, Content, Conversation, Entry, State};
-use crate::input::{LineInput, Submitted};
-use crate::text::{Reading, Writer};
-use crate::workspace::shortened;
+use crate::chat::conversation::{AgentEvent, Command, Content, Conversation, Entry, State};
+use crate::ui::Copy;
+use crate::ui::input::{LineInput, Submitted};
+use crate::ui::paths::shortened;
+use crate::ui::text::{Reading, Writer};
+use crate::ui::theme::{DIM, FONT};
 
 actions!(
     cox,
     [
         /// Stops the turn the agent is taking.
         Stop,
-        /// Copies the text selected in the conversation.
-        Copy,
     ]
 );
 
@@ -64,14 +64,6 @@ pub type Again = Box<dyn FnOnce(&[Entry], &mut Window, &mut App) -> Agent>;
 /// A closed chat's agent started again.
 pub struct Reopened;
 
-/// The font the window is drawn in: a monospaced family the system has.
-/// A generic name such as `monospace` finds no font, and GPUI then falls
-/// back to a font with no bold.
-#[cfg(target_os = "macos")]
-pub const FONT: &str = "Menlo";
-#[cfg(not(target_os = "macos"))]
-pub const FONT: &str = "DejaVu Sans Mono";
-
 /// How wide the conversation is when the stage sits beside it.
 const CONVERSATION_WIDTH: f32 = 420.;
 
@@ -84,7 +76,6 @@ const CONTENT_HEIGHT: f32 = 320.;
 /// The colors of a change's lines.
 const REMOVED: u32 = 0xf0_8080;
 const ADDED: u32 = 0x80_d080;
-const DIM: u32 = 0xa0_a0a0;
 
 /// Whether a chat's stage is open beside its conversation.
 #[derive(Debug, Default)]

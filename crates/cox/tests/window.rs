@@ -11,9 +11,9 @@ use std::time::Duration;
 use agent_client_protocol::schema::v1::{
     McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
 };
-use cox::conversation::{Content, Entry, State, ToolCallResult};
-use cox::input::LineInput;
-use cox::view::{Panel, SessionView, StageView};
+use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
+use cox::chat::view::{Panel, SessionView, StageView};
+use cox::ui::input::LineInput;
 use cox_acp::McpServer;
 use cox_core::diff::Line;
 use fake_agent::FakeAgent;
@@ -62,8 +62,8 @@ fn open_with_stage(
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
     cx.update(|cx| {
-        cox::input::bind_keys(cx);
-        cox::view::bind_keys(cx);
+        cox::ui::input::bind_keys(cx);
+        cox::chat::view::bind_keys(cx);
     });
     let agent = Arc::new(FakeAgent::default());
     let fake = Arc::clone(&agent);
@@ -234,7 +234,7 @@ fn keeps_pasted_line_breaks(cx: &mut TestAppContext) {
 /// The address line holds one line.
 #[gpui::test]
 fn an_input_of_one_line_pastes_line_breaks_as_spaces(cx: &mut TestAppContext) {
-    cx.update(cox::input::bind_keys);
+    cx.update(cox::ui::input::bind_keys);
     let (input, cx) = cx.add_window_view(|_, cx| LineInput::new(cx));
     cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
 

@@ -1,13 +1,11 @@
 //! A terminal on a tab of the stage: the human types into it, and a
 //! command the agent runs there answers how it went.
 
-#![cfg(any(target_os = "linux", target_os = "macos"))]
-
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use cox::mcp::{Ended, Ran};
-use cox::terminal::{Program, Running, Terminal};
+use cox::agent::mcp::{Ended, Ran};
+use cox::stage::terminal::{Program, Running, Terminal};
 use gpui::{
     Entity, Focusable as _, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext,
     VisualTestContext, point, px,
@@ -32,7 +30,7 @@ fn run<'a>(
     command: &str,
     cwd: &std::path::Path,
 ) -> (Entity<Terminal>, Waiting, &'a mut VisualTestContext) {
-    cx.update(cox::terminal::bind_keys);
+    cx.update(cox::stage::terminal::bind_keys);
     let running = Running::start(Program::Command(command.to_owned()), cwd).unwrap();
     let (answer, waiting) = oneshot::channel();
     let (terminal, cx) = cx.add_window_view(|_, cx| Terminal::new(running, Some(answer), cx));

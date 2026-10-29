@@ -1,13 +1,13 @@
 //! The stage: where the human and the agent of one chat work together,
 //! beside the chat's conversation. It holds tabs, each showing a page of
-//! the browser (see [`crate::page`]), a Markdown file (see
-//! [`crate::document`]), a file as it is written, such as code (see
-//! [`crate::code`]), the project's files as a tree (see [`crate::tree`]),
-//! or a terminal (see [`crate::terminal`]). The first shows the page the
+//! the browser (see [`crate::stage::page`]), a Markdown file (see
+//! [`crate::stage::document`]), a file as it is written, such as code (see
+//! [`crate::stage::code`]), the project's files as a tree (see [`crate::stage::tree`]),
+//! or a terminal (see [`crate::stage::terminal`]). The first shows the page the
 //! stage starts on; the human opens more pages and terminals, and the
 //! tree, and closes tabs, and the agent opens and closes pages
 //! too, through the chat's relay. A page that asks for a window of its own
-//! gets a tab instead. With Cox's own tools (see [`crate::mcp`]), the
+//! gets a tab instead. With Cox's own tools (see [`crate::agent::mcp`]), the
 //! agent shows the human Markdown files and code, a tab for each file, and
 //! runs commands in terminals: a command gets the tab of the agent's last
 //! one that ended, or a new one. A link to a file opens it on a tab too:
@@ -24,6 +24,24 @@
 //! stage opens again on the pages and files kept, for the human to look
 //! at; its terminals are not started again. Once the human sends to the
 //! chat again, its agent works on those pages.
+//!
+//! - [`page`] shows a page of the browser, and sends the human's input
+//!   to it.
+//! - [`document`] shows a Markdown file, and [`code`] a file as it is
+//!   written, such as code: both [`follow`] the file as it changes.
+//! - [`servers`] holds the language servers a tab of code asks what the
+//!   code means.
+//! - [`tree`] shows the project's files, for the human to open one.
+//! - [`terminal`] is a terminal the human types into, and the agent runs
+//!   commands in.
+
+pub mod code;
+pub mod document;
+pub mod follow;
+pub mod page;
+pub mod servers;
+pub mod terminal;
+pub mod tree;
 
 use std::path::{Path, PathBuf};
 
@@ -35,19 +53,20 @@ use gpui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::agent::mcp::Ran;
+use crate::agent::mcp::Request;
+use crate::browser::relay::{FromAgent, Pages, Relay};
 use crate::browser::{Cef, TargetId};
-use crate::code::Code;
-use crate::document::{Document, LinkClicked};
-use crate::input::LineInput;
-use crate::markdown::FileLink;
-use crate::mcp::Ran;
-use crate::mcp::Request;
-use crate::page::{OpenTab, Page};
-use crate::relay::{FromAgent, Pages, Relay};
-use crate::servers::Servers;
-use crate::terminal::{Program, Running, Terminal};
-use crate::tree::{Chosen, Tree};
-use crate::view::Panel;
+use crate::chat::view::Panel;
+use crate::stage::code::Code;
+use crate::stage::document::Document;
+use crate::stage::page::{OpenTab, Page};
+use crate::stage::servers::Servers;
+use crate::stage::terminal::{Program, Running, Terminal};
+use crate::stage::tree::{Chosen, Tree};
+use crate::ui::LinkClicked;
+use crate::ui::input::LineInput;
+use crate::ui::markdown::FileLink;
 
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";
@@ -543,7 +562,7 @@ impl Stage {
     fn worked(
         &mut self,
         page: Option<String>,
-        input: Option<crate::relay::AgentInput>,
+        input: Option<crate::browser::relay::AgentInput>,
         cx: &mut Context<Self>,
     ) {
         let index = page
@@ -674,7 +693,7 @@ impl Stage {
     /// Opens `url`, a link the human clicked in what is in `from`, which a
     /// link to a file is from.
     fn open_from(&mut self, url: &str, from: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(link) = crate::markdown::file_link(url) {
+        if let Some(link) = crate::ui::markdown::file_link(url) {
             self.open_file(link, from, window, cx);
             return;
         }

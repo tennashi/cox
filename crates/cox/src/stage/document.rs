@@ -1,9 +1,9 @@
 //! A tab of the stage that shows a Markdown file, drawn as the
 //! conversation draws replies, for the human to read beside the
 //! conversation. The agent opens it with Cox's tool for that (see
-//! [`crate::mcp`]).
+//! [`crate::agent::mcp`]).
 //!
-//! The tab follows the file as it changes (see [`crate::follow`]). The
+//! The tab follows the file as it changes (see [`crate::stage::follow`]). The
 //! human selects and copies its text
 //! as in the conversation, and a click on a link asks for the link to open
 //! on the stage.
@@ -15,26 +15,22 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, ScrollHandle, Task, Window, div, prelude::*, px, rgb,
 };
 
-use crate::follow::{self, Follows, Stamp};
-use crate::markdown::{self, Block};
-use crate::text::Reading;
-use crate::view::Copy;
-use crate::workspace::shortened;
+use crate::stage::follow::{self, Follows, Stamp};
+use crate::ui::markdown::{self, Block};
+use crate::ui::paths::shortened;
+use crate::ui::text::Reading;
+use crate::ui::theme::DIM;
+use crate::ui::{Copy, LinkClicked};
 
 const KEY_CONTEXT: &str = "Document";
 
 /// How wide the text grows, at most.
 const TEXT_WIDTH: f32 = 760.;
 
-const DIM: u32 = 0xa0_a0a0;
-
 /// Binds the keys of the tab.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT))]);
 }
-
-/// The human clicked a link to the address it holds.
-pub struct LinkClicked(pub String);
 
 impl EventEmitter<LinkClicked> for Document {}
 

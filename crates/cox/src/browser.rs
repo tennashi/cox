@@ -12,6 +12,21 @@
 //! sits behind one mutex. On macOS, CEF's UI thread has to be the main
 //! thread, so GPUI gives it a turn every few milliseconds instead (see
 //! [`Browser::pump`]).
+//!
+//! - [`relay`] stands between a chat's agent's browser tools and the
+//!   browser, keeps the agent to its chat's pages, opens and closes tabs
+//!   for it, and tells the stage where the agent points, clicks and
+//!   types, which [`pointer`] turns into what the tab draws over the page.
+//! - [`profile`] is where the browser keeps logins and the like.
+//! - [`quit`] lets signals, and CEF on macOS, ask the app to quit, and
+//!   [`macos`] gives CEF what it expects of the app there.
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+pub mod pointer;
+pub mod profile;
+pub mod quit;
+pub mod relay;
 
 use std::os::raw::c_int;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -40,7 +55,7 @@ use cef::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::watch;
 
-use crate::profile::Profile;
+use crate::browser::profile::Profile;
 
 /// One picture CEF painted: the whole view, or the whole popup, in BGRA,
 /// in device pixels.
@@ -497,7 +512,7 @@ impl Cef {
     /// on CEF's side between calls. Linux does not need it.
     #[cfg(target_os = "macos")]
     pub fn pump(&self) {
-        crate::macos::cef_turn(cef::do_message_loop_work);
+        crate::browser::macos::cef_turn(cef::do_message_loop_work);
     }
 
     /// Closes every browser, waits for CEF to let go of them, and shuts

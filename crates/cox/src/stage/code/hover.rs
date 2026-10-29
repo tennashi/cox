@@ -14,10 +14,11 @@ use gpui::{
     ScrollHandle, Task, Window, anchored, deferred, div, prelude::*, px, rgb,
 };
 
-use super::{Code, FOREGROUND, MENU, MENU_BORDER};
-use crate::document::LinkClicked;
-use crate::markdown::{self, Block};
-use crate::text::Reading;
+use super::{Code, MENU, MENU_BORDER};
+use crate::ui::LinkClicked;
+use crate::ui::markdown::{self, Block};
+use crate::ui::text::Reading;
+use crate::ui::theme::FOREGROUND;
 
 /// How long the mouse rests on a name before the server is asked of it.
 const REST: Duration = Duration::from_millis(300);

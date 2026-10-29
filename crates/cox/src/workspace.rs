@@ -19,9 +19,11 @@ use gpui::{
     Stateful, Subscription, Window, actions, div, prelude::*, px, rgb,
 };
 
-use crate::conversation::{Entry, State};
-use crate::instructions::Instructions;
-use crate::view::{Reopened, SessionView};
+use crate::chat::conversation::{Entry, State};
+use crate::chat::instructions::Instructions;
+use crate::chat::view::{Reopened, SessionView};
+use crate::ui::paths::shortened;
+use crate::ui::theme::FONT;
 
 actions!(
     cox,
@@ -51,22 +53,25 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// Starts a chat's agent working in the directory given, with the
-/// instructions given, keeping the chat in the record given, if any, and
-/// returns the chat's view.
-pub type Open = Rc<
-    dyn Fn(
-        PathBuf,
-        Option<Instructions>,
-        Option<Record>,
-        &mut Window,
-        &mut App,
-    ) -> Entity<SessionView>,
->;
+/// What opens the window's chats: the [`Launcher`](crate::chat::session::Launcher)
+/// of the agents, or a fake one in tests.
+pub trait Opens {
+    /// Starts a chat's agent working in `cwd`, an absolute path, with
+    /// `instructions`, keeping the chat in `record` if given, and returns
+    /// the chat's view.
+    fn open(
+        &self,
+        cwd: PathBuf,
+        instructions: Option<Instructions>,
+        record: Option<Record>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<SessionView>;
 
-/// Returns the view of a closed chat, from what is kept of it, for the
-/// human to read, and to send to again.
-pub type Read = Rc<dyn Fn(Closed, &mut Window, &mut App) -> Entity<SessionView>>;
+    /// Returns the view of `closed`, a chat that has closed, from what is
+    /// kept of it, for the human to read, and to send to again.
+    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<SessionView>;
+}
 
 /// What is kept of a closed chat.
 pub struct Closed {
@@ -179,21 +184,18 @@ pub struct Workspace {
     projects: Vec<Project>,
     /// Where the chat shown is, if any is.
     shown: Option<Place>,
-    open: Open,
-    read: Read,
+    opens: Rc<dyn Opens>,
     store: Rc<Store>,
     focus_handle: FocusHandle,
 }
 
 impl Workspace {
     /// A window with no chat open, listing the chats kept in `store`.
-    /// `open` starts chats, `read` shows closed ones, and chats in no
-    /// project work in `home`.
+    /// `opens` opens chats, and chats in no project work in `home`.
     pub fn new(
         home: PathBuf,
         store: Rc<Store>,
-        open: Open,
-        read: Read,
+        opens: Rc<dyn Opens>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut projects = vec![Project::new(None, NO_PROJECT, home)];
@@ -220,8 +222,7 @@ impl Workspace {
         Self {
             projects,
             shown: None,
-            open,
-            read,
+            opens,
             store,
             focus_handle: cx.focus_handle(),
         }
@@ -284,7 +285,9 @@ impl Workspace {
             .inspect_err(|error| log::error!("the chat is not kept: {error:#}"))
             .ok();
         let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
-        let view = (self.open)(project.folder.clone(), instructions, record, window, cx);
+        let view = self
+            .opens
+            .open(project.folder.clone(), instructions, record, window, cx);
         let changes = cx.observe(&view, |_, _, cx| cx.notify());
         self.projects[index].chats.push(Chat {
             kept,
@@ -382,7 +385,7 @@ impl Workspace {
             session,
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };
-        let view = (self.read)(closed, window, cx);
+        let view = self.opens.read(closed, window, cx);
         let changes = cx.observe(&view, |_, _, cx| cx.notify());
         let reopened = cx.subscribe(&view, move |workspace, _, Reopened, cx| {
             workspace.projects[place.project].chats[place.chat].open = true;
@@ -590,17 +593,6 @@ impl Workspace {
     }
 }
 
-/// `path`, with the home directory as `~`.
-#[must_use]
-pub fn shortened(path: &Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_owned)) {
-        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Some(rest) => format!("~/{}", rest.display()),
-        None => path.display().to_string(),
-    }
-}
-
 impl Focusable for Workspace {
     /// The shown chat's input, or the window itself while none is open.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -643,24 +635,9 @@ impl Render for Workspace {
             .flex()
             .bg(rgb(0x1e_1e1e))
             .text_color(rgb(0xe0_e0e0))
-            .font_family(crate::view::FONT)
+            .font_family(FONT)
             .text_size(px(14.))
             .child(self.render_list(cx))
             .child(div().flex_1().min_w_0().h_full().child(shown))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn paths_in_home_are_shortened() {
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-            return;
-        };
-        assert_eq!(shortened(&home), "~");
-        assert_eq!(shortened(&home.join("Cox")), "~/Cox");
-        assert_eq!(shortened(Path::new("/elsewhere")), "/elsewhere");
     }
 }

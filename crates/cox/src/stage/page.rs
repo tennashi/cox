@@ -25,12 +25,12 @@ use gpui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::browser::pointer::{AgentPointer, Look, Rect, Spot};
+use crate::browser::relay::AgentInput;
 use crate::browser::{
     Browser, Caret, EditCommand, Event, Frame, Modifiers, MouseButton, Navigation, TargetId,
 };
-use crate::input::{LineInput, Submitted};
-use crate::pointer::{AgentPointer, Look, Rect, Spot};
-use crate::relay::AgentInput;
+use crate::ui::input::{LineInput, Submitted};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
 const LINE_HEIGHT: f32 = 40.;

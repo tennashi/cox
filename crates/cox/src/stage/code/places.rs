@@ -14,9 +14,9 @@ use gpui::{
     UniformListScrollHandle, div, prelude::*, px, relative, rgb, uniform_list,
 };
 
-use super::{Code, DIM, FOREGROUND, NUMBER};
-use crate::view::FONT;
-use crate::workspace::shortened;
+use super::{Code, NUMBER};
+use crate::ui::paths::shortened;
+use crate::ui::theme::{DIM, FONT, FOREGROUND};
 
 /// How tall the list is, as a part of the tab's height.
 const HEIGHT: f32 = 0.35;

@@ -1,6 +1,6 @@
 //! A tab of the stage that shows a file as it is written, such as code,
 //! for the human to read beside the conversation. The agent shows it with
-//! Cox's tool for that (see [`crate::mcp`]), at the lines it talks about,
+//! Cox's tool for that (see [`crate::agent::mcp`]), at the lines it talks about,
 //! which the tab marks and scrolls to; a click on a link to a file opens
 //! it too.
 //!
@@ -8,13 +8,13 @@
 //! short one does, each with its number beside it, in colors as its syntax
 //! says, when its language is one the editor knows (see
 //! [`cox_editor::language`]). It follows the file as it changes (see
-//! [`crate::follow`]), and parses it again in the background, keeping its
+//! [`crate::stage::follow`]), and parses it again in the background, keeping its
 //! colors until then. The wheel scrolls it down and across, and a drag
 //! selects text to copy: a double click selects a word, and a triple click
 //! a line.
 //!
 //! When the editor knows a server for the file's language, the tab asks
-//! the project's (see [`crate::servers`]) what the code means. The mouse
+//! the project's (see [`crate::stage::servers`]) what the code means. The mouse
 //! resting on a name shows what the server says of it, its type and its
 //! documentation (see [`hover`]). A click on a name with Command held, or
 //! Control off macOS, goes to where the name is defined, and the menu of
@@ -44,11 +44,11 @@ use gpui::{
     actions, anchored, deferred, div, fill, font, point, prelude::*, px, relative, rgb, size,
 };
 
-use crate::document::LinkClicked;
-use crate::follow::{self, Follows, Stamp};
-use crate::servers::LanguageServer;
-use crate::view::{Copy, FONT};
-use crate::workspace::shortened;
+use crate::stage::follow::{self, Follows, Stamp};
+use crate::stage::servers::LanguageServer;
+use crate::ui::paths::shortened;
+use crate::ui::theme::{BACKGROUND, DIM, FAILED, FONT, FOREGROUND, LINK, SELECTION};
+use crate::ui::{Copy, LinkClicked};
 
 actions!(
     code,
@@ -85,16 +85,9 @@ const WHEEL_LINES: f32 = 3.;
 /// height.
 const REVEAL_AT: f32 = 1. / 3.;
 
-const FOREGROUND: u32 = 0xd4_d4d4;
-const BACKGROUND: u32 = 0x1e_1e1e;
 const NUMBER: u32 = 0x6e_6e6e;
 const NUMBER_MARKED: u32 = 0xd0_d0d0;
 const MARKED: u32 = 0x33_3322;
-const SELECTION: u32 = 0x3a_4a6a;
-const DIM: u32 = 0xa0_a0a0;
-const FAILED: u32 = 0xf0_8080;
-/// What a click with Command held goes to the definition of.
-const LINK: u32 = 0x7f_b4ff;
 /// The name the server says something of.
 const HOVERED: u32 = 0x2c_3a4a;
 const MENU: u32 = 0x25_2526;

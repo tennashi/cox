@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use cox::code::{Back, Code, Forward};
-use cox::servers::{LanguageServer, Servers};
+use cox::stage::code::{Back, Code, Forward};
+use cox::stage::servers::{LanguageServer, Servers};
 use cox_core::tabs::Lines;
 use cox_editor::language::Highlight;
 use gpui::{
@@ -41,7 +41,7 @@ fn open<'a>(
     text: &str,
     lines: Option<Lines>,
 ) -> (Entity<Code>, &'a mut VisualTestContext) {
-    cx.update(cox::code::bind_keys);
+    cx.update(cox::stage::code::bind_keys);
     let text = text.to_owned();
     let (code, cx) = cx.add_window_view(|_, cx| Code::new(path, &text, lines, None, cx));
     cx.run_until_parked();
@@ -233,7 +233,7 @@ fn open_project<'a>(
     servers: &Servers,
 ) -> (Entity<Code>, &'a mut VisualTestContext) {
     fake_lsp::write_project(directory);
-    cx.update(cox::code::bind_keys);
+    cx.update(cox::stage::code::bind_keys);
     let path = directory.join("main.rs");
     let server: Entity<LanguageServer> = cx
         .update(|cx| servers.of(directory, &path, cx))
