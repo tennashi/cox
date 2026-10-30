@@ -26,6 +26,10 @@
 //! chat again, its agent works on those pages.
 //!
 //! - [`tab`] is a tab, and what it shows, whichever kind it is.
+//! - [`links`] is what opens on a tab, and which: a link, a file, or the
+//!   tree of the project's files.
+//! - [`asked`] is what the agent asks of the stage, through the relay and
+//!   its tools.
 //! - [`page`] shows a page of the browser, and sends the human's input
 //!   to it.
 //! - [`document`] shows a Markdown file, and [`code`] a file as it is
@@ -36,40 +40,39 @@
 //! - [`terminal`] is a terminal the human types into, and the agent runs
 //!   commands in.
 
+mod asked;
 pub mod code;
 pub mod document;
 pub mod follow;
+mod links;
 pub mod page;
 pub mod servers;
 pub mod tab;
 pub mod terminal;
 pub mod tree;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use cox_core::list::List;
 use cox_core::store::Record;
-use cox_core::tabs::{KeptTab, KeptTabs, Lines};
+use cox_core::tabs::{KeptTab, KeptTabs};
 use gpui::{
     App, Context, Div, Entity, Focusable, Stateful, Subscription, Task, Window, div, prelude::*,
     px, rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::agent::mcp::Ran;
 use crate::agent::mcp::ToolRequest;
-use cox_browser::relay::{FromAgent, Pages, Relay};
+use cox_browser::relay::{Pages, Relay};
 use cox_browser::{Cef, TargetId};
 
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::page::{OpenTab, Page};
-use crate::stage::tab::{ShowsFile, Tab, TabContent};
+use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
-use crate::stage::tree::{Chosen, Tree};
+use crate::ui::Panel;
 use crate::ui::input::LineInput;
-use crate::ui::markdown::FileLink;
-use crate::ui::{LinkClicked, Panel};
 
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";
@@ -226,168 +229,6 @@ impl Stage {
         cx.notify();
     }
 
-    /// Carries out what the relay tells the stage for the agent.
-    fn hear(
-        mut from_agent: UnboundedReceiver<FromAgent>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Task<()> {
-        cx.spawn_in(window, async move |this, cx| {
-            while let Some(heard) = from_agent.recv().await {
-                let done = this.update_in(cx, |stage, window, cx| match heard {
-                    FromAgent::Worked { page, input } => stage.worked(page, input, cx),
-                    FromAgent::Open {
-                        url,
-                        background,
-                        answer,
-                    } => {
-                        let page = stage.open_tab(&url, !background, window, cx);
-                        if !background {
-                            stage.show_panel(cx);
-                        }
-                        let _ = answer.send(Some(page));
-                    }
-                    FromAgent::Close { page, answer } => {
-                        let closed = match stage.index_of(&page) {
-                            Some(index) => stage.close_tab(index, window, cx),
-                            None => Err("No target with given id found"),
-                        };
-                        let _ = answer.send(closed);
-                    }
-                });
-                if done.is_err() {
-                    break;
-                }
-            }
-        })
-    }
-
-    /// Carries out what the agent's tools ask.
-    fn hear_tools(
-        mut from_tools: UnboundedReceiver<ToolRequest>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Task<()> {
-        cx.spawn_in(window, async move |this, cx| {
-            while let Some(request) = from_tools.recv().await {
-                let done = this.update_in(cx, |stage, window, cx| match request {
-                    ToolRequest::ShowMarkdown { path, text } => {
-                        stage.show_file::<Document>(path, &text, None, window, cx);
-                    }
-                    ToolRequest::ShowFile { path, text, lines } => {
-                        stage.show_file::<Code>(path, &text, lines, window, cx);
-                    }
-                    ToolRequest::RunCommand {
-                        command,
-                        cwd,
-                        answer,
-                    } => stage.run_command(command, &cwd, answer, window, cx),
-                });
-                if done.is_err() {
-                    break;
-                }
-            }
-        })
-    }
-
-    /// Shows the file at `path`, which says `text`, as a `T` shows it, at
-    /// `lines` if any: on the tab that shows it already, or a new one. The
-    /// stage opens if it was closed.
-    fn show_file<T: ShowsFile>(
-        &mut self,
-        path: PathBuf,
-        text: &str,
-        lines: Option<Lines>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let showing = self
-            .tabs
-            .iter()
-            .position(|tab| T::of(&tab.content).is_some_and(|shown| shown.read(cx).path() == path));
-        if let Some(index) = showing {
-            if let Some(shown) = T::of(&self.tabs[index].content) {
-                shown.update(cx, |shown, cx| shown.show(text, lines, cx));
-            }
-            self.tabs.show(index);
-            self.changed(cx);
-        } else {
-            self.push_file::<T>(path, text, lines, true, window, cx);
-        }
-        self.show_panel(cx);
-    }
-
-    /// Puts a tab showing the file at `path`, which says `text`, as a `T`
-    /// shows it, at `lines` if any, after the others, shown if `show` is.
-    fn push_file<T: ShowsFile>(
-        &mut self,
-        path: PathBuf,
-        text: &str,
-        lines: Option<Lines>,
-        show: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let shown = cx.new(|cx| T::open(&self.cwd, path, text, lines, cx));
-        let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
-        let opens = cx.subscribe_in(
-            &shown,
-            window,
-            |stage, shown, LinkClicked(url), window, cx| {
-                // A link to a file is from where the file is.
-                let path = shown.read(cx).path();
-                let from = path.parent().unwrap_or(path).to_owned();
-                stage.open_from(url, &from, window, cx);
-            },
-        );
-        self.push(T::content(shown), changes, Some(opens), show, cx);
-    }
-
-    /// Runs `command`, which the agent asked for, in `cwd`, and answers
-    /// `answer` once it ends: on the tab of the agent's last command if
-    /// that ended, or a new one. The stage opens if it was closed.
-    fn run_command(
-        &mut self,
-        command: String,
-        cwd: &std::path::Path,
-        answer: tokio::sync::oneshot::Sender<Result<Ran, String>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let running = match Running::start(Program::Command(command), cwd) {
-            Ok(running) => running,
-            Err(error) => {
-                let _ = answer.send(Err(format!("cannot start a terminal: {error}")));
-                return;
-            }
-        };
-        let terminal = cx.new(|cx| Terminal::new(running, Some(answer), cx));
-        let changes = cx.observe(&terminal, |stage, _, cx| stage.changed(cx));
-        let ended = self
-            .tabs
-            .iter()
-            .rposition(|tab| tab.content.is_agents_ended(cx));
-        if let Some(index) = ended {
-            let had_focus = self.tabs[index]
-                .content
-                .focus_handle(cx)
-                .contains_focused(window, cx);
-            self.tabs[index] = Tab {
-                content: TabContent::Terminal(terminal),
-                _changes: changes,
-                _opens: None,
-            };
-            self.tabs.show(index);
-            if had_focus {
-                self.focus_shown(window, cx);
-            }
-            self.changed(cx);
-        } else {
-            self.push(TabContent::Terminal(terminal), changes, None, true, cx);
-        }
-        self.show_panel(cx);
-    }
-
     /// A terminal the human opens, with the keyboard in it.
     fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let running = match Running::start(Program::Shell, &self.cwd) {
@@ -401,28 +242,6 @@ impl Stage {
         let changes = cx.observe(&terminal, |stage, _, cx| stage.changed(cx));
         self.push(TabContent::Terminal(terminal), changes, None, true, cx);
         self.focus_shown(window, cx);
-    }
-
-    /// The agent worked on `page`, sending it `input` if any: show its tab,
-    /// and the stage.
-    fn worked(
-        &mut self,
-        page: Option<String>,
-        input: Option<cox_browser::relay::AgentInput>,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(index) = page.and_then(|page| self.index_of(&page))
-            && self.tabs.shown_index() != Some(index)
-        {
-            self.tabs.show(index);
-            self.changed(cx);
-        }
-        self.show_panel(cx);
-        if let Some(input) = input
-            && let Some(page) = self.tabs.shown().and_then(|tab| tab.content.page())
-        {
-            page.update(cx, |page, cx| page.see(input, cx));
-        }
     }
 
     fn show_panel(&self, cx: &mut Context<Self>) {
@@ -532,108 +351,6 @@ impl Stage {
         if let Some(tab) = self.tabs.shown() {
             window.focus(&tab.content.focus_handle(cx));
         }
-    }
-
-    /// Opens `url`, a link the human clicked: on the tab that shows it
-    /// already, or a new one. A link to a file is from where the chat
-    /// works.
-    pub fn open(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let cwd = self.cwd.clone();
-        self.open_from(url, &cwd, window, cx);
-    }
-
-    /// Opens `url`, a link the human clicked in what is in `from`, which a
-    /// link to a file is from.
-    fn open_from(&mut self, url: &str, from: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(link) = crate::ui::markdown::file_link(url) {
-            self.open_file(link, from, window, cx);
-            return;
-        }
-        let showing = self.tabs.iter().position(|tab| {
-            tab.content
-                .page()
-                .is_some_and(|page| page.read(cx).navigation().url == url)
-        });
-        if let Some(index) = showing {
-            self.show(index, window, cx);
-        } else {
-            self.open_tab(url, true, window, cx);
-            self.focus_shown(window, cx);
-        }
-    }
-
-    /// Opens the file `link` links to, from `from`, with the keyboard in
-    /// its tab.
-    fn open_file(
-        &mut self,
-        link: FileLink<'_>,
-        from: &Path,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let path = linked(link.path, from, home.as_deref());
-        if let Err(error) = self.open_path(&path, link.lines, window, cx) {
-            log::warn!("cannot open {}: {error}", path.display());
-        }
-    }
-
-    /// Opens the file at `path`, at `lines` if any, with the keyboard in
-    /// its tab: as Markdown if it is a Markdown file and no lines are
-    /// given, and as it is written otherwise. Opens nothing if the file
-    /// cannot be read.
-    fn open_path(
-        &mut self,
-        path: &Path,
-        lines: Option<Lines>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> std::io::Result<()> {
-        let path = std::fs::canonicalize(path)?;
-        let text = std::fs::read_to_string(&path)?;
-        match FileTab::of(&path, lines) {
-            FileTab::Document => self.show_file::<Document>(path, &text, None, window, cx),
-            FileTab::Code(lines) => self.show_file::<Code>(path, &text, lines, window, cx),
-        }
-        self.focus_shown(window, cx);
-        Ok(())
-    }
-
-    /// Shows the tree of the project's files: on its tab, or a new one,
-    /// with the keyboard in it.
-    fn show_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let showing = self
-            .tabs
-            .iter()
-            .position(|tab| matches!(tab.content, TabContent::Tree(_)));
-        if let Some(index) = showing {
-            self.show(index, window, cx);
-        } else {
-            self.push_tree(Vec::new(), true, window, cx);
-            self.focus_shown(window, cx);
-        }
-    }
-
-    /// Puts a tab showing the tree of the project's files, with the
-    /// folders `open` open, after the others, shown if `show` is.
-    fn push_tree(
-        &mut self,
-        open: Vec<PathBuf>,
-        show: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let tree = cx.new(|cx| Tree::new(self.cwd.clone(), open, cx));
-        let changes = cx.observe(&tree, |stage, _, cx| stage.changed(cx));
-        let opens = cx.subscribe_in(&tree, window, |stage, _, Chosen(path), window, cx| {
-            // A file that cannot be read gets a tab all the same, which
-            // says why.
-            if stage.open_path(path, None, window, cx).is_err() {
-                stage.show_file::<Code>(path.clone(), "", None, window, cx);
-                stage.focus_shown(window, cx);
-            }
-        });
-        self.push(TabContent::Tree(tree), changes, Some(opens), show, cx);
     }
 
     /// A tab the human opens: blank, with the keyboard in its address line,
@@ -747,40 +464,6 @@ impl Stage {
     }
 }
 
-/// The file a link to `path` is to, from `from`, where the link is: `~/`
-/// stands for `home`, when there is one.
-fn linked(path: &str, from: &Path, home: Option<&Path>) -> PathBuf {
-    match (path.strip_prefix("~/"), home) {
-        (Some(rest), Some(home)) => home.join(rest),
-        _ => from.join(path),
-    }
-}
-
-/// Which tab a file opens on, from a link to it or from the tree.
-#[derive(Debug, PartialEq, Eq)]
-enum FileTab {
-    /// A tab showing it as Markdown, drawn.
-    Document,
-    /// A tab showing it as it is written, at these lines if any.
-    Code(Option<Lines>),
-}
-
-impl FileTab {
-    /// Which tab the file at `path` opens on, at `lines` if the link names
-    /// any: as Markdown if it is a Markdown file and no lines are named,
-    /// and as it is written otherwise.
-    fn of(path: &Path, lines: Option<Lines>) -> Self {
-        let is_markdown = path
-            .extension()
-            .is_some_and(|extension| extension == "md" || extension == "markdown");
-        if is_markdown && lines.is_none() {
-            Self::Document
-        } else {
-            Self::Code(lines)
-        }
-    }
-}
-
 impl Render for Stage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -794,67 +477,5 @@ impl Render for Stage {
                     .min_h_0()
                     .children(self.tabs.shown().map(|tab| tab.content.view())),
             )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use cox_core::tabs::Lines;
-
-    use super::{FileTab, linked};
-
-    #[test]
-    fn a_link_to_a_file_is_from_where_the_link_is() {
-        let from = Path::new("/project/docs");
-        let home = Some(Path::new("/home/me"));
-        assert_eq!(
-            linked("notes.md", from, home),
-            Path::new("/project/docs/notes.md")
-        );
-        assert_eq!(
-            linked("../src/main.rs", from, home),
-            Path::new("/project/docs/../src/main.rs")
-        );
-        assert_eq!(linked("/etc/hosts", from, home), Path::new("/etc/hosts"));
-    }
-
-    #[test]
-    fn a_tilde_stands_for_home_when_there_is_one() {
-        let from = Path::new("/project");
-        assert_eq!(
-            linked("~/notes.md", from, Some(Path::new("/home/me"))),
-            Path::new("/home/me/notes.md")
-        );
-        assert_eq!(
-            linked("~/notes.md", from, None),
-            Path::new("/project/~/notes.md")
-        );
-    }
-
-    #[test]
-    fn a_markdown_file_opens_drawn_unless_lines_are_named() {
-        let lines = Some(Lines { first: 3, last: 4 });
-        assert_eq!(
-            FileTab::of(Path::new("/a/README.md"), None),
-            FileTab::Document
-        );
-        assert_eq!(
-            FileTab::of(Path::new("/a/notes.markdown"), None),
-            FileTab::Document
-        );
-        assert_eq!(
-            FileTab::of(Path::new("/a/README.md"), lines),
-            FileTab::Code(lines)
-        );
-        assert_eq!(
-            FileTab::of(Path::new("/a/main.rs"), None),
-            FileTab::Code(None)
-        );
-        assert_eq!(
-            FileTab::of(Path::new("/a/main.rs"), lines),
-            FileTab::Code(lines)
-        );
     }
 }
