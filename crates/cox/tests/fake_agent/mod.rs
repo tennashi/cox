@@ -5,7 +5,7 @@
 //! `claude-agent-acp` does, and then reports it done. When the
 //! prompt mentions "fail", it answers with an error instead. When the prompt
 //! mentions "tool", it first runs `ls` as a tool call that completes, showing
-//! what it printed. When the
+//! what it printed, and when it mentions "twice" too, runs it again. When the
 //! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
 //! turn. A turn cancelled, or whose permission request Cox answers as cancelled,
 //! ends as cancelled. It goes on with a session it opened before as
@@ -212,7 +212,10 @@ async fn serve(
                             .respond_with_error(Error::new(-32603, "the model is unavailable"));
                     }
                     if text.contains("tool") {
-                        run_tool(&turn, &request.session_id)?;
+                        run_tool(&turn, &request.session_id, "call-2")?;
+                        if text.contains("twice") {
+                            run_tool(&turn, &request.session_id, "call-3")?;
+                        }
                     }
                     if text.contains("wait") {
                         say(&turn, &request.session_id, "waiting")?;
@@ -332,15 +335,15 @@ fn finish(cx: &ConnectionTo<Client>, session: &SessionId, id: &str) -> Result<()
 
 /// Runs `ls` as a tool call: announces it, then reports it running, and
 /// done with what it printed.
-fn run_tool(cx: &ConnectionTo<Client>, session: &SessionId) -> Result<()> {
+fn run_tool(cx: &ConnectionTo<Client>, session: &SessionId, id: &str) -> Result<()> {
     let update = |update| cx.send_notification(SessionNotification::new(session.clone(), update));
-    update(SessionUpdate::ToolCall(ToolCall::new("call-2", "ls")))?;
+    update(SessionUpdate::ToolCall(ToolCall::new(id.to_owned(), "ls")))?;
     update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-        "call-2",
+        id.to_owned(),
         ToolCallUpdateFields::new().status(ToolCallStatus::InProgress),
     )))?;
     update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-        "call-2",
+        id.to_owned(),
         ToolCallUpdateFields::new()
             .status(ToolCallStatus::Completed)
             .content(vec![LS_OUTPUT.into()]),

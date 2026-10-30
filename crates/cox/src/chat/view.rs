@@ -15,28 +15,32 @@
 //!
 //! The entries of the conversation are drawn in [`entries`]: what the
 //! human sent, the agent's replies, and what its tool calls and
-//! permission requests show.
+//! permission requests show. While the agent waits for an answer to a
+//! permission request, the number of an option chooses it. A line above
+//! the input tells what the chat waits for, when it is not the human's
+//! next line.
 
 use std::rc::Rc;
 
 use cox_core::store::Record;
 use gpui::{
-    AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, Subscription, Task, Window,
-    actions, div, prelude::*, px, rgb,
+    AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, Subscription, Task,
+    Window, actions, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::{Agent, AgentThread};
 use crate::agent::{AgentEvent, Command};
-use crate::chat::conversation::{Conversation, Entry, State};
+use crate::chat::conversation::{self, Conversation, Entry, State};
 use crate::ui::input::{LineInput, Submitted};
-use crate::ui::paths::shortened;
 use crate::ui::text::Reading;
 use crate::ui::theme::{DIM, FONT};
 use crate::ui::{Copy, Panel};
 
 mod entries;
+
+use entries::Folds;
 
 actions!(
     cox,
@@ -95,6 +99,8 @@ pub struct ChatView {
     open_link: OpenLink,
     /// The conversation's text, and what the human selects of it.
     reading: Reading,
+    /// What the human opened and closed of the conversation.
+    folds: Folds,
     /// Where the conversation is kept as it changes, if it is.
     record: Option<Record>,
     commands: UnboundedSender<Command>,
@@ -124,7 +130,7 @@ impl ChatView {
             .instructions
             .as_ref()
             .map_or_else(Conversation::new, |path| {
-                Conversation::noting(format!("[instructions: {}]", shortened(path)))
+                Conversation::noting(conversation::instructions_note(path))
             });
         let mut view = Self {
             record,
@@ -196,6 +202,7 @@ impl ChatView {
             stage,
             open_link,
             reading: Reading::default(),
+            folds: Folds::default(),
             record: None,
             commands,
             again: None,
@@ -353,8 +360,7 @@ impl ChatView {
         changed
     }
 
-    /// The human pressed Enter: send the text, or answer the permission
-    /// request with the number typed.
+    /// The human pressed Enter: send the text.
     fn submit(&mut self, input: &Entity<LineInput>, cx: &mut Context<Self>) {
         let text = input.read(cx).text().to_owned();
         if let Some(command) = self.follow(|conversation| conversation.submit(&text)) {
@@ -363,8 +369,7 @@ impl ChatView {
             input.update(cx, LineInput::clear);
             cx.notify();
         }
-        // Otherwise the text stays: a turn is running, or the number was
-        // not one of the options.
+        // Otherwise the text stays: a turn is running.
     }
 
     /// The human pressed Enter in a chat that may be closed: start its
@@ -386,6 +391,24 @@ impl ChatView {
             cx.emit(Reopened);
         }
         self.submit(input, cx);
+    }
+
+    /// A key went down: the number of an option of the permission request
+    /// the agent waits on chooses it, in place of typing the number.
+    fn choose_with_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(options) = self.conversation.asked() else {
+            return;
+        };
+        let keystroke = &event.keystroke;
+        if keystroke.modifiers.modified() {
+            return;
+        }
+        if let Ok(number @ 1..) = keystroke.key.parse::<usize>()
+            && number <= options.len()
+        {
+            self.choose(number - 1, cx);
+            cx.stop_propagation();
+        }
     }
 
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -419,32 +442,44 @@ impl Focusable for ChatView {
 }
 
 impl ChatView {
-    fn render_conversation(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let prompt = match self.conversation.state() {
-            State::Idle => "> ",
-            State::Busy => "… ",
-            State::Asking => "choose> ",
-            State::Stopping => "stopping… ",
+    /// What the chat waits for, when it is not the human's next line.
+    fn waiting(&self) -> Option<String> {
+        match self.conversation.state() {
+            State::Idle => None,
+            State::Busy => Some("The agent is working. Escape stops it.".to_owned()),
+            State::Asking => {
+                let count = self.conversation.asked().map_or(0, <[String]>::len);
+                let numbers = if count > 1 {
+                    format!("1–{count}")
+                } else {
+                    "1".to_owned()
+                };
+                Some(format!(
+                    "The agent asks to go on: choose with {numbers}, or stop it with Escape."
+                ))
+            }
+            State::Stopping => Some("Stopping…".to_owned()),
             // A closed chat whose agent can start again takes the next
             // line as an open one does.
-            State::Closed if self.again.is_some() => "> ",
-            State::Closed => "closed ",
-        };
+            State::Closed if self.again.is_some() => {
+                Some("Closed. A line sent starts the agent again.".to_owned())
+            }
+            State::Closed => Some("Closed.".to_owned()),
+        }
+    }
+
+    fn render_conversation(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let running = matches!(self.conversation.state(), State::Busy | State::Asking);
         // The frame lays the text out again.
         self.reading.clear();
-        let entries: Vec<_> = self
-            .conversation
-            .entries()
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| self.render_entry(index, entry, cx))
-            .collect();
+        let entries = self.render_entries(cx);
+        let waiting = self.waiting();
         let input = self.input.clone();
         div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &Stop, _, cx| view.stop(cx)))
             .on_action(cx.listener(Self::copy))
+            .capture_key_down(cx.listener(Self::choose_with_key))
             .size_full()
             .flex()
             .flex_col()
@@ -467,6 +502,15 @@ impl ChatView {
                     .gap_2()
                     .children(entries),
             )
+            .children(waiting.map(|waiting| {
+                div()
+                    .debug_selector(|| "waiting".to_owned())
+                    .px_3()
+                    .py_1()
+                    .text_size(px(12.))
+                    .text_color(rgb(DIM))
+                    .child(waiting)
+            }))
             .child(
                 div()
                     .debug_selector(|| "input".to_owned())
@@ -488,7 +532,6 @@ impl ChatView {
                             }
                         }),
                     )
-                    .child(prompt)
                     .child(div().flex_1().min_w_0().child(self.input.clone()))
                     .when(running, |bar| {
                         bar.child(
@@ -573,8 +616,11 @@ impl Render for ChatView {
                         .child(stage.view.clone()),
                 ),
             _ => root.justify_center().child(
+                // Narrower than its text unwrapped, as a window can be, the
+                // conversation wraps its text in place of growing past it.
                 div()
                     .flex_1()
+                    .min_w_0()
                     .max_w(px(CONVERSATION_MAX_WIDTH))
                     .h_full()
                     .child(conversation),

@@ -344,13 +344,36 @@ async fn stops_a_turn_with_escape_and_sends_the_next_line(cx: &mut TestAppContex
             [
                 Entry::Human("wait".to_owned()),
                 Entry::Reply("waiting".to_owned()),
-                Entry::Note("[Cancelled]".to_owned()),
+                Entry::Note("Stopped.".to_owned()),
                 Entry::Human("hello".to_owned()),
                 Entry::Reply("echo: hello".to_owned()),
-                Entry::Note("[EndTurn]".to_owned()),
             ]
         );
     });
+}
+
+#[gpui::test]
+async fn answers_a_permission_request_with_the_number_of_an_option(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open(cx);
+
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Asking).await;
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("waiting").is_some());
+    // No option has the number.
+    cx.simulate_keystrokes("9");
+    cx.simulate_keystrokes("1");
+    wait_for(cx, &view, State::Idle).await;
+
+    assert_eq!(
+        agent.answers(),
+        [RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new("allow")
+        )]
+    );
+    // The number that chose went to no input.
+    assert_eq!(input_text(cx, &view), "9");
 }
 
 #[gpui::test]
@@ -414,6 +437,62 @@ async fn shows_what_a_tool_call_printed(cx: &mut TestAppContext) {
                 if *content == [Content::Text(fake_agent::LS_OUTPUT.to_owned())]
         ));
     });
+}
+
+/// Clicks the middle of what `selector` names.
+fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"));
+    cx.simulate_click(bounds.center(), Modifiers::none());
+}
+
+/// How far down the window the top of what `selector` names is, as the
+/// last frame drew it. What a frame drew stays known after, so a test can
+/// see where something is, but not that it has gone.
+fn top(cx: &mut VisualTestContext, selector: &'static str) -> Pixels {
+    cx.run_until_parked();
+    cx.debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"))
+        .top()
+}
+
+#[gpui::test]
+async fn what_a_tool_call_printed_opens_with_a_click(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("tool");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    let closed = top(cx, "reply-2");
+    assert!(cx.debug_bounds("content-1").is_none());
+
+    click(cx, "line-1");
+    assert!(cx.debug_bounds("content-1").is_some());
+    assert!(top(cx, "reply-2") > closed);
+    click(cx, "line-1");
+    assert_eq!(top(cx, "reply-2"), closed);
+}
+
+#[gpui::test]
+async fn tool_calls_in_a_row_fold_into_one_line(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("tool twice");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    let folded = top(cx, "reply-3");
+    assert!(folded > top(cx, "calls-1"));
+
+    click(cx, "calls-1");
+    assert!(top(cx, "line-1") > top(cx, "calls-1"));
+    assert!(top(cx, "line-2") > top(cx, "line-1"));
+    assert!(top(cx, "reply-3") > top(cx, "line-2"));
+    assert!(top(cx, "reply-3") > folded);
+    click(cx, "line-2");
+    assert!(cx.debug_bounds("content-2").is_some());
+    click(cx, "calls-1");
+    assert_eq!(top(cx, "reply-3"), folded);
 }
 
 /// The title and result of the first tool call in the conversation.

@@ -17,6 +17,8 @@ pub const BACKGROUND: u32 = 0x1e_1e1e;
 pub const DIM: u32 = 0xa0_a0a0;
 /// What went wrong.
 pub const FAILED: u32 = 0xf0_8080;
+/// What waits for the human to answer.
+pub const ASKING: u32 = 0xd0_a040;
 /// The ground of the text the human selected.
 pub const SELECTION: u32 = 0x3a_4a6a;
 /// A link.

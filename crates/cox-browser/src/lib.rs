@@ -252,7 +252,7 @@ const NO_RANGE: cef::Range = cef::Range {
 /// Which process of the app is loading CEF on macOS.
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Process {
+enum Process {
     /// `cox` itself, at `Cox.app/Contents/MacOS/Cox`.
     Main,
     /// A helper, at `Cox.app/Contents/Frameworks/<name>.app/Contents/MacOS/<name>`.
@@ -268,7 +268,7 @@ pub enum Process {
 /// When this executable is not inside the bundle `cargo xtask bundle`
 /// makes, or the framework does not load.
 #[cfg(target_os = "macos")]
-pub fn load_framework(process: Process) {
+fn load_framework(process: Process) {
     use std::os::unix::ffi::OsStrExt as _;
 
     let exe = std::env::current_exe().expect("the executable has a path");
@@ -292,6 +292,27 @@ pub fn load_framework(process: Process) {
         "CEF did not load from {}; run Cox from the bundle `cargo xtask bundle` makes",
         framework.display()
     );
+}
+
+/// Runs a helper process of the app on macOS, the work CEF gives it on
+/// the command line, and returns its exit code. Each helper app under
+/// `Cox.app/Contents/Frameworks` does only this.
+///
+/// # Panics
+///
+/// When this executable is not inside the bundle `cargo xtask bundle`
+/// makes, or the framework does not load.
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn run_helper() -> i32 {
+    load_framework(Process::Helper);
+    cef::api_hash(cef::sys::CEF_API_VERSION, 0);
+    let args = Args::new();
+    cef::execute_process(
+        Some(args.as_main_args()),
+        None::<&mut cef::App>,
+        std::ptr::null_mut(),
+    )
 }
 
 /// CEF, running for the whole app. Cloning it shares the same CEF.

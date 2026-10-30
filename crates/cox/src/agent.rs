@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn a_new_session_is_told_the_conversation_so_far() {
         let entries = [
-            Entry::Note("[instructions: ~/cox/COX.md]".to_owned()),
+            Entry::Note("Instructions: ~/cox/COX.md".to_owned()),
             Entry::Human("edit".to_owned()),
             Entry::ToolCall {
                 id: "call-1".to_owned(),
@@ -447,7 +447,7 @@ mod tests {
                 chosen: Some(0),
             },
             Entry::Reply("Done".to_owned()),
-            Entry::Note("[EndTurn]".to_owned()),
+            Entry::Note("Stopped.".to_owned()),
         ];
         let told = retold(&entries);
         assert!(
