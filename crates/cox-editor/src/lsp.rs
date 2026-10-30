@@ -11,14 +11,22 @@
 //! [`Position`], which counts the bytes of a line in UTF-8, or in UTF-16,
 //! as the server does (see [`Encoding`]).
 //!
-//! Two threads read and write the messages, so that waiting for the server
-//! holds up nothing else: a request answers a future, which needs no
-//! runtime to wait on.
+//! Two threads read and write the messages (see [`wire`]), so that waiting
+//! for the server holds up nothing else: a request answers a future, which
+//! needs no runtime to wait on.
+//!
+//! - [`position`] is a place in a file as the server counts it.
+//! - [`wire`] reads and writes the messages, and acts on the server's own.
+//! - [`answers`] is what the server answers about a name, read from its
+//!   JSON.
+
+mod answers;
+mod position;
+mod wire;
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc;
@@ -28,7 +36,10 @@ use serde_json::{Value, json};
 use tokio::sync::{oneshot, watch};
 use url::Url;
 
-use crate::buffer::{Buffer, Point};
+pub use self::answers::{Hover, Location};
+use self::answers::{hover, locations};
+pub use self::position::{Encoding, Position};
+use self::wire::{Reader, write};
 
 /// A language server, as the editor starts it.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -83,100 +94,6 @@ pub enum Status {
     Working(String),
     /// It stopped, and answers nothing more.
     Stopped,
-}
-
-/// A place in a file as the server counts it: a line, from 0, and how far
-/// into it, in the server's [`Encoding`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Position {
-    pub line: u32,
-    pub character: u32,
-}
-
-/// What the server counts a line in.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Encoding {
-    /// Bytes, as the editor does.
-    Utf8,
-    /// UTF-16 code units, which every server knows.
-    #[default]
-    Utf16,
-    /// Characters.
-    Utf32,
-}
-
-impl Encoding {
-    fn named(name: &str) -> Self {
-        match name {
-            "utf-8" => Self::Utf8,
-            "utf-32" => Self::Utf32,
-            _ => Self::Utf16,
-        }
-    }
-
-    /// `point` of `buffer`, as the server counts it.
-    #[must_use]
-    pub fn position(self, buffer: &Buffer, point: Point) -> Position {
-        let point = buffer.clip(point);
-        let before = &buffer.line(point.line)[..point.column];
-        let character = match self {
-            Self::Utf8 => before.len(),
-            Self::Utf16 => before.encode_utf16().count(),
-            Self::Utf32 => before.chars().count(),
-        };
-        Position {
-            line: count(point.line),
-            character: count(character),
-        }
-    }
-
-    /// The place in `buffer` that `position` is at, as the server counts
-    /// it: at the end of its line if past it.
-    #[must_use]
-    pub fn point(self, buffer: &Buffer, position: Position) -> Point {
-        let line = position.line as usize;
-        let text = buffer.line(line);
-        let character = position.character as usize;
-        let column = match self {
-            Self::Utf8 => character,
-            Self::Utf16 | Self::Utf32 => {
-                let mut counted = 0;
-                text.char_indices()
-                    .find(|&(_, c)| {
-                        let past = counted >= character;
-                        counted += if self == Self::Utf16 {
-                            c.len_utf16()
-                        } else {
-                            1
-                        };
-                        past
-                    })
-                    .map_or(text.len(), |(at, _)| at)
-            }
-        };
-        buffer.clip(Point::new(line, column))
-    }
-}
-
-/// `n` as the protocol's numbers, which no line goes past.
-fn count(n: usize) -> u32 {
-    u32::try_from(n).unwrap_or(u32::MAX)
-}
-
-/// What the server says of a name: its type and its documentation, as
-/// Markdown, and the stretch of the line it is about, if it says.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Hover {
-    pub markdown: String,
-    pub range: Option<Range<Position>>,
-}
-
-/// A stretch of a file, such as where a name is defined.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Location {
-    /// The file, as an absolute path.
-    pub path: PathBuf,
-    pub range: Range<Position>,
 }
 
 /// A running language server, which the editor talks to.
@@ -545,397 +462,16 @@ impl Drop for OpenFile {
     }
 }
 
-/// Writes each message of `to_write` to `input`, the server's, until the
-/// client is gone or the server stopped reading.
-fn write(mut input: impl Write, to_write: &mpsc::Receiver<Vec<u8>>) {
-    while let Ok(message) = to_write.recv() {
-        if input
-            .write_all(&message)
-            .and_then(|()| input.flush())
-            .is_err()
-        {
-            break;
-        }
-    }
-}
-
-/// Reads what the server writes: answers to the client's requests, which
-/// it hands on, and its own requests and notifications.
-struct Reader {
-    shared: Arc<Shared>,
-    status: watch::Sender<Status>,
-    /// The work the server said it began and has not ended, in order, by
-    /// its token, with its title, and what the status says of it.
-    progress: Vec<(Value, String, String)>,
-    settings: Value,
-    root: PathBuf,
-}
-
-impl Reader {
-    fn read(mut self, output: impl Read) {
-        let mut output = BufReader::new(output);
-        while let Some(message) = read_message(&mut output) {
-            self.heard(message);
-        }
-        // Once the server stopped, nothing more is answered.
-        let waiting = lock(&self.shared.waiting).take();
-        for (_, answer) in waiting.into_iter().flatten() {
-            let _ = answer.send(Err(Error::Stopped));
-        }
-        self.status.send_replace(Status::Stopped);
-    }
-
-    fn heard(&mut self, mut message: Value) {
-        let method = message.get("method").and_then(Value::as_str);
-        let id = message.get("id").cloned();
-        match (method, id) {
-            // An answer.
-            (None, Some(id)) => {
-                let Some(id) = id.as_i64() else {
-                    return;
-                };
-                let answer = lock(&self.shared.waiting)
-                    .as_mut()
-                    .and_then(|waiting| waiting.remove(&id));
-                let Some(answer) = answer else {
-                    return;
-                };
-                let answered = match message.get_mut("error") {
-                    Some(error) => Err(Error::Answered {
-                        code: error.get("code").and_then(Value::as_i64).unwrap_or(0),
-                        message: error
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("the server failed")
-                            .to_owned(),
-                    }),
-                    None => Ok(message.get_mut("result").map_or(Value::Null, Value::take)),
-                };
-                let _ = answer.send(answered);
-            }
-            (Some(method), Some(id)) => {
-                let answer = self.answer(method, message.get("params"));
-                let mut answered = json!({ "jsonrpc": "2.0", "id": id });
-                match answer {
-                    Ok(result) => answered["result"] = result,
-                    Err(message) => {
-                        answered["error"] = json!({ "code": -32601, "message": message });
-                    }
-                }
-                self.shared.send(&answered);
-            }
-            (Some(method), None) => {
-                let method = method.to_owned();
-                self.notified(&method, message.get("params").unwrap_or(&Value::Null));
-            }
-            (None, None) => {}
-        }
-    }
-
-    /// The answer to the server's request `method`, with `params`.
-    fn answer(&self, method: &str, params: Option<&Value>) -> Result<Value, String> {
-        match method {
-            // Each setting asked for is the server's own.
-            "workspace/configuration" => {
-                let items = params
-                    .and_then(|params| params.get("items"))
-                    .and_then(Value::as_array)
-                    .map_or(0, Vec::len);
-                Ok(Value::Array(vec![self.settings.clone(); items]))
-            }
-            "workspace/workspaceFolders" => Ok(Url::from_directory_path(&self.root)
-                .map_or(Value::Null, |uri| json!([{ "uri": uri, "name": "" }]))),
-            "window/workDoneProgress/create"
-            | "client/registerCapability"
-            | "client/unregisterCapability"
-            | "window/showMessageRequest" => Ok(Value::Null),
-            _ => Err(format!("Cox does not answer {method}")),
-        }
-    }
-
-    /// The server's notification `method`, with `params`.
-    fn notified(&mut self, method: &str, params: &Value) {
-        match method {
-            "$/progress" => self.progressed(params),
-            "window/showMessage" | "window/logMessage" => {
-                if let Some(message) = params.get("message").and_then(Value::as_str) {
-                    log::debug!("{message}");
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// The server says how its work goes, as `params`.
-    fn progressed(&mut self, params: &Value) {
-        let Some(token) = params.get("token") else {
-            return;
-        };
-        let value = &params["value"];
-        let at = self.progress.iter().position(|(begun, ..)| begun == token);
-        match (value.get("kind").and_then(Value::as_str), at) {
-            (Some("begin"), _) => {
-                let title = value["title"].as_str().unwrap_or_default().to_owned();
-                let said = said(&title, value);
-                self.progress.push((token.clone(), title, said));
-            }
-            (Some("report"), Some(at)) => {
-                let (_, title, said_now) = &mut self.progress[at];
-                *said_now = said(title, value);
-            }
-            (Some("end"), Some(at)) => {
-                self.progress.remove(at);
-            }
-            _ => return,
-        }
-        let status = match self.progress.last() {
-            Some((.., said)) => Status::Working(said.clone()),
-            None => Status::Ready,
-        };
-        self.status.send_if_modified(|now| {
-            let changed = *now != status;
-            *now = status;
-            changed
-        });
-    }
-}
-
-/// What the status says of work called `title`, as `value` says it goes.
-fn said(title: &str, value: &Value) -> String {
-    let message = value.get("message").and_then(Value::as_str);
-    let percentage = value.get("percentage").and_then(Value::as_u64);
-    match (message, percentage) {
-        (Some(message), _) => format!("{title}: {message}"),
-        (None, Some(percentage)) => format!("{title}: {percentage}%"),
-        (None, None) => title.to_owned(),
-    }
-}
-
-/// Reads the next message from `output`, or `None` once the server
-/// stopped writing.
-fn read_message(output: &mut impl BufRead) -> Option<Value> {
-    loop {
-        let mut length = None;
-        let mut header = String::new();
-        loop {
-            header.clear();
-            if output.read_line(&mut header).ok()? == 0 {
-                return None;
-            }
-            let header = header.trim_end();
-            if header.is_empty() {
-                break;
-            }
-            if let Some((name, value)) = header.split_once(':')
-                && name.eq_ignore_ascii_case("content-length")
-            {
-                length = value.trim().parse::<usize>().ok();
-            }
-        }
-        let Some(length) = length else {
-            continue;
-        };
-        let mut body = vec![0; length];
-        output.read_exact(&mut body).ok()?;
-        // A message that is not JSON is skipped.
-        if let Ok(message) = serde_json::from_slice(&body) {
-            return Some(message);
-        }
-    }
-}
-
-/// The position `value` says.
-fn position(value: &Value) -> Option<Position> {
-    Some(Position {
-        line: u32::try_from(value.get("line")?.as_u64()?).ok()?,
-        character: u32::try_from(value.get("character")?.as_u64()?).ok()?,
-    })
-}
-
-/// The stretch `value` says.
-fn range(value: &Value) -> Option<Range<Position>> {
-    Some(position(value.get("start")?)?..position(value.get("end")?)?)
-}
-
-/// The hover `value` says, if it says anything.
-fn hover(value: &Value) -> Option<Hover> {
-    let markdown = markdown(value.get("contents")?);
-    if markdown.trim().is_empty() {
-        return None;
-    }
-    Some(Hover {
-        markdown,
-        range: value.get("range").and_then(range),
-    })
-}
-
-/// The contents of a hover, as Markdown: markup, or a string of the older
-/// form, or a list of them.
-fn markdown(contents: &Value) -> String {
-    match contents {
-        Value::String(markdown) => markdown.clone(),
-        Value::Array(contents) => contents
-            .iter()
-            .map(markdown)
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        Value::Object(contents) => {
-            let value = contents
-                .get("value")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            match (
-                contents.get("kind").and_then(Value::as_str),
-                contents.get("language").and_then(Value::as_str),
-            ) {
-                (Some("markdown"), _) => value.to_owned(),
-                (_, Some(language)) => format!("```{language}\n{value}\n```"),
-                // Plain text, which Markdown draws as it is in a code block.
-                _ => format!("```\n{value}\n```"),
-            }
-        }
-        _ => String::new(),
-    }
-}
-
-/// The locations `value` says: one, a list of them, or of links to them,
-/// leaving out those not in a file.
-fn locations(value: &Value) -> Vec<Location> {
-    let one = |value: &Value| {
-        // A link goes to the name, within the whole of what it links to.
-        let (uri, stretch) = match value.get("targetUri") {
-            Some(uri) => (
-                uri,
-                value
-                    .get("targetSelectionRange")
-                    .or_else(|| value.get("targetRange"))?,
-            ),
-            None => (value.get("uri")?, value.get("range")?),
-        };
-        Some(Location {
-            path: Url::parse(uri.as_str()?).ok()?.to_file_path().ok()?,
-            range: range(stretch)?,
-        })
-    };
-    match value {
-        Value::Array(values) => values.iter().filter_map(one).collect(),
-        Value::Object(_) => one(value).into_iter().collect(),
-        _ => Vec::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::{BufReader, Write as _};
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn counts_a_line_as_the_server_does() {
-        let buffer = Buffer::new("let 日本 = \"😀\";\n");
-        let after_emoji = Point::new(0, "let 日本 = \"😀".len());
-        for (encoding, character) in [
-            (Encoding::Utf8, 18),
-            (Encoding::Utf16, 12),
-            (Encoding::Utf32, 11),
-        ] {
-            let position = encoding.position(&buffer, after_emoji);
-            assert_eq!(position, Position { line: 0, character });
-            assert_eq!(encoding.point(&buffer, position), after_emoji);
-        }
-        // Past the end of the line, and within a character.
-        let end = Point::new(0, buffer.line(0).len());
-        let past = Position {
-            line: 0,
-            character: 99,
-        };
-        assert_eq!(Encoding::Utf16.point(&buffer, past), end);
-        assert_eq!(
-            Encoding::Utf8.point(
-                &buffer,
-                Position {
-                    line: 0,
-                    character: 5
-                }
-            ),
-            Point::new(0, 4)
-        );
-    }
+    use serde_json::{Value, json};
 
-    #[test]
-    fn reads_hovers_of_every_form() {
-        let markup = json!({
-            "contents": { "kind": "markdown", "value": "```rust\nfn main()\n```" },
-            "range": {
-                "start": { "line": 1, "character": 3 },
-                "end": { "line": 1, "character": 7 },
-            },
-        });
-        assert_eq!(
-            hover(&markup),
-            Some(Hover {
-                markdown: "```rust\nfn main()\n```".to_owned(),
-                range: Some(
-                    Position {
-                        line: 1,
-                        character: 3
-                    }..Position {
-                        line: 1,
-                        character: 7
-                    }
-                ),
-            })
-        );
-        let marked = json!({
-            "contents": [{ "language": "rust", "value": "fn main()" }, "Runs."],
-        });
-        assert_eq!(
-            hover(&marked).unwrap().markdown,
-            "```rust\nfn main()\n```\n\nRuns."
-        );
-        assert_eq!(hover(&json!({ "contents": "" })), None);
-        assert_eq!(hover(&Value::Null), None);
-    }
-
-    #[test]
-    fn reads_locations_and_links_to_them() {
-        let range = json!({
-            "start": { "line": 4, "character": 7 },
-            "end": { "line": 4, "character": 11 },
-        });
-        let whole = json!({
-            "start": { "line": 3, "character": 0 },
-            "end": { "line": 9, "character": 1 },
-        });
-        let expected = Location {
-            path: PathBuf::from("/src/main.rs"),
-            range: Position {
-                line: 4,
-                character: 7,
-            }..Position {
-                line: 4,
-                character: 11,
-            },
-        };
-        let location = json!({ "uri": "file:///src/main.rs", "range": range });
-        assert_eq!(locations(&location), std::slice::from_ref(&expected));
-        let links = json!([
-            { "targetUri": "file:///src/main.rs", "targetRange": whole, "targetSelectionRange": range },
-            { "targetUri": "untitled:Untitled-1", "targetRange": whole },
-        ]);
-        assert_eq!(locations(&links), [expected]);
-        assert_eq!(locations(&Value::Null), []);
-    }
-
-    #[test]
-    fn reads_messages_after_their_headers() {
-        let written = "Content-Length: 2\r\nContent-Type: x\r\n\r\n{}\
-                       content-length: 8\r\n\r\nnot json\
-                       Content-Length: 9\r\n\r\n[1, 2, 3]";
-        let mut output = BufReader::new(written.as_bytes());
-        assert_eq!(read_message(&mut output), Some(json!({})));
-        // The message that is not JSON is skipped.
-        assert_eq!(read_message(&mut output), Some(json!([1, 2, 3])));
-        assert_eq!(read_message(&mut output), None);
-    }
+    use super::wire::read_message;
+    use super::{Client, Encoding, Error, Position, Status, lock};
 
     /// Serves as a language server would, over pipes, keeping what it
     /// hears in `heard`, until it hears `exit`, or `stop`, which it does
