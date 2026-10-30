@@ -386,7 +386,7 @@ fn make_private(path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::diff::Line;
-    use crate::entry::{Content, ToolCallResult};
+    use crate::entry::{Content, Step, StepState, ToolCallResult};
     use crate::tabs::{KeptTab, Lines};
 
     fn scratch(name: &str) -> PathBuf {
@@ -471,6 +471,30 @@ mod tests {
                 Entry::Reply("Done".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn keeps_what_the_agent_thought_and_planned() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let said = [
+            Entry::Thought("Read it first.".to_owned()),
+            Entry::Plan(vec![
+                Step {
+                    text: "Read the code".to_owned(),
+                    state: StepState::Completed,
+                },
+                Step {
+                    text: "Fix it".to_owned(),
+                    state: StepState::InProgress,
+                },
+            ]),
+        ];
+        for (number, entry) in said.iter().enumerate() {
+            store.keep_entry(chat, number, entry).unwrap();
+        }
+
+        assert_eq!(store.entries(chat).unwrap(), said);
     }
 
     #[test]

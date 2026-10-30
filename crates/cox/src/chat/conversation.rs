@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use cox_acp::{PermissionAnswer, StopReason};
-pub use cox_core::entry::{Content, Entry, ToolCallResult};
+pub use cox_core::entry::{Content, Entry, Step, StepState, ToolCallResult};
 
 use crate::agent::{AgentEvent, Command, Opened};
 
@@ -208,6 +208,42 @@ impl Conversation {
         }
     }
 
+    /// Shows the plan the agent works to: in place of the plan it sent
+    /// before in the turn, if it did, so that the turn shows one plan, as
+    /// it stands.
+    fn plan(&mut self, steps: Vec<Step>) {
+        let turn = self
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::Human(_)))
+            .map_or(0, |human| human + 1);
+        let planned = self.entries[turn..]
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::Plan(_)));
+        match planned {
+            Some(index) => {
+                self.entries[turn + index] = Entry::Plan(steps);
+                self.changed.insert(turn + index);
+            }
+            None => self.push(Entry::Plan(steps)),
+        }
+    }
+
+    /// The plan the agent worked to in the last turn, as it stands, if it
+    /// sent one: the turn that runs, or the one that ended, until the
+    /// human sends the next line.
+    #[must_use]
+    pub fn last_plan(&self) -> Option<&[Step]> {
+        self.entries
+            .iter()
+            .rev()
+            .take_while(|entry| !matches!(entry, Entry::Human(_)))
+            .find_map(|entry| match entry {
+                Entry::Plan(steps) => Some(steps.as_slice()),
+                _ => None,
+            })
+    }
+
     /// Shows a permission request with what its tool call is about to do:
     /// what the request tells, or else what the call shows, which then
     /// shows only here.
@@ -271,6 +307,15 @@ impl Conversation {
                     self.push(Entry::Reply(text));
                 }
             }
+            AgentEvent::ThoughtText(text) => {
+                if let Some(Entry::Thought(thought)) = self.entries.last_mut() {
+                    thought.push_str(&text);
+                    self.changed.insert(self.entries.len() - 1);
+                } else {
+                    self.push(Entry::Thought(text));
+                }
+            }
+            AgentEvent::Plan(steps) => self.plan(steps),
             AgentEvent::ToolCall {
                 id,
                 title,
@@ -394,6 +439,69 @@ mod tests {
             ]
         );
         assert_eq!(conversation.state(), State::Idle);
+    }
+
+    #[test]
+    fn joins_thought_pieces_apart_from_the_reply() {
+        let mut conversation = Conversation::new();
+        conversation.submit("hello");
+
+        conversation.apply(AgentEvent::ThoughtText("Say ".to_owned()));
+        conversation.apply(AgentEvent::ThoughtText("it back.".to_owned()));
+        conversation.apply(AgentEvent::ReplyText("echo".to_owned()));
+        conversation.apply(AgentEvent::ThoughtText("Done.".to_owned()));
+
+        assert_eq!(
+            conversation.entries()[1..],
+            [
+                Entry::Thought("Say it back.".to_owned()),
+                Entry::Reply("echo".to_owned()),
+                Entry::Thought("Done.".to_owned()),
+            ]
+        );
+    }
+
+    fn step(text: &str, state: StepState) -> Step {
+        Step {
+            text: text.to_owned(),
+            state,
+        }
+    }
+
+    #[test]
+    fn shows_one_plan_a_turn_as_it_stands() {
+        let mut conversation = Conversation::new();
+        conversation.submit("plan");
+        let first = vec![step("Read", StepState::InProgress)];
+        let then = vec![
+            step("Read", StepState::Completed),
+            step("Fix", StepState::InProgress),
+        ];
+
+        conversation.apply(AgentEvent::Plan(first.clone()));
+        assert_eq!(conversation.last_plan(), Some(&first[..]));
+        conversation.apply(AgentEvent::ReplyText("reading".to_owned()));
+        conversation.take_changed();
+        conversation.apply(AgentEvent::Plan(then.clone()));
+        assert_eq!(conversation.take_changed(), [1]);
+        assert_eq!(
+            conversation.entries()[1..],
+            [
+                Entry::Plan(then.clone()),
+                Entry::Reply("reading".to_owned())
+            ]
+        );
+        assert_eq!(conversation.last_plan(), Some(&then[..]));
+
+        // What the turn did stays in sight once it ends.
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        assert_eq!(conversation.last_plan(), Some(&then[..]));
+        // The next turn plans anew.
+        conversation.submit("again");
+        assert_eq!(conversation.last_plan(), None);
+        conversation.apply(AgentEvent::Plan(first.clone()));
+        assert_eq!(conversation.entries().len(), 5);
+        assert_eq!(conversation.entries()[1], Entry::Plan(then));
     }
 
     #[test]

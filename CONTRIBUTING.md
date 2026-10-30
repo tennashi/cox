@@ -62,11 +62,28 @@ chat's stage.
 The conversation shows each tool call the agent makes on a line of its
 own, marked as running, done or failed; a click on the line opens what
 the call showed, which shows from the start for a call that failed.
-Tool calls made one after another fold into one line, under which only
-those still running show, until a click opens it. When the agent asks
-permission, a click on an option, or its number, answers. A line above
-the input tells what the chat waits for, while it is not the next line
-to send.
+What the agent thinks on its way, when it sends it, shows on a line of
+its own too, open while it arrives, and so does the plan it works to,
+with each step marked as waiting, under way or done. The plan also
+stays in sight on a card over the top right of the conversation, after
+its turn too, until the next line is sent; a click on the card's line
+folds it to that line. The tool calls, thoughts and
+plan of the agent one after another fold into one line, under which
+only the calls still running and the thought still arriving show, until
+a click opens it. When the agent asks permission, a click on an option,
+or its number, answers. A line above the input tells what the chat waits
+for, while it is not the next line to send.
+
+`claude-agent-acp` sends the plan Claude Code keeps with its task tools,
+which recent models get only when the agent runs with
+`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`. It sends what Claude thinks only with
+`CLAUDE_CODE_THINKING_DISPLAY=summarized`, since recent models leave it
+out unless asked. So, for both:
+
+```sh
+CLAUDE_CODE_ENABLE_TODO_TOOLS=1 CLAUDE_CODE_THINKING_DISPLAY=summarized \
+  cox npx -y @agentclientprotocol/claude-agent-acp
+```
 
 A chat's stage holds pages in tabs, and opens beside the conversation
 only when it is used: "Show stage" above the conversation opens it, and

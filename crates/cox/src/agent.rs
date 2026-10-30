@@ -20,12 +20,13 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use cox_acp::{
-    McpServer, PermissionAnswer, Session, StopReason, ToolCallContent, Transport, Update,
+    McpServer, PermissionAnswer, PlanEntry, PlanState, Session, StopReason, ToolCallContent,
+    Transport, Update,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use cox_core::entry::{Content, Entry, ToolCallResult};
+use cox_core::entry::{Content, Entry, Step, StepState, ToolCallResult};
 
 use crate::agent::instructions::Instructions;
 use crate::process::close_on_exec;
@@ -37,6 +38,11 @@ pub enum AgentEvent {
     Opened { id: String, how: Opened },
     /// A piece of the agent's reply.
     ReplyText(String),
+    /// A piece of what the agent thinks on its way to the reply.
+    ThoughtText(String),
+    /// The plan the agent works to, all of it, in place of the plan it
+    /// sent before.
+    Plan(Vec<Step>),
     /// A tool call the agent made started, was retitled, changed what it
     /// shows, or ended.
     ToolCall {
@@ -305,6 +311,10 @@ async fn take_turn(
         };
         match update {
             Update::ReplyText(text) => send(AgentEvent::ReplyText(text)),
+            Update::ThoughtText(text) => send(AgentEvent::ThoughtText(text)),
+            Update::Plan(entries) => {
+                send(AgentEvent::Plan(entries.into_iter().map(step).collect()));
+            }
             Update::ToolCall(call) => send(AgentEvent::ToolCall {
                 id: call.id,
                 title: call.title,
@@ -381,7 +391,9 @@ pub fn retold(entries: &[Entry]) -> String {
                     "[you asked permission for: {title}; the human chose: {chosen}]"
                 ))
             }
-            Entry::Note(_) => None,
+            // What the agent thought and planned is its own, and what came
+            // of it is told already.
+            Entry::Thought(_) | Entry::Plan(_) | Entry::Note(_) => None,
         })
         .collect();
     let mut told = told.join("\n\n");
@@ -411,6 +423,18 @@ fn shown(content: Vec<ToolCallContent>) -> Vec<Content> {
             },
         })
         .collect()
+}
+
+/// A step of the agent's plan, as the conversation keeps it.
+fn step(entry: PlanEntry) -> Step {
+    Step {
+        text: entry.text,
+        state: match entry.state {
+            PlanState::Pending => StepState::Pending,
+            PlanState::InProgress => StepState::InProgress,
+            PlanState::Completed => StepState::Completed,
+        },
+    }
 }
 
 /// How a tool call ended, as the conversation keeps it.

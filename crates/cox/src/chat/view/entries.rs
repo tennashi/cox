@@ -1,12 +1,15 @@
 //! The entries of a chat's conversation, as the window draws them: what
-//! the human sent, the agent's replies as Markdown, and its tool calls and
-//! permission requests, each on a line of its own under a mark of how it
-//! stands. What a call or a request shows, such as a command's output or
-//! a change to a file line by line, opens under it with a click, and shows
-//! at first only where the human has something to read: the change a
-//! request asks to make, or the output of a call that failed. Tool calls
-//! the agent made one after another fold into one line, under which only
-//! those still running show, until the human opens it.
+//! the human sent, the agent's replies as Markdown, and its tool calls,
+//! permission requests, thoughts and plan, each on a line of its own under
+//! a mark of how it stands. What a line stands for, such as a command's
+//! output, a change to a file line by line, all the agent thought, or the
+//! steps of its plan, opens under it with a click, and shows at first only
+//! where the human has something to read: the change a request asks to
+//! make, the output of a call that failed, or what the agent is thinking
+//! as it thinks it. The work the agent did between its replies, its tool
+//! calls, thoughts and plan one after another, folds into one line, under
+//! which only the calls still running and the thought still arriving show,
+//! until the human opens it.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -14,10 +17,10 @@ use std::ops::Range;
 use cox_core::diff::Line;
 use gpui::{AnyElement, Context, SharedString, Stateful, div, prelude::*, px, rgb};
 
-use crate::chat::conversation::{Content, Entry, State, ToolCallResult};
+use crate::chat::conversation::{Content, Entry, State, Step, StepState, ToolCallResult};
 use crate::chat::view::ChatView;
 use crate::ui::text::Writer;
-use crate::ui::theme::{ASKING, DIM, FAILED, LINK};
+use crate::ui::theme::{ASKING, DIM, FAILED, FOREGROUND, LINK};
 
 /// How tall what a tool call shows grows before it scrolls on its own.
 const CONTENT_HEIGHT: f32 = 320.;
@@ -31,30 +34,39 @@ const HUMAN_BACKGROUND: u32 = 0x2c_2f36;
 const BUTTON: u32 = 0x30_3030;
 const HOVER: u32 = 0x40_4040;
 
-/// How far the tool calls of a fold are moved right, under its line.
+/// How far the work of a fold, and the steps of a plan, are moved right,
+/// under their line.
 const INDENT: f32 = 16.;
 
-/// What the conversation shows in one place: one entry, or the tool calls
-/// of the entries in a range, which the agent made one after another.
+/// What the conversation shows in one place: one entry, or the work of
+/// the entries in a range, which the agent did one after another.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Shown {
     Entry(usize),
-    Calls(Range<usize>),
+    Work(Range<usize>),
 }
 
-/// What the conversation shows of `entries`, in order: two tool calls or
-/// more in a row fold into one place.
+/// Whether `entry` is work the agent does on its way to a reply.
+fn is_work(entry: &Entry) -> bool {
+    matches!(
+        entry,
+        Entry::ToolCall { .. } | Entry::Thought(_) | Entry::Plan(_)
+    )
+}
+
+/// What the conversation shows of `entries`, in order: two entries of
+/// work or more in a row fold into one place.
 pub(super) fn shown(entries: &[Entry]) -> Vec<Shown> {
     let mut shown = Vec::new();
     let mut index = 0;
     while index < entries.len() {
-        let calls = entries[index..]
+        let work = entries[index..]
             .iter()
-            .take_while(|entry| matches!(entry, Entry::ToolCall { .. }))
+            .take_while(|entry| is_work(entry))
             .count();
-        if calls > 1 {
-            shown.push(Shown::Calls(index..index + calls));
-            index += calls;
+        if work > 1 {
+            shown.push(Shown::Work(index..index + work));
+            index += work;
         } else {
             shown.push(Shown::Entry(index));
             index += 1;
@@ -64,12 +76,12 @@ pub(super) fn shown(entries: &[Entry]) -> Vec<Shown> {
 }
 
 /// A part of the conversation that the human opens and closes: what the
-/// entry at an index shows under its line, or the tool calls folded from
-/// the entry at an index on.
+/// entry at an index shows under its line, or the work folded from the
+/// entry at an index on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Fold {
     Content(usize),
-    Calls(usize),
+    Work(usize),
 }
 
 /// The parts the human opened or closed, which show otherwise as they do
@@ -99,54 +111,79 @@ impl ChatView {
         for shown in shown(entries) {
             rendered.push(match shown {
                 Shown::Entry(index) => self.render_entry(index, &entries[index], cx),
-                Shown::Calls(calls) => self.render_calls(calls, cx),
+                Shown::Work(work) => self.render_work(work, cx),
             });
         }
         rendered
     }
 
-    /// Tool calls made one after another, under a line that tells how many
-    /// they are and how many failed. Closed, only those still running show.
-    fn render_calls(&self, calls: Range<usize>, cx: &mut Context<Self>) -> AnyElement {
+    /// Whether the entry at `index` is still arriving: the last of a turn
+    /// that runs.
+    fn is_arriving(&self, index: usize) -> bool {
+        matches!(self.conversation.state(), State::Busy | State::Stopping)
+            && index + 1 == self.conversation.entries().len()
+    }
+
+    /// The work the agent did one after another, under a line that tells
+    /// how many tool calls it made and how many of them failed, how often
+    /// it thought, and how far its plan has gone. Closed, only the calls
+    /// still running and the thought still arriving show.
+    fn render_work(&self, work: Range<usize>, cx: &mut Context<Self>) -> AnyElement {
         let entries = self.conversation.entries();
-        let fold = Fold::Calls(calls.start);
+        let fold = Fold::Work(work.start);
         let open = self.folds.is_open(fold, false);
-        let failed = entries[calls.clone()]
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry,
-                    Entry::ToolCall {
-                        result: Some(ToolCallResult::Failed),
-                        ..
+        let (mut calls, mut failed, mut thoughts, mut plan) = (0, 0, 0, None);
+        for entry in &entries[work.clone()] {
+            match entry {
+                Entry::ToolCall { result, .. } => {
+                    calls += 1;
+                    if *result == Some(ToolCallResult::Failed) {
+                        failed += 1;
                     }
-                )
-            })
-            .count();
-        let start = calls.start;
+                }
+                Entry::Thought(_) => thoughts += 1,
+                Entry::Plan(steps) => plan = Some(steps),
+                _ => {}
+            }
+        }
+        let mut told = Vec::new();
+        if calls > 0 {
+            told.push((counted(calls, "tool call"), DIM));
+        }
+        if failed > 0 {
+            told.push((format!("{failed} failed"), FAILED));
+        }
+        if thoughts > 0 {
+            told.push((counted(thoughts, "thought"), DIM));
+        }
+        if let Some(steps) = plan {
+            told.push((format!("plan {}", progress(steps)), DIM));
+        }
+        let told = told.into_iter().enumerate().map(|(i, (text, color))| {
+            div()
+                .text_color(rgb(color))
+                .child(if i == 0 { text } else { format!("· {text}") })
+        });
+        let start = work.start;
         let summary = div()
-            .id(("calls", start))
-            .debug_selector(move || format!("calls-{start}"))
+            .id(("work", start))
+            .debug_selector(move || format!("work-{start}"))
             .flex()
             .gap_2()
             .text_color(rgb(DIM))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(BUTTON)))
             .child(disclosure(Some(open)))
-            .child(format!("{} tool calls", calls.len()))
-            .when(failed > 0, |summary| {
-                summary.child(
-                    div()
-                        .text_color(rgb(FAILED))
-                        .child(format!("{failed} failed")),
-                )
-            })
+            .children(told)
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.folds.flip(fold);
                 cx.notify();
             }));
-        let shown: Vec<_> = calls
-            .filter(|&index| open || matches!(entries[index], Entry::ToolCall { result: None, .. }))
+        let shown: Vec<_> = work
+            .filter(|&index| {
+                open || matches!(entries[index], Entry::ToolCall { result: None, .. })
+                    || (matches!(entries[index], Entry::Thought(_)) && self.is_arriving(index))
+            })
             .map(|index| self.render_entry(index, &entries[index], cx))
             .collect();
         div()
@@ -154,8 +191,8 @@ impl ChatView {
             .flex_col()
             .gap_1()
             .child(summary)
-            .when(!shown.is_empty(), |calls| {
-                calls.child(
+            .when(!shown.is_empty(), |work| {
+                work.child(
                     div()
                         .flex()
                         .flex_col()
@@ -211,6 +248,8 @@ impl ChatView {
                     })
                     .into_any_element()
             }
+            Entry::Thought(text) => self.render_thought(index, text, &mut writer, cx),
+            Entry::Plan(steps) => self.render_plan_entry(index, steps, cx),
             Entry::Note(text) => div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
@@ -255,6 +294,75 @@ impl ChatView {
                 }
             }
         }
+    }
+
+    /// What the agent thought, on a line that shows its start, opening to
+    /// all of it.
+    fn render_thought(
+        &self,
+        index: usize,
+        text: &str,
+        writer: &mut Writer,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let fold = Fold::Content(index);
+        // What the agent is thinking shows as it thinks it.
+        let open = self.folds.is_open(fold, self.is_arriving(index));
+        let line = div()
+            .id(("line", index))
+            .debug_selector(move || format!("line-{index}"))
+            .flex()
+            .gap_2()
+            .text_color(rgb(DIM))
+            .child(disclosure(Some(open)))
+            .child(div().flex_shrink_0().child("∴"))
+            .child(div().flex_1().min_w_0().truncate().italic().child(if open {
+                "Thinking".to_owned()
+            } else {
+                text.lines().next().unwrap_or_default().to_owned()
+            }));
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(folding(line, Some(fold), cx))
+            .when(open, |thought| {
+                thought.child(
+                    div()
+                        .pl(px(INDENT))
+                        .text_color(rgb(DIM))
+                        .child(writer.markdown(text)),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// The plan the agent worked to, on a line that tells how far it went,
+    /// opening to its steps.
+    fn render_plan_entry(
+        &self,
+        index: usize,
+        steps: &[Step],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let fold = Fold::Content(index);
+        let open = self.folds.is_open(fold, false);
+        let line = div()
+            .id(("line", index))
+            .debug_selector(move || format!("line-{index}"))
+            .flex()
+            .gap_2()
+            .text_color(rgb(DIM))
+            .child(disclosure(Some(open)))
+            .child(div().flex_shrink_0().child("≡"))
+            .child(format!("Plan {}", progress(steps)));
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(folding(line, Some(fold), cx))
+            .when(open, |plan| plan.child(render_steps(steps).pl(px(INDENT))))
+            .into_any_element()
     }
 }
 
@@ -341,9 +449,49 @@ fn folding(
         }))
 }
 
+/// `count` of what `one` names, as "1 thought" or "3 thoughts".
+fn counted(count: usize, one: &str) -> String {
+    if count == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{count} {one}s")
+    }
+}
+
+/// How far a plan has gone, as how many of its steps are done of all.
+pub(super) fn progress(steps: &[Step]) -> String {
+    let done = steps
+        .iter()
+        .filter(|step| step.state == StepState::Completed)
+        .count();
+    format!("{done}/{}", steps.len())
+}
+
+/// The steps of a plan, each under a mark of how far it has gone.
+pub(super) fn render_steps(steps: &[Step]) -> gpui::Div {
+    div().flex().flex_col().children(steps.iter().map(|step| {
+        let (mark, color, text) = match step.state {
+            StepState::Completed => ("✓", ADDED, DIM),
+            StepState::InProgress => ("●", LINK, FOREGROUND),
+            StepState::Pending => ("○", DIM, FOREGROUND),
+        };
+        div()
+            .flex()
+            .gap_2()
+            .child(div().flex_shrink_0().text_color(rgb(color)).child(mark))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_color(rgb(text))
+                    .child(SharedString::from(step.text.clone())),
+            )
+    }))
+}
+
 /// The mark of whether a part is open, `None` for one with nothing to
 /// open, which keeps the place of the mark.
-fn disclosure(open: Option<bool>) -> gpui::Div {
+pub(super) fn disclosure(open: Option<bool>) -> gpui::Div {
     let mark = match open {
         Some(true) => "▾",
         Some(false) => "▸",
@@ -445,9 +593,33 @@ mod tests {
                 Shown::Entry(0),
                 Shown::Entry(1),
                 Shown::Entry(2),
-                Shown::Calls(3..6),
+                Shown::Work(3..6),
                 Shown::Entry(6),
-                Shown::Calls(7..9),
+                Shown::Work(7..9),
+            ]
+        );
+    }
+
+    #[test]
+    fn folds_thoughts_and_plans_with_the_tool_calls() {
+        let entries = [
+            Entry::Human("look".to_owned()),
+            Entry::Thought("Look where?".to_owned()),
+            Entry::Reply("Here.".to_owned()),
+            Entry::Plan(Vec::new()),
+            call("call-1"),
+            Entry::Thought("Found it.".to_owned()),
+            Entry::Reply("Done.".to_owned()),
+        ];
+
+        assert_eq!(
+            shown(&entries),
+            [
+                Shown::Entry(0),
+                Shown::Entry(1),
+                Shown::Entry(2),
+                Shown::Work(3..6),
+                Shown::Entry(6),
             ]
         );
     }
@@ -462,7 +634,7 @@ mod tests {
         folds.flip(fold);
         assert!(folds.is_open(fold, false));
         assert!(!folds.is_open(fold, true));
-        assert!(!folds.is_open(Fold::Calls(3), false));
+        assert!(!folds.is_open(Fold::Work(3), false));
 
         folds.flip(fold);
         assert!(!folds.is_open(fold, false));

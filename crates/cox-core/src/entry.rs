@@ -14,6 +14,11 @@ pub enum Entry {
     Human(String),
     /// The agent's reply, as much of it as has arrived.
     Reply(String),
+    /// What the agent thought on its way to the reply, as much of it as
+    /// has arrived.
+    Thought(String),
+    /// The plan the agent works to in a turn, as it last sent it.
+    Plan(Vec<Step>),
     /// A tool call, running until it has a result.
     ToolCall {
         id: String,
@@ -37,6 +42,23 @@ pub enum Entry {
     /// A note from Cox: the instructions the agent gets, how a turn ended,
     /// an error, or the connection closing.
     Note(String),
+}
+
+/// A step of the plan the agent works to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Step {
+    /// What the step is to do.
+    pub text: String,
+    pub state: StepState,
+}
+
+/// How far a step of the plan has gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepState {
+    Pending,
+    InProgress,
+    Completed,
 }
 
 /// Something a tool call or a permission request shows.
