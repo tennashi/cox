@@ -18,6 +18,7 @@ use gpui::Pixels;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::start_cell;
+use crate::process::close_on_exec;
 
 /// How many lines the terminal keeps of what scrolled off.
 const SCROLLBACK: usize = 10_000;
@@ -142,7 +143,7 @@ impl Running {
         // never reads as hung up: on Linux, the terminal then drops what
         // the program wrote last, when it reads that after the hang-up.
         let held = user.try_clone()?;
-        crate::agent::close_on_exec();
+        close_on_exec();
         let pty = tty::from_fd(&options, 0, controller, user)?;
         let event_loop = EventLoop::new(Arc::clone(&term), listener, pty, true, false)?;
         let sender = event_loop.channel();

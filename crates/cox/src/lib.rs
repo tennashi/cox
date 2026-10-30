@@ -18,6 +18,8 @@
 //! - [`ui`] is what all of the window's parts share: the text the human
 //!   types into, text that can be selected, Markdown, and how it all
 //!   looks.
+//! - [`process`] is what Cox does as it starts a program, the agent's or
+//!   a terminal's.
 //! - [`storage`] says where this Cox keeps what lasts across its runs.
 //!
 //! Below them all is [`cox_browser`]: CEF, which renders the stages'
@@ -27,6 +29,7 @@
 pub mod agent;
 pub mod app;
 pub mod chat;
+pub mod process;
 pub mod stage;
 pub mod storage;
 pub mod ui;
