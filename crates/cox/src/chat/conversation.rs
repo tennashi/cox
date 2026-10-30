@@ -35,6 +35,8 @@ pub struct Conversation {
     /// The indexes of the entries added or changed since they were last
     /// taken, to keep.
     changed: BTreeSet<usize>,
+    /// The title the agent gave its session, if it gave one.
+    title: Option<String>,
 }
 
 impl Default for Conversation {
@@ -50,6 +52,7 @@ impl Conversation {
             entries: Vec::new(),
             state: State::Idle,
             changed: BTreeSet::new(),
+            title: None,
         }
     }
 
@@ -69,6 +72,7 @@ impl Conversation {
             entries,
             state: State::Closed,
             changed: BTreeSet::new(),
+            title: None,
         }
     }
 
@@ -229,6 +233,21 @@ impl Conversation {
         }
     }
 
+    /// The title the agent gave its session, if it gave one.
+    #[must_use]
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    /// The first line the human sent, if they sent one.
+    #[must_use]
+    pub fn first_line(&self) -> Option<&str> {
+        self.entries.iter().find_map(|entry| match entry {
+            Entry::Human(text) => text.lines().map(str::trim).find(|line| !line.is_empty()),
+            _ => None,
+        })
+    }
+
     /// The plan the agent worked to in the last turn, as it stands, if it
     /// sent one: the turn that runs, or the one that ended, until the
     /// human sends the next line.
@@ -282,6 +301,7 @@ impl Conversation {
     /// Shows what the agent side sent.
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
+            AgentEvent::Titled(title) => self.title = Some(title),
             AgentEvent::Opened { how, .. } => match how {
                 Opened::New => {}
                 Opened::Resumed => {

@@ -11,17 +11,17 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, Content, ContentBlock, ContentChunk, Diff,
     InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio,
     NewSessionRequest, PermissionOptionKind, Plan as AcpPlan, PlanEntry as AcpPlanEntry,
     PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate,
+    SelectedPermissionOutcome, SessionId, SessionInfoUpdate, SessionNotification, SessionUpdate,
     StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall,
     ToolCallContent as AcpToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
 };
+use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
 use agent_client_protocol::{AcpAgent, Agent, Client, ConnectTo, ConnectionTo, Responder};
 use anyhow::Context;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -62,6 +62,9 @@ impl From<McpServer> for AcpMcpServer {
 /// `mcp_servers` for the agent to use, and runs `talk` with it. The
 /// connection closes when `talk` returns.
 ///
+/// Each title the agent gives the session, whenever it gives one, goes to
+/// `titled`.
+///
 /// With `resume`, the id of a session the agent opened before, the agent
 /// goes on with that session instead, when it can: [`Session::resumed`]
 /// tells whether it did. What the agent tells of the session's past while
@@ -76,6 +79,7 @@ pub async fn connect<T>(
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     resume: Option<String>,
+    titled: impl Fn(String) + Send + Sync,
     talk: impl AsyncFnOnce(Session) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     let (updates, received) = unbounded_channel();
@@ -85,7 +89,14 @@ pub async fn connect<T>(
         .name("cox")
         .on_receive_notification(
             async |notification: SessionNotification, _cx| {
-                if let Some(update) = translate(notification.update) {
+                // A title comes between turns too.
+                if let SessionUpdate::SessionInfoUpdate(SessionInfoUpdate {
+                    title: MaybeUndefined::Value(title),
+                    ..
+                }) = notification.update
+                {
+                    titled(title);
+                } else if let Some(update) = translate(notification.update) {
                     deliver(&updates, update);
                 }
                 Ok(())
