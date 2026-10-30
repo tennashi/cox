@@ -28,6 +28,7 @@ use tokio::sync::oneshot;
 use cox_core::entry::{Content, Entry, ToolCallResult};
 
 use crate::agent::instructions::Instructions;
+use crate::process::close_on_exec;
 
 /// What the agent side tells the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,31 +204,6 @@ pub fn spawn<T: Transport + 'static>(
             stop: Some(stop),
             thread: Some(thread),
         },
-    }
-}
-
-/// Marks every file Cox has open to close when a program starts, so the
-/// program started next, the agent or a terminal's, gets none of them.
-/// Rust opens its files that way already, but CEF opens the stage's
-/// `DevTools` port without: an agent that outlived Cox would keep the port
-/// from the next Cox.
-pub(crate) fn close_on_exec() {
-    let Ok(entries) = std::fs::read_dir("/dev/fd") else {
-        return;
-    };
-    let fds: Vec<libc::c_int> = entries
-        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
-        .collect();
-    // Past standard input, output and error, which the agent gets its own of.
-    for fd in fds.into_iter().filter(|&fd| fd > 2) {
-        // SAFETY: this only sets a flag of the descriptor, and fails
-        // harmlessly on one no longer open, like the listing's own.
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFD);
-            if flags >= 0 {
-                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
-            }
-        }
     }
 }
 
