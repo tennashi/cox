@@ -15,9 +15,10 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, Content, ContentBlock, ContentChunk, Diff,
     InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio,
-    NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    ResumeSessionRequest, SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate,
+    NewSessionRequest, PermissionOptionKind, Plan as AcpPlan, PlanEntry as AcpPlanEntry,
+    PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
+    SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate,
     StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall,
     ToolCallContent as AcpToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
 };
@@ -207,6 +208,13 @@ fn translate(update: SessionUpdate) -> Option<Received> {
             content: ContentBlock::Text(text),
             ..
         }) => Some(Received::Update(Update::ReplyText(text.text))),
+        SessionUpdate::AgentThoughtChunk(ContentChunk {
+            content: ContentBlock::Text(text),
+            ..
+        }) => Some(Received::Update(Update::ThoughtText(text.text))),
+        SessionUpdate::Plan(AcpPlan { entries, .. }) => Some(Received::Update(Update::Plan(
+            entries.into_iter().map(PlanEntry::from).collect(),
+        ))),
         SessionUpdate::ToolCall(AcpToolCall {
             tool_call_id,
             title,
@@ -449,6 +457,11 @@ impl Turn<'_> {
 pub enum Update {
     /// A piece of the agent's reply.
     ReplyText(String),
+    /// A piece of what the agent thinks on its way to the reply.
+    ThoughtText(String),
+    /// The plan the agent works to, all of it, in place of the plan it
+    /// sent before.
+    Plan(Vec<PlanEntry>),
     /// The agent asks to be allowed to run a tool call.
     PermissionRequest(PermissionRequest),
     /// A tool call the agent made started, was retitled, changed what it
@@ -468,6 +481,38 @@ pub struct ToolCall {
     pub content: Option<Vec<ToolCallContent>>,
     /// How the call ended, or `None` while it runs.
     pub result: Option<ToolCallResult>,
+}
+
+/// A step of the plan the agent works to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanEntry {
+    /// What the step is to do.
+    pub text: String,
+    pub state: PlanState,
+}
+
+/// How far a step of the plan has gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlanState {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl From<AcpPlanEntry> for PlanEntry {
+    fn from(entry: AcpPlanEntry) -> Self {
+        let state = match entry.status {
+            PlanEntryStatus::InProgress => PlanState::InProgress,
+            PlanEntryStatus::Completed => PlanState::Completed,
+            // A state newer than this version of Cox knows is taken as
+            // not started.
+            _ => PlanState::Pending,
+        };
+        Self {
+            text: entry.content,
+            state,
+        }
+    }
 }
 
 /// Something a tool call shows: what it is about to do, such as a change to

@@ -16,9 +16,11 @@
 //! The entries of the conversation are drawn in [`entries`]: what the
 //! human sent, the agent's replies, and what its tool calls and
 //! permission requests show. While the agent waits for an answer to a
-//! permission request, the number of an option chooses it. A line above
-//! the input tells what the chat waits for, when it is not the human's
-//! next line.
+//! permission request, the number of an option chooses it. The plan the
+//! agent works to stays in sight on a card at the top right of the
+//! conversation, after its turn too, until the human sends the next line,
+//! and a click on its line folds it to that line. A line above the input
+//! tells what the chat waits for, when it is not the human's next line.
 
 use std::rc::Rc;
 
@@ -26,7 +28,7 @@ use cox_core::store::Record;
 use gpui::{
     AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, Subscription, Task,
-    Window, actions, div, prelude::*, px, rgb,
+    Window, actions, div, prelude::*, px, relative, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -40,7 +42,7 @@ use crate::ui::{Copy, Panel};
 
 mod entries;
 
-use entries::Folds;
+use entries::{Folds, disclosure, progress, render_steps};
 
 actions!(
     cox,
@@ -77,6 +79,11 @@ pub struct Reopened;
 /// How wide the conversation is when the stage sits beside it.
 const CONVERSATION_WIDTH: f32 = 420.;
 
+/// How wide the card of the plan in sight is, and how tall its steps grow
+/// before they scroll on their own.
+const PLAN_WIDTH: f32 = 240.;
+const PLAN_HEIGHT: f32 = 200.;
+
 /// How wide the conversation grows, at most, while the stage is closed.
 const CONVERSATION_MAX_WIDTH: f32 = 800.;
 
@@ -101,6 +108,8 @@ pub struct ChatView {
     reading: Reading,
     /// What the human opened and closed of the conversation.
     folds: Folds,
+    /// Whether the human folded the card of the plan to its line.
+    plan_folded: bool,
     /// Where the conversation is kept as it changes, if it is.
     record: Option<Record>,
     commands: UnboundedSender<Command>,
@@ -203,6 +212,7 @@ impl ChatView {
             open_link,
             reading: Reading::default(),
             folds: Folds::default(),
+            plan_folded: false,
             record: None,
             commands,
             again: None,
@@ -468,12 +478,68 @@ impl ChatView {
         }
     }
 
+    /// The plan the agent works to, on a card over the top right of the
+    /// conversation, which a click on its line folds to that line.
+    fn render_plan(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let steps = self.conversation.last_plan()?;
+        let open = !self.plan_folded;
+        Some(
+            div()
+                .id("plan")
+                .debug_selector(|| "plan".to_owned())
+                .absolute()
+                .top_2()
+                .right_3()
+                // Folded, it is only as wide as its line.
+                .when(open, |plan| plan.w(px(PLAN_WIDTH)))
+                .max_w(relative(0.8))
+                .p_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0x40_4040))
+                .bg(rgb(0x25_2526))
+                .shadow_md()
+                .text_size(px(12.))
+                // The conversation under the card hears none of the mouse.
+                .occlude()
+                .child(
+                    div()
+                        .id("plan-line")
+                        .debug_selector(|| "plan-line".to_owned())
+                        .flex()
+                        .gap_2()
+                        .text_color(rgb(DIM))
+                        .cursor_pointer()
+                        .child(disclosure(Some(open)))
+                        .child(format!("Plan {}", progress(steps)))
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.plan_folded = !view.plan_folded;
+                            cx.notify();
+                        })),
+                )
+                .when(open, |plan| {
+                    plan.child(
+                        div()
+                            .id("plan-steps")
+                            .debug_selector(|| "plan-steps".to_owned())
+                            .max_h(px(PLAN_HEIGHT))
+                            .overflow_y_scroll()
+                            .child(render_steps(steps)),
+                    )
+                }),
+        )
+    }
+
     fn render_conversation(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let running = matches!(self.conversation.state(), State::Busy | State::Asking);
         // The frame lays the text out again.
         self.reading.clear();
         let entries = self.render_entries(cx);
         let waiting = self.waiting();
+        let plan = self.render_plan(cx);
         let input = self.input.clone();
         div()
             .key_context(KEY_CONTEXT)
@@ -485,22 +551,30 @@ impl ChatView {
             .flex_col()
             .child(
                 div()
-                    .id("conversation")
+                    .relative()
                     .flex_1()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-                    .on_mouse_move(cx.listener(Self::mouse_move))
-                    .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(|view, _, _, _| view.reading.stop()),
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id("conversation")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                            .on_mouse_move(cx.listener(Self::mouse_move))
+                            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+                            .on_mouse_up_out(
+                                MouseButton::Left,
+                                cx.listener(|view, _, _, _| view.reading.stop()),
+                            )
+                            .p_3()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .children(entries),
                     )
-                    .p_3()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children(entries),
+                    // Drawn after the conversation, over it.
+                    .children(plan),
             )
             .children(waiting.map(|waiting| {
                 div()

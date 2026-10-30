@@ -482,17 +482,80 @@ async fn tool_calls_in_a_row_fold_into_one_line(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     wait_for(cx, &view, State::Idle).await;
     let folded = top(cx, "reply-3");
-    assert!(folded > top(cx, "calls-1"));
+    assert!(folded > top(cx, "work-1"));
 
-    click(cx, "calls-1");
-    assert!(top(cx, "line-1") > top(cx, "calls-1"));
+    click(cx, "work-1");
+    assert!(top(cx, "line-1") > top(cx, "work-1"));
     assert!(top(cx, "line-2") > top(cx, "line-1"));
     assert!(top(cx, "reply-3") > top(cx, "line-2"));
     assert!(top(cx, "reply-3") > folded);
     click(cx, "line-2");
     assert!(cx.debug_bounds("content-2").is_some());
-    click(cx, "calls-1");
+    click(cx, "work-1");
     assert_eq!(top(cx, "reply-3"), folded);
+}
+
+#[gpui::test]
+async fn what_the_agent_thought_folds_with_its_tool_calls(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("think, then run a tool");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.conversation().entries()[1],
+            Entry::Thought(fake_agent::THOUGHT.to_owned())
+        );
+    });
+    let folded = top(cx, "reply-3");
+
+    click(cx, "work-1");
+    click(cx, "line-1");
+    assert!(top(cx, "reply-3") > folded);
+}
+
+#[gpui::test]
+async fn the_plan_stays_in_sight_until_the_next_line(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("plan, and wait");
+    cx.simulate_keystrokes("enter");
+    cx.condition(&view, |view, _| view.conversation().last_plan().is_some())
+        .await;
+    // On a card over the top of the conversation, at its right.
+    let card = cx.debug_bounds("plan").expect("the plan is drawn");
+    let conversation = cx.debug_bounds("reply-2").expect("the reply is drawn");
+    assert!(card.top() < conversation.bottom());
+    assert!(card.right() > conversation.center().x);
+
+    // What the turn did stays in sight once it ends.
+    cx.simulate_keystrokes("escape");
+    wait_for(cx, &view, State::Idle).await;
+    view.read_with(cx, |view, _| {
+        assert!(matches!(
+            view.conversation().last_plan(),
+            Some(steps) if steps.len() == 2
+        ));
+    });
+    // A click folds it to its line.
+    let height = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        cx.debug_bounds("plan")
+            .expect("the plan is drawn")
+            .size
+            .height
+    };
+    let open = height(cx);
+    click(cx, "plan-line");
+    assert!(height(cx) < open);
+
+    cx.simulate_input("again");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.conversation().last_plan(), None);
+    });
 }
 
 /// The title and result of the first tool call in the conversation.

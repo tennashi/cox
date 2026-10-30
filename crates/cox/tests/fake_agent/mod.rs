@@ -6,6 +6,8 @@
 //! prompt mentions "fail", it answers with an error instead. When the prompt
 //! mentions "tool", it first runs `ls` as a tool call that completes, showing
 //! what it printed, and when it mentions "twice" too, runs it again. When the
+//! prompt mentions "think", it first thinks [`THOUGHT`], and when it mentions
+//! "plan", it first sends a plan of two steps, the first under way. When the
 //! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
 //! turn. A turn cancelled, or whose permission request Cox answers as cancelled,
 //! ends as cancelled. It goes on with a session it opened before as
@@ -19,11 +21,11 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Diff, InitializeRequest,
     InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpServer, NewSessionRequest,
-    NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, ResumeSessionRequest,
-    ResumeSessionResponse, SessionCapabilities, SessionId, SessionNotification,
-    SessionResumeCapabilities, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent,
-    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority,
+    PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
+    SessionId, SessionNotification, SessionResumeCapabilities, SessionUpdate, StopReason,
+    TextContent, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result};
 use tokio::sync::Notify;
@@ -136,6 +138,24 @@ impl FakeAgent {
     }
 }
 
+/// What the agent does on its way to the reply, as the prompt asks: it
+/// thinks, plans and runs tools.
+fn work(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()> {
+    if text.contains("think") {
+        think(cx, session)?;
+    }
+    if text.contains("plan") {
+        plan(cx, session)?;
+    }
+    if text.contains("tool") {
+        run_tool(cx, session, "call-2")?;
+        if text.contains("twice") {
+            run_tool(cx, session, "call-3")?;
+        }
+    }
+    Ok(())
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "what the agent records, each once"
@@ -211,12 +231,7 @@ async fn serve(
                         return responder
                             .respond_with_error(Error::new(-32603, "the model is unavailable"));
                     }
-                    if text.contains("tool") {
-                        run_tool(&turn, &request.session_id, "call-2")?;
-                        if text.contains("twice") {
-                            run_tool(&turn, &request.session_id, "call-3")?;
-                        }
-                    }
+                    work(&turn, &request.session_id, &text)?;
                     if text.contains("wait") {
                         say(&turn, &request.session_id, "waiting")?;
                         cancels.wake.notified().await;
@@ -273,6 +288,29 @@ fn texts_of(prompt: &[ContentBlock]) -> Vec<String> {
 }
 
 /// Sends a piece of the reply.
+/// What the agent thinks when the prompt mentions "think".
+pub const THOUGHT: &str = "Look at the code first.\nThen answer.";
+
+fn think(cx: &ConnectionTo<Client>, session: &SessionId) -> Result<()> {
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+            THOUGHT,
+        )))),
+    ))
+}
+
+fn plan(cx: &ConnectionTo<Client>, session: &SessionId) -> Result<()> {
+    let step = |text: &str, status| PlanEntry::new(text, PlanEntryPriority::Medium, status);
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::Plan(Plan::new(vec![
+            step("Read the code", PlanEntryStatus::InProgress),
+            step("Fix it", PlanEntryStatus::Pending),
+        ])),
+    ))
+}
+
 fn say(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()> {
     cx.send_notification(SessionNotification::new(
         session.clone(),
