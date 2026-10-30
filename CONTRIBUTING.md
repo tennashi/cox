@@ -59,6 +59,15 @@ conversation stays, and the next line can be sent once the agent has
 stopped. A click on a link in a chat's conversation opens it on that
 chat's stage.
 
+The conversation shows each tool call the agent makes on a line of its
+own, marked as running, done or failed; a click on the line opens what
+the call showed, which shows from the start for a call that failed.
+Tool calls made one after another fold into one line, under which only
+those still running show, until a click opens it. When the agent asks
+permission, a click on an option, or its number, answers. A line above
+the input tells what the chat waits for, while it is not the next line
+to send.
+
 A chat's stage holds pages in tabs, and opens beside the conversation
 only when it is used: "Show stage" above the conversation opens it, and
 it opens on its own when a link opens on it, or when the agent works on

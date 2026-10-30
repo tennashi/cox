@@ -292,8 +292,8 @@ async fn the_agent_gets_the_projects_instructions_with_the_first_line(cx: &mut T
     let Entry::Note(note) = first else {
         panic!("the chat opens with a note, not {first:?}");
     };
-    assert!(note.starts_with("[instructions: "), "{note}");
-    assert!(note.ends_with("COX.md]"), "{note}");
+    assert!(note.starts_with("Instructions: "), "{note}");
+    assert!(note.ends_with("COX.md"), "{note}");
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&folder);
 }
@@ -533,9 +533,8 @@ async fn a_closed_chat_goes_on_with_its_session_when_the_human_sends_to_it(
     let mut went_on = said();
     went_on.extend([
         Entry::Human("again".to_owned()),
-        Entry::Note("[resumed: the agent goes on from here]".to_owned()),
+        Entry::Note("Resumed: the agent goes on from here.".to_owned()),
         Entry::Reply("echo: again".to_owned()),
-        Entry::Note("[EndTurn]".to_owned()),
     ]);
     assert_eq!(shown_entries(cx, &workspace), went_on);
     assert_eq!(opened(cx, &workspace), [vec![], vec![true]]);
@@ -567,7 +566,7 @@ async fn what_an_agent_tells_of_a_session_it_loads_is_not_shown_again(cx: &mut T
         shown[3..5],
         [
             Entry::Human("again".to_owned()),
-            Entry::Note("[resumed: the agent goes on from here]".to_owned()),
+            Entry::Note("Resumed: the agent goes on from here.".to_owned()),
         ]
     );
     assert_eq!(shown[5], Entry::Reply("echo: again".to_owned()));
@@ -599,7 +598,7 @@ fn assert_retold(
         "{shown:?}"
     );
     assert!(
-        matches!(&shown[5], Entry::Note(note) if note.starts_with("[instructions: ")),
+        matches!(&shown[5], Entry::Note(note) if note.starts_with("Instructions: ")),
         "{shown:?}"
     );
 }

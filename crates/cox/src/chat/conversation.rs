@@ -3,8 +3,9 @@
 //! the commands the human's lines turn into (see [`crate::agent`]).
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
-use cox_acp::PermissionAnswer;
+use cox_acp::{PermissionAnswer, StopReason};
 pub use cox_core::entry::{Content, Entry, ToolCallResult};
 
 use crate::agent::{AgentEvent, Command, Opened};
@@ -100,24 +101,24 @@ impl Conversation {
         self.entries.push(entry);
     }
 
-    /// Takes what the human entered, and returns what to ask of the agent,
-    /// if anything: a prompt when idle, or the answer to a permission request
-    /// when the input is the number of one of its options.
+    /// Takes what the human entered, and returns the prompt to send the
+    /// agent, when it waits for one.
     pub fn submit(&mut self, input: &str) -> Option<Command> {
-        match self.state {
-            State::Idle => {
-                if input.trim().is_empty() {
-                    return None;
-                }
-                self.push(Entry::Human(input.to_owned()));
-                self.state = State::Busy;
-                Some(Command::Prompt(input.to_owned()))
-            }
-            State::Asking => {
-                let number: usize = input.trim().parse().ok()?;
-                self.choose(number.checked_sub(1)?)
-            }
-            State::Busy | State::Stopping | State::Closed => None,
+        if self.state != State::Idle || input.trim().is_empty() {
+            return None;
+        }
+        self.push(Entry::Human(input.to_owned()));
+        self.state = State::Busy;
+        Some(Command::Prompt(input.to_owned()))
+    }
+
+    /// The options of the permission request the agent waits on, if it
+    /// waits on one.
+    #[must_use]
+    pub fn asked(&self) -> Option<&[String]> {
+        match (self.state, self.entries.last()) {
+            (State::Asking, Some(Entry::Permission { options, .. })) => Some(options),
+            _ => None,
         }
     }
 
@@ -249,19 +250,16 @@ impl Conversation {
                 Opened::New => {}
                 Opened::Resumed => {
                     self.push(Entry::Note(
-                        "[resumed: the agent goes on from here]".to_owned(),
+                        "Resumed: the agent goes on from here.".to_owned(),
                     ));
                 }
                 Opened::Retold { instructions } => {
                     self.push(Entry::Note(
-                        "[the agent could not resume its session: a new one is told the conversation so far]"
+                        "The agent could not resume its session: a new one is told the conversation so far."
                             .to_owned(),
                     ));
                     if let Some(path) = instructions {
-                        self.push(Entry::Note(format!(
-                            "[instructions: {}]",
-                            crate::ui::paths::shortened(&path)
-                        )));
+                        self.push(Entry::Note(instructions_note(&path)));
                     }
                 }
             },
@@ -293,17 +291,19 @@ impl Conversation {
                 }
             }
             AgentEvent::TurnEnded(reason) => {
-                self.push(Entry::Note(format!("[{reason:?}]")));
+                if let Some(note) = ended(reason) {
+                    self.push(Entry::Note(note.to_owned()));
+                }
                 self.state = State::Idle;
             }
             AgentEvent::TurnFailed(error) => {
-                self.push(Entry::Note(format!("[error: {error}]")));
+                self.push(Entry::Note(format!("The turn failed: {error}")));
                 self.state = State::Idle;
             }
             AgentEvent::Closed(error) => {
                 let note = match error {
-                    Some(error) => format!("[closed: {error}]"),
-                    None => "[closed]".to_owned(),
+                    Some(error) => format!("The agent closed: {error}"),
+                    None => "The agent closed.".to_owned(),
                 };
                 self.push(Entry::Note(note));
                 self.state = State::Closed;
@@ -312,10 +312,30 @@ impl Conversation {
     }
 }
 
+/// The note that tells the human which instructions the agent gets,
+/// those of the file at `path`.
+#[must_use]
+pub fn instructions_note(path: &Path) -> String {
+    format!("Instructions: {}", crate::ui::paths::shortened(path))
+}
+
+/// What the conversation notes of a turn that ended for `reason`: nothing
+/// when the agent ended it as it does, having done what it was asked.
+fn ended(reason: StopReason) -> Option<&'static str> {
+    match reason {
+        StopReason::EndTurn => None,
+        StopReason::Cancelled => Some("Stopped."),
+        StopReason::MaxTokens => Some("The turn ended: the agent's reply grew too long."),
+        StopReason::MaxTurnRequests => {
+            Some("The turn ended: the agent asked the model as often as a turn allows.")
+        }
+        StopReason::Refusal => Some("The turn ended: the agent refused to go on."),
+        StopReason::Other => Some("The turn ended, for a reason Cox does not know."),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use cox_acp::StopReason;
-
     use super::*;
 
     #[test]
@@ -340,7 +360,7 @@ mod tests {
             conversation.entries()[2..],
             [
                 Entry::Human("again".to_owned()),
-                Entry::Note("[resumed: the agent goes on from here]".to_owned()),
+                Entry::Note("Resumed: the agent goes on from here.".to_owned()),
             ]
         );
     }
@@ -358,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn joins_reply_pieces_and_returns_to_idle_when_the_turn_ends() {
+    fn joins_reply_pieces_and_returns_to_idle_when_the_turn_ends_as_it_does() {
         let mut conversation = Conversation::new();
         conversation.submit("hello");
 
@@ -371,7 +391,6 @@ mod tests {
             [
                 Entry::Human("hello".to_owned()),
                 Entry::Reply("echo: hello".to_owned()),
-                Entry::Note("[EndTurn]".to_owned()),
             ]
         );
         assert_eq!(conversation.state(), State::Idle);
@@ -526,9 +545,10 @@ mod tests {
     }
 
     #[test]
-    fn answers_a_permission_request_with_the_number_entered() {
+    fn answers_a_permission_request_with_the_option_chosen() {
         let mut conversation = Conversation::new();
         conversation.submit("permission");
+        assert_eq!(conversation.asked(), None);
         conversation.apply(AgentEvent::PermissionRequest {
             id: "call-1".to_owned(),
             title: Some("touch x.txt".to_owned()),
@@ -536,12 +556,18 @@ mod tests {
             options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
         });
 
-        assert_eq!(conversation.submit("3"), None);
         assert_eq!(
-            conversation.submit("2"),
+            conversation.asked(),
+            Some(&["Allow once".to_owned(), "Reject once".to_owned()][..])
+        );
+        assert_eq!(conversation.submit("2"), None);
+        assert_eq!(conversation.choose(2), None);
+        assert_eq!(
+            conversation.choose(1),
             Some(Command::Answer(PermissionAnswer::Select(1)))
         );
         assert_eq!(conversation.state(), State::Busy);
+        assert_eq!(conversation.asked(), None);
     }
 
     #[test]
@@ -567,7 +593,7 @@ mod tests {
             [
                 Entry::Human("wait".to_owned()),
                 Entry::Reply("waiting".to_owned()),
-                Entry::Note("[Cancelled]".to_owned()),
+                Entry::Note("Stopped.".to_owned()),
                 Entry::Human("again".to_owned()),
             ]
         );
@@ -591,12 +617,13 @@ mod tests {
         // A request the agent made before it heard it is to stop.
         conversation.apply(request());
         assert_eq!(conversation.state(), State::Stopping);
-        assert_eq!(conversation.submit("1"), None);
+        assert_eq!(conversation.asked(), None);
+        assert_eq!(conversation.choose(0), None);
     }
 
     #[test]
     fn tells_which_entries_changed_to_keep_them() {
-        let mut conversation = Conversation::noting("[instructions: ~/cox/COX.md]".to_owned());
+        let mut conversation = Conversation::noting("Instructions: ~/cox/COX.md".to_owned());
         assert_eq!(conversation.take_changed(), [0]);
         assert_eq!(conversation.take_changed(), Vec::<usize>::new());
 
@@ -616,7 +643,7 @@ mod tests {
         conversation.choose(0);
         assert_eq!(conversation.take_changed(), [5]);
         conversation.apply(tool_call(None, Some(ToolCallResult::Completed)));
-        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        conversation.apply(AgentEvent::TurnFailed("lost".to_owned()));
         assert_eq!(conversation.take_changed(), [3, 6]);
     }
 

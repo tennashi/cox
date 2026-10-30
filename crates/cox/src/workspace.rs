@@ -24,7 +24,7 @@ use crate::chat::conversation::{Entry, State};
 use crate::chat::view::{ChatView, Reopened};
 use crate::chat::{Closed, Opens};
 use crate::ui::paths::shortened;
-use crate::ui::theme::FONT;
+use crate::ui::theme::{ASKING, FONT};
 
 actions!(
     cox,
@@ -327,7 +327,7 @@ impl Workspace {
         };
         let entries = self.store.entries(kept).unwrap_or_else(|error| {
             log::error!("the chat cannot be read: {error:#}");
-            vec![Entry::Note(format!("[cannot read this chat: {error:#}]"))]
+            vec![Entry::Note(format!("Cox cannot read this chat: {error:#}"))]
         });
         let tabs = self
             .store
@@ -509,7 +509,7 @@ impl Workspace {
         let (mark, color) = match state {
             Some(State::Idle) | None => ("", rgb(0xa0_a0a0)),
             Some(State::Busy | State::Stopping) => ("…", rgb(0xa0_a0a0)),
-            Some(State::Asking) => ("?", rgb(0xd0_a040)),
+            Some(State::Asking) => ("?", rgb(ASKING)),
             Some(State::Closed) => ("closed", rgb(0x80_8080)),
         };
         let mut row = div()
