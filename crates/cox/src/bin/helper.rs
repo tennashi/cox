@@ -9,17 +9,7 @@
 
 #[cfg(target_os = "macos")]
 fn main() {
-    use cef::args::Args;
-
-    cox_browser::load_framework(cox_browser::Process::Helper);
-    cef::api_hash(cef::sys::CEF_API_VERSION, 0);
-    let args = Args::new();
-    let code = cef::execute_process(
-        Some(args.as_main_args()),
-        None::<&mut cef::App>,
-        std::ptr::null_mut(),
-    );
-    std::process::exit(code);
+    std::process::exit(cox_browser::run_helper());
 }
 
 #[cfg(not(target_os = "macos"))]
