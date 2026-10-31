@@ -341,7 +341,8 @@ impl Workspace {
                         chat.id,
                         chat.name,
                         chat.named,
-                        chat.goal_command,
+                        // Only a goal that is a command is worked toward yet.
+                        chat.goal.and_then(|goal| goal.command().map(str::to_owned)),
                         parent,
                         setup,
                     );

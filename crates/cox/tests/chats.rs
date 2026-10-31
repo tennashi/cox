@@ -20,6 +20,7 @@ use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
 use cox::notices::{AppNotices, Notices};
 use cox::workspace::{Chat, Workspace};
+use cox_core::goal::Goal as KeptGoal;
 use cox_core::store::Named;
 use cox_core::store::{Record, Store};
 use fake_agent::{FakeAgent, Resumes, TITLE};
@@ -1090,12 +1091,12 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
     assert_eq!(entries[entries.len() - 3], Entry::Cox(prompts[1].clone()));
     // The goal, and the way to it, are kept.
     let kept = store.chats().unwrap();
-    assert_eq!(kept[0].goal_command.as_deref(), Some(command.as_str()));
+    assert_eq!(kept[0].goal, Some(KeptGoal::Command(command.clone())));
     assert_eq!(store.entries(kept[0].id).unwrap(), entries);
 
     view.update(cx, |view, cx| view.set_goal(None, cx));
     assert_eq!(goals(cx, &workspace, 0), [None]);
-    assert_eq!(store.chats().unwrap()[0].goal_command, None);
+    assert_eq!(store.chats().unwrap()[0].goal, None);
 }
 
 #[gpui::test]
@@ -1103,7 +1104,9 @@ async fn a_chats_goal_lasts_past_cox_starting_again(cx: &mut TestAppContext) {
     let folder = scratch("goal-again");
     std::fs::create_dir_all(&folder).unwrap();
     let (store, kept) = kept_chat(&folder, Some("session-1"));
-    store.keep_goal(kept, Some("true")).unwrap();
+    store
+        .keep_goal(kept, Some(&KeptGoal::Command("true".to_owned())))
+        .unwrap();
     let (agents, workspace, cx) =
         open_window_keeping(cx, scratch("goal-again-home"), Rc::clone(&store));
     assert_eq!(goals(cx, &workspace, 1), [Some("true".to_owned())]);
@@ -1169,8 +1172,8 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     assert_eq!(goals(cx, &workspace, 0), [Some("true".to_owned())]);
     assert_eq!(
-        store.chats().unwrap()[0].goal_command.as_deref(),
-        Some("true")
+        store.chats().unwrap()[0].goal,
+        Some(KeptGoal::Command("true".to_owned()))
     );
     cx.run_until_parked();
     assert!(cx.debug_bounds("goal-1").is_some());
@@ -1193,7 +1196,7 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     right_click(cx, "chat-1");
     click(cx, "clear-goal");
     assert_eq!(goals(cx, &workspace, 0), [None]);
-    assert_eq!(store.chats().unwrap()[0].goal_command, None);
+    assert_eq!(store.chats().unwrap()[0].goal, None);
 }
 
 /// The key of the chat at `index` in no project, and that of the chat

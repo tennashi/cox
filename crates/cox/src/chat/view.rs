@@ -440,7 +440,12 @@ impl ChatView {
             self.check = None;
         }
         if let Some(record) = &self.record
-            && let Err(error) = record.goal(self.conversation.goal().map(Goal::command))
+            && let Err(error) = record.goal(
+                self.conversation
+                    .goal()
+                    .map(|goal| cox_core::goal::Goal::Command(goal.command().to_owned()))
+                    .as_ref(),
+            )
         {
             log::error!("the chat's goal is not kept: {error:#}");
         }
