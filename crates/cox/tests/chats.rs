@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use cox::agent::Start;
 use cox::agent::instructions::Instructions;
-use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest};
+use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, Waited};
 use cox::agent::setup::Setup;
 use cox::chat::conversation::{Conversation, Entry, Goal, State};
 use cox::chat::view::{Again, ChatView};
@@ -1314,4 +1314,114 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     );
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+}
+
+/// Opens a chat from the first chat, on `text`, set up with nothing, as
+/// the chat's agent would, and waits for the list to hold `count` chats.
+async fn open_child(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    asks: &Asks,
+    text: &str,
+    count: usize,
+) {
+    let (answer, _opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::OpenChat {
+            text: text.to_owned(),
+            setup: Setup::default(),
+            goal: None,
+            answer,
+        })
+        .unwrap();
+    cx.condition(workspace, move |workspace, _| {
+        workspace.chats(0).count() == count
+    })
+    .await;
+}
+
+#[gpui::test]
+async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
+    let home = scratch("wait-home");
+    let store = Rc::new(Store::in_memory().unwrap());
+    let (_, asks, workspace, cx) = open_window_asking(cx, home.clone(), store, Resumes::Resume);
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+    let ask = |request| asks.borrow()[0].send(request).unwrap();
+    let view_of = |cx: &mut VisualTestContext, index| {
+        workspace.read_with(cx, |workspace, _| {
+            workspace
+                .chats(0)
+                .nth(index)
+                .unwrap()
+                .view()
+                .unwrap()
+                .clone()
+        })
+    };
+
+    // Waiting for a chat at work answers once its turn ends.
+    open_child(cx, &workspace, &asks, "slow hello", 2).await;
+    let (slow, _) = keys(cx, &workspace, 1);
+    let (answer, mut waited) = tokio::sync::oneshot::channel();
+    ask(ChatRequest::WaitChat { chat: slow, answer });
+    cx.run_until_parked();
+    assert!(waited.try_recv().is_err(), "answered before the turn ended");
+    let view = view_of(cx, 1);
+    wait_for_turn(cx, &view).await;
+    cx.run_until_parked();
+    assert_eq!(
+        waited.try_recv().unwrap(),
+        Ok(Waited {
+            asking: None,
+            said: Some("echo: slow hello".to_owned()),
+        })
+    );
+
+    // Waiting for a chat that comes to wait for the human answers then,
+    // with what it asks.
+    open_child(cx, &workspace, &asks, "permission", 3).await;
+    let (asking, _) = keys(cx, &workspace, 2);
+    let view = view_of(cx, 2);
+    let (answer, waited) = tokio::sync::oneshot::channel();
+    ask(ChatRequest::WaitChat {
+        chat: asking,
+        answer,
+    });
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    cx.run_until_parked();
+    assert_eq!(
+        waited.await.unwrap(),
+        Ok(Waited {
+            asking: Some("Edit x.txt".to_owned()),
+            said: None,
+        })
+    );
+    // A chat not at work answers at once, as it stands.
+    click(cx, "chat-3");
+    click(cx, "option-1");
+    wait_for_turn(cx, &view).await;
+    let (answer, waited) = tokio::sync::oneshot::channel();
+    ask(ChatRequest::WaitChat {
+        chat: asking,
+        answer,
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        waited.await.unwrap(),
+        Ok(Waited {
+            asking: None,
+            said: Some("echo: permission".to_owned()),
+        })
+    );
+
+    // A chat there is none of says so.
+    let (answer, waited) = tokio::sync::oneshot::channel();
+    ask(ChatRequest::WaitChat { chat: 99, answer });
+    cx.run_until_parked();
+    assert_eq!(waited.await.unwrap(), Err("no chat 99".to_owned()));
+    let _ = std::fs::remove_dir_all(&home);
 }

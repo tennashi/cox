@@ -461,14 +461,22 @@ impl Conversation {
     /// reply or Cox's note of how the turn ended, if anything did.
     #[must_use]
     pub fn last_said(&self) -> Option<&str> {
+        self.last_told()?
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+    }
+
+    /// What came last in the last turn, whole: the agent's reply or Cox's
+    /// note of how the turn ended, if anything did.
+    #[must_use]
+    pub fn last_told(&self) -> Option<&str> {
         self.entries
             .iter()
             .rev()
             .take_while(|entry| !is_turn_start(entry))
             .find_map(|entry| match entry {
-                Entry::Reply(text) | Entry::Note(text) => {
-                    text.lines().map(str::trim).find(|line| !line.is_empty())
-                }
+                Entry::Reply(text) | Entry::Note(text) => Some(text.as_str()),
                 _ => None,
             })
     }

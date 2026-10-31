@@ -94,7 +94,7 @@ which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `run_command`,
-`open_chat`), all of them unless given; `stage`, `drive` for the tools
+`open_chat`, `wait_chat`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the titles of the permission requests
 Cox answers in the human's place, as `Edit *` or `cargo test*`, where
@@ -107,6 +107,11 @@ tool and what it works on, as `Edit src/main.rs` or `cargo xtask ci`. A
 chat the human opens is set up with none of this: its agent gets every
 tool, and the human answers every request. Which chat opened a chat, and
 how its agent is set up, last across runs with the rest of the chat.
+`open_chat` answers with a number the chat goes by for this run, which
+the agent gives Cox's `wait_chat` tool to wait for the chat's turn to
+end, or for the chat to come to wait for the human, and hear how it
+stands then: what its agent last said, or what it asks the human. A
+chat that is not at work answers at once.
 
 The conversation shows each tool call the agent makes on a line of its
 own, marked as running, done or failed; a click on the line opens what

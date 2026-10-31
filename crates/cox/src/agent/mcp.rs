@@ -84,6 +84,23 @@ pub enum ChatRequest {
         goal: Option<String>,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
     },
+    /// Wait for the chat that goes by `chat` to end its turn, or to come
+    /// to wait for the human, and answer how it stands then; or at once,
+    /// when it is not at work; or why there is no such chat.
+    WaitChat {
+        chat: u64,
+        answer: oneshot::Sender<Result<Waited, String>>,
+    },
+}
+
+/// How a chat stands, as the agent that waited for it is told.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Waited {
+    /// What it asks the human, when it waits for them to answer.
+    pub asking: Option<String>,
+    /// What came last in its last turn: its agent's reply, or Cox's note
+    /// of how the turn ended, if anything did.
+    pub said: Option<String>,
 }
 
 /// A chat opened from a chat, as its agent is told of it.
@@ -465,7 +482,7 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 4);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 5);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);

@@ -26,7 +26,8 @@
 //! A chat's agent can open a chat too, with Cox's `open_chat` tool: the
 //! chat opens under its own in the list, in the same project, set up as
 //! the agent says (see [`crate::agent::setup`]), and works on the line
-//! the agent gives it. Which chat opened it, and how, is kept with it.
+//! the agent gives it. Which chat opened it, and how, is kept with it,
+//! and the agent waits for it with `wait_chat`.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -40,7 +41,9 @@ use gpui::{
 };
 
 use crate::agent::instructions::Instructions;
-use crate::agent::mcp::{ChatRequest, OpenedChat};
+use tokio::sync::oneshot;
+
+use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
 use crate::agent::setup::Setup;
 use crate::chat::conversation::{Entry, State};
 use crate::chat::view::{Asked, ChatView, Reopened};
@@ -263,6 +266,9 @@ pub struct Workspace {
     menu: Option<(Point<Pixels>, usize)>,
     /// The chat at an index in the list being renamed, in an input.
     renaming: Option<(usize, Entity<LineInput>, Subscription)>,
+    /// The agents waiting for a chat, by its key, to end its turn or to
+    /// come to wait for the human.
+    waiting: Vec<(u64, oneshot::Sender<Result<Waited, String>>)>,
     opens: Rc<dyn Opens>,
     store: Rc<Store>,
     focus_handle: FocusHandle,
@@ -286,6 +292,7 @@ impl Workspace {
             badged: 0,
             menu: None,
             renaming: None,
+            waiting: Vec::new(),
             opens,
             store,
             focus_handle: cx.focus_handle(),
@@ -540,7 +547,7 @@ impl Workspace {
     }
 
     /// Answers `request`, which the agent of the chat of `view` asks of the
-    /// window: opens a chat under it, as the agent says.
+    /// window: opens a chat under it, as the agent says, or waits for one.
     fn asked(
         &mut self,
         view: &Entity<ChatView>,
@@ -576,6 +583,28 @@ impl Workspace {
                 }
                 answer.send(Ok(opened)).ok();
                 cx.notify();
+            }
+            ChatRequest::WaitChat { chat: key, answer } => {
+                let Some(chat) = self
+                    .chats
+                    .iter()
+                    .chain(&self.archived)
+                    .find(|chat| chat.key == key)
+                else {
+                    answer.send(Err(format!("no chat {key}"))).ok();
+                    return;
+                };
+                // The list may not have heard of the chat's last change yet.
+                let state = chat
+                    .view
+                    .as_ref()
+                    .map_or(chat.state, |view| view.read(cx).conversation().state());
+                if at_work(state) {
+                    self.waiting.retain(|(_, answer)| !answer.is_closed());
+                    self.waiting.push((key, answer));
+                } else {
+                    answer.send(Ok(stands(chat, cx))).ok();
+                }
             }
         }
     }
@@ -734,6 +763,12 @@ impl Workspace {
             && let Some(notices) = cx.try_global::<AppNotices>()
         {
             notices.0.notify(chat.key, &chat.name, &body);
+        }
+        let waited = (!at_work(state)).then(|| (chat.key, stands(chat, cx)));
+        if let Some((key, stands)) = waited {
+            for (_, answer) in self.waiting.extract_if(.., |(waited, _)| *waited == key) {
+                answer.send(Ok(stands.clone())).ok();
+            }
         }
         self.badge(cx);
         cx.notify();
@@ -1183,6 +1218,25 @@ fn working(state: State) -> bool {
         state,
         State::Busy | State::Asking | State::Stopping | State::Checking
     )
+}
+
+/// Whether a chat in `state` is at work, so that an agent waiting for it
+/// waits on: not when it waits for the human.
+fn at_work(state: State) -> bool {
+    matches!(state, State::Busy | State::Stopping | State::Checking)
+}
+
+/// How `chat` stands, as an agent waiting for it is told.
+fn stands(chat: &Chat, cx: &App) -> Waited {
+    let conversation = chat.view.as_ref().map(|view| view.read(cx).conversation());
+    Waited {
+        asking: conversation
+            .and_then(|conversation| conversation.asking_for())
+            .map(str::to_owned),
+        said: conversation
+            .and_then(|conversation| conversation.last_told())
+            .map(str::to_owned),
+    }
 }
 
 /// Keeps in `store` whether `chat` is archived.

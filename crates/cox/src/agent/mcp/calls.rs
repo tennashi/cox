@@ -17,6 +17,7 @@ const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
 const RUN_COMMAND: &str = "run_command";
 const OPEN_CHAT: &str = "open_chat";
+const WAIT_CHAT: &str = "wait_chat";
 
 /// The most of a command's output the agent gets: the end of it, where a
 /// build or a test run says how it went.
@@ -111,6 +112,23 @@ fn all_tools() -> Value {
         },
     },
     open_chat_tool(),
+    {
+        "name": WAIT_CHAT,
+        "description": "Waits for a chat you opened with open_chat to end its turn, or to \
+            come to wait for the human, and tells you how it stands then: what its agent \
+            last said, or what it asks the human. A chat that is not at work answers at \
+            once. Use it after open_chat, to hear how the work went before you go on.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "integer",
+                    "description": "The number open_chat gave the chat.",
+                },
+            },
+            "required": ["chat"],
+        },
+    },
     ])
 }
 
@@ -199,6 +217,7 @@ pub(super) async fn call(
         SHOW_FILE => show_file(arguments, cwd, requests),
         RUN_COMMAND => run_command(arguments, cwd, requests).await,
         OPEN_CHAT => open_chat(arguments, chats).await,
+        WAIT_CHAT => wait_chat(arguments, chats).await,
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
     let (text, is_error) = match done {
@@ -390,6 +409,37 @@ async fn open_chat(
     ))
 }
 
+/// Waits for the chat `arguments` name to end its turn, or to come to
+/// wait for the human, and tells how it stands.
+async fn wait_chat(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let chat = arguments
+        .get("chat")
+        .and_then(Value::as_u64)
+        .ok_or("no chat: give the number open_chat gave it as `chat`")?;
+    let (answer, waited) = oneshot::channel();
+    chats
+        .send(ChatRequest::WaitChat { chat, answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let waited = waited
+        .await
+        .map_err(|_| "the chat closed while waiting".to_owned())??;
+    let mut told = match &waited.asking {
+        Some(asking) => format!("Chat {chat} waits for the human to answer: {asking}."),
+        None => format!("Chat {chat} ended its turn."),
+    };
+    match &waited.said {
+        Some(said) => {
+            told.push_str(" It last said:\n\n");
+            told.push_str(said);
+        }
+        None => told.push_str(" It said nothing."),
+    }
+    Ok(told)
+}
+
 /// What the agent is told of a command that ran: its output, or the end
 /// of it, and how it ended.
 fn told(ran: &Ran) -> String {
@@ -418,7 +468,7 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::*;
-    use crate::agent::mcp::OpenedChat;
+    use crate::agent::mcp::{OpenedChat, Waited};
 
     /// What the agent gets from calling the tool `name` with `arguments`
     /// in `cwd`, for a call answered right away.
@@ -678,6 +728,64 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[tokio::test]
+    async fn asks_the_window_how_a_chat_stands_once_it_waits() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let mut waited_for = Vec::new();
+            for stands in [
+                Ok(Waited {
+                    asking: None,
+                    said: Some("Built, and the tests pass.".to_owned()),
+                }),
+                Ok(Waited {
+                    asking: Some("Edit src/main.rs".to_owned()),
+                    said: None,
+                }),
+                Err("no chat 9".to_owned()),
+            ] {
+                let Some(ChatRequest::WaitChat { chat, answer }) = asked.recv().await else {
+                    panic!("the window was not asked");
+                };
+                waited_for.push(chat);
+                let _ = answer.send(stands);
+            }
+            waited_for
+        });
+        let wait = |chat: u64| {
+            let params = json!({ "name": WAIT_CHAT, "arguments": { "chat": chat } });
+            let (sent, chats) = (sent.clone(), chats.clone());
+            async move {
+                call(&params, Path::new("/work"), None, &sent, &chats)
+                    .await
+                    .unwrap()
+            }
+        };
+        let ended = wait(7).await;
+        assert_eq!(ended["isError"], false);
+        assert_eq!(
+            ended["content"][0]["text"],
+            "Chat 7 ended its turn. It last said:\n\nBuilt, and the tests pass."
+        );
+        let asking = wait(7).await;
+        assert_eq!(
+            asking["content"][0]["text"],
+            "Chat 7 waits for the human to answer: Edit src/main.rs. It said nothing."
+        );
+        let none = wait(9).await;
+        assert_eq!(none["isError"], true);
+        assert_eq!(none["content"][0]["text"], "no chat 9");
+        assert_eq!(window.await.unwrap(), [7, 7, 9]);
+
+        // A chat has to be named.
+        let params = json!({ "name": WAIT_CHAT, "arguments": { "chat": "seven" } });
+        let answered = call(&params, Path::new("/work"), None, &sent, &chats)
+            .await
+            .unwrap();
+        assert_eq!(answered["isError"], true);
     }
 
     #[tokio::test]
