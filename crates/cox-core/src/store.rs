@@ -19,7 +19,7 @@ use crate::entry::Entry;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 4;
+const VERSION: i64 = 5;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -44,7 +44,12 @@ CREATE TABLE chats (
     archived INTEGER NOT NULL DEFAULT 0,
     -- The command that checks the chat's goal, which the chat works
     -- until it passes, while the human has set one.
-    goal_command TEXT
+    goal_command TEXT,
+    -- The chat whose agent opened this one, for a chat opened from a chat.
+    parent INTEGER REFERENCES chats (id),
+    -- How the agent of a chat opened from a chat is set up, as JSON, as
+    -- the chat that opened it said.
+    setup TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -65,6 +70,8 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN named INTEGER NOT NULL DEFAULT 0;
      ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
     "ALTER TABLE chats ADD COLUMN goal_command TEXT;",
+    "ALTER TABLE chats ADD COLUMN parent INTEGER REFERENCES chats (id);
+     ALTER TABLE chats ADD COLUMN setup TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -97,6 +104,11 @@ pub struct KeptChat {
     /// The command that checks its goal, which it works until it passes,
     /// if the human set one.
     pub goal_command: Option<String>,
+    /// The chat whose agent opened it, for a chat opened from a chat.
+    pub parent: Option<ChatId>,
+    /// How its agent is set up, as JSON, for a chat opened from a chat
+    /// whose opener said.
+    pub setup: Option<String>,
 }
 
 /// Where a chat's name came from, from the name that gives way most
@@ -212,7 +224,8 @@ impl Store {
     /// When the database cannot be read.
     pub fn chats(&self) -> anyhow::Result<Vec<KeptChat>> {
         let mut statement = self.connection.prepare(
-            "SELECT id, project, name, named, archived, goal_command FROM chats ORDER BY id",
+            "SELECT id, project, name, named, archived, goal_command, parent, setup FROM chats
+             ORDER BY id",
         )?;
         let chats = statement.query_map([], |row| {
             Ok(KeptChat {
@@ -222,6 +235,8 @@ impl Store {
                 named: Named::from_number(row.get(3)?),
                 archived: row.get(4)?,
                 goal_command: row.get(5)?,
+                parent: row.get::<_, Option<i64>>(6)?.map(ChatId),
+                setup: row.get(7)?,
             })
         })?;
         Ok(chats.collect::<Result<_, _>>()?)
@@ -262,6 +277,33 @@ impl Store {
         self.connection.execute(
             "INSERT INTO chats (project, name, created) VALUES (?1, ?2, ?3)",
             params![project.map(|project| project.0), name, now()],
+        )?;
+        Ok(ChatId(self.connection.last_insert_rowid()))
+    }
+
+    /// Keeps a new chat named `name` in `project`, or in no project, which
+    /// the agent of `parent` opened, with its agent set up as `setup`
+    /// says, if it said.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn add_chat_under(
+        &self,
+        parent: ChatId,
+        project: Option<ProjectId>,
+        name: &str,
+        setup: Option<&str>,
+    ) -> anyhow::Result<ChatId> {
+        self.connection.execute(
+            "INSERT INTO chats (project, name, created, parent, setup) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                project.map(|project| project.0),
+                name,
+                now(),
+                parent.0,
+                setup
+            ],
         )?;
         Ok(ChatId(self.connection.last_insert_rowid()))
     }
@@ -699,6 +741,34 @@ mod tests {
     }
 
     #[test]
+    fn keeps_which_chat_opened_a_chat_and_how_its_agent_is_set_up() {
+        let store = Store::in_memory().unwrap();
+        let cox = store.project(Path::new("/src/cox"), "cox").unwrap();
+        let parent = store.add_chat(Some(cox), "Chat 1").unwrap();
+        let child = store
+            .add_chat_under(parent, Some(cox), "Chat 2", Some(r#"{"stage":"look"}"#))
+            .unwrap();
+        let plain = store
+            .add_chat_under(parent, Some(cox), "Chat 3", None)
+            .unwrap();
+
+        let chats: Vec<_> = store
+            .chats()
+            .unwrap()
+            .into_iter()
+            .map(|chat| (chat.id, chat.parent, chat.setup))
+            .collect();
+        assert_eq!(
+            chats,
+            [
+                (parent, None, None),
+                (child, Some(parent), Some(r#"{"stage":"look"}"#.to_owned())),
+                (plain, Some(parent), None),
+            ]
+        );
+    }
+
+    #[test]
     fn a_database_from_an_earlier_cox_is_upgraded() {
         let directory = scratch("earlier");
         let path = directory.join("chats.sqlite");
@@ -739,6 +809,8 @@ mod tests {
         assert_eq!(chats[0].named, Named::Numbered);
         assert!(!chats[0].archived);
         assert_eq!(chats[0].goal_command, None);
+        assert_eq!(chats[0].parent, None);
+        assert_eq!(chats[0].setup, None);
         assert_eq!(store.session(chats[0].id).unwrap(), None);
         store.keep_session(chats[0].id, "session-1").unwrap();
         store.keep_goal(chats[0].id, Some("make")).unwrap();
@@ -752,6 +824,12 @@ mod tests {
             store.chats().unwrap()[0].goal_command.as_deref(),
             Some("make")
         );
+        let child = store
+            .add_chat_under(chats[0].id, None, "Chat 2", Some("{}"))
+            .unwrap();
+        let kept = &store.chats().unwrap()[1];
+        assert_eq!((kept.id, kept.parent), (child, Some(chats[0].id)));
+        assert_eq!(kept.setup.as_deref(), Some("{}"));
         std::fs::remove_dir_all(&directory).unwrap();
     }
 
