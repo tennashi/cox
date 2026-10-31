@@ -248,6 +248,31 @@ impl Conversation {
         })
     }
 
+    /// The first line of what came last in the last turn, the agent's
+    /// reply or Cox's note of how the turn ended, if anything did.
+    #[must_use]
+    pub fn last_said(&self) -> Option<&str> {
+        self.entries
+            .iter()
+            .rev()
+            .take_while(|entry| !matches!(entry, Entry::Human(_)))
+            .find_map(|entry| match entry {
+                Entry::Reply(text) | Entry::Note(text) => {
+                    text.lines().map(str::trim).find(|line| !line.is_empty())
+                }
+                _ => None,
+            })
+    }
+
+    /// What the agent asks permission for, while it waits on the human.
+    #[must_use]
+    pub fn asking_for(&self) -> Option<&str> {
+        match (self.state, self.entries.last()) {
+            (State::Asking, Some(Entry::Permission { title, .. })) => Some(title),
+            _ => None,
+        }
+    }
+
     /// The plan the agent worked to in the last turn, as it stands, if it
     /// sent one: the turn that runs, or the one that ended, until the
     /// human sends the next line.

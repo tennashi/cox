@@ -15,6 +15,8 @@
 //!   files, a tree of the project's files, and terminals.
 //! - [`agent`] is a chat's agent: the ACP connection, and the tools Cox
 //!   hands the agent.
+//! - [`notices`] tells the human of chats that need them while they look
+//!   elsewhere.
 //! - [`ui`] is what all of the window's parts share: the text the human
 //!   types into, text that can be selected, Markdown, and how it all
 //!   looks.
@@ -29,6 +31,7 @@
 pub mod agent;
 pub mod app;
 pub mod chat;
+pub mod notices;
 pub mod process;
 pub mod stage;
 pub mod storage;

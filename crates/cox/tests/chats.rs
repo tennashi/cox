@@ -13,9 +13,10 @@ use std::time::Duration;
 
 use cox::agent::Start;
 use cox::agent::instructions::Instructions;
-use cox::chat::conversation::{Entry, State};
+use cox::chat::conversation::{Conversation, Entry, State};
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
+use cox::notices::{AppNotices, Notices};
 use cox::workspace::{Chat, Workspace};
 use cox_core::store::Named;
 use cox_core::store::{Record, Store};
@@ -844,4 +845,117 @@ async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut Test
     assert!(!kept_names(&store)[1].2);
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+}
+
+/// What Cox told the human through the app's [`Notices`].
+#[derive(Debug, PartialEq, Eq)]
+enum Told {
+    /// A chat's key, name, and what it told.
+    Notice(u64, String, String),
+    Badge(usize),
+}
+
+/// Keeps what Cox tells the human, for a test to read.
+#[derive(Default)]
+struct Recorded(RefCell<Vec<Told>>);
+
+impl Notices for Recorded {
+    fn notify(&self, chat: u64, title: &str, body: &str) {
+        let told = Told::Notice(chat, title.to_owned(), body.to_owned());
+        self.0.borrow_mut().push(told);
+    }
+
+    fn badge(&self, count: usize) {
+        self.0.borrow_mut().push(Told::Badge(count));
+    }
+}
+
+/// Waits until the conversation of the chat `view` is as `until` says.
+async fn wait_until(
+    cx: &mut VisualTestContext,
+    view: &Entity<ChatView>,
+    until: impl Fn(&Conversation) -> bool,
+) {
+    let (timed_out, timeout) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        let _ = timed_out.send(());
+    });
+    tokio::select! {
+        () = cx.condition(view, |view, _| until(view.conversation())) => {}
+        _ = timeout => panic!("the agent never got there"),
+    }
+}
+
+#[gpui::test]
+async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch("notices"));
+    let recorded = Rc::new(Recorded::default());
+    let notices = Rc::clone(&recorded);
+    cx.update(|window, cx| {
+        cx.set_global(AppNotices(notices));
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let told = || recorded.0.borrow_mut().drain(..).collect::<Vec<_>>();
+    let key = |cx: &mut VisualTestContext, index| {
+        workspace.read_with(cx, |workspace, _| {
+            workspace.chats(0).nth(index).unwrap().key()
+        })
+    };
+
+    // The first chat comes to wait for the human while the second is
+    // shown.
+    click(cx, "new-chat");
+    let first = shown(cx, &workspace);
+    cx.simulate_input("slow permission");
+    cx.simulate_keystrokes("enter");
+    click(cx, "new-chat");
+    wait_until(cx, &first, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    let first_key = key(cx, 0);
+    assert_eq!(
+        told(),
+        [
+            Told::Notice(
+                first_key,
+                "slow permission".to_owned(),
+                "Asks you: Edit x.txt".to_owned()
+            ),
+            Told::Badge(1),
+        ]
+    );
+
+    // A click on the notice shows the chat, whose turn then ends in sight.
+    cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| workspace.reveal(first_key, window, cx));
+    });
+    assert_eq!(shown(cx, &workspace), first);
+    cx.simulate_keystrokes("1");
+    wait_for_turn(cx, &first).await;
+    assert_eq!(told(), [Told::Badge(0)]);
+
+    // A turn that ends in the chat shown, with Cox behind other windows.
+    cx.simulate_input("slowly");
+    cx.simulate_keystrokes("enter");
+    cx.deactivate_window();
+    wait_for_turn(cx, &first).await;
+    assert_eq!(
+        told(),
+        [Told::Notice(
+            first_key,
+            "slow permission".to_owned(),
+            "echo: slowly".to_owned()
+        )]
+    );
+
+    // An archived chat, revealed, is back in the list.
+    right_click(cx, "chat-1");
+    click(cx, "archive-chat");
+    cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| workspace.reveal(first_key, window, cx));
+    });
+    assert_eq!(shown(cx, &workspace), first);
 }
