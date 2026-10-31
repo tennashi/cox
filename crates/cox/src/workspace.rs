@@ -396,9 +396,14 @@ impl Workspace {
             .inspect_err(|error| log::error!("the chat is not kept: {error:#}"))
             .ok();
         let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
-        let view = self
-            .opens
-            .open(project.folder.clone(), instructions, record, window, cx);
+        let view = self.opens.open(
+            project.folder.clone(),
+            instructions,
+            None,
+            record,
+            window,
+            cx,
+        );
         let changes = cx.observe_in(&view, window, |workspace, view, window, cx| {
             workspace.changed(&view, window, cx);
         });
@@ -487,6 +492,7 @@ impl Workspace {
             tabs,
             session,
             goal: chat.goal.clone(),
+            setup: None,
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };
         let view = self.opens.read(closed, window, cx);

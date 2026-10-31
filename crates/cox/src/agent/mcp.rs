@@ -122,12 +122,13 @@ const INVALID_PARAMS: i64 = -32602;
 static STARTED: AtomicU64 = AtomicU64::new(0);
 
 /// Starts the server of a chat working in `cwd`, an absolute path, which
-/// the paths the agent gives are taken from.
+/// the paths the agent gives are taken from, serving the tools named in
+/// `only`, or all of them when `None`.
 ///
 /// # Errors
 ///
 /// When the socket cannot be made.
-pub fn start(cwd: PathBuf) -> anyhow::Result<ToolServer> {
+pub fn start(cwd: PathBuf, only: Option<Vec<String>>) -> anyhow::Result<ToolServer> {
     let directory = private_directory()?;
     let socket = directory.join("mcp");
     let listener = StdUnixListener::bind(&socket)
@@ -146,7 +147,7 @@ pub fn start(cwd: PathBuf) -> anyhow::Result<ToolServer> {
             .enable_all()
             .build()
             .map_err(anyhow::Error::from)
-            .and_then(|runtime| runtime.block_on(serve(listener, cwd, sent)));
+            .and_then(|runtime| runtime.block_on(serve(listener, cwd, only, sent)));
         if let Err(error) = served {
             log::error!("the agent's tools stopped: {error:#}");
         }
@@ -177,21 +178,24 @@ fn private_directory() -> anyhow::Result<PathBuf> {
     }
 }
 
-/// Answers the bridge's connections until the chat lets go of `requests`.
+/// Answers the bridge's connections until the chat lets go of `requests`,
+/// with the tools named in `only`, or all of them.
 async fn serve(
     listener: StdUnixListener,
     cwd: PathBuf,
+    only: Option<Vec<String>>,
     requests: UnboundedSender<ToolRequest>,
 ) -> anyhow::Result<()> {
     let listener = UnixListener::from_std(listener)?;
+    let served = Served { cwd, only };
     loop {
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
-                let cwd = cwd.clone();
+                let served = served.clone();
                 let requests = requests.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = talk(stream, &cwd, &requests).await {
+                    if let Err(error) = talk(stream, &served, &requests).await {
                         log::warn!("a connection of the agent's tools ended: {error:#}");
                     }
                 });
@@ -201,10 +205,18 @@ async fn serve(
     }
 }
 
+/// What one chat's server serves: the tools named in `only`, or all of
+/// them, working in `cwd`.
+#[derive(Clone)]
+struct Served {
+    cwd: PathBuf,
+    only: Option<Vec<String>>,
+}
+
 /// Answers what the agent says on one connection, until it hangs up.
 async fn talk(
     stream: UnixStream,
-    cwd: &Path,
+    served: &Served,
     requests: &UnboundedSender<ToolRequest>,
 ) -> anyhow::Result<()> {
     let (heard, mut said) = stream.into_split();
@@ -240,9 +252,9 @@ async fn talk(
             continue;
         }
         let id = message.get("id").map(Value::to_string);
-        let (cwd, requests, answers) = (cwd.to_owned(), requests.clone(), answers.clone());
+        let (served, requests, answers) = (served.clone(), requests.clone(), answers.clone());
         let answer = tokio::spawn(async move {
-            if let Some(answer) = answer(&message, &cwd, &requests).await {
+            if let Some(answer) = answer(&message, &served, &requests).await {
                 let _ = answers.send(answer);
             }
         });
@@ -272,17 +284,18 @@ fn cancelled(message: &Value) -> Option<&Value> {
 /// of.
 async fn answer(
     message: &Value,
-    cwd: &Path,
+    served: &Served,
     requests: &UnboundedSender<ToolRequest>,
 ) -> Option<Value> {
     let id = message.get("id")?;
     let method = message.get("method")?.as_str()?;
     let params = message.get("params").unwrap_or(&Value::Null);
+    let only = served.only.as_deref();
     let result = match method {
         "initialize" => Ok(initialize(params)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": calls::tools() })),
-        "tools/call" => calls::call(params, cwd, requests).await,
+        "tools/list" => Ok(json!({ "tools": calls::tools(only) })),
+        "tools/call" => calls::call(params, &served.cwd, only, requests).await,
         _ => Err((METHOD_NOT_FOUND, format!("no method {method}"))),
     };
     Some(match result {
@@ -371,10 +384,14 @@ mod tests {
         cwd: &Path,
         requests: &UnboundedSender<ToolRequest>,
     ) -> Option<Value> {
+        let served = Served {
+            cwd: cwd.to_owned(),
+            only: None,
+        };
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(answer(message, cwd, requests))
+            .block_on(answer(message, &served, requests))
     }
 
     #[test]

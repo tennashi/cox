@@ -180,7 +180,9 @@ impl Start {
         }
     }
 
-    fn setup(&self) -> Option<&Setup> {
+    /// How the agent is set up, if the chat that opened its chat said.
+    #[must_use]
+    pub fn setup(&self) -> Option<&Setup> {
         match self {
             Self::New { setup, .. } | Self::Again { setup, .. } => setup.as_ref(),
         }

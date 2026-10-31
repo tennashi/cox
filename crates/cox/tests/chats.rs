@@ -14,6 +14,7 @@ use std::time::Duration;
 use cox::agent::Start;
 use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{Ended, Ran, ToolRequest};
+use cox::agent::setup::Setup;
 use cox::chat::conversation::{Conversation, Entry, Goal, State};
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
@@ -83,6 +84,7 @@ impl Opens for FakeOpens {
         &self,
         cwd: PathBuf,
         instructions: Option<Instructions>,
+        setup: Option<Setup>,
         record: Option<Record>,
         _: &mut Window,
         cx: &mut App,
@@ -91,7 +93,7 @@ impl Opens for FakeOpens {
         self.agents.borrow_mut().push(Arc::clone(&agent));
         let start = Start::New {
             instructions,
-            setup: None,
+            setup,
         };
         let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
         agent.tools = Some(fake_terminal());
@@ -104,6 +106,7 @@ impl Opens for FakeOpens {
             entries,
             session,
             goal,
+            setup,
             record,
             ..
         } = closed;
@@ -112,7 +115,7 @@ impl Opens for FakeOpens {
         let again: Again = Box::new(move |entries, _, _| {
             let agent = Arc::new(FakeAgent::resuming(resumes));
             opened.borrow_mut().push(Arc::clone(&agent));
-            let start = Start::again(&cwd, session, entries, None);
+            let start = Start::again(&cwd, session, entries, setup);
             let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
             agent.tools = Some(fake_terminal());
             agent
