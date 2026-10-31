@@ -15,7 +15,9 @@
 //! else, and stops the command when the agent cancels the request.
 //!
 //! The tools themselves are in [`calls`]: what the agent learns of them,
-//! and what each does when called, through what it asks of the chat.
+//! and what each does when called, through what it asks of the chat: of
+//! its stage, as a [`ToolRequest`], or of the window, as a
+//! [`ChatRequest`], such as opening another chat.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -36,6 +38,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
+
+use crate::agent::setup::Setup;
 
 mod calls;
 
@@ -64,6 +68,31 @@ pub enum ToolRequest {
         cwd: PathBuf,
         answer: oneshot::Sender<Result<Ran, String>>,
     },
+}
+
+/// What the agent's tools ask of the window its chat is in, past the chat
+/// itself.
+#[derive(Debug)]
+pub enum ChatRequest {
+    /// Open a chat in the chat's project, under it in the list, whose
+    /// agent is set up as `setup` says, works until `goal` passes if
+    /// given, and gets `text` as its first line; answer how the chat goes
+    /// by, or why it could not open.
+    OpenChat {
+        text: String,
+        setup: Setup,
+        goal: Option<String>,
+        answer: oneshot::Sender<Result<OpenedChat, String>>,
+    },
+}
+
+/// A chat opened from a chat, as its agent is told of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenedChat {
+    /// What the chat goes by to the agent's tools, for this run of Cox.
+    pub number: u64,
+    /// What the human sees it as, in the list.
+    pub name: String,
 }
 
 /// How a command the agent ran went.
@@ -102,11 +131,13 @@ impl fmt::Display for Ended {
 pub struct ToolServer {
     /// Where the bridge reaches the server.
     pub socket: PathBuf,
-    /// What the agent's tools ask. Dropping it stops the server, and
-    /// removes the socket.
+    /// What the agent's tools ask of the chat's stage. Dropping it stops
+    /// the server, and removes the socket.
     pub requests: UnboundedReceiver<ToolRequest>,
     /// Where they ask it, for the chat to ask the same of its stage.
     pub asks: UnboundedSender<ToolRequest>,
+    /// What the agent's tools ask of the window.
+    pub chat_requests: UnboundedReceiver<ChatRequest>,
 }
 
 /// The versions of MCP the server speaks, newest first. Its tools work
@@ -142,12 +173,13 @@ pub fn start(cwd: PathBuf, only: Option<Vec<String>>) -> anyhow::Result<ToolServ
         .with_context(|| format!("cannot listen on {}", socket.display()))?;
     let (sent, requests) = unbounded_channel();
     let asks = sent.clone();
+    let (chats, chat_requests) = unbounded_channel();
     thread::spawn(move || {
         let served = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(anyhow::Error::from)
-            .and_then(|runtime| runtime.block_on(serve(listener, cwd, only, sent)));
+            .and_then(|runtime| runtime.block_on(serve(listener, cwd, only, sent, chats)));
         if let Err(error) = served {
             log::error!("the agent's tools stopped: {error:#}");
         }
@@ -159,6 +191,7 @@ pub fn start(cwd: PathBuf, only: Option<Vec<String>>) -> anyhow::Result<ToolServ
         socket,
         requests,
         asks,
+        chat_requests,
     })
 }
 
@@ -179,15 +212,17 @@ fn private_directory() -> anyhow::Result<PathBuf> {
 }
 
 /// Answers the bridge's connections until the chat lets go of `requests`,
-/// with the tools named in `only`, or all of them.
+/// with the tools named in `only`, or all of them, asking the window
+/// through `chats`.
 async fn serve(
     listener: StdUnixListener,
     cwd: PathBuf,
     only: Option<Vec<String>>,
     requests: UnboundedSender<ToolRequest>,
+    chats: UnboundedSender<ChatRequest>,
 ) -> anyhow::Result<()> {
     let listener = UnixListener::from_std(listener)?;
-    let served = Served { cwd, only };
+    let served = Served { cwd, only, chats };
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -206,11 +241,12 @@ async fn serve(
 }
 
 /// What one chat's server serves: the tools named in `only`, or all of
-/// them, working in `cwd`.
+/// them, working in `cwd`, asking the window through `chats`.
 #[derive(Clone)]
 struct Served {
     cwd: PathBuf,
     only: Option<Vec<String>>,
+    chats: UnboundedSender<ChatRequest>,
 }
 
 /// Answers what the agent says on one connection, until it hangs up.
@@ -295,7 +331,7 @@ async fn answer(
         "initialize" => Ok(initialize(params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": calls::tools(only) })),
-        "tools/call" => calls::call(params, &served.cwd, only, requests).await,
+        "tools/call" => calls::call(params, &served.cwd, only, requests, &served.chats).await,
         _ => Err((METHOD_NOT_FOUND, format!("no method {method}"))),
     };
     Some(match result {
@@ -384,9 +420,11 @@ mod tests {
         cwd: &Path,
         requests: &UnboundedSender<ToolRequest>,
     ) -> Option<Value> {
+        let (chats, _chat_requests) = unbounded_channel();
         let served = Served {
             cwd: cwd.to_owned(),
             only: None,
+            chats,
         };
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -427,7 +465,7 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 4);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);

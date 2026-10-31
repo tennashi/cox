@@ -22,6 +22,11 @@
 //! human is not looking at it, tells them so (see [`crate::notices`]),
 //! and the app's icon counts the chats that wait for them or that they
 //! have not seen since a turn ended. A click on what a chat told shows it.
+//!
+//! A chat's agent can open a chat too, with Cox's `open_chat` tool: the
+//! chat opens under its own in the list, in the same project, set up as
+//! the agent says (see [`crate::agent::setup`]), and works on the line
+//! the agent gives it. Which chat opened it, and how, is kept with it.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -35,8 +40,10 @@ use gpui::{
 };
 
 use crate::agent::instructions::Instructions;
+use crate::agent::mcp::{ChatRequest, OpenedChat};
+use crate::agent::setup::Setup;
 use crate::chat::conversation::{Entry, State};
-use crate::chat::view::{ChatView, Reopened};
+use crate::chat::view::{Asked, ChatView, Reopened};
 use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
 use crate::ui::input::{LineInput, Submitted};
@@ -136,6 +143,11 @@ pub struct Chat {
     unread: bool,
     /// The command it works until it passes, if the human set one.
     goal: Option<String>,
+    /// The key of the chat whose agent opened it, if an agent did and
+    /// that chat is in the list or archived.
+    parent: Option<u64>,
+    /// How its agent is set up, when the chat that opened it said.
+    setup: Option<Setup>,
     /// Its view, or `None` for a closed chat the human has not read yet.
     view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
@@ -145,8 +157,10 @@ pub struct Chat {
 
 impl Chat {
     /// A closed chat of the project at `project`, kept as `kept`, which
-    /// the human has not read yet, named `key` for this run, and working
-    /// until `goal` passes if the human set one.
+    /// the human has not read yet, named `key` for this run, working
+    /// until `goal` passes if the human set one, opened by the chat
+    /// `parent` names if an agent opened it, and set up as `setup` says.
+    #[expect(clippy::too_many_arguments, reason = "what is kept of a chat")]
     fn closed(
         key: u64,
         project: usize,
@@ -154,6 +168,8 @@ impl Chat {
         name: impl Into<SharedString>,
         named: Named,
         goal: Option<String>,
+        parent: Option<u64>,
+        setup: Option<Setup>,
     ) -> Self {
         Self {
             key,
@@ -165,6 +181,8 @@ impl Chat {
             state: State::Closed,
             unread: false,
             goal,
+            parent,
+            setup,
             view: None,
             _changes: Vec::new(),
         }
@@ -209,6 +227,12 @@ impl Chat {
     #[must_use]
     pub fn goal(&self) -> Option<&str> {
         self.goal.as_deref()
+    }
+
+    /// The key of the chat whose agent opened it, if an agent did.
+    #[must_use]
+    pub fn parent(&self) -> Option<u64> {
+        self.parent
     }
 
     /// Its view, once it has been shown.
@@ -287,6 +311,23 @@ impl Workspace {
                     };
                     workspace.projects[index].opened += 1;
                     let key = workspace.next_key();
+                    // The chats come in the order they were opened, so
+                    // the parent is listed before its children.
+                    let parent = chat.parent.and_then(|parent| {
+                        workspace
+                            .chats
+                            .iter()
+                            .chain(&workspace.archived)
+                            .find(|other| other.kept == Some(parent))
+                            .map(|other| other.key)
+                    });
+                    let setup = chat.setup.as_deref().and_then(|setup| {
+                        Setup::from_json(setup)
+                            .inspect_err(|error| {
+                                log::error!("the chat's setup cannot be read: {error:#}");
+                            })
+                            .ok()
+                    });
                     let closed = Chat::closed(
                         key,
                         index,
@@ -294,6 +335,8 @@ impl Workspace {
                         chat.name,
                         chat.named,
                         chat.goal_command,
+                        parent,
+                        setup,
                     );
                     if chat.archived {
                         workspace.archived.push(closed);
@@ -313,18 +356,48 @@ impl Workspace {
         self.last_key
     }
 
-    /// Puts `chat` in the list after the other chats of its project, and
-    /// returns its index.
+    /// Puts `chat` in the list after the other chats of its project, or,
+    /// when a chat in the list opened it, after that chat and the chats
+    /// opened under it; and returns its index.
     fn add(&mut self, chat: Chat) -> usize {
         // What was at an index may move along.
         self.menu = None;
         self.renaming = None;
-        let after = self
-            .chats
-            .iter()
-            .rposition(|other| other.project <= chat.project)
-            .map_or(0, |index| index + 1);
+        let parent = chat
+            .parent
+            .and_then(|parent| self.chats.iter().position(|other| other.key == parent));
+        let after = match parent {
+            Some(parent) => {
+                let depth = self.depth(&self.chats[parent]);
+                self.chats
+                    .iter()
+                    .enumerate()
+                    .skip(parent + 1)
+                    .find(|(_, other)| self.depth(other) <= depth)
+                    .map_or(self.chats.len(), |(index, _)| index)
+            }
+            None => self
+                .chats
+                .iter()
+                .rposition(|other| other.project <= chat.project)
+                .map_or(0, |index| index + 1),
+        };
         self.chats.insert(after, chat, false)
+    }
+
+    /// How many chats `chat` is under, in the list: none for a chat the
+    /// human opened, one for a chat opened from such a chat, and so on.
+    fn depth(&self, chat: &Chat) -> u8 {
+        let mut depth = 0_u8;
+        let mut parent = chat.parent;
+        while let Some(key) = parent {
+            let Some(found) = self.chats.iter().find(|other| other.key == key) else {
+                break;
+            };
+            depth = depth.saturating_add(1);
+            parent = found.parent;
+        }
+        depth
     }
 
     /// The projects, no project first.
@@ -379,6 +452,21 @@ impl Workspace {
     /// is none, and shows it.
     pub fn open(&mut self, folder: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let index = folder.map_or(0, |folder| self.project(folder));
+        let chat = self.open_in(index, None, None, window, cx);
+        self.show(chat, window, cx);
+    }
+
+    /// Opens a chat in the project at `index`, under the chat `from` names
+    /// by its key, and how it is kept, when an agent opens it, set up as
+    /// `setup` says; and returns its index in the list.
+    fn open_in(
+        &mut self,
+        index: usize,
+        from: Option<(u64, Option<ChatId>)>,
+        setup: Option<Setup>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
         let project = &mut self.projects[index];
         if index == 0 {
             // The agent's session fails to open, and says so, if the home
@@ -390,25 +478,29 @@ impl Workspace {
         let instructions = Instructions::read(&project.folder);
         project.opened += 1;
         let name = format!("Chat {}", project.opened);
-        let kept = self
-            .store
-            .add_chat(project.id, &name)
-            .inspect_err(|error| log::error!("the chat is not kept: {error:#}"))
-            .ok();
+        let kept = match from {
+            Some((_, Some(parent))) => self.store.add_chat_under(
+                parent,
+                project.id,
+                &name,
+                setup.as_ref().map(Setup::to_json).as_deref(),
+            ),
+            _ => self.store.add_chat(project.id, &name),
+        }
+        .inspect_err(|error| log::error!("the chat is not kept: {error:#}"))
+        .ok();
         let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
         let view = self.opens.open(
             project.folder.clone(),
             instructions,
-            None,
+            setup.clone(),
             record,
             window,
             cx,
         );
-        let changes = cx.observe_in(&view, window, |workspace, view, window, cx| {
-            workspace.changed(&view, window, cx);
-        });
+        let changes = Self::follow(&view, window, cx);
         let key = self.next_key();
-        let chat = self.add(Chat {
+        self.add(Chat {
             key,
             project: index,
             kept,
@@ -418,10 +510,74 @@ impl Workspace {
             state: State::Idle,
             unread: false,
             goal: None,
+            parent: from.map(|(parent, _)| parent),
+            setup,
             view: Some(view),
-            _changes: vec![changes],
+            _changes: changes,
+        })
+    }
+
+    /// Follows the chat of `view`: redraws the list as it changes, and
+    /// answers what its agent asks of the window.
+    fn follow(
+        view: &Entity<ChatView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<Subscription> {
+        let changed = cx.observe_in(view, window, |workspace, view, window, cx| {
+            workspace.changed(&view, window, cx);
         });
-        self.show(chat, window, cx);
+        let asked = cx.subscribe_in(
+            view,
+            window,
+            |workspace, view, asked: &Asked, window, cx| {
+                if let Some(request) = asked.take() {
+                    workspace.asked(view, request, window, cx);
+                }
+            },
+        );
+        vec![changed, asked]
+    }
+
+    /// Answers `request`, which the agent of the chat of `view` asks of the
+    /// window: opens a chat under it, as the agent says.
+    fn asked(
+        &mut self,
+        view: &Entity<ChatView>,
+        request: ChatRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match request {
+            ChatRequest::OpenChat {
+                text,
+                setup,
+                goal,
+                answer,
+            } => {
+                let parent = self
+                    .chats
+                    .iter()
+                    .chain(&self.archived)
+                    .find(|chat| chat.view.as_ref() == Some(view))
+                    .map(|chat| (chat.project, chat.key, chat.kept, chat.name.to_string()));
+                let Some((project, key, kept, opened_by)) = parent else {
+                    answer.send(Err("the chat is gone".to_owned())).ok();
+                    return;
+                };
+                let index = self.open_in(project, Some((key, kept)), Some(setup), window, cx);
+                let chat = &self.chats[index];
+                let opened = OpenedChat {
+                    number: chat.key,
+                    name: chat.name.to_string(),
+                };
+                if let Some(child) = &chat.view {
+                    child.update(cx, |child, cx| child.tell(&opened_by, &text, goal, cx));
+                }
+                answer.send(Ok(opened)).ok();
+                cx.notify();
+            }
+        }
     }
 
     /// Asks the human for a folder, and opens a chat in its project.
@@ -492,13 +648,11 @@ impl Workspace {
             tabs,
             session,
             goal: chat.goal.clone(),
-            setup: None,
+            setup: chat.setup.clone(),
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };
         let view = self.opens.read(closed, window, cx);
-        let changes = cx.observe_in(&view, window, |workspace, view, window, cx| {
-            workspace.changed(&view, window, cx);
-        });
+        let mut changes = Self::follow(&view, window, cx);
         let reopened = cx.subscribe(&view, move |workspace, _, Reopened, cx| {
             // The chat may have moved along the list since.
             if let Some(chat) = workspace
@@ -521,8 +675,13 @@ impl Workspace {
             state: State::Closed,
             unread: chat.unread,
             goal: chat.goal.take(),
+            parent: chat.parent,
+            setup: chat.setup.take(),
             view: Some(view),
-            _changes: vec![changes, reopened],
+            _changes: {
+                changes.push(reopened);
+                changes
+            },
         };
     }
 
@@ -863,13 +1022,15 @@ impl Workspace {
                 .when(!chat.open, |name| name.text_color(rgb(0x80_8080)))
                 .child(chat.name.clone()),
         };
+        // A chat an agent opened sits in under the chat that opened it.
+        let depth = self.depth(chat);
         let mut row = div()
             .id(("chat", number))
             .debug_selector(move || format!("chat-{number}"))
             .flex()
             .items_center()
             .gap_1()
-            .pl_4()
+            .pl(px(16. + 12. * f32::from(depth)))
             .pr_2()
             .py_1()
             .cursor_pointer()

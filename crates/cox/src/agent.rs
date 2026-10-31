@@ -133,6 +133,9 @@ pub struct Agent {
     /// in a terminal there; `None` when the agent got no tools of Cox's
     /// own.
     pub tools: Option<UnboundedSender<mcp::ToolRequest>>,
+    /// What the agent's tools ask of the window, such as opening another
+    /// chat; `None` when the agent got no tools of Cox's own.
+    pub chat_requests: Option<UnboundedReceiver<mcp::ChatRequest>>,
     /// Stops the agent when dropped.
     pub thread: AgentThread,
 }
@@ -265,6 +268,7 @@ pub fn spawn<T: Transport + 'static>(
         setup,
         cwd: works_in,
         tools: None,
+        chat_requests: None,
         thread: AgentThread {
             stop: Some(stop),
             thread: Some(thread),

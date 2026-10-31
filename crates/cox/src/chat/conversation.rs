@@ -172,18 +172,36 @@ impl Conversation {
         self.entries.push(entry);
     }
 
+    /// Adds `note`, a note from Cox.
+    pub fn note(&mut self, note: String) {
+        self.push(Entry::Note(note));
+    }
+
     /// Takes what the human entered, and returns the prompt to send the
     /// agent, when it waits for one.
     pub fn submit(&mut self, input: &str) -> Option<Command> {
-        if self.state != State::Idle || input.trim().is_empty() {
+        self.start_turn(input, Entry::Human)
+    }
+
+    /// Takes `text`, a line Cox sends in the human's place, such as the
+    /// first line of a chat opened from a chat, and returns the prompt to
+    /// send the agent, when it waits for one.
+    pub fn told(&mut self, text: &str) -> Option<Command> {
+        self.start_turn(text, Entry::Cox)
+    }
+
+    /// Starts a turn on `text`, shown as `entry` makes it, when the agent
+    /// waits for a line.
+    fn start_turn(&mut self, text: &str, entry: fn(String) -> Entry) -> Option<Command> {
+        if self.state != State::Idle || text.trim().is_empty() {
             return None;
         }
-        self.push(Entry::Human(input.to_owned()));
+        self.push(entry(text.to_owned()));
         self.state = State::Busy;
         if let Some(goal) = &mut self.goal {
             goal.turns = 1;
         }
-        Some(Command::Prompt(input.to_owned()))
+        Some(Command::Prompt(text.to_owned()))
     }
 
     /// What the chat works until, if the human set a goal.
@@ -427,11 +445,14 @@ impl Conversation {
         self.title.as_deref()
     }
 
-    /// The first line the human sent, if they sent one.
+    /// The first line sent to the agent, by the human or by Cox in their
+    /// place, if one was.
     #[must_use]
     pub fn first_line(&self) -> Option<&str> {
         self.entries.iter().find_map(|entry| match entry {
-            Entry::Human(text) => text.lines().map(str::trim).find(|line| !line.is_empty()),
+            Entry::Human(text) | Entry::Cox(text) => {
+                text.lines().map(str::trim).find(|line| !line.is_empty())
+            }
             _ => None,
         })
     }

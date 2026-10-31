@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use cox::agent::Start;
 use cox::agent::instructions::Instructions;
-use cox::agent::mcp::{Ended, Ran, ToolRequest};
+use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest};
 use cox::agent::setup::Setup;
 use cox::chat::conversation::{Conversation, Entry, Goal, State};
 use cox::chat::view::{Again, ChatView};
@@ -27,9 +27,15 @@ use gpui::{
     App, AppContext as _, Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
     TestAppContext, VisualTestContext, Window,
 };
+use tokio::sync::mpsc::UnboundedSender;
 
 /// The agent of each chat opened, in the order they were opened.
 type Agents = Rc<RefCell<Vec<Arc<FakeAgent>>>>;
+
+/// The way to the window of each chat opened, in the order they were
+/// opened, for a test to ask of it what the chat's agent would with Cox's
+/// tools.
+type Asks = Rc<RefCell<Vec<UnboundedSender<ChatRequest>>>>;
 
 /// Opens the window with no chat, chats in no project working in `home`,
 /// keeping them in memory.
@@ -46,6 +52,7 @@ fn open_window(
 /// goal run in a shell in place of a terminal.
 struct FakeOpens {
     agents: Agents,
+    asks: Asks,
     resumes: Resumes,
 }
 
@@ -97,6 +104,9 @@ impl Opens for FakeOpens {
         };
         let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
         agent.tools = Some(fake_terminal());
+        let (asks, chat_requests) = tokio::sync::mpsc::unbounded_channel();
+        self.asks.borrow_mut().push(asks);
+        agent.chat_requests = Some(chat_requests);
         cx.new(|cx| ChatView::new(agent, None, Rc::new(|_, _, _| {}), record, cx))
     }
 
@@ -111,6 +121,7 @@ impl Opens for FakeOpens {
             ..
         } = closed;
         let opened = Rc::clone(&self.agents);
+        let asked = Rc::clone(&self.asks);
         let resumes = self.resumes;
         let again: Again = Box::new(move |entries, _, _| {
             let agent = Arc::new(FakeAgent::resuming(resumes));
@@ -118,6 +129,9 @@ impl Opens for FakeOpens {
             let start = Start::again(&cwd, session, entries, setup);
             let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
             agent.tools = Some(fake_terminal());
+            let (asks, chat_requests) = tokio::sync::mpsc::unbounded_channel();
+            asked.borrow_mut().push(asks);
+            agent.chat_requests = Some(chat_requests);
             agent
         });
         let link = Rc::new(|_: &str, _: &mut Window, _: &mut App| {});
@@ -127,10 +141,11 @@ impl Opens for FakeOpens {
 }
 
 /// What opens the chats of a test's window, with their agents added to
-/// `agents`.
-fn opens(agents: &Agents, resumes: Resumes) -> Rc<dyn Opens> {
+/// `agents`, and their ways to the window to `asks`.
+fn opens(agents: &Agents, asks: &Asks, resumes: Resumes) -> Rc<dyn Opens> {
     Rc::new(FakeOpens {
         agents: Rc::clone(agents),
+        asks: Rc::clone(asks),
         resumes,
     })
 }
@@ -152,6 +167,18 @@ fn open_window_resuming(
     store: Rc<Store>,
     resumes: Resumes,
 ) -> (Agents, Entity<Workspace>, &mut VisualTestContext) {
+    let (agents, _, workspace, cx) = open_window_asking(cx, home, store, resumes);
+    (agents, workspace, cx)
+}
+
+/// Opens the window like [`open_window_resuming`], with the way to the
+/// window of each chat's agent too.
+fn open_window_asking(
+    cx: &mut TestAppContext,
+    home: PathBuf,
+    store: Rc<Store>,
+    resumes: Resumes,
+) -> (Agents, Asks, Entity<Workspace>, &mut VisualTestContext) {
     // The agents run on threads of their own, so the test waits for them
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
@@ -161,10 +188,11 @@ fn open_window_resuming(
         cox::workspace::bind_keys(cx);
     });
     let agents = Agents::default();
-    let opens = opens(&agents, resumes);
+    let asks = Asks::default();
+    let opens = opens(&agents, &asks, resumes);
     let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, store, opens, cx));
     cx.update(|window, cx| window.focus(&workspace.focus_handle(cx)));
-    (agents, workspace, cx)
+    (agents, asks, workspace, cx)
 }
 
 /// A directory of its own for each test.
@@ -466,7 +494,7 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     // closed.
     let again = cx.update(|_, cx| {
         let store = Rc::new(Store::open(&kept).unwrap());
-        let opens = opens(&agents, Resumes::Resume);
+        let opens = opens(&agents, &Asks::default(), Resumes::Resume);
         cx.new(|cx| Workspace::new(home.clone(), store, opens, cx))
     });
     let name = folder.file_name().unwrap().to_string_lossy().into_owned();
@@ -865,7 +893,7 @@ async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut Test
     // It stays archived once Cox starts again.
     let again = cx.update(|_, cx| {
         let store = Rc::new(Store::open(&kept).unwrap());
-        let opens = opens(&agents, Resumes::Resume);
+        let opens = opens(&agents, &Asks::default(), Resumes::Resume);
         cx.new(|cx| Workspace::new(home.clone(), store, opens, cx))
     });
     assert_eq!(names(cx, &again), listed(&[("No project", &["first"])]));
@@ -1166,4 +1194,124 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     click(cx, "clear-goal");
     assert_eq!(goals(cx, &workspace, 0), [None]);
     assert_eq!(store.chats().unwrap()[0].goal_command, None);
+}
+
+/// The key of the chat at `index` in no project, and that of the chat
+/// whose agent opened it, if an agent did.
+fn keys(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    index: usize,
+) -> (u64, Option<u64>) {
+    workspace.read_with(cx, |workspace, _| {
+        let chat = workspace.chats(0).nth(index).unwrap();
+        (chat.key(), chat.parent())
+    })
+}
+
+#[gpui::test]
+async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppContext) {
+    let home = scratch("child-home");
+    let kept = scratch("child-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+    click(cx, "new-chat");
+    say(cx, &workspace, "second").await;
+    let (parent, _) = keys(cx, &workspace, 0);
+
+    // The first chat's agent opens a chat, which keeps to a context and
+    // may edit nothing, on a line that asks to edit a file.
+    let setup = Setup {
+        context: Some("Change nothing.".to_owned()),
+        policy: cox::agent::setup::Policy {
+            allow: Vec::new(),
+            reject: vec!["Edit *".to_owned()],
+        },
+        ..Setup::default()
+    };
+    let (answer, opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::OpenChat {
+            text: "permission".to_owned(),
+            setup: setup.clone(),
+            goal: None,
+            answer,
+        })
+        .unwrap();
+    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 3)
+        .await;
+
+    // It goes under the chat that opened it, which stays shown, and
+    // works on the line, sent in the human's place, which names it as
+    // the first line of any chat does.
+    assert_eq!(
+        names(cx, &workspace),
+        listed(&[("No project", &["hello", "permission", "second"])])
+    );
+    let (child, opened_by) = keys(cx, &workspace, 1);
+    assert_eq!(opened_by, Some(parent));
+    let opened = opened.await.unwrap().unwrap();
+    assert_eq!((opened.number, opened.name.as_str()), (child, "Chat 3"));
+    assert_eq!(
+        shown_entries(cx, &workspace)[0],
+        Entry::Human("second".to_owned())
+    );
+    let view = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().view().unwrap().clone()
+    });
+    wait_for_turn(cx, &view).await;
+    let entries = entries(cx, &view);
+    assert_eq!(
+        entries[..3],
+        [
+            Entry::Note("Context: Change nothing.".to_owned()),
+            Entry::Note("Opened by: hello".to_owned()),
+            Entry::Cox("permission".to_owned()),
+        ]
+    );
+    // Cox answered the request to edit, as the chat is set up.
+    assert!(
+        matches!(
+            &entries[4],
+            Entry::Permission {
+                chosen: Some(1),
+                by_setup: true,
+                ..
+            }
+        ),
+        "{entries:?}"
+    );
+    let agent = Arc::clone(&agents.borrow()[2]);
+    assert_eq!(
+        agent.prompt_blocks(),
+        [[
+            "The chat that opened this one set it up with this context. Keep to it for the whole session.\n\nChange nothing.\n".to_owned(),
+            "permission".to_owned()
+        ]]
+    );
+    // Which chat opened it, and how, is kept: Cox started again lists it
+    // under its parent, set up the same.
+    let again = cx.update(|_, cx| {
+        let store = Rc::new(Store::open(&kept).unwrap());
+        let opens = opens(&agents, &Asks::default(), Resumes::Resume);
+        cx.new(|cx| Workspace::new(home.clone(), store, opens, cx))
+    });
+    assert_eq!(
+        names(cx, &again),
+        listed(&[("No project", &["hello", "permission", "second"])])
+    );
+    let (parent, _) = keys(cx, &again, 0);
+    let (_, opened_by) = keys(cx, &again, 1);
+    assert_eq!(opened_by, Some(parent));
+    let chats = store.chats().unwrap();
+    assert_eq!(chats[2].parent, Some(chats[0].id));
+    assert_eq!(
+        Setup::from_json(chats[2].setup.as_deref().unwrap()).unwrap(),
+        setup
+    );
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }

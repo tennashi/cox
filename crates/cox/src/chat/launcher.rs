@@ -184,16 +184,22 @@ impl Launcher {
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(relay.as_ref(), server.as_ref());
         // 4. The stage works with the relay and the tools, and keeps its tabs.
-        let (requests, asks) = server
-            .map(|(_, server)| (server.requests, server.asks))
-            .unzip();
+        let (requests, asks, chat_requests) = match server {
+            Some((_, server)) => (
+                Some(server.requests),
+                Some(server.asks),
+                Some(server.chat_requests),
+            ),
+            None => (None, None, None),
+        };
         stage.update(cx, |stage, cx| {
             stage.work(relay, requests, record, window, cx);
         });
         // 5. The agent, on a thread of its own, which the chat asks of the
-        // stage through what its tools ask.
+        // stage through what its tools ask, and hears ask of the window.
         let mut agent = self.spawn(cwd, tools, start);
         agent.tools = asks;
+        agent.chat_requests = chat_requests;
         agent
     }
 

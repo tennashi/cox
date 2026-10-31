@@ -29,6 +29,7 @@
 //! and hands the conversation how it went, which decides whether the
 //! agent goes on (see [`Conversation::checked`]).
 
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -41,7 +42,7 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{Ran, ToolRequest};
+use crate::agent::mcp::{ChatRequest, Ran, ToolRequest};
 use crate::agent::{Agent, AgentThread};
 use crate::agent::{AgentEvent, Command};
 use crate::chat::conversation::{self, Conversation, Entry, GOAL_TURNS, Goal, State};
@@ -69,6 +70,10 @@ const KEY_CONTEXT: &str = "Conversation";
 /// The key context of the input that sets the chat's goal.
 const GOAL: &str = "Goal";
 
+/// How long the name of the chat that opened a chat grows, in
+/// characters, in the note that says so.
+const OPENED_BY_LENGTH: usize = 40;
+
 /// Binds the keys of the conversation. Escape is the stage's while the
 /// stage has the keyboard, and the input method's while it composes.
 pub fn bind_keys(cx: &mut App) {
@@ -91,6 +96,17 @@ pub type Again = Box<dyn FnOnce(&[Entry], &mut Window, &mut App) -> Agent>;
 
 /// A closed chat's agent started again.
 pub struct Reopened;
+
+/// What the agent's tools asked of the window, such as opening another
+/// chat, for the window to take, once, and carry out.
+pub struct Asked(pub RefCell<Option<ChatRequest>>);
+
+impl Asked {
+    /// Takes the request, the first time.
+    pub fn take(&self) -> Option<ChatRequest> {
+        self.0.borrow_mut().take()
+    }
+}
 
 /// How wide the conversation is when the stage sits beside it.
 const CONVERSATION_WIDTH: f32 = 420.;
@@ -131,9 +147,10 @@ pub struct ChatView {
     commands: UnboundedSender<Command>,
     /// What starts the agent of a closed chat again, until it has.
     again: Option<Again>,
-    /// The agent, and what hears it. The agent lives as long as the chat
-    /// stays open: dropping this stops it. A closed chat has none.
-    agent: Option<(AgentThread, Task<()>)>,
+    /// The agent, and what hears it, and what its tools ask of the window.
+    /// The agent lives as long as the chat stays open: dropping this stops
+    /// it. A closed chat has none.
+    agent: Option<(AgentThread, Vec<Task<()>>)>,
     /// The directory the agent works in, and where the chat asks its stage
     /// to run the goal's command, as the agent's tools ask it to, while
     /// the agent runs and has tools of Cox's own.
@@ -257,8 +274,8 @@ impl ChatView {
         }
     }
 
-    /// Talks to `agent` from now on: sends it what the human asks, and
-    /// shows what it tells.
+    /// Talks to `agent` from now on: sends it what the human asks, shows
+    /// what it tells, and passes on what its tools ask of the window.
     fn attach(&mut self, agent: Agent, cx: &mut Context<Self>) {
         let Agent {
             commands,
@@ -266,6 +283,7 @@ impl ChatView {
             thread,
             cwd,
             tools,
+            chat_requests,
             ..
         } = agent;
         let hears = cx.spawn(async move |this, cx| {
@@ -279,9 +297,48 @@ impl ChatView {
                 }
             }
         });
+        let mut tasks = vec![hears];
+        if let Some(mut chat_requests) = chat_requests {
+            tasks.push(cx.spawn(async move |this, cx| {
+                while let Some(request) = chat_requests.recv().await {
+                    let passed = this.update(cx, |_, cx| {
+                        cx.emit(Asked(RefCell::new(Some(request))));
+                    });
+                    if passed.is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
         self.commands = commands;
-        self.agent = Some((thread, hears));
+        self.agent = Some((thread, tasks));
         self.tools = tools.map(|tools| (cwd, tools));
+    }
+
+    /// Starts the chat, opened from the chat named `opened_by`, on `text`
+    /// as its first line, sent in the human's place, working until `goal`
+    /// passes if given.
+    pub fn tell(
+        &mut self,
+        opened_by: &str,
+        text: &str,
+        goal: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        // A chat named after its first line has a long name.
+        let opened_by: String = match opened_by.char_indices().nth(OPENED_BY_LENGTH) {
+            Some((end, _)) => format!("{}\u{2026}", opened_by[..end].trim_end()),
+            None => opened_by.to_owned(),
+        };
+        self.follow(|conversation| conversation.note(format!("Opened by: {opened_by}")));
+        if let Some(goal) = goal {
+            self.set_goal(Some(goal), cx);
+        }
+        if let Some(command) = self.follow(|conversation| conversation.told(text)) {
+            self.send(command);
+        }
+        self.keep();
+        cx.notify();
     }
 
     /// Shows what the agent side told, and keeps it. A turn that ends
@@ -585,6 +642,7 @@ impl ChatView {
 }
 
 impl gpui::EventEmitter<Reopened> for ChatView {}
+impl gpui::EventEmitter<Asked> for ChatView {}
 
 impl Focusable for ChatView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
