@@ -76,7 +76,7 @@ impl Agent {
 fn the_agent_shows_a_file_on_its_chats_stage() {
     let cwd = scratch("show");
     std::fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
-    let server = cox::agent::mcp::start(cwd.clone()).unwrap();
+    let server = cox::agent::mcp::start(cwd.clone(), None).unwrap();
     let mut agent = Agent::start(&server);
     let ToolServer {
         socket,
@@ -109,7 +109,7 @@ fn the_agent_shows_a_file_on_its_chats_stage() {
 #[test]
 fn the_agent_runs_a_command_on_its_chats_stage_and_can_cancel_it() {
     let cwd = scratch("run");
-    let server = cox::agent::mcp::start(cwd.clone()).unwrap();
+    let server = cox::agent::mcp::start(cwd.clone(), None).unwrap();
     let mut agent = Agent::start(&server);
     let mut requests = server.requests;
 
@@ -155,6 +155,40 @@ fn the_agent_runs_a_command_on_its_chats_stage_and_can_cancel_it() {
         assert!(Instant::now() < deadline, "the command was waited for");
         std::thread::sleep(Duration::from_millis(20));
     }
+    drop(agent);
+    std::fs::remove_dir_all(cwd).unwrap();
+}
+
+#[test]
+fn the_agent_gets_only_the_tools_its_setup_names() {
+    let cwd = scratch("only");
+    std::fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
+    let only = Some(vec!["show_markdown".to_owned()]);
+    let server = cox::agent::mcp::start(cwd.clone(), only).unwrap();
+    let mut agent = Agent::start(&server);
+    let mut requests = server.requests;
+
+    let listed = agent.ask(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["show_markdown"]);
+
+    // A tool the agent does not get is no tool to it.
+    agent.call(3, "run_command", &json!({ "command": "make" }));
+    let refused = agent.hear();
+    assert_eq!(refused["error"]["message"], "no tool run_command");
+    assert!(requests.try_recv().is_err());
+    // The one it gets works.
+    agent.call(4, "show_markdown", &json!({ "path": "plan.md" }));
+    assert_eq!(agent.hear()["result"]["isError"], false);
+    assert!(matches!(
+        requests.try_recv().unwrap(),
+        ToolRequest::ShowMarkdown { .. }
+    ));
     drop(agent);
     std::fs::remove_dir_all(cwd).unwrap();
 }

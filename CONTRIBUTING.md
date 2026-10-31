@@ -86,6 +86,33 @@ line of theirs, or when the agent made no tool call for two turns in a
 row, which says it has something to ask, or when Escape stops the
 check. The goal lasts across runs, with the rest of the chat.
 
+A chat's agent can open a chat too, with Cox's `open_chat` tool, giving
+it its first line: the chat opens under the agent's own in the list, in
+the same project, and works on that line, which shows in its
+conversation in the human's place but dimmer, after a line that says
+which chat opened it. The agent says how the chat's agent is set up:
+`context`, text the agent gets after the project's `COX.md` and ahead of
+the first line, which the chat notes at its top; `tools`, the names of
+the Cox tools it gets (`show_markdown`, `show_file`, `run_command`,
+`open_chat`, `wait_chat`), all of them unless given; `stage`, `drive` for the tools
+that read and drive the stage, the default, or `look` for none of them;
+`allow` and `reject`, patterns of the titles of the permission requests
+Cox answers in the human's place, as `Edit *` or `cargo test*`, where
+`*` stands for any run of characters, a title both match being rejected,
+and the rest asked of the human as usual, with the conversation saying
+which Cox answered; and `goal`, a command the chat works until it
+passes, as "Set goal…" sets. The titles are the agent's, as the
+conversation shows them: `claude-agent-acp` titles a request after the
+tool and what it works on, as `Edit src/main.rs` or `cargo xtask ci`. A
+chat the human opens is set up with none of this: its agent gets every
+tool, and the human answers every request. Which chat opened a chat, and
+how its agent is set up, last across runs with the rest of the chat.
+`open_chat` answers with a number the chat goes by for this run, which
+the agent gives Cox's `wait_chat` tool to wait for the chat's turn to
+end, or for the chat to come to wait for the human, and hear how it
+stands then: what its agent last said, or what it asks the human. A
+chat that is not at work answers at once.
+
 The conversation shows each tool call the agent makes on a line of its
 own, marked as running, done or failed; a click on the line opens what
 the call showed, which shows from the start for a call that failed.

@@ -109,8 +109,16 @@ impl Conversation {
     /// A conversation that opens with `note`, a note from Cox.
     #[must_use]
     pub fn noting(note: String) -> Self {
+        Self::noting_each([note])
+    }
+
+    /// A conversation that starts with `notes` from Cox, in order.
+    #[must_use]
+    pub fn noting_each(notes: impl IntoIterator<Item = String>) -> Self {
         let mut conversation = Self::new();
-        conversation.push(Entry::Note(note));
+        for note in notes {
+            conversation.push(Entry::Note(note));
+        }
         conversation
     }
 
@@ -164,18 +172,36 @@ impl Conversation {
         self.entries.push(entry);
     }
 
+    /// Adds `note`, a note from Cox.
+    pub fn note(&mut self, note: String) {
+        self.push(Entry::Note(note));
+    }
+
     /// Takes what the human entered, and returns the prompt to send the
     /// agent, when it waits for one.
     pub fn submit(&mut self, input: &str) -> Option<Command> {
-        if self.state != State::Idle || input.trim().is_empty() {
+        self.start_turn(input, Entry::Human)
+    }
+
+    /// Takes `text`, a line Cox sends in the human's place, such as the
+    /// first line of a chat opened from a chat, and returns the prompt to
+    /// send the agent, when it waits for one.
+    pub fn told(&mut self, text: &str) -> Option<Command> {
+        self.start_turn(text, Entry::Cox)
+    }
+
+    /// Starts a turn on `text`, shown as `entry` makes it, when the agent
+    /// waits for a line.
+    fn start_turn(&mut self, text: &str, entry: fn(String) -> Entry) -> Option<Command> {
+        if self.state != State::Idle || text.trim().is_empty() {
             return None;
         }
-        self.push(Entry::Human(input.to_owned()));
+        self.push(entry(text.to_owned()));
         self.state = State::Busy;
         if let Some(goal) = &mut self.goal {
             goal.turns = 1;
         }
-        Some(Command::Prompt(input.to_owned()))
+        Some(Command::Prompt(text.to_owned()))
     }
 
     /// What the chat works until, if the human set a goal.
@@ -419,11 +445,14 @@ impl Conversation {
         self.title.as_deref()
     }
 
-    /// The first line the human sent, if they sent one.
+    /// The first line sent to the agent, by the human or by Cox in their
+    /// place, if one was.
     #[must_use]
     pub fn first_line(&self) -> Option<&str> {
         self.entries.iter().find_map(|entry| match entry {
-            Entry::Human(text) => text.lines().map(str::trim).find(|line| !line.is_empty()),
+            Entry::Human(text) | Entry::Cox(text) => {
+                text.lines().map(str::trim).find(|line| !line.is_empty())
+            }
             _ => None,
         })
     }
@@ -432,14 +461,22 @@ impl Conversation {
     /// reply or Cox's note of how the turn ended, if anything did.
     #[must_use]
     pub fn last_said(&self) -> Option<&str> {
+        self.last_told()?
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+    }
+
+    /// What came last in the last turn, whole: the agent's reply or Cox's
+    /// note of how the turn ended, if anything did.
+    #[must_use]
+    pub fn last_told(&self) -> Option<&str> {
         self.entries
             .iter()
             .rev()
             .take_while(|entry| !is_turn_start(entry))
             .find_map(|entry| match entry {
-                Entry::Reply(text) | Entry::Note(text) => {
-                    text.lines().map(str::trim).find(|line| !line.is_empty())
-                }
+                Entry::Reply(text) | Entry::Note(text) => Some(text.as_str()),
                 _ => None,
             })
     }
@@ -470,13 +507,15 @@ impl Conversation {
 
     /// Shows a permission request with what its tool call is about to do:
     /// what the request tells, or else what the call shows, which then
-    /// shows only here.
+    /// shows only here. The request waits on the human, unless Cox
+    /// `decided` it already, as the chat's setup says.
     fn ask(
         &mut self,
         id: String,
         title: Option<String>,
         content: Option<Vec<Content>>,
         options: Vec<String>,
+        decided: Option<usize>,
     ) {
         let call = self.tool_call_entry(&id);
         let shown = call.and_then(|index| match &mut self.entries[index] {
@@ -499,7 +538,8 @@ impl Conversation {
             title: title.unwrap_or_else(|| "a tool call".to_owned()),
             content,
             options,
-            chosen: None,
+            chosen: decided,
+            by_setup: decided.is_some(),
         });
     }
 
@@ -514,13 +554,19 @@ impl Conversation {
                         "Resumed: the agent goes on from here.".to_owned(),
                     ));
                 }
-                Opened::Retold { instructions } => {
+                Opened::Retold {
+                    instructions,
+                    context,
+                } => {
                     self.push(Entry::Note(
                         "The agent could not resume its session: a new one is told the conversation so far."
                             .to_owned(),
                     ));
                     if let Some(path) = instructions {
                         self.push(Entry::Note(instructions_note(&path)));
+                    }
+                    if let Some(context) = context {
+                        self.push(Entry::Note(context_note(&context)));
                     }
                 }
             },
@@ -553,13 +599,22 @@ impl Conversation {
                 content,
                 options,
             } => {
-                self.ask(id, title, content, options);
+                self.ask(id, title, content, options, None);
                 // Asked before the agent heard it is to stop: the agent
                 // side answers it as cancelled, without the human.
                 if self.state != State::Stopping {
                     self.state = State::Asking;
                 }
             }
+            // Cox answered, as the chat is set up: the human sees what was
+            // asked, and what was chosen, and the turn goes on.
+            AgentEvent::PermissionDecided {
+                id,
+                title,
+                content,
+                options,
+                chosen,
+            } => self.ask(id, title, content, options, Some(chosen)),
             AgentEvent::TurnEnded(reason) => {
                 if let Some(note) = ended(reason) {
                     self.push(Entry::Note(note.to_owned()));
@@ -592,6 +647,13 @@ impl Conversation {
 #[must_use]
 pub fn instructions_note(path: &Path) -> String {
     format!("Instructions: {}", crate::ui::paths::shortened(path))
+}
+
+/// The note that tells the human the context the agent was set up with,
+/// by the chat that opened its chat.
+#[must_use]
+pub fn context_note(context: &str) -> String {
+    format!("Context: {}", context.trim())
 }
 
 /// Whether `entry` starts a turn: a line sent to the agent, by the human
@@ -924,6 +986,38 @@ mod tests {
         );
         assert_eq!(conversation.state(), State::Busy);
         assert_eq!(conversation.asked(), None);
+    }
+
+    #[test]
+    fn a_permission_request_cox_answered_waits_on_nobody() {
+        let mut conversation = Conversation::new();
+        conversation.submit("edit");
+        conversation.apply(tool_call(Some(vec![text("the change")]), None));
+        conversation.apply(AgentEvent::PermissionDecided {
+            id: "call-1".to_owned(),
+            title: Some("Edit x.txt".to_owned()),
+            content: None,
+            options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
+            chosen: 1,
+        });
+
+        assert_eq!(conversation.state(), State::Busy);
+        assert_eq!(conversation.asked(), None);
+        assert_eq!(conversation.asking_for(), None);
+        assert_eq!(conversation.choose(0), None);
+        // The request shows what the call showed.
+        assert_eq!(
+            shown(&conversation),
+            [("call", vec![]), ("permission", vec![text("the change")])]
+        );
+        assert!(matches!(
+            conversation.entries().last(),
+            Some(Entry::Permission {
+                chosen: Some(1),
+                by_setup: true,
+                ..
+            })
+        ));
     }
 
     #[test]

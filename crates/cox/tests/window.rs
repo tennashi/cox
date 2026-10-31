@@ -11,6 +11,7 @@ use std::time::Duration;
 use agent_client_protocol::schema::v1::{
     McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
 };
+use cox::agent::setup::{Policy, Setup};
 use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
 use cox::chat::view::{ChatView, StageView};
 use cox::ui::Panel;
@@ -26,7 +27,16 @@ use gpui::{
 
 /// Opens the window, talking to a fake agent, with the input focused.
 fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
-    open_with(cx, Vec::new(), Opened::default())
+    open_with(cx, Vec::new(), Opened::default(), None)
+}
+
+/// Opens the window like [`open`], on a chat whose agent is set up as
+/// `setup` says.
+fn open_set_up(
+    cx: &mut TestAppContext,
+    setup: Setup,
+) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
+    open_with(cx, Vec::new(), Opened::default(), Some(setup))
 }
 
 /// The links the human opened, in order.
@@ -38,8 +48,9 @@ fn open_with(
     cx: &mut TestAppContext,
     mcp_servers: Vec<McpServer>,
     opened: Opened,
+    setup: Option<Setup>,
 ) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
-    open_with_stage(cx, mcp_servers, opened, false)
+    open_with_stage(cx, mcp_servers, opened, setup, false)
 }
 
 /// A stand-in for the stage, which needs CEF.
@@ -57,6 +68,7 @@ fn open_with_stage(
     cx: &mut TestAppContext,
     mcp_servers: Vec<McpServer>,
     opened: Opened,
+    setup: Option<Setup>,
     stage: bool,
 ) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
     // The agent side runs on a thread of its own, so the test waits for it
@@ -78,7 +90,10 @@ fn open_with_stage(
                 move || Ok(fake.connect()),
                 std::env::temp_dir(),
                 mcp_servers,
-                cox::agent::Start::New(None),
+                cox::agent::Start::New {
+                    instructions: None,
+                    setup,
+                },
             ),
             stage,
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
@@ -154,7 +169,7 @@ async fn hands_the_agent_its_tools(cx: &mut TestAppContext) {
         command: "/usr/bin/npx".into(),
         args: vec!["-y".to_owned(), "chrome-devtools-mcp".to_owned()],
     };
-    let (agent, view, cx) = open_with(cx, vec![stage], Opened::default());
+    let (agent, view, cx) = open_with(cx, vec![stage], Opened::default(), None);
 
     cx.simulate_input("hello");
     cx.simulate_keystrokes("enter");
@@ -393,6 +408,87 @@ async fn stops_a_turn_that_asks_permission_with_the_stop_button(cx: &mut TestApp
         tool_call(cx, &view),
         ("Edit x.txt".to_owned(), Some(ToolCallResult::Cancelled))
     );
+}
+
+/// A setup whose policy answers requests titled as `reject` says with no,
+/// and as `allow` says with yes, with a context to keep to.
+fn set_up(allow: &[&str], reject: &[&str]) -> Setup {
+    Setup {
+        context: Some("Change nothing.".to_owned()),
+        policy: Policy {
+            allow: allow.iter().map(|&s| s.to_owned()).collect(),
+            reject: reject.iter().map(|&s| s.to_owned()).collect(),
+        },
+        ..Setup::default()
+    }
+}
+
+#[gpui::test]
+async fn the_setups_policy_answers_a_permission_request_in_the_humans_place(
+    cx: &mut TestAppContext,
+) {
+    let (agent, view, cx) = open_set_up(cx, set_up(&[], &["Edit *"]));
+
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+
+    // The agent was told no, and heard nothing from the human.
+    assert_eq!(
+        agent.answers(),
+        [RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new("reject")
+        )]
+    );
+    view.read_with(cx, |view, _| {
+        let entries = view.conversation().entries();
+        assert!(
+            matches!(&entries[0], Entry::Note(note) if note == "Context: Change nothing."),
+            "{entries:?}"
+        );
+        assert!(
+            matches!(
+                &entries[3],
+                Entry::Permission {
+                    chosen: Some(1),
+                    by_setup: true,
+                    ..
+                }
+            ),
+            "{entries:?}"
+        );
+    });
+    // The context is told after the instructions, with the first line.
+    assert_eq!(
+        agent.prompt_blocks()[0],
+        [
+            "The chat that opened this one set it up with this context. Keep to it for the whole session.\n\nChange nothing.\n".to_owned(),
+            "permission".to_owned()
+        ]
+    );
+}
+
+#[gpui::test]
+async fn a_request_the_policy_allows_goes_through_and_the_rest_wait_on_the_human(
+    cx: &mut TestAppContext,
+) {
+    let (agent, view, cx) = open_set_up(cx, set_up(&["Edit x.txt"], &[]));
+
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    assert_eq!(
+        agent.answers(),
+        [RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new("allow")
+        )]
+    );
+
+    // A setup that says nothing of the request asks the human.
+    let (_agent, view, cx) = open_set_up(cx, set_up(&["Read *"], &["Write *"]));
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Asking).await;
 }
 
 #[gpui::test]
@@ -641,7 +737,7 @@ async fn selects_a_word_with_a_double_click(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn opens_a_link_the_human_clicks(cx: &mut TestAppContext) {
     let opened = Opened::default();
-    let (_agent, view, cx) = open_with(cx, Vec::new(), Rc::clone(&opened));
+    let (_agent, view, cx) = open_with(cx, Vec::new(), Rc::clone(&opened), None);
     say(cx, &view, "see https://example.com/x").await;
 
     let reply = first_reply(cx);
@@ -669,7 +765,7 @@ fn stage_is_open(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> bool {
 
 #[gpui::test]
 fn opens_and_closes_the_stage_with_its_button(cx: &mut TestAppContext) {
-    let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Opened::default(), true);
+    let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Opened::default(), None, true);
 
     assert!(!stage_is_open(cx, &view));
     assert!(cx.debug_bounds("stage-panel").is_none());
@@ -693,7 +789,7 @@ fn opens_and_closes_the_stage_with_its_button(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn opens_the_stage_for_a_link_the_human_clicks(cx: &mut TestAppContext) {
     let opened = Opened::default();
-    let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Rc::clone(&opened), true);
+    let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Rc::clone(&opened), None, true);
     say(cx, &view, "see https://example.com/x").await;
 
     let reply = first_reply(cx);
