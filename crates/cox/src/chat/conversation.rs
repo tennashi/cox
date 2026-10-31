@@ -1,6 +1,13 @@
 //! What the window shows of a chat, and what the human's input means,
 //! without GPUI: the conversation, as the agent's events change it, and
 //! the commands the human's lines turn into (see [`crate::agent`]).
+//!
+//! A chat can have a [`Goal`]: a command, which the chat works until it
+//! passes. When a turn ends as the agent ends it, the command runs; while
+//! it fails, Cox sends the agent what it printed, as the next turn, and
+//! the agent goes on, until the command passes, or the chat has taken as
+//! many turns on the human's line as one line gets, or the agent stops
+//! calling tools, which says it waits for the human.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -8,6 +15,7 @@ use std::path::Path;
 use cox_acp::{PermissionAnswer, StopReason};
 pub use cox_core::entry::{Content, Entry, Step, StepState, ToolCallResult};
 
+use crate::agent::mcp::{Ended, Ran};
 use crate::agent::{AgentEvent, Command, Opened};
 
 /// Whose move it is.
@@ -23,8 +31,47 @@ pub enum State {
     /// The human asked the agent to stop the turn, and it has not ended
     /// yet.
     Stopping,
+    /// The turn ended, and the command of the chat's goal runs, to see
+    /// whether the goal is met.
+    Checking,
     /// The connection has closed; nothing more can be sent.
     Closed,
+}
+
+/// How many turns a chat takes toward its goal on one line of the human's,
+/// at most.
+pub const GOAL_TURNS: usize = 10;
+
+/// How many turns in a row without a tool call stop a chat working toward
+/// its goal: an agent that only talks waits for the human.
+const IDLE_TURNS: usize = 2;
+
+/// The most of what the goal's command printed that the agent is told,
+/// in characters, from the end.
+const OUTPUT_TAIL: usize = 4000;
+
+/// What a chat works until: a command that passes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Goal {
+    /// The command, which passes when it exits with 0.
+    command: String,
+    /// How many turns the agent has taken toward it on the human's last
+    /// line.
+    turns: usize,
+}
+
+impl Goal {
+    #[must_use]
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    /// How many turns the agent has taken toward it on the human's last
+    /// line, counting the one that runs.
+    #[must_use]
+    pub fn turns(&self) -> usize {
+        self.turns
+    }
 }
 
 /// The conversation the window shows.
@@ -37,6 +84,8 @@ pub struct Conversation {
     changed: BTreeSet<usize>,
     /// The title the agent gave its session, if it gave one.
     title: Option<String>,
+    /// What the chat works until, if the human set one.
+    goal: Option<Goal>,
 }
 
 impl Default for Conversation {
@@ -53,6 +102,7 @@ impl Conversation {
             state: State::Idle,
             changed: BTreeSet::new(),
             title: None,
+            goal: None,
         }
     }
 
@@ -73,7 +123,16 @@ impl Conversation {
             state: State::Closed,
             changed: BTreeSet::new(),
             title: None,
+            goal: None,
         }
+    }
+
+    /// The conversation, of a chat that works until `goal` passes, if the
+    /// human set one.
+    #[must_use]
+    pub fn with_goal(mut self, goal: Option<String>) -> Self {
+        self.goal = goal.map(|command| Goal { command, turns: 0 });
+        self
     }
 
     /// Opens the conversation of a chat that has closed again, for the
@@ -113,7 +172,122 @@ impl Conversation {
         }
         self.push(Entry::Human(input.to_owned()));
         self.state = State::Busy;
+        if let Some(goal) = &mut self.goal {
+            goal.turns = 1;
+        }
         Some(Command::Prompt(input.to_owned()))
+    }
+
+    /// What the chat works until, if the human set a goal.
+    #[must_use]
+    pub fn goal(&self) -> Option<&Goal> {
+        self.goal.as_ref()
+    }
+
+    /// Sets the chat to work until `command` passes, or, given `None`,
+    /// toward no goal, and notes so. A check of the goal that runs is
+    /// given up.
+    pub fn set_goal(&mut self, command: Option<String>) {
+        if command.as_deref() == self.goal.as_ref().map(Goal::command) {
+            return;
+        }
+        let note = match &command {
+            Some(command) => format!("Goal: until `{command}` passes."),
+            None => "The goal is cleared.".to_owned(),
+        };
+        self.goal = command.map(|command| Goal { command, turns: 0 });
+        self.push(Entry::Note(note));
+        if self.state == State::Checking {
+            self.state = State::Idle;
+        }
+    }
+
+    /// The command that runs to see whether the goal is met, while one
+    /// does.
+    #[must_use]
+    pub fn checking(&self) -> Option<&str> {
+        match (self.state, &self.goal) {
+            (State::Checking, Some(goal)) => Some(&goal.command),
+            _ => None,
+        }
+    }
+
+    /// Takes how the goal's command went, `ran`, and returns the next
+    /// turn to send the agent, when the goal is not met and the chat
+    /// goes on toward it. Otherwise the chat notes how it stands and
+    /// waits for the human: the goal is met, or the command could not
+    /// run, or the chat has taken as many turns as one line gets, or the
+    /// agent made no tool call in its last turns.
+    pub fn checked(&mut self, ran: Result<Ran, String>) -> Option<Command> {
+        let goal = self.goal.as_ref().filter(|_| self.state == State::Checking);
+        let (command, turns) = goal.map(|goal| (goal.command.clone(), goal.turns))?;
+        self.state = State::Idle;
+        let ran = match ran {
+            Ok(ran) => ran,
+            Err(error) => {
+                self.push(Entry::Note(format!(
+                    "The goal could not be checked: {error}"
+                )));
+                return None;
+            }
+        };
+        let not_met = match ran.ended {
+            Ended::Exited(0) => {
+                self.push(Entry::Note(format!("Goal met: `{command}` passed.")));
+                return None;
+            }
+            Ended::Closed => {
+                self.push(Entry::Note(format!(
+                    "The goal was not checked: the terminal of `{command}` was closed."
+                )));
+                return None;
+            }
+            ended => format!("Goal not met: `{command}` {ended}."),
+        };
+        if turns >= GOAL_TURNS {
+            self.push(Entry::Note(format!(
+                "{not_met} The chat took {GOAL_TURNS} turns toward it, as many as one line gets; send a line to go on."
+            )));
+            return None;
+        }
+        if self.turns_without_tools() >= IDLE_TURNS {
+            self.push(Entry::Note(format!(
+                "{not_met} The agent made no tool call in its last {IDLE_TURNS} turns, so it may wait for you."
+            )));
+            return None;
+        }
+        let output = tail(&ran.output, OUTPUT_TAIL);
+        let prompt = if output.is_empty() {
+            format!("{not_met} Go on until it passes. It printed nothing.")
+        } else {
+            format!("{not_met} Go on until it passes. It printed, at the end:\n\n{output}")
+        };
+        if let Some(goal) = &mut self.goal {
+            goal.turns += 1;
+        }
+        self.push(Entry::Cox(prompt.clone()));
+        self.state = State::Busy;
+        Some(Command::Prompt(prompt))
+    }
+
+    /// How many of the last turns made no tool call, counting back from
+    /// the last turn to the first that made one.
+    fn turns_without_tools(&self) -> usize {
+        let mut turns = 0;
+        let mut called = false;
+        for entry in self.entries.iter().rev() {
+            match entry {
+                Entry::ToolCall { .. } => called = true,
+                Entry::Human(_) | Entry::Cox(_) => {
+                    if called {
+                        break;
+                    }
+                    turns += 1;
+                }
+                _ => {}
+            }
+        }
+        turns
     }
 
     /// The options of the permission request the agent waits on, if it
@@ -156,6 +330,12 @@ impl Conversation {
             State::Busy | State::Asking => {
                 self.state = State::Stopping;
                 Some(Command::Cancel)
+            }
+            // The goal's command stops; there is no turn to stop.
+            State::Checking => {
+                self.push(Entry::Note("Stopped.".to_owned()));
+                self.state = State::Idle;
+                None
             }
             State::Idle | State::Stopping | State::Closed => None,
         }
@@ -219,8 +399,8 @@ impl Conversation {
         let turn = self
             .entries
             .iter()
-            .rposition(|entry| matches!(entry, Entry::Human(_)))
-            .map_or(0, |human| human + 1);
+            .rposition(is_turn_start)
+            .map_or(0, |start| start + 1);
         let planned = self.entries[turn..]
             .iter()
             .rposition(|entry| matches!(entry, Entry::Plan(_)));
@@ -255,7 +435,7 @@ impl Conversation {
         self.entries
             .iter()
             .rev()
-            .take_while(|entry| !matches!(entry, Entry::Human(_)))
+            .take_while(|entry| !is_turn_start(entry))
             .find_map(|entry| match entry {
                 Entry::Reply(text) | Entry::Note(text) => {
                     text.lines().map(str::trim).find(|line| !line.is_empty())
@@ -281,7 +461,7 @@ impl Conversation {
         self.entries
             .iter()
             .rev()
-            .take_while(|entry| !matches!(entry, Entry::Human(_)))
+            .take_while(|entry| !is_turn_start(entry))
             .find_map(|entry| match entry {
                 Entry::Plan(steps) => Some(steps.as_slice()),
                 _ => None,
@@ -384,7 +564,12 @@ impl Conversation {
                 if let Some(note) = ended(reason) {
                     self.push(Entry::Note(note.to_owned()));
                 }
-                self.state = State::Idle;
+                // A turn the agent ended as it does, having done what it
+                // was asked, is when the goal is looked at.
+                let check = reason == StopReason::EndTurn
+                    && self.state == State::Busy
+                    && self.goal.is_some();
+                self.state = if check { State::Checking } else { State::Idle };
             }
             AgentEvent::TurnFailed(error) => {
                 self.push(Entry::Note(format!("The turn failed: {error}")));
@@ -407,6 +592,24 @@ impl Conversation {
 #[must_use]
 pub fn instructions_note(path: &Path) -> String {
     format!("Instructions: {}", crate::ui::paths::shortened(path))
+}
+
+/// Whether `entry` starts a turn: a line sent to the agent, by the human
+/// or by Cox in their place.
+fn is_turn_start(entry: &Entry) -> bool {
+    matches!(entry, Entry::Human(_) | Entry::Cox(_))
+}
+
+/// The last `length` characters of `text`, at most, less blank lines at
+/// its end, with a mark of what is left out.
+fn tail(text: &str, length: usize) -> String {
+    let text = text.trim_end();
+    let count = text.chars().count();
+    if count <= length {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().skip(count - length).collect();
+    format!("[…]{kept}")
 }
 
 /// What the conversation notes of a turn that ended for `reason`: nothing
@@ -798,6 +1001,245 @@ mod tests {
         conversation.apply(tool_call(None, Some(ToolCallResult::Completed)));
         conversation.apply(AgentEvent::TurnFailed("lost".to_owned()));
         assert_eq!(conversation.take_changed(), [3, 6]);
+    }
+
+    /// How the goal's command went: it exited with `code`, printing
+    /// `output`.
+    #[expect(clippy::unnecessary_wraps, reason = "what `checked` takes")]
+    fn ran(code: i32, output: &str) -> Result<Ran, String> {
+        Ok(Ran {
+            output: output.to_owned(),
+            ended: Ended::Exited(code),
+        })
+    }
+
+    /// A conversation working until `make` passes, whose agent takes a
+    /// turn on "fix", with a tool call when `calling`, which ends.
+    fn toward_make(calling: bool) -> Conversation {
+        let mut conversation = Conversation::new();
+        conversation.set_goal(Some("make".to_owned()));
+        assert_eq!(
+            conversation.entries(),
+            [Entry::Note("Goal: until `make` passes.".to_owned())]
+        );
+        conversation.submit("fix");
+        take_turn(&mut conversation, calling);
+        conversation
+    }
+
+    /// The agent takes a turn, with a tool call when `calling`, and ends
+    /// it as it does.
+    fn take_turn(conversation: &mut Conversation, calling: bool) {
+        if calling {
+            let id = format!("call-{}", conversation.entries().len());
+            conversation.apply(AgentEvent::ToolCall {
+                id,
+                title: Some("Edit x.txt".to_owned()),
+                content: None,
+                result: Some(ToolCallResult::Completed),
+            });
+        }
+        conversation.apply(AgentEvent::ReplyText("Done.".to_owned()));
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+    }
+
+    #[test]
+    fn works_toward_its_goal_until_the_command_passes() {
+        let mut conversation = toward_make(true);
+        assert_eq!(conversation.state(), State::Checking);
+        assert_eq!(conversation.checking(), Some("make"));
+        assert_eq!(conversation.submit("again"), None);
+        assert_eq!(conversation.goal().map(Goal::turns), Some(1));
+        conversation.take_changed();
+
+        let prompt = "Goal not met: `make` exit code 2. Go on until it passes. \
+                      It printed, at the end:\n\nerror: x is not defined";
+        assert_eq!(
+            conversation.checked(ran(2, "error: x is not defined\n\n")),
+            Some(Command::Prompt(prompt.to_owned()))
+        );
+        assert_eq!(conversation.state(), State::Busy);
+        assert_eq!(conversation.checking(), None);
+        assert_eq!(conversation.goal().map(Goal::turns), Some(2));
+        assert_eq!(conversation.take_changed(), [4]);
+        assert_eq!(conversation.entries()[4], Entry::Cox(prompt.to_owned()));
+
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.checked(ran(0, "ok")), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            conversation.entries().last(),
+            Some(&Entry::Note("Goal met: `make` passed.".to_owned()))
+        );
+        // The goal stays, for the human's next line.
+        assert_eq!(conversation.goal().map(Goal::command), Some("make"));
+        conversation.submit("more");
+        assert_eq!(conversation.goal().map(Goal::turns), Some(1));
+    }
+
+    #[test]
+    fn each_turn_toward_the_goal_plans_anew() {
+        let mut conversation = toward_make(true);
+        let first = vec![step("Fix", StepState::Completed)];
+        let then = vec![step("Fix more", StepState::InProgress)];
+        conversation.checked(ran(1, ""));
+        conversation.apply(AgentEvent::Plan(then.clone()));
+        assert_eq!(conversation.last_plan(), Some(&then[..]));
+
+        conversation.apply(AgentEvent::Plan(first.clone()));
+        let plans: Vec<_> = conversation
+            .entries()
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Plan(_)))
+            .collect();
+        assert_eq!(plans, [&Entry::Plan(first)]);
+    }
+
+    #[test]
+    fn tells_the_agent_the_end_of_a_long_output() {
+        let mut conversation = toward_make(true);
+        let output = format!("{}{}", "x".repeat(100), "y".repeat(OUTPUT_TAIL));
+
+        let Some(Command::Prompt(prompt)) = conversation.checked(ran(1, &output)) else {
+            panic!("the agent goes on");
+        };
+        assert!(prompt.ends_with(&format!("[…]{}", "y".repeat(OUTPUT_TAIL))));
+        assert!(!prompt.contains("xy"), "{prompt}");
+    }
+
+    #[test]
+    fn stops_toward_the_goal_when_the_agent_only_talks() {
+        let mut conversation = toward_make(false);
+        assert!(conversation.checked(ran(1, "")).is_some());
+
+        take_turn(&mut conversation, false);
+        assert_eq!(conversation.checked(ran(1, "")), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            conversation.last_said(),
+            Some(
+                "Goal not met: `make` exit code 1. The agent made no tool call in its last 2 turns, so it may wait for you."
+            )
+        );
+    }
+
+    #[test]
+    fn stops_after_as_many_turns_toward_the_goal_as_one_line_gets() {
+        let mut conversation = toward_make(true);
+        for turn in 1..GOAL_TURNS {
+            assert_eq!(conversation.goal().map(Goal::turns), Some(turn));
+            assert!(conversation.checked(ran(1, "")).is_some());
+            take_turn(&mut conversation, true);
+        }
+
+        assert_eq!(conversation.checked(ran(1, "")), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            conversation.last_said(),
+            Some(
+                "Goal not met: `make` exit code 1. The chat took 10 turns toward it, as many as one line gets; send a line to go on."
+            )
+        );
+        // The human's line starts the count again.
+        conversation.submit("go on");
+        take_turn(&mut conversation, true);
+        assert!(conversation.checked(ran(1, "")).is_some());
+    }
+
+    #[test]
+    fn a_turn_that_is_stopped_or_fails_is_not_checked() {
+        let mut conversation = Conversation::new();
+        conversation.set_goal(Some("make".to_owned()));
+        conversation.submit("wait");
+        conversation.cancel();
+        conversation.apply(AgentEvent::TurnEnded(StopReason::Cancelled));
+        assert_eq!(conversation.state(), State::Idle);
+
+        conversation.submit("fail");
+        conversation.apply(AgentEvent::TurnFailed("lost".to_owned()));
+        assert_eq!(conversation.state(), State::Idle);
+
+        conversation.submit("long");
+        conversation.apply(AgentEvent::TurnEnded(StopReason::MaxTokens));
+        assert_eq!(conversation.state(), State::Idle);
+    }
+
+    #[test]
+    fn stopping_while_the_goal_is_checked_gives_the_check_up() {
+        let mut conversation = toward_make(true);
+
+        assert_eq!(conversation.cancel(), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            conversation.entries().last(),
+            Some(&Entry::Note("Stopped.".to_owned()))
+        );
+        // What the command answers once it is stopped changes nothing.
+        let entries = conversation.entries().len();
+        assert_eq!(conversation.checked(ran(1, "")), None);
+        assert_eq!(conversation.entries().len(), entries);
+        assert_eq!(
+            conversation.submit("again"),
+            Some(Command::Prompt("again".to_owned()))
+        );
+    }
+
+    #[test]
+    fn changing_the_goal_while_it_is_checked_gives_the_check_up() {
+        let mut conversation = toward_make(true);
+        conversation.set_goal(Some("make".to_owned()));
+        assert_eq!(conversation.state(), State::Checking);
+
+        conversation.set_goal(None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(conversation.goal(), None);
+        assert_eq!(
+            conversation.entries().last(),
+            Some(&Entry::Note("The goal is cleared.".to_owned()))
+        );
+        assert_eq!(conversation.checked(ran(1, "")), None);
+        // With no goal, a turn ends as it did.
+        conversation.submit("fix");
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.state(), State::Idle);
+    }
+
+    #[test]
+    fn a_goal_that_cannot_be_checked_waits_for_the_human() {
+        let mut conversation = toward_make(true);
+        assert_eq!(
+            conversation.checked(Err("the chat has no terminal to run it in".to_owned())),
+            None
+        );
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            conversation.last_said(),
+            Some("The goal could not be checked: the chat has no terminal to run it in")
+        );
+
+        conversation.submit("fix");
+        take_turn(&mut conversation, true);
+        let closed = Ok(Ran {
+            output: String::new(),
+            ended: Ended::Closed,
+        });
+        assert_eq!(conversation.checked(closed), None);
+        assert_eq!(
+            conversation.last_said(),
+            Some("The goal was not checked: the terminal of `make` was closed.")
+        );
+    }
+
+    #[test]
+    fn a_closed_conversation_keeps_the_goal_it_had() {
+        let mut conversation = Conversation::closed(vec![Entry::Human("fix".to_owned())])
+            .with_goal(Some("make".to_owned()));
+        assert_eq!(conversation.goal().map(Goal::command), Some("make"));
+
+        conversation.reopen();
+        conversation.submit("again");
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.checking(), Some("make"));
     }
 
     #[test]

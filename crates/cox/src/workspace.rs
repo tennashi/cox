@@ -13,9 +13,10 @@
 //! human sends in it, then by the title its agent gives it, until the
 //! human names it. Its row in the list tells whether its agent is at
 //! work, waits for the human, or finished a turn the human has not seen
-//! yet. The menu of the right button on a row renames the chat, as a
-//! double click does, or archives it: an archived chat leaves the list
-//! for "Archived" at its foot, whose click brings it back.
+//! yet, and whether it has a goal. The menu of the right button on a row
+//! renames the chat, as a double click does, sets or clears its goal, or
+//! archives it: an archived chat leaves the list for "Archived" at its
+//! foot, whose click brings it back.
 //!
 //! A chat that comes to wait for the human, or whose turn ends, while the
 //! human is not looking at it, tells them so (see [`crate::notices`]),
@@ -133,6 +134,8 @@ pub struct Chat {
     /// Whether a turn ended while the chat was not shown, and it has not
     /// been shown since.
     unread: bool,
+    /// The command it works until it passes, if the human set one.
+    goal: Option<String>,
     /// Its view, or `None` for a closed chat the human has not read yet.
     view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
@@ -142,13 +145,15 @@ pub struct Chat {
 
 impl Chat {
     /// A closed chat of the project at `project`, kept as `kept`, which
-    /// the human has not read yet, named `key` for this run.
+    /// the human has not read yet, named `key` for this run, and working
+    /// until `goal` passes if the human set one.
     fn closed(
         key: u64,
         project: usize,
         kept: ChatId,
         name: impl Into<SharedString>,
         named: Named,
+        goal: Option<String>,
     ) -> Self {
         Self {
             key,
@@ -159,6 +164,7 @@ impl Chat {
             open: false,
             state: State::Closed,
             unread: false,
+            goal,
             view: None,
             _changes: Vec::new(),
         }
@@ -197,6 +203,12 @@ impl Chat {
     #[must_use]
     pub fn is_unread(&self) -> bool {
         self.unread
+    }
+
+    /// The command it works until it passes, if the human set one.
+    #[must_use]
+    pub fn goal(&self) -> Option<&str> {
+        self.goal.as_deref()
     }
 
     /// Its view, once it has been shown.
@@ -275,7 +287,14 @@ impl Workspace {
                     };
                     workspace.projects[index].opened += 1;
                     let key = workspace.next_key();
-                    let closed = Chat::closed(key, index, chat.id, chat.name, chat.named);
+                    let closed = Chat::closed(
+                        key,
+                        index,
+                        chat.id,
+                        chat.name,
+                        chat.named,
+                        chat.goal_command,
+                    );
                     if chat.archived {
                         workspace.archived.push(closed);
                     } else {
@@ -393,6 +412,7 @@ impl Workspace {
             open: true,
             state: State::Idle,
             unread: false,
+            goal: None,
             view: Some(view),
             _changes: vec![changes],
         });
@@ -466,6 +486,7 @@ impl Workspace {
             entries,
             tabs,
             session,
+            goal: chat.goal.clone(),
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };
         let view = self.opens.read(closed, window, cx);
@@ -493,6 +514,7 @@ impl Workspace {
             open: false,
             state: State::Closed,
             unread: chat.unread,
+            goal: chat.goal.take(),
             view: Some(view),
             _changes: vec![changes, reopened],
         };
@@ -529,6 +551,7 @@ impl Workspace {
             None
         };
         chat.state = state;
+        chat.goal = conversation.goal().map(|goal| goal.command().to_owned());
         let about = match (conversation.title(), conversation.first_line()) {
             (Some(title), _) => Some((title, Named::Agent)),
             (None, Some(line)) => Some((line, Named::FirstLine)),
@@ -612,6 +635,24 @@ impl Workspace {
         }
         window.focus(&self.focus_handle(cx));
         cx.notify();
+    }
+
+    /// Shows the chat at `index`, and opens the input that sets its goal.
+    pub fn edit_goal(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.show(index, window, cx);
+        if let Some(view) = self.chats.get(index).and_then(Chat::view) {
+            view.update(cx, |view, cx| view.edit_goal(window, cx));
+        }
+    }
+
+    /// Shows the chat at `index`, and clears its goal.
+    pub fn clear_goal(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.show(index, window, cx);
+        if let Some(view) = self.chats.get(index).and_then(Chat::view) {
+            view.update(cx, |view, cx| view.set_goal(None, cx));
+        }
     }
 
     /// Takes the chat at `index` out of the list, to "Archived" at its
@@ -783,7 +824,7 @@ impl Workspace {
             .filter(|_| chat.open)
             .map(|view| view.read(cx).conversation().state());
         let (mark, color) = match state {
-            Some(State::Busy | State::Stopping) => ("…", rgb(DIM)),
+            Some(State::Busy | State::Stopping | State::Checking) => ("…", rgb(DIM)),
             Some(State::Asking) => ("?", rgb(ASKING)),
             Some(State::Closed) => ("closed", rgb(0x80_8080)),
             _ if chat.unread => ("●", rgb(LINK)),
@@ -843,6 +884,15 @@ impl Workspace {
                 }),
             )
             .child(name)
+            .when(chat.goal.is_some(), |row| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(DIM))
+                        .debug_selector(move || format!("goal-{number}"))
+                        .child("◎"),
+                )
+            })
             .child(div().flex_shrink_0().text_color(color).child(mark));
         if self.chats.shown_index() == Some(index) {
             row = row.bg(rgb(0x2a_2a2a));
@@ -912,6 +962,10 @@ impl Workspace {
     /// The menu of the right button on a chat, if it is open.
     fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (at, index) = self.menu?;
+        let has_goal = self
+            .chats
+            .get(index)
+            .is_some_and(|chat| chat.goal.is_some());
         let item = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -939,6 +993,16 @@ impl Workspace {
             .child(item("rename-chat", "Rename").on_click(
                 cx.listener(move |workspace, _, window, cx| workspace.rename(index, window, cx)),
             ))
+            .child(item("set-goal", "Set goal…").on_click(cx.listener(
+                move |workspace, _, window, cx| {
+                    workspace.edit_goal(index, window, cx);
+                },
+            )))
+            .when(has_goal, |menu| {
+                menu.child(item("clear-goal", "Clear goal").on_click(cx.listener(
+                    move |workspace, _, window, cx| workspace.clear_goal(index, window, cx),
+                )))
+            })
             .child(item("archive-chat", "Archive").on_click(
                 cx.listener(move |workspace, _, window, cx| workspace.archive(index, window, cx)),
             ));
@@ -948,7 +1012,10 @@ impl Workspace {
 
 /// Whether an agent that stands as `state` is at work.
 fn working(state: State) -> bool {
-    matches!(state, State::Busy | State::Asking | State::Stopping)
+    matches!(
+        state,
+        State::Busy | State::Asking | State::Stopping | State::Checking
+    )
 }
 
 /// Keeps in `store` whether `chat` is archived.

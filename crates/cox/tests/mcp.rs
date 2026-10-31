@@ -81,6 +81,7 @@ fn the_agent_shows_a_file_on_its_chats_stage() {
     let ToolServer {
         socket,
         mut requests,
+        ..
     } = server;
 
     agent.call(2, "show_markdown", &json!({ "path": "plan.md" }));

@@ -1,5 +1,6 @@
 //! The entries of a chat's conversation, as the window draws them: what
-//! the human sent, the agent's replies as Markdown, and its tool calls,
+//! the human sent, and Cox in their place, the agent's replies as
+//! Markdown, and its tool calls,
 //! permission requests, thoughts and plan, each on a line of its own under
 //! a mark of how it stands. What a line stands for, such as a command's
 //! output, a change to a file line by line, all the agent thought, or the
@@ -212,6 +213,18 @@ impl ChatView {
                 .py_2()
                 .rounded_md()
                 .bg(rgb(HUMAN_BACKGROUND))
+                .child(writer.plain(text, "\n\n"))
+                .into_any_element(),
+            // Sent in the human's place, so drawn in theirs, but as Cox's
+            // notes are.
+            Entry::Cox(text) => div()
+                .debug_selector(|| format!("cox-{index}"))
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(rgb(HUMAN_BACKGROUND))
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
                 .child(writer.plain(text, "\n\n"))
                 .into_any_element(),
             Entry::Reply(text) => writer

@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use cox::agent::Start;
 use cox::agent::instructions::Instructions;
-use cox::chat::conversation::{Conversation, Entry, State};
+use cox::agent::mcp::{Ended, Ran, ToolRequest};
+use cox::chat::conversation::{Conversation, Entry, Goal, State};
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
 use cox::notices::{AppNotices, Notices};
@@ -40,10 +41,41 @@ fn open_window(
 
 /// Opens chats with no stage, each with its agent faked, added to
 /// `agents`. Sent to, a closed chat's agent starts again, faked, going on
-/// with its session as `resumes` says.
+/// with its session as `resumes` says. The commands a chat runs for its
+/// goal run in a shell in place of a terminal.
 struct FakeOpens {
     agents: Agents,
     resumes: Resumes,
+}
+
+/// Runs the commands a chat asks its stage to run, as a terminal would,
+/// in a shell, and answers how each went. Dropping the sender ends it.
+fn fake_terminal() -> tokio::sync::mpsc::UnboundedSender<ToolRequest> {
+    let (asks, mut requests) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        while let Some(request) = requests.blocking_recv() {
+            let ToolRequest::RunCommand {
+                command,
+                cwd,
+                answer,
+            } = request
+            else {
+                continue;
+            };
+            let ran = std::process::Command::new("sh")
+                .args(["-c", &command])
+                .current_dir(cwd)
+                .output()
+                .map(|output| Ran {
+                    output: String::from_utf8_lossy(&output.stdout).into_owned()
+                        + &String::from_utf8_lossy(&output.stderr),
+                    ended: output.status.code().map_or(Ended::Unknown, Ended::Exited),
+                })
+                .map_err(|error| error.to_string());
+            let _ = answer.send(ran);
+        }
+    });
+    asks
 }
 
 impl Opens for FakeOpens {
@@ -58,7 +90,8 @@ impl Opens for FakeOpens {
         let agent = Arc::new(FakeAgent::default());
         self.agents.borrow_mut().push(Arc::clone(&agent));
         let start = Start::New(instructions);
-        let agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
+        let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
+        agent.tools = Some(fake_terminal());
         cx.new(|cx| ChatView::new(agent, None, Rc::new(|_, _, _| {}), record, cx))
     }
 
@@ -67,6 +100,7 @@ impl Opens for FakeOpens {
             cwd,
             entries,
             session,
+            goal,
             record,
             ..
         } = closed;
@@ -76,10 +110,13 @@ impl Opens for FakeOpens {
             let agent = Arc::new(FakeAgent::resuming(resumes));
             opened.borrow_mut().push(Arc::clone(&agent));
             let start = Start::again(&cwd, session, entries);
-            cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start)
+            let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
+            agent.tools = Some(fake_terminal());
+            agent
         });
         let link = Rc::new(|_: &str, _: &mut Window, _: &mut App| {});
-        cx.new(|cx| ChatView::closed(entries, None, link, record, Some(again), window, cx))
+        let conversation = Conversation::closed(entries).with_goal(goal);
+        cx.new(|cx| ChatView::closed(conversation, None, link, record, Some(again), window, cx))
     }
 }
 
@@ -958,4 +995,169 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
         workspace.update(cx, |workspace, cx| workspace.reveal(first_key, window, cx));
     });
     assert_eq!(shown(cx, &workspace), first);
+}
+
+/// A command that fails the first time it runs, leaving a mark in
+/// `folder`, and passes from then on. It mentions "tool", so that the
+/// fake agent, told what it printed, calls a tool.
+fn passing_the_second_time(folder: &std::path::Path) -> String {
+    let mark = folder.join("passed").display().to_string();
+    format!("test -e {mark} || {{ touch {mark}; echo 'no tool ran yet'; exit 1; }}")
+}
+
+/// The goal of the chats of the project at `project`, in the order of the
+/// list.
+fn goals(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    project: usize,
+) -> Vec<Option<String>> {
+    workspace.read_with(cx, |workspace, _| {
+        workspace
+            .chats(project)
+            .map(|chat| chat.goal().map(str::to_owned))
+            .collect()
+    })
+}
+
+#[gpui::test]
+async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppContext) {
+    let home = scratch("goal");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Rc::new(Store::in_memory().unwrap());
+    let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), Rc::clone(&store));
+    click(cx, "new-chat");
+    let view = shown(cx, &workspace);
+    let command = passing_the_second_time(&home);
+    view.update(cx, |view, cx| view.set_goal(Some(command.clone()), cx));
+    assert_eq!(goals(cx, &workspace, 0), [Some(command.clone())]);
+
+    say(cx, &workspace, "tool").await;
+
+    let prompts = agents.borrow()[0].prompts();
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(
+        prompts[1].starts_with(&format!(
+            "Goal not met: `{command}` exit code 1. Go on until it passes. \
+             It printed, at the end:\n\nno tool ran yet"
+        )),
+        "{}",
+        prompts[1]
+    );
+    let entries = shown_entries(cx, &workspace);
+    assert_eq!(
+        entries[0],
+        Entry::Note(format!("Goal: until `{command}` passes."))
+    );
+    assert_eq!(
+        entries.last(),
+        Some(&Entry::Note(format!("Goal met: `{command}` passed.")))
+    );
+    assert_eq!(entries[entries.len() - 3], Entry::Cox(prompts[1].clone()));
+    // The goal, and the way to it, are kept.
+    let kept = store.chats().unwrap();
+    assert_eq!(kept[0].goal_command.as_deref(), Some(command.as_str()));
+    assert_eq!(store.entries(kept[0].id).unwrap(), entries);
+
+    view.update(cx, |view, cx| view.set_goal(None, cx));
+    assert_eq!(goals(cx, &workspace, 0), [None]);
+    assert_eq!(store.chats().unwrap()[0].goal_command, None);
+}
+
+#[gpui::test]
+async fn a_chats_goal_lasts_past_cox_starting_again(cx: &mut TestAppContext) {
+    let folder = scratch("goal-again");
+    std::fs::create_dir_all(&folder).unwrap();
+    let (store, kept) = kept_chat(&folder, Some("session-1"));
+    store.keep_goal(kept, Some("true")).unwrap();
+    let (agents, workspace, cx) =
+        open_window_keeping(cx, scratch("goal-again-home"), Rc::clone(&store));
+    assert_eq!(goals(cx, &workspace, 1), [Some("true".to_owned())]);
+
+    click(cx, "chat-1");
+    let view = shown(cx, &workspace);
+    assert_eq!(
+        view.read_with(cx, |view, _| {
+            let conversation = view.conversation();
+            (
+                conversation.state(),
+                conversation.goal().map(Goal::command).map(str::to_owned),
+            )
+        }),
+        (State::Closed, Some("true".to_owned()))
+    );
+
+    // Sent to, the chat goes on toward its goal.
+    say(cx, &workspace, "hello").await;
+    assert_eq!(agents.borrow()[0].prompts().len(), 1);
+    assert_eq!(
+        shown_entries(cx, &workspace).last(),
+        Some(&Entry::Note("Goal met: `true` passed.".to_owned()))
+    );
+}
+
+#[gpui::test]
+async fn escape_stops_the_check_of_the_goal(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch("goal-stop"));
+    click(cx, "new-chat");
+    let view = shown(cx, &workspace);
+    view.update(cx, |view, cx| view.set_goal(Some("sleep 3".to_owned()), cx));
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Checking
+    })
+    .await;
+
+    cx.simulate_keystrokes("escape");
+
+    assert_eq!(
+        view.read_with(cx, |view, _| view.conversation().state()),
+        State::Idle
+    );
+    assert_eq!(
+        shown_entries(cx, &workspace).last(),
+        Some(&Entry::Note("Stopped.".to_owned()))
+    );
+}
+
+#[gpui::test]
+async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
+    let store = Rc::new(Store::in_memory().unwrap());
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch("goal-menu"), Rc::clone(&store));
+    click(cx, "new-chat");
+    assert!(cx.debug_bounds("goal-1").is_none());
+
+    right_click(cx, "chat-1");
+    assert!(cx.debug_bounds("clear-goal").is_none());
+    click(cx, "set-goal");
+    cx.simulate_input("true");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(goals(cx, &workspace, 0), [Some("true".to_owned())]);
+    assert_eq!(
+        store.chats().unwrap()[0].goal_command.as_deref(),
+        Some("true")
+    );
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("goal-1").is_some());
+    // The input that sets the goal is closed, and the keyboard is back in
+    // the chat's own.
+    say(cx, &workspace, "hello").await;
+    assert_eq!(agents.borrow()[0].prompts(), ["hello"]);
+    assert_eq!(
+        shown_entries(cx, &workspace).last(),
+        Some(&Entry::Note("Goal met: `true` passed.".to_owned()))
+    );
+
+    // Escape leaves the goal as it was.
+    right_click(cx, "chat-1");
+    click(cx, "set-goal");
+    cx.simulate_input("false");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(goals(cx, &workspace, 0), [Some("true".to_owned())]);
+
+    right_click(cx, "chat-1");
+    click(cx, "clear-goal");
+    assert_eq!(goals(cx, &workspace, 0), [None]);
+    assert_eq!(store.chats().unwrap()[0].goal_command, None);
 }

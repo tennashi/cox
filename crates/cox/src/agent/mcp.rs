@@ -105,6 +105,8 @@ pub struct ToolServer {
     /// What the agent's tools ask. Dropping it stops the server, and
     /// removes the socket.
     pub requests: UnboundedReceiver<ToolRequest>,
+    /// Where they ask it, for the chat to ask the same of its stage.
+    pub asks: UnboundedSender<ToolRequest>,
 }
 
 /// The versions of MCP the server speaks, newest first. Its tools work
@@ -138,6 +140,7 @@ pub fn start(cwd: PathBuf) -> anyhow::Result<ToolServer> {
         })
         .with_context(|| format!("cannot listen on {}", socket.display()))?;
     let (sent, requests) = unbounded_channel();
+    let asks = sent.clone();
     thread::spawn(move || {
         let served = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -151,7 +154,11 @@ pub fn start(cwd: PathBuf) -> anyhow::Result<ToolServer> {
             log::warn!("{} is left behind: {error}", directory.display());
         }
     });
-    Ok(ToolServer { socket, requests })
+    Ok(ToolServer {
+        socket,
+        requests,
+        asks,
+    })
 }
 
 /// Makes a new directory for a socket that only this user can enter.

@@ -1,6 +1,7 @@
 //! What a chat's conversation shows, entry by entry: what the human sent,
-//! what the agent replied and did, and the notes Cox adds. It is what Cox
-//! keeps of a chat for the human to read again.
+//! what Cox sent the agent in their place, what the agent replied and did,
+//! and the notes Cox adds. It is what Cox keeps of a chat for the human to
+//! read again.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +13,9 @@ use crate::diff::Line;
 pub enum Entry {
     /// A line the human sent.
     Human(String),
+    /// A line Cox sent the agent in the human's place, as the agent's
+    /// next turn: what the chat's goal asks while it is not met.
+    Cox(String),
     /// The agent's reply, as much of it as has arrived.
     Reply(String),
     /// What the agent thought on its way to the reply, as much of it as

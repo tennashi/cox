@@ -54,6 +54,8 @@ pub struct Closed {
     pub tabs: Option<KeptTabs>,
     /// The id its agent gave its session, to go on with, if it had one.
     pub session: Option<String>,
+    /// The command it works until it passes, if the human set one.
+    pub goal: Option<String>,
     /// Where it is kept, to go on keeping it once the human sends to it.
     pub record: Option<Record>,
 }
