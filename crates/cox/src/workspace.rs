@@ -2,7 +2,9 @@
 //! they are in, and the one shown beside the list. A project is a folder
 //! the human opened: each chat in it works there, and its agent gets the
 //! instructions in the folder's `COX.md`. Chats in no project work in
-//! Cox's home, with the instructions there.
+//! Cox's home, with the instructions there. A project with roles (see
+//! [`crate::agent::role`]) lists them when the human asks for a chat in
+//! it, to open the chat as one; the row names a chat's role.
 //!
 //! The projects and chats are kept as they go (see [`cox_core::store`]).
 //! A chat's agent runs until Cox quits; the chats of earlier runs stay in
@@ -29,12 +31,13 @@ use std::rc::Rc;
 use cox_core::list::List;
 use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
 use gpui::{
-    App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, MouseButton,
-    MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString, Stateful, Subscription, Window,
-    actions, anchored, deferred, div, prelude::*, px, rgb,
+    App, ClickEvent, Context, Div, ElementId, Entity, FocusHandle, Focusable, KeyBinding,
+    MouseButton, MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString, Stateful,
+    Subscription, Window, actions, anchored, deferred, div, prelude::*, px, rgb,
 };
 
 use crate::agent::instructions::Instructions;
+use crate::agent::role::Role;
 use crate::chat::conversation::{Entry, State};
 use crate::chat::view::{ChatView, Reopened};
 use crate::chat::{Closed, Opens};
@@ -136,6 +139,8 @@ pub struct Chat {
     unread: bool,
     /// The command it works until it passes, if the human set one.
     goal: Option<String>,
+    /// The name of the role it was opened as, if the human chose one.
+    role: Option<String>,
     /// Its view, or `None` for a closed chat the human has not read yet.
     view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
@@ -145,8 +150,9 @@ pub struct Chat {
 
 impl Chat {
     /// A closed chat of the project at `project`, kept as `kept`, which
-    /// the human has not read yet, named `key` for this run, and working
-    /// until `goal` passes if the human set one.
+    /// the human has not read yet, named `key` for this run, working
+    /// until `goal` passes if the human set one, and opened as `role` if
+    /// they chose one.
     fn closed(
         key: u64,
         project: usize,
@@ -154,6 +160,7 @@ impl Chat {
         name: impl Into<SharedString>,
         named: Named,
         goal: Option<String>,
+        role: Option<String>,
     ) -> Self {
         Self {
             key,
@@ -165,6 +172,7 @@ impl Chat {
             state: State::Closed,
             unread: false,
             goal,
+            role,
             view: None,
             _changes: Vec::new(),
         }
@@ -211,6 +219,12 @@ impl Chat {
         self.goal.as_deref()
     }
 
+    /// The name of the role it was opened as, if the human chose one.
+    #[must_use]
+    pub fn role(&self) -> Option<&str> {
+        self.role.as_deref()
+    }
+
     /// Its view, once it has been shown.
     #[must_use]
     pub fn view(&self) -> Option<&Entity<ChatView>> {
@@ -237,6 +251,10 @@ pub struct Workspace {
     /// The menu of the right button, where it opened in the window, for
     /// the chat at an index in the list.
     menu: Option<(Point<Pixels>, usize)>,
+    /// The roles of the project at an index, listed where its + was
+    /// clicked, for the human to open a chat as one, while the list is
+    /// open.
+    role_menu: Option<(Point<Pixels>, usize, Vec<String>)>,
     /// The chat at an index in the list being renamed, in an input.
     renaming: Option<(usize, Entity<LineInput>, Subscription)>,
     opens: Rc<dyn Opens>,
@@ -261,6 +279,7 @@ impl Workspace {
             last_key: 0,
             badged: 0,
             menu: None,
+            role_menu: None,
             renaming: None,
             opens,
             store,
@@ -294,6 +313,7 @@ impl Workspace {
                         chat.name,
                         chat.named,
                         chat.goal_command,
+                        chat.role,
                     );
                     if chat.archived {
                         workspace.archived.push(closed);
@@ -376,8 +396,22 @@ impl Workspace {
     }
 
     /// Opens a chat in the project of `folder`, or in no project when there
-    /// is none, and shows it.
+    /// is none, as no role, and shows it.
     pub fn open(&mut self, folder: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_as(folder, None, window, cx);
+    }
+
+    /// Opens a chat in the project of `folder`, or in no project when there
+    /// is none, as the project's role named `role` if given, and shows it.
+    /// A role that cannot be read opens the chat as none.
+    pub fn open_as(
+        &mut self,
+        folder: Option<PathBuf>,
+        role: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.role_menu = None;
         let index = folder.map_or(0, |folder| self.project(folder));
         let project = &mut self.projects[index];
         if index == 0 {
@@ -388,6 +422,11 @@ impl Workspace {
             }
         }
         let instructions = Instructions::read(&project.folder);
+        let role = role.and_then(|name| {
+            Role::read(&project.folder, &name)
+                .inspect_err(|error| log::error!("the chat opens as no role: {error:#}"))
+                .ok()
+        });
         project.opened += 1;
         let name = format!("Chat {}", project.opened);
         let kept = self
@@ -395,10 +434,21 @@ impl Workspace {
             .add_chat(project.id, &name)
             .inspect_err(|error| log::error!("the chat is not kept: {error:#}"))
             .ok();
+        if let (Some(kept), Some(role)) = (kept, &role)
+            && let Err(error) = self.store.keep_role(kept, &role.name)
+        {
+            log::error!("the chat's role is not kept: {error:#}");
+        }
         let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
-        let view = self
-            .opens
-            .open(project.folder.clone(), instructions, record, window, cx);
+        let role_name = role.as_ref().map(|role| role.name.clone());
+        let view = self.opens.open(
+            project.folder.clone(),
+            instructions,
+            role,
+            record,
+            window,
+            cx,
+        );
         let changes = cx.observe_in(&view, window, |workspace, view, window, cx| {
             workspace.changed(&view, window, cx);
         });
@@ -413,10 +463,31 @@ impl Workspace {
             state: State::Idle,
             unread: false,
             goal: None,
+            role: role_name,
             view: Some(view),
             _changes: vec![changes],
         });
         self.show(chat, window, cx);
+    }
+
+    /// Opens a chat in the project at `index`, as its + asks, clicked at
+    /// `at`: as one of the project's roles, which a list there offers
+    /// while the project has any, or else as no role.
+    fn new_chat_in(
+        &mut self,
+        index: usize,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let folder = self.projects[index].folder.clone();
+        let roles = Role::list(&folder);
+        if roles.is_empty() {
+            self.open(Some(folder), window, cx);
+        } else {
+            self.role_menu = Some((at, index, roles));
+            cx.notify();
+        }
     }
 
     /// Asks the human for a folder, and opens a chat in its project.
@@ -487,6 +558,7 @@ impl Workspace {
             tabs,
             session,
             goal: chat.goal.clone(),
+            role: chat.role.clone(),
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };
         let view = self.opens.read(closed, window, cx);
@@ -515,6 +587,7 @@ impl Workspace {
             state: State::Closed,
             unread: chat.unread,
             goal: chat.goal.take(),
+            role: chat.role.take(),
             view: Some(view),
             _changes: vec![changes, reopened],
         };
@@ -766,9 +839,8 @@ impl Workspace {
     }
 
     /// The heading of the project at `index`, with a button that opens a
-    /// chat in it.
+    /// chat in it, as one of its roles if it has any.
     fn render_project(index: usize, project: &Project, cx: &mut Context<Self>) -> Stateful<Div> {
-        let folder = project.folder.clone();
         div()
             .id(("project", index))
             .flex()
@@ -807,9 +879,11 @@ impl Workspace {
                     .text_color(rgb(0x80_8080))
                     .hover(|style| style.bg(rgb(0x40_4040)).text_color(rgb(0xe0_e0e0)))
                     .child("+")
-                    .on_click(cx.listener(move |workspace, _, window, cx| {
-                        workspace.open(Some(folder.clone()), window, cx);
-                    })),
+                    .on_click(
+                        cx.listener(move |workspace, event: &ClickEvent, window, cx| {
+                            workspace.new_chat_in(index, event.position(), window, cx);
+                        }),
+                    ),
             )
     }
 
@@ -883,6 +957,16 @@ impl Workspace {
                     cx.notify();
                 }),
             )
+            .when_some(chat.role.clone(), |row, role| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(rgb(DIM))
+                        .debug_selector(move || format!("role-{number}"))
+                        .child(role),
+                )
+            })
             .child(name)
             .when(chat.goal.is_some(), |row| {
                 row.child(
@@ -1008,6 +1092,59 @@ impl Workspace {
             ));
         Some(deferred(anchored().position(at).child(menu)).with_priority(2))
     }
+
+    /// The roles of a project, listed where its + was clicked, if they are.
+    fn render_role_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (at, index, roles) = self.role_menu.as_ref()?;
+        let (at, index) = (*at, *index);
+        let folder = self.projects[index].folder.clone();
+        let item = |id: ElementId, selector: String, label: SharedString| {
+            div()
+                .id(id)
+                .debug_selector(move || selector.clone())
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(0x04_395e)))
+                .child(label)
+        };
+        let as_role = roles.iter().enumerate().map(|(i, role)| {
+            let (folder, role) = (self.projects[index].folder.clone(), role.clone());
+            item(
+                ("open-as", i).into(),
+                format!("open-as-{}", i + 1),
+                role.clone().into(),
+            )
+            .on_click(cx.listener(move |workspace, _, window, cx| {
+                workspace.open_as(Some(folder.clone()), Some(role.clone()), window, cx);
+            }))
+        });
+        let as_none = item(
+            "open-as-none".into(),
+            "open-as-none".to_owned(),
+            "No role".into(),
+        )
+        .on_click(cx.listener(move |workspace, _, window, cx| {
+            workspace.open(Some(folder.clone()), window, cx);
+        }));
+        let menu = div()
+            .occlude()
+            .min_w(px(160.))
+            .p_1()
+            .bg(rgb(0x25_2526))
+            .border_1()
+            .border_color(rgb(0x45_4545))
+            .rounded_md()
+            .shadow_md()
+            .on_mouse_down_out(cx.listener(|workspace, _, _, cx| {
+                workspace.role_menu = None;
+                cx.notify();
+            }))
+            .children(as_role)
+            .child(as_none);
+        Some(deferred(anchored().position(at).child(menu)).with_priority(2))
+    }
 }
 
 /// Whether an agent that stands as `state` is at work.
@@ -1074,5 +1211,6 @@ impl Render for Workspace {
             .child(self.render_list(cx))
             .child(div().flex_1().min_w_0().h_full().child(shown))
             .children(self.render_menu(cx))
+            .children(self.render_role_menu(cx))
     }
 }

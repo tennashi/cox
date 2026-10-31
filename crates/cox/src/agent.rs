@@ -185,7 +185,9 @@ impl Start {
         }
     }
 
-    fn role(&self) -> Option<&Role> {
+    /// The role the chat was opened as, if any.
+    #[must_use]
+    pub fn role(&self) -> Option<&Role> {
         match self {
             Self::New { role, .. } | Self::Again { role, .. } => role.as_ref(),
         }
@@ -649,7 +651,7 @@ mod tests {
         // answers, so only stopping it ends it.
         let script = format!("sleep 60 & echo $! > {}; wait", file.display());
         let agent = spawn(
-            move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script], Vec::new()),
             std::env::temp_dir(),
             Vec::new(),
             Start::New {
@@ -686,7 +688,7 @@ mod tests {
             file.display()
         );
         let agent = spawn(
-            move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script], Vec::new()),
             std::env::temp_dir(),
             Vec::new(),
             Start::New {

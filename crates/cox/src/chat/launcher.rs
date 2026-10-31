@@ -37,6 +37,7 @@ use gpui::{App, Entity, Window, prelude::*};
 
 use crate::agent::instructions::Instructions;
 use crate::agent::mcp::ToolServer;
+use crate::agent::role::{Role, StageUse};
 use crate::agent::{Agent, Start};
 use crate::chat::conversation::Conversation;
 use crate::chat::view::{Again, ChatView, OpenLink, StageView};
@@ -45,11 +46,12 @@ use crate::stage::Stage;
 use crate::ui::Panel;
 use cox_browser::relay::Relay;
 
-/// Opens chats, each with an agent of the same command: the [`Opens`] of
-/// the window when Cox runs.
+/// Opens chats, each with an agent of the same command, unless the chat's
+/// role names another: the [`Opens`] of the window when Cox runs.
 #[derive(Clone)]
 pub struct Launcher {
-    /// The agent to start, and its arguments.
+    /// The agent to start, and its arguments, for a chat whose role names
+    /// none.
     pub command: Vec<String>,
     /// The page each chat's stage shows first.
     pub stage: String,
@@ -63,11 +65,13 @@ pub struct Launcher {
 
 impl Opens for Launcher {
     /// Starts a chat working in `cwd`, an absolute path, whose agent gets
-    /// `instructions`, kept in `record`, and returns its view.
+    /// `instructions`, as `role` if given, kept in `record`, and returns
+    /// its view.
     fn open(
         &self,
         cwd: PathBuf,
         instructions: Option<Instructions>,
+        role: Option<Role>,
         record: Option<Record>,
         window: &mut Window,
         cx: &mut App,
@@ -89,10 +93,7 @@ impl Opens for Launcher {
             &stage,
             cwd,
             record.clone(),
-            Start::New {
-                instructions,
-                role: None,
-            },
+            Start::New { instructions, role },
             window,
             cx,
         );
@@ -118,6 +119,7 @@ impl Opens for Launcher {
             tabs,
             session,
             goal,
+            role,
             record,
         } = closed;
         // 1. The stage, on the pages and files the chat had.
@@ -138,7 +140,7 @@ impl Opens for Launcher {
         let works = stage.clone();
         let kept = record.clone();
         let again: Again = Box::new(move |entries, window, cx| {
-            let start = Start::again(&cwd, session, entries, None);
+            let start = Start::again(&cwd, session, entries, role.as_deref());
             launcher.start(&works, cwd, kept, start, window, cx)
         });
         // 6. The view, with the stage beside it, and no agent yet.
@@ -159,7 +161,8 @@ impl Opens for Launcher {
 impl Launcher {
     /// Steps 2 to 5: starts the agent of a chat working in `cwd`, as
     /// `start` says, with what it reaches `stage` through, which from then
-    /// on works with the agent, keeping its tabs in `record`.
+    /// on works with the agent, keeping its tabs in `record`. The chat's
+    /// role, if it has one, says which agent, with which tools.
     fn start(
         &self,
         stage: &Entity<Stage>,
@@ -169,10 +172,13 @@ impl Launcher {
         window: &mut Window,
         cx: &mut App,
     ) -> Agent {
-        // 2. The relay the agent's browser tools go through.
-        let relay = self.relay();
+        let role = start.role();
+        // 2. The relay the agent's browser tools go through, unless the
+        // role keeps the agent from driving the stage.
+        let drives = role.is_none_or(|role| role.stage == StageUse::Drive);
+        let relay = drives.then(|| self.relay()).flatten();
         // 3. The server of Cox's own tools, with the `cox` that reaches it.
-        let server = self.server(&cwd);
+        let server = self.server(&cwd, role.and_then(|role| role.tools.clone()));
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(relay.as_ref(), server.as_ref());
         // 4. The stage works with the relay and the tools, and keeps its tabs.
@@ -209,11 +215,16 @@ impl Launcher {
     }
 
     /// Starts the server of Cox's own tools for a chat working in `cwd`,
-    /// and answers it with the `cox` the agent runs to reach it, or `None`
-    /// when it did not start.
-    fn server(&self, cwd: &std::path::Path) -> Option<(PathBuf, ToolServer)> {
+    /// serving the tools named in `only`, or all of them, and answers it
+    /// with the `cox` the agent runs to reach it, or `None` when it did not
+    /// start.
+    fn server(
+        &self,
+        cwd: &std::path::Path,
+        only: Option<Vec<String>>,
+    ) -> Option<(PathBuf, ToolServer)> {
         let exe = self.exe.clone()?;
-        match crate::agent::mcp::start(cwd.to_owned()) {
+        match crate::agent::mcp::start(cwd.to_owned(), only) {
             Ok(server) => Some((exe, server)),
             Err(error) => {
                 log::error!("the agent gets no tools of Cox's own: {error:#}");
@@ -239,10 +250,16 @@ impl Launcher {
             .collect()
     }
 
-    /// Starts the agent working in `cwd` with `tools`, as `start` says.
+    /// Starts the agent working in `cwd` with `tools`, as `start` says:
+    /// the agent the chat's role names, in its environment, or else the
+    /// one Cox was given.
     fn spawn(&self, cwd: PathBuf, tools: Vec<McpServer>, start: Start) -> Agent {
-        let command = self.command.clone();
-        crate::agent::spawn(move || cox_acp::launch(command), cwd, tools, start)
+        let role = start.role();
+        let command = role
+            .and_then(|role| role.command.clone())
+            .unwrap_or_else(|| self.command.clone());
+        let env = role.map(|role| role.env.clone()).unwrap_or_default();
+        crate::agent::spawn(move || cox_acp::launch(command, env), cwd, tools, start)
     }
 }
 

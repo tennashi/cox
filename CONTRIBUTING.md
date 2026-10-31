@@ -86,6 +86,49 @@ line of theirs, or when the agent made no tool call for two turns in a
 row, which says it has something to ask, or when Escape stops the
 check. The goal lasts across runs, with the rest of the chat.
 
+A project can have roles for its chats: files `.cox/roles/<name>.md` in
+its folder. While it has any, the + beside the project lists them, to
+open a chat as one of them, or as none; the row names the chat's role,
+and a closed chat starts its agent again as the same role. TOML between
+`---` lines at the top of the file says how the role's agent runs, and
+the Markdown under it is what the agent is told of its role, after
+`COX.md`. Every part can be left out. One project might have a sparring
+partner, which plans the work and writes no code, and an executor, which
+edits without being asked each time. The sparring partner's file might
+be:
+
+```markdown
+---
+agent = "npx -y @agentclientprotocol/claude-agent-acp"
+env = { CLAUDE_CODE_THINKING_DISPLAY = "summarized" }
+tools = ["show_markdown", "show_file"]
+stage = "look"
+[permissions]
+allow = ["Read *", "grep *", "cargo *"]
+reject = ["Edit *", "Write *"]
+---
+# Sparring partner
+
+Write no code. Read the repository, break what is asked into units of
+change, one commit each, and list them in a Markdown file for the human
+to read on the stage. Agree on them one by one before anything is built.
+```
+
+`agent` is the command of the agent to run, in place of the one Cox was
+given, and `env` what to set in its environment. `tools` names the
+tools of Cox's own the agent gets (`show_markdown`, `show_file`,
+`run_command`), all of them unless given, and `stage = "look"` gives it
+no tools to drive the stage, so it only shows the human things there.
+Under `permissions`, `allow` and `reject` are patterns of the titles of
+the agent's permission requests, as they show in the conversation, with
+`*` for any run of characters: a request whose title matches is allowed
+or rejected once by Cox, in the human's place, and the conversation says
+the role chose; one both match is rejected, and the human is asked about
+the rest. With `claude-agent-acp`, the title of a shell command is the
+command itself, as `cargo xtask ci`, and the title of an edit, a write
+or a read is the tool's name and the file's path from the folder, as
+`Edit src/main.rs`.
+
 The conversation shows each tool call the agent makes on a line of its
 own, marked as running, done or failed; a click on the line opens what
 the call showed, which shows from the start for a call that failed.

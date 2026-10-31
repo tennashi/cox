@@ -11,9 +11,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_client_protocol::schema::v1::{RequestPermissionOutcome, SelectedPermissionOutcome};
 use cox::agent::Start;
 use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{Ended, Ran, ToolRequest};
+use cox::agent::role::{ROLES_DIR, Role};
 use cox::chat::conversation::{Conversation, Entry, Goal, State};
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
@@ -83,16 +85,14 @@ impl Opens for FakeOpens {
         &self,
         cwd: PathBuf,
         instructions: Option<Instructions>,
+        role: Option<Role>,
         record: Option<Record>,
         _: &mut Window,
         cx: &mut App,
     ) -> Entity<ChatView> {
         let agent = Arc::new(FakeAgent::default());
         self.agents.borrow_mut().push(Arc::clone(&agent));
-        let start = Start::New {
-            instructions,
-            role: None,
-        };
+        let start = Start::New { instructions, role };
         let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
         agent.tools = Some(fake_terminal());
         cx.new(|cx| ChatView::new(agent, None, Rc::new(|_, _, _| {}), record, cx))
@@ -104,6 +104,7 @@ impl Opens for FakeOpens {
             entries,
             session,
             goal,
+            role,
             record,
             ..
         } = closed;
@@ -112,7 +113,7 @@ impl Opens for FakeOpens {
         let again: Again = Box::new(move |entries, _, _| {
             let agent = Arc::new(FakeAgent::resuming(resumes));
             opened.borrow_mut().push(Arc::clone(&agent));
-            let start = Start::again(&cwd, session, entries, None);
+            let start = Start::again(&cwd, session, entries, role.as_deref());
             let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
             agent.tools = Some(fake_terminal());
             agent
@@ -1163,4 +1164,140 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     click(cx, "clear-goal");
     assert_eq!(goals(cx, &workspace, 0), [None]);
     assert_eq!(store.chats().unwrap()[0].goal_command, None);
+}
+
+/// Writes the role `name` of `folder`, whose front matter is `front`.
+fn role_file(folder: &std::path::Path, name: &str, front: &str) {
+    let roles = folder.join(ROLES_DIR);
+    std::fs::create_dir_all(&roles).unwrap();
+    let text = format!("---\n{front}\n---\n# {name}\n\nKeep to it.\n");
+    std::fs::write(roles.join(format!("{name}.md")), text).unwrap();
+}
+
+/// The role of each chat of the project at `project`, as listed.
+fn roles(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    project: usize,
+) -> Vec<Option<String>> {
+    workspace.read_with(cx, |workspace, _| {
+        workspace
+            .chats(project)
+            .map(|chat| chat.role().map(str::to_owned))
+            .collect()
+    })
+}
+
+/// The agent was told no, as a role's policy says.
+fn rejected() -> [RequestPermissionOutcome; 1] {
+    [RequestPermissionOutcome::Selected(
+        SelectedPermissionOutcome::new("reject"),
+    )]
+}
+
+#[gpui::test]
+async fn the_human_opens_a_chat_as_one_of_the_projects_roles(cx: &mut TestAppContext) {
+    let folder = scratch("roles");
+    std::fs::create_dir_all(&folder).unwrap();
+    role_file(&folder, "reviewer", "[permissions]\nreject = [\"Edit *\"]");
+    role_file(&folder, "builder", "[permissions]\nallow = [\"Edit *\"]");
+    let store = Rc::new(Store::in_memory().unwrap());
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch("roles-home"), Rc::clone(&store));
+    // Opening the folder opens a chat as no role.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(folder.clone()), window, cx);
+    });
+    assert_eq!(roles(cx, &workspace, 1), [None]);
+
+    // The + lists the roles, in order, and one opens a chat as it.
+    click(cx, "new-chat-in-2");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("open-as-1").is_some(), "builder is listed");
+    assert!(cx.debug_bounds("open-as-none").is_some());
+    click(cx, "open-as-2");
+    cx.run_until_parked();
+    assert_eq!(
+        roles(cx, &workspace, 1),
+        [None, Some("reviewer".to_owned())]
+    );
+    assert!(
+        cx.debug_bounds("role-2").is_some(),
+        "the row names the role"
+    );
+    let kept: Vec<Option<String>> = store
+        .chats()
+        .unwrap()
+        .into_iter()
+        .map(|chat| chat.role)
+        .collect();
+    assert_eq!(kept, [None, Some("reviewer".to_owned())]);
+
+    // The agent is told of its role, and its policy answers for the human.
+    say(cx, &workspace, "permission").await;
+    let agent = Arc::clone(&agents.borrow()[1]);
+    assert_eq!(agent.answers(), rejected());
+    let blocks = agent.prompt_blocks();
+    assert_eq!(blocks[0].len(), 2, "{blocks:?}");
+    assert!(
+        blocks[0][0].starts_with("Your role in this project, from "),
+        "{blocks:?}"
+    );
+    assert!(
+        blocks[0][0].ends_with("# reviewer\n\nKeep to it.\n"),
+        "{blocks:?}"
+    );
+    let entries = shown_entries(cx, &workspace);
+    assert!(
+        matches!(&entries[0], Entry::Note(note) if note.starts_with("Role: ")),
+        "{entries:?}"
+    );
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            Entry::Permission {
+                chosen: Some(1),
+                by_policy: true,
+                ..
+            }
+        )),
+        "{entries:?}"
+    );
+
+    // "No role" opens a chat as none.
+    click(cx, "new-chat-in-2");
+    cx.run_until_parked();
+    click(cx, "open-as-none");
+    cx.run_until_parked();
+    assert_eq!(
+        roles(cx, &workspace, 1),
+        [None, Some("reviewer".to_owned()), None]
+    );
+    let view = shown(cx, &workspace);
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    cx.condition(&view, |view, _| {
+        view.conversation().state() == State::Asking
+    })
+    .await;
+    assert_eq!(agents.borrow()[2].answers(), []);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui::test]
+async fn a_closed_chat_starts_its_agent_again_as_its_role(cx: &mut TestAppContext) {
+    let folder = scratch("role-again");
+    std::fs::create_dir_all(&folder).unwrap();
+    role_file(&folder, "reviewer", "[permissions]\nreject = [\"Edit *\"]");
+    let (store, kept) = kept_chat(&folder, Some("session-1"));
+    store.keep_role(kept, "reviewer").unwrap();
+    let (agents, workspace, cx) =
+        open_window_keeping(cx, scratch("role-again-home"), Rc::clone(&store));
+    assert_eq!(roles(cx, &workspace, 1), [Some("reviewer".to_owned())]);
+
+    click(cx, "chat-1");
+    say(cx, &workspace, "permission").await;
+    let agent = Arc::clone(&agents.borrow()[0]);
+    assert_eq!(agent.resumed(), ["session-1"]);
+    assert_eq!(agent.answers(), rejected());
+    let _ = std::fs::remove_dir_all(&folder);
 }

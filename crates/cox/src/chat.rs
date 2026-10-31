@@ -21,6 +21,7 @@ use cox_core::tabs::KeptTabs;
 use gpui::{App, Entity, Window};
 
 use crate::agent::instructions::Instructions;
+use crate::agent::role::Role;
 use crate::chat::conversation::Entry;
 use crate::chat::view::ChatView;
 
@@ -28,12 +29,13 @@ use crate::chat::view::ChatView;
 /// of the agents, or a fake one in tests.
 pub trait Opens {
     /// Starts a chat's agent working in `cwd`, an absolute path, with
-    /// `instructions`, keeping the chat in `record` if given, and returns
-    /// the chat's view.
+    /// `instructions`, as `role` if given, keeping the chat in `record` if
+    /// given, and returns the chat's view.
     fn open(
         &self,
         cwd: PathBuf,
         instructions: Option<Instructions>,
+        role: Option<Role>,
         record: Option<Record>,
         window: &mut Window,
         cx: &mut App,
@@ -56,6 +58,8 @@ pub struct Closed {
     pub session: Option<String>,
     /// The command it works until it passes, if the human set one.
     pub goal: Option<String>,
+    /// The name of the role it was opened as, if the human chose one.
+    pub role: Option<String>,
     /// Where it is kept, to go on keeping it once the human sends to it.
     pub record: Option<Record>,
 }

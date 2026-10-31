@@ -57,7 +57,8 @@ pub struct Settings {
     pub stage: String,
     /// Where chats in no project work, if not in `~/Cox`.
     pub home: Option<PathBuf>,
-    /// The agent each chat starts, and its arguments.
+    /// The agent each chat starts, and its arguments, unless the chat's
+    /// role names another.
     pub command: Vec<String>,
 }
 

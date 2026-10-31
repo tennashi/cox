@@ -22,7 +22,9 @@ use agent_client_protocol::schema::v1::{
     ToolCallContent as AcpToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
 };
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
-use agent_client_protocol::{AcpAgent, Agent, Client, ConnectTo, ConnectionTo, Responder};
+use agent_client_protocol::{
+    AcpAgent, AcpAgentConfig, Agent, Client, ConnectTo, ConnectionTo, Responder,
+};
 use anyhow::Context;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -32,13 +34,20 @@ pub trait Transport: ConnectTo<Client> {}
 
 impl<T: ConnectTo<Client>> Transport for T {}
 
-/// Starts `command` (the program, then its arguments) as an agent process.
+/// Starts `command` (the program, then its arguments) as an agent process,
+/// with `env` set in its environment, over Cox's own.
 ///
 /// # Errors
 ///
 /// Returns an error if `command` is empty.
-pub fn launch(command: impl IntoIterator<Item = String>) -> anyhow::Result<impl Transport> {
-    Ok(AcpAgent::from_args(command)?)
+pub fn launch(
+    command: impl IntoIterator<Item = String>,
+    env: impl IntoIterator<Item = (String, String)>,
+) -> anyhow::Result<impl Transport> {
+    let mut command = command.into_iter();
+    let program = command.next().context("the agent's command is empty")?;
+    let config = AcpAgentConfig::new(program).args(command).envs(env);
+    Ok(AcpAgent::new(config))
 }
 
 /// An MCP server the agent starts for the session, to use its tools. The

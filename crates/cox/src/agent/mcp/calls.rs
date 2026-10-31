@@ -20,8 +20,24 @@ const RUN_COMMAND: &str = "run_command";
 /// build or a test run says how it went.
 const OUTPUT_LENGTH: usize = 30_000;
 
-/// The tools, as the agent learns of them.
-pub(super) fn tools() -> Value {
+/// The tools, as the agent learns of them: those named in `only`, or all
+/// of them.
+pub(super) fn tools(only: Option<&[String]>) -> Value {
+    let mut tools = all_tools();
+    if let Some(only) = only
+        && let Some(tools) = tools.as_array_mut()
+    {
+        tools.retain(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| only.iter().any(|only| only == name))
+        });
+    }
+    tools
+}
+
+/// Every tool, as the agent learns of it.
+fn all_tools() -> Value {
     json!([
     {
         "name": SHOW_MARKDOWN,
@@ -100,10 +116,15 @@ pub(super) fn tools() -> Value {
 pub(super) async fn call(
     params: &Value,
     cwd: &Path,
+    only: Option<&[String]>,
     requests: &UnboundedSender<ToolRequest>,
 ) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
+    // A tool the chat's agent does not get is no tool to it.
+    if only.is_some_and(|only| !only.iter().any(|only| only == name)) {
+        return Err((INVALID_PARAMS, format!("no tool {name}")));
+    }
     let done = match name {
         SHOW_MARKDOWN => show_markdown(arguments, cwd, requests),
         SHOW_FILE => show_file(arguments, cwd, requests),
@@ -273,7 +294,7 @@ mod tests {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(call(&params, cwd, requests))
+            .block_on(call(&params, cwd, None, requests))
             .unwrap()
     }
 
@@ -286,7 +307,7 @@ mod tests {
 
     #[test]
     fn lists_the_tools() {
-        let listed = tools();
+        let listed = tools(None);
         assert_eq!(listed[0]["name"], SHOW_MARKDOWN);
         assert_eq!(listed[1]["name"], SHOW_FILE);
         assert_eq!(listed[2]["name"], RUN_COMMAND);
@@ -416,7 +437,9 @@ mod tests {
             }
         });
         let params = json!({ "name": RUN_COMMAND, "arguments": arguments });
-        let answered = call(&params, Path::new("/work"), &sent).await.unwrap();
+        let answered = call(&params, Path::new("/work"), None, &sent)
+            .await
+            .unwrap();
         drop(sent);
         let asked = chat.await.unwrap();
         assert_eq!(asked.as_deref(), params["arguments"]["command"].as_str());
@@ -453,7 +476,7 @@ mod tests {
     async fn asks_for_a_command() {
         let (sent, mut requests) = unbounded_channel();
         let params = json!({ "name": RUN_COMMAND, "arguments": { "command": " " } });
-        let answered = call(&params, Path::new("/"), &sent).await.unwrap();
+        let answered = call(&params, Path::new("/"), None, &sent).await.unwrap();
         assert_eq!(answered["isError"], true);
         assert!(requests.try_recv().is_err());
     }
