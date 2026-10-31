@@ -19,7 +19,7 @@ use crate::entry::Entry;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 4;
+const VERSION: i64 = 5;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -44,7 +44,10 @@ CREATE TABLE chats (
     archived INTEGER NOT NULL DEFAULT 0,
     -- The command that checks the chat's goal, which the chat works
     -- until it passes, while the human has set one.
-    goal_command TEXT
+    goal_command TEXT,
+    -- The role the chat was opened as, the name of its file among the
+    -- project's roles, while the human chose one.
+    role TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -65,6 +68,7 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN named INTEGER NOT NULL DEFAULT 0;
      ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
     "ALTER TABLE chats ADD COLUMN goal_command TEXT;",
+    "ALTER TABLE chats ADD COLUMN role TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -97,6 +101,8 @@ pub struct KeptChat {
     /// The command that checks its goal, which it works until it passes,
     /// if the human set one.
     pub goal_command: Option<String>,
+    /// The role it was opened as, if the human chose one.
+    pub role: Option<String>,
 }
 
 /// Where a chat's name came from, from the name that gives way most
@@ -212,7 +218,7 @@ impl Store {
     /// When the database cannot be read.
     pub fn chats(&self) -> anyhow::Result<Vec<KeptChat>> {
         let mut statement = self.connection.prepare(
-            "SELECT id, project, name, named, archived, goal_command FROM chats ORDER BY id",
+            "SELECT id, project, name, named, archived, goal_command, role FROM chats ORDER BY id",
         )?;
         let chats = statement.query_map([], |row| {
             Ok(KeptChat {
@@ -222,6 +228,7 @@ impl Store {
                 named: Named::from_number(row.get(3)?),
                 archived: row.get(4)?,
                 goal_command: row.get(5)?,
+                role: row.get(6)?,
             })
         })?;
         Ok(chats.collect::<Result<_, _>>()?)
@@ -303,6 +310,19 @@ impl Store {
         self.connection.execute(
             "UPDATE chats SET goal_command = ?2 WHERE id = ?1",
             params![chat.0, command],
+        )?;
+        Ok(())
+    }
+
+    /// Keeps `role` as the role `chat` was opened as.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_role(&self, chat: ChatId, role: &str) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET role = ?2 WHERE id = ?1",
+            params![chat.0, role],
         )?;
         Ok(())
     }
@@ -445,6 +465,15 @@ impl Record {
     /// When the database cannot be written.
     pub fn goal(&self, command: Option<&str>) -> anyhow::Result<()> {
         self.store.keep_goal(self.chat, command)
+    }
+
+    /// Keeps `role` as the role the chat was opened as.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn role(&self, role: &str) -> anyhow::Result<()> {
+        self.store.keep_role(self.chat, role)
     }
 }
 
@@ -699,6 +728,25 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_role_a_chat_was_opened_as() {
+        let store = Store::in_memory().unwrap();
+        store.add_chat(None, "Chat 1").unwrap();
+        let other = store.add_chat(None, "Chat 2").unwrap();
+        let roles = |store: &Store| {
+            store
+                .chats()
+                .unwrap()
+                .into_iter()
+                .map(|chat| chat.role)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(roles(&store), [None, None]);
+
+        store.keep_role(other, "reviewer").unwrap();
+        assert_eq!(roles(&store), [None, Some("reviewer".to_owned())]);
+    }
+
+    #[test]
     fn a_database_from_an_earlier_cox_is_upgraded() {
         let directory = scratch("earlier");
         let path = directory.join("chats.sqlite");
@@ -739,9 +787,11 @@ mod tests {
         assert_eq!(chats[0].named, Named::Numbered);
         assert!(!chats[0].archived);
         assert_eq!(chats[0].goal_command, None);
+        assert_eq!(chats[0].role, None);
         assert_eq!(store.session(chats[0].id).unwrap(), None);
         store.keep_session(chats[0].id, "session-1").unwrap();
         store.keep_goal(chats[0].id, Some("make")).unwrap();
+        store.keep_role(chats[0].id, "builder").unwrap();
         drop(store);
         let store = Store::open(&path).unwrap();
         assert_eq!(
@@ -752,6 +802,7 @@ mod tests {
             store.chats().unwrap()[0].goal_command.as_deref(),
             Some("make")
         );
+        assert_eq!(store.chats().unwrap()[0].role.as_deref(), Some("builder"));
         std::fs::remove_dir_all(&directory).unwrap();
     }
 
