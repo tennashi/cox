@@ -83,8 +83,8 @@ impl Setup {
         let context = self.context.as_deref().map(str::trim)?;
         (!context.is_empty()).then(|| {
             format!(
-                "The chat that opened this one set it up with this context. Keep to it for the \
-                 whole session.\n\n{context}\n"
+                "You were set up with this context for the whole session. Keep to \
+                 it.\n\n{context}\n"
             )
         })
     }
@@ -167,7 +167,7 @@ mod tests {
             ..Setup::default()
         };
         let prompt = told.prompt().unwrap();
-        assert!(prompt.starts_with("The chat that opened this one set it up"));
+        assert!(prompt.starts_with("You were set up with this context"));
         assert!(prompt.ends_with("\n\nChange nothing.\n"));
         assert_eq!(Setup::default().prompt(), None);
         let blank = Setup {

@@ -4,6 +4,7 @@
 //!
 //! - [`entry`] is what a chat's conversation shows, entry by entry, and
 //!   [`diff`] the lines a change to a file shows in it.
+//! - [`goal`] is what a chat works until, when the human set a goal.
 //! - [`tabs`] is what is kept of a chat's stage.
 //! - [`list`] is a list of which one item is shown, as a stage's tabs
 //!   are, and a window's chats.
@@ -11,6 +12,7 @@
 
 pub mod diff;
 pub mod entry;
+pub mod goal;
 pub mod list;
 pub mod store;
 pub mod tabs;

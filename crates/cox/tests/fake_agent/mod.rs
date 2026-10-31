@@ -231,12 +231,17 @@ async fn serve(
                 let blocks = texts_of(&request.prompt);
                 let text = blocks.concat();
                 prompts.lock().unwrap().push(blocks);
+                let verdict = judge(&prompts.lock().unwrap());
                 let answers = Arc::clone(&answers);
                 let cancels = Arc::clone(&waits);
                 let turn = cx.clone();
                 // Asking permission waits for Cox's answer, which arrives
                 // through the loop that runs this handler, so wait elsewhere.
                 cx.spawn(async move {
+                    if let Some(verdict) = verdict {
+                        say(&turn, &request.session_id, verdict)?;
+                        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                    }
                     if text.contains("fail") {
                         return responder
                             .respond_with_error(Error::new(-32603, "the model is unavailable"));
@@ -304,6 +309,26 @@ fn texts_of(prompt: &[ContentBlock]) -> Vec<String> {
 /// What the agent thinks when the prompt mentions "think".
 /// How long the agent waits before it answers when asked to be slow.
 const SLOW: Duration = Duration::from_millis(300);
+
+/// What Cox asks the judge of a goal to end its reply with, which tells
+/// the agent it is asked to judge.
+const JUDGE_ASKS: &str = "PASS or FAIL";
+
+/// What the agent says when the last of `prompts` asks it to judge a
+/// goal: it finds the goal not met the first time it is asked, and met
+/// from then on. `None` when it is not asked to judge.
+fn judge(prompts: &[Vec<String>]) -> Option<&'static str> {
+    let asks = |blocks: &Vec<String>| blocks.concat().contains(JUDGE_ASKS);
+    if !prompts.last().is_some_and(asks) {
+        return None;
+    }
+    let judged = prompts.iter().filter(|blocks| asks(blocks)).count();
+    Some(if judged <= 1 {
+        "I read src/main.rs.\nFAIL: the greeting still says hello"
+    } else {
+        "I read it again.\nPASS"
+    })
+}
 
 /// The title the agent gives its session when asked to.
 pub const TITLE: &str = "Fix the tests";

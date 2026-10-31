@@ -40,6 +40,7 @@ use crate::agent::mcp::ToolServer;
 use crate::agent::setup::{Setup, StageUse};
 use crate::agent::{Agent, Start};
 use crate::chat::conversation::Conversation;
+use crate::chat::judge::Starts;
 use crate::chat::view::{Again, ChatView, OpenLink, StageView};
 use crate::chat::{Closed, Opens};
 use crate::stage::Stage;
@@ -106,6 +107,7 @@ impl Opens for Launcher {
                 Some(shown(&stage, panel)),
                 open_link(&stage),
                 record,
+                Some(self.starts()),
                 cx,
             )
         })
@@ -153,6 +155,7 @@ impl Opens for Launcher {
                 open_link(&stage),
                 record,
                 Some(again),
+                Some(self.starts()),
                 window,
                 cx,
             )
@@ -161,6 +164,13 @@ impl Opens for Launcher {
 }
 
 impl Launcher {
+    /// What starts an agent with no chat, such as the judge of a goal: the
+    /// same command, with no tools of Cox's own and none for the stage.
+    fn starts(&self) -> Starts {
+        let launcher = self.clone();
+        Rc::new(move |cwd, start| launcher.spawn(cwd, Vec::new(), start))
+    }
+
     /// Steps 2 to 5: starts the agent of a chat working in `cwd`, as
     /// `start` says, with what it reaches `stage` through, which from then
     /// on works with the agent, keeping its tabs in `record`. The chat's

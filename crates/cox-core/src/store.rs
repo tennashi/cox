@@ -16,10 +16,11 @@ use anyhow::{Context as _, bail};
 use rusqlite::{Connection, OptionalExtension as _, params};
 
 use crate::entry::Entry;
+use crate::goal::Goal;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 5;
+const VERSION: i64 = 6;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -49,7 +50,11 @@ CREATE TABLE chats (
     parent INTEGER REFERENCES chats (id),
     -- How the agent of a chat opened from a chat is set up, as JSON, as
     -- the chat that opened it said.
-    setup TEXT
+    setup TEXT,
+    -- The words of the chat's goal, which an agent judges met or not,
+    -- while the human has set a goal in words. A chat has one goal, so
+    -- this and goal_command are not both set.
+    goal_words TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -72,6 +77,7 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN goal_command TEXT;",
     "ALTER TABLE chats ADD COLUMN parent INTEGER REFERENCES chats (id);
      ALTER TABLE chats ADD COLUMN setup TEXT;",
+    "ALTER TABLE chats ADD COLUMN goal_words TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -101,9 +107,8 @@ pub struct KeptChat {
     pub named: Named,
     /// Whether the human put it away, out of the list.
     pub archived: bool,
-    /// The command that checks its goal, which it works until it passes,
-    /// if the human set one.
-    pub goal_command: Option<String>,
+    /// What it works until, if the human set a goal.
+    pub goal: Option<Goal>,
     /// The chat whose agent opened it, for a chat opened from a chat.
     pub parent: Option<ChatId>,
     /// How its agent is set up, as JSON, for a chat opened from a chat
@@ -224,17 +229,19 @@ impl Store {
     /// When the database cannot be read.
     pub fn chats(&self) -> anyhow::Result<Vec<KeptChat>> {
         let mut statement = self.connection.prepare(
-            "SELECT id, project, name, named, archived, goal_command, parent, setup FROM chats
-             ORDER BY id",
+            "SELECT id, project, name, named, archived, goal_command, parent, setup, goal_words
+             FROM chats ORDER BY id",
         )?;
         let chats = statement.query_map([], |row| {
+            let command: Option<String> = row.get(5)?;
+            let words: Option<String> = row.get(8)?;
             Ok(KeptChat {
                 id: ChatId(row.get(0)?),
                 project: row.get::<_, Option<i64>>(1)?.map(ProjectId),
                 name: row.get(2)?,
                 named: Named::from_number(row.get(3)?),
                 archived: row.get(4)?,
-                goal_command: row.get(5)?,
+                goal: command.map(Goal::Command).or(words.map(Goal::Words)),
                 parent: row.get::<_, Option<i64>>(6)?.map(ChatId),
                 setup: row.get(7)?,
             })
@@ -335,16 +342,18 @@ impl Store {
         Ok(())
     }
 
-    /// Keeps `command` as the command that checks the goal of `chat`,
-    /// which it works until it passes, or that it works toward no goal.
+    /// Keeps `goal` as what `chat` works until, or that it works toward no
+    /// goal.
     ///
     /// # Errors
     ///
     /// When the database cannot be written.
-    pub fn keep_goal(&self, chat: ChatId, command: Option<&str>) -> anyhow::Result<()> {
+    pub fn keep_goal(&self, chat: ChatId, goal: Option<&Goal>) -> anyhow::Result<()> {
+        let command = goal.and_then(Goal::command);
+        let words = goal.and_then(Goal::words);
         self.connection.execute(
-            "UPDATE chats SET goal_command = ?2 WHERE id = ?1",
-            params![chat.0, command],
+            "UPDATE chats SET goal_command = ?2, goal_words = ?3 WHERE id = ?1",
+            params![chat.0, command, words],
         )?;
         Ok(())
     }
@@ -479,14 +488,14 @@ impl Record {
         self.store.keep_session(self.chat, session)
     }
 
-    /// Keeps `command` as the command that checks the chat's goal, which
-    /// it works until it passes, or that it works toward no goal.
+    /// Keeps `goal` as what the chat works until, or that it works toward
+    /// no goal.
     ///
     /// # Errors
     ///
     /// When the database cannot be written.
-    pub fn goal(&self, command: Option<&str>) -> anyhow::Result<()> {
-        self.store.keep_goal(self.chat, command)
+    pub fn goal(&self, goal: Option<&Goal>) -> anyhow::Result<()> {
+        self.store.keep_goal(self.chat, goal)
     }
 }
 
@@ -728,16 +737,23 @@ mod tests {
                 .chats()
                 .unwrap()
                 .into_iter()
-                .map(|chat| chat.goal_command)
+                .map(|chat| chat.goal)
                 .collect::<Vec<_>>()
         };
         assert_eq!(goals(&store), [None, None]);
 
-        store.keep_goal(chat, Some("cargo xtask ci")).unwrap();
-        assert_eq!(goals(&store), [Some("cargo xtask ci".to_owned()), None]);
-        store.keep_goal(other, Some("make")).unwrap();
+        let ci = Goal::Command("cargo xtask ci".to_owned());
+        let words = Goal::Words("The greeting names the user.".to_owned());
+        store.keep_goal(chat, Some(&ci)).unwrap();
+        assert_eq!(goals(&store), [Some(ci.clone()), None]);
+        store.keep_goal(other, Some(&words)).unwrap();
         store.keep_goal(chat, None).unwrap();
-        assert_eq!(goals(&store), [None, Some("make".to_owned())]);
+        assert_eq!(goals(&store), [None, Some(words.clone())]);
+        // A goal in words takes the place of a command, and the other way.
+        store.keep_goal(other, Some(&ci)).unwrap();
+        assert_eq!(goals(&store), [None, Some(ci)]);
+        store.keep_goal(other, Some(&words)).unwrap();
+        assert_eq!(goals(&store), [None, Some(words)]);
     }
 
     #[test]
@@ -808,12 +824,14 @@ mod tests {
         assert_eq!(chats.len(), 1);
         assert_eq!(chats[0].named, Named::Numbered);
         assert!(!chats[0].archived);
-        assert_eq!(chats[0].goal_command, None);
+        assert_eq!(chats[0].goal, None);
         assert_eq!(chats[0].parent, None);
         assert_eq!(chats[0].setup, None);
         assert_eq!(store.session(chats[0].id).unwrap(), None);
         store.keep_session(chats[0].id, "session-1").unwrap();
-        store.keep_goal(chats[0].id, Some("make")).unwrap();
+        store
+            .keep_goal(chats[0].id, Some(&Goal::Command("make".to_owned())))
+            .unwrap();
         drop(store);
         let store = Store::open(&path).unwrap();
         assert_eq!(
@@ -821,8 +839,8 @@ mod tests {
             Some("session-1")
         );
         assert_eq!(
-            store.chats().unwrap()[0].goal_command.as_deref(),
-            Some("make")
+            store.chats().unwrap()[0].goal,
+            Some(Goal::Command("make".to_owned()))
         );
         let child = store
             .add_chat_under(chats[0].id, None, "Chat 2", Some("{}"))

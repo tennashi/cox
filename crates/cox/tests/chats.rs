@@ -16,10 +16,12 @@ use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, Waited};
 use cox::agent::setup::Setup;
 use cox::chat::conversation::{Conversation, Entry, Goal, State};
+use cox::chat::judge::Starts;
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
 use cox::notices::{AppNotices, Notices};
 use cox::workspace::{Chat, Workspace};
+use cox_core::goal::Goal as KeptGoal;
 use cox_core::store::Named;
 use cox_core::store::{Record, Store};
 use fake_agent::{FakeAgent, Resumes, TITLE};
@@ -107,7 +109,8 @@ impl Opens for FakeOpens {
         let (asks, chat_requests) = tokio::sync::mpsc::unbounded_channel();
         self.asks.borrow_mut().push(asks);
         agent.chat_requests = Some(chat_requests);
-        cx.new(|cx| ChatView::new(agent, None, Rc::new(|_, _, _| {}), record, cx))
+        let starts = self.starts();
+        cx.new(|cx| ChatView::new(agent, None, Rc::new(|_, _, _| {}), record, Some(starts), cx))
     }
 
     fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<ChatView> {
@@ -136,7 +139,32 @@ impl Opens for FakeOpens {
         });
         let link = Rc::new(|_: &str, _: &mut Window, _: &mut App| {});
         let conversation = Conversation::closed(entries).with_goal(goal);
-        cx.new(|cx| ChatView::closed(conversation, None, link, record, Some(again), window, cx))
+        let starts = self.starts();
+        cx.new(|cx| {
+            ChatView::closed(
+                conversation,
+                None,
+                link,
+                record,
+                Some(again),
+                Some(starts),
+                window,
+                cx,
+            )
+        })
+    }
+}
+
+impl FakeOpens {
+    /// What starts an agent with no chat, such as the judge of a goal,
+    /// faked and added to `agents` like the chats' own.
+    fn starts(&self) -> Starts {
+        let agents = Rc::clone(&self.agents);
+        Rc::new(move |cwd, start| {
+            let agent = Arc::new(FakeAgent::default());
+            agents.borrow_mut().push(Arc::clone(&agent));
+            cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start)
+        })
     }
 }
 
@@ -1045,11 +1073,11 @@ fn goals(
     cx: &mut VisualTestContext,
     workspace: &Entity<Workspace>,
     project: usize,
-) -> Vec<Option<String>> {
+) -> Vec<Option<KeptGoal>> {
     workspace.read_with(cx, |workspace, _| {
         workspace
             .chats(project)
-            .map(|chat| chat.goal().map(str::to_owned))
+            .map(|chat| chat.goal().cloned())
             .collect()
     })
 }
@@ -1063,8 +1091,13 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
     click(cx, "new-chat");
     let view = shown(cx, &workspace);
     let command = passing_the_second_time(&home);
-    view.update(cx, |view, cx| view.set_goal(Some(command.clone()), cx));
-    assert_eq!(goals(cx, &workspace, 0), [Some(command.clone())]);
+    view.update(cx, |view, cx| {
+        view.set_goal(Some(KeptGoal::Command(command.clone())), cx);
+    });
+    assert_eq!(
+        goals(cx, &workspace, 0),
+        [Some(KeptGoal::Command(command.clone()))]
+    );
 
     say(cx, &workspace, "tool").await;
 
@@ -1090,12 +1123,80 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
     assert_eq!(entries[entries.len() - 3], Entry::Cox(prompts[1].clone()));
     // The goal, and the way to it, are kept.
     let kept = store.chats().unwrap();
-    assert_eq!(kept[0].goal_command.as_deref(), Some(command.as_str()));
+    assert_eq!(kept[0].goal, Some(KeptGoal::Command(command.clone())));
     assert_eq!(store.entries(kept[0].id).unwrap(), entries);
 
     view.update(cx, |view, cx| view.set_goal(None, cx));
     assert_eq!(goals(cx, &workspace, 0), [None]);
-    assert_eq!(store.chats().unwrap()[0].goal_command, None);
+    assert_eq!(store.chats().unwrap()[0].goal, None);
+}
+
+#[gpui::test]
+async fn a_goal_in_words_is_judged_by_an_agent_until_it_is_met(cx: &mut TestAppContext) {
+    let home = scratch("goal-words");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Rc::new(Store::in_memory().unwrap());
+    let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), Rc::clone(&store));
+    click(cx, "new-chat");
+    right_click(cx, "chat-1");
+    click(cx, "set-goal");
+    cx.simulate_input("The greeting names the user.");
+    cx.simulate_keystrokes("enter");
+    let goal = KeptGoal::Words("The greeting names the user.".to_owned());
+    assert_eq!(goals(cx, &workspace, 0), [Some(goal.clone())]);
+    assert_eq!(store.chats().unwrap()[0].goal, Some(goal));
+
+    say(cx, &workspace, "tool").await;
+
+    // The judge is an agent of its own, with no chat, working in the
+    // project's folder with no tools of Cox's, asked once a turn.
+    let agents = agents.borrow();
+    assert_eq!(agents.len(), 2);
+    let judge = &agents[1];
+    assert_eq!(judge.cwd(), Some(home));
+    assert_eq!(judge.mcp_servers(), []);
+    let asked = judge.prompt_blocks();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(
+        asked[0][0].contains("\n\nYou judge whether"),
+        "{}",
+        asked[0][0]
+    );
+    assert!(
+        asked[0][0].ends_with("The goal:\n\nThe greeting names the user.\n"),
+        "{}",
+        asked[0][0]
+    );
+    let question = asked[0].last().unwrap();
+    assert!(
+        question.starts_with("Is the goal met now?\n\nThe greeting names the user.\n"),
+        "{question}"
+    );
+    assert!(question.contains("last said:\n\necho: tool"), "{question}");
+    assert_eq!(asked[1].len(), 1, "{:?}", asked[1]);
+
+    // The working agent hears what the judge said, until it passes.
+    let prompts = agents[0].prompts();
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert_eq!(
+        prompts[1],
+        "Goal not met, as judged: the greeting still says hello Go on until it is met. \
+         The judge said:\n\nI read src/main.rs.\nFAIL: the greeting still says hello"
+    );
+    let entries = shown_entries(cx, &workspace);
+    assert_eq!(
+        entries[0],
+        Entry::Note("Goal: The greeting names the user.".to_owned())
+    );
+    assert!(entries.contains(&Entry::Cox(prompts[1].clone())));
+    assert_eq!(
+        entries.last(),
+        Some(&Entry::Note("Goal met, as judged.".to_owned()))
+    );
+    assert_eq!(
+        store.entries(store.chats().unwrap()[0].id).unwrap(),
+        entries
+    );
 }
 
 #[gpui::test]
@@ -1103,10 +1204,15 @@ async fn a_chats_goal_lasts_past_cox_starting_again(cx: &mut TestAppContext) {
     let folder = scratch("goal-again");
     std::fs::create_dir_all(&folder).unwrap();
     let (store, kept) = kept_chat(&folder, Some("session-1"));
-    store.keep_goal(kept, Some("true")).unwrap();
+    store
+        .keep_goal(kept, Some(&KeptGoal::Command("true".to_owned())))
+        .unwrap();
     let (agents, workspace, cx) =
         open_window_keeping(cx, scratch("goal-again-home"), Rc::clone(&store));
-    assert_eq!(goals(cx, &workspace, 1), [Some("true".to_owned())]);
+    assert_eq!(
+        goals(cx, &workspace, 1),
+        [Some(KeptGoal::Command("true".to_owned()))]
+    );
 
     click(cx, "chat-1");
     let view = shown(cx, &workspace);
@@ -1115,7 +1221,10 @@ async fn a_chats_goal_lasts_past_cox_starting_again(cx: &mut TestAppContext) {
             let conversation = view.conversation();
             (
                 conversation.state(),
-                conversation.goal().map(Goal::command).map(str::to_owned),
+                conversation
+                    .goal()
+                    .and_then(Goal::command)
+                    .map(str::to_owned),
             )
         }),
         (State::Closed, Some("true".to_owned()))
@@ -1135,7 +1244,9 @@ async fn escape_stops_the_check_of_the_goal(cx: &mut TestAppContext) {
     let (_, workspace, cx) = open_window(cx, scratch("goal-stop"));
     click(cx, "new-chat");
     let view = shown(cx, &workspace);
-    view.update(cx, |view, cx| view.set_goal(Some("sleep 3".to_owned()), cx));
+    view.update(cx, |view, cx| {
+        view.set_goal(Some(KeptGoal::Command("sleep 3".to_owned())), cx);
+    });
     cx.simulate_input("hello");
     cx.simulate_keystrokes("enter");
     wait_until(cx, &view, |conversation| {
@@ -1165,12 +1276,15 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     right_click(cx, "chat-1");
     assert!(cx.debug_bounds("clear-goal").is_none());
     click(cx, "set-goal");
-    cx.simulate_input("true");
+    cx.simulate_input("$ true");
     cx.simulate_keystrokes("enter");
-    assert_eq!(goals(cx, &workspace, 0), [Some("true".to_owned())]);
     assert_eq!(
-        store.chats().unwrap()[0].goal_command.as_deref(),
-        Some("true")
+        goals(cx, &workspace, 0),
+        [Some(KeptGoal::Command("true".to_owned()))]
+    );
+    assert_eq!(
+        store.chats().unwrap()[0].goal,
+        Some(KeptGoal::Command("true".to_owned()))
     );
     cx.run_until_parked();
     assert!(cx.debug_bounds("goal-1").is_some());
@@ -1186,14 +1300,17 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     // Escape leaves the goal as it was.
     right_click(cx, "chat-1");
     click(cx, "set-goal");
-    cx.simulate_input("false");
+    cx.simulate_input("$ false");
     cx.simulate_keystrokes("escape");
-    assert_eq!(goals(cx, &workspace, 0), [Some("true".to_owned())]);
+    assert_eq!(
+        goals(cx, &workspace, 0),
+        [Some(KeptGoal::Command("true".to_owned()))]
+    );
 
     right_click(cx, "chat-1");
     click(cx, "clear-goal");
     assert_eq!(goals(cx, &workspace, 0), [None]);
-    assert_eq!(store.chats().unwrap()[0].goal_command, None);
+    assert_eq!(store.chats().unwrap()[0].goal, None);
 }
 
 /// The key of the chat at `index` in no project, and that of the chat
@@ -1288,7 +1405,7 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     assert_eq!(
         agent.prompt_blocks(),
         [[
-            "The chat that opened this one set it up with this context. Keep to it for the whole session.\n\nChange nothing.\n".to_owned(),
+            "You were set up with this context for the whole session. Keep to it.\n\nChange nothing.\n".to_owned(),
             "permission".to_owned()
         ]]
     );

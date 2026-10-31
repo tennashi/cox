@@ -98,6 +98,7 @@ fn open_with_stage(
             stage,
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
             None,
+            None,
             cx,
         )
     });
@@ -462,7 +463,7 @@ async fn the_setups_policy_answers_a_permission_request_in_the_humans_place(
     assert_eq!(
         agent.prompt_blocks()[0],
         [
-            "The chat that opened this one set it up with this context. Keep to it for the whole session.\n\nChange nothing.\n".to_owned(),
+            "You were set up with this context for the whole session. Keep to it.\n\nChange nothing.\n".to_owned(),
             "permission".to_owned()
         ]
     );

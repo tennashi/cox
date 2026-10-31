@@ -11,6 +11,7 @@
 //!   `cox-core` keeps what it shows.
 
 pub mod conversation;
+pub mod judge;
 pub mod launcher;
 pub mod view;
 
@@ -56,8 +57,8 @@ pub struct Closed {
     pub tabs: Option<KeptTabs>,
     /// The id its agent gave its session, to go on with, if it had one.
     pub session: Option<String>,
-    /// The command it works until it passes, if the human set one.
-    pub goal: Option<String>,
+    /// What it works until, if the human set a goal.
+    pub goal: Option<cox_core::goal::Goal>,
     /// How its agent is set up, if the chat that opened it said.
     pub setup: Option<Setup>,
     /// Where it is kept, to go on keeping it once the human sends to it.
