@@ -20,8 +20,15 @@
 //! agent works to stays in sight on a card at the top right of the
 //! conversation, after its turn too, until the human sends the next line,
 //! and a click on its line folds it to that line. A line above the input
-//! tells what the chat waits for, when it is not the human's next line.
+//! tells what the chat waits for, when it is not the human's next line,
+//! and the goal the chat works toward, while it has one.
+//!
+//! When a turn ends and the chat has a goal, the view runs the goal's
+//! command in a terminal on the stage, as the agent's own tool would,
+//! and hands the conversation how it went, which decides whether the
+//! agent goes on (see [`Conversation::checked`]).
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use cox_core::store::Record;
@@ -31,10 +38,12 @@ use gpui::{
     Window, actions, div, prelude::*, px, relative, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
+use crate::agent::mcp::{Ran, ToolRequest};
 use crate::agent::{Agent, AgentThread};
 use crate::agent::{AgentEvent, Command};
-use crate::chat::conversation::{self, Conversation, Entry, State};
+use crate::chat::conversation::{self, Conversation, Entry, GOAL_TURNS, Goal, State};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::text::Reading;
 use crate::ui::theme::{DIM, FONT};
@@ -118,6 +127,13 @@ pub struct ChatView {
     /// The agent, and what hears it. The agent lives as long as the chat
     /// stays open: dropping this stops it. A closed chat has none.
     agent: Option<(AgentThread, Task<()>)>,
+    /// The directory the agent works in, and where the chat asks its stage
+    /// to run the goal's command, as the agent's tools ask it to, while
+    /// the agent runs and has tools of Cox's own.
+    tools: Option<(PathBuf, UnboundedSender<ToolRequest>)>,
+    /// The check of the goal that runs, if one does. Dropping it lets go
+    /// of the answer, which stops the command.
+    check: Option<Task<()>>,
     _submitted: Subscription,
     /// Redraws the chat as its stage opens and closes.
     _panel_changes: Option<Subscription>,
@@ -150,12 +166,13 @@ impl ChatView {
         view
     }
 
-    /// A chat that has closed, which showed `entries`, for the human to
-    /// read, with `stage` beside it when there is one and it is open. When
-    /// the human sends to it, `again` starts its agent again, if it can,
-    /// and the chat goes on, kept in `record` when there is one.
+    /// A chat that has closed, whose `conversation` is for the human to
+    /// read (see [`Conversation::closed`]), with `stage` beside it when
+    /// there is one and it is open. When the human sends to it, `again`
+    /// starts its agent again, if it can, and the chat goes on, kept in
+    /// `record` when there is one.
     pub fn closed(
-        entries: Vec<Entry>,
+        conversation: Conversation,
         stage: Option<StageView>,
         open_link: OpenLink,
         record: Option<Record>,
@@ -163,7 +180,6 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let conversation = Conversation::closed(entries);
         let view = Self {
             record,
             again,
@@ -217,6 +233,8 @@ impl ChatView {
             commands,
             again: None,
             agent: None,
+            tools: None,
+            check: None,
             _submitted: submitted,
             _panel_changes: panel_changes,
         }
@@ -229,12 +247,14 @@ impl ChatView {
             commands,
             mut events,
             thread,
+            cwd,
+            tools,
             ..
         } = agent;
         let hears = cx.spawn(async move |this, cx| {
             while let Some(event) = events.recv().await {
                 let shown = this.update(cx, |view, cx| {
-                    view.hear(event);
+                    view.hear(event, cx);
                     cx.notify();
                 });
                 if shown.is_err() {
@@ -244,17 +264,76 @@ impl ChatView {
         });
         self.commands = commands;
         self.agent = Some((thread, hears));
+        self.tools = tools.map(|tools| (cwd, tools));
     }
 
-    /// Shows what the agent side told, and keeps it.
-    fn hear(&mut self, event: AgentEvent) {
+    /// Shows what the agent side told, and keeps it. A turn that ends
+    /// with a goal to meet starts the goal's check.
+    fn hear(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
         if let (AgentEvent::Opened { id, .. }, Some(record)) = (&event, &self.record)
             && let Err(error) = record.session(id)
         {
             log::error!("the agent's session is not kept, to resume: {error:#}");
         }
+        let was_checking = self.conversation.state() == State::Checking;
         self.follow(|conversation| conversation.apply(event));
+        if !was_checking && let Some(command) = self.conversation.checking() {
+            self.check(command.to_owned(), cx);
+        }
         self.keep();
+    }
+
+    /// Runs `command`, the goal's, in a terminal on the stage, and hands
+    /// the conversation how it went once it ends.
+    fn check(&mut self, command: String, cx: &mut Context<Self>) {
+        let Some((cwd, tools)) = &self.tools else {
+            self.checked(Err("the chat has no terminal to run it in".to_owned()), cx);
+            return;
+        };
+        let (answer, ran) = oneshot::channel();
+        let request = ToolRequest::RunCommand {
+            command,
+            cwd: cwd.clone(),
+            answer,
+        };
+        if tools.send(request).is_err() {
+            self.checked(Err("the chat's terminals are gone".to_owned()), cx);
+            return;
+        }
+        self.check = Some(cx.spawn(async move |this, cx| {
+            let ran = match ran.await {
+                Ok(ran) => ran,
+                Err(_) => Err("its terminal went away".to_owned()),
+            };
+            this.update(cx, |view, cx| view.checked(ran, cx)).ok();
+        }));
+    }
+
+    /// The goal's command ended as `ran` says: the agent goes on if the
+    /// goal is not met yet.
+    fn checked(&mut self, ran: Result<Ran, String>, cx: &mut Context<Self>) {
+        self.check = None;
+        if let Some(command) = self.follow(|conversation| conversation.checked(ran)) {
+            self.send(command);
+        }
+        self.keep();
+        cx.notify();
+    }
+
+    /// Sets the chat to work until `command` passes, or, given `None`,
+    /// toward no goal, and keeps that.
+    pub fn set_goal(&mut self, command: Option<String>, cx: &mut Context<Self>) {
+        self.follow(|conversation| conversation.set_goal(command));
+        if self.conversation.state() != State::Checking {
+            self.check = None;
+        }
+        if let Some(record) = &self.record
+            && let Err(error) = record.goal(self.conversation.goal().map(Goal::command))
+        {
+            log::error!("the chat's goal is not kept: {error:#}");
+        }
+        self.keep();
+        cx.notify();
     }
 
     /// Whether the chat's agent runs: it was opened in this run, or the
@@ -430,8 +509,15 @@ impl ChatView {
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
-        if let Some(command) = self.conversation.cancel() {
+        let before = self.conversation.state();
+        if let Some(command) = self.follow(Conversation::cancel) {
             self.send(command);
+        }
+        if self.conversation.state() != State::Checking {
+            self.check = None;
+        }
+        if self.conversation.state() != before {
+            self.keep();
             cx.notify();
         }
     }
@@ -452,11 +538,23 @@ impl Focusable for ChatView {
 }
 
 impl ChatView {
-    /// What the chat waits for, when it is not the human's next line.
+    /// What the chat waits for, when it is not the human's next line, or
+    /// the goal it works toward, while it has one.
     fn waiting(&self) -> Option<String> {
+        let goal = self.conversation.goal();
         match self.conversation.state() {
-            State::Idle => None,
-            State::Busy => Some("The agent is working. Escape stops it.".to_owned()),
+            State::Idle => goal.map(|goal| format!("Goal: until `{}` passes.", goal.command())),
+            State::Busy => Some(match goal {
+                Some(goal) => format!(
+                    "The agent works toward the goal, turn {} of {GOAL_TURNS}. Escape stops it.",
+                    goal.turns()
+                ),
+                None => "The agent is working. Escape stops it.".to_owned(),
+            }),
+            State::Checking => Some(format!(
+                "Checking the goal: `{}` runs. Escape stops it.",
+                goal.map_or("", |goal| goal.command())
+            )),
             State::Asking => {
                 let count = self.conversation.asked().map_or(0, <[String]>::len);
                 let numbers = if count > 1 {
@@ -534,7 +632,10 @@ impl ChatView {
     }
 
     fn render_conversation(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let running = matches!(self.conversation.state(), State::Busy | State::Asking);
+        let running = matches!(
+            self.conversation.state(),
+            State::Busy | State::Asking | State::Checking
+        );
         // The frame lays the text out again.
         self.reading.clear();
         let entries = self.render_entries(cx);

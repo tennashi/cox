@@ -105,6 +105,13 @@ pub struct Agent {
     /// Where the instructions the agent gets with the first prompt come
     /// from, if it gets any.
     pub instructions: Option<PathBuf>,
+    /// The directory the agent works in.
+    pub cwd: PathBuf,
+    /// Where what the agent's tools ask of its chat goes, for the chat to
+    /// ask the same of its stage, such as running the command of its goal
+    /// in a terminal there; `None` when the agent got no tools of Cox's
+    /// own.
+    pub tools: Option<UnboundedSender<mcp::ToolRequest>>,
     /// Stops the agent when dropped.
     pub thread: AgentThread,
 }
@@ -184,6 +191,7 @@ pub fn spawn<T: Transport + 'static>(
     let (commands, received) = unbounded_channel();
     let (sent, events) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
+    let works_in = cwd.clone();
     let thread = thread::spawn(move || {
         close_on_exec();
         let outcome = tokio::runtime::Builder::new_multi_thread()
@@ -208,6 +216,8 @@ pub fn spawn<T: Transport + 'static>(
         commands,
         events,
         instructions: source,
+        cwd: works_in,
+        tools: None,
         thread: AgentThread {
             stop: Some(stop),
             thread: Some(thread),
@@ -378,14 +388,15 @@ const RETOLD_LENGTH: usize = 100_000;
 
 /// What a new session of a chat's agent is told of the conversation so
 /// far, `entries`, when the agent could not go on with the chat's own: what
-/// the human said, what the agent replied, and the tool calls it made, by
-/// their titles. Cox's notes are left out.
+/// the human said, and Cox in their place, what the agent replied, and the
+/// tool calls it made, by their titles. Cox's notes are left out.
 #[must_use]
 pub fn retold(entries: &[Entry]) -> String {
     let told: Vec<String> = entries
         .iter()
         .filter_map(|entry| match entry {
             Entry::Human(text) => Some(format!("[human]\n{text}")),
+            Entry::Cox(text) => Some(format!("[cox]\n{text}")),
             Entry::Reply(text) => Some(format!("[you]\n{text}")),
             Entry::ToolCall { title, result, .. } => {
                 let result = result.map_or_else(|| "not ended".to_owned(), |r| format!("{r:?}"));

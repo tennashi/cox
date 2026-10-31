@@ -38,6 +38,7 @@ use gpui::{App, Entity, Window, prelude::*};
 use crate::agent::instructions::Instructions;
 use crate::agent::mcp::ToolServer;
 use crate::agent::{Agent, Start};
+use crate::chat::conversation::Conversation;
 use crate::chat::view::{Again, ChatView, OpenLink, StageView};
 use crate::chat::{Closed, Opens};
 use crate::stage::Stage;
@@ -113,6 +114,7 @@ impl Opens for Launcher {
             entries,
             tabs,
             session,
+            goal,
             record,
         } = closed;
         // 1. The stage, on the pages and files the chat had.
@@ -139,7 +141,7 @@ impl Opens for Launcher {
         // 6. The view, with the stage beside it, and no agent yet.
         cx.new(|cx| {
             ChatView::closed(
-                entries,
+                Conversation::closed(entries).with_goal(goal),
                 Some(shown(&stage, panel)),
                 open_link(&stage),
                 record,
@@ -171,12 +173,17 @@ impl Launcher {
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(relay.as_ref(), server.as_ref());
         // 4. The stage works with the relay and the tools, and keeps its tabs.
-        let requests = server.map(|(_, server)| server.requests);
+        let (requests, asks) = server
+            .map(|(_, server)| (server.requests, server.asks))
+            .unzip();
         stage.update(cx, |stage, cx| {
             stage.work(relay, requests, record, window, cx);
         });
-        // 5. The agent, on a thread of its own.
-        self.spawn(cwd, tools, start)
+        // 5. The agent, on a thread of its own, which the chat asks of the
+        // stage through what its tools ask.
+        let mut agent = self.spawn(cwd, tools, start);
+        agent.tools = asks;
+        agent
     }
 
     /// Starts the relay that the agent's browser tools go through, kept to

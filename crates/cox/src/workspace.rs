@@ -133,6 +133,8 @@ pub struct Chat {
     /// Whether a turn ended while the chat was not shown, and it has not
     /// been shown since.
     unread: bool,
+    /// The command it works until it passes, if the human set one.
+    goal: Option<String>,
     /// Its view, or `None` for a closed chat the human has not read yet.
     view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
@@ -142,13 +144,15 @@ pub struct Chat {
 
 impl Chat {
     /// A closed chat of the project at `project`, kept as `kept`, which
-    /// the human has not read yet, named `key` for this run.
+    /// the human has not read yet, named `key` for this run, and working
+    /// until `goal` passes if the human set one.
     fn closed(
         key: u64,
         project: usize,
         kept: ChatId,
         name: impl Into<SharedString>,
         named: Named,
+        goal: Option<String>,
     ) -> Self {
         Self {
             key,
@@ -159,6 +163,7 @@ impl Chat {
             open: false,
             state: State::Closed,
             unread: false,
+            goal,
             view: None,
             _changes: Vec::new(),
         }
@@ -197,6 +202,12 @@ impl Chat {
     #[must_use]
     pub fn is_unread(&self) -> bool {
         self.unread
+    }
+
+    /// The command it works until it passes, if the human set one.
+    #[must_use]
+    pub fn goal(&self) -> Option<&str> {
+        self.goal.as_deref()
     }
 
     /// Its view, once it has been shown.
@@ -275,7 +286,14 @@ impl Workspace {
                     };
                     workspace.projects[index].opened += 1;
                     let key = workspace.next_key();
-                    let closed = Chat::closed(key, index, chat.id, chat.name, chat.named);
+                    let closed = Chat::closed(
+                        key,
+                        index,
+                        chat.id,
+                        chat.name,
+                        chat.named,
+                        chat.goal_command,
+                    );
                     if chat.archived {
                         workspace.archived.push(closed);
                     } else {
@@ -393,6 +411,7 @@ impl Workspace {
             open: true,
             state: State::Idle,
             unread: false,
+            goal: None,
             view: Some(view),
             _changes: vec![changes],
         });
@@ -466,6 +485,7 @@ impl Workspace {
             entries,
             tabs,
             session,
+            goal: chat.goal.clone(),
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };
         let view = self.opens.read(closed, window, cx);
@@ -493,6 +513,7 @@ impl Workspace {
             open: false,
             state: State::Closed,
             unread: chat.unread,
+            goal: chat.goal.take(),
             view: Some(view),
             _changes: vec![changes, reopened],
         };
@@ -529,6 +550,7 @@ impl Workspace {
             None
         };
         chat.state = state;
+        chat.goal = conversation.goal().map(|goal| goal.command().to_owned());
         let about = match (conversation.title(), conversation.first_line()) {
             (Some(title), _) => Some((title, Named::Agent)),
             (None, Some(line)) => Some((line, Named::FirstLine)),
@@ -783,7 +805,7 @@ impl Workspace {
             .filter(|_| chat.open)
             .map(|view| view.read(cx).conversation().state());
         let (mark, color) = match state {
-            Some(State::Busy | State::Stopping) => ("…", rgb(DIM)),
+            Some(State::Busy | State::Stopping | State::Checking) => ("…", rgb(DIM)),
             Some(State::Asking) => ("?", rgb(ASKING)),
             Some(State::Closed) => ("closed", rgb(0x80_8080)),
             _ if chat.unread => ("●", rgb(LINK)),
@@ -948,7 +970,10 @@ impl Workspace {
 
 /// Whether an agent that stands as `state` is at work.
 fn working(state: State) -> bool {
-    matches!(state, State::Busy | State::Asking | State::Stopping)
+    matches!(
+        state,
+        State::Busy | State::Asking | State::Stopping | State::Checking
+    )
 }
 
 /// Keeps in `store` whether `chat` is archived.
