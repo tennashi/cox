@@ -25,14 +25,17 @@
 //! the goal in an input that opens in its place (see [`ChatView::edit_goal`]).
 //!
 //! When a turn ends and the chat has a goal, the view runs the goal's
-//! command in a terminal on the stage, as the agent's own tool would,
+//! command in a terminal on the stage, as the agent's own tool would, or
+//! asks the goal's judge, an agent of its own (see [`crate::chat::judge`]),
 //! and hands the conversation how it went, which decides whether the
-//! agent goes on (see [`Conversation::checked`]).
+//! agent goes on (see [`Conversation::checked`] and
+//! [`Conversation::judged`]).
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use cox_core::goal;
 use cox_core::store::Record;
 use gpui::{
     AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
@@ -46,6 +49,7 @@ use crate::agent::mcp::{ChatRequest, Ran, ToolRequest};
 use crate::agent::{Agent, AgentThread};
 use crate::agent::{AgentEvent, Command};
 use crate::chat::conversation::{self, Conversation, Entry, GOAL_TURNS, Goal, State};
+use crate::chat::judge::{Judge, Starts};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::text::Reading;
 use crate::ui::theme::{DIM, FONT, LINK};
@@ -158,6 +162,13 @@ pub struct ChatView {
     /// The check of the goal that runs, if one does. Dropping it lets go
     /// of the answer, which stops the command.
     check: Option<Task<()>>,
+    /// What starts the judge of a goal in words, when the chat can have
+    /// one.
+    starts: Option<Starts>,
+    /// The judge of the goal in words, once it was asked.
+    judge: Option<Judge>,
+    /// The directory the agent works in, while it runs.
+    cwd: Option<PathBuf>,
     /// The input the human sets the goal in, while it is open.
     goal_input: Option<(Entity<LineInput>, Subscription)>,
     _submitted: Subscription,
@@ -169,11 +180,14 @@ impl ChatView {
     /// Opens on `agent`, with `stage` beside the conversation when there is
     /// one and it is open, keeping the conversation in `record` when there
     /// is one. Links the human clicks go to `open_link`.
+    /// `starts` starts the judge of a goal in words, when the chat can
+    /// have one.
     pub fn new(
         agent: Agent,
         stage: Option<StageView>,
         open_link: OpenLink,
         record: Option<Record>,
+        starts: Option<Starts>,
         cx: &mut Context<Self>,
     ) -> Self {
         // The human sees which instructions the agent gets, and the context
@@ -192,6 +206,7 @@ impl ChatView {
         let conversation = Conversation::noting_each(notes);
         let mut view = Self {
             record,
+            starts,
             ..Self::with(conversation, stage, open_link, None, cx)
         };
         view.attach(agent, cx);
@@ -203,19 +218,23 @@ impl ChatView {
     /// read (see [`Conversation::closed`]), with `stage` beside it when
     /// there is one and it is open. When the human sends to it, `again`
     /// starts its agent again, if it can, and the chat goes on, kept in
-    /// `record` when there is one.
+    /// `record` when there is one. `starts` starts the judge of a goal in
+    /// words, when the chat can have one.
+    #[expect(clippy::too_many_arguments, reason = "what a closed chat is made of")]
     pub fn closed(
         conversation: Conversation,
         stage: Option<StageView>,
         open_link: OpenLink,
         record: Option<Record>,
         again: Option<Again>,
+        starts: Option<Starts>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let view = Self {
             record,
             again,
+            starts,
             ..Self::with(conversation, stage, open_link, Some(window), cx)
         };
         view.scroll.scroll_to_bottom();
@@ -268,6 +287,9 @@ impl ChatView {
             agent: None,
             tools: None,
             check: None,
+            starts: None,
+            judge: None,
+            cwd: None,
             goal_input: None,
             _submitted: submitted,
             _panel_changes: panel_changes,
@@ -312,6 +334,7 @@ impl ChatView {
         }
         self.commands = commands;
         self.agent = Some((thread, tasks));
+        self.cwd = Some(cwd.clone());
         self.tools = tools.map(|tools| (cwd, tools));
     }
 
@@ -332,7 +355,7 @@ impl ChatView {
         };
         self.follow(|conversation| conversation.note(format!("Opened by: {opened_by}")));
         if let Some(goal) = goal {
-            self.set_goal(Some(goal), cx);
+            self.set_goal(Some(goal::Goal::Command(goal)), cx);
         }
         if let Some(command) = self.follow(|conversation| conversation.told(text)) {
             self.send(command);
@@ -342,7 +365,7 @@ impl ChatView {
     }
 
     /// Shows what the agent side told, and keeps it. A turn that ends
-    /// with a goal to meet starts the goal's check.
+    /// with a goal to meet starts the goal's check, or asks its judge.
     fn hear(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
         if let (AgentEvent::Opened { id, .. }, Some(record)) = (&event, &self.record)
             && let Err(error) = record.session(id)
@@ -351,8 +374,12 @@ impl ChatView {
         }
         let was_checking = self.conversation.state() == State::Checking;
         self.follow(|conversation| conversation.apply(event));
-        if !was_checking && let Some(command) = self.conversation.checking() {
-            self.check(command.to_owned(), cx);
+        if !was_checking {
+            if let Some(command) = self.conversation.checking() {
+                self.check(command.to_owned(), cx);
+            } else if let Some(words) = self.conversation.judging().map(str::to_owned) {
+                self.judge(&words, cx);
+            }
         }
         self.keep();
     }
@@ -394,18 +421,52 @@ impl ChatView {
         cx.notify();
     }
 
+    /// Asks the judge of the goal, `words`, whether it is met now, starting
+    /// the judge if the chat has none yet.
+    fn judge(&mut self, words: &str, cx: &mut Context<Self>) {
+        if self.judge.is_none() {
+            let (Some(starts), Some(cwd)) = (&self.starts, &self.cwd) else {
+                self.judged(Err("the chat has no agent to judge it".to_owned()), cx);
+                return;
+            };
+            self.judge = Some(Judge::start(starts, cwd.clone(), words, cx));
+        }
+        let said = self.conversation.last_told().map(str::to_owned);
+        if let Some(judge) = &self.judge {
+            judge.ask(words, said.as_deref());
+        }
+    }
+
+    /// The judge said `judged` of the goal, or could not judge it: the
+    /// agent goes on if the goal is not met yet.
+    pub fn judged(&mut self, judged: Result<String, String>, cx: &mut Context<Self>) {
+        if let Some(command) = self.follow(|conversation| conversation.judged(judged)) {
+            self.send(command);
+        }
+        self.keep();
+        cx.notify();
+    }
+
+    /// The judge's agent closed, as `error` says: the next judgement
+    /// starts a judge anew, and the one under way, if any, is not coming.
+    pub fn judge_closed(&mut self, error: String, cx: &mut Context<Self>) {
+        self.judge = None;
+        self.judged(Err(error), cx);
+    }
+
     /// Opens an input above the chat's own, for the human to set the goal:
-    /// the command the chat works until it passes, which Enter sets, and
-    /// Escape leaves as it was. Emptied, the input clears the goal.
+    /// words, or `$ ` and the command the chat works until it passes,
+    /// which Enter sets, and Escape leaves as it was. Emptied, the input
+    /// clears the goal.
     pub fn edit_goal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let command = self
+        let line = self
             .conversation
             .goal()
-            .map(Goal::command)
+            .map(|goal| goal.what().input())
             .unwrap_or_default();
         let input = cx.new(|cx| {
             let mut input = LineInput::new(cx);
-            input.set_text(command, cx);
+            input.set_text(&line, cx);
             input.select_whole(cx);
             input
         });
@@ -425,27 +486,26 @@ impl ChatView {
             return;
         };
         if keep {
-            let command = input.read(cx).text().trim().to_owned();
-            self.set_goal(Some(command).filter(|command| !command.is_empty()), cx);
+            let goal = goal::Goal::parse(input.read(cx).text());
+            self.set_goal(goal, cx);
         }
         window.focus(&self.input.focus_handle(cx));
         cx.notify();
     }
 
-    /// Sets the chat to work until `command` passes, or, given `None`,
-    /// toward no goal, and keeps that.
-    pub fn set_goal(&mut self, command: Option<String>, cx: &mut Context<Self>) {
-        self.follow(|conversation| conversation.set_goal(command));
+    /// Sets the chat to work toward `goal`, or, given `None`, toward no
+    /// goal, and keeps that. The judge of the goal before, if any, is
+    /// let go.
+    pub fn set_goal(&mut self, goal: Option<goal::Goal>, cx: &mut Context<Self>) {
+        if goal.as_ref() != self.conversation.goal().map(Goal::what) {
+            self.judge = None;
+        }
+        self.follow(|conversation| conversation.set_goal(goal));
         if self.conversation.state() != State::Checking {
             self.check = None;
         }
         if let Some(record) = &self.record
-            && let Err(error) = record.goal(
-                self.conversation
-                    .goal()
-                    .map(|goal| cox_core::goal::Goal::Command(goal.command().to_owned()))
-                    .as_ref(),
-            )
+            && let Err(error) = record.goal(self.conversation.goal().map(Goal::what))
         {
             log::error!("the chat's goal is not kept: {error:#}");
         }
@@ -632,6 +692,11 @@ impl ChatView {
         }
         if self.conversation.state() != State::Checking {
             self.check = None;
+            if before == State::Checking
+                && let Some(judge) = &self.judge
+            {
+                judge.cancel();
+            }
         }
         if self.conversation.state() != before {
             self.keep();
@@ -661,7 +726,7 @@ impl ChatView {
     fn waiting(&self) -> Option<String> {
         let goal = self.conversation.goal();
         match self.conversation.state() {
-            State::Idle => goal.map(|goal| format!("Goal: until `{}` passes.", goal.command())),
+            State::Idle => goal.map(|goal| format!("Goal: {}", goal.line())),
             State::Busy => Some(match goal {
                 Some(goal) => format!(
                     "The agent works toward the goal, turn {} of {GOAL_TURNS}. Escape stops it.",
@@ -669,10 +734,10 @@ impl ChatView {
                 ),
                 None => "The agent is working. Escape stops it.".to_owned(),
             }),
-            State::Checking => Some(format!(
-                "Checking the goal: `{}` runs. Escape stops it.",
-                goal.map_or("", |goal| goal.command())
-            )),
+            State::Checking => Some(match goal.and_then(Goal::command) {
+                Some(command) => format!("Checking the goal: `{command}` runs. Escape stops it."),
+                None => "Judging the goal. Escape stops it.".to_owned(),
+            }),
             State::Asking => {
                 let count = self.conversation.asked().map_or(0, <[String]>::len);
                 let numbers = if count > 1 {
@@ -873,7 +938,7 @@ impl ChatView {
                     div()
                         .flex_shrink_0()
                         .text_color(rgb(DIM))
-                        .child("Goal: until this command passes"),
+                        .child("Goal: words, or $ and a command"),
                 )
                 .child(
                     div()

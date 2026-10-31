@@ -32,6 +32,7 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use cox_core::goal::Goal;
 use cox_core::list::List;
 use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
 use gpui::{
@@ -144,8 +145,8 @@ pub struct Chat {
     /// Whether a turn ended while the chat was not shown, and it has not
     /// been shown since.
     unread: bool,
-    /// The command it works until it passes, if the human set one.
-    goal: Option<String>,
+    /// What it works until, if the human set a goal.
+    goal: Option<Goal>,
     /// The key of the chat whose agent opened it, if an agent did and
     /// that chat is in the list or archived.
     parent: Option<u64>,
@@ -161,7 +162,7 @@ pub struct Chat {
 impl Chat {
     /// A closed chat of the project at `project`, kept as `kept`, which
     /// the human has not read yet, named `key` for this run, working
-    /// until `goal` passes if the human set one, opened by the chat
+    /// toward `goal` if the human set one, opened by the chat
     /// `parent` names if an agent opened it, and set up as `setup` says.
     #[expect(clippy::too_many_arguments, reason = "what is kept of a chat")]
     fn closed(
@@ -170,7 +171,7 @@ impl Chat {
         kept: ChatId,
         name: impl Into<SharedString>,
         named: Named,
-        goal: Option<String>,
+        goal: Option<Goal>,
         parent: Option<u64>,
         setup: Option<Setup>,
     ) -> Self {
@@ -226,10 +227,10 @@ impl Chat {
         self.unread
     }
 
-    /// The command it works until it passes, if the human set one.
+    /// What it works until, if the human set a goal.
     #[must_use]
-    pub fn goal(&self) -> Option<&str> {
-        self.goal.as_deref()
+    pub fn goal(&self) -> Option<&Goal> {
+        self.goal.as_ref()
     }
 
     /// The key of the chat whose agent opened it, if an agent did.
@@ -336,15 +337,7 @@ impl Workspace {
                             .ok()
                     });
                     let closed = Chat::closed(
-                        key,
-                        index,
-                        chat.id,
-                        chat.name,
-                        chat.named,
-                        // Only a goal that is a command is worked toward yet.
-                        chat.goal.and_then(|goal| goal.command().map(str::to_owned)),
-                        parent,
-                        setup,
+                        key, index, chat.id, chat.name, chat.named, chat.goal, parent, setup,
                     );
                     if chat.archived {
                         workspace.archived.push(closed);
@@ -746,7 +739,7 @@ impl Workspace {
             None
         };
         chat.state = state;
-        chat.goal = conversation.goal().map(|goal| goal.command().to_owned());
+        chat.goal = conversation.goal().map(|goal| goal.what().clone());
         let about = match (conversation.title(), conversation.first_line()) {
             (Some(title), _) => Some((title, Named::Agent)),
             (None, Some(line)) => Some((line, Named::FirstLine)),
