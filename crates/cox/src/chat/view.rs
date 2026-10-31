@@ -159,13 +159,14 @@ impl ChatView {
         record: Option<Record>,
         cx: &mut Context<Self>,
     ) -> Self {
-        // The human sees which instructions the agent gets.
-        let conversation = agent
+        // The human sees which instructions the agent gets, and which role
+        // it plays.
+        let notes = agent
             .instructions
-            .as_ref()
-            .map_or_else(Conversation::new, |path| {
-                Conversation::noting(conversation::instructions_note(path))
-            });
+            .iter()
+            .map(|path| conversation::instructions_note(path))
+            .chain(agent.role.iter().map(|path| conversation::role_note(path)));
+        let conversation = Conversation::noting_each(notes);
         let mut view = Self {
             record,
             ..Self::with(conversation, stage, open_link, None, cx)

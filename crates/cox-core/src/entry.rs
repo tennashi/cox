@@ -40,8 +40,12 @@ pub enum Entry {
         /// choosing.
         content: Vec<Content>,
         options: Vec<String>,
-        /// The option the human chose, once they have.
+        /// The option chosen, once one is: by the human, or by the policy
+        /// of the chat's role in their place.
         chosen: Option<usize>,
+        /// Whether the role's policy chose, so the human was not asked.
+        #[serde(default)]
+        by_policy: bool,
     },
     /// A note from Cox: the instructions the agent gets, how a turn ended,
     /// an error, or the connection closing.

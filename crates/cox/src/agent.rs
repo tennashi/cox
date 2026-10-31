@@ -23,8 +23,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use cox_acp::{
-    McpServer, PermissionAnswer, PlanEntry, PlanState, Session, StopReason, ToolCallContent,
-    Transport, Update,
+    McpServer, PermissionAnswer, PermissionKind, PlanEntry, PlanState, Session, StopReason,
+    ToolCallContent, Transport, Update,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -32,6 +32,7 @@ use tokio::sync::oneshot;
 use cox_core::entry::{Content, Entry, Step, StepState, ToolCallResult};
 
 use crate::agent::instructions::Instructions;
+use crate::agent::role::{Decision, Policy, Role};
 use crate::process::close_on_exec;
 
 /// What the agent side tells the window.
@@ -70,6 +71,16 @@ pub enum AgentEvent {
         content: Option<Vec<Content>>,
         options: Vec<String>,
     },
+    /// The agent asked permission for a tool call, and the policy of the
+    /// chat's role answered in the human's place, choosing `chosen` of
+    /// `options`.
+    PermissionDecided {
+        id: String,
+        title: Option<String>,
+        content: Option<Vec<Content>>,
+        options: Vec<String>,
+        chosen: usize,
+    },
     /// The turn ended.
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
@@ -88,8 +99,12 @@ pub enum Opened {
     Resumed,
     /// A new session for a chat that had one before, which the agent
     /// could not go on with, so the agent gets told the conversation so
-    /// far, along with the instructions in `instructions`, if any.
-    Retold { instructions: Option<PathBuf> },
+    /// far, along with the instructions in `instructions`, if any, and
+    /// its role from the file `role`, if it has one.
+    Retold {
+        instructions: Option<PathBuf>,
+        role: Option<PathBuf>,
+    },
 }
 
 /// What the window asks of the agent side.
@@ -108,6 +123,8 @@ pub struct Agent {
     /// Where the instructions the agent gets with the first prompt come
     /// from, if it gets any.
     pub instructions: Option<PathBuf>,
+    /// The file of the role the agent plays, if it plays one.
+    pub role: Option<PathBuf>,
     /// The directory the agent works in.
     pub cwd: PathBuf,
     /// Where what the agent's tools ask of its chat goes, for the chat to
@@ -119,11 +136,16 @@ pub struct Agent {
     pub thread: AgentThread,
 }
 
-/// How a chat's agent starts.
+/// How a chat's agent starts. In a chat opened as a role, the agent gets
+/// told of the role after the instructions, and the role's policy
+/// answers its permission requests in the human's place.
 pub enum Start {
     /// For a new chat: the agent gets `instructions`, if any, ahead of the
     /// first prompt.
-    New(Option<Instructions>),
+    New {
+        instructions: Option<Instructions>,
+        role: Option<Role>,
+    },
     /// For a closed chat the human sends to again: the agent goes on with
     /// the chat's `session`, when the chat had one and the agent can.
     /// Otherwise it opens a new session, which gets `instructions`, if
@@ -132,6 +154,7 @@ pub enum Start {
     Again {
         session: Option<String>,
         instructions: Option<Instructions>,
+        role: Option<Role>,
         earlier: Vec<Entry>,
     },
 }
@@ -139,14 +162,32 @@ pub enum Start {
 impl Start {
     /// How the agent of a closed chat that worked in `cwd`, and showed
     /// `earlier`, starts again: going on with `session` if it can, or else
-    /// told what the chat showed, with the project's instructions as they
-    /// are now.
+    /// told what the chat showed, with the project's instructions, and
+    /// the chat's role, named `role`, as they are now. A role whose file
+    /// is gone is given up, and the agent starts without one.
     #[must_use]
-    pub fn again(cwd: &Path, session: Option<String>, earlier: &[Entry]) -> Self {
+    pub fn again(
+        cwd: &Path,
+        session: Option<String>,
+        earlier: &[Entry],
+        role: Option<&str>,
+    ) -> Self {
+        let role = role.and_then(|name| {
+            Role::read(cwd, name)
+                .inspect_err(|error| log::error!("the chat goes on without its role: {error:#}"))
+                .ok()
+        });
         Self::Again {
             session,
             instructions: Instructions::read(cwd),
+            role,
             earlier: earlier.to_vec(),
+        }
+    }
+
+    fn role(&self) -> Option<&Role> {
+        match self {
+            Self::New { role, .. } | Self::Again { role, .. } => role.as_ref(),
         }
     }
 }
@@ -187,10 +228,17 @@ pub fn spawn<T: Transport + 'static>(
     mcp_servers: Vec<McpServer>,
     start: Start,
 ) -> Agent {
-    let source = match &start {
-        Start::New(instructions) => instructions.as_ref().map(|i| i.path.clone()),
-        Start::Again { .. } => None,
+    let (source, role) = match &start {
+        Start::New { instructions, role } => (
+            instructions.as_ref().map(|i| i.path.clone()),
+            role.as_ref().map(|role| role.path.clone()),
+        ),
+        Start::Again { .. } => (None, None),
     };
+    let policy = start
+        .role()
+        .map(|role| role.policy.clone())
+        .unwrap_or_default();
     let (commands, received) = unbounded_channel();
     let (sent, events) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
@@ -204,7 +252,7 @@ pub fn spawn<T: Transport + 'static>(
             .and_then(|runtime| {
                 let outcome = runtime.block_on(async {
                     tokio::select! {
-                        outcome = run(connect, cwd, mcp_servers, start, received, &sent) => outcome,
+                        outcome = run(connect, cwd, mcp_servers, start, &policy, received, &sent) => outcome,
                         // Dropping the connection kills the agent.
                         _ = stopped => Ok(()),
                     }
@@ -219,6 +267,7 @@ pub fn spawn<T: Transport + 'static>(
         commands,
         events,
         instructions: source,
+        role,
         cwd: works_in,
         tools: None,
         thread: AgentThread {
@@ -233,12 +282,13 @@ async fn run<T: Transport + 'static>(
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     start: Start,
+    policy: &Policy,
     mut commands: UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
     let transport = connect()?;
     let resume = match &start {
-        Start::New(_) => None,
+        Start::New { .. } => None,
         Start::Again { session, .. } => session.clone(),
     };
     let told = events.clone();
@@ -263,7 +313,7 @@ async fn run<T: Transport + 'static>(
                 if let Command::Prompt(text) = command {
                     // What goes ahead of the first prompt goes once.
                     let prompt = std::mem::take(&mut ahead).into_iter().chain([text]);
-                    take_turn(&mut session, prompt, &mut commands, events).await?;
+                    take_turn(&mut session, prompt, policy, &mut commands, events).await?;
                 }
             }
             Ok(())
@@ -274,36 +324,43 @@ async fn run<T: Transport + 'static>(
 
 /// How the session opened, for an agent that started as `start`, and
 /// whether it `resumed` a session, with what goes ahead of the first
-/// prompt: the instructions, and what the chat showed, when a session
-/// starts anew for a chat that had one.
+/// prompt: the instructions, the role, and what the chat showed, when a
+/// session starts anew for a chat that had one.
 fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
     match start {
-        Start::New(instructions) => (
-            Opened::New,
-            instructions.map(|i| i.prompt()).into_iter().collect(),
-        ),
+        Start::New { instructions, role } => (Opened::New, told(instructions, role)),
         Start::Again { .. } if resumed => (Opened::Resumed, Vec::new()),
         Start::Again {
             instructions,
+            role,
             earlier,
             ..
         } => {
             let how = Opened::Retold {
                 instructions: instructions.as_ref().map(|i| i.path.clone()),
+                role: role.as_ref().map(|role| role.path.clone()),
             };
-            let ahead = instructions
-                .map(|i| i.prompt())
-                .into_iter()
-                .chain([retold(&earlier)])
-                .collect();
+            let mut ahead = told(instructions, role);
+            ahead.push(retold(&earlier));
             (how, ahead)
         }
     }
 }
 
+/// What a new session is told first: `instructions`, then `role`, each
+/// when there is one.
+fn told(instructions: Option<Instructions>, role: Option<Role>) -> Vec<String> {
+    instructions
+        .map(|i| i.prompt())
+        .into_iter()
+        .chain(role.and_then(|role| role.prompt()))
+        .collect()
+}
+
 async fn take_turn(
     session: &mut Session,
     prompt: impl IntoIterator<Item = String>,
+    policy: &Policy,
     commands: &mut UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
@@ -352,6 +409,19 @@ async fn take_turn(
             Update::PermissionRequest(request) if cancelled => {
                 request.answer(PermissionAnswer::Cancel)?;
             }
+            // The role's policy answers in the human's place, when it has
+            // an answer and the agent offers it.
+            Update::PermissionRequest(request) if decided(policy, &request).is_some() => {
+                let chosen = decided(policy, &request).unwrap_or_default();
+                send(AgentEvent::PermissionDecided {
+                    id: request.tool_call_id(),
+                    title: request.title().map(str::to_owned),
+                    content: request.content().map(shown),
+                    options: request.options().iter().map(|o| o.name.clone()).collect(),
+                    chosen,
+                });
+                request.answer(PermissionAnswer::Select(chosen))?;
+            }
             Update::PermissionRequest(request) => {
                 send(AgentEvent::PermissionRequest {
                     id: request.tool_call_id(),
@@ -383,8 +453,21 @@ async fn take_turn(
     Ok(())
 }
 
-/// What a tool call shows, made ready for the window here, on the agent
-/// side, where working out a large change does not hold up the window.
+/// The option of `request` that `policy` chooses, if it has an answer to
+/// a request so titled, and the agent offers an option that means it: to
+/// allow once, or to reject once. The policy never answers for always:
+/// it is the file's to keep, not the agent's.
+fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usize> {
+    let kind = match policy.decide(request.title()?)? {
+        Decision::Allow => PermissionKind::AllowOnce,
+        Decision::Reject => PermissionKind::RejectOnce,
+    };
+    request
+        .options()
+        .iter()
+        .position(|option| option.kind == kind)
+}
+
 /// The most of the conversation so far that a new session is told, in
 /// characters: past it, the start is left out.
 const RETOLD_LENGTH: usize = 100_000;
@@ -409,13 +492,19 @@ pub fn retold(entries: &[Entry]) -> String {
                 title,
                 options,
                 chosen,
+                by_policy,
                 ..
             } => {
                 let chosen = chosen
                     .and_then(|chosen| options.get(chosen))
                     .map_or("nothing", String::as_str);
+                let who = if *by_policy {
+                    "your role's policy"
+                } else {
+                    "the human"
+                };
                 Some(format!(
-                    "[you asked permission for: {title}; the human chose: {chosen}]"
+                    "[you asked permission for: {title}; {who} chose: {chosen}]"
                 ))
             }
             // What the agent thought and planned is its own, and what came
@@ -496,6 +585,15 @@ mod tests {
                 content: Vec::new(),
                 options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
                 chosen: Some(0),
+                by_policy: false,
+            },
+            Entry::Permission {
+                id: "call-2".to_owned(),
+                title: "Write y.txt".to_owned(),
+                content: Vec::new(),
+                options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
+                chosen: Some(1),
+                by_policy: true,
             },
             Entry::Reply("Done".to_owned()),
             Entry::Note("Stopped.".to_owned()),
@@ -506,6 +604,7 @@ mod tests {
                 "\n\n[human]\nedit\n\n\
                  [your tool call: Edit x.txt … Completed]\n\n\
                  [you asked permission for: Edit x.txt; the human chose: Allow once]\n\n\
+                 [you asked permission for: Write y.txt; your role's policy chose: Reject once]\n\n\
                  [you]\nDone"
             ),
             "{told}"
@@ -553,7 +652,10 @@ mod tests {
             move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
             std::env::temp_dir(),
             Vec::new(),
-            Start::New(None),
+            Start::New {
+                instructions: None,
+                role: None,
+            },
         );
         let mut pid = String::new();
         assert!(wait_until(|| {
@@ -587,7 +689,10 @@ mod tests {
             move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
             std::env::temp_dir(),
             Vec::new(),
-            Start::New(None),
+            Start::New {
+                instructions: None,
+                role: None,
+            },
         );
         let mut seen = String::new();
         assert!(wait_until(|| {

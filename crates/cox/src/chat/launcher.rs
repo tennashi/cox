@@ -89,7 +89,10 @@ impl Opens for Launcher {
             &stage,
             cwd,
             record.clone(),
-            Start::New(instructions),
+            Start::New {
+                instructions,
+                role: None,
+            },
             window,
             cx,
         );
@@ -135,7 +138,7 @@ impl Opens for Launcher {
         let works = stage.clone();
         let kept = record.clone();
         let again: Again = Box::new(move |entries, window, cx| {
-            let start = Start::again(&cwd, session, entries);
+            let start = Start::again(&cwd, session, entries, None);
             launcher.start(&works, cwd, kept, start, window, cx)
         });
         // 6. The view, with the stage beside it, and no agent yet.

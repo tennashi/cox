@@ -273,6 +273,7 @@ impl ChatView {
                 content,
                 options,
                 chosen,
+                by_policy,
                 ..
             } => {
                 let asking = self.conversation.state() == State::Asking
@@ -284,29 +285,49 @@ impl ChatView {
                     let answer = chosen
                         .and_then(|chosen| options.get(chosen))
                         .map_or("no answer", String::as_str);
-                    // What was asked was read when it was answered.
-                    let fold = Fold::Content(index);
-                    let open = self.folds.is_open(fold, false);
-                    let opens = (!content.is_empty()).then_some(open);
-                    let line = line_of(index, opens, ("?", ASKING), title, &mut writer).child(
-                        div()
-                            .flex_shrink_0()
-                            .text_color(rgb(DIM))
-                            .child(SharedString::from(answer.to_owned())),
-                    );
-                    let line = folding(line, opens.map(|_| fold), cx);
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(line)
-                        .when(open, |asked| {
-                            asked.children(render_content(index, content, &mut writer))
-                        })
-                        .into_any_element()
+                    // The human sees that they were not asked, and why.
+                    let answer = if *by_policy {
+                        format!("{answer}, as the role says")
+                    } else {
+                        answer.to_owned()
+                    };
+                    self.render_answered(index, title, content, answer, &mut writer, cx)
                 }
             }
         }
+    }
+
+    /// A permission request answered with `answer`, on a line that opens
+    /// to what was asked, if the request showed something.
+    fn render_answered(
+        &self,
+        index: usize,
+        title: &str,
+        content: &[Content],
+        answer: String,
+        writer: &mut Writer,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // What was asked was read when it was answered.
+        let fold = Fold::Content(index);
+        let open = self.folds.is_open(fold, false);
+        let opens = (!content.is_empty()).then_some(open);
+        let line = line_of(index, opens, ("?", ASKING), title, writer).child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(DIM))
+                .child(SharedString::from(answer)),
+        );
+        let line = folding(line, opens.map(|_| fold), cx);
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(line)
+            .when(open, |asked| {
+                asked.children(render_content(index, content, writer))
+            })
+            .into_any_element()
     }
 
     /// What the agent thought, on a line that shows its start, opening to

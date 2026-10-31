@@ -89,7 +89,10 @@ impl Opens for FakeOpens {
     ) -> Entity<ChatView> {
         let agent = Arc::new(FakeAgent::default());
         self.agents.borrow_mut().push(Arc::clone(&agent));
-        let start = Start::New(instructions);
+        let start = Start::New {
+            instructions,
+            role: None,
+        };
         let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
         agent.tools = Some(fake_terminal());
         cx.new(|cx| ChatView::new(agent, None, Rc::new(|_, _, _| {}), record, cx))
@@ -109,7 +112,7 @@ impl Opens for FakeOpens {
         let again: Again = Box::new(move |entries, _, _| {
             let agent = Arc::new(FakeAgent::resuming(resumes));
             opened.borrow_mut().push(Arc::clone(&agent));
-            let start = Start::again(&cwd, session, entries);
+            let start = Start::again(&cwd, session, entries, None);
             let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
             agent.tools = Some(fake_terminal());
             agent
