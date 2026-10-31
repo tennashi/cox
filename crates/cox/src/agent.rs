@@ -6,6 +6,8 @@
 //! [`AgentEvent`]s it hears.
 //!
 //! - [`instructions`] reads what the agent gets told of the project.
+//! - [`role`] reads the project's roles, which say how the agent of a
+//!   chat opened as one runs, and what it is told of the role.
 //! - [`mcp`] serves Cox's own tools to each chat's agent, and is the
 //!   bridge the agent runs to reach them.
 //! - [`tools`] says which MCP servers the agent gets: the stage's, and
@@ -13,6 +15,7 @@
 
 pub mod instructions;
 pub mod mcp;
+pub mod role;
 pub mod tools;
 
 use std::path::{Path, PathBuf};
