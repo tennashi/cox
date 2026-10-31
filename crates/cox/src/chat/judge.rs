@@ -12,7 +12,7 @@
 //! The judge lives as long as the chat's goal does: each judgement is a
 //! turn of the same session, so it remembers what it looked at before.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cox_acp::{PermissionAnswer, StopReason};
@@ -28,7 +28,12 @@ use crate::chat::view::ChatView;
 /// [`Start`] says: the judge of a goal.
 pub type Starts = Rc<dyn Fn(PathBuf, Start) -> Agent>;
 
-/// What the judge is told it is, ahead of the goal.
+/// The file in a project's folder that replaces [`STANCE`] for the
+/// project's judges, when there is one.
+pub const STANCE_FILE: &str = "COX.goal.md";
+
+/// What the judge is told it is, ahead of the goal, unless the project's
+/// [`STANCE_FILE`] says otherwise.
 const STANCE: &str = "You judge whether another chat's work meets a goal. The chat works in \
     this same folder; you read what it did, and run what reads or tests it, but change \
     nothing: you may not edit or write files, and you may not run what changes the \
@@ -123,11 +128,28 @@ fn strip_word<'a>(line: &'a str, word: &str) -> Option<&'a str> {
         .then_some(rest)
 }
 
-/// How the judge of `goal` is set up.
+/// What the judges of the project in `folder` are told they are: what
+/// its [`STANCE_FILE`] says, or [`STANCE`] when there is none.
 #[must_use]
-pub fn setup(goal: &str) -> Setup {
+pub fn stance(folder: &Path) -> String {
+    let path = folder.join(STANCE_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) if !text.trim().is_empty() => text.trim().to_owned(),
+        Ok(_) => STANCE.to_owned(),
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::error!("cannot read {}: {error}", path.display());
+            }
+            STANCE.to_owned()
+        }
+    }
+}
+
+/// How the judge of `goal` is set up, told `stance` ahead of the goal.
+#[must_use]
+pub fn setup(goal: &str, stance: &str) -> Setup {
     Setup {
-        context: Some(format!("{STANCE}\n\n{PROTOCOL}\n\nThe goal:\n\n{goal}\n")),
+        context: Some(format!("{stance}\n\n{PROTOCOL}\n\nThe goal:\n\n{goal}\n")),
         tools: Some(Vec::new()),
         stage: StageUse::Look,
         policy: Policy {
@@ -170,7 +192,7 @@ impl Judge {
     pub fn start(starts: &Starts, cwd: PathBuf, goal: &str, cx: &mut Context<ChatView>) -> Self {
         let start = Start::New {
             instructions: Instructions::read(&cwd),
-            setup: Some(setup(goal)),
+            setup: Some(setup(goal, &stance(&cwd))),
         };
         let Agent {
             commands,
@@ -283,7 +305,7 @@ mod tests {
 
     #[test]
     fn the_judge_is_set_up_to_read_and_not_to_change() {
-        let setup = setup("The greeting names the user.");
+        let setup = setup("The greeting names the user.", STANCE);
         let context = setup.context.unwrap();
         assert!(context.starts_with("You judge whether"), "{context}");
         assert!(context.contains("`PASS`") && context.contains("`FAIL: `"));
@@ -300,6 +322,32 @@ mod tests {
         );
         assert_eq!(setup.policy.decide("Edit src/main.rs"), None);
         assert_eq!(setup.policy.decide("cargo publish"), None);
+    }
+
+    #[test]
+    fn the_projects_own_stance_replaces_the_default() {
+        let folder = std::env::temp_dir().join(format!("cox-judge-stance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        assert_eq!(stance(&folder), STANCE);
+
+        std::fs::write(folder.join(STANCE_FILE), " \n").unwrap();
+        assert_eq!(stance(&folder), STANCE);
+
+        std::fs::write(
+            folder.join(STANCE_FILE),
+            "You review the change as a maintainer would.\n",
+        )
+        .unwrap();
+        assert_eq!(
+            stance(&folder),
+            "You review the change as a maintainer would."
+        );
+        let setup = setup("The tests pass.", &stance(&folder));
+        let context = setup.context.unwrap();
+        assert!(context.starts_with("You review the change as a maintainer would.\n\n"));
+        assert!(context.contains("`PASS`"), "{context}");
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]

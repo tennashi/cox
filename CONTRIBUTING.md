@@ -71,20 +71,42 @@ conversation stays, and the next line can be sent once the agent has
 stopped. A click on a link in a chat's conversation opens it on that
 chat's stage.
 
-A chat can have a goal: a command, such as `cargo xtask ci`, which the
-chat works until it passes. "Set goal…" in the menu of the right button
-opens an input above the chat's own for the command (Enter sets it,
-Escape leaves it as it was, and emptied, it clears the goal), and
-"Clear goal" clears it; the row marks a chat with a goal (◎), and a
-line above the input names the goal while the chat waits. When a turn
-ends as the agent ends it, the command runs in a terminal on the stage,
-as the agent's `run_command` tool would. While it fails, Cox sends the
-agent what it printed, as the next turn, shown in the conversation in
-the human's place but dimmer, and the agent goes on. The chat stops to
-wait for the human when the command passes, or after ten turns on one
-line of theirs, or when the agent made no tool call for two turns in a
-row, which says it has something to ask, or when Escape stops the
-check. The goal lasts across runs, with the rest of the chat.
+A chat can have a goal, which the chat works until it is met: a
+command, such as `cargo xtask ci`, which has to pass, or words, such as
+"The greeting names the user.", which an agent judges. "Set goal…" in
+the menu of the right button opens an input above the chat's own for
+the goal (Enter sets it, Escape leaves it as it was, and emptied, it
+clears the goal), where `$ ` and a command is the command, and any
+other text is a goal in words; "Clear goal" clears it; the row marks a
+chat with a goal (◎), and a line above the input names the goal while
+the chat waits. When a turn ends as the agent ends it, a command runs
+in a terminal on the stage, as the agent's `run_command` tool would.
+While it fails, Cox sends the agent what it printed, as the next turn,
+shown in the conversation in the human's place but dimmer, and the
+agent goes on. The chat stops to wait for the human when the command
+passes, or after ten turns on one line of theirs, or when the agent
+made no tool call for two turns in a row, which says it has something
+to ask, or when Escape stops the check. The goal lasts across runs,
+with the rest of the chat.
+
+A goal in words is judged by an agent Cox starts for it, of the same
+command as the chat's, in the project's folder: not a chat, so not in
+the list, and the human does not talk to it. Each time a turn ends, Cox
+asks it whether the goal is met now, telling it what the chat last
+said, and it ends its reply with `PASS`, or `FAIL: ` and why. While it
+fails, the chat's agent is told why, as the next turn, as with a
+command's output, and when it passes the chat notes so and waits for
+the human; a reply with no verdict counts as a fail. The judge is told
+to read the project and run what reads or tests it, but to change
+nothing, and gets none of Cox's tools, nor the stage's; of its
+permission requests, Cox allows those that read, search, or run the
+usual tests (`Read *`, `Grep *`, `git diff*`, `cargo test*`, and so
+on), and cancels the rest, since no human answers for it. The judge
+keeps one session while the goal lasts, so it remembers what it looked
+at, until the goal changes or Cox quits. A `COX.goal.md` in the
+project's folder replaces what the judge is told it is, for a project
+that wants its goals judged in a way of its own; Cox still adds how to
+end the reply, and the goal.
 
 A chat's agent can open a chat too, with Cox's `open_chat` tool, giving
 it its first line: the chat opens under the agent's own in the list, in
