@@ -7,7 +7,9 @@
 //! mentions "tool", it first runs `ls` as a tool call that completes, showing
 //! what it printed, and when it mentions "twice" too, runs it again. When the
 //! prompt mentions "think", it first thinks [`THOUGHT`], and when it mentions
-//! "plan", it first sends a plan of two steps, the first under way. When the
+//! "plan", it first sends a plan of two steps, the first under way. When it
+//! mentions "title", it first titles its session [`TITLE`], and when it
+//! mentions "slow", it waits a moment before anything. When the
 //! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
 //! turn. A turn cancelled, or whose permission request Cox answers as cancelled,
 //! ends as cancelled. It goes on with a session it opened before as
@@ -17,6 +19,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Diff, InitializeRequest,
@@ -24,8 +27,9 @@ use agent_client_protocol::schema::v1::{
     NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority,
     PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
-    SessionId, SessionNotification, SessionResumeCapabilities, SessionUpdate, StopReason,
-    TextContent, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    SessionId, SessionInfoUpdate, SessionNotification, SessionResumeCapabilities, SessionUpdate,
+    StopReason, TextContent, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result};
 use tokio::sync::Notify;
@@ -141,6 +145,12 @@ impl FakeAgent {
 /// What the agent does on its way to the reply, as the prompt asks: it
 /// thinks, plans and runs tools.
 fn work(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()> {
+    if text.contains("title") {
+        cx.send_notification(SessionNotification::new(
+            session.clone(),
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(TITLE)),
+        ))?;
+    }
     if text.contains("think") {
         think(cx, session)?;
     }
@@ -231,6 +241,9 @@ async fn serve(
                         return responder
                             .respond_with_error(Error::new(-32603, "the model is unavailable"));
                     }
+                    if text.contains("slow") {
+                        tokio::time::sleep(SLOW).await;
+                    }
                     work(&turn, &request.session_id, &text)?;
                     if text.contains("wait") {
                         say(&turn, &request.session_id, "waiting")?;
@@ -289,6 +302,12 @@ fn texts_of(prompt: &[ContentBlock]) -> Vec<String> {
 
 /// Sends a piece of the reply.
 /// What the agent thinks when the prompt mentions "think".
+/// How long the agent waits before it answers when asked to be slow.
+const SLOW: Duration = Duration::from_millis(300);
+
+/// The title the agent gives its session when asked to.
+pub const TITLE: &str = "Fix the tests";
+
 pub const THOUGHT: &str = "Look at the code first.\nThen answer.";
 
 fn think(cx: &ConnectionTo<Client>, session: &SessionId) -> Result<()> {

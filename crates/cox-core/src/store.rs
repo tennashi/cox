@@ -19,7 +19,7 @@ use crate::entry::Entry;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 2;
+const VERSION: i64 = 3;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -37,7 +37,11 @@ CREATE TABLE chats (
     -- Its stage's tabs, as JSON, once it has a stage.
     tabs TEXT,
     -- The id its agent gave its session, once the agent has opened one.
-    session TEXT
+    session TEXT,
+    -- Who named it, as `Named` numbers them.
+    named INTEGER NOT NULL DEFAULT 0,
+    -- Whether the human put it away, out of the list.
+    archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -53,7 +57,11 @@ CREATE TABLE entries (
 
 /// What makes the tables of each earlier version into those of the next:
 /// the first of version 1, and so on.
-const UPGRADES: &[&str] = &["ALTER TABLE chats ADD COLUMN session TEXT;"];
+const UPGRADES: &[&str] = &[
+    "ALTER TABLE chats ADD COLUMN session TEXT;",
+    "ALTER TABLE chats ADD COLUMN named INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
+];
 
 /// How long a write waits for another Cox writing the same database.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -79,6 +87,40 @@ pub struct KeptChat {
     /// Its project, or `None` for no project.
     pub project: Option<ProjectId>,
     pub name: String,
+    pub named: Named,
+    /// Whether the human put it away, out of the list.
+    pub archived: bool,
+}
+
+/// Where a chat's name came from, from the name that gives way most
+/// readily to the one that lasts most: a chat is named by a number when
+/// it opens, then after the first line the human sends, then by the title
+/// its agent gives it, until the human names it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Named {
+    #[default]
+    Numbered,
+    FirstLine,
+    Agent,
+    Human,
+}
+
+impl Named {
+    const ALL: [Self; 4] = [Self::Numbered, Self::FirstLine, Self::Agent, Self::Human];
+
+    /// How it is kept: its place in [`Named::ALL`].
+    fn number(self) -> i64 {
+        self as i64
+    }
+
+    /// What `number` keeps, or a numbered name for a number a newer Cox
+    /// kept.
+    fn from_number(number: i64) -> Self {
+        usize::try_from(number)
+            .ok()
+            .and_then(|number| Self::ALL.get(number).copied())
+            .unwrap_or_default()
+    }
 }
 
 pub struct Store {
@@ -164,12 +206,14 @@ impl Store {
     pub fn chats(&self) -> anyhow::Result<Vec<KeptChat>> {
         let mut statement = self
             .connection
-            .prepare("SELECT id, project, name FROM chats ORDER BY id")?;
+            .prepare("SELECT id, project, name, named, archived FROM chats ORDER BY id")?;
         let chats = statement.query_map([], |row| {
             Ok(KeptChat {
                 id: ChatId(row.get(0)?),
                 project: row.get::<_, Option<i64>>(1)?.map(ProjectId),
                 name: row.get(2)?,
+                named: Named::from_number(row.get(3)?),
+                archived: row.get(4)?,
             })
         })?;
         Ok(chats.collect::<Result<_, _>>()?)
@@ -212,6 +256,33 @@ impl Store {
             params![project.map(|project| project.0), name, now()],
         )?;
         Ok(ChatId(self.connection.last_insert_rowid()))
+    }
+
+    /// Keeps `name` as that of `chat`, which `named` says where it came
+    /// from.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn name_chat(&self, chat: ChatId, name: &str, named: Named) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET name = ?2, named = ?3 WHERE id = ?1",
+            params![chat.0, name, named.number()],
+        )?;
+        Ok(())
+    }
+
+    /// Keeps whether the human put `chat` away, out of the list.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn archive_chat(&self, chat: ChatId, archived: bool) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET archived = ?2 WHERE id = ?1",
+            params![chat.0, archived],
+        )?;
+        Ok(())
     }
 
     /// What `chat` showed, in order.
@@ -435,6 +506,40 @@ mod tests {
     }
 
     #[test]
+    fn keeps_a_chats_name_and_whether_it_is_put_away() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let other = store.add_chat(None, "Chat 2").unwrap();
+        let kept = |store: &Store| {
+            store
+                .chats()
+                .unwrap()
+                .into_iter()
+                .map(|chat| (chat.name, chat.named, chat.archived))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kept(&store),
+            [
+                ("Chat 1".to_owned(), Named::Numbered, false),
+                ("Chat 2".to_owned(), Named::Numbered, false),
+            ]
+        );
+
+        store
+            .name_chat(chat, "Fix the tests", Named::Agent)
+            .unwrap();
+        store.archive_chat(other, true).unwrap();
+        assert_eq!(
+            kept(&store),
+            [
+                ("Fix the tests".to_owned(), Named::Agent, false),
+                ("Chat 2".to_owned(), Named::Numbered, true),
+            ]
+        );
+    }
+
+    #[test]
     fn keeps_each_entry_as_it_last_was() {
         let store = Store::in_memory().unwrap();
         let chat = store.add_chat(None, "Chat 1").unwrap();
@@ -577,6 +682,8 @@ mod tests {
         let store = Store::open(&path).unwrap();
         let chats = store.chats().unwrap();
         assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].named, Named::Numbered);
+        assert!(!chats[0].archived);
         assert_eq!(store.session(chats[0].id).unwrap(), None);
         store.keep_session(chats[0].id, "session-1").unwrap();
         drop(store);

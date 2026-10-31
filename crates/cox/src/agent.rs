@@ -36,6 +36,8 @@ use crate::process::close_on_exec;
 pub enum AgentEvent {
     /// The agent opened the session `id`, to resume later, as `how` says.
     Opened { id: String, how: Opened },
+    /// The agent gave the session a title, in place of any it gave before.
+    Titled(String),
     /// A piece of the agent's reply.
     ReplyText(String),
     /// A piece of what the agent thinks on its way to the reply.
@@ -226,23 +228,34 @@ async fn run<T: Transport + 'static>(
         Start::New(_) => None,
         Start::Again { session, .. } => session.clone(),
     };
-    cox_acp::connect(transport, cwd, mcp_servers, resume, async |mut session| {
-        let (how, mut ahead) = opened(start, session.resumed());
-        let _ = events.send(AgentEvent::Opened {
-            id: session.id(),
-            how,
-        });
-        while let Some(command) = commands.recv().await {
-            // An answer with no permission request waiting has nothing to
-            // answer, and a cancel with no turn running nothing to stop.
-            if let Command::Prompt(text) = command {
-                // What goes ahead of the first prompt goes once.
-                let prompt = std::mem::take(&mut ahead).into_iter().chain([text]);
-                take_turn(&mut session, prompt, &mut commands, events).await?;
+    let told = events.clone();
+    let titled = move |title| {
+        let _ = told.send(AgentEvent::Titled(title));
+    };
+    cox_acp::connect(
+        transport,
+        cwd,
+        mcp_servers,
+        resume,
+        titled,
+        async |mut session| {
+            let (how, mut ahead) = opened(start, session.resumed());
+            let _ = events.send(AgentEvent::Opened {
+                id: session.id(),
+                how,
+            });
+            while let Some(command) = commands.recv().await {
+                // An answer with no permission request waiting has nothing to
+                // answer, and a cancel with no turn running nothing to stop.
+                if let Command::Prompt(text) = command {
+                    // What goes ahead of the first prompt goes once.
+                    let prompt = std::mem::take(&mut ahead).into_iter().chain([text]);
+                    take_turn(&mut session, prompt, &mut commands, events).await?;
+                }
             }
-        }
-        Ok(())
-    })
+            Ok(())
+        },
+    )
     .await
 }
 

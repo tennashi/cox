@@ -17,10 +17,12 @@ use cox::chat::conversation::{Entry, State};
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
 use cox::workspace::{Chat, Workspace};
+use cox_core::store::Named;
 use cox_core::store::{Record, Store};
-use fake_agent::{FakeAgent, Resumes};
+use fake_agent::{FakeAgent, Resumes, TITLE};
 use gpui::{
-    App, AppContext as _, Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, Window,
+    App, AppContext as _, Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
+    TestAppContext, VisualTestContext, Window,
 };
 
 /// The agent of each chat opened, in the order they were opened.
@@ -204,11 +206,11 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
 
     click(cx, "new-chat");
     say(cx, &workspace, "hello").await;
-    for _ in 0..2 {
+    for line in ["one", "two"] {
         workspace.update_in(cx, |workspace, window, cx| {
             workspace.open(Some(folder.clone()), window, cx);
         });
-        say(cx, &workspace, "hello").await;
+        say(cx, &workspace, line).await;
     }
     // The heading of the project opens a chat in it, and so does no
     // project's.
@@ -226,11 +228,13 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
     );
     assert!(home.is_dir(), "the home is made for the chat");
     let name = folder.file_name().unwrap().to_string_lossy().into_owned();
+    // A chat is named after the first line sent in it, and numbered until
+    // then.
     assert_eq!(
         names(cx, &workspace),
         listed(&[
-            ("No project", &["Chat 1", "Chat 2"]),
-            (&name, &["Chat 1", "Chat 2", "Chat 3"]),
+            ("No project", &["hello", "Chat 2"]),
+            (&name, &["one", "two", "Chat 3"]),
         ])
     );
     let shown = workspace.read_with(cx, |workspace, _| {
@@ -424,7 +428,7 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     let name = folder.file_name().unwrap().to_string_lossy().into_owned();
     assert_eq!(
         names(cx, &again),
-        listed(&[("No project", &["Chat 1"]), (&name, &["Chat 1"])])
+        listed(&[("No project", &["hello"]), (&name, &["permission"])])
     );
     assert_eq!(opened(cx, &again), [vec![false], vec![false]]);
     let read = |cx: &mut VisualTestContext, place| {
@@ -451,7 +455,10 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     });
     assert_eq!(
         names(cx, &again),
-        listed(&[("No project", &["Chat 1"]), (&name, &["Chat 1", "Chat 2"])])
+        listed(&[
+            ("No project", &["hello"]),
+            (&name, &["permission", "Chat 2"])
+        ])
     );
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&folder);
@@ -683,4 +690,158 @@ async fn a_new_chat_keeps_its_agents_session(cx: &mut TestAppContext) {
         store.session(chats[0].id).unwrap().as_deref(),
         Some("session-1")
     );
+}
+
+/// The name of each chat kept, with where it came from and whether it is
+/// archived.
+fn kept_names(store: &Store) -> Vec<(String, Named, bool)> {
+    store
+        .chats()
+        .unwrap()
+        .into_iter()
+        .map(|chat| (chat.name, chat.named, chat.archived))
+        .collect()
+}
+
+/// Clicks what `selector` names twice, quickly.
+fn double_click(cx: &mut VisualTestContext, selector: &'static str) {
+    let position = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"))
+        .center();
+    for click_count in 1..=2 {
+        cx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::none(),
+            click_count,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::none(),
+            click_count,
+        });
+    }
+}
+
+/// Opens the menu of the right button on what `selector` names.
+fn right_click(cx: &mut VisualTestContext, selector: &'static str) {
+    let position = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"))
+        .center();
+    cx.simulate_mouse_down(position, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(position, MouseButton::Right, Modifiers::none());
+}
+
+#[gpui::test]
+async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppContext) {
+    let store = Rc::new(Store::in_memory().unwrap());
+    let (_, workspace, cx) = open_window_keeping(cx, scratch("named"), Rc::clone(&store));
+    click(cx, "new-chat");
+    say(cx, &workspace, "a title, please").await;
+    assert_eq!(names(cx, &workspace), listed(&[("No project", &[TITLE])]));
+    assert_eq!(
+        kept_names(&store),
+        [(TITLE.to_owned(), Named::Agent, false)]
+    );
+
+    double_click(cx, "chat-1");
+    cx.simulate_input("Mine");
+    cx.simulate_keystrokes("enter");
+    say(cx, &workspace, "another title").await;
+    assert_eq!(names(cx, &workspace), listed(&[("No project", &["Mine"])]));
+    assert_eq!(
+        kept_names(&store),
+        [("Mine".to_owned(), Named::Human, false)]
+    );
+
+    // Escape leaves the name as it was.
+    right_click(cx, "chat-1");
+    click(cx, "rename-chat");
+    cx.simulate_input("Not mine");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(names(cx, &workspace), listed(&[("No project", &["Mine"])]));
+}
+
+#[gpui::test]
+async fn a_turn_that_ends_unseen_marks_its_chat_until_it_is_shown(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch("unread"));
+    click(cx, "new-chat");
+    let first = shown(cx, &workspace);
+    cx.simulate_input("slowly");
+    cx.simulate_keystrokes("enter");
+    click(cx, "new-chat");
+    wait_for_turn(cx, &first).await;
+    let unread = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| {
+            workspace.chats(0).map(Chat::is_unread).collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(unread(cx), [true, false]);
+
+    // A turn the human sees end leaves its chat read.
+    say(cx, &workspace, "hello").await;
+    assert_eq!(unread(cx), [true, false]);
+    click(cx, "chat-1");
+    assert_eq!(unread(cx), [false, false]);
+}
+
+#[gpui::test]
+async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut TestAppContext) {
+    let home = scratch("archived");
+    let kept = scratch("archived-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), Rc::clone(&store));
+    click(cx, "new-chat");
+    say(cx, &workspace, "first").await;
+    click(cx, "new-chat");
+    say(cx, &workspace, "second").await;
+
+    right_click(cx, "chat-2");
+    click(cx, "archive-chat");
+    assert_eq!(names(cx, &workspace), listed(&[("No project", &["first"])]));
+    // The chat after it in the list, or before it, is shown instead.
+    let shown_name = |cx: &mut VisualTestContext, workspace: &Entity<Workspace>| {
+        workspace.read_with(cx, |workspace, _| {
+            workspace.shown().map(|chat| chat.name().to_owned())
+        })
+    };
+    assert_eq!(shown_name(cx, &workspace).as_deref(), Some("first"));
+    assert_eq!(
+        kept_names(&store),
+        [
+            ("first".to_owned(), Named::FirstLine, false),
+            ("second".to_owned(), Named::FirstLine, true),
+        ]
+    );
+
+    // It stays archived once Cox starts again.
+    let again = cx.update(|_, cx| {
+        let store = Rc::new(Store::open(&kept).unwrap());
+        let opens = opens(&agents, Resumes::Resume);
+        cx.new(|cx| Workspace::new(home.clone(), store, opens, cx))
+    });
+    assert_eq!(names(cx, &again), listed(&[("No project", &["first"])]));
+    let archived = again.read_with(cx, |workspace, _| {
+        workspace
+            .archived()
+            .iter()
+            .map(|chat| chat.name().to_owned())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(archived, ["second"]);
+
+    click(cx, "archived");
+    click(cx, "archived-1");
+    assert_eq!(
+        names(cx, &workspace),
+        listed(&[("No project", &["first", "second"])])
+    );
+    assert_eq!(shown_name(cx, &workspace).as_deref(), Some("second"));
+    assert!(!kept_names(&store)[1].2);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }

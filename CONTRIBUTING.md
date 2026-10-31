@@ -44,7 +44,14 @@ works in `<dir>`, `~/Cox` unless given. Each chat starts its own
 own, showing `<url>` first. When the folder has a `COX.md`, the agent gets
 what it says ahead of the first line sent in the chat, and the chat says
 so at its top. The list switches between chats (Control-Tab and
-Control-Shift-Tab do too). A chat's agent runs until Cox quits. Cox
+Control-Shift-Tab do too). A chat is named by a number at first, then
+after the first line sent in it, then by the title its agent gives its
+session, as `claude-agent-acp` does, until the human renames it: a
+double click on its row, or "Rename" in the menu of the right button.
+The row marks a chat whose agent is at work (…), one that waits for the
+human (?), and one that finished a turn the human has not seen yet (●).
+"Archive" in the menu takes a chat out of the list, to "Archived" at its
+foot, from where a click brings it back; its agent, if it runs, goes on. A chat's agent runs until Cox quits. Cox
 keeps each chat's conversation, and its stage's tabs, as they change,
 and lists the chats of earlier runs too, greyed and closed, for the
 human to read what they showed. A closed chat's stage opens again on

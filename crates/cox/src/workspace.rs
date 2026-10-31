@@ -8,23 +8,33 @@
 //! A chat's agent runs until Cox quits; the chats of earlier runs stay in
 //! the list, closed, for the human to read what they showed, and to send
 //! to again, which starts the chat's agent again.
+//!
+//! A chat is named by a number at first, then after the first line the
+//! human sends in it, then by the title its agent gives it, until the
+//! human names it. Its row in the list tells whether its agent is at
+//! work, waits for the human, or finished a turn the human has not seen
+//! yet. The menu of the right button on a row renames the chat, as a
+//! double click does, or archives it: an archived chat leaves the list
+//! for "Archived" at its foot, whose click brings it back.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cox_core::list::List;
-use cox_core::store::{ChatId, ProjectId, Record, Store};
+use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
 use gpui::{
-    App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, PathPromptOptions, SharedString,
-    Stateful, Subscription, Window, actions, div, prelude::*, px, rgb,
+    App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, MouseButton,
+    MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString, Stateful, Subscription, Window,
+    actions, anchored, deferred, div, prelude::*, px, rgb,
 };
 
 use crate::agent::instructions::Instructions;
 use crate::chat::conversation::{Entry, State};
 use crate::chat::view::{ChatView, Reopened};
 use crate::chat::{Closed, Opens};
+use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
-use crate::ui::theme::{ASKING, FONT};
+use crate::ui::theme::{ASKING, DIM, FONT, LINK};
 
 actions!(
     cox,
@@ -35,6 +45,8 @@ actions!(
         OpenFolder,
         NextChat,
         PreviousChat,
+        /// Leaves the chat's name as it was.
+        CancelRename,
     ]
 );
 
@@ -44,6 +56,13 @@ const LIST_WIDTH: f32 = 220.;
 /// What the project of chats with no folder is called.
 const NO_PROJECT: &str = "No project";
 
+/// How long a chat's name grows, in characters, when the agent or the
+/// first line names it.
+const NAME_LENGTH: usize = 80;
+
+/// The key context of the input that renames a chat.
+const RENAMING: &str = "Renaming";
+
 /// Binds the keys that open chats and move between them.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -51,6 +70,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-o", OpenFolder, Some("Workspace")),
         KeyBinding::new("ctrl-tab", NextChat, Some("Workspace")),
         KeyBinding::new("ctrl-shift-tab", PreviousChat, Some("Workspace")),
+        KeyBinding::new("escape", CancelRename, Some(RENAMING)),
     ]);
 }
 
@@ -96,8 +116,14 @@ pub struct Chat {
     /// How it is kept, or `None` when it could not be.
     kept: Option<ChatId>,
     name: SharedString,
+    named: Named,
     /// Whether its agent runs.
     open: bool,
+    /// Whether its agent was at work when the chat last changed.
+    working: bool,
+    /// Whether a turn ended while the chat was not shown, and it has not
+    /// been shown since.
+    unread: bool,
     /// Its view, or `None` for a closed chat the human has not read yet.
     view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
@@ -108,14 +134,29 @@ pub struct Chat {
 impl Chat {
     /// A closed chat of the project at `project`, kept as `kept`, which
     /// the human has not read yet.
-    fn closed(project: usize, kept: ChatId, name: impl Into<SharedString>) -> Self {
+    fn closed(project: usize, kept: ChatId, name: impl Into<SharedString>, named: Named) -> Self {
         Self {
             project,
             kept: Some(kept),
             name: name.into(),
+            named,
             open: false,
+            working: false,
+            unread: false,
             view: None,
             _changes: Vec::new(),
+        }
+    }
+
+    /// Names it `name`, which `named` says where it came from, and keeps
+    /// the name in `store`.
+    fn name_as(&mut self, name: &str, named: Named, store: &Store) {
+        self.name = SharedString::from(name.to_owned());
+        self.named = named;
+        if let Some(kept) = self.kept
+            && let Err(error) = store.name_chat(kept, name, named)
+        {
+            log::error!("the chat's name is not kept: {error:#}");
         }
     }
 
@@ -127,6 +168,13 @@ impl Chat {
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Whether a turn ended while the chat was not shown, and it has not
+    /// been shown since.
+    #[must_use]
+    pub fn is_unread(&self) -> bool {
+        self.unread
     }
 
     /// Its view, once it has been shown.
@@ -143,6 +191,16 @@ pub struct Workspace {
     /// The chats, in the order of the list: under their projects, each
     /// after the ones opened before it; and which is shown, if any is.
     chats: List<Chat>,
+    /// The chats the human archived, out of the list, in the order they
+    /// were archived.
+    archived: Vec<Chat>,
+    /// Whether the archived chats show at the foot of the list.
+    archived_open: bool,
+    /// The menu of the right button, where it opened in the window, for
+    /// the chat at an index in the list.
+    menu: Option<(Point<Pixels>, usize)>,
+    /// The chat at an index in the list being renamed, in an input.
+    renaming: Option<(usize, Entity<LineInput>, Subscription)>,
     opens: Rc<dyn Opens>,
     store: Rc<Store>,
     focus_handle: FocusHandle,
@@ -160,6 +218,10 @@ impl Workspace {
         let mut workspace = Self {
             projects: vec![Project::new(None, NO_PROJECT, home)],
             chats: List::new(),
+            archived: Vec::new(),
+            archived_open: false,
+            menu: None,
+            renaming: None,
             opens,
             store,
             focus_handle: cx.focus_handle(),
@@ -184,7 +246,12 @@ impl Workspace {
                         continue;
                     };
                     workspace.projects[index].opened += 1;
-                    workspace.add(Chat::closed(index, chat.id, chat.name));
+                    let closed = Chat::closed(index, chat.id, chat.name, chat.named);
+                    if chat.archived {
+                        workspace.archived.push(closed);
+                    } else {
+                        workspace.add(closed);
+                    }
                 }
             }
             Err(error) => log::error!("the chats kept cannot be listed: {error:#}"),
@@ -195,6 +262,9 @@ impl Workspace {
     /// Puts `chat` in the list after the other chats of its project, and
     /// returns its index.
     fn add(&mut self, chat: Chat) -> usize {
+        // What was at an index may move along.
+        self.menu = None;
+        self.renaming = None;
         let after = self
             .chats
             .iter()
@@ -220,6 +290,12 @@ impl Workspace {
     #[must_use]
     pub fn shown(&self) -> Option<&Chat> {
         self.chats.shown()
+    }
+
+    /// The chats the human archived, in the order they were archived.
+    #[must_use]
+    pub fn archived(&self) -> &[Chat] {
+        &self.archived
     }
 
     /// The index of the project of `folder`, opened first if it is not
@@ -269,12 +345,15 @@ impl Workspace {
         let view = self
             .opens
             .open(project.folder.clone(), instructions, record, window, cx);
-        let changes = cx.observe(&view, |_, _, cx| cx.notify());
+        let changes = cx.observe(&view, |workspace, view, cx| workspace.changed(&view, cx));
         let chat = self.add(Chat {
             project: index,
             kept,
             name: name.into(),
+            named: Named::Numbered,
             open: true,
+            working: false,
+            unread: false,
             view: Some(view),
             _changes: vec![changes],
         });
@@ -312,6 +391,7 @@ impl Workspace {
         if !self.chats.show(index) {
             return;
         }
+        self.chats[index].unread = false;
         self.read(index, window, cx);
         window.focus(&self.focus_handle(cx));
         cx.notify();
@@ -349,7 +429,7 @@ impl Workspace {
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };
         let view = self.opens.read(closed, window, cx);
-        let changes = cx.observe(&view, |_, _, cx| cx.notify());
+        let changes = cx.observe(&view, |workspace, view, cx| workspace.changed(&view, cx));
         let reopened = cx.subscribe(&view, move |workspace, _, Reopened, cx| {
             // The chat may have moved along the list since.
             if let Some(chat) = workspace
@@ -366,10 +446,119 @@ impl Workspace {
             project: chat.project,
             kept: Some(kept),
             name: chat.name.clone(),
+            named: chat.named,
             open: false,
+            working: false,
+            unread: chat.unread,
             view: Some(view),
             _changes: vec![changes, reopened],
         };
+    }
+
+    /// Follows a change of the chat of `view`: a turn that ends while it is
+    /// not shown leaves it unread, and what it is about names it, unless a
+    /// name that lasts more has.
+    fn changed(&mut self, view: &Entity<ChatView>, cx: &mut Context<Self>) {
+        let shown = self.chats.shown().and_then(Chat::view) == Some(view);
+        let Some(chat) = self
+            .chats
+            .iter_mut()
+            .chain(&mut self.archived)
+            .find(|chat| chat.view.as_ref() == Some(view))
+        else {
+            return;
+        };
+        let conversation = view.read(cx).conversation();
+        let working = matches!(
+            conversation.state(),
+            State::Busy | State::Asking | State::Stopping
+        );
+        if chat.working && !working && !shown {
+            chat.unread = true;
+        }
+        chat.working = working;
+        let about = match (conversation.title(), conversation.first_line()) {
+            (Some(title), _) => Some((title, Named::Agent)),
+            (None, Some(line)) => Some((line, Named::FirstLine)),
+            (None, None) => None,
+        };
+        if let Some((name, named)) = about {
+            let name: String = name.chars().take(NAME_LENGTH).collect();
+            // The agent may title its session anew.
+            let lasts = named > chat.named || (named == Named::Agent && chat.named == named);
+            if lasts && name != chat.name.as_ref() {
+                chat.name_as(&name, named, &self.store);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Opens an input in place of the name of the chat at `index`, for the
+    /// human to rename it.
+    pub fn rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(chat) = self.chats.get(index) else {
+            return;
+        };
+        let name = chat.name.clone();
+        let input = cx.new(|cx| {
+            let mut input = LineInput::new(cx);
+            input.set_text(&name, cx);
+            input.select_whole(cx);
+            input
+        });
+        let submitted = cx.subscribe_in(&input, window, |workspace, _, Submitted, window, cx| {
+            workspace.end_renaming(true, window, cx);
+        });
+        window.focus(&input.focus_handle(cx));
+        self.menu = None;
+        self.renaming = Some((index, input, submitted));
+        cx.notify();
+    }
+
+    /// Closes the input that renames a chat, naming the chat what it holds
+    /// when `keep` says to and it holds a name.
+    fn end_renaming(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((index, input, _)) = self.renaming.take() else {
+            return;
+        };
+        let name = input.read(cx).text().trim().to_owned();
+        if keep && !name.is_empty() {
+            self.chats[index].name_as(&name, Named::Human, &self.store);
+        }
+        window.focus(&self.focus_handle(cx));
+        cx.notify();
+    }
+
+    /// Takes the chat at `index` out of the list, to "Archived" at its
+    /// foot. Its agent, if it runs, goes on.
+    pub fn archive(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let was_shown = self.chats.shown_index() == Some(index);
+        self.menu = None;
+        self.renaming = None;
+        let Some(chat) = self.chats.remove(index) else {
+            return;
+        };
+        keep_archived(&chat, true, &self.store);
+        self.archived.push(chat);
+        if was_shown {
+            match self.chats.shown_index() {
+                Some(shown) => self.show(shown, window, cx),
+                None => window.focus(&self.focus_handle),
+            }
+        }
+        cx.notify();
+    }
+
+    /// Brings the archived chat at `index` among the archived back to the
+    /// list, and shows it.
+    pub fn unarchive(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.archived.len() {
+            return;
+        }
+        let chat = self.archived.remove(index);
+        keep_archived(&chat, false, &self.store);
+        let listed = self.add(chat);
+        self.show(listed, window, cx);
     }
 
     /// Shows the chat `step` places along the list, going round.
@@ -388,6 +577,7 @@ impl Workspace {
                 rows.push(self.render_chat(chat, open, cx));
             }
         }
+        rows.extend(self.render_archived(cx));
         div()
             .w(px(LIST_WIDTH))
             .h_full()
@@ -498,7 +688,8 @@ impl Workspace {
     }
 
     /// The row of the chat at `index` in the list, which numbers its
-    /// chats from 1.
+    /// chats from 1: its name, or the input that renames it, and a mark of
+    /// how it stands.
     fn render_chat(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Stateful<Div> {
         let number = index + 1;
         let state = chat
@@ -507,10 +698,38 @@ impl Workspace {
             .filter(|_| chat.open)
             .map(|view| view.read(cx).conversation().state());
         let (mark, color) = match state {
-            Some(State::Idle) | None => ("", rgb(0xa0_a0a0)),
-            Some(State::Busy | State::Stopping) => ("…", rgb(0xa0_a0a0)),
+            Some(State::Busy | State::Stopping) => ("…", rgb(DIM)),
             Some(State::Asking) => ("?", rgb(ASKING)),
             Some(State::Closed) => ("closed", rgb(0x80_8080)),
+            _ if chat.unread => ("●", rgb(LINK)),
+            Some(State::Idle) | None => ("", rgb(DIM)),
+        };
+        let name = match &self.renaming {
+            Some((renaming, input, _)) if *renaming == index => div()
+                .key_context(RENAMING)
+                .debug_selector(|| "renaming".to_owned())
+                .flex_1()
+                .min_w_0()
+                .px_1()
+                .border_1()
+                .border_color(rgb(LINK))
+                .rounded_sm()
+                // A click in the input stays there, not showing the chat.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_action(cx.listener(|workspace, _: &CancelRename, window, cx| {
+                    workspace.end_renaming(false, window, cx);
+                }))
+                .on_mouse_down_out(cx.listener(|workspace, _, window, cx| {
+                    workspace.end_renaming(true, window, cx);
+                }))
+                .child(input.clone()),
+            _ => div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                // A closed chat is there to read.
+                .when(!chat.open, |name| name.text_color(rgb(0x80_8080)))
+                .child(chat.name.clone()),
         };
         let mut row = div()
             .id(("chat", number))
@@ -523,24 +742,131 @@ impl Workspace {
             .py_1()
             .cursor_pointer()
             .on_click(
-                cx.listener(move |workspace, _, window, cx| workspace.show(index, window, cx)),
+                cx.listener(move |workspace, event: &ClickEvent, window, cx| {
+                    if event.click_count() == 2 {
+                        workspace.rename(index, window, cx);
+                    } else {
+                        workspace.show(index, window, cx);
+                    }
+                }),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    // A closed chat is there to read.
-                    .when(!chat.open, |name| name.text_color(rgb(0x80_8080)))
-                    .child(chat.name.clone()),
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |workspace, event: &MouseDownEvent, _, cx| {
+                    workspace.menu = Some((event.position, index));
+                    cx.notify();
+                }),
             )
-            .child(div().text_color(color).child(mark));
+            .child(name)
+            .child(div().flex_shrink_0().text_color(color).child(mark));
         if self.chats.shown_index() == Some(index) {
             row = row.bg(rgb(0x2a_2a2a));
         } else {
             row = row.hover(|style| style.bg(rgb(0x26_2626)));
         }
         row
+    }
+}
+
+impl Workspace {
+    /// "Archived" at the foot of the list, if the human archived a chat,
+    /// with the archived chats under it while it is open: each with its
+    /// project's name, brought back to the list by a click.
+    fn render_archived(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+        if self.archived.is_empty() {
+            return Vec::new();
+        }
+        let open = self.archived_open;
+        let mut rows = vec![
+            div()
+                .id("archived")
+                .debug_selector(|| "archived".to_owned())
+                .flex()
+                .gap_1()
+                .px_2()
+                .pt_3()
+                .pb_1()
+                .cursor_pointer()
+                .text_color(rgb(DIM))
+                .child(if open { "▾" } else { "▸" })
+                .child(format!("Archived ({})", self.archived.len()))
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.archived_open = !workspace.archived_open;
+                    cx.notify();
+                })),
+        ];
+        if open {
+            rows.extend(self.archived.iter().enumerate().map(|(index, chat)| {
+                let number = index + 1;
+                div()
+                    .id(("archived-chat", number))
+                    .debug_selector(move || format!("archived-{number}"))
+                    .flex()
+                    .gap_2()
+                    .pl_4()
+                    .pr_2()
+                    .py_1()
+                    .cursor_pointer()
+                    .text_color(rgb(0x80_8080))
+                    .hover(|style| style.bg(rgb(0x26_2626)))
+                    .child(div().flex_1().min_w_0().truncate().child(chat.name.clone()))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .child(self.projects[chat.project].name.clone()),
+                    )
+                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                        workspace.unarchive(index, window, cx);
+                    }))
+            }));
+        }
+        rows
+    }
+
+    /// The menu of the right button on a chat, if it is open.
+    fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (at, index) = self.menu?;
+        let item = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .debug_selector(move || id.to_owned())
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(0x04_395e)))
+                .child(label)
+        };
+        let menu = div()
+            .occlude()
+            .min_w(px(160.))
+            .p_1()
+            .bg(rgb(0x25_2526))
+            .border_1()
+            .border_color(rgb(0x45_4545))
+            .rounded_md()
+            .shadow_md()
+            .on_mouse_down_out(cx.listener(|workspace, _, _, cx| {
+                workspace.menu = None;
+                cx.notify();
+            }))
+            .child(item("rename-chat", "Rename").on_click(
+                cx.listener(move |workspace, _, window, cx| workspace.rename(index, window, cx)),
+            ))
+            .child(item("archive-chat", "Archive").on_click(
+                cx.listener(move |workspace, _, window, cx| workspace.archive(index, window, cx)),
+            ));
+        Some(deferred(anchored().position(at).child(menu)).with_priority(2))
+    }
+}
+
+/// Keeps in `store` whether `chat` is archived.
+fn keep_archived(chat: &Chat, archived: bool, store: &Store) {
+    if let Some(kept) = chat.kept
+        && let Err(error) = store.archive_chat(kept, archived)
+    {
+        log::error!("whether the chat is archived is not kept: {error:#}");
     }
 }
 
@@ -590,5 +916,6 @@ impl Render for Workspace {
             .text_size(px(14.))
             .child(self.render_list(cx))
             .child(div().flex_1().min_w_0().h_full().child(shown))
+            .children(self.render_menu(cx))
     }
 }
