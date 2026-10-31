@@ -19,7 +19,7 @@ use crate::entry::Entry;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -41,7 +41,10 @@ CREATE TABLE chats (
     -- Who named it, as `Named` numbers them.
     named INTEGER NOT NULL DEFAULT 0,
     -- Whether the human put it away, out of the list.
-    archived INTEGER NOT NULL DEFAULT 0
+    archived INTEGER NOT NULL DEFAULT 0,
+    -- The command that checks the chat's goal, which the chat works
+    -- until it passes, while the human has set one.
+    goal_command TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -61,6 +64,7 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN session TEXT;",
     "ALTER TABLE chats ADD COLUMN named INTEGER NOT NULL DEFAULT 0;
      ALTER TABLE chats ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
+    "ALTER TABLE chats ADD COLUMN goal_command TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -90,6 +94,9 @@ pub struct KeptChat {
     pub named: Named,
     /// Whether the human put it away, out of the list.
     pub archived: bool,
+    /// The command that checks its goal, which it works until it passes,
+    /// if the human set one.
+    pub goal_command: Option<String>,
 }
 
 /// Where a chat's name came from, from the name that gives way most
@@ -204,9 +211,9 @@ impl Store {
     ///
     /// When the database cannot be read.
     pub fn chats(&self) -> anyhow::Result<Vec<KeptChat>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT id, project, name, named, archived FROM chats ORDER BY id")?;
+        let mut statement = self.connection.prepare(
+            "SELECT id, project, name, named, archived, goal_command FROM chats ORDER BY id",
+        )?;
         let chats = statement.query_map([], |row| {
             Ok(KeptChat {
                 id: ChatId(row.get(0)?),
@@ -214,6 +221,7 @@ impl Store {
                 name: row.get(2)?,
                 named: Named::from_number(row.get(3)?),
                 archived: row.get(4)?,
+                goal_command: row.get(5)?,
             })
         })?;
         Ok(chats.collect::<Result<_, _>>()?)
@@ -281,6 +289,20 @@ impl Store {
         self.connection.execute(
             "UPDATE chats SET archived = ?2 WHERE id = ?1",
             params![chat.0, archived],
+        )?;
+        Ok(())
+    }
+
+    /// Keeps `command` as the command that checks the goal of `chat`,
+    /// which it works until it passes, or that it works toward no goal.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_goal(&self, chat: ChatId, command: Option<&str>) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET goal_command = ?2 WHERE id = ?1",
+            params![chat.0, command],
         )?;
         Ok(())
     }
@@ -413,6 +435,16 @@ impl Record {
     /// When the database cannot be written.
     pub fn session(&self, session: &str) -> anyhow::Result<()> {
         self.store.keep_session(self.chat, session)
+    }
+
+    /// Keeps `command` as the command that checks the chat's goal, which
+    /// it works until it passes, or that it works toward no goal.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn goal(&self, command: Option<&str>) -> anyhow::Result<()> {
+        self.store.keep_goal(self.chat, command)
     }
 }
 
@@ -645,6 +677,28 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_goal_of_a_chat_while_the_human_sets_one() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let other = store.add_chat(None, "Chat 2").unwrap();
+        let goals = |store: &Store| {
+            store
+                .chats()
+                .unwrap()
+                .into_iter()
+                .map(|chat| chat.goal_command)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(goals(&store), [None, None]);
+
+        store.keep_goal(chat, Some("cargo xtask ci")).unwrap();
+        assert_eq!(goals(&store), [Some("cargo xtask ci".to_owned()), None]);
+        store.keep_goal(other, Some("make")).unwrap();
+        store.keep_goal(chat, None).unwrap();
+        assert_eq!(goals(&store), [None, Some("make".to_owned())]);
+    }
+
+    #[test]
     fn a_database_from_an_earlier_cox_is_upgraded() {
         let directory = scratch("earlier");
         let path = directory.join("chats.sqlite");
@@ -684,13 +738,19 @@ mod tests {
         assert_eq!(chats.len(), 1);
         assert_eq!(chats[0].named, Named::Numbered);
         assert!(!chats[0].archived);
+        assert_eq!(chats[0].goal_command, None);
         assert_eq!(store.session(chats[0].id).unwrap(), None);
         store.keep_session(chats[0].id, "session-1").unwrap();
+        store.keep_goal(chats[0].id, Some("make")).unwrap();
         drop(store);
         let store = Store::open(&path).unwrap();
         assert_eq!(
             store.session(chats[0].id).unwrap().as_deref(),
             Some("session-1")
+        );
+        assert_eq!(
+            store.chats().unwrap()[0].goal_command.as_deref(),
+            Some("make")
         );
         std::fs::remove_dir_all(&directory).unwrap();
     }
