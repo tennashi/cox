@@ -50,6 +50,11 @@ session, as `claude-agent-acp` does, until the human renames it: a
 double click on its row, or "Rename" in the menu of the right button.
 The row marks a chat whose agent is at work (…), one that waits for the
 human (?), and one that finished a turn the human has not seen yet (●).
+On macOS, a chat the human is not looking at, as when another chat is
+shown or Cox is behind other windows, tells them with a notification
+when it comes to wait for them, and when its turn ends; a click on the
+notification shows the chat. The Dock's icon counts the chats that
+wait for the human or that they have not seen since a turn ended.
 "Archive" in the menu takes a chat out of the list, to "Archived" at its
 foot, from where a click brings it back; its agent, if it runs, goes on. A chat's agent runs until Cox quits. Cox
 keeps each chat's conversation, and its stage's tabs, as they change,
@@ -201,7 +206,9 @@ target/debug/Cox.app/Contents/MacOS/Cox <agent command>
 `Cox.app` next to them: `cox` as `Contents/MacOS/Cox`, the framework and
 five copies of `cox-helper` (`Cox Helper.app`, `Cox Helper (GPU).app`,
 ...) under `Contents/Frameworks`. CEF fixes that layout and those names,
-starting from the executable's. `cargo run` on macOS stops at once,
+starting from the executable's. It then signs the app as a whole, ad
+hoc, which macOS asks of an app before it shows the app's
+notifications. `cargo run` on macOS stops at once,
 saying where the framework was expected.
 
 ## Using Cox to build Cox

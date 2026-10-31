@@ -137,6 +137,10 @@ fn assemble(sh: &Shell, build: &Build) -> anyhow::Result<PathBuf> {
         sh.create_dir(contents.join("MacOS"))?;
         sh.copy_file(&build.helper, contents.join("MacOS").join(&name))?;
     }
+    // The linker signs only the executables, each under a name of its own;
+    // macOS lets an app post notifications only once it is signed as a
+    // bundle, under the bundle's identifier. Ad hoc is enough for that.
+    cmd!(sh, "codesign --force --deep --sign - {app}").run()?;
     Ok(app)
 }
 

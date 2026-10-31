@@ -10,7 +10,7 @@
 //! 3. The app's own parts are made: the [`Launcher`] that opens chats.
 //! 4. GPUI runs the app: the keys are bound, the globals set, the loops
 //!    that keep the browser and the quit asks served start, and the
-//!    window opens.
+//!    window opens, telling the human of its chats on macOS.
 //! 5. Quitting runs what was registered for it: the browser shuts down
 //!    before GPUI ends. On macOS, quitting ends the process there, so
 //!    nothing runs after `run`.
@@ -25,7 +25,8 @@ use std::time::Duration;
 
 use cox_core::store::Store;
 use gpui::{
-    App, Application, Bounds, Focusable, WindowBounds, WindowOptions, actions, prelude::*, px, size,
+    App, Application, Bounds, Focusable, WindowBounds, WindowHandle, WindowOptions, actions,
+    prelude::*, px, size,
 };
 
 use crate::chat::launcher::Launcher;
@@ -250,8 +251,33 @@ fn open_window(home: PathBuf, store: Rc<Store>, launcher: Launcher, cx: &mut App
         })
         .expect("the window is open");
     cx.on_window_closed(|cx| cx.quit()).detach();
+    tell_of_chats(window, cx);
     cx.activate(true);
 }
+
+/// Tells the human of the chats in `window` with the system's
+/// notifications, and the Dock's badge, and brings up the chat of a
+/// notification they click.
+#[cfg(target_os = "macos")]
+fn tell_of_chats(window: WindowHandle<Workspace>, cx: &mut App) {
+    let (clicked, mut clicks) = tokio::sync::mpsc::unbounded_channel();
+    let notices = crate::notices::macos::System::start(clicked);
+    cx.set_global(crate::notices::AppNotices(Rc::new(notices)));
+    cx.spawn(async move |cx| {
+        while let Some(chat) = clicks.recv().await {
+            let _ = window.update(cx, |workspace, window, cx| {
+                workspace.reveal(chat, window, cx);
+                window.activate_window();
+            });
+            let _ = cx.update(|cx| cx.activate(true));
+        }
+    })
+    .detach();
+}
+
+/// Elsewhere, Cox tells of nothing.
+#[cfg(target_os = "linux")]
+fn tell_of_chats(_window: WindowHandle<Workspace>, _cx: &mut App) {}
 
 #[cfg(test)]
 mod tests {

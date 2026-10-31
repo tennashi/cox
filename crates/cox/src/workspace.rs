@@ -16,6 +16,11 @@
 //! yet. The menu of the right button on a row renames the chat, as a
 //! double click does, or archives it: an archived chat leaves the list
 //! for "Archived" at its foot, whose click brings it back.
+//!
+//! A chat that comes to wait for the human, or whose turn ends, while the
+//! human is not looking at it, tells them so (see [`crate::notices`]),
+//! and the app's icon counts the chats that wait for them or that they
+//! have not seen since a turn ended. A click on what a chat told shows it.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -32,6 +37,7 @@ use crate::agent::instructions::Instructions;
 use crate::chat::conversation::{Entry, State};
 use crate::chat::view::{ChatView, Reopened};
 use crate::chat::{Closed, Opens};
+use crate::notices::AppNotices;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ASKING, DIM, FONT, LINK};
@@ -111,6 +117,9 @@ impl Project {
 /// A chat in the list: open, with its agent, or closed, from an earlier
 /// run, for the human to read, until they send to it.
 pub struct Chat {
+    /// What names it for this run, as it moves along the list, or out of
+    /// it.
+    key: u64,
     /// The index of its project.
     project: usize,
     /// How it is kept, or `None` when it could not be.
@@ -119,8 +128,8 @@ pub struct Chat {
     named: Named,
     /// Whether its agent runs.
     open: bool,
-    /// Whether its agent was at work when the chat last changed.
-    working: bool,
+    /// Whose move it was when the chat last changed.
+    state: State,
     /// Whether a turn ended while the chat was not shown, and it has not
     /// been shown since.
     unread: bool,
@@ -133,15 +142,22 @@ pub struct Chat {
 
 impl Chat {
     /// A closed chat of the project at `project`, kept as `kept`, which
-    /// the human has not read yet.
-    fn closed(project: usize, kept: ChatId, name: impl Into<SharedString>, named: Named) -> Self {
+    /// the human has not read yet, named `key` for this run.
+    fn closed(
+        key: u64,
+        project: usize,
+        kept: ChatId,
+        name: impl Into<SharedString>,
+        named: Named,
+    ) -> Self {
         Self {
+            key,
             project,
             kept: Some(kept),
             name: name.into(),
             named,
             open: false,
-            working: false,
+            state: State::Closed,
             unread: false,
             view: None,
             _changes: Vec::new(),
@@ -170,6 +186,12 @@ impl Chat {
         self.open
     }
 
+    /// What names it for this run.
+    #[must_use]
+    pub fn key(&self) -> u64 {
+        self.key
+    }
+
     /// Whether a turn ended while the chat was not shown, and it has not
     /// been shown since.
     #[must_use]
@@ -196,6 +218,10 @@ pub struct Workspace {
     archived: Vec<Chat>,
     /// Whether the archived chats show at the foot of the list.
     archived_open: bool,
+    /// The key of the last chat opened.
+    last_key: u64,
+    /// How many chats the app's icon counts.
+    badged: usize,
     /// The menu of the right button, where it opened in the window, for
     /// the chat at an index in the list.
     menu: Option<(Point<Pixels>, usize)>,
@@ -220,6 +246,8 @@ impl Workspace {
             chats: List::new(),
             archived: Vec::new(),
             archived_open: false,
+            last_key: 0,
+            badged: 0,
             menu: None,
             renaming: None,
             opens,
@@ -246,7 +274,8 @@ impl Workspace {
                         continue;
                     };
                     workspace.projects[index].opened += 1;
-                    let closed = Chat::closed(index, chat.id, chat.name, chat.named);
+                    let key = workspace.next_key();
+                    let closed = Chat::closed(key, index, chat.id, chat.name, chat.named);
                     if chat.archived {
                         workspace.archived.push(closed);
                     } else {
@@ -257,6 +286,12 @@ impl Workspace {
             Err(error) => log::error!("the chats kept cannot be listed: {error:#}"),
         }
         workspace
+    }
+
+    /// A key for a chat, which no other chat has had in this run.
+    fn next_key(&mut self) -> u64 {
+        self.last_key += 1;
+        self.last_key
     }
 
     /// Puts `chat` in the list after the other chats of its project, and
@@ -345,14 +380,18 @@ impl Workspace {
         let view = self
             .opens
             .open(project.folder.clone(), instructions, record, window, cx);
-        let changes = cx.observe(&view, |workspace, view, cx| workspace.changed(&view, cx));
+        let changes = cx.observe_in(&view, window, |workspace, view, window, cx| {
+            workspace.changed(&view, window, cx);
+        });
+        let key = self.next_key();
         let chat = self.add(Chat {
+            key,
             project: index,
             kept,
             name: name.into(),
             named: Named::Numbered,
             open: true,
-            working: false,
+            state: State::Idle,
             unread: false,
             view: Some(view),
             _changes: vec![changes],
@@ -392,6 +431,7 @@ impl Workspace {
             return;
         }
         self.chats[index].unread = false;
+        self.badge(cx);
         self.read(index, window, cx);
         window.focus(&self.focus_handle(cx));
         cx.notify();
@@ -429,7 +469,9 @@ impl Workspace {
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };
         let view = self.opens.read(closed, window, cx);
-        let changes = cx.observe(&view, |workspace, view, cx| workspace.changed(&view, cx));
+        let changes = cx.observe_in(&view, window, |workspace, view, window, cx| {
+            workspace.changed(&view, window, cx);
+        });
         let reopened = cx.subscribe(&view, move |workspace, _, Reopened, cx| {
             // The chat may have moved along the list since.
             if let Some(chat) = workspace
@@ -443,12 +485,13 @@ impl Workspace {
         });
         let chat = &mut self.chats[index];
         *chat = Chat {
+            key: chat.key,
             project: chat.project,
             kept: Some(kept),
             name: chat.name.clone(),
             named: chat.named,
             open: false,
-            working: false,
+            state: State::Closed,
             unread: chat.unread,
             view: Some(view),
             _changes: vec![changes, reopened],
@@ -457,9 +500,11 @@ impl Workspace {
 
     /// Follows a change of the chat of `view`: a turn that ends while it is
     /// not shown leaves it unread, and what it is about names it, unless a
-    /// name that lasts more has.
-    fn changed(&mut self, view: &Entity<ChatView>, cx: &mut Context<Self>) {
+    /// name that lasts more has. A chat the human is not looking at tells
+    /// them when it comes to wait for them, and when its turn ends.
+    fn changed(&mut self, view: &Entity<ChatView>, window: &Window, cx: &mut Context<Self>) {
         let shown = self.chats.shown().and_then(Chat::view) == Some(view);
+        let seen = shown && window.is_window_active();
         let Some(chat) = self
             .chats
             .iter_mut()
@@ -469,14 +514,21 @@ impl Workspace {
             return;
         };
         let conversation = view.read(cx).conversation();
-        let working = matches!(
-            conversation.state(),
-            State::Busy | State::Asking | State::Stopping
-        );
-        if chat.working && !working && !shown {
+        let state = conversation.state();
+        let ended = working(chat.state) && !working(state);
+        if ended && !shown {
             chat.unread = true;
         }
-        chat.working = working;
+        let news = if state == State::Asking && chat.state != state {
+            let asked = conversation.asking_for().unwrap_or("permission");
+            Some(format!("Asks you: {asked}"))
+        } else if ended {
+            let said = conversation.last_said().unwrap_or("The turn ended.");
+            Some(said.to_owned())
+        } else {
+            None
+        };
+        chat.state = state;
         let about = match (conversation.title(), conversation.first_line()) {
             (Some(title), _) => Some((title, Named::Agent)),
             (None, Some(line)) => Some((line, Named::FirstLine)),
@@ -490,7 +542,40 @@ impl Workspace {
                 chat.name_as(&name, named, &self.store);
             }
         }
+        if let Some(body) = news.filter(|_| !seen)
+            && let Some(notices) = cx.try_global::<AppNotices>()
+        {
+            notices.0.notify(chat.key, &chat.name, &body);
+        }
+        self.badge(cx);
         cx.notify();
+    }
+
+    /// Counts on the app's icon the chats that wait for the human, or that
+    /// they have not seen since a turn ended.
+    fn badge(&mut self, cx: &App) {
+        let count = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .filter(|chat| chat.unread || chat.state == State::Asking)
+            .count();
+        if count != self.badged {
+            self.badged = count;
+            if let Some(notices) = cx.try_global::<AppNotices>() {
+                notices.0.badge(count);
+            }
+        }
+    }
+
+    /// Shows the chat `key` names, bringing it back to the list if it was
+    /// archived, as a click on what it told the human does.
+    pub fn reveal(&mut self, key: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.chats.iter().position(|chat| chat.key == key) {
+            self.show(index, window, cx);
+        } else if let Some(index) = self.archived.iter().position(|chat| chat.key == key) {
+            self.unarchive(index, window, cx);
+        }
     }
 
     /// Opens an input in place of the name of the chat at `index`, for the
@@ -859,6 +944,11 @@ impl Workspace {
             ));
         Some(deferred(anchored().position(at).child(menu)).with_priority(2))
     }
+}
+
+/// Whether an agent that stands as `state` is at work.
+fn working(state: State) -> bool {
+    matches!(state, State::Busy | State::Asking | State::Stopping)
 }
 
 /// Keeps in `store` whether `chat` is archived.
