@@ -109,8 +109,16 @@ impl Conversation {
     /// A conversation that opens with `note`, a note from Cox.
     #[must_use]
     pub fn noting(note: String) -> Self {
+        Self::noting_each([note])
+    }
+
+    /// A conversation that starts with `notes` from Cox, in order.
+    #[must_use]
+    pub fn noting_each(notes: impl IntoIterator<Item = String>) -> Self {
         let mut conversation = Self::new();
-        conversation.push(Entry::Note(note));
+        for note in notes {
+            conversation.push(Entry::Note(note));
+        }
         conversation
     }
 
@@ -470,13 +478,15 @@ impl Conversation {
 
     /// Shows a permission request with what its tool call is about to do:
     /// what the request tells, or else what the call shows, which then
-    /// shows only here.
+    /// shows only here. The request waits on the human, unless Cox
+    /// `decided` it already, as the chat's setup says.
     fn ask(
         &mut self,
         id: String,
         title: Option<String>,
         content: Option<Vec<Content>>,
         options: Vec<String>,
+        decided: Option<usize>,
     ) {
         let call = self.tool_call_entry(&id);
         let shown = call.and_then(|index| match &mut self.entries[index] {
@@ -499,7 +509,8 @@ impl Conversation {
             title: title.unwrap_or_else(|| "a tool call".to_owned()),
             content,
             options,
-            chosen: None,
+            chosen: decided,
+            by_setup: decided.is_some(),
         });
     }
 
@@ -514,13 +525,19 @@ impl Conversation {
                         "Resumed: the agent goes on from here.".to_owned(),
                     ));
                 }
-                Opened::Retold { instructions } => {
+                Opened::Retold {
+                    instructions,
+                    context,
+                } => {
                     self.push(Entry::Note(
                         "The agent could not resume its session: a new one is told the conversation so far."
                             .to_owned(),
                     ));
                     if let Some(path) = instructions {
                         self.push(Entry::Note(instructions_note(&path)));
+                    }
+                    if let Some(context) = context {
+                        self.push(Entry::Note(context_note(&context)));
                     }
                 }
             },
@@ -553,13 +570,22 @@ impl Conversation {
                 content,
                 options,
             } => {
-                self.ask(id, title, content, options);
+                self.ask(id, title, content, options, None);
                 // Asked before the agent heard it is to stop: the agent
                 // side answers it as cancelled, without the human.
                 if self.state != State::Stopping {
                     self.state = State::Asking;
                 }
             }
+            // Cox answered, as the chat is set up: the human sees what was
+            // asked, and what was chosen, and the turn goes on.
+            AgentEvent::PermissionDecided {
+                id,
+                title,
+                content,
+                options,
+                chosen,
+            } => self.ask(id, title, content, options, Some(chosen)),
             AgentEvent::TurnEnded(reason) => {
                 if let Some(note) = ended(reason) {
                     self.push(Entry::Note(note.to_owned()));
@@ -592,6 +618,13 @@ impl Conversation {
 #[must_use]
 pub fn instructions_note(path: &Path) -> String {
     format!("Instructions: {}", crate::ui::paths::shortened(path))
+}
+
+/// The note that tells the human the context the agent was set up with,
+/// by the chat that opened its chat.
+#[must_use]
+pub fn context_note(context: &str) -> String {
+    format!("Context: {}", context.trim())
 }
 
 /// Whether `entry` starts a turn: a line sent to the agent, by the human
@@ -924,6 +957,38 @@ mod tests {
         );
         assert_eq!(conversation.state(), State::Busy);
         assert_eq!(conversation.asked(), None);
+    }
+
+    #[test]
+    fn a_permission_request_cox_answered_waits_on_nobody() {
+        let mut conversation = Conversation::new();
+        conversation.submit("edit");
+        conversation.apply(tool_call(Some(vec![text("the change")]), None));
+        conversation.apply(AgentEvent::PermissionDecided {
+            id: "call-1".to_owned(),
+            title: Some("Edit x.txt".to_owned()),
+            content: None,
+            options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
+            chosen: 1,
+        });
+
+        assert_eq!(conversation.state(), State::Busy);
+        assert_eq!(conversation.asked(), None);
+        assert_eq!(conversation.asking_for(), None);
+        assert_eq!(conversation.choose(0), None);
+        // The request shows what the call showed.
+        assert_eq!(
+            shown(&conversation),
+            [("call", vec![]), ("permission", vec![text("the change")])]
+        );
+        assert!(matches!(
+            conversation.entries().last(),
+            Some(Entry::Permission {
+                chosen: Some(1),
+                by_setup: true,
+                ..
+            })
+        ));
     }
 
     #[test]
