@@ -71,6 +71,21 @@ conversation stays, and the next line can be sent once the agent has
 stopped. A click on a link in a chat's conversation opens it on that
 chat's stage.
 
+A chat can have a goal: a command, such as `cargo xtask ci`, which the
+chat works until it passes. "Set goal…" in the menu of the right button
+opens an input above the chat's own for the command (Enter sets it,
+Escape leaves it as it was, and emptied, it clears the goal), and
+"Clear goal" clears it; the row marks a chat with a goal (◎), and a
+line above the input names the goal while the chat waits. When a turn
+ends as the agent ends it, the command runs in a terminal on the stage,
+as the agent's `run_command` tool would. While it fails, Cox sends the
+agent what it printed, as the next turn, shown in the conversation in
+the human's place but dimmer, and the agent goes on. The chat stops to
+wait for the human when the command passes, or after ten turns on one
+line of theirs, or when the agent made no tool call for two turns in a
+row, which says it has something to ask, or when Escape stops the
+check. The goal lasts across runs, with the rest of the chat.
+
 The conversation shows each tool call the agent makes on a line of its
 own, marked as running, done or failed; a click on the line opens what
 the call showed, which shows from the start for a call that failed.

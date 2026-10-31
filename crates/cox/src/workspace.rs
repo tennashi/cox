@@ -13,9 +13,10 @@
 //! human sends in it, then by the title its agent gives it, until the
 //! human names it. Its row in the list tells whether its agent is at
 //! work, waits for the human, or finished a turn the human has not seen
-//! yet. The menu of the right button on a row renames the chat, as a
-//! double click does, or archives it: an archived chat leaves the list
-//! for "Archived" at its foot, whose click brings it back.
+//! yet, and whether it has a goal. The menu of the right button on a row
+//! renames the chat, as a double click does, sets or clears its goal, or
+//! archives it: an archived chat leaves the list for "Archived" at its
+//! foot, whose click brings it back.
 //!
 //! A chat that comes to wait for the human, or whose turn ends, while the
 //! human is not looking at it, tells them so (see [`crate::notices`]),
@@ -636,6 +637,24 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Shows the chat at `index`, and opens the input that sets its goal.
+    pub fn edit_goal(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.show(index, window, cx);
+        if let Some(view) = self.chats.get(index).and_then(Chat::view) {
+            view.update(cx, |view, cx| view.edit_goal(window, cx));
+        }
+    }
+
+    /// Shows the chat at `index`, and clears its goal.
+    pub fn clear_goal(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.show(index, window, cx);
+        if let Some(view) = self.chats.get(index).and_then(Chat::view) {
+            view.update(cx, |view, cx| view.set_goal(None, cx));
+        }
+    }
+
     /// Takes the chat at `index` out of the list, to "Archived" at its
     /// foot. Its agent, if it runs, goes on.
     pub fn archive(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -865,6 +884,15 @@ impl Workspace {
                 }),
             )
             .child(name)
+            .when(chat.goal.is_some(), |row| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(DIM))
+                        .debug_selector(move || format!("goal-{number}"))
+                        .child("◎"),
+                )
+            })
             .child(div().flex_shrink_0().text_color(color).child(mark));
         if self.chats.shown_index() == Some(index) {
             row = row.bg(rgb(0x2a_2a2a));
@@ -934,6 +962,10 @@ impl Workspace {
     /// The menu of the right button on a chat, if it is open.
     fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (at, index) = self.menu?;
+        let has_goal = self
+            .chats
+            .get(index)
+            .is_some_and(|chat| chat.goal.is_some());
         let item = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -961,6 +993,16 @@ impl Workspace {
             .child(item("rename-chat", "Rename").on_click(
                 cx.listener(move |workspace, _, window, cx| workspace.rename(index, window, cx)),
             ))
+            .child(item("set-goal", "Set goal…").on_click(cx.listener(
+                move |workspace, _, window, cx| {
+                    workspace.edit_goal(index, window, cx);
+                },
+            )))
+            .when(has_goal, |menu| {
+                menu.child(item("clear-goal", "Clear goal").on_click(cx.listener(
+                    move |workspace, _, window, cx| workspace.clear_goal(index, window, cx),
+                )))
+            })
             .child(item("archive-chat", "Archive").on_click(
                 cx.listener(move |workspace, _, window, cx| workspace.archive(index, window, cx)),
             ));

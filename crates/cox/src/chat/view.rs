@@ -21,7 +21,8 @@
 //! conversation, after its turn too, until the human sends the next line,
 //! and a click on its line folds it to that line. A line above the input
 //! tells what the chat waits for, when it is not the human's next line,
-//! and the goal the chat works toward, while it has one.
+//! and the goal the chat works toward, while it has one; the human sets
+//! the goal in an input that opens in its place (see [`ChatView::edit_goal`]).
 //!
 //! When a turn ends and the chat has a goal, the view runs the goal's
 //! command in a terminal on the stage, as the agent's own tool would,
@@ -46,7 +47,7 @@ use crate::agent::{AgentEvent, Command};
 use crate::chat::conversation::{self, Conversation, Entry, GOAL_TURNS, Goal, State};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::text::Reading;
-use crate::ui::theme::{DIM, FONT};
+use crate::ui::theme::{DIM, FONT, LINK};
 use crate::ui::{Copy, Panel};
 
 mod entries;
@@ -58,10 +59,15 @@ actions!(
     [
         /// Stops the turn the agent is taking.
         Stop,
+        /// Leaves the chat's goal as it was.
+        CancelGoal,
     ]
 );
 
 const KEY_CONTEXT: &str = "Conversation";
+
+/// The key context of the input that sets the chat's goal.
+const GOAL: &str = "Goal";
 
 /// Binds the keys of the conversation. Escape is the stage's while the
 /// stage has the keyboard, and the input method's while it composes.
@@ -70,6 +76,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", Stop, Some(KEY_CONTEXT)),
         // The secondary key is Command on macOS, Control elsewhere.
         KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT)),
+        KeyBinding::new("escape", CancelGoal, Some(GOAL)),
     ]);
 }
 
@@ -134,6 +141,8 @@ pub struct ChatView {
     /// The check of the goal that runs, if one does. Dropping it lets go
     /// of the answer, which stops the command.
     check: Option<Task<()>>,
+    /// The input the human sets the goal in, while it is open.
+    goal_input: Option<(Entity<LineInput>, Subscription)>,
     _submitted: Subscription,
     /// Redraws the chat as its stage opens and closes.
     _panel_changes: Option<Subscription>,
@@ -235,6 +244,7 @@ impl ChatView {
             agent: None,
             tools: None,
             check: None,
+            goal_input: None,
             _submitted: submitted,
             _panel_changes: panel_changes,
         }
@@ -317,6 +327,44 @@ impl ChatView {
             self.send(command);
         }
         self.keep();
+        cx.notify();
+    }
+
+    /// Opens an input above the chat's own, for the human to set the goal:
+    /// the command the chat works until it passes, which Enter sets, and
+    /// Escape leaves as it was. Emptied, the input clears the goal.
+    pub fn edit_goal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let command = self
+            .conversation
+            .goal()
+            .map(Goal::command)
+            .unwrap_or_default();
+        let input = cx.new(|cx| {
+            let mut input = LineInput::new(cx);
+            input.set_text(command, cx);
+            input.select_whole(cx);
+            input
+        });
+        let submitted = cx.subscribe_in(&input, window, |view, _, Submitted, window, cx| {
+            view.end_editing_goal(true, window, cx);
+        });
+        window.focus(&input.focus_handle(cx));
+        self.goal_input = Some((input, submitted));
+        cx.notify();
+    }
+
+    /// Closes the input that sets the goal, setting the goal to what it
+    /// holds when `keep` says to, and brings the keyboard back to the
+    /// chat's input.
+    fn end_editing_goal(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((input, _)) = self.goal_input.take() else {
+            return;
+        };
+        if keep {
+            let command = input.read(cx).text().trim().to_owned();
+            self.set_goal(Some(command).filter(|command| !command.is_empty()), cx);
+        }
+        window.focus(&self.input.focus_handle(cx));
         cx.notify();
     }
 
@@ -640,6 +688,7 @@ impl ChatView {
         self.reading.clear();
         let entries = self.render_entries(cx);
         let waiting = self.waiting();
+        let goal_input = self.render_goal_input(cx);
         let plan = self.render_plan(cx);
         let input = self.input.clone();
         div()
@@ -677,7 +726,7 @@ impl ChatView {
                     // Drawn after the conversation, over it.
                     .children(plan),
             )
-            .children(waiting.map(|waiting| {
+            .children(waiting.filter(|_| goal_input.is_none()).map(|waiting| {
                 div()
                     .debug_selector(|| "waiting".to_owned())
                     .px_3()
@@ -686,6 +735,7 @@ impl ChatView {
                     .text_color(rgb(DIM))
                     .child(waiting)
             }))
+            .children(goal_input)
             .child(
                 div()
                     .debug_selector(|| "input".to_owned())
@@ -729,6 +779,45 @@ impl ChatView {
 }
 
 impl ChatView {
+    /// The input that sets the goal, in place of the line that tells what
+    /// the chat waits for, while it is open.
+    fn render_goal_input(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (input, _) = self.goal_input.as_ref()?;
+        Some(
+            div()
+                .key_context(GOAL)
+                .debug_selector(|| "goal-input".to_owned())
+                .px_3()
+                .py_1()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(12.))
+                .on_action(cx.listener(|view, _: &CancelGoal, window, cx| {
+                    view.end_editing_goal(false, window, cx);
+                }))
+                .on_mouse_down_out(cx.listener(|view, _, window, cx| {
+                    view.end_editing_goal(true, window, cx);
+                }))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(DIM))
+                        .child("Goal: until this command passes"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .px_1()
+                        .border_1()
+                        .border_color(rgb(LINK))
+                        .rounded_sm()
+                        .child(input.clone()),
+                ),
+        )
+    }
+
     /// The bar above the conversation, with the button that opens and
     /// closes the stage, when there is one.
     fn render_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {

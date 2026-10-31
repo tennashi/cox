@@ -1120,3 +1120,44 @@ async fn escape_stops_the_check_of_the_goal(cx: &mut TestAppContext) {
         Some(&Entry::Note("Stopped.".to_owned()))
     );
 }
+
+#[gpui::test]
+async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
+    let store = Rc::new(Store::in_memory().unwrap());
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch("goal-menu"), Rc::clone(&store));
+    click(cx, "new-chat");
+    assert!(cx.debug_bounds("goal-1").is_none());
+
+    right_click(cx, "chat-1");
+    assert!(cx.debug_bounds("clear-goal").is_none());
+    click(cx, "set-goal");
+    cx.simulate_input("true");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(goals(cx, &workspace, 0), [Some("true".to_owned())]);
+    assert_eq!(
+        store.chats().unwrap()[0].goal_command.as_deref(),
+        Some("true")
+    );
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("goal-1").is_some());
+    // The input that sets the goal is closed, and the keyboard is back in
+    // the chat's own.
+    say(cx, &workspace, "hello").await;
+    assert_eq!(agents.borrow()[0].prompts(), ["hello"]);
+    assert_eq!(
+        shown_entries(cx, &workspace).last(),
+        Some(&Entry::Note("Goal met: `true` passed.".to_owned()))
+    );
+
+    // Escape leaves the goal as it was.
+    right_click(cx, "chat-1");
+    click(cx, "set-goal");
+    cx.simulate_input("false");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(goals(cx, &workspace, 0), [Some("true".to_owned())]);
+
+    right_click(cx, "chat-1");
+    click(cx, "clear-goal");
+    assert_eq!(goals(cx, &workspace, 0), [None]);
+    assert_eq!(store.chats().unwrap()[0].goal_command, None);
+}
