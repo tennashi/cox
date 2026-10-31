@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::Path;
 
+use cox_core::goal::Goal;
 use cox_core::tabs::Lines;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
@@ -149,9 +150,10 @@ fn open_chat_tool() -> Value {
             \"drive\" (the default); `allow` and `reject` are patterns of the titles of \
             its permission requests, as they show in the conversation, which Cox answers \
             in the human's place, once each, with `*` for any run of characters (a title \
-            both match is rejected, and the human is asked about the rest); `goal` is a \
-            shell command the chat works until it passes, as a goal the human sets. \
-            Answers the number the chat goes by, to wait for it with wait_chat.",
+            both match is rejected, and the human is asked about the rest); `goal` is \
+            what the chat works until it is met, as a goal the human sets: `$ ` and a \
+            shell command, which has to pass, or words, which an agent judges. Answers \
+            the number the chat goes by, to wait for it with wait_chat.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -189,7 +191,8 @@ fn open_chat_tool() -> Value {
                 },
                 "goal": {
                     "type": "string",
-                    "description": "A shell command the chat works until it passes.",
+                    "description": "What the chat works until it is met: \"$ \" and a shell \
+                        command, which has to pass, or words, which an agent judges.",
                 },
             },
             "required": ["text"],
@@ -389,7 +392,7 @@ async fn open_chat(
             reject: strings("reject")?.unwrap_or_default(),
         },
     };
-    let goal = string("goal")?.filter(|goal| !goal.trim().is_empty());
+    let goal = string("goal")?.as_deref().and_then(Goal::parse);
     let (answer, opened) = oneshot::channel();
     chats
         .send(ChatRequest::OpenChat {
@@ -679,6 +682,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_goal_in_words_opens_a_chat_judged_by_an_agent() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let Some(ChatRequest::OpenChat { goal, answer, .. }) = asked.recv().await else {
+                panic!("the window was not asked");
+            };
+            let _ = answer.send(Ok(OpenedChat {
+                number: 3,
+                name: "Chat 3".to_owned(),
+            }));
+            goal
+        });
+        let params = json!({ "name": OPEN_CHAT, "arguments": {
+            "text": "Make the greeting name the user.",
+            "goal": "The greeting names the user.",
+        } });
+        call(&params, Path::new("/work"), None, &sent, &chats)
+            .await
+            .unwrap();
+        assert_eq!(
+            window.await.unwrap(),
+            Some(Goal::Words("The greeting names the user.".to_owned()))
+        );
+    }
+
+    #[tokio::test]
     async fn asks_the_window_to_open_a_chat_as_the_agent_says() {
         let (sent, _requests) = unbounded_channel();
         let (chats, mut asked) = unbounded_channel();
@@ -705,7 +735,7 @@ mod tests {
             "stage": "look",
             "allow": ["Read *", "cargo *"],
             "reject": ["Edit *"],
-            "goal": "cargo xtask ci",
+            "goal": "$ cargo xtask ci",
         } });
         let answered = call(&params, Path::new("/work"), None, &sent, &chats)
             .await
@@ -715,7 +745,7 @@ mod tests {
         assert!(told.contains("Chat 2") && told.contains("chat 7"), "{told}");
         let (text, setup, goal) = window.await.unwrap();
         assert_eq!(text, "Build the first unit.");
-        assert_eq!(goal.as_deref(), Some("cargo xtask ci"));
+        assert_eq!(goal, Some(Goal::Command("cargo xtask ci".to_owned())));
         assert_eq!(
             setup,
             Setup {

@@ -340,12 +340,12 @@ impl ChatView {
 
     /// Starts the chat, opened from the chat named `opened_by`, on `text`
     /// as its first line, sent in the human's place, working until `goal`
-    /// passes if given.
+    /// is met if given.
     pub fn tell(
         &mut self,
         opened_by: &str,
         text: &str,
-        goal: Option<String>,
+        goal: Option<goal::Goal>,
         cx: &mut Context<Self>,
     ) {
         // A chat named after its first line has a long name.
@@ -354,8 +354,8 @@ impl ChatView {
             None => opened_by.to_owned(),
         };
         self.follow(|conversation| conversation.note(format!("Opened by: {opened_by}")));
-        if let Some(goal) = goal {
-            self.set_goal(Some(goal::Goal::Command(goal)), cx);
+        if goal.is_some() {
+            self.set_goal(goal, cx);
         }
         if let Some(command) = self.follow(|conversation| conversation.told(text)) {
             self.send(command);

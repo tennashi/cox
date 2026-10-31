@@ -122,9 +122,9 @@ that read and drive the stage, the default, or `look` for none of them;
 Cox answers in the human's place, as `Edit *` or `cargo test*`, where
 `*` stands for any run of characters, a title both match being rejected,
 and the rest asked of the human as usual, with the conversation saying
-which Cox answered; and `goal`, a command the chat works until it
-passes, as "Set goal…" sets. The titles are the agent's, as the
-conversation shows them: `claude-agent-acp` titles a request after the
+which Cox answered; and `goal`, what the chat works until it is met,
+as "Set goal…" takes it: `$ ` and a command, or words. The titles are
+the agent's, as the conversation shows them: `claude-agent-acp` titles a request after the
 tool and what it works on, as `Edit src/main.rs` or `cargo xtask ci`. A
 chat the human opens is set up with none of this: its agent gets every
 tool, and the human answers every request. Which chat opened a chat, and
