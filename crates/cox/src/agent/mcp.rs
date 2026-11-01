@@ -97,6 +97,15 @@ pub enum ChatRequest {
         trial: Option<Trial>,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
     },
+    /// Make the chat a trial that starts from `trial`, to try out `what`:
+    /// once its turn ends, its agent starts again in the trial's folder,
+    /// with the conversation so far; answer the folder, or why the chat
+    /// cannot be a trial.
+    StartTrial {
+        trial: Trial,
+        what: String,
+        answer: oneshot::Sender<Result<PathBuf, String>>,
+    },
     /// Wait for the chat that goes by `chat` to end its turn, or to come
     /// to wait for the human, and answer how it stands then; or at once,
     /// when it is not at work; or why there is no such chat.
@@ -497,7 +506,7 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 6);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 7);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);

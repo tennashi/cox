@@ -372,6 +372,25 @@ impl ChatView {
         cx.notify();
     }
 
+    /// Starts the agent of the chat again, if it is closed and can be,
+    /// and sends it `text` in the human's place, as when the chat moves
+    /// into a trial and goes on there.
+    pub fn go_on(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.conversation.state() == State::Closed
+            && let Some(again) = self.again.take()
+        {
+            let agent = again(self.conversation.entries(), window, cx);
+            self.attach(agent, cx);
+            self.conversation.reopen();
+            cx.emit(Reopened);
+        }
+        if let Some(command) = self.follow(|conversation| conversation.told(text)) {
+            self.send(command);
+        }
+        self.keep();
+        cx.notify();
+    }
+
     /// Shows what the agent side told, and keeps it. A turn that ends
     /// with a goal to meet starts the goal's check, or asks its judge.
     fn hear(&mut self, event: AgentEvent, cx: &mut Context<Self>) {

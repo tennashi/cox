@@ -22,6 +22,7 @@ const RUN_COMMAND: &str = "run_command";
 const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
+const START_TRIAL: &str = "start_trial";
 
 /// The most of a command's output the agent gets: the end of it, where a
 /// build or a test run says how it went.
@@ -134,7 +135,44 @@ fn all_tools() -> Value {
         },
     },
     propose_goal_tool(),
+    start_trial_tool(),
     ])
+}
+
+/// The tool that makes the chat a trial, as the agent learns of it.
+fn start_trial_tool() -> Value {
+    json!(
+    {
+        "name": START_TRIAL,
+        "description": "Makes this chat a trial, to try uncertain work out apart from the \
+            project before you and the human agree what it is to be: Cox makes a folder of \
+            its own for it, and once this turn ends, starts you again there, with the \
+            conversation so far, to go on with what you try. There you change and test \
+            files without asking the human. `from` is \"project\", a Git worktree of the \
+            project's last commit, to try a change to the project, or \"empty\", an empty \
+            Git repository, to try something from nothing. Call it, then end your turn. \
+            Once you have tried it, show the human what it made, and propose a goal from \
+            it with propose_goal; the human ends the trial, keeping it or not, and the chat \
+            goes on in the project. To try several ways side by side, open a trial of its \
+            own for each with open_chat instead.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "from": {
+                    "type": "string",
+                    "enum": ["project", "empty"],
+                    "description": "What the trial starts from: the project's last \
+                        commit, or nothing.",
+                },
+                "what": {
+                    "type": "string",
+                    "description": "What you try, in a sentence: you are told it again \
+                        once you start in the trial.",
+                },
+            },
+            "required": ["from", "what"],
+        },
+    })
 }
 
 /// The tool that proposes a goal for the chat, as the agent learns of it.
@@ -198,10 +236,11 @@ fn open_chat_tool() -> Value {
             project, and changes and tests its files there without asking the human: \
             \"project\", a Git worktree of the project's last commit, to try a change to \
             the project, or \"empty\", an empty Git repository, to try something from \
-            nothing. Open a trial when the work is uncertain, to try it out before you \
-            and the human agree what it is to be: read what the trial made, show the human, \
-            and propose a goal from it with propose_goal. Answers the number the chat goes \
-            by, to wait for it with wait_chat.",
+            nothing. Open trials when the work is uncertain and you would try several \
+            ways side by side, one trial each, before you and the human agree what it is \
+            to be: read what each made, show the human, and propose a goal from it with \
+            propose_goal; to try one way, make this chat the trial with start_trial \
+            instead. Answers the number the chat goes by, to wait for it with wait_chat.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -277,6 +316,7 @@ pub(super) async fn call(
         OPEN_CHAT => open_chat(arguments, chats).await,
         WAIT_CHAT => wait_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
+        START_TRIAL => start_trial(arguments, chats).await,
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
     let (text, is_error) = match done {
@@ -551,6 +591,43 @@ async fn propose_goal(
     Ok(told)
 }
 
+/// Asks the window to make the chat a trial, as `arguments` say, and
+/// tells the agent where it goes on.
+async fn start_trial(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let trial = arguments
+        .get("from")
+        .and_then(Value::as_str)
+        .and_then(Trial::parse)
+        .ok_or("`from` is not \"project\" or \"empty\"")?;
+    let what = arguments
+        .get("what")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|what| !what.is_empty())
+        .ok_or("no `what`: say what you try")?
+        .to_owned();
+    let (answer, made) = oneshot::channel();
+    chats
+        .send(ChatRequest::StartTrial {
+            trial,
+            what,
+            answer,
+        })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let folder = made
+        .await
+        .map_err(|_| "the chat closed before the trial was made".to_owned())??;
+    Ok(format!(
+        "The trial is ready in {}, {}. End your turn now: Cox then starts you again there, \
+         with the conversation so far, to go on with what you try.",
+        folder.display(),
+        trial.what()
+    ))
+}
+
 /// What the agent is told of a command that ran: its output, or the end
 /// of it, and how it ended.
 fn told(ran: &Ran) -> String {
@@ -611,6 +688,57 @@ mod tests {
         assert_eq!(listed[1]["name"], SHOW_FILE);
         assert_eq!(listed[2]["name"], RUN_COMMAND);
         assert_eq!(listed[3]["name"], OPEN_CHAT);
+        assert_eq!(listed[6]["name"], START_TRIAL);
+    }
+
+    #[tokio::test]
+    async fn asks_the_window_to_make_the_chat_a_trial() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let Some(ChatRequest::StartTrial {
+                trial,
+                what,
+                answer,
+            }) = asked.recv().await
+            else {
+                panic!("the window was not asked");
+            };
+            let _ = answer.send(Ok("/trials/greet-1".into()));
+            (trial, what)
+        });
+        let params = json!({ "name": START_TRIAL, "arguments": {
+            "from": "project",
+            "what": "A warmer greeting.",
+        } });
+        let answered = call(&params, Path::new("/work"), None, &sent, &chats)
+            .await
+            .unwrap();
+        assert_eq!(answered["isError"], false);
+        let told = answered["content"][0]["text"].as_str().unwrap();
+        assert!(
+            told.starts_with("The trial is ready in /trials/greet-1, a worktree"),
+            "{told}"
+        );
+        assert_eq!(
+            window.await.unwrap(),
+            (Trial::Project, "A warmer greeting.".to_owned())
+        );
+
+        // It says what it tries, and from what.
+        let (chats, mut asked) = unbounded_channel();
+        for arguments in [
+            json!({ "what": "A greeting." }),
+            json!({ "from": "container", "what": "A greeting." }),
+            json!({ "from": "empty", "what": " " }),
+        ] {
+            let params = json!({ "name": START_TRIAL, "arguments": arguments });
+            let answered = call(&params, Path::new("/"), None, &sent, &chats)
+                .await
+                .unwrap();
+            assert_eq!(answered["isError"], true, "{arguments}");
+        }
+        assert!(asked.try_recv().is_err());
     }
 
     #[test]
