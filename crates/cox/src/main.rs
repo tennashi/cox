@@ -18,16 +18,29 @@ use std::process::ExitCode;
 use cox::app::{self, Mode};
 
 fn main() -> ExitCode {
-    cox::logs::init();
     match Mode::parse(std::env::args().skip(1)) {
-        Mode::App(settings) => app::run(settings),
-        Mode::Bridge(socket) => match cox::agent::mcp::bridge(&socket) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("cox: {error:#}");
-                ExitCode::from(1)
+        Mode::App(settings) => {
+            // On Linux, CEF runs `cox` again for its helper processes,
+            // which end inside `app::run`, and keep no file of their own.
+            let helper = std::env::args().any(|arg| arg.starts_with("--type="));
+            let logs = if helper {
+                None
+            } else {
+                cox::storage::path("logs")
+            };
+            cox::logs::init(logs.as_deref());
+            app::run(settings)
+        }
+        Mode::Bridge(socket) => {
+            cox::logs::init(None);
+            match cox::agent::mcp::bridge(&socket) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("cox: {error:#}");
+                    ExitCode::from(1)
+                }
             }
-        },
+        }
         Mode::Usage => {
             eprintln!("{}", app::USAGE);
             ExitCode::from(2)
