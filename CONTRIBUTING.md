@@ -131,7 +131,7 @@ which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `run_command`,
-`open_chat`, `wait_chat`, `propose_goal`), all of them unless given; `stage`, `drive` for the tools
+`open_chat`, `wait_chat`, `propose_goal`, `start_trial`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the titles of the permission requests
 Cox answers in the human's place, as `Edit *` or `cargo test*`, where
@@ -147,7 +147,13 @@ chat the human opens is set up with none of this: its agent gets every
 tool, and the human answers every request. Which chat opened a chat, and
 how its agent is set up, last across runs with the rest of the chat.
 A trial tries the work out apart from the project, before the human and
-the agent that opened it agree what it is to be: its agent works in a
+the agent agree what it is to be. A chat's agent makes its own chat a
+trial with Cox's `start_trial` tool, saying what the trial starts from,
+`project` or `empty`, and what it tries: once its turn ends, its agent
+starts again in the trial's folder, with the conversation so far, told
+what it tries, and the row marks the chat as a trial. `trial` in
+`open_chat` opens a chat that is a trial instead, for trying several
+ways side by side, one trial each. A trial's agent works in a
 folder Cox makes for it in `trials`, beside the chats' database (see
 [The stage](#the-stage)), and changes and tests the files there
 without asking the human, the policy allowing edits and what the judge
@@ -156,9 +162,9 @@ the project's last commit, so the project has to be in a Git
 repository; a trial from nothing works in an empty folder, `scratch-`
 and a number, made a Git repository of its own, for a project of any
 kind or none, which "Open folder…" opens as a project once the human
-wants to go on with it. The chat notes at its top where it works, and
-the agent that opened it is told, to read what the trial made and
-propose a goal from it. A chat a trial opens works in the trial's
+wants to go on with it. The chat notes where it works from then on,
+and the agent that opened a trial with `open_chat` is told, to read
+what the trial made and propose a goal from it. A chat a trial opens works in the trial's
 folder too, and a trial goes on there once it is started again. The
 menu of the right button on a trial ends it once the human has what
 they wanted of it: "Keep as branch", for a trial from the project,

@@ -47,7 +47,7 @@ use tokio::sync::oneshot;
 
 use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
 use crate::agent::setup::{Policy, Setup};
-use crate::chat::conversation::{Entry, State};
+use crate::chat::conversation::{self, Entry, State};
 use crate::chat::trial::{self, Trial};
 use crate::chat::view::{Asked, ChatView, Reopened};
 use crate::chat::{Closed, Opens};
@@ -153,8 +153,12 @@ pub struct Chat {
     /// The key of the chat whose agent opened it, if an agent did and
     /// that chat is in the list or archived.
     parent: Option<u64>,
-    /// How its agent is set up, when the chat that opened it said.
+    /// How its agent is set up, when the chat that opened it said, or
+    /// once it became a trial.
     setup: Option<Setup>,
+    /// What its agent is told to go on with once it moves into the trial
+    /// the chat became, which it does when its turn ends.
+    moving: Option<String>,
     /// Its view, or `None` for a closed chat the human has not read yet.
     view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
@@ -190,6 +194,7 @@ impl Chat {
             goal,
             parent,
             setup,
+            moving: None,
             view: None,
             _changes: Vec::new(),
         }
@@ -521,6 +526,7 @@ impl Workspace {
             goal: None,
             parent: from.map(|(parent, _)| parent),
             setup,
+            moving: None,
             view: Some(view),
             _changes: changes,
         })
@@ -549,7 +555,8 @@ impl Workspace {
     }
 
     /// Answers `request`, which the agent of the chat of `view` asks of the
-    /// window: opens a chat under it, as the agent says, or waits for one.
+    /// window: makes the chat a trial, shows a goal it proposes, opens a
+    /// chat under it, as the agent says, or waits for one.
     fn asked(
         &mut self,
         view: &Entity<ChatView>,
@@ -558,6 +565,15 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match request {
+            ChatRequest::StartTrial {
+                trial,
+                what,
+                answer,
+            } => {
+                let started = self.start_trial(view, trial, &what, window, cx);
+                answer.send(started).ok();
+                cx.notify();
+            }
             ChatRequest::ProposeGoal { goal, why, answer } => {
                 let now = view.update(cx, |view, cx| {
                     view.propose_goal(&goal, why, cx);
@@ -632,28 +648,37 @@ impl Workspace {
                 answer.send(Ok(opened)).ok();
                 cx.notify();
             }
-            ChatRequest::WaitChat { chat: key, answer } => {
-                let Some(chat) = self
-                    .chats
-                    .iter()
-                    .chain(&self.archived)
-                    .find(|chat| chat.key == key)
-                else {
-                    answer.send(Err(format!("no chat {key}"))).ok();
-                    return;
-                };
-                // The list may not have heard of the chat's last change yet.
-                let state = chat
-                    .view
-                    .as_ref()
-                    .map_or(chat.state, |view| view.read(cx).conversation().state());
-                if at_work(state) {
-                    self.waiting.retain(|(_, answer)| !answer.is_closed());
-                    self.waiting.push((key, answer));
-                } else {
-                    answer.send(Ok(stands(chat, cx))).ok();
-                }
-            }
+            ChatRequest::WaitChat { chat, answer } => self.wait_chat(chat, answer, cx),
+        }
+    }
+
+    /// Answers `answer` with how the chat that goes by `key` stands once it
+    /// is not at work, or at once when it is not.
+    fn wait_chat(
+        &mut self,
+        key: u64,
+        answer: oneshot::Sender<Result<Waited, String>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(chat) = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .find(|chat| chat.key == key)
+        else {
+            answer.send(Err(format!("no chat {key}"))).ok();
+            return;
+        };
+        // The list may not have heard of the chat's last change yet.
+        let state = chat
+            .view
+            .as_ref()
+            .map_or(chat.state, |view| view.read(cx).conversation().state());
+        if at_work(state) {
+            self.waiting.retain(|(_, answer)| !answer.is_closed());
+            self.waiting.push((key, answer));
+        } else {
+            answer.send(Ok(stands(chat, cx))).ok();
         }
     }
 
@@ -758,6 +783,7 @@ impl Workspace {
             goal: chat.goal.take(),
             parent: chat.parent,
             setup: chat.setup.take(),
+            moving: chat.moving.take(),
             view: Some(view),
             _changes: {
                 changes.push(reopened);
@@ -770,7 +796,7 @@ impl Workspace {
     /// not shown leaves it unread, and what it is about names it, unless a
     /// name that lasts more has. A chat the human is not looking at tells
     /// them when it comes to wait for them, and when its turn ends.
-    fn changed(&mut self, view: &Entity<ChatView>, window: &Window, cx: &mut Context<Self>) {
+    fn changed(&mut self, view: &Entity<ChatView>, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self.chats.shown().and_then(Chat::view) == Some(view);
         let seen = shown && window.is_window_active();
         let Some(chat) = self
@@ -817,13 +843,117 @@ impl Workspace {
             notices.0.notify(chat.key, &chat.name, &body);
         }
         let waited = (!at_work(state)).then(|| (chat.key, stands(chat, cx)));
+        let moves = chat.moving.is_some() && !working(state);
         if let Some((key, stands)) = waited {
             for (_, answer) in self.waiting.extract_if(.., |(waited, _)| *waited == key) {
                 answer.send(Ok(stands.clone())).ok();
             }
         }
+        // A chat that became a trial moves into it once its turn ends.
+        if moves
+            && let Some(index) = self
+                .chats
+                .iter()
+                .position(|chat| chat.view.as_ref() == Some(view))
+        {
+            self.move_into_trial(index, window, cx);
+        }
         self.badge(cx);
         cx.notify();
+    }
+
+    /// Makes the chat of `view` a trial that starts from `trial`, to try
+    /// out `what`, and answers its folder, or why it cannot be one. It
+    /// moves into the trial at once, unless its turn goes on, until it
+    /// ends.
+    fn start_trial(
+        &mut self,
+        view: &Entity<ChatView>,
+        started: Trial,
+        what: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<PathBuf, String> {
+        let index = self
+            .chats
+            .iter()
+            .position(|chat| chat.view.as_ref() == Some(view))
+            .ok_or("the chat is not in the list")?;
+        let chat = &self.chats[index];
+        let setup = chat.setup.clone().unwrap_or_default();
+        if let (Some(_), Some(folder)) = (setup.trial, &setup.folder) {
+            return Err(format!(
+                "the chat is a trial already, working in {}",
+                folder.display()
+            ));
+        }
+        let from = setup
+            .folder
+            .clone()
+            .unwrap_or_else(|| self.projects[chat.project].folder.clone());
+        let trials = storage::path(trial::FOLDER).ok_or("Cox cannot tell where to keep trials")?;
+        let folder = trial::make(started, &from, &trials)?;
+        let setup = Setup {
+            folder: Some(folder.clone()),
+            trial: Some(started),
+            policy: Policy {
+                allow: setup
+                    .policy
+                    .allow
+                    .into_iter()
+                    .chain(trial::allowed())
+                    .collect(),
+                ..setup.policy
+            },
+            ..setup
+        };
+        let chat = &mut self.chats[index];
+        if let Some(kept) = chat.kept
+            && let Err(error) = self.store.keep_setup(kept, Some(&setup.to_json()))
+        {
+            log::error!("the chat's setup is not kept: {error:#}");
+        }
+        chat.setup = Some(setup);
+        chat.moving = Some(format!(
+            "You work in a trial now, in {}, {}, apart from the project: there you change \
+             and test files without asking the human. Go on with what you try: {what}",
+            folder.display(),
+            started.what()
+        ));
+        if !working(chat.state) {
+            self.move_into_trial(index, window, cx);
+        }
+        Ok(folder)
+    }
+
+    /// Moves the chat at `index`, which became a trial, into it: closes
+    /// it, its agent stopped, and starts its agent again in the trial's
+    /// folder, with the conversation so far, on what it goes on with.
+    fn move_into_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let chat = &mut self.chats[index];
+        let Some(line) = chat.moving.take() else {
+            return;
+        };
+        let folder = chat
+            .setup
+            .as_ref()
+            .and_then(|setup| setup.folder.clone())
+            .unwrap_or_default();
+        if let Some(view) = chat.view.take() {
+            view.update(cx, |view, cx| {
+                view.close(conversation::trial_note(&folder), cx);
+            });
+        }
+        chat.open = false;
+        chat.state = State::Closed;
+        if self.chats.shown_index() == Some(index) {
+            self.show(index, window, cx);
+        } else {
+            self.read(index, window, cx);
+        }
+        if let Some(view) = self.chats[index].view.clone() {
+            view.update(cx, |view, cx| view.go_on(&line, window, cx));
+        }
     }
 
     /// Counts on the app's icon the chats that wait for the human, or that
@@ -1206,6 +1336,10 @@ impl Workspace {
     /// how it stands.
     fn render_chat(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Stateful<Div> {
         let number = index + 1;
+        let trial = chat
+            .setup
+            .as_ref()
+            .is_some_and(|setup| setup.trial.is_some());
         let state = chat
             .view
             .as_ref()
@@ -1274,6 +1408,15 @@ impl Workspace {
                 }),
             )
             .child(name)
+            .when(trial, |row| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(DIM))
+                        .debug_selector(move || format!("trial-{number}"))
+                        .child("trial"),
+                )
+            })
             .when(chat.goal.is_some(), |row| {
                 row.child(
                     div()

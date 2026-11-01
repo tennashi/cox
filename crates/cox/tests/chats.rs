@@ -1541,6 +1541,73 @@ async fn a_trial_works_in_a_folder_apart_from_the_project(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+async fn a_chat_becomes_a_trial_and_goes_on_there(cx: &mut TestAppContext) {
+    let home = repository("trial-in-place-home");
+    let kept = scratch("trial-in-place-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+    let start = |cx: &mut VisualTestContext| {
+        let (answer, made) = tokio::sync::oneshot::channel();
+        // The chat's agent, the last to start.
+        asks.borrow()
+            .last()
+            .unwrap()
+            .send(ChatRequest::StartTrial {
+                trial: Trial::Project,
+                what: "A warmer greeting.".to_owned(),
+                answer,
+            })
+            .unwrap();
+        cx.run_until_parked();
+        made
+    };
+
+    // Its turn has ended, so it moves into the trial at once: its agent
+    // starts again there, on what it tries.
+    let folder = start(cx).await.unwrap().unwrap();
+    let trials = cox::storage::path(cox::chat::trial::FOLDER).unwrap();
+    assert!(folder.starts_with(&trials), "{}", folder.display());
+    let view = shown(cx, &workspace);
+    wait_for_turn(cx, &view).await;
+    assert_eq!(agents.borrow().len(), 2);
+    assert_eq!(agents.borrow()[1].cwd(), Some(folder.clone()));
+    let entries = entries(cx, &view);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Note(note) if note.starts_with("Trial: works in"))),
+        "{entries:?}"
+    );
+    assert!(
+        entries.iter().any(|entry| matches!(entry, Entry::Cox(line)
+            if line.starts_with("You work in a trial now") && line.ends_with("A warmer greeting."))),
+        "{entries:?}"
+    );
+    let setup = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).next().unwrap().setup().cloned().unwrap()
+    });
+    assert_eq!(setup.trial, Some(Trial::Project));
+    assert_eq!(setup.folder.as_ref(), Some(&folder));
+    assert!(setup.policy.allow.contains(&"Edit *".to_owned()));
+
+    // A trial is not made a trial again.
+    let again = start(cx).await.unwrap();
+    assert!(
+        again
+            .as_ref()
+            .is_err_and(|error| error.contains("a trial already")),
+        "{again:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+}
+
+#[gpui::test]
 async fn an_ended_trial_goes_on_in_the_project(cx: &mut TestAppContext) {
     let home = repository("trial-on-home");
     let kept = scratch("trial-on-kept").join("chats.sqlite");
