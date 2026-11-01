@@ -98,11 +98,15 @@ pub enum Opened {
     New,
     /// The session the chat had before, which the agent went on with.
     Resumed,
-    /// A new session for a chat that had one before, which the agent
-    /// could not go on with, so the agent gets told the conversation so
-    /// far, along with the instructions in `instructions`, if any, and
-    /// the context of its setup, if it was set up with one.
+    /// A new session for a chat that has a conversation already, so the
+    /// agent gets told the conversation so far, along with the
+    /// instructions in `instructions`, if any, and the context of its
+    /// setup, if it was set up with one. The session the chat had is
+    /// `lost` when the agent could not go on with it; a chat has none to
+    /// go on with when it never got one, or when it moved, as into a
+    /// trial, where its agent works in another folder.
     Retold {
+        lost: bool,
         instructions: Option<PathBuf>,
         context: Option<String>,
     },
@@ -333,17 +337,19 @@ fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
         } => (Opened::New, told(instructions, setup.as_ref())),
         Start::Again { .. } if resumed => (Opened::Resumed, Vec::new()),
         Start::Again {
+            session,
             instructions,
             setup,
             earlier,
-            ..
         } => {
+            let lost = session.is_some();
             let how = Opened::Retold {
+                lost,
                 instructions: instructions.as_ref().map(|i| i.path.clone()),
                 context: setup.as_ref().and_then(|setup| setup.context.clone()),
             };
             let mut ahead = told(instructions, setup.as_ref());
-            ahead.push(retold(&earlier));
+            ahead.push(retold(&earlier, lost));
             (how, ahead)
         }
     }
@@ -477,11 +483,12 @@ fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usiz
 const RETOLD_LENGTH: usize = 100_000;
 
 /// What a new session of a chat's agent is told of the conversation so
-/// far, `entries`, when the agent could not go on with the chat's own: what
+/// far, `entries`, when the agent does not go on with a session of the
+/// chat's own, which is `lost` if the agent could not go on with it: what
 /// the human said, and Cox in their place, what the agent replied, and the
 /// tool calls it made, by their titles. Cox's notes are left out.
 #[must_use]
-pub fn retold(entries: &[Entry]) -> String {
+pub fn retold(entries: &[Entry], lost: bool) -> String {
     let told: Vec<String> = entries
         .iter()
         .filter_map(|entry| match entry {
@@ -531,10 +538,12 @@ pub fn retold(entries: &[Entry]) -> String {
         let kept: String = told.chars().skip(length - RETOLD_LENGTH).collect();
         told = format!("[… the start is left out]\n{kept}");
     }
-    format!(
-        "This chat goes on from an earlier session of yours, which could not be resumed. \
-         This is the conversation so far, as Cox kept it; go on from its end.\n\n{told}"
-    )
+    let from = if lost {
+        "This chat goes on from an earlier session of yours, which could not be resumed."
+    } else {
+        "This chat goes on from an earlier session of yours."
+    };
+    format!("{from} This is the conversation so far, as Cox kept it; go on from its end.\n\n{told}")
 }
 
 fn shown(content: Vec<ToolCallContent>) -> Vec<Content> {
@@ -616,7 +625,10 @@ mod tests {
             },
             Entry::Note("Stopped.".to_owned()),
         ];
-        let told = retold(&entries);
+        let told = retold(&entries, true);
+        assert!(
+            told.starts_with("This chat goes on from an earlier session of yours, which could not")
+        );
         assert!(
             told.ends_with(
                 "\n\n[human]\nedit\n\n\
@@ -634,7 +646,11 @@ mod tests {
     #[test]
     fn a_long_conversation_is_told_from_its_end() {
         let long = "あ".repeat(RETOLD_LENGTH);
-        let told = retold(&[Entry::Human("first".to_owned()), Entry::Reply(long.clone())]);
+        let told = retold(
+            &[Entry::Human("first".to_owned()), Entry::Reply(long.clone())],
+            false,
+        );
+        assert!(told.starts_with("This chat goes on from an earlier session of yours. This"));
         assert!(told.ends_with(&format!("[… the start is left out]\n{long}")));
         assert!(!told.contains("first"));
     }

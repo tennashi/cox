@@ -682,12 +682,13 @@ async fn what_an_agent_tells_of_a_session_it_loads_is_not_shown_again(cx: &mut T
 
 /// Asserts that the agent of the chat shown was told the conversation so
 /// far, after the instructions of `folder`, ahead of `again`, and that the
-/// chat says so.
+/// chat says so if the session it had was `lost`.
 fn assert_retold(
     cx: &mut VisualTestContext,
     workspace: &Entity<Workspace>,
     agent: &FakeAgent,
     folder: &std::path::Path,
+    lost: bool,
 ) {
     let instructions = Instructions::read(folder).unwrap();
     let blocks = agent.prompt_blocks();
@@ -699,14 +700,31 @@ fn assert_retold(
         "{blocks:?}"
     );
     assert_eq!(blocks[0][2], "again");
+    assert_eq!(
+        blocks[0][1].contains("could not be resumed"),
+        lost,
+        "{blocks:?}"
+    );
     let shown = shown_entries(cx, workspace);
     assert_eq!(shown[3], Entry::Human("again".to_owned()));
+    let notes = if lost {
+        assert!(
+            matches!(&shown[4], Entry::Note(note) if note.contains("could not resume")),
+            "{shown:?}"
+        );
+        5
+    } else {
+        4
+    };
     assert!(
-        matches!(&shown[4], Entry::Note(note) if note.contains("could not resume")),
+        matches!(&shown[notes], Entry::Note(note) if note.starts_with("Instructions: ")),
         "{shown:?}"
     );
     assert!(
-        matches!(&shown[5], Entry::Note(note) if note.starts_with("Instructions: ")),
+        !shown
+            .iter()
+            .skip(notes)
+            .any(|entry| matches!(entry, Entry::Note(note) if note.contains("could not resume"))),
         "{shown:?}"
     );
 }
@@ -732,7 +750,7 @@ async fn an_agent_that_cannot_resume_is_told_the_conversation_so_far(cx: &mut Te
     let agent = Arc::clone(&agents.borrow()[0]);
     assert_eq!(agent.resumed(), Vec::<String>::new());
     assert_eq!(agent.sessions_opened(), 1);
-    assert_retold(cx, &workspace, &agent, &folder);
+    assert_retold(cx, &workspace, &agent, &folder, true);
     // The new session is the one to go on with from now on.
     assert_eq!(store.session(kept).unwrap().as_deref(), Some("session-1"));
     let _ = std::fs::remove_dir_all(&folder);
@@ -755,7 +773,7 @@ async fn an_agent_that_refuses_to_resume_is_told_the_conversation_so_far(cx: &mu
     let agent = Arc::clone(&agents.borrow()[0]);
     assert_eq!(agent.resumed(), ["session-0"]);
     assert_eq!(agent.sessions_opened(), 1);
-    assert_retold(cx, &workspace, &agent, &folder);
+    assert_retold(cx, &workspace, &agent, &folder, true);
     let _ = std::fs::remove_dir_all(&folder);
 }
 
@@ -775,7 +793,7 @@ async fn a_chat_kept_with_no_session_is_told_the_conversation_so_far(cx: &mut Te
 
     let agent = Arc::clone(&agents.borrow()[0]);
     assert_eq!(agent.resumed(), Vec::<String>::new());
-    assert_retold(cx, &workspace, &agent, &folder);
+    assert_retold(cx, &workspace, &agent, &folder, false);
     let _ = std::fs::remove_dir_all(&folder);
 }
 
@@ -1584,6 +1602,13 @@ async fn a_chat_becomes_a_trial_and_goes_on_there(cx: &mut TestAppContext) {
     assert!(
         entries.iter().any(|entry| matches!(entry, Entry::Cox(line)
             if line.starts_with("You work in a trial now") && line.ends_with("A warmer greeting."))),
+        "{entries:?}"
+    );
+    // It moved on purpose, so it has no session it could not resume.
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Note(note) if note.contains("could not resume"))),
         "{entries:?}"
     );
     let setup = workspace.read_with(cx, |workspace, _| {
