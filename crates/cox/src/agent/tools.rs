@@ -24,7 +24,7 @@ const DEVTOOLS_MCP: &str = "chrome-devtools-mcp@1.11.0";
 #[must_use]
 pub fn stage(relay_port: u16, path: &OsStr) -> Option<McpServer> {
     let Some(npx) = find("npx", path) else {
-        log::warn!("no npx on PATH, so the agent gets no tools for the stage");
+        tracing::warn!("no npx on PATH, so the agent gets no tools for the stage");
         return None;
     };
     Some(McpServer {

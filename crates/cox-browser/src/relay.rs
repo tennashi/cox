@@ -221,7 +221,7 @@ pub fn start(devtools_port: u16) -> anyhow::Result<Relay> {
                 runtime.block_on(serve(listener, devtools_port, known, to_find, seen))
             });
         if let Err(error) = served {
-            log::error!("a relay to the stage stopped: {error:#}");
+            tracing::error!("a relay to the stage stopped: {error:#}");
         }
     });
     Ok(Relay {
@@ -249,7 +249,7 @@ async fn serve(
                 let seen = seen.clone();
                 tokio::spawn(async move {
                     if let Err(error) = relay(stream, devtools_port, known, seen).await {
-                        log::warn!("a connection to the stage ended: {error:#}");
+                        tracing::warn!("a connection to the stage ended: {error:#}");
                     }
                 });
             }
@@ -274,7 +274,7 @@ async fn find_page(devtools_port: u16, mut page: TargetId) -> Option<(String, Op
         Ok(Ok(page)) => page.clone()?,
         Ok(Err(_)) => return None,
         Err(_) => {
-            log::warn!("CEF did not name a page in time, so its agent does not see it");
+            tracing::warn!("CEF did not name a page in time, so its agent does not see it");
             return None;
         }
     };
@@ -285,11 +285,11 @@ async fn find_page(devtools_port: u16, mut page: TargetId) -> Option<(String, Op
     let tab = match tab {
         Ok(Ok(tab)) => tab,
         Ok(Err(error)) => {
-            log::warn!("no tab found for a page, so its agent gets the page alone: {error:#}");
+            tracing::warn!("no tab found for a page, so its agent gets the page alone: {error:#}");
             None
         }
         Err(_) => {
-            log::warn!("no tab found for a page in time, so its agent gets the page alone");
+            tracing::warn!("no tab found for a page in time, so its agent gets the page alone");
             None
         }
     };
@@ -340,7 +340,7 @@ async fn relay(
         .await
         .is_err()
     {
-        log::warn!("the stage's pages did not open in time, so its agent sees those that did");
+        tracing::warn!("the stage's pages did not open in time, so its agent sees those that did");
     }
     let learned = known.clone();
     let opened = known.clone();

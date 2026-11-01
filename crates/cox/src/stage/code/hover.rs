@@ -117,7 +117,7 @@ impl Code {
             Ok(Some(hover)) => hover,
             Ok(None) => return,
             Err(error) => {
-                log::debug!("no hover: {error}");
+                tracing::debug!("no hover: {error}");
                 return;
             }
         };

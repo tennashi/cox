@@ -208,7 +208,7 @@ impl Chat {
         if let Some(kept) = self.kept
             && let Err(error) = store.name_chat(kept, name, named)
         {
-            log::error!("the chat's name is not kept: {error:#}");
+            tracing::error!("the chat's name is not kept: {error:#}");
         }
     }
 
@@ -346,7 +346,7 @@ impl Workspace {
                     let setup = chat.setup.as_deref().and_then(|setup| {
                         Setup::from_json(setup)
                             .inspect_err(|error| {
-                                log::error!("the chat's setup cannot be read: {error:#}");
+                                tracing::error!("the chat's setup cannot be read: {error:#}");
                             })
                             .ok()
                     });
@@ -360,7 +360,7 @@ impl Workspace {
                     }
                 }
             }
-            Err(error) => log::error!("the chats kept cannot be listed: {error:#}"),
+            Err(error) => tracing::error!("the chats kept cannot be listed: {error:#}"),
         }
         workspace
     }
@@ -457,7 +457,7 @@ impl Workspace {
         let id = self
             .store
             .project(&folder, &name)
-            .inspect_err(|error| log::error!("the project is not kept: {error:#}"))
+            .inspect_err(|error| tracing::error!("the project is not kept: {error:#}"))
             .ok();
         self.projects.push(Project::new(id, name, folder));
         self.projects.len() - 1
@@ -487,7 +487,7 @@ impl Workspace {
             // The agent's session fails to open, and says so, if the home
             // cannot be made.
             if let Err(error) = std::fs::create_dir_all(&project.folder) {
-                log::error!("cannot make {}: {error}", project.folder.display());
+                tracing::error!("cannot make {}: {error}", project.folder.display());
             }
         }
         let instructions = Instructions::read(&project.folder);
@@ -502,7 +502,7 @@ impl Workspace {
             ),
             _ => self.store.add_chat(project.id, &name),
         }
-        .inspect_err(|error| log::error!("the chat is not kept: {error:#}"))
+        .inspect_err(|error| tracing::error!("the chat is not kept: {error:#}"))
         .ok();
         let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
         let cwd = setup
@@ -694,7 +694,7 @@ impl Workspace {
             let folder = match chosen.await {
                 Ok(Ok(Some(mut paths))) if !paths.is_empty() => paths.swap_remove(0),
                 Ok(Err(error)) => {
-                    log::error!("no folder chosen: {error:#}");
+                    tracing::error!("no folder chosen: {error:#}");
                     return;
                 }
                 _ => return,
@@ -729,19 +729,19 @@ impl Workspace {
             return;
         };
         let entries = self.store.entries(kept).unwrap_or_else(|error| {
-            log::error!("the chat cannot be read: {error:#}");
+            tracing::error!("the chat cannot be read: {error:#}");
             vec![Entry::Note(format!("Cox cannot read this chat: {error:#}"))]
         });
         let tabs = self
             .store
             .tabs(kept)
-            .inspect_err(|error| log::error!("the chat's tabs cannot be read: {error:#}"))
+            .inspect_err(|error| tracing::error!("the chat's tabs cannot be read: {error:#}"))
             .ok()
             .flatten();
         let session = self
             .store
             .session(kept)
-            .inspect_err(|error| log::error!("the chat's session cannot be read: {error:#}"))
+            .inspect_err(|error| tracing::error!("the chat's session cannot be read: {error:#}"))
             .ok()
             .flatten();
         let closed = Closed {
@@ -911,7 +911,7 @@ impl Workspace {
         if let Some(kept) = chat.kept
             && let Err(error) = self.store.keep_setup(kept, Some(&setup.to_json()))
         {
-            log::error!("the chat's setup is not kept: {error:#}");
+            tracing::error!("the chat's setup is not kept: {error:#}");
         }
         chat.setup = Some(setup);
         chat.moving = Some(format!(
@@ -1088,7 +1088,7 @@ impl Workspace {
             // A project now, what changed in it is what changed since its
             // last commit.
             if let Err(error) = cox_editor::changes::forget(&folder) {
-                log::warn!(
+                tracing::warn!(
                     "{} still counts changes from nothing: {error}",
                     folder.display()
                 );
@@ -1162,7 +1162,7 @@ impl Workspace {
                     .store
                     .keep_setup(kept, chat.setup.as_ref().map(Setup::to_json).as_deref())
             {
-                log::error!("the chat's setup is not kept: {error:#}");
+                tracing::error!("the chat's setup is not kept: {error:#}");
             }
             ended.push((chat.key, told));
         }
@@ -1601,7 +1601,7 @@ fn keep_archived(chat: &Chat, archived: bool, store: &Store) {
     if let Some(kept) = chat.kept
         && let Err(error) = store.archive_chat(kept, archived)
     {
-        log::error!("whether the chat is archived is not kept: {error:#}");
+        tracing::error!("whether the chat is archived is not kept: {error:#}");
     }
 }
 

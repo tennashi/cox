@@ -397,7 +397,7 @@ impl ChatView {
         if let (AgentEvent::Opened { id, .. }, Some(record)) = (&event, &self.record)
             && let Err(error) = record.session(id)
         {
-            log::error!("the agent's session is not kept, to resume: {error:#}");
+            tracing::error!("the agent's session is not kept, to resume: {error:#}");
         }
         let was_checking = self.conversation.state() == State::Checking;
         self.follow(|conversation| conversation.apply(event));
@@ -595,7 +595,7 @@ impl ChatView {
         if let Some(record) = &self.record
             && let Err(error) = record.goal(self.conversation.goal().map(Goal::what))
         {
-            log::error!("the chat's goal is not kept: {error:#}");
+            tracing::error!("the chat's goal is not kept: {error:#}");
         }
         self.keep();
         cx.notify();
@@ -639,7 +639,7 @@ impl ChatView {
         };
         for index in changed {
             if let Err(error) = record.entry(index, &self.conversation.entries()[index]) {
-                log::error!("the chat is not kept as it goes: {error:#}");
+                tracing::error!("the chat is not kept as it goes: {error:#}");
                 break;
             }
         }

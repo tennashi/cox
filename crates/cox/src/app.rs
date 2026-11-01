@@ -111,7 +111,7 @@ pub fn run(settings: Settings) -> ExitCode {
     let cef = cox_browser::start(crate::storage::path("stage"));
     // In place of CEF's handlers, which quit without the app's quit handlers.
     if let Err(error) = cox_browser::quit::on_signals() {
-        log::error!("signals will end Cox without stopping the agents: {error}");
+        tracing::error!("signals will end Cox without stopping the agents: {error}");
     }
     let store = Rc::new(open_store());
 
@@ -122,7 +122,7 @@ pub fn run(settings: Settings) -> ExitCode {
         path: std::env::var_os("PATH").unwrap_or_default(),
         exe: std::env::current_exe()
             .inspect_err(|error| {
-                log::error!("the agents get no tools of Cox's own: {error}");
+                tracing::error!("the agents get no tools of Cox's own: {error}");
             })
             .ok(),
         cef: cef.clone(),
@@ -157,7 +157,7 @@ fn open_store() -> Store {
         .ok_or_else(|| anyhow::anyhow!("there is no place to keep them"))
         .and_then(|path| Store::open(&path));
     kept.or_else(|error| {
-        log::error!("the chats last for this run only: {error:#}");
+        tracing::error!("the chats last for this run only: {error:#}");
         Store::in_memory()
     })
     .expect("SQLite opens a database in memory")

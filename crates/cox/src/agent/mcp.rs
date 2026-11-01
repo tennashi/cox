@@ -225,10 +225,10 @@ pub fn start(cwd: PathBuf, only: Option<Vec<String>>) -> anyhow::Result<ToolServ
             .map_err(anyhow::Error::from)
             .and_then(|runtime| runtime.block_on(serve(listener, cwd, only, sent, chats)));
         if let Err(error) = served {
-            log::error!("the agent's tools stopped: {error:#}");
+            tracing::error!("the agent's tools stopped: {error:#}");
         }
         if let Err(error) = fs::remove_dir_all(&directory) {
-            log::warn!("{} is left behind: {error}", directory.display());
+            tracing::warn!("{} is left behind: {error}", directory.display());
         }
     });
     Ok(ToolServer {
@@ -275,7 +275,7 @@ async fn serve(
                 let requests = requests.clone();
                 tokio::spawn(async move {
                     if let Err(error) = talk(stream, &served, &requests).await {
-                        log::warn!("a connection of the agent's tools ended: {error:#}");
+                        tracing::warn!("a connection of the agent's tools ended: {error:#}");
                     }
                 });
             }

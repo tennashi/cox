@@ -217,7 +217,7 @@ impl Drop for AgentThread {
         if let Some(thread) = self.thread.take()
             && thread.join().is_err()
         {
-            log::error!("the agent's thread panicked");
+            tracing::error!("the agent's thread panicked");
         }
     }
 }

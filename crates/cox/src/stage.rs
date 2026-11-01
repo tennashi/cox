@@ -228,7 +228,7 @@ impl Stage {
             let tabs = self.tabs(cx);
             if self.kept.as_ref() != Some(&tabs) {
                 if let Err(error) = record.tabs(&tabs) {
-                    log::error!("the stage's tabs are not kept: {error:#}");
+                    tracing::error!("the stage's tabs are not kept: {error:#}");
                 }
                 self.kept = Some(tabs);
             }
@@ -241,7 +241,7 @@ impl Stage {
         let running = match Running::start(Program::Shell, &self.cwd) {
             Ok(running) => running,
             Err(error) => {
-                log::error!("cannot start a terminal: {error}");
+                tracing::error!("cannot start a terminal: {error}");
                 return;
             }
         };

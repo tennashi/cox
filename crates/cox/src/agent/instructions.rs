@@ -24,7 +24,7 @@ impl Instructions {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
             Err(error) => {
-                log::error!("cannot read {}: {error}", path.display());
+                tracing::error!("cannot read {}: {error}", path.display());
                 return None;
             }
         };

@@ -23,6 +23,7 @@
 //! - [`process`] is what Cox does as it starts a program, the agent's or
 //!   a terminal's.
 //! - [`storage`] says where this Cox keeps what lasts across its runs.
+//! - [`logs`] is what Cox says of itself as it runs.
 //!
 //! Below them all is [`cox_browser`]: CEF, which renders the stages'
 //! pages, and what keeps the agent to its chat's pages. It is a crate of
@@ -31,6 +32,7 @@
 pub mod agent;
 pub mod app;
 pub mod chat;
+pub mod logs;
 pub mod notices;
 pub mod process;
 pub mod stage;

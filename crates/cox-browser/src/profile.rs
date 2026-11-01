@@ -33,20 +33,20 @@ impl Profile {
     #[must_use]
     pub fn open_at(kept: Option<PathBuf>) -> Self {
         let Some(path) = kept else {
-            log::warn!("no place to keep the stage's profile, so it lasts for this run only");
+            tracing::warn!("no place to keep the stage's profile, so it lasts for this run only");
             return Self::throwaway();
         };
         match lock(&path) {
             Ok(Some(lock)) => Self::Kept { path, _lock: lock },
             Ok(None) => {
-                log::info!(
+                tracing::info!(
                     "another Cox uses the stage's profile at {}, so this one gets its own for this run",
                     path.display()
                 );
                 Self::throwaway()
             }
             Err(error) => {
-                log::warn!(
+                tracing::warn!(
                     "the stage's profile at {} cannot be used, so this run gets its own: {error}",
                     path.display()
                 );
@@ -79,7 +79,7 @@ impl Profile {
         if let Self::Throwaway(path) = self
             && let Err(error) = fs::remove_dir_all(path)
         {
-            log::warn!("the stage's profile at {} stays: {error}", path.display());
+            tracing::warn!("the stage's profile at {} stays: {error}", path.display());
         }
     }
 }

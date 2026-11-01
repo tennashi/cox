@@ -128,7 +128,7 @@ impl Reader {
             "$/progress" => self.progressed(params),
             "window/showMessage" | "window/logMessage" => {
                 if let Some(message) = params.get("message").and_then(Value::as_str) {
-                    log::debug!("{message}");
+                    tracing::debug!("{message}");
                 }
             }
             _ => {}

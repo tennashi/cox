@@ -112,7 +112,7 @@ impl Stage {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let path = linked(link.path, from, home.as_deref());
         if let Err(error) = self.open_path(&path, link.lines, window, cx) {
-            log::warn!("cannot open {}: {error}", path.display());
+            tracing::warn!("cannot open {}: {error}", path.display());
         }
     }
 

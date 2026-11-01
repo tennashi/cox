@@ -230,7 +230,9 @@ impl Launcher {
         {
             Ok(relay) => Some(relay),
             Err(error) => {
-                log::error!("no relay to the stage, so the agent gets no tools for it: {error:#}");
+                tracing::error!(
+                    "no relay to the stage, so the agent gets no tools for it: {error:#}"
+                );
                 None
             }
         }
@@ -249,7 +251,7 @@ impl Launcher {
         match crate::agent::mcp::start(cwd.to_owned(), only) {
             Ok(server) => Some((exe, server)),
             Err(error) => {
-                log::error!("the agent gets no tools of Cox's own: {error:#}");
+                tracing::error!("the agent gets no tools of Cox's own: {error:#}");
                 None
             }
         }

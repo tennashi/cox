@@ -372,7 +372,9 @@ pub fn start(profile: Option<PathBuf>) -> Cef {
     let devtools_port = match free_port() {
         Ok(port) => Some(port),
         Err(error) => {
-            log::error!("no port is free for DevTools, so agents cannot reach the stage: {error}");
+            tracing::error!(
+                "no port is free for DevTools, so agents cannot reach the stage: {error}"
+            );
             None
         }
     };

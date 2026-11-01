@@ -67,7 +67,7 @@ impl System {
             return;
         }
         if current.is_some() {
-            log::warn!("something else took the notifications' delegate; Cox takes it back");
+            tracing::warn!("something else took the notifications' delegate; Cox takes it back");
         }
         // SAFETY: `System` keeps the delegate as long as the center.
         unsafe { self.center.setDelegate(Some(ours)) };

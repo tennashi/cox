@@ -18,7 +18,7 @@ use std::process::ExitCode;
 use cox::app::{self, Mode};
 
 fn main() -> ExitCode {
-    env_logger::init();
+    cox::logs::init();
     match Mode::parse(std::env::args().skip(1)) {
         Mode::App(settings) => app::run(settings),
         Mode::Bridge(socket) => match cox::agent::mcp::bridge(&socket) {

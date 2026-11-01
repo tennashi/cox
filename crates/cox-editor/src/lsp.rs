@@ -197,7 +197,7 @@ impl Client {
         let program = server.program;
         std::thread::spawn(move || {
             for line in BufReader::new(errors).lines().map_while(Result::ok) {
-                log::debug!("{program}: {line}");
+                tracing::debug!("{program}: {line}");
             }
         });
         let settings = serde_json::from_str(server.settings).unwrap_or(Value::Null);
