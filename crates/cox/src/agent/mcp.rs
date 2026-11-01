@@ -41,6 +41,7 @@ use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
 use crate::agent::setup::Setup;
+use crate::chat::trial::Trial;
 
 mod calls;
 
@@ -91,6 +92,9 @@ pub enum ChatRequest {
         text: String,
         setup: Setup,
         goal: Option<Goal>,
+        /// What the chat starts from when it is a trial, working in a
+        /// folder of its own.
+        trial: Option<Trial>,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
     },
     /// Wait for the chat that goes by `chat` to end its turn, or to come
@@ -119,6 +123,8 @@ pub struct OpenedChat {
     pub number: u64,
     /// What the human sees it as, in the list.
     pub name: String,
+    /// The folder it works in, when it is a trial.
+    pub folder: Option<PathBuf>,
 }
 
 /// How a command the agent ran went.

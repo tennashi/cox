@@ -17,6 +17,7 @@ use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, Waited};
 use cox::agent::setup::Setup;
 use cox::chat::conversation::{Conversation, Entry, Goal, State};
 use cox::chat::judge::Starts;
+use cox::chat::trial::Trial;
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
 use cox::notices::{AppNotices, Notices};
@@ -1355,6 +1356,7 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
             text: "permission".to_owned(),
             setup: setup.clone(),
             goal: None,
+            trial: None,
             answer,
         })
         .unwrap();
@@ -1433,6 +1435,104 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }
 
+#[gpui::test]
+async fn a_trial_works_in_a_folder_apart_from_the_project(cx: &mut TestAppContext) {
+    let home = scratch("trial-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let git = |args: &[&str]| {
+        let done = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&home)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{done:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(home.join("main.rs"), "fn main() {}\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "first"]);
+    let kept = scratch("trial-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+
+    let (answer, opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::OpenChat {
+            text: "try it".to_owned(),
+            setup: Setup::default(),
+            goal: None,
+            trial: Some(Trial::Project),
+            answer,
+        })
+        .unwrap();
+    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 2)
+        .await;
+    let folder = opened
+        .await
+        .unwrap()
+        .unwrap()
+        .folder
+        .expect("a trial's folder");
+    let trials = cox::storage::path(cox::chat::trial::FOLDER).unwrap();
+    assert!(folder.starts_with(&trials), "{}", folder.display());
+    assert_eq!(
+        std::fs::read_to_string(folder.join("main.rs")).unwrap(),
+        "fn main() {}\n"
+    );
+    // Its agent works there, changes files unasked, and the human is
+    // told where.
+    let child = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().view().cloned().unwrap()
+    });
+    wait_for_turn(cx, &child).await;
+    assert_eq!(agents.borrow()[1].cwd(), Some(folder.clone()));
+    let entries = entries(cx, &child);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Note(note) if note.starts_with("Trial: works in"))),
+        "{entries:?}"
+    );
+    let setup = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().setup().cloned().unwrap()
+    });
+    assert_eq!(setup.folder.as_ref(), Some(&folder));
+    assert!(setup.policy.allow.contains(&"Edit *".to_owned()));
+
+    // A trial from nothing works in an empty repository of its own.
+    let (answer, opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::OpenChat {
+            text: "try it from nothing".to_owned(),
+            setup: Setup::default(),
+            goal: None,
+            trial: Some(Trial::Empty),
+            answer,
+        })
+        .unwrap();
+    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 3)
+        .await;
+    let empty = opened
+        .await
+        .unwrap()
+        .unwrap()
+        .folder
+        .expect("a trial's folder");
+    assert!(empty.starts_with(&trials), "{}", empty.display());
+    assert!(empty.join(".git").is_dir());
+    assert!(!empty.join("main.rs").exists());
+
+    let _ = std::fs::remove_dir_all(&empty);
+    let _ = std::fs::remove_dir_all(&folder);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+}
+
 /// Opens a chat from the first chat, on `text`, set up with nothing, as
 /// the chat's agent would, and waits for the list to hold `count` chats.
 async fn open_child(
@@ -1448,6 +1548,7 @@ async fn open_child(
             text: text.to_owned(),
             setup: Setup::default(),
             goal: None,
+            trial: None,
             answer,
         })
         .unwrap();

@@ -12,6 +12,8 @@
 //! characters; the rest matches as written. The title is the agent's, as
 //! it shows in the conversation.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 /// How a chat's agent is set up, as the chat that opened it said.
@@ -28,6 +30,10 @@ pub struct Setup {
     pub stage: StageUse,
     /// What answers the agent's permission requests in the human's place.
     pub policy: Policy,
+    /// The folder the agent works in, in place of the project's, when the
+    /// chat is a trial: a folder of its own (see
+    /// [`crate::chat::trial`]).
+    pub folder: Option<PathBuf>,
 }
 
 /// What an agent does with the stage.
@@ -143,6 +149,7 @@ mod tests {
                 allow: ["Read *", "grep *"].map(str::to_owned).to_vec(),
                 reject: ["Edit *", "Write *"].map(str::to_owned).to_vec(),
             },
+            folder: Some("/trials/greet-1".into()),
         };
         let json = setup.to_json();
         assert_eq!(Setup::from_json(&json).unwrap(), setup);

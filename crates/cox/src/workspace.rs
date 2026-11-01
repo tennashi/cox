@@ -47,9 +47,11 @@ use tokio::sync::oneshot;
 use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
 use crate::agent::setup::Setup;
 use crate::chat::conversation::{Entry, State};
+use crate::chat::trial;
 use crate::chat::view::{Asked, ChatView, Reopened};
 use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
+use crate::storage;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ASKING, DIM, FONT, LINK};
@@ -237,6 +239,12 @@ impl Chat {
     #[must_use]
     pub fn parent(&self) -> Option<u64> {
         self.parent
+    }
+
+    /// How the chat's agent is set up, when the chat that opened it said.
+    #[must_use]
+    pub fn setup(&self) -> Option<&Setup> {
+        self.setup.as_ref()
     }
 
     /// Its view, once it has been shown.
@@ -491,14 +499,13 @@ impl Workspace {
         .inspect_err(|error| log::error!("the chat is not kept: {error:#}"))
         .ok();
         let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
-        let view = self.opens.open(
-            project.folder.clone(),
-            instructions,
-            setup.clone(),
-            record,
-            window,
-            cx,
-        );
+        let cwd = setup
+            .as_ref()
+            .and_then(|setup| setup.folder.clone())
+            .unwrap_or_else(|| project.folder.clone());
+        let view = self
+            .opens
+            .open(cwd, instructions, setup.clone(), record, window, cx);
         let changes = Self::follow(&view, window, cx);
         let key = self.next_key();
         self.add(Chat {
@@ -559,8 +566,9 @@ impl Workspace {
             }
             ChatRequest::OpenChat {
                 text,
-                setup,
+                mut setup,
                 goal,
+                trial,
                 answer,
             } => {
                 let parent = self
@@ -568,16 +576,53 @@ impl Workspace {
                     .iter()
                     .chain(&self.archived)
                     .find(|chat| chat.view.as_ref() == Some(view))
-                    .map(|chat| (chat.project, chat.key, chat.kept, chat.name.to_string()));
-                let Some((project, key, kept, opened_by)) = parent else {
+                    .map(|chat| {
+                        let folder = chat.setup.as_ref().and_then(|setup| setup.folder.clone());
+                        (
+                            chat.project,
+                            chat.key,
+                            chat.kept,
+                            chat.name.to_string(),
+                            folder,
+                        )
+                    });
+                let Some((project, key, kept, opened_by, folder)) = parent else {
                     answer.send(Err("the chat is gone".to_owned())).ok();
                     return;
+                };
+                // A trial works in a folder of its own; any other chat
+                // works where the chat that opened it does.
+                setup.folder = if let Some(trial) = trial {
+                    let made = storage::path(trial::FOLDER)
+                        .ok_or_else(|| "Cox cannot tell where to keep trials".to_owned())
+                        .and_then(|trials| {
+                            trial::make(
+                                trial,
+                                folder.as_ref().unwrap_or(&self.projects[project].folder),
+                                &trials,
+                            )
+                        });
+                    match made {
+                        Ok(made) => {
+                            setup.policy.allow.extend(trial::allowed());
+                            Some(made)
+                        }
+                        Err(error) => {
+                            answer.send(Err(error)).ok();
+                            return;
+                        }
+                    }
+                } else {
+                    folder
                 };
                 let index = self.open_in(project, Some((key, kept)), Some(setup), window, cx);
                 let chat = &self.chats[index];
                 let opened = OpenedChat {
                     number: chat.key,
                     name: chat.name.to_string(),
+                    folder: trial
+                        .and(chat.setup.as_ref())
+                        .and_then(|setup| setup.folder.clone()),
                 };
                 if let Some(child) = &chat.view {
                     child.update(cx, |child, cx| child.tell(&opened_by, &text, goal, cx));
@@ -673,7 +718,11 @@ impl Workspace {
             .ok()
             .flatten();
         let closed = Closed {
-            cwd: project.folder.clone(),
+            cwd: chat
+                .setup
+                .as_ref()
+                .and_then(|setup| setup.folder.clone())
+                .unwrap_or_else(|| project.folder.clone()),
             entries,
             tabs,
             session,

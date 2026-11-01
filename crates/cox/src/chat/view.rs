@@ -201,6 +201,13 @@ impl ChatView {
                 agent
                     .setup
                     .iter()
+                    .filter_map(|setup| setup.folder.as_deref())
+                    .map(conversation::trial_note),
+            )
+            .chain(
+                agent
+                    .setup
+                    .iter()
                     .filter_map(|setup| setup.context.as_deref())
                     .map(conversation::context_note),
             );

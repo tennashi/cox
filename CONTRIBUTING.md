@@ -138,12 +138,29 @@ Cox answers in the human's place, as `Edit *` or `cargo test*`, where
 `*` stands for any run of characters, a title both match being rejected,
 and the rest asked of the human as usual, with the conversation saying
 which Cox answered; and `goal`, what the chat works until it is met,
-as "Set goal…" takes it: `$ ` and a command, or words. The titles are
+as "Set goal…" takes it: `$ ` and a command, or words; and `trial`,
+which makes the chat a trial, from the project (`project`) or from
+nothing (`empty`). The titles are
 the agent's, as the conversation shows them: `claude-agent-acp` titles a request after the
 tool and what it works on, as `Edit src/main.rs` or `cargo xtask ci`. A
 chat the human opens is set up with none of this: its agent gets every
 tool, and the human answers every request. Which chat opened a chat, and
 how its agent is set up, last across runs with the rest of the chat.
+A trial tries the work out apart from the project, before the human and
+the agent that opened it agree what it is to be: its agent works in a
+folder Cox makes for it in `trials`, beside the chats' database (see
+[The stage](#the-stage)), and changes and tests the files there
+without asking the human, the policy allowing edits and what the judge
+of a goal may run. A trial from the project works in a Git worktree of
+the project's last commit, so the project has to be in a Git
+repository; a trial from nothing works in an empty folder, `scratch-`
+and a number, made a Git repository of its own, for a project of any
+kind or none, which "Open folder…" opens as a project once the human
+wants to go on with it. The chat notes at its top where it works, and
+the agent that opened it is told, to read what the trial made and
+propose a goal from it. A chat a trial opens works in the trial's
+folder too, and a trial goes on there once it is started again. Cox
+leaves the folders be: `git worktree remove` takes a worktree away.
 `open_chat` answers with a number the chat goes by for this run, which
 the agent gives Cox's `wait_chat` tool to wait for the chat's turn to
 end, or for the chat to come to wait for the human, and hear how it

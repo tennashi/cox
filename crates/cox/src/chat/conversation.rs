@@ -805,6 +805,16 @@ pub fn context_note(context: &str) -> String {
     format!("Context: {}", context.trim())
 }
 
+/// The note that tells the human a chat works in `folder`, a trial's,
+/// apart from the project.
+#[must_use]
+pub fn trial_note(folder: &Path) -> String {
+    format!(
+        "Trial: works in {}, apart from the project.",
+        folder.display()
+    )
+}
+
 /// Whether `entry` starts a turn: a line sent to the agent, by the human
 /// or by Cox in their place.
 fn is_turn_start(entry: &Entry) -> bool {
