@@ -130,7 +130,7 @@ conversation in the human's place but dimmer, after a line that says
 which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
-the Cox tools it gets (`show_markdown`, `show_file`, `run_command`,
+the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `run_command`,
 `open_chat`, `wait_chat`, `propose_goal`, `start_trial`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the titles of the permission requests
@@ -258,6 +258,20 @@ without what Git ignores, for the human to open one: a click on a
 folder opens or closes it, and a click on a file opens it, as a link to
 it does. The tab follows the folders open in it as files come and go,
 and a closed chat's stage opens it again with the same folders open.
+
+"Changes" beside it opens a tab of what changed in the project's files,
+as Git tells it, file by file and line by line, with the files Git does
+not track yet but does not ignore: in a trial, all it changed since it
+started, what it committed too, and elsewhere what changed since the
+last commit. A click on a file, or on a line, opens the file there, as
+a link to it does. The tab follows the files as they change. The agent
+opens it with Cox's `show_changes` tool, to show the human what it
+made, and hears which files changed; given another folder, such as that
+of a trial it opened, the tab shows what changed there. A trial marks
+where it starts with a ref of its worktree's own,
+`refs/worktree/cox-start`: the commit it starts from, or the empty tree
+for a trial from nothing, which then counts all it made; a trial opened
+as a project forgets it.
 
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The

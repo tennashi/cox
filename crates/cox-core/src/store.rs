@@ -726,6 +726,9 @@ mod tests {
                 KeptTab::Files {
                     open: vec!["/work/src".into()],
                 },
+                KeptTab::Changes {
+                    folder: "/work".into(),
+                },
             ],
             shown: 1,
         };
