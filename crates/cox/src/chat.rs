@@ -13,6 +13,7 @@
 pub mod conversation;
 pub mod judge;
 pub mod launcher;
+pub mod trial;
 pub mod view;
 
 use std::path::PathBuf;

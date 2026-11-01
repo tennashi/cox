@@ -58,7 +58,7 @@ const COMMAND: &str = "COMMAND:";
 /// The titles of the permission requests the judge's agent may go on
 /// with, as `claude-agent-acp` titles them: reading, searching, and
 /// running what reads or tests.
-const ALLOWED: &[&str] = &[
+pub(crate) const ALLOWED: &[&str] = &[
     "Read *",
     "Glob *",
     "Grep *",
@@ -180,6 +180,7 @@ pub fn setup(goal: &str, stance: &str) -> Setup {
             allow: ALLOWED.iter().map(|&title| title.to_owned()).collect(),
             reject: Vec::new(),
         },
+        folder: None,
     }
 }
 

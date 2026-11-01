@@ -2,6 +2,7 @@
 //! each does when called, through what it asks of the chat as a
 //! [`ToolRequest`], or of the window as a [`ChatRequest`].
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -13,6 +14,7 @@ use tokio::sync::oneshot;
 
 use crate::agent::mcp::{ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest};
 use crate::agent::setup::{Policy, Setup, StageUse};
+use crate::chat::trial::Trial;
 
 const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
@@ -191,8 +193,15 @@ fn open_chat_tool() -> Value {
             in the human's place, once each, with `*` for any run of characters (a title \
             both match is rejected, and the human is asked about the rest); `goal` is \
             what the chat works until it is met, as a goal the human sets: `$ ` and a \
-            shell command, which has to pass, or words, which an agent judges. Answers \
-            the number the chat goes by, to wait for it with wait_chat.",
+            shell command, which has to pass, or words, which an agent judges; `trial` \
+            makes the chat a trial, which works in a folder of its own, apart from the \
+            project, and changes and tests its files there without asking the human: \
+            \"project\", a Git worktree of the project's last commit, to try a change to \
+            the project, or \"empty\", an empty Git repository, to try something from \
+            nothing. Open a trial when the work is uncertain, to try it out before you \
+            and the human agree what it is to be: read what the trial made, show the human, \
+            and propose a goal from it with propose_goal. Answers the number the chat goes \
+            by, to wait for it with wait_chat.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -232,6 +241,13 @@ fn open_chat_tool() -> Value {
                     "type": "string",
                     "description": "What the chat works until it is met: \"$ \" and a shell \
                         command, which has to pass, or words, which an agent judges.",
+                },
+                "trial": {
+                    "type": "string",
+                    "enum": ["project", "empty"],
+                    "description": "What the chat starts from when it tries the work out \
+                        in a folder of its own, apart from the project: the project's last \
+                        commit, or nothing.",
                 },
             },
             "required": ["text"],
@@ -431,25 +447,40 @@ async fn open_chat(
             allow: strings("allow")?.unwrap_or_default(),
             reject: strings("reject")?.unwrap_or_default(),
         },
+        folder: None,
     };
     let goal = string("goal")?.as_deref().and_then(Goal::parse);
+    let trial = string("trial")?
+        .map(|name| Trial::parse(&name).ok_or("`trial` is not \"project\" or \"empty\""))
+        .transpose()?;
     let (answer, opened) = oneshot::channel();
     chats
         .send(ChatRequest::OpenChat {
             text: text.to_owned(),
             setup,
             goal,
+            trial,
             answer,
         })
         .map_err(|_| "the chat has closed".to_owned())?;
     let opened = opened
         .await
         .map_err(|_| "the chat closed while the other opened".to_owned())??;
-    Ok(format!(
+    let mut told = format!(
         "{} is open under this chat as chat {}, working on your line. Wait for its turn to \
          end with wait_chat, giving {}.",
         opened.name, opened.number, opened.number
-    ))
+    );
+    if let (Some(trial), Some(folder)) = (trial, &opened.folder) {
+        let _ = write!(
+            told,
+            " It is a trial, working in {}, {}, apart from the project: read what it made \
+             there.",
+            folder.display(),
+            trial.what()
+        );
+    }
+    Ok(told)
 }
 
 /// Waits for the chat `arguments` name to end its turn, or to come to
@@ -768,6 +799,7 @@ mod tests {
             let _ = answer.send(Ok(OpenedChat {
                 number: 3,
                 name: "Chat 3".to_owned(),
+                folder: None,
             }));
             goal
         });
@@ -793,6 +825,7 @@ mod tests {
                 text,
                 setup,
                 goal,
+                trial,
                 answer,
             }) = asked.recv().await
             else {
@@ -801,8 +834,9 @@ mod tests {
             let _ = answer.send(Ok(OpenedChat {
                 number: 7,
                 name: "Chat 2".to_owned(),
+                folder: Some("/trials/greet-1".into()),
             }));
-            (text, setup, goal)
+            (text, setup, goal, trial)
         });
         let params = json!({ "name": OPEN_CHAT, "arguments": {
             "text": "Build the first unit.",
@@ -812,6 +846,7 @@ mod tests {
             "allow": ["Read *", "cargo *"],
             "reject": ["Edit *"],
             "goal": "$ cargo xtask ci",
+            "trial": "project",
         } });
         let answered = call(&params, Path::new("/work"), None, &sent, &chats)
             .await
@@ -819,7 +854,12 @@ mod tests {
         assert_eq!(answered["isError"], false);
         let told = answered["content"][0]["text"].as_str().unwrap();
         assert!(told.contains("Chat 2") && told.contains("chat 7"), "{told}");
-        let (text, setup, goal) = window.await.unwrap();
+        assert!(
+            told.contains("a trial, working in /trials/greet-1"),
+            "{told}"
+        );
+        let (text, setup, goal, trial) = window.await.unwrap();
+        assert_eq!(trial, Some(Trial::Project));
         assert_eq!(text, "Build the first unit.");
         assert_eq!(goal, Some(Goal::Command("cargo xtask ci".to_owned())));
         assert_eq!(
@@ -832,6 +872,7 @@ mod tests {
                     allow: ["Read *", "cargo *"].map(str::to_owned).to_vec(),
                     reject: ["Edit *"].map(str::to_owned).to_vec(),
                 },
+                folder: None,
             }
         );
     }
@@ -954,6 +995,8 @@ mod tests {
             json!({ "text": " " }),
             json!({ "text": "go", "stage": "fly" }),
             json!({ "text": "go", "allow": "Read *" }),
+            json!({ "text": "go", "trial": true }),
+            json!({ "text": "go", "trial": "container" }),
         ] {
             let params = json!({ "name": OPEN_CHAT, "arguments": arguments });
             let answered = call(&params, Path::new("/"), None, &sent, &chats)
