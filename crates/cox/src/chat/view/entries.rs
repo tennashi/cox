@@ -18,7 +18,11 @@ use std::ops::Range;
 use cox_core::diff::Line;
 use gpui::{AnyElement, Context, SharedString, Stateful, div, prelude::*, px, rgb};
 
-use crate::chat::conversation::{Content, Entry, State, Step, StepState, ToolCallResult};
+use cox_core::goal::Goal;
+
+use crate::chat::conversation::{
+    self, Answer, Content, Entry, State, Step, StepState, ToolCallResult,
+};
 use crate::chat::view::ChatView;
 use crate::ui::text::Writer;
 use crate::ui::theme::{ASKING, DIM, FAILED, FOREGROUND, LINK};
@@ -263,6 +267,9 @@ impl ChatView {
             }
             Entry::Thought(text) => self.render_thought(index, text, &mut writer, cx),
             Entry::Plan(steps) => self.render_plan_entry(index, steps, cx),
+            Entry::Proposal { goal, why, answer } => {
+                render_proposal(index, goal, why.as_deref(), *answer, &mut writer, cx)
+            }
             Entry::Note(text) => div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
@@ -398,6 +405,81 @@ impl ChatView {
             .when(open, |plan| plan.child(render_steps(steps).pl(px(INDENT))))
             .into_any_element()
     }
+}
+
+/// A goal the agent proposed: while the human has not answered it, a
+/// card with why the agent proposes it, and buttons to set it, to
+/// change it first, or to let it be; then a line that says what they
+/// did.
+fn render_proposal(
+    index: usize,
+    goal: &str,
+    why: Option<&str>,
+    answer: Option<Answer>,
+    writer: &mut Writer,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let read = Goal::parse(goal).map_or_else(|| goal.to_owned(), |goal| conversation::line(&goal));
+    let title = format!("Proposed goal: {read}");
+    if let Some(answer) = answer {
+        let answer = match answer {
+            Answer::Set => "set",
+            Answer::Changed => "changed, and set",
+            Answer::Dismissed => "let be",
+        };
+        return line_of(index, None, ("◎", LINK), &title, writer)
+            .debug_selector(move || format!("proposal-{index}"))
+            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
+            .into_any_element();
+    }
+    let button = |name: &'static str, label: &'static str| {
+        div()
+            .id(SharedString::from(format!("{name}-{index}")))
+            .debug_selector(move || format!("{name}-{index}"))
+            .px_2()
+            .rounded_sm()
+            .bg(rgb(BUTTON))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(HOVER)))
+            .child(label)
+    };
+    let buttons = [
+        button("set-goal", "Set goal").on_click(cx.listener(move |view, _, _, cx| {
+            view.answer_proposal(index, Answer::Set, cx);
+        })),
+        button("change-goal", "Change…").on_click(cx.listener(move |view, _, window, cx| {
+            view.change_proposal(index, window, cx);
+        })),
+        button("dismiss-goal", "Dismiss").on_click(cx.listener(move |view, _, _, cx| {
+            view.answer_proposal(index, Answer::Dismissed, cx);
+        })),
+    ];
+    div()
+        .debug_selector(move || format!("proposal-{index}"))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(rgb(LINK))
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .text_color(rgb(DIM))
+                .child(div().flex_shrink_0().text_color(rgb(LINK)).child("◎"))
+                .child("Proposed goal"),
+        )
+        .child(writer.markdown(&read))
+        .children(why.map(|why| {
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child(writer.markdown(why))
+        }))
+        .child(div().flex().flex_wrap().gap_2().children(buttons))
+        .into_any_element()
 }
 
 /// The permission request the agent waits on: what it asks to do, and

@@ -71,10 +71,18 @@ pub enum ToolRequest {
     },
 }
 
-/// What the agent's tools ask of the window its chat is in, past the chat
-/// itself.
+/// What the agent's tools ask of the window its chat is in: of the chat's
+/// conversation, or past the chat itself.
 #[derive(Debug)]
 pub enum ChatRequest {
+    /// Show the human `goal`, proposed for the chat, for them to set,
+    /// change, or let be, with `why`, if the agent said; answer the goal
+    /// the chat has now, if any.
+    ProposeGoal {
+        goal: Goal,
+        why: Option<String>,
+        answer: oneshot::Sender<Option<Goal>>,
+    },
     /// Open a chat in the chat's project, under it in the list, whose
     /// agent is set up as `setup` says, works until `goal` is met if
     /// given, and gets `text` as its first line; answer how the chat goes
@@ -483,7 +491,7 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 5);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 6);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);

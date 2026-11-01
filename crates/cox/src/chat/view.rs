@@ -48,7 +48,7 @@ use tokio::sync::oneshot;
 use crate::agent::mcp::{ChatRequest, Ran, ToolRequest};
 use crate::agent::{Agent, AgentThread};
 use crate::agent::{AgentEvent, Command};
-use crate::chat::conversation::{self, Conversation, Entry, GOAL_TURNS, Goal, State};
+use crate::chat::conversation::{self, Answer, Conversation, Entry, GOAL_TURNS, Goal, State};
 use crate::chat::judge::{Judge, Starts};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::text::Reading;
@@ -169,8 +169,9 @@ pub struct ChatView {
     judge: Option<Judge>,
     /// The directory the agent works in, while it runs.
     cwd: Option<PathBuf>,
-    /// The input the human sets the goal in, while it is open.
-    goal_input: Option<(Entity<LineInput>, Subscription)>,
+    /// The input the human sets the goal in, while it is open, with the
+    /// index of the proposed goal it changes, when it changes one.
+    goal_input: Option<(Entity<LineInput>, Option<usize>, Subscription)>,
     _submitted: Subscription,
     /// Redraws the chat as its stage opens and closes.
     _panel_changes: Option<Subscription>,
@@ -464,9 +465,21 @@ impl ChatView {
             .goal()
             .map(|goal| goal.what().input())
             .unwrap_or_default();
+        self.open_goal_input(&line, None, window, cx);
+    }
+
+    /// Opens the input that sets the goal on `line`, which changes the
+    /// goal proposed at `proposal`, when given.
+    fn open_goal_input(
+        &mut self,
+        line: &str,
+        proposal: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let input = cx.new(|cx| {
             let mut input = LineInput::new(cx);
-            input.set_text(&line, cx);
+            input.set_text(line, cx);
             input.select_whole(cx);
             input
         });
@@ -474,7 +487,7 @@ impl ChatView {
             view.end_editing_goal(true, window, cx);
         });
         window.focus(&input.focus_handle(cx));
-        self.goal_input = Some((input, submitted));
+        self.goal_input = Some((input, proposal, submitted));
         cx.notify();
     }
 
@@ -482,15 +495,64 @@ impl ChatView {
     /// holds when `keep` says to, and brings the keyboard back to the
     /// chat's input.
     fn end_editing_goal(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((input, _)) = self.goal_input.take() else {
+        let Some((input, proposal, _)) = self.goal_input.take() else {
             return;
         };
         if keep {
             let goal = goal::Goal::parse(input.read(cx).text());
-            self.set_goal(goal, cx);
+            match proposal {
+                None => self.set_goal(goal, cx),
+                // Emptied, the input changes the goal proposed into none,
+                // and leaves both goals as they were.
+                Some(index) => {
+                    if let Some(goal) = goal {
+                        let proposed = self.conversation.proposed(index);
+                        let answer = if proposed.as_ref() == Some(&goal) {
+                            Answer::Set
+                        } else {
+                            Answer::Changed
+                        };
+                        if proposed.is_some() {
+                            self.conversation.answer_proposal(index, answer);
+                            self.set_goal(Some(goal), cx);
+                        }
+                    }
+                }
+            }
         }
         window.focus(&self.input.focus_handle(cx));
         cx.notify();
+    }
+
+    /// Shows `goal`, which the agent proposes, on a card in the
+    /// conversation, for the human to set, change, or let be, with `why`
+    /// the agent proposes it, if it said.
+    pub fn propose_goal(&mut self, goal: &goal::Goal, why: Option<String>, cx: &mut Context<Self>) {
+        self.follow(|conversation| conversation.propose(goal, why));
+        self.keep();
+        cx.notify();
+    }
+
+    /// The human answered the goal proposed at `index`: set it as it is,
+    /// or let it be.
+    fn answer_proposal(&mut self, index: usize, answer: Answer, cx: &mut Context<Self>) {
+        let Some(goal) = self.conversation.answer_proposal(index, answer) else {
+            return;
+        };
+        if answer == Answer::Set {
+            self.set_goal(Some(goal), cx);
+        } else {
+            self.keep();
+            cx.notify();
+        }
+    }
+
+    /// Opens the input that sets the goal on the goal proposed at `index`,
+    /// for the human to change it before they set it.
+    fn change_proposal(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(goal) = self.conversation.proposed(index) {
+            self.open_goal_input(&goal.input(), Some(index), window, cx);
+        }
     }
 
     /// Sets the chat to work toward `goal`, or, given `None`, toward no
@@ -917,7 +979,7 @@ impl ChatView {
     /// The input that sets the goal, in place of the line that tells what
     /// the chat waits for, while it is open.
     fn render_goal_input(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let (input, _) = self.goal_input.as_ref()?;
+        let (input, _, _) = self.goal_input.as_ref()?;
         Some(
             div()
                 .key_context(GOAL)

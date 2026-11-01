@@ -48,9 +48,32 @@ pub enum Entry {
         #[serde(default)]
         by_setup: bool,
     },
+    /// A goal the agent proposed for the chat, for the human to set as it
+    /// is, to change before they set it, or to let be.
+    Proposal {
+        /// The goal, as the input that sets it reads: `$ ` and a command,
+        /// or words.
+        goal: String,
+        /// Why the agent proposes it, if it said.
+        why: Option<String>,
+        /// What the human did with it, once they did.
+        answer: Option<Answer>,
+    },
     /// A note from Cox: the instructions the agent gets, how a turn ended,
     /// an error, or the connection closing.
     Note(String),
+}
+
+/// What the human did with a goal the agent proposed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Answer {
+    /// Set it as it was proposed.
+    Set,
+    /// Changed it, and set what they changed it to.
+    Changed,
+    /// Let it be.
+    Dismissed,
 }
 
 /// A step of the plan the agent works to.

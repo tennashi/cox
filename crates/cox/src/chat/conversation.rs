@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use cox_acp::{PermissionAnswer, StopReason};
-pub use cox_core::entry::{Content, Entry, Step, StepState, ToolCallResult};
+pub use cox_core::entry::{Answer, Content, Entry, Step, StepState, ToolCallResult};
 use cox_core::goal;
 
 use crate::agent::mcp::{Ended, Ran};
@@ -90,10 +90,7 @@ impl Goal {
     /// How the goal reads, after "Goal:".
     #[must_use]
     pub fn line(&self) -> String {
-        match &self.what {
-            goal::Goal::Command(command) => format!("until `{command}` passes."),
-            goal::Goal::Words(words) => words.clone(),
-        }
+        line(&self.what)
     }
 
     /// How many turns the agent has taken toward it on the human's last
@@ -101,6 +98,15 @@ impl Goal {
     #[must_use]
     pub fn turns(&self) -> usize {
         self.turns
+    }
+}
+
+/// How `goal` reads, after "Goal:".
+#[must_use]
+pub fn line(goal: &goal::Goal) -> String {
+    match goal {
+        goal::Goal::Command(command) => format!("until `{command}` passes."),
+        goal::Goal::Words(words) => words.clone(),
     }
 }
 
@@ -255,6 +261,40 @@ impl Conversation {
         if self.state == State::Checking {
             self.state = State::Idle;
         }
+    }
+
+    /// Shows `goal`, which the agent proposes for the chat, for the human
+    /// to set, change, or let be, with `why` the agent proposes it, if it
+    /// said.
+    pub fn propose(&mut self, goal: &goal::Goal, why: Option<String>) {
+        self.push(Entry::Proposal {
+            goal: goal.input(),
+            why: why.filter(|why| !why.trim().is_empty()),
+            answer: None,
+        });
+    }
+
+    /// The goal proposed at `index`, while the human has not answered it.
+    #[must_use]
+    pub fn proposed(&self, index: usize) -> Option<goal::Goal> {
+        match self.entries.get(index)? {
+            Entry::Proposal {
+                goal, answer: None, ..
+            } => goal::Goal::parse(goal),
+            _ => None,
+        }
+    }
+
+    /// Takes the human's `answer` to the goal proposed at `index`, and
+    /// returns the goal proposed, unless they answered it already. Setting
+    /// a goal is the caller's, with [`Conversation::set_goal`].
+    pub fn answer_proposal(&mut self, index: usize, answer: Answer) -> Option<goal::Goal> {
+        let proposed = self.proposed(index)?;
+        if let Some(Entry::Proposal { answer: taken, .. }) = self.entries.get_mut(index) {
+            *taken = Some(answer);
+            self.changed.insert(index);
+        }
+        Some(proposed)
     }
 
     /// The command that runs to see whether the goal is met, while one
@@ -1535,6 +1575,52 @@ mod tests {
                 "Goal not met, as judged: not yet The agent made no tool call in its last 2 turns, so it may wait for you."
             )
         );
+    }
+
+    #[test]
+    fn a_goal_proposed_waits_for_the_human_to_answer_it() {
+        let mut conversation = Conversation::new();
+        conversation.submit("greet the user");
+        let make = goal::Goal::Command("make".to_owned());
+        conversation.propose(&make, Some("make builds it".to_owned()));
+        conversation.propose(
+            &goal::Goal::Words("It greets.".to_owned()),
+            Some(" ".to_owned()),
+        );
+        assert_eq!(
+            conversation.entries()[1..],
+            [
+                Entry::Proposal {
+                    goal: "$ make".to_owned(),
+                    why: Some("make builds it".to_owned()),
+                    answer: None,
+                },
+                Entry::Proposal {
+                    goal: "It greets.".to_owned(),
+                    why: None,
+                    answer: None,
+                },
+            ]
+        );
+        // Proposing sets nothing, nor holds up the turn.
+        assert_eq!(conversation.goal(), None);
+        assert_eq!(conversation.state(), State::Busy);
+        conversation.take_changed();
+
+        assert_eq!(conversation.proposed(1), Some(make.clone()));
+        assert_eq!(conversation.answer_proposal(1, Answer::Set), Some(make));
+        assert_eq!(conversation.take_changed(), [1]);
+        // Answered, it is answered for good.
+        assert_eq!(conversation.proposed(1), None);
+        assert_eq!(conversation.answer_proposal(1, Answer::Dismissed), None);
+        assert_eq!(conversation.answer_proposal(0, Answer::Set), None);
+        assert!(matches!(
+            conversation.entries()[1],
+            Entry::Proposal {
+                answer: Some(Answer::Set),
+                ..
+            }
+        ));
     }
 
     #[test]

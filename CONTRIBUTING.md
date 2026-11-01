@@ -89,6 +89,16 @@ made no tool call for two turns in a row, which says it has something
 to ask, or when Escape stops the check. The goal lasts across runs,
 with the rest of the chat.
 
+A chat's agent can propose a goal too, with Cox's `propose_goal` tool,
+as the human and it talk through what they want, or when the human asks
+it for one: a command or words, as "Set goal…" takes them, and why. The
+goal shows on a card in the conversation, with "Set goal", which sets
+it, "Change…", which opens the input above the chat's own on it to
+change before Enter sets it, and "Dismiss", which lets it be; the card
+then says which the human chose. Only the human sets a goal so: the
+agent hears at once that the goal is for the human to set, and which
+goal the chat has then, and goes on with its turn.
+
 A goal in words is judged by an agent Cox starts for it, of the same
 command as the chat's, in the project's folder: not a chat, so not in
 the list, and the human does not talk to it. Each time a turn ends, Cox
@@ -116,7 +126,7 @@ which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `run_command`,
-`open_chat`, `wait_chat`), all of them unless given; `stage`, `drive` for the tools
+`open_chat`, `wait_chat`, `propose_goal`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the titles of the permission requests
 Cox answers in the human's place, as `Edit *` or `cargo test*`, where
