@@ -20,7 +20,7 @@ use cox_core::goal;
 
 use crate::agent::mcp::{Ended, Ran};
 use crate::agent::{AgentEvent, Command, Opened};
-use crate::chat::judge::Verdict;
+use crate::chat::judge::{self, Verdict};
 
 /// Whose move it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -373,6 +373,7 @@ impl Conversation {
                 return None;
             }
         };
+        self.offer_command(&said);
         let why = match Verdict::of(&said) {
             Verdict::Met(said) if said.is_empty() => {
                 self.push(Entry::Note("Goal met, as judged.".to_owned()));
@@ -390,6 +391,30 @@ impl Conversation {
             tail(&said, OUTPUT_TAIL)
         );
         self.go_on(&not_met, &told)
+    }
+
+    /// Proposes the command the judge `said` decides the goal, if it named
+    /// one, for the human to judge the goal by in the judge's place: once
+    /// in the chat, as a proposal of the agent's would be.
+    fn offer_command(&mut self, said: &str) {
+        let Some(command) = judge::command_of(said) else {
+            return;
+        };
+        let goal = goal::Goal::Command(command);
+        let input = goal.input();
+        let offered = self.entries.iter().any(
+            |entry| matches!(entry, Entry::Proposal { goal: proposed, .. } if *proposed == input),
+        );
+        if !offered {
+            self.propose(
+                &goal,
+                Some(
+                    "The judge says this command passes just when the goal is met, so it \
+                     can decide the goal in the judge's place."
+                        .to_owned(),
+                ),
+            );
+        }
     }
 
     /// Goes on toward the goal, `not_met` as the check or the judge said:
@@ -1505,6 +1530,41 @@ mod tests {
         );
         conversation.submit("more");
         assert_eq!(conversation.goal().map(Goal::turns), Some(1));
+    }
+
+    #[test]
+    fn the_command_the_judge_finds_is_offered_once() {
+        let mut conversation = toward_words(true);
+        let said = "I ran it.\nCOMMAND: cargo test greeting\nFAIL: the test fails";
+        assert!(conversation.judged(Ok(said.to_owned())).is_some());
+        let offered = conversation
+            .entries()
+            .iter()
+            .position(|entry| matches!(entry, Entry::Proposal { .. }))
+            .expect("the command is offered");
+        // Offered ahead of the next turn it gives.
+        assert!(matches!(conversation.entries()[offered + 1], Entry::Cox(_)));
+        assert_eq!(
+            conversation.proposed(offered),
+            Some(goal::Goal::Command("cargo test greeting".to_owned()))
+        );
+
+        take_turn(&mut conversation, true);
+        conversation.judged(Ok("COMMAND: cargo test greeting\nPASS".to_owned()));
+        let offers = conversation
+            .entries()
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Proposal { .. }))
+            .count();
+        assert_eq!(offers, 1);
+
+        // Set, it is the goal, which a command checks from then on.
+        let command = conversation.answer_proposal(offered, Answer::Set).unwrap();
+        conversation.set_goal(Some(command));
+        assert_eq!(
+            conversation.goal().and_then(Goal::command),
+            Some("cargo test greeting")
+        );
     }
 
     #[test]

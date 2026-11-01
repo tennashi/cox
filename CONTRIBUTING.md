@@ -116,7 +116,12 @@ keeps one session while the goal lasts, so it remembers what it looked
 at, until the goal changes or Cox quits. A `COX.goal.md` in the
 project's folder replaces what the judge is told it is, for a project
 that wants its goals judged in a way of its own; Cox still adds how to
-end the reply, and the goal.
+end the reply, and the goal. When the judge finds that one command
+decides the goal, passing just when it is met, it names the command on
+a line `COMMAND: ` ahead of its verdict, and the chat proposes the
+command as the goal, on a card as the agent's proposals are, once: set,
+the command checks the goal from then on, the same way each time, and
+the judge goes.
 
 A chat's agent can open a chat too, with Cox's `open_chat` tool, giving
 it its first line: the chat opens under the agent's own in the list, in

@@ -40,9 +40,20 @@ const STANCE: &str = "You judge whether another chat's work meets a goal. The ch
     project. Be strict about the goal as written, and no stricter. Each time you are \
     asked, say briefly what you looked at and what you found.";
 
-/// How the judge ends its reply, so that Cox reads the verdict.
+/// How the judge ends its reply, so that Cox reads the verdict, and the
+/// command that decides the goal, when the judge finds one.
 const PROTOCOL: &str = "End every reply with one line of its own: `PASS` when the goal is \
-    met, or `FAIL: ` and why it is not, in one sentence, which the working chat is told.";
+    met, or `FAIL: ` and why it is not, in one sentence, which the working chat is told. \
+    When one shell command, run in this folder, would decide the goal as written by \
+    itself, passing exactly when the goal is met, now and as the work goes on, put a line \
+    `COMMAND: ` and that command just before the verdict, which Cox offers the human to \
+    judge the goal by in your place; you have run it, or would stake the verdict on it. \
+    Leave the line out when part of the goal is a matter of judgement, or no command \
+    decides it.";
+
+/// What starts the line of a judge's reply that names the command that
+/// decides the goal.
+const COMMAND: &str = "COMMAND:";
 
 /// The titles of the permission requests the judge's agent may go on
 /// with, as `claude-agent-acp` titles them: reading, searching, and
@@ -116,6 +127,19 @@ impl Verdict {
             Self::NotMet("the judge gave no verdict".to_owned())
         }
     }
+}
+
+/// The command that `reply` says decides the goal, on a line of its own
+/// that starts `COMMAND:`, if it names one: the last such line.
+#[must_use]
+pub fn command_of(reply: &str) -> Option<String> {
+    reply.lines().rev().find_map(|line| {
+        let line = line.trim().trim_start_matches(['`', '*', '_']);
+        let command = line.strip_prefix(COMMAND)?;
+        let command = command.trim().trim_matches(['`', '*', '_']).trim();
+        let command = command.strip_prefix("$ ").unwrap_or(command).trim();
+        (!command.is_empty()).then(|| command.to_owned())
+    })
 }
 
 /// What follows `word` at the start of `line`, when `line` starts with
@@ -304,11 +328,28 @@ mod tests {
     }
 
     #[test]
+    fn the_judge_may_name_the_command_that_decides_the_goal() {
+        let reply = "I ran the test.\n\nCOMMAND: `cargo test greeting`\nPASS";
+        assert_eq!(command_of(reply), Some("cargo test greeting".to_owned()));
+        // The verdict is read past it.
+        assert_eq!(Verdict::of(reply), Verdict::Met(String::new()));
+        assert_eq!(
+            command_of("**COMMAND:** $ make check\nFAIL: it fails"),
+            Some("make check".to_owned())
+        );
+        assert_eq!(command_of("I read it.\nPASS"), None);
+        assert_eq!(command_of("COMMAND:  \nPASS"), None);
+        // Only a line of its own names one.
+        assert_eq!(command_of("No COMMAND: decides it.\nPASS"), None);
+    }
+
+    #[test]
     fn the_judge_is_set_up_to_read_and_not_to_change() {
         let setup = setup("The greeting names the user.", STANCE);
         let context = setup.context.unwrap();
         assert!(context.starts_with("You judge whether"), "{context}");
         assert!(context.contains("`PASS`") && context.contains("`FAIL: `"));
+        assert!(context.contains("`COMMAND: `"), "{context}");
         assert!(context.ends_with("The goal:\n\nThe greeting names the user.\n"));
         assert_eq!(setup.tools, Some(Vec::new()));
         assert_eq!(setup.stage, StageUse::Look);
