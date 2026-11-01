@@ -145,9 +145,12 @@ fn propose_goal_tool() -> Value {
             which an agent judges by reading the project and running what tests it. Use it \
             once you and the human have talked through what they want, or when they ask \
             for a goal. Make it one that can be checked: name the commands, files or \
-            behaviour that show it is met, not the steps to get there. The human sees it on \
-            a card in the conversation, and sets it as it is, changes it first, or lets it \
-            be; it is not the chat's goal until they set it. It answers at once, with the \
+            behaviour that show it is met, not the steps to get there. When one command \
+            decides it, passing exactly when it is met, such as a test that checks what the \
+            human asked for, propose the command: it checks the goal the same way every \
+            time, with no judge. The human sees it on a card in the conversation, and sets \
+            it as it is, changes it first, or lets it be; it is not the chat's goal until \
+            they set it. It answers at once, with the \
             goal the chat has now, if any. Once a goal is set, each time your turn ends Cox \
             runs its command or asks its judge, and while it is not met, tells you why as \
             the next turn.",
