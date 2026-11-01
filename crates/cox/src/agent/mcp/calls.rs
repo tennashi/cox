@@ -19,6 +19,7 @@ const SHOW_FILE: &str = "show_file";
 const RUN_COMMAND: &str = "run_command";
 const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
+const PROPOSE_GOAL: &str = "propose_goal";
 
 /// The most of a command's output the agent gets: the end of it, where a
 /// build or a test run says how it went.
@@ -130,7 +131,42 @@ fn all_tools() -> Value {
             "required": ["chat"],
         },
     },
+    propose_goal_tool(),
     ])
+}
+
+/// The tool that proposes a goal for the chat, as the agent learns of it.
+fn propose_goal_tool() -> Value {
+    json!(
+    {
+        "name": PROPOSE_GOAL,
+        "description": "Proposes a goal for this chat to the human: what the chat works \
+            until it is met, either `$ ` and a shell command, which has to pass, or words, \
+            which an agent judges by reading the project and running what tests it. Use it \
+            once you and the human have talked through what they want, or when they ask \
+            for a goal. Make it one that can be checked: name the commands, files or \
+            behaviour that show it is met, not the steps to get there. The human sees it on \
+            a card in the conversation, and sets it as it is, changes it first, or lets it \
+            be; it is not the chat's goal until they set it. It answers at once, with the \
+            goal the chat has now, if any. Once a goal is set, each time your turn ends Cox \
+            runs its command or asks its judge, and while it is not met, tells you why as \
+            the next turn.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "The goal: \"$ \" and a shell command, which has to \
+                        pass, or words, which an agent judges.",
+                },
+                "why": {
+                    "type": "string",
+                    "description": "Why this goal, in a sentence, for the human to weigh it.",
+                },
+            },
+            "required": ["goal"],
+        },
+    })
 }
 
 /// The tool that opens a chat, as the agent learns of it.
@@ -221,6 +257,7 @@ pub(super) async fn call(
         RUN_COMMAND => run_command(arguments, cwd, requests).await,
         OPEN_CHAT => open_chat(arguments, chats).await,
         WAIT_CHAT => wait_chat(arguments, chats).await,
+        PROPOSE_GOAL => propose_goal(arguments, chats).await,
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
     let (text, is_error) = match done {
@@ -439,6 +476,42 @@ async fn wait_chat(
             told.push_str(said);
         }
         None => told.push_str(" It said nothing."),
+    }
+    Ok(told)
+}
+
+/// Asks the window to show the human the goal `arguments` propose, and
+/// tells the agent the goal the chat has now.
+async fn propose_goal(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let goal = arguments
+        .get("goal")
+        .and_then(Value::as_str)
+        .and_then(Goal::parse)
+        .ok_or("no goal: give the goal to propose as `goal`")?;
+    let why = match arguments.get("why") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(why)) => Some(why.clone()),
+        Some(_) => return Err("`why` is not a string".to_owned()),
+    };
+    let (answer, now) = oneshot::channel();
+    chats
+        .send(ChatRequest::ProposeGoal { goal, why, answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let now = now
+        .await
+        .map_err(|_| "the chat closed before it showed the goal".to_owned())?;
+    let mut told = "The goal is on a card in the conversation, for the human to set, change, \
+                    or let be; it is not the chat's goal until they set it."
+        .to_owned();
+    match now {
+        Some(now) => {
+            told.push_str(" The chat's goal now: ");
+            told.push_str(&now.input());
+        }
+        None => told.push_str(" The chat has no goal now."),
     }
     Ok(told)
 }
@@ -757,6 +830,57 @@ mod tests {
                     reject: ["Edit *"].map(str::to_owned).to_vec(),
                 },
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn proposes_a_goal_to_the_human_and_tells_the_goal_now() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let mut proposed = Vec::new();
+            for now in [None, Some(Goal::Command("make".to_owned()))] {
+                let Some(ChatRequest::ProposeGoal { goal, why, answer }) = asked.recv().await
+                else {
+                    panic!("the window was not asked");
+                };
+                proposed.push((goal, why));
+                let _ = answer.send(now);
+            }
+            proposed
+        });
+        let propose = |arguments: Value| {
+            let params = json!({ "name": PROPOSE_GOAL, "arguments": arguments });
+            let (sent, chats) = (sent.clone(), chats.clone());
+            async move {
+                call(&params, Path::new("/work"), None, &sent, &chats)
+                    .await
+                    .unwrap()
+            }
+        };
+        let first = propose(json!({
+            "goal": "$ cargo test greeting",
+            "why": "The test names the user.",
+        }))
+        .await;
+        assert_eq!(first["isError"], false);
+        let told = first["content"][0]["text"].as_str().unwrap();
+        assert!(told.ends_with("The chat has no goal now."), "{told}");
+        let second = propose(json!({ "goal": "The greeting names the user." })).await;
+        let told = second["content"][0]["text"].as_str().unwrap();
+        assert!(told.ends_with("The chat's goal now: $ make"), "{told}");
+        // A goal that is blank is no goal to propose, and asks nothing.
+        let blank = propose(json!({ "goal": " " })).await;
+        assert_eq!(blank["isError"], true);
+        assert_eq!(
+            window.await.unwrap(),
+            [
+                (
+                    Goal::Command("cargo test greeting".to_owned()),
+                    Some("The test names the user.".to_owned())
+                ),
+                (Goal::Words("The greeting names the user.".to_owned()), None),
+            ]
         );
     }
 

@@ -550,6 +550,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match request {
+            ChatRequest::ProposeGoal { goal, why, answer } => {
+                let now = view.update(cx, |view, cx| {
+                    view.propose_goal(&goal, why, cx);
+                    view.conversation().goal().map(|goal| goal.what().clone())
+                });
+                answer.send(now).ok();
+            }
             ChatRequest::OpenChat {
                 text,
                 setup,

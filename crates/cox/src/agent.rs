@@ -30,7 +30,7 @@ use cox_acp::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use cox_core::entry::{Content, Entry, Step, StepState, ToolCallResult};
+use cox_core::entry::{Answer, Content, Entry, Step, StepState, ToolCallResult};
 
 use crate::agent::instructions::Instructions;
 use crate::agent::setup::{Decision, Policy, Setup};
@@ -511,6 +511,15 @@ pub fn retold(entries: &[Entry]) -> String {
                     "[you asked permission for: {title}; {who} chose: {chosen}]"
                 ))
             }
+            Entry::Proposal { goal, answer, .. } => {
+                let answer = match answer {
+                    Some(Answer::Set) => "the human set it",
+                    Some(Answer::Changed) => "the human changed it, and set that",
+                    Some(Answer::Dismissed) => "the human let it be",
+                    None => "the human has not answered",
+                };
+                Some(format!("[you proposed the goal: {goal}; {answer}]"))
+            }
             // What the agent thought and planned is its own, and what came
             // of it is told already.
             Entry::Thought(_) | Entry::Plan(_) | Entry::Note(_) => None,
@@ -600,6 +609,11 @@ mod tests {
                 by_setup: true,
             },
             Entry::Reply("Done".to_owned()),
+            Entry::Proposal {
+                goal: "$ make".to_owned(),
+                why: Some("make builds it".to_owned()),
+                answer: Some(Answer::Changed),
+            },
             Entry::Note("Stopped.".to_owned()),
         ];
         let told = retold(&entries);
@@ -609,7 +623,8 @@ mod tests {
                  [your tool call: Edit x.txt … Completed]\n\n\
                  [you asked permission for: Edit x.txt; the human chose: Allow once]\n\n\
                  [you asked permission for: Write y.txt; Cox, as the chat is set up, chose: Reject once]\n\n\
-                 [you]\nDone"
+                 [you]\nDone\n\n\
+                 [you proposed the goal: $ make; the human changed it, and set that]"
             ),
             "{told}"
         );
