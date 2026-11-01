@@ -159,8 +159,20 @@ kind or none, which "Open folder…" opens as a project once the human
 wants to go on with it. The chat notes at its top where it works, and
 the agent that opened it is told, to read what the trial made and
 propose a goal from it. A chat a trial opens works in the trial's
-folder too, and a trial goes on there once it is started again. Cox
-leaves the folders be: `git worktree remove` takes a worktree away.
+folder too, and a trial goes on there once it is started again. The
+menu of the right button on a trial ends it once the human has what
+they wanted of it: "Keep as branch", for a trial from the project,
+commits what it changed and keeps it as a branch of the project's
+repository, `trial/` and the name of its folder, for the human to merge
+or not, and takes the worktree away; "Open as project", for a trial
+from nothing, opens its folder as a project, with a chat in it, to go on
+with what it made; and "Discard trial" takes its folder away, unless
+it was opened as a project, which the human goes on with. A trial
+kept or discarded stops its agent, and those of the chats it opened,
+which worked in its folder, and each chat goes on in the project: a
+line sent starts its agent again there, with the conversation so far,
+asking the human as any chat does, since what it was allowed was for
+the trial.
 `open_chat` answers with a number the chat goes by for this run, which
 the agent gives Cox's `wait_chat` tool to wait for the chat's turn to
 end, or for the chat to come to wait for the human, and hear how it

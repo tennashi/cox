@@ -14,9 +14,10 @@
 //! human names it. Its row in the list tells whether its agent is at
 //! work, waits for the human, or finished a turn the human has not seen
 //! yet, and whether it has a goal. The menu of the right button on a row
-//! renames the chat, as a double click does, sets or clears its goal, or
-//! archives it: an archived chat leaves the list for "Archived" at its
-//! foot, whose click brings it back.
+//! renames the chat, as a double click does, sets or clears its goal,
+//! ends a trial (see [`crate::chat::trial`]), or archives it: an archived
+//! chat leaves the list for "Archived" at its foot, whose click brings it
+//! back.
 //!
 //! A chat that comes to wait for the human, or whose turn ends, while the
 //! human is not looking at it, tells them so (see [`crate::notices`]),
@@ -45,9 +46,9 @@ use crate::agent::instructions::Instructions;
 use tokio::sync::oneshot;
 
 use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
-use crate::agent::setup::Setup;
+use crate::agent::setup::{Policy, Setup};
 use crate::chat::conversation::{Entry, State};
-use crate::chat::trial;
+use crate::chat::trial::{self, Trial};
 use crate::chat::view::{Asked, ChatView, Reopened};
 use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
@@ -605,6 +606,7 @@ impl Workspace {
                     match made {
                         Ok(made) => {
                             setup.policy.allow.extend(trial::allowed());
+                            setup.trial = Some(trial);
                             Some(made)
                         }
                         Err(error) => {
@@ -903,6 +905,142 @@ impl Workspace {
         if let Some(view) = self.chats.get(index).and_then(Chat::view) {
             view.update(cx, |view, cx| view.set_goal(None, cx));
         }
+    }
+
+    /// The trial the chat at `index` is, what it started from and the
+    /// folder it works in, while the folder is there.
+    fn trial_of(&self, index: usize) -> Option<(Trial, PathBuf)> {
+        let setup = self.chats.get(index)?.setup.as_ref()?;
+        let folder = setup.folder.clone().filter(|folder| folder.exists())?;
+        Some((setup.trial?, folder))
+    }
+
+    /// Whether the trial at `index` can be discarded: its folder is there,
+    /// and was not opened as a project, which the human goes on with.
+    fn discards(&self, index: usize) -> bool {
+        self.trial_of(index).is_some_and(|(_, folder)| {
+            !self.projects.iter().any(|project| project.folder == folder)
+        })
+    }
+
+    /// Keeps what the trial at `index` made as a branch of the project's
+    /// repository, and ends the trial (see [`trial::keep`]).
+    pub fn keep_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((Trial::Project, folder)) = self.trial_of(index) else {
+            return;
+        };
+        let title = self.chats[index].name.to_string();
+        let kept = trial::keep(&folder, &title).map(|branch| {
+            format!(
+                "The trial is kept as the branch {branch} of the project, and its folder is gone."
+            )
+        });
+        self.end_trial(index, &folder, kept, window, cx);
+    }
+
+    /// Discards the trial at `index`, its folder with it, and ends the
+    /// trial (see [`trial::discard`]).
+    pub fn discard_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((started, folder)) = self.trial_of(index).filter(|_| self.discards(index)) else {
+            return;
+        };
+        let discarded = trial::discard(started, &folder)
+            .map(|()| "The trial is discarded, and its folder is gone.".to_owned());
+        self.end_trial(index, &folder, discarded, window, cx);
+    }
+
+    /// Opens the folder of the trial from nothing at `index` as a project
+    /// of its own, with a chat in it, to go on with what the trial made.
+    pub fn open_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        if let Some((Trial::Empty, folder)) = self.trial_of(index) {
+            self.open(Some(folder), window, cx);
+        }
+    }
+
+    /// Shows the chat at `index`, a trial that worked in `folder`, and
+    /// ends the trial as `ended` says, or says why it could not. Ended,
+    /// the trial's chat goes on in the project, as do the chats it opened,
+    /// which worked in its folder too: each is closed, its agent stopped,
+    /// and set up to work in the project, asking the human as any chat
+    /// does, so that a line sent starts its agent again there, with the
+    /// conversation so far.
+    fn end_trial(
+        &mut self,
+        index: usize,
+        folder: &Path,
+        ended: Result<String, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.menu = None;
+        self.show(index, window, cx);
+        let note = match ended {
+            Ok(note) => note,
+            Err(error) => {
+                if let Some(view) = self.chats.get(index).and_then(Chat::view) {
+                    view.update(cx, |view, cx| {
+                        view.note(format!("The trial could not end: {error}"), cx);
+                    });
+                }
+                return;
+            }
+        };
+        let goes_on = "The chat goes on in the project: a line sent starts its agent again \
+                       there, with the conversation so far.";
+        let trial = self.chats[index].key;
+        let mut ended = Vec::new();
+        for chat in self.chats.iter_mut().chain(&mut self.archived) {
+            let worked_there = chat.setup.as_ref().is_some_and(|setup| {
+                setup
+                    .folder
+                    .as_ref()
+                    .is_some_and(|works| works.starts_with(folder))
+            });
+            if !worked_there {
+                continue;
+            }
+            let told = if chat.key == trial {
+                format!("{note} {goes_on}")
+            } else {
+                format!(
+                    "The trial this chat worked in has ended, and its folder is gone. {goes_on}"
+                )
+            };
+            if let Some(view) = chat.view.take() {
+                view.update(cx, |view, cx| view.close(told.clone(), cx));
+            }
+            chat.open = false;
+            chat.state = State::Closed;
+            chat.setup = chat.setup.take().map(|setup| Setup {
+                folder: None,
+                trial: None,
+                policy: Policy::default(),
+                ..setup
+            });
+            if let Some(kept) = chat.kept
+                && let Err(error) = self
+                    .store
+                    .keep_setup(kept, chat.setup.as_ref().map(Setup::to_json).as_deref())
+            {
+                log::error!("the chat's setup is not kept: {error:#}");
+            }
+            ended.push((chat.key, told));
+        }
+        // What waits for them hears how they ended.
+        for (key, told) in ended {
+            for (_, answer) in self.waiting.extract_if(.., |(waited, _)| *waited == key) {
+                let stands = Waited {
+                    asking: None,
+                    said: Some(told.clone()),
+                };
+                answer.send(Ok(stands)).ok();
+            }
+        }
+        // The trial's chat, shown again, gets a view of it read again,
+        // closed, to go on with.
+        self.show(index, window, cx);
+        cx.notify();
     }
 
     /// Takes the chat at `index` out of the list, to "Archived" at its
@@ -1218,6 +1356,8 @@ impl Workspace {
             .chats
             .get(index)
             .is_some_and(|chat| chat.goal.is_some());
+        let trial = self.trial_of(index).map(|(trial, _)| trial);
+        let discards = self.discards(index);
         let item = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -1253,6 +1393,21 @@ impl Workspace {
             .when(has_goal, |menu| {
                 menu.child(item("clear-goal", "Clear goal").on_click(cx.listener(
                     move |workspace, _, window, cx| workspace.clear_goal(index, window, cx),
+                )))
+            })
+            .when(trial == Some(Trial::Project), |menu| {
+                menu.child(item("keep-trial", "Keep as branch").on_click(cx.listener(
+                    move |workspace, _, window, cx| workspace.keep_trial(index, window, cx),
+                )))
+            })
+            .when(trial == Some(Trial::Empty), |menu| {
+                menu.child(item("open-trial", "Open as project").on_click(cx.listener(
+                    move |workspace, _, window, cx| workspace.open_trial(index, window, cx),
+                )))
+            })
+            .when(discards, |menu| {
+                menu.child(item("discard-trial", "Discard trial").on_click(cx.listener(
+                    move |workspace, _, window, cx| workspace.discard_trial(index, window, cx),
                 )))
             })
             .child(item("archive-chat", "Archive").on_click(

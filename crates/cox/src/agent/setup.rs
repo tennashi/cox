@@ -16,6 +16,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::chat::trial::Trial;
+
 /// How a chat's agent is set up, as the chat that opened it said.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -34,6 +36,9 @@ pub struct Setup {
     /// chat is a trial: a folder of its own (see
     /// [`crate::chat::trial`]).
     pub folder: Option<PathBuf>,
+    /// What the chat started from, when it is a trial: not a chat that a
+    /// trial opened, which works in its folder too.
+    pub trial: Option<Trial>,
 }
 
 /// What an agent does with the stage.
@@ -150,10 +155,12 @@ mod tests {
                 reject: ["Edit *", "Write *"].map(str::to_owned).to_vec(),
             },
             folder: Some("/trials/greet-1".into()),
+            trial: Some(Trial::Project),
         };
         let json = setup.to_json();
         assert_eq!(Setup::from_json(&json).unwrap(), setup);
         assert!(json.contains("\"stage\":\"look\""), "{json}");
+        assert!(json.contains("\"trial\":\"project\""), "{json}");
 
         // Every part can be left out.
         assert_eq!(Setup::from_json("{}").unwrap(), Setup::default());

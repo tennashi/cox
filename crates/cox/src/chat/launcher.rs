@@ -139,13 +139,17 @@ impl Opens for Launcher {
                 cx,
             )
         });
-        // 2 to 5, once the human sends to the chat.
+        // 2 to 5, once the human sends to the chat; but not to a chat of a
+        // trial whose folder is gone from under it.
+        let gone = setup.as_ref().is_some_and(|setup| setup.folder.is_some()) && !cwd.exists();
         let launcher = self.clone();
         let works = stage.clone();
         let kept = record.clone();
-        let again: Again = Box::new(move |entries, window, cx| {
-            let start = Start::again(&cwd, session, entries, setup);
-            launcher.start(&works, cwd, kept, start, window, cx)
+        let again: Option<Again> = (!gone).then(|| -> Again {
+            Box::new(move |entries, window, cx| {
+                let start = Start::again(&cwd, session, entries, setup);
+                launcher.start(&works, cwd, kept, start, window, cx)
+            })
         });
         // 6. The view, with the stage beside it, and no agent yet.
         cx.new(|cx| {
@@ -154,7 +158,7 @@ impl Opens for Launcher {
                 Some(shown(&stage, panel)),
                 open_link(&stage),
                 record,
-                Some(again),
+                again,
                 Some(self.starts()),
                 window,
                 cx,

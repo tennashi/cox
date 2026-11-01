@@ -448,6 +448,7 @@ async fn open_chat(
             reject: strings("reject")?.unwrap_or_default(),
         },
         folder: None,
+        trial: None,
     };
     let goal = string("goal")?.as_deref().and_then(Goal::parse);
     let trial = string("trial")?
@@ -873,6 +874,7 @@ mod tests {
                     reject: ["Edit *"].map(str::to_owned).to_vec(),
                 },
                 folder: None,
+                trial: None,
             }
         );
     }

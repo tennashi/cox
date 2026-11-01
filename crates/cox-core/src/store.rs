@@ -433,6 +433,22 @@ impl Store {
         )?)
     }
 
+    /// Keeps `setup` as how the agent of `chat` is set up, as JSON, or
+    /// that it is set up with nothing, and forgets the session of its
+    /// agent, which a new setup may not go on with, as when the agent
+    /// works in another folder from then on.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_setup(&self, chat: ChatId, setup: Option<&str>) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET setup = ?2, session = NULL WHERE id = ?1",
+            params![chat.0, setup],
+        )?;
+        Ok(())
+    }
+
     /// Keeps `session` as the id of the session of `chat`'s agent.
     ///
     /// # Errors
@@ -725,6 +741,31 @@ mod tests {
 
         store.keep_session(chat, "session-1").unwrap();
         assert_eq!(store.session(chat).unwrap().as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn keeps_a_new_setup_and_forgets_the_session() {
+        let store = Store::in_memory().unwrap();
+        let parent = store.add_chat(None, "Chat 1").unwrap();
+        let chat = store
+            .add_chat_under(parent, None, "Chat 2", Some(r#"{"folder":"/trials/a-1"}"#))
+            .unwrap();
+        store.keep_session(chat, "session-1").unwrap();
+
+        store.keep_setup(chat, Some("{}")).unwrap();
+        let setup = |store: &Store| {
+            store
+                .chats()
+                .unwrap()
+                .into_iter()
+                .find(|kept| kept.id == chat)
+                .unwrap()
+                .setup
+        };
+        assert_eq!(setup(&store).as_deref(), Some("{}"));
+        assert_eq!(store.session(chat).unwrap(), None);
+        store.keep_setup(chat, None).unwrap();
+        assert_eq!(setup(&store), None);
     }
 
     #[test]
