@@ -1507,6 +1507,8 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

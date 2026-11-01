@@ -22,7 +22,9 @@ use agent_client_protocol::schema::v1::{
     ToolCallContent as AcpToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
 };
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
-use agent_client_protocol::{AcpAgent, Agent, Client, ConnectTo, ConnectionTo, Responder};
+use agent_client_protocol::{
+    AcpAgent, Agent, Client, ConnectTo, ConnectionTo, LineDirection, Responder,
+};
 use anyhow::Context;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -32,13 +34,33 @@ pub trait Transport: ConnectTo<Client> {}
 
 impl<T: ConnectTo<Client>> Transport for T {}
 
+/// The target under which each line Cox and the agent send each other is
+/// said, at `debug`, with `from` saying whose it is: `cox` or `agent`.
+pub const WIRE: &str = "cox_acp::wire";
+
+/// The target under which each line the agent writes to its standard error
+/// is said, at `info`.
+pub const STDERR: &str = "cox_acp::stderr";
+
 /// Starts `command` (the program, then its arguments) as an agent process.
+/// What Cox and the agent send each other, and what the agent writes to its
+/// standard error, is said a line at a time, under [`WIRE`] and
+/// [`STDERR`], in the span `launch` is called in, such as its chat's.
 ///
 /// # Errors
 ///
 /// Returns an error if `command` is empty.
 pub fn launch(command: impl IntoIterator<Item = String>) -> anyhow::Result<impl Transport> {
-    Ok(AcpAgent::from_args(command)?)
+    let span = tracing::Span::current();
+    Ok(
+        AcpAgent::from_args(command)?.with_debug(move |line, direction| {
+            span.in_scope(|| match direction {
+                LineDirection::Stdin => tracing::debug!(target: WIRE, from = "cox", "{line}"),
+                LineDirection::Stdout => tracing::debug!(target: WIRE, from = "agent", "{line}"),
+                LineDirection::Stderr => tracing::info!(target: STDERR, "{line}"),
+            });
+        }),
+    )
 }
 
 /// An MCP server the agent starts for the session, to use its tools. The

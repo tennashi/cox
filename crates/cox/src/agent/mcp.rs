@@ -218,7 +218,11 @@ pub fn start(cwd: PathBuf, only: Option<Vec<String>>) -> anyhow::Result<ToolServ
     let (sent, requests) = unbounded_channel();
     let asks = sent.clone();
     let (chats, chat_requests) = unbounded_channel();
+    // What the server says is said in the span it starts in, its chat's:
+    // its runtime runs on this one thread.
+    let span = tracing::Span::current();
     thread::spawn(move || {
+        let _entered = span.enter();
         let served = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

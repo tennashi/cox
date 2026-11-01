@@ -91,6 +91,13 @@ pub struct ProjectId(i64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ChatId(i64);
 
+/// The number the chat is kept by, as the logs say which chat a line is of.
+impl std::fmt::Display for ChatId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeptProject {
     pub id: ProjectId,
@@ -475,6 +482,12 @@ impl Record {
     #[must_use]
     pub fn new(store: Rc<Store>, chat: ChatId) -> Self {
         Self { store, chat }
+    }
+
+    /// The chat this keeps.
+    #[must_use]
+    pub fn chat(&self) -> ChatId {
+        self.chat
     }
 
     /// Keeps `entry` as the `number`th of the chat.

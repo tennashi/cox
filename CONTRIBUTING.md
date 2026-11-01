@@ -348,7 +348,10 @@ Cox says what goes wrong on standard error, as `RUST_LOG` asks, and only
 the errors unless it asks for more. It also keeps all it says, down to
 `debug`, or as `COX_LOG` asks, in a file of each run's own, for an agent
 that debugs Cox to read and search once the run is over too: one JSON
-object a line, with the spans it was said in. The files are in `logs`
+object a line, with the spans it was said in, such as the chat it was
+said of. Among it is what Cox and each chat's agent send each other over
+ACP, a line at a time, under `cox_acp::wire`, and what the agent writes
+to its standard error, under `cox_acp::stderr`. The files are in `logs`
 beside the chats' database (see [The stage](#the-stage)), as
 `~/Library/Application Support/Cox/logs` for the installed Cox on macOS,
 and `cox-logs` beside any other, as `target/debug/cox-logs`, each named
