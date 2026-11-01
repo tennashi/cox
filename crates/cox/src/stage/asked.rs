@@ -1,7 +1,7 @@
 //! What the agent asks of the stage. Through the chat's relay, it works on
 //! pages, which the stage shows, and opens and closes them. Through Cox's
 //! own tools, it shows the human files, as Markdown or as they are
-//! written, and runs commands in terminals.
+//! written, and what changed in them, and runs commands in terminals.
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -66,6 +66,10 @@ impl Stage {
                     }
                     ToolRequest::ShowFile { path, text, lines } => {
                         stage.show_file::<Code>(path, &text, lines, window, cx);
+                    }
+                    ToolRequest::ShowChanges { folder } => {
+                        stage.show_changes(folder, window, cx);
+                        stage.show_panel(cx);
                     }
                     ToolRequest::RunCommand {
                         command,

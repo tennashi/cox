@@ -9,7 +9,10 @@
 //!
 //! Cox makes the folder when the chat opens, in a folder of its own for
 //! trials (see [`crate::storage`]), and keeps where it is with the chat's
-//! setup, so the chat goes on there once it is started again.
+//! setup, so the chat goes on there once it is started again. It marks
+//! where the trial starts in the folder's repository, so that what the
+//! trial changed shows on the stage as all it changed since then (see
+//! [`cox_editor::changes`]).
 //!
 //! Once the human has what they wanted of it, the trial ends: a trial of
 //! the project's is kept as a branch of the project's repository, with
@@ -21,6 +24,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
+
+use cox_editor::changes;
 
 use crate::chat::judge;
 
@@ -85,14 +90,17 @@ pub fn allowed() -> Vec<String> {
 /// Git repository, or when Git cannot make the folder, with what Git
 /// said.
 pub fn make(trial: Trial, project: &Path, trials: &Path) -> Result<PathBuf, String> {
-    match trial {
-        Trial::Project => worktree(project, trials),
+    let folder = match trial {
+        Trial::Project => worktree(project, trials)?,
         Trial::Empty => {
             let folder = free(trials, "scratch")?;
             git(&folder, &["init", "--quiet"])?;
-            Ok(folder)
+            folder
         }
-    }
+    };
+    // What the trial changed is what it changed since now.
+    changes::start(&folder)?;
+    Ok(folder)
 }
 
 /// Makes a worktree of the Git repository `project` is in, from its last
@@ -285,6 +293,10 @@ mod tests {
             std::fs::read_to_string(project.join("app/main.rs")).unwrap(),
             "fn main() { todo!() }\n"
         );
+        // What it changed is what it changed since it started.
+        let diff = changes::read(&trial).unwrap();
+        assert!(matches!(diff.since, changes::Since::Start(_)));
+        assert_eq!(diff.counts(), (1, 1));
         // Each trial gets a worktree of its own.
         assert_eq!(
             make(Trial::Project, &project, &trials).unwrap(),
@@ -316,6 +328,10 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(files, [".git"]);
+        assert_eq!(
+            changes::read(&trial).unwrap().since,
+            changes::Since::Nothing
+        );
         assert_eq!(
             git(&trial, &["rev-parse", "--show-toplevel"])
                 .unwrap()

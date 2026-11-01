@@ -3,7 +3,8 @@
 //! the browser (see [`crate::stage::page`]), a Markdown file (see
 //! [`crate::stage::document`]), a file as it is written, such as code (see
 //! [`crate::stage::code`]), the project's files as a tree (see [`crate::stage::tree`]),
-//! or a terminal (see [`crate::stage::terminal`]). The first shows the page the
+//! what changed in them (see [`crate::stage::changes`]), or a terminal (see
+//! [`crate::stage::terminal`]). The first shows the page the
 //! stage starts on; the human opens more pages and terminals, and the
 //! tree, and closes tabs, and the agent opens and closes pages
 //! too, through the chat's relay. A page that asks for a window of its own
@@ -37,10 +38,13 @@
 //! - [`servers`] holds the language servers a tab of code asks what the
 //!   code means.
 //! - [`tree`] shows the project's files, for the human to open one.
+//! - [`changes`] shows what changed in them, for the human to read, and
+//!   to open a file where it changed.
 //! - [`terminal`] is a terminal the human types into, and the agent runs
 //!   commands in.
 
 mod asked;
+pub mod changes;
 pub mod code;
 pub mod document;
 pub mod follow;
@@ -197,6 +201,9 @@ impl Stage {
                 KeptTab::Files { open } => {
                     stage.push_tree(open, show, window, cx);
                 }
+                KeptTab::Changes { folder } => {
+                    stage.push_changes(folder, show, window, cx);
+                }
                 KeptTab::Terminal { .. } => {}
             }
         }
@@ -255,6 +262,7 @@ impl Stage {
             TabContent::Document(_)
             | TabContent::Code(_)
             | TabContent::Tree(_)
+            | TabContent::Changes(_)
             | TabContent::Terminal(_) => false,
         })
     }
@@ -460,6 +468,22 @@ impl Stage {
                     .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
                     .child("Files")
                     .on_click(cx.listener(|stage, _, window, cx| stage.show_tree(window, cx))),
+            )
+            .child(
+                div()
+                    .id("show-changes")
+                    .debug_selector(|| "show-changes".to_owned())
+                    .flex_shrink_0()
+                    .px_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(rgb(0x80_8080))
+                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .child("Changes")
+                    .on_click(cx.listener(|stage, _, window, cx| {
+                        let cwd = stage.cwd.clone();
+                        stage.show_changes(cwd, window, cx);
+                    })),
             )
     }
 }

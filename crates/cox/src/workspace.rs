@@ -916,7 +916,8 @@ impl Workspace {
         chat.setup = Some(setup);
         chat.moving = Some(format!(
             "You work in a trial now, in {}, {}, apart from the project: there you change \
-             and test files without asking the human. Go on with what you try: {what}",
+             and test files without asking the human. Once you have tried it, show the human \
+             what you made with show_changes. Go on with what you try: {what}",
             folder.display(),
             started.what()
         ));
@@ -1084,6 +1085,14 @@ impl Workspace {
     pub fn open_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
         if let Some((Trial::Empty, folder)) = self.trial_of(index) {
+            // A project now, what changed in it is what changed since its
+            // last commit.
+            if let Err(error) = cox_editor::changes::forget(&folder) {
+                log::warn!(
+                    "{} still counts changes from nothing: {error}",
+                    folder.display()
+                );
+            }
             self.open(Some(folder), window, cx);
         }
     }

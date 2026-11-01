@@ -8,6 +8,7 @@ use std::path::Path;
 
 use cox_core::goal::Goal;
 use cox_core::tabs::Lines;
+use cox_editor::changes::{self, Diff};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -18,11 +19,15 @@ use crate::chat::trial::Trial;
 
 const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
+const SHOW_CHANGES: &str = "show_changes";
 const RUN_COMMAND: &str = "run_command";
 const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const START_TRIAL: &str = "start_trial";
+
+/// The most files the agent is told of, of those that changed.
+const FILES_TOLD: usize = 50;
 
 /// The most of a command's output the agent gets: the end of it, where a
 /// build or a test run says how it went.
@@ -95,6 +100,7 @@ fn all_tools() -> Value {
             "required": ["path"],
         },
     },
+    show_changes_tool(),
     {
         "name": RUN_COMMAND,
         "description": "Runs a shell command in a terminal on the stage beside the \
@@ -139,6 +145,32 @@ fn all_tools() -> Value {
     ])
 }
 
+/// The tool that shows what changed, as the agent learns of it.
+fn show_changes_tool() -> Value {
+    json!(
+    {
+        "name": SHOW_CHANGES,
+        "description": "Shows the human what changed in the files of a Git repository, \
+            file by file and line by line, on a tab of the stage beside the conversation, \
+            where a click on a line opens the file there: in a trial, all it changed since \
+            it started, and elsewhere what changed since the last commit, with the files \
+            Git does not track yet. Use it to show the human what you made, before you talk \
+            it through or propose a goal from it. The tab follows the files as they change. \
+            Answers the files that changed, and how many lines each gained and lost.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "folder": {
+                    "type": "string",
+                    "description": "A folder of the repository, absolute or from the working \
+                        directory, such as a trial's folder: the working directory unless \
+                        given.",
+                },
+            },
+        },
+    })
+}
+
 /// The tool that makes the chat a trial, as the agent learns of it.
 fn start_trial_tool() -> Value {
     json!(
@@ -151,8 +183,8 @@ fn start_trial_tool() -> Value {
             files without asking the human. `from` is \"project\", a Git worktree of the \
             project's last commit, to try a change to the project, or \"empty\", an empty \
             Git repository, to try something from nothing. Call it, then end your turn. \
-            Once you have tried it, show the human what it made, and propose a goal from \
-            it with propose_goal; the human ends the trial, keeping it or not, and the chat \
+            Once you have tried it, show the human what it made with show_changes, and \
+            propose a goal from it with propose_goal; the human ends the trial, keeping it or not, and the chat \
             goes on in the project. To try several ways side by side, open a trial of its \
             own for each with open_chat instead.",
         "inputSchema": {
@@ -238,8 +270,8 @@ fn open_chat_tool() -> Value {
             the project, or \"empty\", an empty Git repository, to try something from \
             nothing. Open trials when the work is uncertain and you would try several \
             ways side by side, one trial each, before you and the human agree what it is \
-            to be: read what each made, show the human, and propose a goal from it with \
-            propose_goal; to try one way, make this chat the trial with start_trial \
+            to be: read what each made, show the human with show_changes, giving its \
+            folder, and propose a goal from it with propose_goal; to try one way, make this chat the trial with start_trial \
             instead. Answers the number the chat goes by, to wait for it with wait_chat.",
         "inputSchema": {
             "type": "object",
@@ -312,6 +344,7 @@ pub(super) async fn call(
     let done = match name {
         SHOW_MARKDOWN => show_markdown(arguments, cwd, requests),
         SHOW_FILE => show_file(arguments, cwd, requests),
+        SHOW_CHANGES => show_changes(arguments, cwd, requests),
         RUN_COMMAND => run_command(arguments, cwd, requests).await,
         OPEN_CHAT => open_chat(arguments, chats).await,
         WAIT_CHAT => wait_chat(arguments, chats).await,
@@ -407,6 +440,67 @@ fn show_file(
         .send(ToolRequest::ShowFile { path, text, lines })
         .map_err(|_| "the chat has closed".to_owned())?;
     Ok(shown)
+}
+
+/// Asks the chat to show what changed in the repository of the folder
+/// `arguments` name, and answers what changed.
+fn show_changes(
+    arguments: &Value,
+    cwd: &Path,
+    requests: &UnboundedSender<ToolRequest>,
+) -> Result<String, String> {
+    let folder = match arguments.get("folder") {
+        None | Some(Value::Null) => cwd.to_owned(),
+        Some(folder) => cwd.join(
+            folder
+                .as_str()
+                .ok_or("folder is to be a path, as a string")?,
+        ),
+    };
+    let folder = fs::canonicalize(&folder)
+        .map_err(|error| format!("cannot read {}: {error}", folder.display()))?;
+    let diff = changes::read(&folder)
+        .map_err(|error| format!("cannot tell what changed in {}: {error}", folder.display()))?;
+    requests
+        .send(ToolRequest::ShowChanges { folder })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    Ok(told_changes(&diff))
+}
+
+/// What changed in `diff`, as the agent is told it.
+fn told_changes(diff: &Diff) -> String {
+    let top = diff.top.display();
+    if diff.files.is_empty() {
+        return format!(
+            "Nothing changed in {top} {}; the stage shows so.",
+            diff.since.said()
+        );
+    }
+    let (added, removed) = diff.counts();
+    let files = match diff.files.len() {
+        1 => "1 file".to_owned(),
+        count => format!("{count} files"),
+    };
+    let mut told = format!(
+        "What changed in {top} {} is on the stage, for the human to read: {files}, +{added} \
+         -{removed}.",
+        diff.since.said(),
+    );
+    for file in diff.files.iter().take(FILES_TOLD) {
+        let _ = write!(told, "\n{} {}", file.how.letter(), file.path.display());
+        if let Some(was) = &file.was {
+            let _ = write!(told, " (was {})", was.display());
+        }
+        if file.binary {
+            told.push_str(" binary");
+        } else {
+            let _ = write!(told, " +{} -{}", file.added, file.removed);
+        }
+    }
+    if diff.files.len() > FILES_TOLD {
+        let _ = write!(told, "\n... and {} more", diff.files.len() - FILES_TOLD);
+    }
+    told
 }
 
 /// Asks the chat to run the command `arguments` holds, and waits for it to
@@ -516,7 +610,7 @@ async fn open_chat(
         let _ = write!(
             told,
             " It is a trial, working in {}, {}, apart from the project: read what it made \
-             there.",
+             there, and show the human with show_changes, giving that folder.",
             folder.display(),
             trial.what()
         );
@@ -686,9 +780,10 @@ mod tests {
         let listed = tools(None);
         assert_eq!(listed[0]["name"], SHOW_MARKDOWN);
         assert_eq!(listed[1]["name"], SHOW_FILE);
-        assert_eq!(listed[2]["name"], RUN_COMMAND);
-        assert_eq!(listed[3]["name"], OPEN_CHAT);
-        assert_eq!(listed[6]["name"], START_TRIAL);
+        assert_eq!(listed[2]["name"], SHOW_CHANGES);
+        assert_eq!(listed[3]["name"], RUN_COMMAND);
+        assert_eq!(listed[4]["name"], OPEN_CHAT);
+        assert_eq!(listed[7]["name"], START_TRIAL);
     }
 
     #[tokio::test]
@@ -830,6 +925,53 @@ mod tests {
         );
         assert!(fails(json!({ "path": "gone.rs" })).starts_with("cannot read"));
         fs::remove_dir_all(cwd).unwrap();
+    }
+
+    #[test]
+    fn shows_what_changed_in_a_folder_and_tells_the_agent() {
+        let cwd = scratch("changes");
+        let trial = cwd.join("trial");
+        fs::create_dir_all(&trial).unwrap();
+        let git = |args: &[&str]| {
+            let ran = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&trial)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(ran.status.success(), "{ran:?}");
+        };
+        git(&["init", "--quiet"]);
+        changes::start(&trial).unwrap();
+        fs::write(trial.join("hello.txt"), "Hello\nthere\n").unwrap();
+        let (sent, mut requests) = unbounded_channel();
+
+        let shown = call_now(SHOW_CHANGES, &json!({ "folder": "trial" }), &cwd, &sent);
+        assert_eq!(shown["isError"], false);
+        let told = shown["content"][0]["text"].as_str().unwrap();
+        assert!(told.contains("since nothing"), "{told}");
+        assert!(
+            told.ends_with("1 file, +2 -0.\nA hello.txt +2 -0"),
+            "{told}"
+        );
+        match requests.try_recv() {
+            Ok(ToolRequest::ShowChanges { folder }) => assert_eq!(folder, trial),
+            _ => panic!("the stage was not asked to show what changed"),
+        }
+
+        // A folder out of any repository has no changes to show.
+        let outside = scratch("no-changes");
+        if std::process::Command::new("git")
+            .arg("-C")
+            .arg(&outside)
+            .args(["rev-parse", "--git-dir"])
+            .output()
+            .is_ok_and(|ran| !ran.status.success())
+        {
+            let shown = call_now(SHOW_CHANGES, &json!({}), &outside, &sent);
+            assert_eq!(shown["isError"], true);
+            assert!(requests.try_recv().is_err());
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! A tab of the stage, and what it shows: a page of the browser, a
-//! Markdown file, a file as it is written, the project's files or a
-//! terminal. What the stage asks of every kind alike, the name the tab
+//! Markdown file, a file as it is written, the project's files, what
+//! changed in them, or a terminal. What the stage asks of every kind alike, the name the tab
 //! goes by, how it is kept for a closed chat's stage to open again, the
 //! keyboard's place in it and the view drawn, each kind answers as
 //! [`Shows`], and [`TabContent`] turns to that in one place. What the stage
@@ -14,6 +14,7 @@ use gpui::{
     AnyView, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Subscription,
 };
 
+use super::changes::Changes;
 use super::code::Code;
 use super::document::Document;
 use super::page::Page;
@@ -77,6 +78,7 @@ pub(super) enum TabContent {
     Document(Entity<Document>),
     Code(Entity<Code>),
     Tree(Entity<Tree>),
+    Changes(Entity<Changes>),
     Terminal(Entity<Terminal>),
 }
 
@@ -114,6 +116,7 @@ impl TabContent {
             Self::Document(document) => document,
             Self::Code(code) => code,
             Self::Tree(tree) => tree,
+            Self::Changes(changes) => changes,
             Self::Terminal(terminal) => terminal,
         }
     }
@@ -142,7 +145,11 @@ impl TabContent {
     pub(super) fn page(&self) -> Option<&Entity<Page>> {
         match self {
             Self::Page { page, .. } => Some(page),
-            Self::Document(_) | Self::Code(_) | Self::Tree(_) | Self::Terminal(_) => None,
+            Self::Document(_)
+            | Self::Code(_)
+            | Self::Tree(_)
+            | Self::Changes(_)
+            | Self::Terminal(_) => None,
         }
     }
 
@@ -153,7 +160,11 @@ impl TabContent {
                 let terminal = terminal.read(cx);
                 matches!(terminal.program(), Program::Command(_)) && terminal.ended().is_some()
             }
-            Self::Page { .. } | Self::Document(_) | Self::Code(_) | Self::Tree(_) => false,
+            Self::Page { .. }
+            | Self::Document(_)
+            | Self::Code(_)
+            | Self::Tree(_)
+            | Self::Changes(_) => false,
         }
     }
 }

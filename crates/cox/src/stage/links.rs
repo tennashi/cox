@@ -2,7 +2,7 @@
 //! showing its page already or a new one; a file, as Markdown or as it is
 //! written, on the tab showing it already or a new one, from the link's
 //! own folder; and the tree of the project's files, from which a click
-//! opens a file the same way.
+//! opens a file the same way, as one does from what changed in them.
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +10,7 @@ use cox_core::tabs::Lines;
 use gpui::{Context, Window, prelude::*};
 
 use crate::stage::Stage;
+use crate::stage::changes::{self, Changes};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::tab::{ShowsFile, TabContent};
@@ -171,6 +172,55 @@ impl Stage {
             }
         });
         self.push(TabContent::Tree(tree), changes, Some(opens), show, cx);
+    }
+
+    /// Shows what changed in the files of the repository of `folder`, an
+    /// absolute path: on its tab, or a new one, with the keyboard in it.
+    pub(super) fn show_changes(
+        &mut self,
+        folder: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let showing = self.tabs.iter().position(|tab| match &tab.content {
+            TabContent::Changes(changes) => changes.read(cx).folder() == folder,
+            _ => false,
+        });
+        if let Some(index) = showing {
+            self.show(index, window, cx);
+        } else {
+            self.push_changes(folder, true, window, cx);
+            self.focus_shown(window, cx);
+        }
+    }
+
+    /// Puts a tab showing what changed in the files of the repository of
+    /// `folder` after the others, shown if `show` is.
+    pub(super) fn push_changes(
+        &mut self,
+        folder: PathBuf,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self.cwd.clone();
+        let shown = cx.new(|cx| Changes::new(folder, &cwd, cx));
+        let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
+        let opens = cx.subscribe_in(
+            &shown,
+            window,
+            |stage, _, changes::Chosen { path, line }, window, cx| {
+                let lines = line.map(|line| Lines {
+                    first: line,
+                    last: line,
+                });
+                if stage.open_path(path, lines, window, cx).is_err() {
+                    stage.show_file::<Code>(path.clone(), "", lines, window, cx);
+                    stage.focus_shown(window, cx);
+                }
+            },
+        );
+        self.push(TabContent::Changes(shown), changes, Some(opens), show, cx);
     }
 }
 
