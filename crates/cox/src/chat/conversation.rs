@@ -710,13 +710,18 @@ impl Conversation {
                     ));
                 }
                 Opened::Retold {
+                    lost,
                     instructions,
                     context,
                 } => {
-                    self.push(Entry::Note(
-                        "The agent could not resume its session: a new one is told the conversation so far."
-                            .to_owned(),
-                    ));
+                    // A chat with no session to go on with, as one that
+                    // moved into a trial, goes on as if it had one.
+                    if lost {
+                        self.push(Entry::Note(
+                            "The agent could not resume its session: a new one is told the conversation so far."
+                                .to_owned(),
+                        ));
+                    }
                     if let Some(path) = instructions {
                         self.push(Entry::Note(instructions_note(&path)));
                     }

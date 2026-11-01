@@ -64,7 +64,10 @@ the pages and Markdown files it had; its terminals do not start again.
 A line sent in a closed chat starts its agent again, which goes on with
 the chat's session when it can (ACP's `session/resume`, or else
 `session/load`); otherwise the agent starts a new session, and gets the
-conversation so far, as Cox kept it, ahead of that line.
+conversation so far, as Cox kept it, ahead of that line, and the chat
+notes that the agent could not resume. A chat with no session to go on
+with, as one that moved into a trial or out of one, starts a new
+session the same way, without the note.
 Escape in a chat's
 conversation, or its Stop button, stops the turn its agent is taking; the
 conversation stays, and the next line can be sent once the agent has
