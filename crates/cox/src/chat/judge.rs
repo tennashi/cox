@@ -181,6 +181,7 @@ pub fn setup(goal: &str, stance: &str) -> Setup {
             reject: Vec::new(),
         },
         folder: None,
+        trial: None,
     }
 }
 

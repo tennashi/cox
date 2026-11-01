@@ -582,6 +582,29 @@ impl ChatView {
         cx.notify();
     }
 
+    /// Adds `note`, a note from Cox, to the conversation.
+    pub fn note(&mut self, note: String, cx: &mut Context<Self>) {
+        self.follow(|conversation| conversation.note(note));
+        self.keep();
+        cx.notify();
+    }
+
+    /// Closes the chat, as `note` says why, as when the trial it works in
+    /// ends: its agent stops, and the chat cannot start it again; what
+    /// goes on with it is a view of it read again.
+    pub fn close(&mut self, note: String, cx: &mut Context<Self>) {
+        self.agent = None;
+        self.tools = None;
+        self.check = None;
+        self.judge = None;
+        self.cwd = None;
+        self.again = None;
+        self.goal_input = None;
+        self.follow(|conversation| conversation.close(note));
+        self.keep();
+        cx.notify();
+    }
+
     /// Whether the chat's agent runs: it was opened in this run, or the
     /// human sent to it again.
     #[must_use]

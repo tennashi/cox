@@ -14,7 +14,7 @@ use std::time::Duration;
 use cox::agent::Start;
 use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, Waited};
-use cox::agent::setup::Setup;
+use cox::agent::setup::{Policy, Setup};
 use cox::chat::conversation::{Conversation, Entry, Goal, State};
 use cox::chat::judge::Starts;
 use cox::chat::trial::Trial;
@@ -1435,43 +1435,53 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }
 
-#[gpui::test]
-async fn a_trial_works_in_a_folder_apart_from_the_project(cx: &mut TestAppContext) {
-    let home = scratch("trial-home");
+/// A Git repository at a scratch folder named after `name`, with
+/// `main.rs` committed, and someone to commit as.
+fn repository(name: &str) -> PathBuf {
+    let home = scratch(name);
     std::fs::create_dir_all(&home).unwrap();
     let git = |args: &[&str]| {
         let done = std::process::Command::new("git")
             .arg("-C")
             .arg(&home)
-            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
             .args(args)
             .output()
             .unwrap();
         assert!(done.status.success(), "{done:?}");
     };
     git(&["init", "-q"]);
+    git(&["config", "user.name", "t"]);
+    git(&["config", "user.email", "t@t"]);
     std::fs::write(home.join("main.rs"), "fn main() {}\n").unwrap();
     git(&["add", "."]);
     git(&["commit", "-q", "-m", "first"]);
-    let kept = scratch("trial-kept").join("chats.sqlite");
-    let store = Rc::new(Store::open(&kept).unwrap());
-    let (agents, asks, workspace, cx) =
-        open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
-    click(cx, "new-chat");
-    say(cx, &workspace, "hello").await;
+    home
+}
 
+/// Opens a trial that starts from `trial` from the first chat, as the
+/// chat's agent would, waits for the list to hold `count` chats, and
+/// answers the folder the trial works in.
+async fn open_trial(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    asks: &Asks,
+    trial: Trial,
+    count: usize,
+) -> PathBuf {
     let (answer, opened) = tokio::sync::oneshot::channel();
     asks.borrow()[0]
         .send(ChatRequest::OpenChat {
             text: "try it".to_owned(),
             setup: Setup::default(),
             goal: None,
-            trial: Some(Trial::Project),
+            trial: Some(trial),
             answer,
         })
         .unwrap();
-    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 2)
-        .await;
+    cx.condition(workspace, move |workspace, _| {
+        workspace.chats(0).count() == count
+    })
+    .await;
     let folder = opened
         .await
         .unwrap()
@@ -1480,6 +1490,20 @@ async fn a_trial_works_in_a_folder_apart_from_the_project(cx: &mut TestAppContex
         .expect("a trial's folder");
     let trials = cox::storage::path(cox::chat::trial::FOLDER).unwrap();
     assert!(folder.starts_with(&trials), "{}", folder.display());
+    folder
+}
+
+#[gpui::test]
+async fn a_trial_works_in_a_folder_apart_from_the_project(cx: &mut TestAppContext) {
+    let home = repository("trial-home");
+    let kept = scratch("trial-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+
+    let folder = open_trial(cx, &workspace, &asks, Trial::Project, 2).await;
     assert_eq!(
         std::fs::read_to_string(folder.join("main.rs")).unwrap(),
         "fn main() {}\n"
@@ -1502,33 +1526,169 @@ async fn a_trial_works_in_a_folder_apart_from_the_project(cx: &mut TestAppContex
         workspace.chats(0).nth(1).unwrap().setup().cloned().unwrap()
     });
     assert_eq!(setup.folder.as_ref(), Some(&folder));
+    assert_eq!(setup.trial, Some(Trial::Project));
     assert!(setup.policy.allow.contains(&"Edit *".to_owned()));
 
     // A trial from nothing works in an empty repository of its own.
-    let (answer, opened) = tokio::sync::oneshot::channel();
-    asks.borrow()[0]
-        .send(ChatRequest::OpenChat {
-            text: "try it from nothing".to_owned(),
-            setup: Setup::default(),
-            goal: None,
-            trial: Some(Trial::Empty),
-            answer,
-        })
-        .unwrap();
-    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 3)
-        .await;
-    let empty = opened
-        .await
-        .unwrap()
-        .unwrap()
-        .folder
-        .expect("a trial's folder");
-    assert!(empty.starts_with(&trials), "{}", empty.display());
+    let empty = open_trial(cx, &workspace, &asks, Trial::Empty, 3).await;
     assert!(empty.join(".git").is_dir());
     assert!(!empty.join("main.rs").exists());
 
     let _ = std::fs::remove_dir_all(&empty);
     let _ = std::fs::remove_dir_all(&folder);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+}
+
+#[gpui::test]
+async fn an_ended_trial_goes_on_in_the_project(cx: &mut TestAppContext) {
+    let home = repository("trial-on-home");
+    let kept = scratch("trial-on-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+    let folder = open_trial(cx, &workspace, &asks, Trial::Project, 2).await;
+    // The trial's agent opens a chat, which works in the trial's folder.
+    let (answer, _opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[1]
+        .send(ChatRequest::OpenChat {
+            text: "help".to_owned(),
+            setup: Setup::default(),
+            goal: None,
+            trial: None,
+            answer,
+        })
+        .unwrap();
+    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 3)
+        .await;
+    let opened = workspace.read_with(cx, |workspace, _| {
+        let chat = workspace.chats(0).nth(2).unwrap();
+        assert_eq!(chat.setup().unwrap().folder.as_ref(), Some(&folder));
+        chat.view().cloned().unwrap()
+    });
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.discard_trial(1, window, cx);
+    });
+    assert!(!folder.exists());
+    // Both close, and are set up to work in the project, asking the human.
+    let setups = workspace.read_with(cx, |workspace, _| {
+        workspace
+            .chats(0)
+            .skip(1)
+            .map(|chat| (chat.is_open(), chat.setup().cloned().unwrap()))
+            .collect::<Vec<_>>()
+    });
+    for (open, setup) in setups {
+        assert!(!open);
+        assert_eq!((setup.folder, setup.trial), (None, None));
+        assert_eq!(setup.policy, Policy::default());
+    }
+    let last = opened.read_with(cx, |view, _| {
+        assert_eq!(view.conversation().state(), State::Closed);
+        view.conversation().entries().last().cloned()
+    });
+    assert!(
+        matches!(&last, Some(Entry::Note(note)) if note.contains("has ended")),
+        "{last:?}"
+    );
+
+    // A line sent to the trial's chat starts its agent again, in the
+    // project.
+    say(cx, &workspace, "go on").await;
+    assert_eq!(agents.borrow().last().unwrap().cwd(), Some(home.clone()));
+    let open = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().is_open()
+    });
+    assert!(open);
+
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+}
+
+#[gpui::test]
+async fn a_trial_ends_kept_as_a_branch_or_discarded(cx: &mut TestAppContext) {
+    let home = repository("trial-end-home");
+    let kept = scratch("trial-end-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (_agents, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+    let folder = open_trial(cx, &workspace, &asks, Trial::Project, 2).await;
+    let empty = open_trial(cx, &workspace, &asks, Trial::Empty, 3).await;
+    let ended = |cx: &mut VisualTestContext, index: usize| {
+        workspace.read_with(cx, |workspace, cx| {
+            let chat = workspace.chats(0).nth(index).unwrap();
+            let view = chat.view().unwrap().read(cx);
+            let last = view.conversation().entries().last().cloned();
+            (chat.is_open(), view.conversation().state(), last)
+        })
+    };
+
+    // The trial of the project is kept as a branch, with what it changed,
+    // and ends.
+    std::fs::write(folder.join("main.rs"), "fn main() { trial() }\n").unwrap();
+    let branch = format!("trial/{}", folder.file_name().unwrap().to_string_lossy());
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.keep_trial(1, window, cx);
+    });
+    assert!(!folder.exists());
+    let shown = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&home)
+        .arg("show")
+        .arg(format!("{branch}:main.rs"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&shown.stdout),
+        "fn main() { trial() }\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("main.rs")).unwrap(),
+        "fn main() {}\n"
+    );
+    let (open, state, last) = ended(cx, 1);
+    assert!(!open);
+    assert_eq!(state, State::Closed);
+    assert!(
+        matches!(&last, Some(Entry::Note(note)) if note.contains(&format!("the branch {branch} "))),
+        "{last:?}"
+    );
+
+    // The trial from nothing is discarded, its folder with it.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.discard_trial(2, window, cx);
+    });
+    assert!(!empty.exists());
+    let (open, state, last) = ended(cx, 2);
+    assert!(!open);
+    assert_eq!(state, State::Closed);
+    assert!(
+        matches!(&last, Some(Entry::Note(note)) if note.contains("discarded")),
+        "{last:?}"
+    );
+
+    // Another opens as a project of its own, which the human goes on
+    // with, so it is no longer discarded.
+    let empty = open_trial(cx, &workspace, &asks, Trial::Empty, 4).await;
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open_trial(3, window, cx);
+        workspace.discard_trial(3, window, cx);
+    });
+    let opened = workspace.read_with(cx, |workspace, _| {
+        workspace
+            .projects()
+            .iter()
+            .any(|project| project.folder() == empty.as_path())
+    });
+    assert!(opened);
+    assert!(empty.exists());
+
+    let _ = std::fs::remove_dir_all(&empty);
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }

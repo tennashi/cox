@@ -213,6 +213,12 @@ impl Conversation {
         self.push(Entry::Note(note));
     }
 
+    /// Closes the conversation, as `note` says why: its agent is gone.
+    pub fn close(&mut self, note: String) {
+        self.note(note);
+        self.state = State::Closed;
+    }
+
     /// Takes what the human entered, and returns the prompt to send the
     /// agent, when it waits for one.
     pub fn submit(&mut self, input: &str) -> Option<Command> {
