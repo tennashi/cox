@@ -31,6 +31,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 use anyhow::Context as _;
+use cox_core::goal::Goal;
 use cox_core::tabs::Lines;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
@@ -75,13 +76,13 @@ pub enum ToolRequest {
 #[derive(Debug)]
 pub enum ChatRequest {
     /// Open a chat in the chat's project, under it in the list, whose
-    /// agent is set up as `setup` says, works until `goal` passes if
+    /// agent is set up as `setup` says, works until `goal` is met if
     /// given, and gets `text` as its first line; answer how the chat goes
     /// by, or why it could not open.
     OpenChat {
         text: String,
         setup: Setup,
-        goal: Option<String>,
+        goal: Option<Goal>,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
     },
     /// Wait for the chat that goes by `chat` to end its turn, or to come
