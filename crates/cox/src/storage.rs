@@ -5,11 +5,14 @@
 //! Each place Cox runs from keeps its own, the way VS Code keeps its data
 //! apart from that of a build of its own source: the Cox
 //! `cargo xtask install` put in place keeps the human's, and the one being
-//! built in `target/` keeps its own beside it.
+//! built in `target/` keeps its own beside it. A Cox told where to keep it,
+//! with `--data`, keeps it there instead, as to run apart from what it kept
+//! before, or on what another kept.
 
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Where `cargo xtask install` puts Cox, from the home directory.
 const INSTALLED: &str = if cfg!(target_os = "macos") {
@@ -18,10 +21,24 @@ const INSTALLED: &str = if cfg!(target_os = "macos") {
     ".local/bin/cox"
 };
 
+/// Where this Cox was told to keep what lasts, if it was.
+static DATA: OnceLock<PathBuf> = OnceLock::new();
+
+/// Keeps what lasts in `directory` from now on, for the rest of the
+/// process, in place of where this Cox keeps it from the place it runs
+/// from. Only the first call counts.
+pub fn keep_in(directory: &Path) {
+    let directory = std::path::absolute(directory).unwrap_or_else(|_| directory.to_owned());
+    let _ = DATA.set(directory);
+}
+
 /// Where this Cox keeps what it calls `name`, or `None` when it cannot
 /// tell where it runs from.
 #[must_use]
 pub fn path(name: &str) -> Option<PathBuf> {
+    if let Some(data) = DATA.get() {
+        return Some(data.join(name));
+    }
     // Without links, so the installed Cox is found however it was run.
     let exe = std::env::current_exe().and_then(fs::canonicalize).ok()?;
     let home = std::env::var_os("HOME").map(|home| fs::canonicalize(&home).unwrap_or(home.into()));

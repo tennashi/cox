@@ -33,7 +33,7 @@ its own, through the [cef](https://crates.io/crates/cef) crate. The crate's
 build downloads the matching CEF distribution from the official builds
 (about 200 MB, once per target directory).
 
-`cox [--stage <url>] [--home <dir>] <agent command>` opens a window with
+`cox [--stage <url>] [--home <dir>] [--data <dir>] <agent command>` opens a window with
 no chat in it. The list on the left of the window shows the chats under
 the projects they are in. A project is a folder: "Open folder…"
 (Command-O on macOS, Control-O elsewhere) opens a chat in the project of a
@@ -318,7 +318,10 @@ across runs, one for each place Cox runs from. The Cox that
 second Cox from the same place gets a profile for that run only. The
 chats are kept the same way, in a SQLite database: `chats.sqlite` beside
 the installed Cox's `stage`, and `cox-chats.sqlite` beside any other, as
-in `target/debug/cox-chats.sqlite`.
+in `target/debug/cox-chats.sqlite`. A Cox given `--data <dir>` keeps all
+of that, and the rest it keeps, in `<dir>` instead, without the `cox-`:
+`<dir>/stage`, `<dir>/chats.sqlite`, and so on, to run apart from what it
+kept before, or on a copy of what another Cox kept.
 
 On Linux, `cargo run` is enough: CEF is linked into `cox`, and its helper
 processes run `cox` again.
