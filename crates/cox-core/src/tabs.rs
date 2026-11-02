@@ -39,6 +39,9 @@ pub enum KeptTab {
     /// the modules in it `at` names, from the crate down, or at the
     /// crates when it names none.
     Map { at: Vec<String> },
+    /// The flow of one tool call through Cox, the call by the id the
+    /// agent gave it.
+    Flow { call: String },
 }
 
 /// Lines of a file, as people number them: from 1, the last included.

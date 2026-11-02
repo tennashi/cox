@@ -9,7 +9,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use cox_browser::relay::FromAgent;
 use gpui::{Context, Task, Window, prelude::*};
 
-use crate::agent::mcp::{Ran, ToolRequest};
+use crate::agent::mcp::{ASKED, Ran, ToolRequest};
 use crate::stage::Stage;
 use crate::stage::code::Code;
 use crate::stage::document::Document;
@@ -53,14 +53,18 @@ impl Stage {
         })
     }
 
-    /// Carries out what the agent's tools ask.
+    /// Carries out what the agent's tools ask, saying so in the span this
+    /// is called in, its chat's (see [`ASKED`]).
     pub(super) fn hear_tools(
         mut from_tools: UnboundedReceiver<ToolRequest>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<()> {
+        let span = tracing::Span::current();
         cx.spawn_in(window, async move |this, cx| {
             while let Some(request) = from_tools.recv().await {
+                let _entered = span.enter();
+                tracing::debug!(target: ASKED, "the stage carries it out: {}", request.said());
                 let done = this.update_in(cx, |stage, window, cx| match request {
                     ToolRequest::ShowMarkdown { path, text } => {
                         stage.show_file::<Document>(path, &text, None, window, cx);

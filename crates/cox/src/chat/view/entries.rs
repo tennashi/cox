@@ -236,10 +236,10 @@ impl ChatView {
                 .debug_selector(|| format!("reply-{index}"))
                 .into_any_element(),
             Entry::ToolCall {
+                id,
                 title,
                 content,
                 result,
-                ..
             } => {
                 let (mark, color) = match result {
                     None => ("●", LINK),
@@ -254,6 +254,7 @@ impl ChatView {
                     .is_open(fold, *result == Some(ToolCallResult::Failed));
                 let opens = (!content.is_empty()).then_some(open);
                 let line = line_of(index, opens, (mark, color), title, &mut writer);
+                let line = line.child(flow_button(index, id, cx));
                 let line = folding(line, opens.map(|_| fold), cx);
                 div()
                     .flex()
@@ -545,6 +546,29 @@ fn line_of(
                 .text_color(rgb(DIM))
                 .child(writer.markdown(title)),
         )
+}
+
+/// A small "flow" at the end of the line of the tool call `id`, which
+/// opens the flow of the call through Cox on the stage (see
+/// [`crate::stage::flow`]).
+fn flow_button(index: usize, id: &str, cx: &mut Context<ChatView>) -> impl IntoElement {
+    let link = crate::stage::flow::link(id);
+    div()
+        .id(("flow", index))
+        .debug_selector(move || format!("flow-{index}"))
+        .flex_shrink_0()
+        .px_1()
+        .rounded_sm()
+        .text_xs()
+        .text_color(rgb(DIM))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(LINK)))
+        .child("flow")
+        .on_click(cx.listener(move |view, _, window, cx| {
+            // Not a click on the line, which opens what the call shows.
+            cx.stop_propagation();
+            view.show_link(&link, window, cx);
+        }))
 }
 
 /// `line`, for a click to open or close `fold`, if there is something to

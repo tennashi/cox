@@ -14,6 +14,7 @@ use crate::stage::Stage;
 use crate::stage::changes::{self, Changes};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
+use crate::stage::flow::{self, Flow};
 use crate::stage::map::{self, Map};
 use crate::stage::tab::{ShowsFile, TabContent};
 use crate::stage::tree::{Chosen, Tree};
@@ -85,6 +86,10 @@ impl Stage {
     /// Opens `url`, a link the human clicked in what is in `from`, which a
     /// link to a file is from.
     fn open_from(&mut self, url: &str, from: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(call) = flow::linked(url) {
+            self.show_flow(call.to_owned(), window, cx);
+            return;
+        }
         if let Some(link) = crate::ui::markdown::file_link(url) {
             self.open_file(link, from, window, cx);
             return;
@@ -283,6 +288,58 @@ impl Stage {
             }
         });
         self.push(TabContent::Map(shown), changes, Some(opens), show, cx);
+    }
+}
+
+impl Stage {
+    /// Shows the flow of the tool call `call` through Cox (see
+    /// [`cox_core::tabs::KeptTab::Flow`]): on its tab, or a new one, with
+    /// the keyboard in it.
+    pub(super) fn show_flow(&mut self, call: String, window: &mut Window, cx: &mut Context<Self>) {
+        let showing = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab.content, TabContent::Flow(_)));
+        if let Some(index) = showing {
+            if let TabContent::Flow(flow) = &self.tabs[index].content {
+                flow.update(cx, |flow, cx| flow.open(call, cx));
+            }
+            self.show(index, window, cx);
+        } else {
+            self.push_flow(call, true, window, cx);
+            self.focus_shown(window, cx);
+        }
+    }
+
+    /// Puts a tab showing the flow of the tool call `call` after the
+    /// others, shown if `show` is. A click on a step opens the file it is
+    /// taken in, at its line.
+    pub(super) fn push_flow(
+        &mut self,
+        call: String,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let logs = crate::logs::directory().map(Path::to_owned);
+        let shown = cx.new(|cx| Flow::new(self.cwd.clone(), logs, call, cx));
+        let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
+        let opens = cx.subscribe_in(
+            &shown,
+            window,
+            |stage, _, opened: &flow::Opened, window, cx| {
+                let line = usize::try_from(opened.line).unwrap_or(1).max(1);
+                let lines = Some(Lines {
+                    first: line,
+                    last: line,
+                });
+                if stage.open_path(&opened.path, lines, window, cx).is_err() {
+                    stage.show_file::<Code>(opened.path.clone(), "", lines, window, cx);
+                    stage.focus_shown(window, cx);
+                }
+            },
+        );
+        self.push(TabContent::Flow(shown), changes, Some(opens), show, cx);
     }
 }
 

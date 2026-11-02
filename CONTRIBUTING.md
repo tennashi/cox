@@ -193,6 +193,21 @@ chat that is not at work answers at once.
 The conversation shows each tool call the agent makes on a line of its
 own, marked as running, done or failed; a click on the line opens what
 the call showed, which shows from the start for a call that failed.
+"flow" at the end of the line opens, on the stage, how the call went
+through Cox, read from what Cox kept of the run (see
+[What Cox keeps of each run](#what-cox-keeps-of-each-run)): the
+agent's process, Cox's thread for the agent, the chat's tool server and
+the window as lanes, and each step as a row, with how long after the
+first it came, an arrow into the lane it is taken in, what was said or
+done, and where in Cox's code it is taken, as `asked.rs:67`, which a
+click opens when the project has the file, as it does when the project
+is Cox itself. A step in a file that changed, as "Changes" shows it, is
+marked. For a call of one of Cox's own tools, the agent says over
+ACP that it calls the tool, `cox --mcp` passes its `tools/call` on to the
+tool server, the tool asks the stage, the stage carries it out, the
+server answers, and the agent says the call is done; for another tool,
+such as the agent's own `Read`, the flow shows only what the agent says
+of it, and its permission request and Cox's answer when it asks one.
 What the agent thinks on its way, when it sends it, shows on a line of
 its own too, open while it arrives, and so does the plan it works to,
 with each step marked as waiting, under way or done. The plan also
@@ -386,8 +401,13 @@ the errors unless it asks for more. It also keeps all it says, down to
 that debugs Cox to read and search once the run is over too: one JSON
 object a line, with the spans it was said in, such as the chat it was
 said of. Among it is what Cox and each chat's agent send each other over
-ACP, a line at a time, under `cox_acp::wire`, and what the agent writes
-to its standard error, under `cox_acp::stderr`. The files are in `logs`
+ACP, a line at a time, under `cox_acp::wire`, what the agent and the
+server of Cox's own tools send each other over the chat's socket, under
+`cox::agent::mcp::wire`, what a tool asks of the stage, under
+`cox::agent::mcp::asks`, and the stage carrying it out, under
+`cox::stage::asked`, and what the agent writes to its standard error,
+under `cox_acp::stderr`. Each line names the file and line of Cox's code
+it was said at. The files are in `logs`
 beside the chats' database (see [The stage](#the-stage)), as
 `~/Library/Application Support/Cox/logs` for the installed Cox on macOS,
 and `cox-logs` beside any other, as `target/debug/cox-logs`, each named

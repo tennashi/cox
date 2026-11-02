@@ -725,11 +725,16 @@ impl ChatView {
     /// under it.
     fn mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(url) = self.reading.release(event.position) {
-            if let Some(stage) = &self.stage {
-                stage.panel.update(cx, Panel::open);
-            }
-            (self.open_link)(&url, window, cx);
+            self.show_link(&url, window, cx);
         }
+    }
+
+    /// Opens `url`, a link the human clicked, on the stage, which opens.
+    pub(super) fn show_link(&self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(stage) = &self.stage {
+            stage.panel.update(cx, Panel::open);
+        }
+        (self.open_link)(url, window, cx);
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {

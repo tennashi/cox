@@ -15,7 +15,9 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{Answered, ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest, answered};
+use crate::agent::mcp::{
+    ASKS, Answered, ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest, answered,
+};
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::chat::trial::Trial;
 
@@ -406,9 +408,7 @@ fn show_markdown(
     let read = fs::canonicalize(&path).and_then(|path| Ok((fs::read_to_string(&path)?, path)));
     let (text, path) = read.map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let shown = format!("{} is on the stage, for the human to read.", path.display());
-    requests
-        .send(ToolRequest::ShowMarkdown { path, text })
-        .map_err(|_| "the chat has closed".to_owned())?;
+    ask(requests, ToolRequest::ShowMarkdown { path, text })?;
     Ok(shown)
 }
 
@@ -466,9 +466,7 @@ fn show_file(
         ),
         None => format!("{} is on the stage, for the human to read.", path.display()),
     };
-    requests
-        .send(ToolRequest::ShowFile { path, text, lines })
-        .map_err(|_| "the chat has closed".to_owned())?;
+    ask(requests, ToolRequest::ShowFile { path, text, lines })?;
     Ok(shown)
 }
 
@@ -491,9 +489,7 @@ fn show_changes(
         .map_err(|error| format!("cannot read {}: {error}", folder.display()))?;
     let diff = changes::read(&folder)
         .map_err(|error| format!("cannot tell what changed in {}: {error}", folder.display()))?;
-    requests
-        .send(ToolRequest::ShowChanges { folder })
-        .map_err(|_| "the chat has closed".to_owned())?;
+    ask(requests, ToolRequest::ShowChanges { folder })?;
     Ok(told_changes(&diff))
 }
 
@@ -539,9 +535,7 @@ fn show_map(
     let changed = changes::read(cwd)
         .ok()
         .map(|diff| map::changed_files(&diff));
-    requests
-        .send(ToolRequest::ShowMap { at: at.clone() })
-        .map_err(|_| "the chat has closed".to_owned())?;
+    ask(requests, ToolRequest::ShowMap { at: at.clone() })?;
     Ok(told_map(&map, &place, changed.as_ref(), &placed(cwd, &at)))
 }
 
@@ -634,6 +628,19 @@ fn placed(cwd: &Path, at: &[String]) -> String {
         .join(" › ")
 }
 
+/// Asks `request` of the chat's stage through `requests`, saying so in the
+/// log (see [`ASKS`]), for the flow of the call to be read later.
+///
+/// # Errors
+///
+/// When the chat has closed.
+fn ask(requests: &UnboundedSender<ToolRequest>, request: ToolRequest) -> Result<(), String> {
+    tracing::debug!(target: ASKS, "asks the stage to {}", request.said());
+    requests
+        .send(request)
+        .map_err(|_| "the chat has closed".to_owned())
+}
+
 /// What changed in `diff`, as the agent is told it.
 fn told_changes(diff: &Diff) -> String {
     let top = diff.top.display();
@@ -684,13 +691,14 @@ async fn run_command(
         .filter(|command| !command.trim().is_empty())
         .ok_or("no command: give the command to run as `command`")?;
     let (answer, ran) = oneshot::channel();
-    requests
-        .send(ToolRequest::RunCommand {
+    ask(
+        requests,
+        ToolRequest::RunCommand {
             command: command.to_owned(),
             cwd: cwd.to_owned(),
             answer,
-        })
-        .map_err(|_| "the chat has closed".to_owned())?;
+        },
+    )?;
     let ran = ran
         .await
         .map_err(|_| "the chat closed while the command ran".to_owned())??;

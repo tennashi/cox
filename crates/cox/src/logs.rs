@@ -9,6 +9,8 @@
 //! once the run is over too: `logs/<time>-<process id>.jsonl` where Cox
 //! keeps what lasts (see [`crate::storage`]). It keeps the files of the
 //! last [`RUNS_KEPT`] runs. A panic goes there too, with its backtrace.
+//! Each line says where in Cox's code it was said, so that what Cox did
+//! can be followed back to the code, as [`flow`] does for a tool call.
 
 use std::backtrace::Backtrace;
 use std::fs::{self, File};
@@ -22,6 +24,8 @@ use tracing_subscriber::filter::{EnvFilter, LevelFilter, filter_fn};
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt as _;
+
+pub mod flow;
 
 /// How many runs' files Cox keeps, this one's with them.
 pub const RUNS_KEPT: usize = 20;
@@ -40,6 +44,12 @@ static FILE: OnceLock<PathBuf> = OnceLock::new();
 #[must_use]
 pub fn file() -> Option<&'static Path> {
     FILE.get().map(PathBuf::as_path)
+}
+
+/// The directory the files of the runs are in, if this run is kept.
+#[must_use]
+pub fn directory() -> Option<&'static Path> {
+    file().and_then(Path::parent)
 }
 
 /// Starts taking what Cox says, for the rest of the process, keeping it in
@@ -92,7 +102,8 @@ pub fn init(directory: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// What keeps what Cox says in `file`: one JSON object a line, with the
-/// spans it was said in, such as its chat's.
+/// spans it was said in, such as its chat's, and the file and line of
+/// Cox's code it was said at.
 fn kept<S>(file: File) -> impl Layer<S>
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
@@ -101,6 +112,8 @@ where
         .json()
         .with_current_span(false)
         .with_span_list(true)
+        .with_file(true)
+        .with_line_number(true)
         .with_ansi(false)
         // Each line is written whole, so what is kept stays readable
         // however the run ends.
@@ -231,6 +244,8 @@ mod tests {
         assert_eq!(kept["spans"][0]["name"], "chat");
         assert_eq!(kept["spans"][0]["id"], 7);
         assert!(kept["timestamp"].is_string());
+        assert_eq!(kept["filename"], file!());
+        assert!(kept["line_number"].is_u64());
         fs::remove_dir_all(directory).unwrap();
     }
 }
