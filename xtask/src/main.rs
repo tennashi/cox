@@ -21,6 +21,12 @@ Tasks:
     install
             Build Cox for release and install it apart from target/:
             ~/Applications/Cox.app on macOS, ~/.local/bin/cox on Linux
+    run [--headless] [--data <dir>] [<scenario> | -- <agent command>...]
+            Build Cox and run it with cox-fake-agent playing <scenario>,
+            the fake agent's tour unless given, or with <agent command>.
+            It keeps what lasts in <dir>, or afresh in target/debug/cox-run.
+            --headless runs it on a display of its own (Xvfb, on Linux),
+            for screenshots and input
     setup   Install the pinned development tools that `ci` needs
     help    Show this message
 ";
@@ -31,6 +37,7 @@ fn main() -> anyhow::Result<()> {
         Some("bundle") => bundle(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("ci") => ci(&sh),
         Some("install") => install(&sh, &env::args().skip(2).collect::<Vec<_>>()),
+        Some("run") => run(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("setup") => setup(&sh),
         None | Some("help" | "-h" | "--help") => {
             print!("{USAGE}");
@@ -209,6 +216,156 @@ fn install(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// What `run` is asked for.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Run {
+    headless: bool,
+    data: Option<PathBuf>,
+    /// The scenario the fake agent plays, when no agent is given.
+    scenario: Option<PathBuf>,
+    /// The agent to run, and its arguments, in place of the fake one.
+    agent: Vec<String>,
+}
+
+impl Run {
+    fn parse(args: &[String]) -> anyhow::Result<Self> {
+        let mut run = Self::default();
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--headless" => run.headless = true,
+                "--data" => {
+                    run.data = Some(args.next().context("--data names a directory")?.into());
+                }
+                "--" => {
+                    run.agent = args.by_ref().cloned().collect();
+                    if run.agent.is_empty() {
+                        bail!("-- is followed by the agent's command");
+                    }
+                }
+                flag if flag.starts_with("--") => bail!("run has no {flag}"),
+                scenario if run.scenario.is_none() => run.scenario = Some(scenario.into()),
+                _ => bail!("run plays one scenario"),
+            }
+        }
+        if run.scenario.is_some() && !run.agent.is_empty() {
+            bail!("run plays a scenario or runs an agent, not both");
+        }
+        Ok(run)
+    }
+}
+
+/// Builds Cox and runs it as `args` ask (see [`USAGE`]) until it quits.
+fn run(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
+    let asked = Run::parse(args)?;
+    if asked.headless && !cfg!(target_os = "linux") {
+        bail!("--headless runs Cox on Xvfb, which is for Linux");
+    }
+    let agent = if asked.agent.is_empty() {
+        let scenario = asked
+            .scenario
+            .unwrap_or_else(|| PathBuf::from("crates/cox-fake-agent/scenarios/tour.json"));
+        let scenario = std::path::absolute(&scenario)?;
+        if !scenario.is_file() {
+            bail!("there is no scenario {}", scenario.display());
+        }
+        cmd!(sh, "cargo build --bin cox-fake-agent").run()?;
+        Vec::from([String::new(), scenario.display().to_string()])
+    } else {
+        asked.agent
+    };
+    let build = build(sh, false)?;
+    let debug = build
+        .cox
+        .parent()
+        .context("the executable is in a directory")?;
+    let mut agent = agent;
+    if agent[0].is_empty() {
+        agent[0] = debug.join("cox-fake-agent").display().to_string();
+    }
+    let cox = if cfg!(target_os = "macos") {
+        assemble(sh, &build)?.join("Contents/MacOS").join(APP)
+    } else {
+        build.cox.clone()
+    };
+    let data = if let Some(data) = asked.data {
+        std::path::absolute(data)?
+    } else {
+        let data = debug.join("cox-run");
+        sh.remove_path(&data)?;
+        data
+    };
+    let home = data.join("home");
+    sh.create_dir(&home)?;
+    let display = if asked.headless {
+        Some(Display::start()?)
+    } else {
+        None
+    };
+    println!("Cox keeps what lasts in {}", data.display());
+    println!("What it does is kept in {}", data.join("logs").display());
+    if let Some(display) = &display {
+        println!(
+            "It runs on DISPLAY={0}; for a screenshot: DISPLAY={0} import -window root shot.png",
+            display.name
+        );
+    }
+    let mut cox = cmd!(sh, "{cox} --data {data} --home {home} {agent...}");
+    if let Some(display) = &display {
+        cox = cox.env("DISPLAY", &display.name);
+    }
+    cox.run()?;
+    Ok(())
+}
+
+/// A display of Cox's own, which Xvfb draws in memory, until dropped.
+struct Display {
+    name: String,
+    xvfb: std::process::Child,
+}
+
+impl Display {
+    /// Starts Xvfb on the first display no other server has.
+    fn start() -> anyhow::Result<Self> {
+        let number = (99..200)
+            .find(|number| {
+                !Path::new(&format!("/tmp/.X11-unix/X{number}")).exists()
+                    && !Path::new(&format!("/tmp/.X{number}-lock")).exists()
+            })
+            .context("every display up to :199 is taken")?;
+        let name = format!(":{number}");
+        let xvfb = std::process::Command::new("Xvfb")
+            .args([
+                name.as_str(),
+                "-screen",
+                "0",
+                "1400x900x24",
+                "-nolisten",
+                "tcp",
+                // Gone with its last client, Cox, however xtask ends.
+                "-terminate",
+            ])
+            .spawn()
+            .context("cannot start Xvfb; is it installed (apt-get install xvfb)?")?;
+        let display = Self { name, xvfb };
+        let socket = PathBuf::from(format!("/tmp/.X11-unix/X{number}"));
+        for _ in 0..100 {
+            if socket.exists() {
+                return Ok(display);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        bail!("Xvfb did not start on {}", display.name)
+    }
+}
+
+impl Drop for Display {
+    fn drop(&mut self) {
+        let _ = self.xvfb.kill();
+        let _ = self.xvfb.wait();
+    }
+}
+
 /// Puts what `make` makes at `path`, in place of what is there. `make`
 /// makes it beside `path`, so `path` holds either the old one or the new
 /// one, whole, all but for a moment.
@@ -354,7 +511,7 @@ fn info_plist(name: &str, identifier: &str, helper: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Build;
+    use super::{Build, Run};
 
     #[test]
     fn the_build_is_read_from_cargo_messages() {
@@ -379,5 +536,32 @@ mod tests {
     fn a_build_without_cef_is_refused() {
         let messages = r#"{"reason":"compiler-artifact","target":{"name":"cox"},"executable":"/target/debug/cox"}"#;
         assert!(Build::parse(messages).is_err());
+    }
+
+    fn parse(args: &[&str]) -> anyhow::Result<Run> {
+        Run::parse(&args.iter().map(|&arg| arg.to_owned()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn run_plays_a_scenario_or_runs_an_agent() {
+        assert_eq!(parse(&[]).unwrap(), Run::default());
+        assert_eq!(
+            parse(&["--headless", "--data", "d", "s.json"]).unwrap(),
+            Run {
+                headless: true,
+                data: Some("d".into()),
+                scenario: Some("s.json".into()),
+                agent: Vec::new(),
+            }
+        );
+        assert_eq!(
+            parse(&["--", "npx", "--yes", "agent"]).unwrap().agent,
+            ["npx", "--yes", "agent"]
+        );
+        assert!(parse(&["s.json", "--", "agent"]).is_err());
+        assert!(parse(&["a.json", "b.json"]).is_err());
+        assert!(parse(&["--data"]).is_err());
+        assert!(parse(&["--fast"]).is_err());
+        assert!(parse(&["--"]).is_err());
     }
 }

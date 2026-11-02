@@ -6,6 +6,8 @@
 - `cargo xtask ci` runs every check. A change is ready only when it passes.
 - `cargo xtask install` builds Cox for release and installs it apart from
   `target/` (see [Using Cox to build Cox](#using-cox-to-build-cox)).
+- `cargo xtask run` builds Cox and runs it with a fake agent, apart from
+  what it kept before (see [A fake agent](#a-fake-agent)).
 
 ## Building on macOS
 
@@ -369,12 +371,26 @@ should answer: to try Cox out, to see a change working, or to make a
 fault happen again. It speaks ACP as `claude-agent-acp` does, and answers
 each line sent to it with a turn of the scenario, a JSON file, as
 [`crates/cox-fake-agent/scenarios/tour.json`](crates/cox-fake-agent/scenarios/tour.json)
-shows:
+shows.
+
+`cargo xtask run [--headless] [--data <dir>] [<scenario> | -- <agent command>...]`
+builds Cox and runs it with the fake agent playing `<scenario>`, the tour
+unless given, or with `<agent command>`, keeping what lasts in `<dir>`,
+or afresh in `target/debug/cox-run` each time (see `--data` in
+[The stage](#the-stage)), and says where the files of its runs are.
+`--headless`, on Linux, runs Cox on a display of its own, which Xvfb
+draws in memory, and says which, for an agent to look at it and type
+into it without a screen, as with `xdotool` and ImageMagick's `import`:
 
 ```sh
-cargo build --bin cox-fake-agent
-cox target/debug/cox-fake-agent crates/cox-fake-agent/scenarios/tour.json
+sudo apt-get install xvfb mesa-vulkan-drivers xdotool imagemagick
+cargo xtask run --headless
+DISPLAY=:99 xdotool key ctrl+n; DISPLAY=:99 xdotool type 'hello'; DISPLAY=:99 xdotool key Return
+DISPLAY=:99 import -window root shot.png
 ```
+
+gpui draws with Vulkan, which `mesa-vulkan-drivers` gives a machine
+with no GPU.
 
 Each line takes the first turn not taken yet whose `when`, if it has one,
 is in what the line says, as a goal's judge is told, and the turn takes
