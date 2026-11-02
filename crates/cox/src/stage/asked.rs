@@ -77,7 +77,7 @@ impl Stage {
                         stage.show_panel(cx);
                     }
                     ToolRequest::ShowMap { at } => {
-                        stage.show_map_at(at, window, cx);
+                        stage.show_map_at(&at, window, cx);
                         stage.show_panel(cx);
                     }
                     ToolRequest::RunCommand {

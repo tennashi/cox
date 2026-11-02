@@ -9,12 +9,12 @@
 //!
 //! What Cox knows, a plugin reads as JSON from `cox://api/<what>`:
 //!
-//! - `cox://api/parts`: the parts the chat runs with, as the Parts tab
-//!   shows them (see [`crate::stage::parts`]), with the file and line of
-//!   the code that starts each.
+//! - `cox://api/parts`: the parts the chat runs with (see
+//!   [`crate::stage::parts`]), with the file and line of the code that
+//!   starts each.
 //! - `cox://api/map/<crate>/<module>…`: the map of the project, open at
-//!   the crate and the modules named, or at the crates when none is, as
-//!   the Map tab shows it (see [`crate::stage::map`]).
+//!   the crate and the modules named, or at the crates when none is (see
+//!   [`crate::stage::map`]).
 //!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Parts plugin does for a part's code.
@@ -37,9 +37,9 @@ const PROJECT_PLUGINS: &str = ".cox/plugins";
 /// The files of a plugin, by their paths within it.
 type Files = &'static [(&'static str, &'static [u8])];
 
-/// What is built into Cox at `cox://<name>/`: the plugins, each with its
-/// files, and `vendor`, the libraries they draw with, which is no plugin,
-/// having no page.
+/// What is built into Cox at `cox://<name>/`: the plugins, Map and
+/// Parts, each with its files, and `vendor`, the libraries they draw
+/// with, which is no plugin, having no page.
 const BUILT_IN: &[(&str, Files)] = &[
     (
         "map",
@@ -378,8 +378,8 @@ mod tests {
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
         assert_eq!(names, ["map", "parts", "tour"]);
-        assert_eq!(listed[0].title, "Map (web)");
-        assert_eq!(listed[1].title, "Parts (web)");
+        assert_eq!(listed[0].title, "Map");
+        assert_eq!(listed[1].title, "Parts");
         assert_eq!(listed[2].title, "A tour");
         assert_eq!(listed[2].url(), "cox://tour/");
         assert_eq!(

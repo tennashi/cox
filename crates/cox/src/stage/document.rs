@@ -191,9 +191,7 @@ impl ShowsFile for Document {
             | TabContent::Code(_)
             | TabContent::Tree(_)
             | TabContent::Changes(_)
-            | TabContent::Map(_)
             | TabContent::Flow(_)
-            | TabContent::Parts(_)
             | TabContent::Terminal(_) => None,
         }
     }

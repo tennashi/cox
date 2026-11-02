@@ -15,8 +15,6 @@ use crate::stage::changes::{self, Changes};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::flow::{self, Flow};
-use crate::stage::map::{self, Map};
-use crate::stage::parts::{self, Parts};
 use crate::stage::tab::{ShowsFile, TabContent};
 use crate::stage::tree::{Chosen, Tree};
 use crate::ui::LinkClicked;
@@ -231,65 +229,61 @@ impl Stage {
         self.push(TabContent::Changes(shown), changes, Some(opens), show, cx);
     }
 
-    /// Shows the map of the project: on its tab, or a new one, with the
-    /// keyboard in it.
-    pub(super) fn show_map(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let showing = self
-            .tabs
-            .iter()
-            .position(|tab| matches!(tab.content, TabContent::Map(_)));
+    /// Shows the page of the plugin `name` (see [`crate::stage::plugins`]),
+    /// at `fragment`, `#` and what follows, when one is given: on the tab
+    /// that shows the page, wherever it has gone, which goes to the
+    /// fragment, or a new one, with the keyboard in it.
+    pub(super) fn show_plugin(
+        &mut self,
+        name: &str,
+        fragment: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prefix = format!("cox://{name}/");
+        let url = format!("{prefix}{fragment}");
+        let showing = self.tabs.iter().position(|tab| {
+            tab.content
+                .page()
+                .is_some_and(|page| page.read(cx).navigation().url.starts_with(&prefix))
+        });
         if let Some(index) = showing {
+            if !fragment.is_empty()
+                && let Some(page) = self.tabs[index].content.page().cloned()
+            {
+                page.update(cx, |page, cx| page.open(&url, window, cx));
+            }
             self.show(index, window, cx);
         } else {
-            self.push_map(Vec::new(), true, window, cx);
+            self.open_tab(&url, true, window, cx);
             self.focus_shown(window, cx);
         }
     }
 
-    /// Shows the map of the project open `at` (see
-    /// [`cox_core::tabs::KeptTab::Map`]), as the agent asks: on its tab,
-    /// or a new one, with the keyboard in it.
+    /// Shows the map of the project open `at`, as the agent asks: on the
+    /// Map page's tab, or a new one, with the keyboard in it.
     pub(super) fn show_map_at(
         &mut self,
-        at: Vec<String>,
+        at: &[String],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let showing = self
-            .tabs
-            .iter()
-            .position(|tab| matches!(tab.content, TabContent::Map(_)));
-        if let Some(index) = showing {
-            if let TabContent::Map(map) = &self.tabs[index].content {
-                map.update(cx, |map, cx| map.open_at(at, cx));
-            }
-            self.show(index, window, cx);
-        } else {
-            self.push_map(at, true, window, cx);
-            self.focus_shown(window, cx);
-        }
+        self.show_plugin("map", &map_fragment(at), window, cx);
     }
+}
 
-    /// Puts a tab showing the map of the project, open `at` (see
-    /// [`cox_core::tabs::KeptTab::Map`]), after the others, shown if
-    /// `show` is.
-    pub(super) fn push_map(
-        &mut self,
-        at: Vec<String>,
-        show: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let shown = cx.new(|cx| Map::new(self.cwd.clone(), at, cx));
-        let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
-        let opens = cx.subscribe_in(&shown, window, |stage, _, map::Chosen(path), window, cx| {
-            if stage.open_path(path, None, window, cx).is_err() {
-                stage.show_file::<Code>(path.clone(), "", None, window, cx);
-                stage.focus_shown(window, cx);
-            }
-        });
-        self.push(TabContent::Map(shown), changes, Some(opens), show, cx);
-    }
+/// The address of the Parts page.
+pub(super) const PARTS_URL: &str = "cox://parts/";
+
+/// The address of the Map page, open `at`: the names the map is open at
+/// are the page's hash, as `cox://map/#cox/stage`.
+pub(super) fn map_url(at: &[String]) -> String {
+    format!("cox://map/{}", map_fragment(at))
+}
+
+/// The hash of the Map page open `at`: `#` alone at the crates.
+fn map_fragment(at: &[String]) -> String {
+    format!("#{}", at.join("/"))
 }
 
 impl Stage {
@@ -341,47 +335,6 @@ impl Stage {
             },
         );
         self.push(TabContent::Flow(shown), changes, Some(opens), show, cx);
-    }
-}
-
-impl Stage {
-    /// Shows the parts the chat runs with (see
-    /// [`cox_core::tabs::KeptTab::Parts`]): on their tab, or a new one,
-    /// with the keyboard in it.
-    pub(super) fn show_parts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let showing = self
-            .tabs
-            .iter()
-            .position(|tab| matches!(tab.content, TabContent::Parts(_)));
-        if let Some(index) = showing {
-            self.show(index, window, cx);
-        } else {
-            self.push_parts(true, window, cx);
-            self.focus_shown(window, cx);
-        }
-    }
-
-    /// Puts a tab showing the parts the chat runs with after the others,
-    /// shown if `show` is. A click on a part opens the code that starts
-    /// it, at the line that does.
-    pub(super) fn push_parts(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let shown = cx.new(|cx| Parts::new(self.cwd.clone(), self.started.clone(), cx));
-        let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
-        let opens = cx.subscribe_in(
-            &shown,
-            window,
-            |stage, _, opened: &parts::Opened, window, cx| {
-                let path = stage.cwd.join(&opened.file);
-                let lines = parts::line_saying(&path, opened.find).map(|line| Lines {
-                    first: line,
-                    last: line,
-                });
-                if let Err(error) = stage.open_path(&path, lines, window, cx) {
-                    tracing::warn!("cannot open {}: {error}", path.display());
-                }
-            },
-        );
-        self.push(TabContent::Parts(shown), changes, Some(opens), show, cx);
     }
 }
 

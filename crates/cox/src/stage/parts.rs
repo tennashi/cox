@@ -1,35 +1,22 @@
-//! A tab of the stage that shows the parts a chat runs with, and how
-//! they reach each other, for the human to see what is started before
-//! they read the code: the agent's process and Cox's thread for it,
-//! speaking ACP; the `cox --mcp` the agent starts and the chat's tool
-//! server it reaches over the socket, which asks the stage; the Chrome
-//! `DevTools` MCP server the agent starts, the relay it goes through and
-//! CEF behind it; `rust-analyzer`, when a tab of Rust code needs it; and
-//! the judge of a goal in words. Each part is a box, with what it is,
-//! who starts it, and, while the chat's agent runs, how it was started:
-//! the agent's command, the socket, the ports. A click on a box opens the
-//! code that starts the part, when the project has the file, as it does
-//! when the project is Cox.
+//! The parts a chat runs with, and how they reach each other, for the
+//! human to see what is started before they read the code: the agent's
+//! process and Cox's thread for it, speaking ACP; the `cox --mcp` the
+//! agent starts and the chat's tool server it reaches over the socket,
+//! which asks the stage; the Chrome `DevTools` MCP server the agent
+//! starts, the relay it goes through and CEF behind it; `rust-analyzer`,
+//! when a tab of Rust code needs it; and the judge of a goal in words.
+//! Each part has what it is, who starts it, and, while the chat's agent
+//! runs, how it was started: the agent's command, the socket, the ports;
+//! and the code that starts it, when the project has the file, as it does
+//! when the project is Cox. The stage's Parts page draws them, from what
+//! [`told`] says of them as JSON at `cox://api/parts` (see
+//! [`crate::stage::plugins`]).
 
 use std::path::{Path, PathBuf};
 
 use cox_acp::McpServer;
-use cox_core::tabs::KeptTab;
-use gpui::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, ScrollHandle,
-    Window, div, prelude::*, px, rgb,
-};
 
-use crate::stage::tab::Shows;
 use crate::ui::paths::shortened;
-use crate::ui::theme::{BACKGROUND, DIM, FOREGROUND, LINK};
-
-/// How wide a part's box is, and the arrow between two.
-const BOX_WIDTH: f32 = 180.;
-const ARROW_WIDTH: f32 = 84.;
-
-const BORDER: u32 = 0x40_4040;
-const HOVER: u32 = 0x2a_2d2e;
 
 /// What a chat runs with, as Cox started its agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,14 +33,7 @@ pub struct Started {
     pub servers: Vec<McpServer>,
 }
 
-/// The human chose a part, to open the code that starts it: `file`, from
-/// the project's folder, at the first line that says `find`.
-pub struct Opened {
-    pub file: PathBuf,
-    pub find: &'static str,
-}
-
-/// What kind of thing a part is, which the picture colors it by.
+/// What kind of thing a part is, which the page colors it by.
 #[derive(Clone, Copy)]
 enum Kind {
     /// A process of its own.
@@ -318,185 +298,7 @@ fn judge_row() -> Row {
     }
 }
 
-pub struct Parts {
-    /// The chat's folder, where Cox's code is when the project is Cox.
-    root: PathBuf,
-    /// What the chat runs with, while its agent runs.
-    started: Option<Started>,
-    rows: Vec<Row>,
-    scroll: ScrollHandle,
-    focus_handle: FocusHandle,
-}
-
-impl EventEmitter<Opened> for Parts {}
-
-impl Parts {
-    /// A tab showing the parts of a chat working in `root`, an absolute
-    /// path, which runs with `started`, if its agent runs.
-    pub fn new(root: PathBuf, started: Option<Started>, cx: &mut Context<Self>) -> Self {
-        Self {
-            root,
-            started,
-            rows: rows(),
-            scroll: ScrollHandle::new(),
-            focus_handle: cx.focus_handle(),
-        }
-    }
-
-    /// The chat's agent started, with `started`.
-    pub fn runs(&mut self, started: Started, cx: &mut Context<Self>) {
-        if self.started.as_ref() != Some(&started) {
-            self.started = Some(started);
-            cx.notify();
-        }
-    }
-
-    /// How `part` was started, while the agent runs, as its box says it.
-    fn detail(&self, part: &Part) -> Option<String> {
-        detail(self.started.as_ref(), part)
-    }
-
-    /// The line above the picture.
-    fn render_heading(&self) -> AnyElement {
-        let said = if self.started.is_some() {
-            "What the chat runs with, and how they reach each other. A click on a part opens \
-             the code that starts it."
-        } else {
-            "The chat is closed, so its agent is not started: a line sent starts it again, \
-             with these parts. A click on a part opens the code that starts it."
-        };
-        div()
-            .px_3()
-            .py_2()
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .text_color(rgb(DIM))
-            .child(said)
-            .into_any_element()
-    }
-
-    fn render_row(&self, index: usize, row: &Row, cx: &mut Context<Self>) -> AnyElement {
-        let mut across: Vec<AnyElement> = Vec::new();
-        for (at, part) in row.parts.iter().enumerate() {
-            if at > 0
-                && let Some(between) = row.between.get(at - 1)
-            {
-                across.push(render_between(between));
-            }
-            across.push(self.render_part(index * 10 + at, part, cx));
-        }
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .px_3()
-            .py_2()
-            .when_some(row.when, |row, when| {
-                row.child(div().text_xs().text_color(rgb(DIM)).child(when))
-            })
-            .child(div().flex().items_center().children(across))
-            .into_any_element()
-    }
-
-    /// A part's box: its name, what it is, who starts it, how it was
-    /// started while the agent runs, and the file that starts it.
-    fn render_part(&self, number: usize, part: &Part, cx: &mut Context<Self>) -> AnyElement {
-        let file = PathBuf::from(part.file);
-        let has = self.root.join(&file).is_file();
-        let find = part.find;
-        let name = file.file_name().map_or_else(
-            || part.file.to_owned(),
-            |name| name.to_string_lossy().into_owned(),
-        );
-        let detail = self.detail(part);
-        let mut element = div()
-            .id(("part", number))
-            .debug_selector(move || format!("part-{number}"))
-            .w(px(BOX_WIDTH))
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .p_2()
-            .border_1()
-            .border_color(rgb(BORDER))
-            .rounded_md()
-            .child(
-                div()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(FOREGROUND))
-                    .child(part.name),
-            )
-            .child(div().text_xs().text_color(rgb(DIM)).child(part.says))
-            .child(div().text_xs().text_color(rgb(DIM)).child(part.started))
-            .when_some(detail, |element, detail| {
-                element.child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(FOREGROUND))
-                        .truncate()
-                        .child(detail),
-                )
-            })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(if has { LINK } else { DIM }))
-                    .child(name),
-            );
-        if has {
-            element = element
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(HOVER)))
-                .on_click(cx.listener(move |_, _, _, cx| {
-                    cx.emit(Opened {
-                        file: file.clone(),
-                        find,
-                    });
-                }));
-        }
-        element.into_any_element()
-    }
-}
-
-/// What goes between two parts: its words over an arrow.
-fn render_between(between: &Between) -> AnyElement {
-    let (left, right) = match between.way {
-        Way::Right => (None, Some("▶")),
-        Way::Left => (Some("◀"), None),
-        Way::Both => (Some("◀"), Some("▶")),
-    };
-    div()
-        .w(px(ARROW_WIDTH))
-        .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap_1()
-        .px_1()
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(DIM))
-                .text_center()
-                .child(between.says),
-        )
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .items_center()
-                .text_xs()
-                .text_color(rgb(DIM))
-                .children(left)
-                .child(div().flex_1().h(px(2.)).bg(rgb(DIM)))
-                .children(right),
-        )
-        .into_any_element()
-}
-
-/// How `part` was started, as `started` says, while the agent runs: its
-/// box says it under what it is.
+/// How `part` was started, as `started` says, while the agent runs.
 fn detail(started: Option<&Started>, part: &Part) -> Option<String> {
     let started = started?;
     let server = |name: &str| {
@@ -585,53 +387,6 @@ pub fn line_saying(path: &Path, find: &str) -> Option<usize> {
     text.lines()
         .position(|line| line.contains(find))
         .map(|index| index + 1)
-}
-
-impl Shows for Parts {
-    fn title(&self) -> String {
-        "Parts".to_owned()
-    }
-
-    fn kept(&self) -> KeptTab {
-        KeptTab::Parts
-    }
-}
-
-impl Focusable for Parts {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl Render for Parts {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = std::mem::take(&mut self.rows);
-        let drawn: Vec<AnyElement> = rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| self.render_row(index, row, cx))
-            .collect();
-        self.rows = rows;
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .track_focus(&self.focus_handle)
-            .bg(rgb(BACKGROUND))
-            .text_color(rgb(FOREGROUND))
-            .child(self.render_heading())
-            .child(
-                div()
-                    .id("parts")
-                    .debug_selector(|| "parts".to_owned())
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .py_1()
-                    .children(drawn),
-            )
-    }
 }
 
 #[cfg(test)]

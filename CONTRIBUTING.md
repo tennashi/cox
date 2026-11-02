@@ -300,29 +300,30 @@ as a project forgets it.
 
 "Map" beside it opens a tab of the project as a map, for the human to
 see where things are before they read them: the crates of the Cargo
-workspace, or the one crate, as boxes, each with the first paragraph of
+workspace, or the one crate, as cards, each with the first paragraph of
 what its `lib.rs` or `main.rs` says of itself (its `//!` lines), how many
 lines it has, and which crates of the project it uses. A click on a
 crate opens the map at it: the files it starts from, and its modules as
-boxes, each with what its file says of itself, and a click on a module
+cards, each with what its file says of itself, and a click on a module
 with modules of its own opens the map at that, down to the files; the
-path above the boxes leads back up. A click on a file opens it, as a
+path above the cards leads back up. A click on a file opens it, as a
 link to it does. What changed, as "Changes" shows it, is laid over the
-map: a box with a file that changed in it is marked, with how many lines
+map: a card with a file that changed in it is marked, with how many lines
 changed in how many files, so that the human sees where a change falls
-in the project before they read it. The mouse resting on a box shows
-what it has to do with the others: the boxes it uses are colored one
-way, and those that use it another, and the line above the boxes names
+in the project before they read it. The mouse resting on a card shows
+what it has to do with the others: the cards it uses are colored one
+way, and those that use it another, and the line above the cards names
 them. A crate uses another when its `Cargo.toml` says so, and a module
 uses another when a file in it names the other, in a `use` line or a
 path in its code, as `crate::stage::Stage` or `cox_core::tabs`. The ‹
-and › above the boxes go back and forward between the places the map was
-open at, as Command-[ and Command-] do (Alt-Left and Alt-Right, and
-Control off macOS), as in a tab of code. The agent opens it with Cox's
-`show_map` tool, at a crate or module, to show the human where what it
-talks of is before it talks it through, and hears what the map shows
-there. The tab follows the project as it changes, and a closed chat's
-stage opens it again where it was open.
+and › above the cards go back and forward between the places the map was
+open at. The agent opens it with Cox's `show_map` tool, at a crate or
+module, to show the human where what it talks of is before it talks it
+through, and hears what the map shows there. The tab follows the project
+as it changes, and a closed chat's stage opens it again where it was
+open. The map is a page of the stage, one of its plugins (see below),
+at `cox://map/`, where the map is open being the page's hash, as
+`cox://map/#cox/stage`.
 
 "Parts" beside it opens a tab of the parts the chat runs with, and how
 they reach each other, for the human to see what is running before they
@@ -331,43 +332,42 @@ ACP; the `cox --mcp` the agent starts and the chat's tool server it
 reaches over the socket, which asks the stage; the Chrome DevTools MCP
 server the agent starts, the relay it goes through and CEF behind it;
 `rust-analyzer`, when a tab shows Rust code; and the judge of a goal in
-words. Each part is a box, with what it is, who starts it, and, while
-the chat's agent runs, how it was started: the agent's command, the
-socket, the ports. A click on a box opens the code that starts the
-part, when the project has the file, as it does when the project is
-Cox.
+words. Each part is a card, in a named row, colored by what it is (a
+process of its own, a thread of Cox's, or part of the window), with what
+it is, who starts it, and, while the chat's agent runs, how it was
+started: the agent's command, the socket, the ports; and arrows between
+the cards for what goes between them. A click on a card opens the code
+that starts the part, when the project has the file, as it does when
+the project is Cox. It is a page of the stage too, at `cox://parts/`.
 
-A tab can show a plugin too: a page, in HTML and JavaScript, that draws
+A tab can show a plugin: a page, in HTML and JavaScript, that draws
 what Cox knows as a tab Cox draws would, for whoever wants a view of
 their own on the stage, the agent included, since it writes HTML and
-reads pages. A plugin is a folder with an `index.html`, and a
-`plugin.json` naming its `title` if it has one: those built into Cox, in
-`crates/cox/plugins`, and the project's, in `.cox/plugins/<name>` under
-its folder. The tab bar has a button for each, after "Parts", which
-opens the plugin's page at `cox://<name>/`, an address the stage serves
-itself, through CEF, from the plugin's files; the agent opens it as any
-page. A plugin reads what Cox knows as JSON from `cox://api/<what>`:
-`cox://api/parts` is the parts the chat runs with, as "Parts" shows
-them, with the file and line of the code that starts each, and
+reads pages. "Map" and "Parts" are the two built in. A plugin is a
+folder with an `index.html`, and a `plugin.json` naming its `title` if
+it has one: those built into Cox, in `crates/cox/plugins`, and the
+project's, in `.cox/plugins/<name>` under its folder. The tab bar has a
+button for each, after "Changes", which opens the plugin's page at
+`cox://<name>/`, an address the stage serves itself, through CEF, from
+the plugin's files, or shows the tab that has it, wherever the page has
+gone; the agent opens it as any page. A page at a `cox:` address is
+drawn as a tab Cox draws, without the toolbar a page of the web has,
+since the page is the tab. A plugin reads what Cox knows as JSON from
+`cox://api/<what>`: `cox://api/parts` is the parts the chat runs with,
+with the file and line of the code that starts each, and
 `cox://api/map/<crate>/<module>…` is the map of the project open at the
-crate and modules named, or at the crates when none is, as "Map" shows
-it: each box with what it is, its path, what it says of itself, its
-counts, what changed in it, and which of the other boxes it uses. It
-opens a file on a tab by going to `cox://open/<path>#L<line>`, which
-the stage takes as it takes a link to a file (a page that is not itself
-a file may not link to one). Two are built in, drawn by pages with
+crate and modules named, or at the crates when none is: each card with
+what it is, its path, what it says of itself, its counts, what changed
+in it, and which of the other cards it uses. It opens a file on a tab
+by going to `cox://open/<path>#L<line>`, which the stage takes as it
+takes a link to a file (a page that is not itself a file may not link
+to one). The built-in plugins are drawn with
 [Preact](https://preactjs.com) and
 [htm](https://github.com/developit/htm), which the stage serves at
 `cox://vendor/` from `crates/cox/plugins/vendor`, for a project's
 plugin to use too, so that none needs a build step or the network, and
-which read their JSON again every two seconds, as Cox's own tabs follow
-what they show. "Parts (web)" is the parts "Parts" shows, as cards in
-named rows, colored by what each is (a process of its own, a thread of
-Cox's, or part of the window), with arrows between them for what goes
-between. "Map (web)" is the map "Map" shows, as cards colored by what
-each is (a crate, a file, or a module), where the map is open being the
-page's hash, as `cox://map/#cox/stage`, so that the browser's back and
-forward go between the places it was open at.
+they read their JSON again every two seconds, as Cox's own tabs follow
+what they show.
 
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
