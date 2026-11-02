@@ -19,13 +19,15 @@
 //!   types, which [`pointer`] turns into what the tab draws over the page.
 //! - [`profile`] is where the browser keeps logins and the like.
 //! - [`handlers`] is what CEF calls into on its threads, [`viewport`]
-//!   fits the page to the stage's size, and [`events`] makes CEF's mouse
-//!   and key events of the stage's.
+//!   fits the page to the stage's size, [`events`] makes CEF's mouse
+//!   and key events of the stage's, and [`links`] tells which of a
+//!   page's navigations is a link to a file.
 //! - [`quit`] lets signals, and CEF on macOS, ask the app to quit, and
 //!   [`macos`] gives CEF what it expects of the app there.
 
 mod events;
 mod handlers;
+mod links;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod pointer;
@@ -48,12 +50,13 @@ use cef::{
     CompositionUnderline, DevToolsMessageObserver, DisplayHandler, ImplApp, ImplBrowser,
     ImplBrowserHost, ImplBrowserProcessHandler, ImplClient, ImplCommandLine,
     ImplDevToolsMessageObserver, ImplDisplayHandler, ImplFrame, ImplLifeSpanHandler,
-    ImplLoadHandler, ImplRenderHandler, ImplTask, LifeSpanHandler, LoadHandler, Registration,
-    RenderHandler, Settings, Task, ThreadId, WindowInfo, WrapApp, WrapBrowserProcessHandler,
-    WrapClient, WrapDevToolsMessageObserver, WrapDisplayHandler, WrapLifeSpanHandler,
-    WrapLoadHandler, WrapRenderHandler, WrapTask, wrap_app, wrap_browser_process_handler,
-    wrap_client, wrap_dev_tools_message_observer, wrap_display_handler, wrap_life_span_handler,
-    wrap_load_handler, wrap_render_handler, wrap_task,
+    ImplLoadHandler, ImplRenderHandler, ImplRequest, ImplRequestHandler, ImplTask, LifeSpanHandler,
+    LoadHandler, Registration, RenderHandler, RequestHandler, Settings, Task, ThreadId, WindowInfo,
+    WrapApp, WrapBrowserProcessHandler, WrapClient, WrapDevToolsMessageObserver,
+    WrapDisplayHandler, WrapLifeSpanHandler, WrapLoadHandler, WrapRenderHandler,
+    WrapRequestHandler, WrapTask, wrap_app, wrap_browser_process_handler, wrap_client,
+    wrap_dev_tools_message_observer, wrap_display_handler, wrap_life_span_handler,
+    wrap_load_handler, wrap_render_handler, wrap_request_handler, wrap_task,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::watch;
@@ -95,6 +98,10 @@ pub enum Event {
     Navigated,
     /// The page asks for a window of its own, showing this address.
     Popup(String),
+    /// The human clicked a link in the page to a file, at this `file:`
+    /// address, with lines after it if it names any (see [`links`]): the
+    /// page stays, for the stage to open the file on a tab of its own.
+    FileLink(String),
 }
 
 /// Where the browser is in its history, as the toolbar shows it, and what

@@ -9,7 +9,8 @@
 //! stage starts on; the human opens more pages and terminals, and the
 //! tree, and closes tabs, and the agent opens and closes pages
 //! too, through the chat's relay. A page that asks for a window of its own
-//! gets a tab instead. With Cox's own tools (see [`crate::agent::mcp`]), the
+//! gets a tab instead, and a link in a page to a file opens the file on a
+//! tab, as a link from the conversation does. With Cox's own tools (see [`crate::agent::mcp`]), the
 //! agent shows the human Markdown files and code, a tab for each file, and
 //! runs commands in terminals: a command gets the tab of the agent's last
 //! one that ended, or a new one. A link to a file opens it on a tab too:
@@ -76,7 +77,7 @@ use cox_browser::{Cef, TargetId};
 
 use crate::stage::code::Code;
 use crate::stage::document::Document;
-use crate::stage::page::{OpenTab, Page};
+use crate::stage::page::{Opens, Page};
 use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
 use crate::ui::Panel;
@@ -294,8 +295,11 @@ impl Stage {
         }
         let page = cx.new(|cx| Page::new(browser, events, window, cx));
         let changes = cx.observe(&page, |stage, _, cx| stage.changed(cx));
-        let popups = cx.subscribe_in(&page, window, |stage, _, OpenTab(url), window, cx| {
-            stage.open_tab(url, true, window, cx);
+        let popups = cx.subscribe_in(&page, window, |stage, _, opens, window, cx| match opens {
+            Opens::Tab(url) => {
+                stage.open_tab(url, true, window, cx);
+            }
+            Opens::File(url) => stage.open(url, window, cx),
         });
         let content = TabContent::Page {
             page,
