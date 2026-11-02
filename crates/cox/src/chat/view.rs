@@ -37,6 +37,7 @@ use std::rc::Rc;
 
 use cox_core::goal;
 use cox_core::store::Record;
+use cox_core::tabs::KeptTabs;
 use gpui::{
     AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, Subscription, Task,
@@ -50,6 +51,7 @@ use crate::agent::{Agent, AgentThread};
 use crate::agent::{AgentEvent, Command};
 use crate::chat::conversation::{self, Answer, Conversation, Entry, GOAL_TURNS, Goal, State};
 use crate::chat::judge::{Judge, Starts};
+use crate::stage::Stage;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::text::Reading;
 use crate::ui::theme::{DIM, FONT, LINK};
@@ -676,6 +678,19 @@ impl ChatView {
         &self.input
     }
 
+    /// The input the human sets the goal in, while it is open.
+    #[must_use]
+    pub fn goal_input(&self) -> Option<&Entity<LineInput>> {
+        self.goal_input.as_ref().map(|(input, _, _)| input)
+    }
+
+    /// The stage's tabs, as they are kept, when the chat has a stage.
+    #[must_use]
+    pub fn tabs(&self, cx: &App) -> Option<KeptTabs> {
+        let stage = self.stage.as_ref()?.view.clone().downcast::<Stage>().ok()?;
+        Some(stage.read(cx).tabs(cx))
+    }
+
     /// Where the conversation is scrolled to.
     #[must_use]
     pub fn scroll(&self) -> &ScrollHandle {
@@ -833,8 +848,10 @@ impl Focusable for ChatView {
 
 impl ChatView {
     /// What the chat waits for, when it is not the human's next line, or
-    /// the goal it works toward, while it has one.
-    fn waiting(&self) -> Option<String> {
+    /// the goal it works toward, while it has one: the line above the
+    /// input.
+    #[must_use]
+    pub fn waiting(&self) -> Option<String> {
         let goal = self.conversation.goal();
         match self.conversation.state() {
             State::Idle => goal.map(|goal| format!("Goal: {}", goal.line())),

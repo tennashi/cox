@@ -439,6 +439,51 @@ async fn switching_keeps_each_chats_conversation_and_draft(cx: &mut TestAppConte
     assert_eq!(agents.borrow()[1].prompts(), Vec::<String>::new());
 }
 
+#[gpui::test]
+async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
+    let home = scratch("stands");
+    let (_, workspace, cx) = open_window(cx, home.clone());
+    let describe = |cx: &mut VisualTestContext, chat: Option<u64>| {
+        cx.update(|window, cx| cox::inspect::describe(workspace.read(cx), chat, None, window, cx))
+    };
+
+    let told = describe(cx, None);
+    assert!(told.contains("The chats, as listed:\n  none\n"), "{told}");
+    assert!(
+        told.contains("the keyboard is in the window, which shows no chat"),
+        "{told}"
+    );
+    assert!(told.ends_with("\nNo chat is shown.\n"), "{told}");
+
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "first").await;
+    cx.simulate_keystrokes("secondary-n");
+    cx.simulate_input("not sent yet");
+
+    let told = describe(cx, None);
+    let listed = format!(
+        "The chats, as listed:\n  No project ({})\n    chat 1 \"first\": idle\n    chat 2 \"Chat 2\": idle, shown\n",
+        home.display()
+    );
+    assert!(told.contains(&listed), "{told}");
+    assert!(told.contains("the keyboard is in the input"), "{told}");
+    assert!(
+        told.ends_with(
+            "Chat 2 \"Chat 2\":\n  idle\n  Input: \"not sent yet\"\n  Stage: none\n  Conversation, 0 entries:\n"
+        ),
+        "{told}"
+    );
+    let told = describe(cx, Some(1));
+    assert!(
+        told.ends_with(
+            "Chat 1 \"first\":\n  idle\n  Not shown: its input and stage are as they were left.\n  \
+            Input: \"\"\n  Stage: none\n  Conversation, 2 entries:\n    1 human: first\n    2 reply: echo: first\n"
+        ),
+        "{told}"
+    );
+    assert!(describe(cx, Some(9)).ends_with("\nThere is no chat 9.\n"));
+}
+
 /// The entries of the chat `view` shows.
 fn entries(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> Vec<Entry> {
     view.read_with(cx, |view, _| view.conversation().entries().to_vec())

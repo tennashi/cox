@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest};
+use crate::agent::mcp::{Answered, ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest, answered};
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::chat::trial::Trial;
 
@@ -334,7 +334,7 @@ pub(super) async fn call(
     only: Option<&[String]>,
     requests: &UnboundedSender<ToolRequest>,
     chats: &UnboundedSender<ChatRequest>,
-) -> Result<Value, (i64, String)> {
+) -> Answered {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
     // A tool the chat's agent does not get is no tool to it.
@@ -352,14 +352,10 @@ pub(super) async fn call(
         START_TRIAL => start_trial(arguments, chats).await,
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
-    let (text, is_error) = match done {
-        Ok(text) => (text, false),
-        Err(text) => (text, true),
-    };
-    Ok(json!({
-        "content": [{ "type": "text", "text": text }],
-        "isError": is_error,
-    }))
+    Ok(match done {
+        Ok(text) => answered(&text, false),
+        Err(text) => answered(&text, true),
+    })
 }
 
 /// Reads the file `arguments` names, and asks the chat to show it.

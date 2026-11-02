@@ -12,7 +12,10 @@
 //! What goes over the socket is MCP as it goes over standard input and
 //! output: JSON-RPC messages, one to a line. The server answers each
 //! request as it is done, so a command that runs long holds up nothing
-//! else, and stops the command when the agent cancels the request.
+//! else, and stops the command when the agent cancels the request. The
+//! server itself serves whatever [`Serves`] its tools: the socket that
+//! answers for Cox as a whole, in `crate::inspect`, is one of these
+//! servers too, and the same bridge reaches it.
 //!
 //! The tools themselves are in [`calls`]: what the agent learns of them,
 //! and what each does when called, through what it asks of the chat: of
@@ -22,11 +25,14 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
+use std::future::Future;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::fs::DirBuilderExt as _;
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
 use std::path::{Path, PathBuf};
+use std::pin::{Pin, pin};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
@@ -191,7 +197,33 @@ const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "
 /// JSON-RPC's codes for what went wrong with a request.
 const PARSE_ERROR: i64 = -32700;
 const METHOD_NOT_FOUND: i64 = -32601;
-const INVALID_PARAMS: i64 = -32602;
+pub(crate) const INVALID_PARAMS: i64 = -32602;
+pub(crate) const INTERNAL_ERROR: i64 = -32603;
+
+/// What a request's tool answers: MCP's result of `tools/call`, or the
+/// JSON-RPC error, with its code, that the request gets instead.
+pub(crate) type Answered = Result<Value, (i64, String)>;
+
+/// The tools a server serves: what a client learns of them, and what each
+/// does when called. A server answers many calls at once, so a call that
+/// waits holds up no other.
+pub(crate) trait Serves: Send + Sync + 'static {
+    /// The tools, as MCP lists them.
+    fn tools(&self) -> Value;
+    /// Calls the tool `params`, those of `tools/call`, name, with its
+    /// arguments.
+    fn call<'a>(&'a self, params: &'a Value)
+    -> Pin<Box<dyn Future<Output = Answered> + Send + 'a>>;
+}
+
+/// The result of a call that answers with `text`, as an error when
+/// `is_error`.
+pub(crate) fn answered(text: &str, is_error: bool) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": is_error,
+    })
+}
 
 /// How many servers this Cox started, which numbers their directories.
 static STARTED: AtomicU64 = AtomicU64::new(0);
@@ -206,29 +238,26 @@ static STARTED: AtomicU64 = AtomicU64::new(0);
 pub fn start(cwd: PathBuf, only: Option<Vec<String>>) -> anyhow::Result<ToolServer> {
     let directory = private_directory()?;
     let socket = directory.join("mcp");
-    let listener = StdUnixListener::bind(&socket)
-        .and_then(|listener| {
-            listener.set_nonblocking(true)?;
-            Ok(listener)
-        })
-        .inspect_err(|_| {
-            let _ = fs::remove_dir_all(&directory);
-        })
-        .with_context(|| format!("cannot listen on {}", socket.display()))?;
+    let listener = listen(&socket).inspect_err(|_| {
+        let _ = fs::remove_dir_all(&directory);
+    })?;
     let (sent, requests) = unbounded_channel();
     let asks = sent.clone();
     let (chats, chat_requests) = unbounded_channel();
+    let served = Arc::new(Served {
+        cwd,
+        only,
+        requests: sent,
+        chats,
+    });
+    // The server stops when the chat lets go of the requests.
+    let until = served.requests.clone();
     // What the server says is said in the span it starts in, its chat's:
     // its runtime runs on this one thread.
     let span = tracing::Span::current();
     thread::spawn(move || {
         let _entered = span.enter();
-        let served = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(anyhow::Error::from)
-            .and_then(|runtime| runtime.block_on(serve(listener, cwd, only, sent, chats)));
-        if let Err(error) = served {
+        if let Err(error) = serve(listener, served, until.closed()) {
             tracing::error!("the agent's tools stopped: {error:#}");
         }
         if let Err(error) = fs::remove_dir_all(&directory) {
@@ -259,50 +288,85 @@ fn private_directory() -> anyhow::Result<PathBuf> {
     }
 }
 
-/// Answers the bridge's connections until the chat lets go of `requests`,
-/// with the tools named in `only`, or all of them, asking the window
-/// through `chats`.
-async fn serve(
+/// Listens on `socket`, a new path, for a server.
+///
+/// # Errors
+///
+/// When the socket cannot be made.
+pub(crate) fn listen(socket: &Path) -> anyhow::Result<StdUnixListener> {
+    StdUnixListener::bind(socket)
+        .and_then(|listener| {
+            listener.set_nonblocking(true)?;
+            Ok(listener)
+        })
+        .with_context(|| format!("cannot listen on {}", socket.display()))
+}
+
+/// Serves `served` to the connections of `listener`, on this thread,
+/// until `until` is done.
+///
+/// # Errors
+///
+/// When the runtime cannot start, or the listener fails.
+pub(crate) fn serve(
     listener: StdUnixListener,
+    served: Arc<dyn Serves>,
+    until: impl Future<Output = ()>,
+) -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async move {
+        let listener = UnixListener::from_std(listener)?;
+        let mut until = pin!(until);
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (stream, _) = accepted?;
+                    let served = served.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = talk(stream, served).await {
+                            tracing::warn!("a connection of the tools ended: {error:#}");
+                        }
+                    });
+                }
+                () = &mut until => return Ok(()),
+            }
+        }
+    })
+}
+
+/// What one chat's server serves: the tools named in `only`, or all of
+/// them, working in `cwd`, asking the chat's stage through `requests`,
+/// and the window through `chats`.
+struct Served {
     cwd: PathBuf,
     only: Option<Vec<String>>,
     requests: UnboundedSender<ToolRequest>,
     chats: UnboundedSender<ChatRequest>,
-) -> anyhow::Result<()> {
-    let listener = UnixListener::from_std(listener)?;
-    let served = Served { cwd, only, chats };
-    loop {
-        tokio::select! {
-            accepted = listener.accept() => {
-                let (stream, _) = accepted?;
-                let served = served.clone();
-                let requests = requests.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = talk(stream, &served, &requests).await {
-                        tracing::warn!("a connection of the agent's tools ended: {error:#}");
-                    }
-                });
-            }
-            () = requests.closed() => return Ok(()),
-        }
+}
+
+impl Serves for Served {
+    fn tools(&self) -> Value {
+        calls::tools(self.only.as_deref())
+    }
+
+    fn call<'a>(
+        &'a self,
+        params: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Answered> + Send + 'a>> {
+        Box::pin(calls::call(
+            params,
+            &self.cwd,
+            self.only.as_deref(),
+            &self.requests,
+            &self.chats,
+        ))
     }
 }
 
-/// What one chat's server serves: the tools named in `only`, or all of
-/// them, working in `cwd`, asking the window through `chats`.
-#[derive(Clone)]
-struct Served {
-    cwd: PathBuf,
-    only: Option<Vec<String>>,
-    chats: UnboundedSender<ChatRequest>,
-}
-
 /// Answers what the agent says on one connection, until it hangs up.
-async fn talk(
-    stream: UnixStream,
-    served: &Served,
-    requests: &UnboundedSender<ToolRequest>,
-) -> anyhow::Result<()> {
+async fn talk(stream: UnixStream, served: Arc<dyn Serves>) -> anyhow::Result<()> {
     let (heard, mut said) = stream.into_split();
     // Answers go out as they are ready, in whatever order that is.
     let (answers, mut ready) = unbounded_channel::<Value>();
@@ -336,9 +400,9 @@ async fn talk(
             continue;
         }
         let id = message.get("id").map(Value::to_string);
-        let (served, requests, answers) = (served.clone(), requests.clone(), answers.clone());
+        let (served, answers) = (served.clone(), answers.clone());
         let answer = tokio::spawn(async move {
-            if let Some(answer) = answer(&message, &served, &requests).await {
+            if let Some(answer) = answer(&message, served.as_ref()).await {
                 let _ = answers.send(answer);
             }
         });
@@ -366,20 +430,15 @@ fn cancelled(message: &Value) -> Option<&Value> {
 /// The answer to `message`, or `None` when it needs none: a
 /// notification, or an answer to a request, which the server makes none
 /// of.
-async fn answer(
-    message: &Value,
-    served: &Served,
-    requests: &UnboundedSender<ToolRequest>,
-) -> Option<Value> {
+async fn answer(message: &Value, served: &dyn Serves) -> Option<Value> {
     let id = message.get("id")?;
     let method = message.get("method")?.as_str()?;
     let params = message.get("params").unwrap_or(&Value::Null);
-    let only = served.only.as_deref();
     let result = match method {
         "initialize" => Ok(initialize(params)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": calls::tools(only) })),
-        "tools/call" => calls::call(params, &served.cwd, only, requests, &served.chats).await,
+        "tools/list" => Ok(json!({ "tools": served.tools() })),
+        "tools/call" => served.call(params).await,
         _ => Err((METHOD_NOT_FOUND, format!("no method {method}"))),
     };
     Some(match result {
@@ -472,12 +531,13 @@ mod tests {
         let served = Served {
             cwd: cwd.to_owned(),
             only: None,
+            requests: requests.clone(),
             chats,
         };
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(answer(message, &served, requests))
+            .block_on(answer(message, &served))
     }
 
     #[test]

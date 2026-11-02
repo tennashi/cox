@@ -14,7 +14,7 @@ use std::backtrace::Backtrace;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use tracing::Subscriber;
 use tracing_subscriber::Layer;
@@ -32,6 +32,15 @@ const KEPT: &str = "info,cox=debug";
 /// The target a panic is said under, which only the file of the run takes:
 /// on standard error, Rust says it already.
 const PANIC: &str = "cox::panic";
+
+/// The file this run is kept in, once [`init`] opened one.
+static FILE: OnceLock<PathBuf> = OnceLock::new();
+
+/// The file this run is kept in, if it is.
+#[must_use]
+pub fn file() -> Option<&'static Path> {
+    FILE.get().map(PathBuf::as_path)
+}
 
 /// Starts taking what Cox says, for the rest of the process, keeping it in
 /// a new file in `directory` when given, and answers that file's path.
@@ -59,6 +68,9 @@ pub fn init(directory: Option<&Path>) -> Option<PathBuf> {
             .ok()
     });
     let path = file.as_ref().map(|(path, _)| path.clone());
+    if let Some(path) = &path {
+        let _ = FILE.set(path.clone());
+    }
     let kept = file.map(|(_, file)| {
         let filter = EnvFilter::try_from_env("COX_LOG").unwrap_or_else(|_| EnvFilter::new(KEPT));
         kept(file).with_filter(filter)

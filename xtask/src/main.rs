@@ -26,7 +26,7 @@ Tasks:
             the fake agent's tour unless given, or with <agent command>.
             It keeps what lasts in <dir>, or afresh in target/debug/cox-run.
             --headless runs it on a display of its own (Xvfb, on Linux),
-            for screenshots and input
+            with no screen; `cox --inspect` asks it how it stands
     setup   Install the pinned development tools that `ci` needs
     help    Show this message
 ";
@@ -304,11 +304,13 @@ fn run(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
     };
     println!("Cox keeps what lasts in {}", data.display());
     println!("What it does is kept in {}", data.join("logs").display());
+    println!(
+        "Ask it how it stands, and drive it: {} --data {} --inspect [state | screenshot | key | type | click | action]",
+        cox.display(),
+        data.display()
+    );
     if let Some(display) = &display {
-        println!(
-            "It runs on DISPLAY={0}; for a screenshot: DISPLAY={0} import -window root shot.png",
-            display.name
-        );
+        println!("It runs on DISPLAY={}", display.name);
     }
     let mut cox = cmd!(sh, "{cox} --data {data} --home {home} {agent...}");
     if let Some(display) = &display {

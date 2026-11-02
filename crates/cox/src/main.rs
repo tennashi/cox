@@ -11,7 +11,9 @@
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
 //!
 //! The agents run `cox` too, as `cox --mcp <socket>`, the MCP server of
-//! Cox's own tools that `cox::agent::mcp` hands them. And on Linux, CEF runs
+//! Cox's own tools that `cox::agent::mcp` hands them. An agent that debugs
+//! Cox runs `cox [--data <dir>] --inspect <tool>` to ask a running Cox how
+//! it stands, and to drive it (see `cox::inspect`). And on Linux, CEF runs
 //! `cox` for its helper processes, which `cox_browser` tells apart.
 
 use std::process::ExitCode;
@@ -38,6 +40,23 @@ fn main() -> ExitCode {
         Mode::Bridge(socket) => {
             cox::logs::init(None);
             match cox::agent::mcp::bridge(&socket) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("cox: {error:#}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        Mode::Inspect { data, args } => {
+            if let Some(data) = &data {
+                cox::storage::keep_in(data);
+            }
+            cox::logs::init(None);
+            let Some(socket) = cox::inspect::socket() else {
+                eprintln!("cox: there is no place for the socket of a Cox run from here");
+                return ExitCode::from(1);
+            };
+            match cox::inspect::client::run(&socket, &args) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("cox: {error:#}");
