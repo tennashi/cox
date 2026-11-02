@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Map (web)</title>
+    <script type="importmap">
+      {
+        "imports": {
+          "preact": "cox://vendor/preact.mjs",
+          "preact/hooks": "cox://vendor/hooks.mjs",
+          "htm": "cox://vendor/htm.mjs"
+        }
+      }
+    </script>
+    <style>
+      :root {
+        color-scheme: dark;
+        --foreground: #d4d4d4;
+        --background: #1e1e1e;
+        --card: #252628;
+        --card-hover: #2c2e31;
+        --dim: #9a9a9a;
+        --faint: #6e6e6e;
+        --link: #7fb4ff;
+        --border: #3a3b3e;
+        --failed: #f08080;
+        --changed: #8fd19e;
+        --crate: #e5a85a;
+        --module: #6cb8ff;
+        --file: #c9a7ff;
+        --uses: #1f2d40;
+        --uses-text: #7fb4ff;
+        --used-by: #3a2e1c;
+        --used-by-text: #e0b060;
+        --both: #2e2b3a;
+        --sans: -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+        --mono: Menlo, "DejaVu Sans Mono", monospace;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--background);
+        color: var(--foreground);
+        font: 13px/1.45 var(--sans);
+      }
+      #app {
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+      .heading {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 7px 16px;
+        background: var(--background);
+        border-bottom: 1px solid var(--border);
+      }
+      .steps {
+        display: flex;
+        flex: none;
+        gap: 4px;
+      }
+      .steps span {
+        padding: 0 5px;
+        border-radius: 3px;
+        color: var(--foreground);
+        cursor: pointer;
+        user-select: none;
+      }
+      .steps span:hover {
+        background: #404040;
+      }
+      .crumbs {
+        display: flex;
+        flex: none;
+        align-items: baseline;
+        gap: 6px;
+        font-weight: 600;
+      }
+      .crumbs a {
+        color: var(--link);
+        text-decoration: none;
+      }
+      .crumbs a:hover {
+        text-decoration: underline;
+      }
+      .crumbs .sep {
+        color: var(--dim);
+        font-weight: 400;
+      }
+      .aside {
+        flex: 1 1 0;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        color: var(--dim);
+        font-size: 12px;
+      }
+      .aside .name {
+        color: var(--foreground);
+        font-weight: 600;
+        font-family: var(--mono);
+      }
+      .aside .uses {
+        color: var(--uses-text);
+      }
+      .aside .used-by {
+        color: var(--used-by-text);
+      }
+      .aside .dot {
+        margin: 0 4px;
+      }
+      .said {
+        padding: 10px 16px;
+        color: var(--dim);
+      }
+      .said.failed {
+        color: var(--failed);
+      }
+      .boxes {
+        display: flex;
+        flex-wrap: wrap;
+        align-content: flex-start;
+        gap: 10px;
+        padding: 12px 16px 32px;
+      }
+      .box {
+        box-sizing: border-box;
+        flex: 1 1 200px;
+        max-width: 260px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 9px 11px 8px 12px;
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--kind);
+        border-radius: 6px;
+        background: var(--card);
+        color: inherit;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .box:hover,
+      .box.hovered {
+        background: var(--card-hover);
+      }
+      .box.changed {
+        border-color: color-mix(in srgb, var(--changed) 55%, var(--border));
+        border-left-color: var(--kind);
+      }
+      .box.uses {
+        background: var(--uses);
+      }
+      .box.used-by {
+        background: var(--used-by);
+      }
+      .box.both {
+        background: var(--both);
+      }
+      .box .kind {
+        font-size: 9.5px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--kind);
+      }
+      .box .name {
+        font-size: 14px;
+        font-weight: 600;
+        font-family: var(--mono);
+        overflow-wrap: anywhere;
+      }
+      .box.opens .name {
+        color: var(--link);
+      }
+      .box .counts {
+        font-size: 11.5px;
+        color: var(--dim);
+      }
+      .box .says {
+        font-size: 12px;
+        line-height: 1.4;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
+        overflow: hidden;
+      }
+      .box .note {
+        font-size: 11.5px;
+        color: var(--dim);
+      }
+      .box .diff {
+        margin-top: auto;
+        padding-top: 2px;
+        font: 11.5px var(--mono);
+        color: var(--changed);
+      }
+      .box .foot {
+        margin-top: auto;
+        padding-top: 2px;
+        font: 11px var(--mono);
+        color: var(--faint);
+      }
+      .box.opens .foot {
+        color: var(--link);
+      }
+      .box.opens:hover .foot {
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
