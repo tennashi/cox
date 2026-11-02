@@ -53,8 +53,30 @@ pub struct Opened {
     pub find: &'static str,
 }
 
+/// What kind of thing a part is, which the picture colors it by.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// A process of its own.
+    Process,
+    /// A thread of Cox's.
+    Thread,
+    /// Part of the window, on its thread.
+    Window,
+}
+
+impl Kind {
+    fn said(self) -> &'static str {
+        match self {
+            Self::Process => "process",
+            Self::Thread => "thread",
+            Self::Window => "window",
+        }
+    }
+}
+
 /// A part a chat runs with.
 struct Part {
+    kind: Kind,
     name: &'static str,
     /// What it is.
     says: &'static str,
@@ -83,6 +105,8 @@ struct Between {
 /// A row of the picture: parts across it, with what goes between them,
 /// and when the row is there at all, if not always.
 struct Row {
+    /// What the row is about.
+    name: &'static str,
     when: Option<&'static str>,
     parts: Vec<Part>,
     between: Vec<Between>,
@@ -100,6 +124,7 @@ fn rows() -> Vec<Row> {
 }
 
 fn part(
+    kind: Kind,
     name: &'static str,
     says: &'static str,
     started: &'static str,
@@ -107,6 +132,7 @@ fn part(
     find: &'static str,
 ) -> Part {
     Part {
+        kind,
         name,
         says,
         started,
@@ -122,9 +148,11 @@ fn between(says: &'static str, way: Way) -> Between {
 /// The agent, and how what it says reaches the conversation.
 fn agent_row() -> Row {
     Row {
+        name: "Talking with the agent",
         when: None,
         parts: vec![
             part(
+                Kind::Process,
                 "the agent",
                 "The agent's process, which speaks ACP on its standard input and output.",
                 "Started by Cox for the chat, in the chat's folder.",
@@ -132,6 +160,7 @@ fn agent_row() -> Row {
                 "fn spawn(",
             ),
             part(
+                Kind::Thread,
                 "agent thread",
                 "Cox's thread for the agent: speaks ACP with it, and hands what it says to the \
                  chat.",
@@ -140,6 +169,7 @@ fn agent_row() -> Row {
                 "pub fn spawn<",
             ),
             part(
+                Kind::Window,
                 "conversation",
                 "The chat's conversation, on the window's thread, which shows what the agent says \
                  and asks.",
@@ -158,9 +188,11 @@ fn agent_row() -> Row {
 /// Cox's own tools: from the bridge the agent starts to the stage.
 fn tools_row() -> Row {
     Row {
+        name: "Cox's own tools",
         when: None,
         parts: vec![
             part(
+                Kind::Process,
                 "cox --mcp",
                 "Cox run again, as the bridge that carries what the agent says to the chat's \
                  tools.",
@@ -169,6 +201,7 @@ fn tools_row() -> Row {
                 "pub fn cox(",
             ),
             part(
+                Kind::Thread,
                 "tools thread",
                 "The chat's server of Cox's own tools, which answers on the chat's socket.",
                 "Started by Cox with the agent, on a thread of its own.",
@@ -176,6 +209,7 @@ fn tools_row() -> Row {
                 "pub fn start(",
             ),
             part(
+                Kind::Window,
                 "the stage",
                 "The chat's stage, on the window's thread, which carries out what the tools ask.",
                 "Part of the window.",
@@ -193,9 +227,11 @@ fn tools_row() -> Row {
 /// The pages: from the browser tools the agent starts to CEF.
 fn pages_row() -> Row {
     Row {
+        name: "The stage's pages",
         when: None,
         parts: vec![
             part(
+                Kind::Process,
                 "chrome-devtools-mcp",
                 "The Chrome DevTools MCP server, with which the agent reads and drives the pages.",
                 "Started by the agent, as its MCP server `stage`, through npx.",
@@ -203,6 +239,7 @@ fn pages_row() -> Row {
                 "pub fn stage(",
             ),
             part(
+                Kind::Thread,
                 "relay",
                 "Cox's relay for the chat: passes everything on, but keeps the agent to the \
                  chat's pages.",
@@ -211,6 +248,7 @@ fn pages_row() -> Row {
                 "pub fn start(",
             ),
             part(
+                Kind::Process,
                 "CEF",
                 "Chromium, which draws the stage's pages with no window of its own.",
                 "Started by Cox once, for every chat.",
@@ -228,9 +266,11 @@ fn pages_row() -> Row {
 /// The language server of the project's Rust code.
 fn rust_row() -> Row {
     Row {
+        name: "Rust code",
         when: Some("when a tab shows Rust code"),
         parts: vec![
             part(
+                Kind::Process,
                 "rust-analyzer",
                 "The language server of the project's Rust code, which says what a name means.",
                 "Started by Cox when a tab of Rust code first needs it, one for the project.",
@@ -238,6 +278,7 @@ fn rust_row() -> Row {
                 "pub fn of(",
             ),
             part(
+                Kind::Window,
                 "code tabs",
                 "The tabs of code, which ask the server what the code means.",
                 "Part of the stage.",
@@ -252,9 +293,11 @@ fn rust_row() -> Row {
 /// The judge of a goal in words.
 fn judge_row() -> Row {
     Row {
+        name: "A goal in words",
         when: Some("when the chat has a goal in words"),
         parts: vec![
             part(
+                Kind::Process,
                 "the judge",
                 "An agent of the chat's command, which judges whether the goal is met.",
                 "Started by Cox when the goal is set, in the chat's folder, with none of Cox's \
@@ -263,6 +306,7 @@ fn judge_row() -> Row {
                 "pub fn start(",
             ),
             part(
+                Kind::Window,
                 "the chat",
                 "The chat asks it, each time a turn ends, whether the goal is met now.",
                 "Part of the window.",
@@ -483,9 +527,9 @@ fn detail(started: Option<&Started>, part: &Part) -> Option<String> {
 
 /// The picture as JSON, for a page of the stage to draw it (see
 /// [`crate::stage::plugins`]): whether the agent runs, and the rows, each
-/// with its parts and what goes between them. A part names the file and
-/// line of the code that starts it, as absolute paths, when the project
-/// in `root` has the file.
+/// named, with its parts and what goes between them. A part is of a
+/// [`Kind`], and names the file and line of the code that starts it, as
+/// absolute paths, when the project in `root` has the file.
 #[must_use]
 pub fn told(root: &Path, started: Option<&Started>) -> serde_json::Value {
     let rows: Vec<serde_json::Value> = rows()
@@ -498,6 +542,7 @@ pub fn told(root: &Path, started: Option<&Started>) -> serde_json::Value {
                     let path = root.join(part.file);
                     let has = path.is_file();
                     serde_json::json!({
+                        "kind": part.kind.said(),
                         "name": part.name,
                         "says": part.says,
                         "started": part.started,
@@ -521,7 +566,12 @@ pub fn told(root: &Path, started: Option<&Started>) -> serde_json::Value {
                     })
                 })
                 .collect();
-            serde_json::json!({ "when": row.when, "parts": parts, "between": between })
+            serde_json::json!({
+                "name": row.name,
+                "when": row.when,
+                "parts": parts,
+                "between": between,
+            })
         })
         .collect();
     serde_json::json!({ "running": started.is_some(), "rows": rows })

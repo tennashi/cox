@@ -351,8 +351,11 @@ page. A plugin reads what Cox knows as JSON from `cox://api/<what>`:
 them, with the file and line of the code that starts each. It opens a
 file on a tab by going to `cox://open/<path>#L<line>`, which the stage
 takes as it takes a link to a file (a page that is not itself a file may
-not link to one). "Parts (web)" is the one built in: the same picture as
-"Parts", drawn by a page with [Preact](https://preactjs.com) and
+not link to one). "Parts (web)" is the one built in: the parts "Parts"
+shows, as cards in named rows, colored by what each is (a process of
+its own, a thread of Cox's, or part of the window), with arrows between
+them for what goes between, drawn by a page with
+[Preact](https://preactjs.com) and
 [htm](https://github.com/developit/htm), vendored under
 `crates/cox/plugins/parts/vendor` so that it needs no build step and
 no network, which reads `cox://api/parts` again every two seconds, as
