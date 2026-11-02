@@ -35,6 +35,59 @@ pub struct Map {
     pub crates: Vec<Crate>,
 }
 
+/// Where a map is open, as far as the map has the names given, and what
+/// is there (see [`Map::place`]).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Place<'a> {
+    /// How many of the names given the map has, from the first.
+    pub depth: usize,
+    /// The crate the names lead into; none at the crates.
+    pub krate: Option<&'a Crate>,
+    /// The files there: those the crate starts from, or that of the
+    /// module the names lead to; none at the crates.
+    pub files: Vec<&'a Module>,
+    /// The modules there; none at the crates.
+    pub modules: Vec<&'a Module>,
+}
+
+impl Map {
+    /// Where the map is open `at`: the crate the first name is, and the
+    /// modules in it the names after it are, from the crate down, as far
+    /// as the map has them; the crates when it names none, or no crate
+    /// of the map.
+    #[must_use]
+    pub fn place(&self, at: &[String]) -> Place<'_> {
+        let Some(krate) = at
+            .first()
+            .and_then(|name| self.crates.iter().find(|krate| krate.name == *name))
+        else {
+            return Place {
+                depth: 0,
+                krate: None,
+                files: Vec::new(),
+                modules: Vec::new(),
+            };
+        };
+        let mut depth = 1;
+        let mut files: Vec<&Module> = krate.entries.iter().collect();
+        let mut modules: Vec<&Module> = krate.modules();
+        for name in at.iter().skip(1) {
+            let Some(module) = modules.iter().find(|module| module.name == *name) else {
+                break;
+            };
+            files = Vec::from([*module]);
+            modules = module.modules.iter().collect();
+            depth += 1;
+        }
+        Place {
+            depth,
+            krate: Some(krate),
+            files,
+            modules,
+        }
+    }
+}
+
 /// A crate of the project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Crate {
@@ -828,6 +881,24 @@ not-mine = "1"
         assert_eq!(app.lines(), 7 + 1 + 9);
         assert_eq!(map.crates[1].uses, Vec::<String>::new());
         assert_eq!(map.crates[1].said(), "The core.");
+
+        let at =
+            |names: &[&str]| -> Vec<String> { names.iter().map(|n| (*n).to_owned()).collect() };
+        let crates = map.place(&at(&[]));
+        assert_eq!((crates.depth, crates.krate), (0, None));
+        let in_app = map.place(&at(&["app"]));
+        assert_eq!(in_app.depth, 1);
+        assert_eq!(in_app.krate.map(|k| k.name.as_str()), Some("app"));
+        let files: Vec<&str> = in_app.files.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(files, ["lib.rs", "main.rs"]);
+        let modules: Vec<&str> = in_app.modules.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(modules, ["stage", "ui"]);
+        let in_stage = map.place(&at(&["app", "stage", "nowhere"]));
+        assert_eq!(in_stage.depth, 2);
+        assert_eq!(in_stage.files[0].name, "stage");
+        let modules: Vec<&str> = in_stage.modules.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(modules, ["tab", "code"]);
+        assert_eq!(map.place(&at(&["nowhere"])).depth, 0);
     }
 
     #[test]

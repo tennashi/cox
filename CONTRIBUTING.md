@@ -135,7 +135,7 @@ conversation in the human's place but dimmer, after a line that says
 which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
-the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `run_command`,
+the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `run_command`,
 `open_chat`, `wait_chat`, `propose_goal`, `start_trial`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the titles of the permission requests
@@ -298,8 +298,11 @@ uses another when a file in it names the other, in a `use` line or a
 path in its code, as `crate::stage::Stage` or `cox_core::tabs`. The ‹
 and › above the boxes go back and forward between the places the map was
 open at, as Command-[ and Command-] do (Alt-Left and Alt-Right, and
-Control off macOS), as in a tab of code. The tab follows the project as
-it changes, and a closed chat's stage opens it again where it was open.
+Control off macOS), as in a tab of code. The agent opens it with Cox's
+`show_map` tool, at a crate or module, to show the human where what it
+talks of is before it talks it through, and hears what the map shows
+there. The tab follows the project as it changes, and a closed chat's
+stage opens it again where it was open.
 
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The

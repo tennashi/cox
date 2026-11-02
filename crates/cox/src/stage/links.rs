@@ -240,6 +240,30 @@ impl Stage {
         }
     }
 
+    /// Shows the map of the project open `at` (see
+    /// [`cox_core::tabs::KeptTab::Map`]), as the agent asks: on its tab,
+    /// or a new one, with the keyboard in it.
+    pub(super) fn show_map_at(
+        &mut self,
+        at: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let showing = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab.content, TabContent::Map(_)));
+        if let Some(index) = showing {
+            if let TabContent::Map(map) = &self.tabs[index].content {
+                map.update(cx, |map, cx| map.open_at(at, cx));
+            }
+            self.show(index, window, cx);
+        } else {
+            self.push_map(at, true, window, cx);
+            self.focus_shown(window, cx);
+        }
+    }
+
     /// Puts a tab showing the map of the project, open `at` (see
     /// [`cox_core::tabs::KeptTab::Map`]), after the others, shown if
     /// `show` is.

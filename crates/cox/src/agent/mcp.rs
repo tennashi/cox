@@ -70,6 +70,9 @@ pub enum ToolRequest {
     /// Show the human what changed in the files of the Git repository of
     /// `folder`, an absolute path, on a tab of the stage.
     ShowChanges { folder: PathBuf },
+    /// Show the human the map of the project on a tab of the stage, open
+    /// `at` (see [`cox_core::tabs::KeptTab::Map`]).
+    ShowMap { at: Vec<String> },
     /// Run `command` in a terminal on the stage, working in `cwd`, and
     /// answer how it went, or why it could not start, once it ends. The
     /// agent no longer waits for the answer once `answer` is closed: the
@@ -573,7 +576,7 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 8);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 9);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);

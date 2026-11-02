@@ -2,13 +2,15 @@
 //! each does when called, through what it asks of the chat as a
 //! [`ToolRequest`], or of the window as a [`ChatRequest`].
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cox_core::goal::Goal;
 use cox_core::tabs::Lines;
 use cox_editor::changes::{self, Diff};
+use cox_editor::map::{self, Changed, Module};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -20,6 +22,7 @@ use crate::chat::trial::Trial;
 const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
 const SHOW_CHANGES: &str = "show_changes";
+const SHOW_MAP: &str = "show_map";
 const RUN_COMMAND: &str = "run_command";
 const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
@@ -101,6 +104,7 @@ fn all_tools() -> Value {
         },
     },
     show_changes_tool(),
+    show_map_tool(),
     {
         "name": RUN_COMMAND,
         "description": "Runs a shell command in a terminal on the stage beside the \
@@ -165,6 +169,35 @@ fn show_changes_tool() -> Value {
                     "description": "A folder of the repository, absolute or from the working \
                         directory, such as a trial's folder: the working directory unless \
                         given.",
+                },
+            },
+        },
+    })
+}
+
+/// The tool that shows the map of the project, as the agent learns of it.
+fn show_map_tool() -> Value {
+    json!(
+    {
+        "name": SHOW_MAP,
+        "description": "Shows the human the map of the project on a tab of the stage beside \
+            the conversation: the crates of the Cargo workspace, or the modules in a crate \
+            or in a module, as boxes, each with the first paragraph of what its file says \
+            of itself and how long it is, with what changed since the last commit laid \
+            over them, and, when the human rests on a box, what it uses and what uses it. \
+            A click on a box opens the map at it, and a file opens as code. Use it to show \
+            the human where what you talk of is in the project, before you talk it through \
+            or show the diff: open it at the crate or module you talk of, and the human \
+            sees the boxes around it. Answers what the map shows there, box by box.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Where to open the map: the crate's name, then the \
+                        modules in it from the crate down, as [\"cox\", \"stage\"]; the \
+                        crates when empty or not given.",
                 },
             },
         },
@@ -345,6 +378,7 @@ pub(super) async fn call(
         SHOW_MARKDOWN => show_markdown(arguments, cwd, requests),
         SHOW_FILE => show_file(arguments, cwd, requests),
         SHOW_CHANGES => show_changes(arguments, cwd, requests),
+        SHOW_MAP => show_map(arguments, cwd, requests),
         RUN_COMMAND => run_command(arguments, cwd, requests).await,
         OPEN_CHAT => open_chat(arguments, chats).await,
         WAIT_CHAT => wait_chat(arguments, chats).await,
@@ -461,6 +495,143 @@ fn show_changes(
         .send(ToolRequest::ShowChanges { folder })
         .map_err(|_| "the chat has closed".to_owned())?;
     Ok(told_changes(&diff))
+}
+
+/// Asks the chat to show the map of the project open where `arguments`
+/// say, and answers what is there.
+fn show_map(
+    arguments: &Value,
+    cwd: &Path,
+    requests: &UnboundedSender<ToolRequest>,
+) -> Result<String, String> {
+    let at: Vec<String> = match arguments.get("at") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(at) => at
+            .as_array()
+            .ok_or("at is to be a list of names, as strings")?
+            .iter()
+            .map(|name| {
+                name.as_str()
+                    .map(str::to_owned)
+                    .ok_or("at is to be a list of names, as strings")
+            })
+            .collect::<Result<_, _>>()?,
+    };
+    let map = map::read(cwd).map_err(|error| format!("cannot map the project: {error}"))?;
+    let place = map.place(&at);
+    if place.depth < at.len() {
+        let there: Vec<&str> = if place.depth == 0 {
+            map.crates.iter().map(|krate| krate.name.as_str()).collect()
+        } else {
+            place
+                .modules
+                .iter()
+                .map(|module| module.name.as_str())
+                .collect()
+        };
+        return Err(format!(
+            "there is no `{}` in {}; there are: {}",
+            at[place.depth],
+            placed(cwd, &at[..place.depth]),
+            there.join(", ")
+        ));
+    }
+    let changed = changes::read(cwd)
+        .ok()
+        .map(|diff| map::changed_files(&diff));
+    requests
+        .send(ToolRequest::ShowMap { at: at.clone() })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    Ok(told_map(&map, &place, changed.as_ref(), &placed(cwd, &at)))
+}
+
+/// What the map shows at `place`, `placed` in words, as the agent is told
+/// it: a line for each box, with its counts, what `changed` in it, and
+/// the first sentence of what it says of itself.
+fn told_map(
+    map: &map::Map,
+    place: &map::Place<'_>,
+    changed: Option<&HashMap<PathBuf, (usize, usize)>>,
+    placed: &str,
+) -> String {
+    let mut told = format!(
+        "The map of the project is on the stage, open at {placed}, for the human to see where \
+         things are:"
+    );
+    let mut tell = |name: &str, counts: &str, said: &str, changed: Changed| {
+        let _ = write!(told, "\n{name}: {counts}");
+        if changed.any() {
+            let _ = write!(
+                told,
+                ", +{} -{} in {} file{}",
+                changed.added,
+                changed.removed,
+                changed.files,
+                if changed.files == 1 { "" } else { "s" }
+            );
+        }
+        if !said.is_empty() {
+            let _ = write!(told, "; {}", first_sentence(said));
+        }
+    };
+    let changed_in =
+        |module: &Module| changed.map_or_else(Changed::default, |files| module.changed(files));
+    if place.krate.is_none() {
+        for krate in &map.crates {
+            let mut counts = format!("{} lines", krate.lines());
+            if !krate.uses.is_empty() {
+                let _ = write!(counts, ", uses {}", krate.uses.join(", "));
+            }
+            let changed = changed.map_or_else(Changed::default, |files| krate.changed(files));
+            tell(&krate.name, &counts, krate.said(), changed);
+        }
+    } else {
+        for file in &place.files {
+            let name = file.path.file_name().map_or_else(
+                || file.name.clone(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            tell(
+                &name,
+                &format!("{} lines", file.lines),
+                &file.said,
+                changed_in(file),
+            );
+        }
+        for module in &place.modules {
+            let counts = if module.modules.is_empty() {
+                format!("{} lines", module.lines)
+            } else {
+                format!(
+                    "{} modules, {} lines",
+                    module.modules_in_all(),
+                    module.lines_in_all()
+                )
+            };
+            tell(&module.name, &counts, &module.said, changed_in(module));
+        }
+    }
+    told
+}
+
+/// The first sentence of `said`, what a crate or module says of itself:
+/// enough for the agent to know what is where, which the human reads in
+/// full on the map.
+fn first_sentence(said: &str) -> &str {
+    said.find(". ").map_or(said, |end| &said[..=end])
+}
+
+/// Where a map of the project in `cwd` is open `at`, in words: the
+/// project's name, and the names after it.
+fn placed(cwd: &Path, at: &[String]) -> String {
+    let project = cwd.file_name().map_or_else(
+        || cwd.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    std::iter::once(project)
+        .chain(at.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" › ")
 }
 
 /// What changed in `diff`, as the agent is told it.
@@ -777,9 +948,63 @@ mod tests {
         assert_eq!(listed[0]["name"], SHOW_MARKDOWN);
         assert_eq!(listed[1]["name"], SHOW_FILE);
         assert_eq!(listed[2]["name"], SHOW_CHANGES);
-        assert_eq!(listed[3]["name"], RUN_COMMAND);
-        assert_eq!(listed[4]["name"], OPEN_CHAT);
-        assert_eq!(listed[7]["name"], START_TRIAL);
+        assert_eq!(listed[3]["name"], SHOW_MAP);
+        assert_eq!(listed[4]["name"], RUN_COMMAND);
+        assert_eq!(listed[5]["name"], OPEN_CHAT);
+        assert_eq!(listed[8]["name"], START_TRIAL);
+    }
+
+    #[test]
+    fn shows_the_map_and_tells_what_is_there() {
+        let cwd = scratch("map");
+        fs::write(cwd.join("Cargo.toml"), "[package]\nname = \"one\"\n").unwrap();
+        fs::create_dir_all(cwd.join("src")).unwrap();
+        fs::write(cwd.join("src/main.rs"), "//! One.\nmod a;\nmod b;\n").unwrap();
+        fs::write(cwd.join("src/a.rs"), "//! A. It says more.\n").unwrap();
+        fs::write(cwd.join("src/b.rs"), "//! B,\n//! with more.\nmod c;\n").unwrap();
+        fs::create_dir_all(cwd.join("src/b")).unwrap();
+        fs::write(cwd.join("src/b/c.rs"), "").unwrap();
+        let (sent, mut requests) = unbounded_channel();
+        let project = cwd.file_name().unwrap().to_string_lossy().into_owned();
+
+        let shown = call_now(SHOW_MAP, &json!({}), &cwd, &sent);
+        assert_eq!(shown["isError"], false, "{shown}");
+        let told = shown["content"][0]["text"].as_str().unwrap();
+        assert!(
+            told.contains(&format!("open at {project}, for the human")),
+            "{told}"
+        );
+        assert!(told.ends_with("\none: 7 lines; One."), "{told}");
+        match requests.try_recv() {
+            Ok(ToolRequest::ShowMap { at }) => assert_eq!(at, Vec::<String>::new()),
+            _ => panic!("the stage was not asked to show the map"),
+        }
+
+        let shown = call_now(SHOW_MAP, &json!({ "at": ["one"] }), &cwd, &sent);
+        let told = shown["content"][0]["text"].as_str().unwrap();
+        assert!(
+            told.contains(&format!("open at {project} › one,")),
+            "{told}"
+        );
+        assert!(
+            told.ends_with(
+                "\nmain.rs: 3 lines; One.\na: 1 lines; A.\nb: 1 modules, 3 lines; B, with more."
+            ),
+            "{told}"
+        );
+        match requests.try_recv() {
+            Ok(ToolRequest::ShowMap { at }) => assert_eq!(at, ["one"]),
+            _ => panic!("the stage was not asked to show the map"),
+        }
+
+        let shown = call_now(SHOW_MAP, &json!({ "at": ["one", "nowhere"] }), &cwd, &sent);
+        assert_eq!(shown["isError"], true);
+        let told = shown["content"][0]["text"].as_str().unwrap();
+        assert_eq!(
+            told,
+            format!("there is no `nowhere` in {project} › one; there are: a, b")
+        );
+        assert!(requests.try_recv().is_err());
     }
 
     #[tokio::test]
