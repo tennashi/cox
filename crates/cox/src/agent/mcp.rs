@@ -198,6 +198,7 @@ const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "
 const PARSE_ERROR: i64 = -32700;
 const METHOD_NOT_FOUND: i64 = -32601;
 pub(crate) const INVALID_PARAMS: i64 = -32602;
+pub(crate) const INTERNAL_ERROR: i64 = -32603;
 
 /// What a request's tool answers: MCP's result of `tools/call`, or the
 /// JSON-RPC error, with its code, that the request gets instead.

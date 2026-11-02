@@ -214,7 +214,8 @@ impl Stage {
     }
 
     /// The tabs, as they are kept.
-    fn tabs(&self, cx: &App) -> KeptTabs {
+    #[must_use]
+    pub fn tabs(&self, cx: &App) -> KeptTabs {
         KeptTabs {
             tabs: self.tabs.iter().map(|tab| tab.content.kept(cx)).collect(),
             shown: self.tabs.shown_index().unwrap_or(0),

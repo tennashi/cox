@@ -228,6 +228,20 @@ impl Chat {
         self.key
     }
 
+    /// The index of its project.
+    #[must_use]
+    pub fn project(&self) -> usize {
+        self.project
+    }
+
+    /// Whether it is a trial, working in a folder of its own.
+    #[must_use]
+    pub fn is_trial(&self) -> bool {
+        self.setup
+            .as_ref()
+            .is_some_and(|setup| setup.trial.is_some())
+    }
+
     /// Whether a turn ended while the chat was not shown, and it has not
     /// been shown since.
     #[must_use]
@@ -432,6 +446,21 @@ impl Workspace {
     #[must_use]
     pub fn shown(&self) -> Option<&Chat> {
         self.chats.shown()
+    }
+
+    /// The chats in the order of the list, each with how many chats it is
+    /// under (see [`Self::depth`]).
+    pub fn listed(&self) -> impl Iterator<Item = (&Chat, u8)> {
+        self.chats.iter().map(|chat| (chat, self.depth(chat)))
+    }
+
+    /// The chat that goes by `key` for this run, in the list or archived.
+    #[must_use]
+    pub fn chat(&self, key: u64) -> Option<&Chat> {
+        self.chats
+            .iter()
+            .chain(&self.archived)
+            .find(|chat| chat.key == key)
     }
 
     /// The chats the human archived, in the order they were archived.

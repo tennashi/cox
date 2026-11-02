@@ -17,6 +17,8 @@
 //!   hands the agent.
 //! - [`notices`] tells the human of chats that need them while they look
 //!   elsewhere.
+//! - [`inspect`] answers for the window to an agent that debugs Cox, on a
+//!   socket, and is the client that asks it.
 //! - [`ui`] is what all of the window's parts share: the text the human
 //!   types into, text that can be selected, Markdown, and how it all
 //!   looks.
@@ -32,6 +34,7 @@
 pub mod agent;
 pub mod app;
 pub mod chat;
+pub mod inspect;
 pub mod logs;
 pub mod notices;
 pub mod process;

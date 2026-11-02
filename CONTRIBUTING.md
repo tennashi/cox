@@ -379,14 +379,18 @@ unless given, or with `<agent command>`, keeping what lasts in `<dir>`,
 or afresh in `target/debug/cox-run` each time (see `--data` in
 [The stage](#the-stage)), and says where the files of its runs are.
 `--headless`, on Linux, runs Cox on a display of its own, which Xvfb
-draws in memory, and says which, for an agent to look at it and type
-into it without a screen, as with `xdotool` and ImageMagick's `import`:
+draws in memory, with no screen; `cox --inspect` (see
+[Asking Cox how it stands](#asking-cox-how-it-stands)) looks at it and
+types into it there, through `xdotool` and ImageMagick's `import`:
 
 ```sh
 sudo apt-get install xvfb mesa-vulkan-drivers xdotool imagemagick
 cargo xtask run --headless
-DISPLAY=:99 xdotool key ctrl+n; DISPLAY=:99 xdotool type 'hello'; DISPLAY=:99 xdotool key Return
-DISPLAY=:99 import -window root shot.png
+target/debug/cox --data target/debug/cox-run --inspect key ctrl-n
+target/debug/cox --data target/debug/cox-run --inspect type 'hello'
+target/debug/cox --data target/debug/cox-run --inspect key enter
+target/debug/cox --data target/debug/cox-run --inspect state
+target/debug/cox --data target/debug/cox-run --inspect screenshot shot.png
 ```
 
 gpui draws with Vulkan, which `mesa-vulkan-drivers` gives a machine
@@ -416,6 +420,49 @@ its standard error, turn by turn, with the waits between them, so that
 what happened in the run happens again, as on another machine. The
 agent's calls of Cox's own tools do not go over ACP, so the scenario
 does not make them.
+
+## Asking Cox how it stands
+
+Cox answers for its window to an agent that debugs it: one in a
+terminal, one in a chat of another Cox, or one on a machine with no
+screen. It opens a Unix socket, `inspect.sock` beside the chats'
+database (see [The stage](#the-stage)), as its window opens, and
+answers on it how it stands, in words; with a screenshot; and to keys,
+text, clicks and GPUI's actions, which reach the window whether it has
+the screen's focus or not, as when the Cox under test runs behind the
+Cox in use. The socket speaks MCP, as the server of each chat's tools
+does, so `cox --mcp <socket>` reaches it as an MCP server, for an agent
+set up with one, as in Claude Code's `.mcp.json`, once Cox runs.
+
+`cox [--data <dir>] --inspect [<tool> [<arguments>...]]` asks it from a
+shell: the Cox that keeps what lasts where this `cox` does, as
+`target/debug/cox` for the Cox run from there, and the installed Cox
+for itself, or where `--data` says, as `cargo xtask run` tells it
+(`target/debug/cox --data target/debug/cox-run --inspect state`). It
+prints what the tool answered; with no tool, it prints the tools. They
+are:
+
+- `state [<chat>]`: where Cox keeps what lasts and this run's log (see
+  [What Cox keeps of each run](#what-cox-keeps-of-each-run)), the
+  stages' DevTools port, the window and where the keyboard is, the chats
+  as the list shows them, by the numbers they go by to the agents' tools,
+  and one chat in full, the chat shown or chat `<chat>`: the line above
+  its input, its input, its stage's tabs, and its conversation, entry by
+  entry.
+- `screenshot [<file>]`: the window as a PNG, written to `<file>`,
+  `cox-screenshot.png` unless given: through ImageMagick's `import` on
+  Linux, and `screencapture` on macOS, which has to be allowed to record
+  the screen.
+- `key <keystroke>...`: presses keys, as GPUI writes them, as `ctrl-n`,
+  `enter`, `escape`, `1`, or `secondary-o` (cmd on macOS, ctrl
+  elsewhere), and says whether each was handled.
+- `type <text>`: types text, a character at a time, a newline pressing
+  Enter.
+- `click <x> <y> [left|right|middle] [<count>]`: clicks at a point of
+  the window, in points from its top left corner, as the screenshot
+  shows it: through `xdotool` on Linux, and not on macOS yet.
+- `action <name>`: dispatches a GPUI action by name, as `cox::NewChat`,
+  or `NewChat` when only one action's name ends so.
 
 ## Using Cox to build Cox
 

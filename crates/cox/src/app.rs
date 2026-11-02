@@ -36,8 +36,9 @@ use cox_browser::Cef;
 
 actions!(cox, [Quit]);
 
-pub const USAGE: &str =
-    "Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] <agent command> [args...]";
+pub const USAGE: &str = "\
+Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] <agent command> [args...]
+       cox [--data <dir>] --inspect [<tool> [<arguments>...]]";
 
 /// What the command line asks `cox` to be.
 #[derive(Debug, PartialEq, Eq)]
@@ -48,7 +49,15 @@ pub enum Mode {
     /// The bridge between an agent and the server of its chat's tools on
     /// the socket given, as `cox --mcp <socket>` (see [`crate::agent::mcp`]).
     Bridge(PathBuf),
-    /// Neither: the usage is to be shown.
+    /// The client that asks a running Cox how it stands, and drives it,
+    /// as `cox [--data <dir>] --inspect <tool> [<arguments>...]` (see
+    /// [`crate::inspect::client`]): the Cox that keeps what lasts where
+    /// `--data` says, or where this one does.
+    Inspect {
+        data: Option<PathBuf>,
+        args: Vec<String>,
+    },
+    /// None of these: the usage is to be shown.
     Usage,
 }
 
@@ -75,6 +84,12 @@ impl Mode {
             return Self::Bridge(socket);
         }
         let settings = Settings::parse(args);
+        if settings.command.first().map(String::as_str) == Some(crate::inspect::OPTION) {
+            return Self::Inspect {
+                data: settings.data,
+                args: settings.command[1..].to_vec(),
+            };
+        }
         if settings.command.is_empty() {
             return Self::Usage;
         }
@@ -120,6 +135,7 @@ pub fn run(settings: Settings) -> ExitCode {
     // CEF first: on Linux, its helper processes run this same executable
     // with arguments of their own, and exit inside `start`.
     let cef = cox_browser::start(crate::storage::path("stage"));
+    let devtools = cef.devtools_port();
     // In place of CEF's handlers, which quit without the app's quit handlers.
     if let Err(error) = cox_browser::quit::on_signals() {
         tracing::error!("signals will end Cox without stopping the agents: {error}");
@@ -145,7 +161,8 @@ pub fn run(settings: Settings) -> ExitCode {
         serve_browser(&cef, cx);
         quit_when_asked(cx);
         shut_down_on_quit(cef, cx);
-        open_window(home, store, launcher, cx);
+        let window = open_window(home, store, launcher, cx);
+        crate::inspect::start(window, devtools, cx);
     });
     ExitCode::SUCCESS
 }
@@ -244,7 +261,12 @@ fn shut_down_on_quit(cef: Cef, cx: &mut App) {
 /// Opens the window, with no chat in it, listing the chats kept in
 /// `store`, where `launcher` opens chats, and chats in no project work in
 /// `home`. The app quits when the window closes.
-fn open_window(home: PathBuf, store: Rc<Store>, launcher: Launcher, cx: &mut App) {
+fn open_window(
+    home: PathBuf,
+    store: Rc<Store>,
+    launcher: Launcher,
+    cx: &mut App,
+) -> WindowHandle<Workspace> {
     let opens = Rc::new(launcher);
     let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
     let window = cx
@@ -264,6 +286,7 @@ fn open_window(home: PathBuf, store: Rc<Store>, launcher: Launcher, cx: &mut App
     cx.on_window_closed(|cx| cx.quit()).detach();
     tell_of_chats(window, cx);
     cx.activate(true);
+    window
 }
 
 /// Tells the human of the chats in `window` with the system's
@@ -346,6 +369,24 @@ mod tests {
         assert_eq!(
             parse(&["--mcp", "/tmp/cox-1-0/mcp"]),
             Mode::Bridge(PathBuf::from("/tmp/cox-1-0/mcp"))
+        );
+    }
+
+    #[test]
+    fn the_client_is_asked_for_with_its_tool_and_data() {
+        assert_eq!(
+            parse(&["--data", "/tmp/d", "--inspect", "key", "ctrl-n"]),
+            Mode::Inspect {
+                data: Some(PathBuf::from("/tmp/d")),
+                args: vec!["key".to_owned(), "ctrl-n".to_owned()],
+            }
+        );
+        assert_eq!(
+            parse(&["--inspect"]),
+            Mode::Inspect {
+                data: None,
+                args: Vec::new(),
+            }
         );
     }
 
