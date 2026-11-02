@@ -223,7 +223,12 @@ a page there (navigates it, clicks or types in it, or opens a tab),
 showing that page's tab. Closed, it keeps its tabs. The + beside the
 tabs opens another, and a page that asks for a window of its own, as a
 link with `target="_blank"` does, gets a tab instead. A link from the
-conversation gets a tab of its own, unless a tab shows it already.
+conversation gets a tab of its own, unless a tab shows it already. A link
+in a page to a file, as `file:///home/me/app/src/main.rs#L12`, opens the
+file on a tab as a link from the conversation does, at the lines it
+names, unless the file is an HTML page, which the page goes to as any
+other; so a page the agent makes, such as a diagram of the project, can
+lead to the code it draws.
 
 A tab can show a Markdown file too, drawn as the conversation draws the
 agent's replies, for the human to read: the agent opens it with Cox's

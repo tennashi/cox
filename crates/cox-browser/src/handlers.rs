@@ -109,7 +109,8 @@ fn create(new: NewBrowser) {
         StageRenderHandler::new(Arc::clone(&shared), events.clone()),
         StageLifeSpanHandler::new(Arc::clone(&shared), events.clone(), target),
         StageLoadHandler::new(Arc::clone(&shared), events.clone()),
-        StageDisplayHandler::new(Arc::clone(&shared), events),
+        StageDisplayHandler::new(Arc::clone(&shared), events.clone()),
+        StageRequestHandler::new(events),
     );
     let settings = BrowserSettings {
         windowless_frame_rate: 60,
@@ -163,6 +164,7 @@ wrap_client! {
         life_span: LifeSpanHandler,
         load: LoadHandler,
         display: DisplayHandler,
+        request: RequestHandler,
     }
 
     impl Client {
@@ -180,6 +182,42 @@ wrap_client! {
 
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(self.display.clone())
+        }
+
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request.clone())
+        }
+    }
+}
+
+wrap_request_handler! {
+    struct StageRequestHandler {
+        events: UnboundedSender<Event>,
+    }
+
+    impl RequestHandler {
+        /// The page is about to go somewhere. When that is a link to a
+        /// file the human clicked (see [`crate::links`]), the page stays
+        /// and the stage opens the file on a tab of its own.
+        fn on_before_browse(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            user_gesture: c_int,
+            _is_redirect: c_int,
+        ) -> c_int {
+            let is_main = frame.is_some_and(|frame| frame.is_main() == 1);
+            let url = request.map(|request| CefString::from(&request.url()).to_string());
+            let linked = url.and_then(|url| crate::links::file_linked(&url, user_gesture == 1));
+            match linked {
+                Some(url) if is_main => {
+                    let _ = self.events.send(Event::FileLink(url));
+                    // 1: do not go there.
+                    1
+                }
+                _ => 0,
+            }
         }
     }
 }

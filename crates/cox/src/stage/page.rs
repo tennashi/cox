@@ -59,11 +59,18 @@ pub struct Page {
     _submitted: Subscription,
 }
 
-/// The page asks for a tab of its own, showing this address: for a link
-/// with `target="_blank"`, or `window.open`.
-pub struct OpenTab(pub String);
+/// What the page asks the stage to open.
+pub enum Opens {
+    /// A tab of its own, showing this address: for a link with
+    /// `target="_blank"`, or `window.open`.
+    Tab(String),
+    /// A file the human clicked a link to, at this `file:` address with
+    /// the lines after it if any, on a tab of its own, as a link to it
+    /// from the conversation opens.
+    File(String),
+}
 
-impl EventEmitter<OpenTab> for Page {}
+impl EventEmitter<Opens> for Page {}
 
 /// How often the tab checks on a resize the browser has not answered.
 const TICK: Duration = Duration::from_millis(250);
@@ -81,7 +88,8 @@ impl Page {
                 let shown = this.update(cx, |page, cx| {
                     match event {
                         Event::Navigated => page.navigated(cx),
-                        Event::Popup(url) => cx.emit(OpenTab(url)),
+                        Event::Popup(url) => cx.emit(Opens::Tab(url)),
+                        Event::FileLink(url) => cx.emit(Opens::File(url)),
                         _ => {}
                     }
                     cx.notify();
