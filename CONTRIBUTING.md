@@ -348,18 +348,26 @@ opens the plugin's page at `cox://<name>/`, an address the stage serves
 itself, through CEF, from the plugin's files; the agent opens it as any
 page. A plugin reads what Cox knows as JSON from `cox://api/<what>`:
 `cox://api/parts` is the parts the chat runs with, as "Parts" shows
-them, with the file and line of the code that starts each. It opens a
-file on a tab by going to `cox://open/<path>#L<line>`, which the stage
-takes as it takes a link to a file (a page that is not itself a file may
-not link to one). "Parts (web)" is the one built in: the parts "Parts"
-shows, as cards in named rows, colored by what each is (a process of
-its own, a thread of Cox's, or part of the window), with arrows between
-them for what goes between, drawn by a page with
+them, with the file and line of the code that starts each, and
+`cox://api/map/<crate>/<module>…` is the map of the project open at the
+crate and modules named, or at the crates when none is, as "Map" shows
+it: each box with what it is, its path, what it says of itself, its
+counts, what changed in it, and which of the other boxes it uses. It
+opens a file on a tab by going to `cox://open/<path>#L<line>`, which
+the stage takes as it takes a link to a file (a page that is not itself
+a file may not link to one). Two are built in, drawn by pages with
 [Preact](https://preactjs.com) and
-[htm](https://github.com/developit/htm), vendored under
-`crates/cox/plugins/parts/vendor` so that it needs no build step and
-no network, which reads `cox://api/parts` again every two seconds, as
-Cox's own tabs follow what they show.
+[htm](https://github.com/developit/htm), which the stage serves at
+`cox://vendor/` from `crates/cox/plugins/vendor`, for a project's
+plugin to use too, so that none needs a build step or the network, and
+which read their JSON again every two seconds, as Cox's own tabs follow
+what they show. "Parts (web)" is the parts "Parts" shows, as cards in
+named rows, colored by what each is (a process of its own, a thread of
+Cox's, or part of the window), with arrows between them for what goes
+between. "Map (web)" is the map "Map" shows, as cards colored by what
+each is (a crate, a file, or a module), where the map is open being the
+page's hash, as `cox://map/#cox/stage`, so that the browser's back and
+forward go between the places it was open at.
 
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The

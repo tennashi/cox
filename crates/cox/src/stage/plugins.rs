@@ -12,15 +12,23 @@
 //! - `cox://api/parts`: the parts the chat runs with, as the Parts tab
 //!   shows them (see [`crate::stage::parts`]), with the file and line of
 //!   the code that starts each.
+//! - `cox://api/map/<crate>/<module>…`: the map of the project, open at
+//!   the crate and the modules named, or at the crates when none is, as
+//!   the Map tab shows it (see [`crate::stage::map`]).
 //!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Parts plugin does for a part's code.
+//!
+//! `cox://vendor/` has the libraries the built-in plugins draw with,
+//! [Preact](https://preactjs.com) and [htm](https://github.com/developit/htm),
+//! for a project's plugin to use too, with no build step and no network.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use cox_browser::scheme::{Resource, Serve};
 
+use crate::stage::map;
 use crate::stage::parts::{self, Started};
 
 /// Where a project keeps its plugins, under its folder.
@@ -29,33 +37,58 @@ const PROJECT_PLUGINS: &str = ".cox/plugins";
 /// The files of a plugin, by their paths within it.
 type Files = &'static [(&'static str, &'static [u8])];
 
-/// The plugins built into Cox: each by its name, with its files.
-const BUILT_IN: &[(&str, Files)] = &[(
-    "parts",
-    &[
-        (
-            "plugin.json",
-            include_bytes!("../../plugins/parts/plugin.json"),
-        ),
-        (
-            "index.html",
-            include_bytes!("../../plugins/parts/index.html"),
-        ),
-        ("app.js", include_bytes!("../../plugins/parts/app.js")),
-        (
-            "vendor/preact.mjs",
-            include_bytes!("../../plugins/parts/vendor/preact.mjs"),
-        ),
-        (
-            "vendor/hooks.mjs",
-            include_bytes!("../../plugins/parts/vendor/hooks.mjs"),
-        ),
-        (
-            "vendor/htm.mjs",
-            include_bytes!("../../plugins/parts/vendor/htm.mjs"),
-        ),
-    ],
-)];
+/// What is built into Cox at `cox://<name>/`: the plugins, each with its
+/// files, and `vendor`, the libraries they draw with, which is no plugin,
+/// having no page.
+const BUILT_IN: &[(&str, Files)] = &[
+    (
+        "map",
+        &[
+            (
+                "plugin.json",
+                include_bytes!("../../plugins/map/plugin.json"),
+            ),
+            ("index.html", include_bytes!("../../plugins/map/index.html")),
+            ("app.js", include_bytes!("../../plugins/map/app.js")),
+        ],
+    ),
+    (
+        "parts",
+        &[
+            (
+                "plugin.json",
+                include_bytes!("../../plugins/parts/plugin.json"),
+            ),
+            (
+                "index.html",
+                include_bytes!("../../plugins/parts/index.html"),
+            ),
+            ("app.js", include_bytes!("../../plugins/parts/app.js")),
+        ],
+    ),
+    (
+        "vendor",
+        &[
+            (
+                "preact.mjs",
+                include_bytes!("../../plugins/vendor/preact.mjs"),
+            ),
+            (
+                "hooks.mjs",
+                include_bytes!("../../plugins/vendor/hooks.mjs"),
+            ),
+            ("htm.mjs", include_bytes!("../../plugins/vendor/htm.mjs")),
+            (
+                "LICENSE-preact",
+                include_bytes!("../../plugins/vendor/LICENSE-preact"),
+            ),
+            (
+                "LICENSE-htm",
+                include_bytes!("../../plugins/vendor/LICENSE-htm"),
+            ),
+        ],
+    ),
+];
 
 /// A plugin the stage can show.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,6 +139,7 @@ impl Plugins {
     pub fn list(&self) -> Vec<Plugin> {
         let mut plugins: Vec<Plugin> = BUILT_IN
             .iter()
+            .filter(|(_, files)| files.iter().any(|(path, _)| *path == "index.html"))
             .map(|(name, files)| {
                 let manifest = files
                     .iter()
@@ -160,14 +194,23 @@ impl Plugins {
 
     /// What Cox knows, as JSON, at `cox://api/<what>`.
     fn api(&self, what: &str) -> Option<Resource> {
+        let (what, rest) = what.split_once('/').unwrap_or((what, ""));
         let json = match what {
-            "parts" => {
+            "parts" if rest.is_empty() => {
                 let started = self
                     .started
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone();
                 parts::told(&self.root, started.as_ref())
+            }
+            "map" => {
+                let at: Vec<String> = rest
+                    .split('/')
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                map::told(&self.root, &at)
             }
             _ => return None,
         };
@@ -282,9 +325,13 @@ mod tests {
             plugins.resource("cox://parts/app.js").unwrap().mime,
             "text/javascript"
         );
-        assert!(plugins.resource("cox://parts/vendor/preact.mjs").is_some());
+        assert_eq!(
+            plugins.resource("cox://vendor/preact.mjs").unwrap().mime,
+            "text/javascript"
+        );
         assert_eq!(plugins.resource("cox://parts/missing.js"), None);
         assert_eq!(plugins.resource("cox://nothing/"), None);
+        assert_eq!(plugins.resource("cox://vendor/"), None);
     }
 
     #[test]
@@ -297,6 +344,25 @@ mod tests {
         assert_eq!(json["running"], false);
         assert_eq!(json["rows"][0]["parts"][0]["name"], "the agent");
         assert_eq!(plugins.resource("cox://api/weather"), None);
+        assert_eq!(plugins.resource("cox://api/parts/more"), None);
+    }
+
+    #[test]
+    fn the_map_is_told_as_json_at_the_names_given() {
+        let root = scratch("map");
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"one\"\n").unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "mod a;\n").unwrap();
+        std::fs::write(root.join("src/a.rs"), "").unwrap();
+        let plugins = Plugins::new(root);
+
+        let answer = plugins.resource("cox://api/map").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["boxes"][0]["name"], "one");
+        let answer = plugins.resource("cox://api/map/one/").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["at"], serde_json::json!(["one"]));
+        assert_eq!(json["boxes"][1]["name"], "a");
     }
 
     #[test]
@@ -310,11 +376,12 @@ mod tests {
         let plugins = Plugins::new(root);
 
         let listed = plugins.list();
-        assert_eq!(listed[0].name, "parts");
-        assert_eq!(listed[0].title, "Parts (web)");
-        assert_eq!(listed[1].name, "tour");
-        assert_eq!(listed[1].title, "A tour");
-        assert_eq!(listed[1].url(), "cox://tour/");
+        let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
+        assert_eq!(names, ["map", "parts", "tour"]);
+        assert_eq!(listed[0].title, "Map (web)");
+        assert_eq!(listed[1].title, "Parts (web)");
+        assert_eq!(listed[2].title, "A tour");
+        assert_eq!(listed[2].url(), "cox://tour/");
         assert_eq!(
             plugins.resource("cox://tour/").unwrap().body,
             b"<h1>Tour</h1>"
