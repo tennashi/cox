@@ -40,7 +40,8 @@
 //! - [`document`] shows a Markdown file, and [`code`] a file as it is
 //!   written, such as code: both [`follow`] the file as it changes.
 //! - [`servers`] holds the language servers a tab of code asks what the
-//!   code means.
+//!   code means, and [`outline`] asks them what a file defines, for the
+//!   map.
 //! - [`tree`] shows the project's files, for the human to open one.
 //! - [`changes`] shows what changed in them, for the human to read, and
 //!   to open a file where it changed.
@@ -48,9 +49,9 @@
 //!   commands in.
 //! - [`plugins`] are pages that draw what Cox knows, as a tab would, which
 //!   the stage serves its pages itself at `cox:` addresses: [`map`] tells
-//!   the project as its crates and modules, with what changed laid over
-//!   them, for the human to see where things are, and [`parts`] what the
-//!   chat runs with.
+//!   the project's map, as an agent wrote it, with what changed laid over
+//!   its boxes, for the human to see where things are, and [`parts`] what
+//!   the chat runs with.
 
 mod asked;
 pub mod changes;
@@ -60,6 +61,7 @@ pub mod flow;
 pub mod follow;
 mod links;
 pub mod map;
+pub mod outline;
 pub mod page;
 pub mod parts;
 pub mod plugins;
@@ -85,6 +87,7 @@ use cox_browser::{Cef, TargetId};
 
 use crate::stage::code::Code;
 use crate::stage::document::Document;
+use crate::stage::outline::Outlines;
 use crate::stage::page::{Opens, Page};
 use crate::stage::parts::Started;
 use crate::stage::plugins::Plugins;
@@ -139,23 +142,26 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut stage = Self::empty(cef, cwd, panel);
+        let mut stage = Self::empty(cef, cwd, panel, cx);
         stage.open_tab(url, true, window, cx);
         stage
     }
 
-    /// A stage with no tab yet.
-    fn empty(cef: Cef, cwd: PathBuf, panel: Entity<Panel>) -> Self {
+    /// A stage with no tab yet, whose pages can ask what the project's
+    /// files define (see [`outline`]).
+    fn empty(cef: Cef, cwd: PathBuf, panel: Entity<Panel>, cx: &mut Context<Self>) -> Self {
+        let (outlines, asked) = Outlines::new();
+        let answering = outline::answer(asked, outlines.clone(), cwd.clone(), cx);
         Self {
             cef,
-            plugins: Plugins::new(cwd.clone()),
+            plugins: Plugins::new(cwd.clone(), outlines),
             cwd,
             tabs: List::new(),
             pages: None,
             panel,
             record: None,
             kept: None,
-            heard: Vec::new(),
+            heard: vec![answering],
             started: None,
         }
     }
@@ -204,7 +210,7 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut stage = Self::empty(cef, cwd, panel);
+        let mut stage = Self::empty(cef, cwd, panel, cx);
         let KeptTabs { tabs, shown } = kept.unwrap_or_default();
         for (index, tab) in tabs.into_iter().enumerate() {
             // The tab shown is the one that was, or else the last before

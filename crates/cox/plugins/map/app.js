@@ -6,8 +6,11 @@
 // beside it as a frame, and lines between them for the edges; a card
 // opens the tier inside it, or, on its own, the paths of the code it
 // holds, each of which opens on a tab of the stage through a
-// `cox://open/` address. Where the page is open is its hash: a tier's
-// id, and after it the id of a card open on its own, as `#cox/stage`.
+// `cox://open/` address, with what the project's language server says
+// of each file, read from `cox://api/file/<path>`: the symbols it
+// defines, how many places use each, and which files use them. Where
+// the page is open is its hash: a tier's id, and after it the id of a
+// card open on its own, as `#cox/stage`.
 
 const API = "cox://api/map";
 const EVERY = 2000;
@@ -18,6 +21,11 @@ const DEFS =
 const app = document.getElementById("app");
 let data = null;
 let lastText = null;
+// What the server says of the files the page shows, by their path, as
+// text, to see whether it changed, and read.
+const fileText = {};
+const fileData = {};
+let wanted = [];
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -201,15 +209,17 @@ function place(t, id) {
 function renderLeaf(tierId, id) {
   const p = parts()[id] || { name: id, says: "" };
   const f = facts(id);
+  wanted = f.holds.filter((h) => h.exists && h.lines !== null).map((h) => h.path);
   const holds = f.holds
     .map((h) => {
       const name = h.said.split(":")[0];
       const opens = h.exists && h.lines !== null;
       const href = `cox://open${h.path}${h.line ? `#L${h.line}` : ""}`;
       const changed = h.added || h.removed ? `<span class="badge">+${h.added} −${h.removed}</span>` : "";
-      const inside = `<div class="head"><span class="path">${esc(name)}${h.line ? `<span class="ln">:${h.line}</span>` : ""}</span>${h.lines !== null ? `<span class="n">${h.lines} lines</span>` : h.exists ? '<span class="n">folder</span>' : ""}${changed}${h.exists ? "" : '<span class="missing">gone</span>'}</div>`;
+      const path = `${esc(name)}${h.line ? `<span class="ln">:${h.line}</span>` : ""}`;
+      const head = `<div class="head">${opens ? `<a class="path" href="${esc(href)}">${path}</a>` : `<span class="path">${path}</span>`}${h.lines !== null ? `<span class="n">${h.lines} lines</span>` : h.exists ? '<span class="n">folder</span>' : ""}${changed}${h.exists ? "" : '<span class="missing">gone</span>'}</div>`;
       const classes = `hold ${h.added || h.removed ? "lit" : ""} ${h.exists ? "" : "missing"}`;
-      return opens ? `<a class="${classes}" href="${esc(href)}">${inside}</a>` : `<div class="${classes}">${inside}</div>`;
+      return `<div class="${classes}">${head}${opens ? outlineEl(h.path, h.line) : ""}</div>`;
     })
     .join("");
   const chain = [...above(tierId), tierId].map((tid) => ({ text: tier(tid).name, tier: tid }));
@@ -220,7 +230,50 @@ function renderLeaf(tierId, id) {
     ${p.note ? `<div class="says" style="color:var(--note)"><b>note</b> ${esc(p.note)}</div>` : ""}
     ${f.stale.length ? `<div class="says" style="color:var(--stale)"><b>stale</b> the project no longer has ${f.stale.map(esc).join(", ")}; an agent is to bring the map up to date</div>` : ""}
     <div class="leaf">${holds || '<div class="says">This box holds no paths.</div>'}</div>
-    <div class="foot"><span>a file opens on a tab of the stage, at its line</span></div>`;
+    <div class="foot"><span>a file, or a symbol in it, opens on a tab of the stage, at its line</span><span>·</span><span>the symbols and their uses are as the project's language server says</span></div>`;
+}
+
+/// What the language server says of the file at `path`, an absolute
+/// path, as the page has heard it so far: its symbols, each a link to
+/// its line, the one at `line` marked, and the files that use them.
+function outlineEl(path, line) {
+  const f = fileData[path];
+  if (!f) return '<div class="outline"><span class="lsp">asking the language server…</span></div>';
+  const status = f.pending ? `<span class="lsp">${esc(f.said || (f.server ? `${f.server}: asked again` : "asking the language server…"))}</span>` : "";
+  if (!f.pending && !f.server) return `<div class="outline"><span class="lsp faint">no language server knows ${f.language ? esc(f.language) : "this kind of file"}</span></div>`;
+  const error = f.error ? `<span class="lsp failed">${esc(f.error)}</span>` : "";
+  const symbols = (f.symbols || []).map(symEl(path, line, 0)).join("");
+  const used = f.used_by && f.used_by.length
+    ? `<div class="usedby"><b>used by</b>${f.used_by.map((u) => `<span><a href="cox://open${esc(absolute(u.path))}">${esc(u.path)}</a><span class="n">×${u.count}</span></span>`).join("")}</div>`
+    : f.symbols && !f.pending && !f.error
+      ? '<div class="usedby faint">used by no other file</div>'
+      : "";
+  return `<div class="outline">${status}${error}${symbols ? `<div class="symbols">${symbols}</div>` : f.symbols && !f.error ? '<span class="lsp faint">defines no symbols</span>' : ""}${used}</div>`;
+}
+
+/// A path as the server tells it, from the project's folder, as an
+/// absolute one.
+function absolute(path) {
+  return path.startsWith("/") ? path : `${data.root}/${path}`;
+}
+
+/// A symbol of the file at `path`, as a line of its outline, with those
+/// within it where they are worth showing: the methods of an `impl` or a
+/// trait, not the fields of a struct, which are counted instead.
+function symEl(path, line, depth) {
+  return (s) => {
+    const kind = s.kind === "object" && /^impl\b/.test(s.name) ? "" : s.kind === "type parameter" ? "type" : s.kind;
+    const kids = s.children || [];
+    const opens = ["", "module", "namespace", "class", "interface"].includes(kind);
+    const within = opens && kids.length ? `<div class="within">${kids.map(symEl(path, line, depth + 1)).join("")}</div>` : "";
+    const counted = !opens && kids.length ? `<span class="n">${kids.length} ${kind === "enum" ? "variant" : kind === "struct" ? "field" : "item"}${kids.length === 1 ? "" : "s"}</span>` : "";
+    const uses = s.uses === null || s.uses === undefined ? "" : `<span class="uses ${s.uses ? "" : "zero"}">${s.uses} use${s.uses === 1 ? "" : "s"}</span>`;
+    const label = s.detail && s.detail.includes(s.name) ? `<span class="detail">${esc(s.detail)}</span>` : `<span class="name">${esc(s.name)}</span>${s.detail ? `<span class="detail">${esc(s.detail)}</span>` : ""}`;
+    // The innermost symbol the line is in is marked.
+    const holds = (sym) => line && sym.line <= line && line <= sym.end;
+    const here = holds(s) && !kids.some(holds) ? "here" : "";
+    return `<div class="sym ${here}"><a href="cox://open${esc(path)}#L${s.line}"><span class="ln">${s.line}</span>${kind ? `<span class="kind">${esc(kind)}</span>` : ""}${label}${counted}${uses}</a>${within}</div>`;
+  };
 }
 
 function renderEmpty() {
@@ -233,6 +286,7 @@ function renderEmpty() {
 
 function render() {
   if (!data) return;
+  wanted = [];
   if (!data.map || !tiers().length) return renderEmpty();
   const { tier: tierId, part } = where();
   if (part && parts()[part]) renderLeaf(tierId, part);
@@ -408,13 +462,37 @@ async function load() {
     const response = await fetch(API);
     if (!response.ok) throw new Error(`${API} answered ${response.status}`);
     const text = await response.text();
-    if (text === lastText) return;
-    lastText = text;
-    data = JSON.parse(text);
-    render();
+    if (text !== lastText) {
+      lastText = text;
+      data = JSON.parse(text);
+      render();
+    }
   } catch (failed) {
     if (!data) app.innerHTML = `<div class="says failed">${esc(String(failed))}</div>`;
   }
+  await loadFiles();
+}
+
+/// Reads again what the server says of the files the page shows, and
+/// draws the page again when it changed.
+async function loadFiles() {
+  let changed = false;
+  await Promise.all(
+    wanted.map(async (path) => {
+      try {
+        const response = await fetch(`cox://api/file${path}`);
+        if (!response.ok) return;
+        const text = await response.text();
+        if (text === fileText[path]) return;
+        fileText[path] = text;
+        fileData[path] = JSON.parse(text);
+        changed = true;
+      } catch {
+        // Asked again next time.
+      }
+    }),
+  );
+  if (changed) render();
 }
 load();
 setInterval(load, EVERY);

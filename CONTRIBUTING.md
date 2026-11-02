@@ -266,8 +266,8 @@ again only where it changed, keeping the colors it had until then.
 
 A tab of Rust code asks `rust-analyzer` what the code means, which has to
 be on `PATH` (`rustup component add rust-analyzer`). Each project gets
-one, started when a tab first needs it and shared by the tabs of all its
-chats, until Cox quits; it builds what it needs in `target/rust-analyzer`,
+one, started when a tab, or the map, first needs it and shared by the
+tabs of all its chats, until Cox quits; it builds what it needs in `target/rust-analyzer`,
 so that it does not hold up the project's builds. The mouse resting on a
 name shows what the server says of it, its type and documentation. A
 click on a name with Command held, Control off macOS, goes to where it
@@ -310,7 +310,12 @@ code's on the right. Each box has a line on what it is, for a reader
 who does not know the project, how many of it there are, and the paths
 it holds. A click on a box opens the tier inside it, or, for a box that
 holds paths, the box on its own, with its files, each of which a click
-opens as a link to it does; the path above the boxes leads back up.
+opens as a link to it does, and under each file what the project's
+language server says of it, once it has read the project: the symbols
+the file defines, as `rust-analyzer` lists them for Rust, each opening
+the file at its line, how many places use each, and which files use
+them; until the server has answered, the file says what the server is
+doing. The path above the boxes leads back up.
 The map is a file in the project's folder, `.cox/map.json`, written by
 an agent once and kept up to date by the agents that change the code,
 so that it is there whenever the tab is opened, the same whatever
@@ -363,7 +368,11 @@ since the page is the tab. A plugin reads what Cox knows as JSON from
 with the file and line of the code that starts each, and
 `cox://api/map` is the map of the project, as its `.cox/map.json` has
 it, with what Cox knows of each box laid over: the files it holds, as
-the project has them now, what changed in them, and which are gone. It
+the project has them now, what changed in them, and which are gone; and
+`cox://api/file/<path>` is what the project's language server says of
+the file at `<path>`, an absolute path in the project, once it has
+answered, which the page reads again for: the symbols it defines, how
+many places use each, and which files use them. It
 opens a file on a tab
 by going to `cox://open/<path>#L<line>`, which the stage takes as it
 takes a link to a file (a page that is not itself a file may not link

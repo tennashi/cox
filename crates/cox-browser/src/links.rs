@@ -37,7 +37,8 @@ pub(crate) fn file_linked(url: &str, user_gesture: bool) -> Option<String> {
 /// `text` with its `%XX` escapes decoded, as a `file:` address writes a
 /// space or a letter beyond ASCII; an escape that is no UTF-8 is left as
 /// written.
-fn percent_decoded(text: &str) -> String {
+#[must_use]
+pub fn percent_decoded(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut index = 0;
