@@ -124,7 +124,7 @@ impl Browser {
             }
             Some(resizing) if now.duration_since(resizing.since) >= RESIZE_TIMEOUT => {
                 let painted = shared.painted;
-                log::debug!("no picture at {was:?} yet, painted {painted:?}");
+                tracing::debug!("no picture at {was:?} yet, painted {painted:?}");
                 let Some(painted) = painted else {
                     return;
                 };
@@ -152,7 +152,7 @@ impl Browser {
         // info, which locks `shared` too: on macOS that happens right here,
         // on this thread, so the lock must be gone by then.
         drop(shared);
-        log::debug!("asking CEF: {ask:?} at {reported:?}");
+        tracing::debug!("asking CEF: {ask:?} at {reported:?}");
         #[expect(clippy::float_cmp, reason = "the same value, or not")]
         if reported.scale != was.scale {
             host.notify_screen_info_changed();

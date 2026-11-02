@@ -218,17 +218,21 @@ pub fn start(cwd: PathBuf, only: Option<Vec<String>>) -> anyhow::Result<ToolServ
     let (sent, requests) = unbounded_channel();
     let asks = sent.clone();
     let (chats, chat_requests) = unbounded_channel();
+    // What the server says is said in the span it starts in, its chat's:
+    // its runtime runs on this one thread.
+    let span = tracing::Span::current();
     thread::spawn(move || {
+        let _entered = span.enter();
         let served = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(anyhow::Error::from)
             .and_then(|runtime| runtime.block_on(serve(listener, cwd, only, sent, chats)));
         if let Err(error) = served {
-            log::error!("the agent's tools stopped: {error:#}");
+            tracing::error!("the agent's tools stopped: {error:#}");
         }
         if let Err(error) = fs::remove_dir_all(&directory) {
-            log::warn!("{} is left behind: {error}", directory.display());
+            tracing::warn!("{} is left behind: {error}", directory.display());
         }
     });
     Ok(ToolServer {
@@ -275,7 +279,7 @@ async fn serve(
                 let requests = requests.clone();
                 tokio::spawn(async move {
                     if let Err(error) = talk(stream, &served, &requests).await {
-                        log::warn!("a connection of the agent's tools ended: {error:#}");
+                        tracing::warn!("a connection of the agent's tools ended: {error:#}");
                     }
                 });
             }

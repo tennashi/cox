@@ -119,7 +119,7 @@ unsafe fn add_method<F: Copy>(
     // SAFETY: `class` is live and `types` outlives the call.
     let added = unsafe { class_addMethod(class, name, imp, types.as_ptr()) };
     if !added.as_bool() {
-        log::warn!("the application already answers {name}");
+        tracing::warn!("the application already answers {name}");
     }
 }
 
@@ -147,7 +147,7 @@ extern "C-unwind" fn send_event(this: &AnyObject, _cmd: Sel, event: *mut AnyObje
 /// the quit is only asked for.
 extern "C-unwind" fn terminate(this: &AnyObject, _cmd: Sel, sender: *mut AnyObject) {
     if IN_CEF_TURN.load(Ordering::SeqCst) {
-        log::info!("quitting once CEF's turn is over");
+        tracing::info!("quitting once CEF's turn is over");
         crate::quit::ask();
         return;
     }

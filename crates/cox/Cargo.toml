@@ -24,16 +24,22 @@ cox-acp.workspace = true
 cox-browser.workspace = true
 cox-core.workspace = true
 cox-editor.workspace = true
-env_logger = "0.11.11"
 # runtime_shaders: compile the Metal shaders when the app starts, so a Mac
 # with only the Command Line Tools (no Xcode, no `metal` compiler) can build.
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 # The version gpui uses, to hand it the browser's frames.
 image = "0.25.10"
-log = "0.4.29"
+# The time each run's file of what Cox says is named after: see
+# `src/logs.rs`.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # Reading the agent's replies as Markdown: see `src/ui/markdown.rs`.
 pulldown-cmark = { version = "0.13.5", default-features = false }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing.workspace = true
+# What Cox says of itself, and what gpui and others say through `log`, on
+# standard error, and as JSON in a file of each run's own: see
+# `src/logs.rs`.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt", "json", "std", "tracing-log"] }
 unicode-segmentation = "1.12.0"
 
 # CEF is cox-browser's; the executables depend on its sys crate as well

@@ -1,5 +1,6 @@
 //! Where Cox keeps what lasts across its runs: the stage's profile (see
-//! [`cox_browser::profile`]) and the chats (see [`cox_core::store`]).
+//! [`cox_browser::profile`]), the chats (see [`cox_core::store`]), and
+//! what Cox said of each run (see [`crate::logs`]).
 //!
 //! Each place Cox runs from keeps its own, the way VS Code keeps its data
 //! apart from that of a build of its own source: the Cox

@@ -342,6 +342,23 @@ hoc, which macOS asks of an app before it shows the app's
 notifications. `cargo run` on macOS stops at once,
 saying where the framework was expected.
 
+## What Cox keeps of each run
+
+Cox says what goes wrong on standard error, as `RUST_LOG` asks, and only
+the errors unless it asks for more. It also keeps all it says, down to
+`debug`, or as `COX_LOG` asks, in a file of each run's own, for an agent
+that debugs Cox to read and search once the run is over too: one JSON
+object a line, with the spans it was said in, such as the chat it was
+said of. Among it is what Cox and each chat's agent send each other over
+ACP, a line at a time, under `cox_acp::wire`, and what the agent writes
+to its standard error, under `cox_acp::stderr`. The files are in `logs`
+beside the chats' database (see [The stage](#the-stage)), as
+`~/Library/Application Support/Cox/logs` for the installed Cox on macOS,
+and `cox-logs` beside any other, as `target/debug/cox-logs`, each named
+after the time its run started and its process id, as
+`20261101T160000Z-4242.jsonl`. Cox keeps the files of the last twenty
+runs. A panic is kept there too, with its backtrace.
+
 ## Using Cox to build Cox
 
 The Cox in use runs from where `cargo xtask install` puts it, so that

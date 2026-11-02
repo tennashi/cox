@@ -152,7 +152,7 @@ impl LanguageServer {
         self.state = match started {
             Ok(client) => State::Running(client),
             Err(error) => {
-                log::warn!("{} did not start: {error}", self.server.program);
+                tracing::warn!("{} did not start: {error}", self.server.program);
                 State::Failed(error.to_string())
             }
         };

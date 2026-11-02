@@ -29,6 +29,7 @@ use cox_acp::{
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
+use tracing::Instrument as _;
 
 use cox_core::entry::{Answer, Content, Entry, Step, StepState, ToolCallResult};
 
@@ -217,7 +218,7 @@ impl Drop for AgentThread {
         if let Some(thread) = self.thread.take()
             && thread.join().is_err()
         {
-            log::error!("the agent's thread panicked");
+            tracing::error!("the agent's thread panicked");
         }
     }
 }
@@ -225,7 +226,8 @@ impl Drop for AgentThread {
 /// Starts the agent side on a thread of its own. `connect` runs on its
 /// runtime and returns the transport to the agent, which works in `cwd`, an
 /// absolute path, gets the tools of `mcp_servers`, and starts as `start`
-/// says.
+/// says. What the agent side says is said in the span `spawn` is called
+/// in, such as its chat's.
 pub fn spawn<T: Transport + 'static>(
     connect: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     cwd: PathBuf,
@@ -245,6 +247,7 @@ pub fn spawn<T: Transport + 'static>(
     let (sent, events) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
     let works_in = cwd.clone();
+    let span = tracing::Span::current();
     let thread = thread::spawn(move || {
         close_on_exec();
         let outcome = tokio::runtime::Builder::new_multi_thread()
@@ -252,13 +255,16 @@ pub fn spawn<T: Transport + 'static>(
             .build()
             .map_err(anyhow::Error::from)
             .and_then(|runtime| {
-                let outcome = runtime.block_on(async {
-                    tokio::select! {
-                        outcome = run(connect, cwd, mcp_servers, start, &policy, received, &sent) => outcome,
-                        // Dropping the connection kills the agent.
-                        _ = stopped => Ok(()),
+                let outcome = runtime.block_on(
+                    async {
+                        tokio::select! {
+                            outcome = run(connect, cwd, mcp_servers, start, &policy, received, &sent) => outcome,
+                            // Dropping the connection kills the agent.
+                            _ = stopped => Ok(()),
+                        }
                     }
-                });
+                    .instrument(span),
+                );
                 // The connection's tasks go with the runtime.
                 runtime.shutdown_timeout(STOP_TIMEOUT);
                 outcome

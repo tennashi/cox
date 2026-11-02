@@ -172,7 +172,11 @@ impl Launcher {
     /// same command, with no tools of Cox's own and none for the stage.
     fn starts(&self) -> Starts {
         let launcher = self.clone();
-        Rc::new(move |cwd, start| launcher.spawn(cwd, Vec::new(), start))
+        Rc::new(move |cwd, start| {
+            let span = tracing::info_span!("judge", cwd = %cwd.display());
+            let _entered = span.enter();
+            launcher.spawn(cwd, Vec::new(), start)
+        })
     }
 
     /// Steps 2 to 5: starts the agent of a chat working in `cwd`, as
@@ -188,6 +192,12 @@ impl Launcher {
         window: &mut Window,
         cx: &mut App,
     ) -> Agent {
+        // What the chat's agent and its tools say is said in its chat's span.
+        let span = tracing::info_span!("chat", id = tracing::field::Empty, cwd = %cwd.display());
+        if let Some(record) = &record {
+            span.record("id", tracing::field::display(record.chat()));
+        }
+        let _entered = span.enter();
         let setup = start.setup();
         // 2. The relay the agent's browser tools go through, unless the
         // setup keeps the agent from driving the stage.
@@ -230,7 +240,9 @@ impl Launcher {
         {
             Ok(relay) => Some(relay),
             Err(error) => {
-                log::error!("no relay to the stage, so the agent gets no tools for it: {error:#}");
+                tracing::error!(
+                    "no relay to the stage, so the agent gets no tools for it: {error:#}"
+                );
                 None
             }
         }
@@ -249,7 +261,7 @@ impl Launcher {
         match crate::agent::mcp::start(cwd.to_owned(), only) {
             Ok(server) => Some((exe, server)),
             Err(error) => {
-                log::error!("the agent gets no tools of Cox's own: {error:#}");
+                tracing::error!("the agent gets no tools of Cox's own: {error:#}");
                 None
             }
         }

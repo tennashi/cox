@@ -125,7 +125,7 @@ fn create(new: NewBrowser) {
         None,
     );
     if created != 1 {
-        log::error!("CEF did not create a browser");
+        tracing::error!("CEF did not create a browser");
     }
 }
 
@@ -148,11 +148,10 @@ wrap_dev_tools_message_observer! {
                 .filter(|_| success == 1)
                 .and_then(|result| serde_json::from_slice::<serde_json::Value>(result).ok())
                 .and_then(|result| result["targetInfo"]["targetId"].as_str().map(str::to_owned));
-            match target {
-                Some(target) => {
-                    self.target.send_replace(Some(target));
-                }
-                None => log::error!("CEF did not name the page's target, so its agent cannot reach it"),
+            if let Some(target) = target {
+                self.target.send_replace(Some(target));
+            } else {
+                tracing::error!("CEF did not name the page's target, so its agent cannot reach it");
             }
         }
     }

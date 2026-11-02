@@ -162,7 +162,7 @@ pub fn stance(folder: &Path) -> String {
         Ok(_) => STANCE.to_owned(),
         Err(error) => {
             if error.kind() != std::io::ErrorKind::NotFound {
-                log::error!("cannot read {}: {error}", path.display());
+                tracing::error!("cannot read {}: {error}", path.display());
             }
             STANCE.to_owned()
         }
