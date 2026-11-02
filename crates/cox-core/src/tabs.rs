@@ -42,6 +42,8 @@ pub enum KeptTab {
     /// The flow of one tool call through Cox, the call by the id the
     /// agent gave it.
     Flow { call: String },
+    /// The parts the chat runs with, and how they reach each other.
+    Parts,
 }
 
 /// Lines of a file, as people number them: from 1, the last included.

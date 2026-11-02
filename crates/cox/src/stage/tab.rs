@@ -1,7 +1,7 @@
 //! A tab of the stage, and what it shows: a page of the browser, a
 //! Markdown file, a file as it is written, the project's files, what
-//! changed in them, the map of the project, the flow of a tool call, or a
-//! terminal. What the stage asks of every kind alike, the name the tab
+//! changed in them, the map of the project, the flow of a tool call, the
+//! parts the chat runs with, or a terminal. What the stage asks of every kind alike, the name the tab
 //! goes by, how it is kept for a closed chat's stage to open again, the
 //! keyboard's place in it and the view drawn, each kind answers as
 //! [`Shows`], and [`TabContent`] turns to that in one place. What the stage
@@ -21,6 +21,7 @@ use super::document::Document;
 use super::flow::Flow;
 use super::map::Map;
 use super::page::Page;
+use super::parts::Parts;
 use super::terminal::{Program, Terminal};
 use super::tree::Tree;
 use crate::ui::LinkClicked;
@@ -84,6 +85,7 @@ pub(super) enum TabContent {
     Changes(Entity<Changes>),
     Map(Entity<Map>),
     Flow(Entity<Flow>),
+    Parts(Entity<Parts>),
     Terminal(Entity<Terminal>),
 }
 
@@ -124,6 +126,7 @@ impl TabContent {
             Self::Changes(changes) => changes,
             Self::Map(map) => map,
             Self::Flow(flow) => flow,
+            Self::Parts(parts) => parts,
             Self::Terminal(terminal) => terminal,
         }
     }
@@ -158,6 +161,7 @@ impl TabContent {
             | Self::Changes(_)
             | Self::Map(_)
             | Self::Flow(_)
+            | Self::Parts(_)
             | Self::Terminal(_) => None,
         }
     }
@@ -175,7 +179,8 @@ impl TabContent {
             | Self::Tree(_)
             | Self::Changes(_)
             | Self::Map(_)
-            | Self::Flow(_) => false,
+            | Self::Flow(_)
+            | Self::Parts(_) => false,
         }
     }
 }

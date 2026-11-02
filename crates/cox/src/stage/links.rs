@@ -16,6 +16,7 @@ use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::flow::{self, Flow};
 use crate::stage::map::{self, Map};
+use crate::stage::parts::{self, Parts};
 use crate::stage::tab::{ShowsFile, TabContent};
 use crate::stage::tree::{Chosen, Tree};
 use crate::ui::LinkClicked;
@@ -340,6 +341,47 @@ impl Stage {
             },
         );
         self.push(TabContent::Flow(shown), changes, Some(opens), show, cx);
+    }
+}
+
+impl Stage {
+    /// Shows the parts the chat runs with (see
+    /// [`cox_core::tabs::KeptTab::Parts`]): on their tab, or a new one,
+    /// with the keyboard in it.
+    pub(super) fn show_parts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let showing = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab.content, TabContent::Parts(_)));
+        if let Some(index) = showing {
+            self.show(index, window, cx);
+        } else {
+            self.push_parts(true, window, cx);
+            self.focus_shown(window, cx);
+        }
+    }
+
+    /// Puts a tab showing the parts the chat runs with after the others,
+    /// shown if `show` is. A click on a part opens the code that starts
+    /// it, at the line that does.
+    pub(super) fn push_parts(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = cx.new(|cx| Parts::new(self.cwd.clone(), self.started.clone(), cx));
+        let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
+        let opens = cx.subscribe_in(
+            &shown,
+            window,
+            |stage, _, opened: &parts::Opened, window, cx| {
+                let path = stage.cwd.join(&opened.file);
+                let lines = parts::line_saying(&path, opened.find).map(|line| Lines {
+                    first: line,
+                    last: line,
+                });
+                if let Err(error) = stage.open_path(&path, lines, window, cx) {
+                    tracing::warn!("cannot open {}: {error}", path.display());
+                }
+            },
+        );
+        self.push(TabContent::Parts(shown), changes, Some(opens), show, cx);
     }
 }
 

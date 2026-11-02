@@ -193,6 +193,7 @@ impl ShowsFile for Document {
             | TabContent::Changes(_)
             | TabContent::Map(_)
             | TabContent::Flow(_)
+            | TabContent::Parts(_)
             | TabContent::Terminal(_) => None,
         }
     }
