@@ -17,6 +17,7 @@ ignore = "0.4.33"
 ropey = { version = "1.6.1", default-features = false, features = ["simd"] }
 # Talking to the language servers, in JSON-RPC, with the files' addresses
 # as URLs: see `src/lsp.rs`.
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { workspace = true, features = ["sync"] }
 # What the language servers say, for the logs: see `src/lsp.rs`.

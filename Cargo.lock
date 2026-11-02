@@ -1546,6 +1546,7 @@ version = "0.0.0"
 dependencies = [
  "ignore",
  "ropey",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

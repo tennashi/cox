@@ -36,9 +36,9 @@ pub enum KeptTab {
     /// its absolute path, as Git tells it.
     Changes { folder: PathBuf },
     /// The map of the project's crates and modules, open at the crate and
-    /// the modules in it `at` names, from the crate down, or at the
-    /// crates when it names none: a tab Cox drew in earlier runs, which
-    /// opens again as the page that draws the map now.
+    /// the modules in it `at` names: a tab Cox drew in earlier runs, which
+    /// opens again as the page that draws the project's map now, at its
+    /// top, the map being in tiers of its own now.
     Map { at: Vec<String> },
     /// The flow of one tool call through Cox, the call by the id the
     /// agent gave it.

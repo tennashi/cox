@@ -260,8 +260,9 @@ impl Stage {
         }
     }
 
-    /// Shows the map of the project open `at`, as the agent asks: on the
-    /// Map page's tab, or a new one, with the keyboard in it.
+    /// Shows the map of the project open `at`, a tier and a box in it
+    /// by their ids, or at its top, as the agent asks: on the Map page's
+    /// tab, or a new one, with the keyboard in it.
     pub(super) fn show_map_at(
         &mut self,
         at: &[String],
@@ -275,13 +276,11 @@ impl Stage {
 /// The address of the Parts page.
 pub(super) const PARTS_URL: &str = "cox://parts/";
 
-/// The address of the Map page, open `at`: the names the map is open at
-/// are the page's hash, as `cox://map/#cox/stage`.
-pub(super) fn map_url(at: &[String]) -> String {
-    format!("cox://map/{}", map_fragment(at))
-}
+/// The address of the Map page, at its top.
+pub(super) const MAP_URL: &str = "cox://map/";
 
-/// The hash of the Map page open `at`: `#` alone at the crates.
+/// The hash of the Map page open `at`, a tier and a box in it by their
+/// ids, as `#cox/stage`: `#` alone at the top.
 fn map_fragment(at: &[String]) -> String {
     format!("#{}", at.join("/"))
 }

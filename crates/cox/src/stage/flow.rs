@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use cox_core::tabs::KeptTab;
 use cox_editor::changes;
-use cox_editor::map::changed_files;
+use cox_editor::changes::changed_files;
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, ScrollHandle, Task,
     Window, div, prelude::*, px, rgb,

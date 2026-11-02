@@ -8,8 +8,8 @@
 //! - [`history`] is where a tab has been, to go back and forward.
 //! - [`files`] lists what is in a project's folders.
 //! - [`changes`] is what changed in them, as Git tells it.
-//! - [`map`] is the project as its crates and modules, for the human to
-//!   see where things are, with what changed laid over it.
+//! - [`map`] is the project's map, in tiers, as an agent wrote it, with
+//!   what changed laid over it.
 //! - [`language`] is the languages the editor knows, and what in their
 //!   code is drawn how.
 //! - [`syntax`] is the syntax of a text in its language.

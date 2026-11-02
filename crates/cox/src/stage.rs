@@ -234,9 +234,10 @@ impl Stage {
                     stage.push_flow(call, show, window, cx);
                 }
                 // The tabs Cox drew in earlier runs open as the pages that
-                // draw them now.
-                KeptTab::Map { at } => {
-                    stage.open_tab(&links::map_url(&at), show, window, cx);
+                // draw them now: the map at its top, since its tiers are
+                // not the crates the tab was open at.
+                KeptTab::Map { .. } => {
+                    stage.open_tab(links::MAP_URL, show, window, cx);
                 }
                 KeptTab::Parts => {
                     stage.open_tab(links::PARTS_URL, show, window, cx);
