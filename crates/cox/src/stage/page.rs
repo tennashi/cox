@@ -189,6 +189,13 @@ impl Page {
         cx.notify();
     }
 
+    /// Whether the page is one the stage serves itself, at a `cox:`
+    /// address (see [`crate::stage::plugins`]): drawn as a tab Cox draws,
+    /// with no toolbar, since the page is the tab.
+    fn is_plugin(&self) -> bool {
+        self.navigation.url.starts_with("cox://")
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Navigation {
             loading,
@@ -433,7 +440,9 @@ impl Render for Page {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.render_toolbar(cx))
+            .when(!self.is_plugin(), |page| {
+                page.child(self.render_toolbar(cx))
+            })
             .child(
                 div()
                     .id("stage")

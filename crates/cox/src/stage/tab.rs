@@ -19,9 +19,7 @@ use super::changes::Changes;
 use super::code::Code;
 use super::document::Document;
 use super::flow::Flow;
-use super::map::Map;
 use super::page::Page;
-use super::parts::Parts;
 use super::terminal::{Program, Terminal};
 use super::tree::Tree;
 use crate::ui::LinkClicked;
@@ -83,9 +81,7 @@ pub(super) enum TabContent {
     Code(Entity<Code>),
     Tree(Entity<Tree>),
     Changes(Entity<Changes>),
-    Map(Entity<Map>),
     Flow(Entity<Flow>),
-    Parts(Entity<Parts>),
     Terminal(Entity<Terminal>),
 }
 
@@ -124,9 +120,7 @@ impl TabContent {
             Self::Code(code) => code,
             Self::Tree(tree) => tree,
             Self::Changes(changes) => changes,
-            Self::Map(map) => map,
             Self::Flow(flow) => flow,
-            Self::Parts(parts) => parts,
             Self::Terminal(terminal) => terminal,
         }
     }
@@ -159,9 +153,7 @@ impl TabContent {
             | Self::Code(_)
             | Self::Tree(_)
             | Self::Changes(_)
-            | Self::Map(_)
             | Self::Flow(_)
-            | Self::Parts(_)
             | Self::Terminal(_) => None,
         }
     }
@@ -178,9 +170,7 @@ impl TabContent {
             | Self::Code(_)
             | Self::Tree(_)
             | Self::Changes(_)
-            | Self::Map(_)
-            | Self::Flow(_)
-            | Self::Parts(_) => false,
+            | Self::Flow(_) => false,
         }
     }
 }

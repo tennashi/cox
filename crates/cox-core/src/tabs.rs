@@ -37,12 +37,15 @@ pub enum KeptTab {
     Changes { folder: PathBuf },
     /// The map of the project's crates and modules, open at the crate and
     /// the modules in it `at` names, from the crate down, or at the
-    /// crates when it names none.
+    /// crates when it names none: a tab Cox drew in earlier runs, which
+    /// opens again as the page that draws the map now.
     Map { at: Vec<String> },
     /// The flow of one tool call through Cox, the call by the id the
     /// agent gave it.
     Flow { call: String },
-    /// The parts the chat runs with, and how they reach each other.
+    /// The parts the chat runs with, and how they reach each other: a tab
+    /// Cox drew in earlier runs, which opens again as the page that draws
+    /// them now.
     Parts,
 }
 

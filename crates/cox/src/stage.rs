@@ -3,9 +3,11 @@
 //! the browser (see [`crate::stage::page`]), a Markdown file (see
 //! [`crate::stage::document`]), a file as it is written, such as code (see
 //! [`crate::stage::code`]), the project's files as a tree (see [`crate::stage::tree`]),
-//! what changed in them (see [`crate::stage::changes`]), the map of the
-//! project (see [`crate::stage::map`]), or a terminal (see
-//! [`crate::stage::terminal`]). The first shows the page the
+//! what changed in them (see [`crate::stage::changes`]), or a terminal
+//! (see [`crate::stage::terminal`]); and the pages of the stage's
+//! plugins (see [`crate::stage::plugins`]), such as the map of the
+//! project (see [`crate::stage::map`]) and the parts the chat runs with
+//! (see [`crate::stage::parts`]), are pages of the browser. The first shows the page the
 //! stage starts on; the human opens more pages and terminals, and the
 //! tree, and closes tabs, and the agent opens and closes pages
 //! too, through the chat's relay. A page that asks for a window of its own
@@ -42,12 +44,13 @@
 //! - [`tree`] shows the project's files, for the human to open one.
 //! - [`changes`] shows what changed in them, for the human to read, and
 //!   to open a file where it changed.
-//! - [`map`] shows the project as its crates and modules, with what
-//!   changed laid over them, for the human to see where things are.
 //! - [`terminal`] is a terminal the human types into, and the agent runs
 //!   commands in.
 //! - [`plugins`] are pages that draw what Cox knows, as a tab would, which
-//!   the stage serves its pages itself at `cox:` addresses.
+//!   the stage serves its pages itself at `cox:` addresses: [`map`] tells
+//!   the project as its crates and modules, with what changed laid over
+//!   them, for the human to see where things are, and [`parts`] what the
+//!   chat runs with.
 
 mod asked;
 pub mod changes;
@@ -170,11 +173,6 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for tab in &self.tabs {
-            if let TabContent::Parts(parts) = &tab.content {
-                parts.update(cx, |parts, cx| parts.runs(started.clone(), cx));
-            }
-        }
         self.plugins.runs(started.clone());
         self.started = Some(started);
         if let Some(relay) = relay {
@@ -232,14 +230,16 @@ impl Stage {
                 KeptTab::Changes { folder } => {
                     stage.push_changes(folder, show, window, cx);
                 }
-                KeptTab::Map { at } => {
-                    stage.push_map(at, show, window, cx);
-                }
                 KeptTab::Flow { call } => {
                     stage.push_flow(call, show, window, cx);
                 }
+                // The tabs Cox drew in earlier runs open as the pages that
+                // draw them now.
+                KeptTab::Map { at } => {
+                    stage.open_tab(&links::map_url(&at), show, window, cx);
+                }
                 KeptTab::Parts => {
-                    stage.push_parts(show, window, cx);
+                    stage.open_tab(links::PARTS_URL, show, window, cx);
                 }
                 KeptTab::Terminal { .. } => {}
             }
@@ -301,9 +301,7 @@ impl Stage {
             | TabContent::Code(_)
             | TabContent::Tree(_)
             | TabContent::Changes(_)
-            | TabContent::Map(_)
             | TabContent::Flow(_)
-            | TabContent::Parts(_)
             | TabContent::Terminal(_) => false,
         })
     }
@@ -529,43 +527,17 @@ impl Stage {
                         stage.show_changes(cwd, window, cx);
                     })),
             )
-            .child(
-                div()
-                    .id("show-map")
-                    .debug_selector(|| "show-map".to_owned())
-                    .flex_shrink_0()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
-                    .child("Map")
-                    .on_click(cx.listener(|stage, _, window, cx| stage.show_map(window, cx))),
-            )
-            .child(
-                div()
-                    .id("show-parts")
-                    .debug_selector(|| "show-parts".to_owned())
-                    .flex_shrink_0()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
-                    .child("Parts")
-                    .on_click(cx.listener(|stage, _, window, cx| stage.show_parts(window, cx))),
-            )
             .children(self.render_plugins(cx))
     }
 
     /// A button for each plugin, after the tabs Cox draws, which opens its
-    /// page, or shows the tab that does.
+    /// page, or shows the tab that does, wherever the page has gone.
     fn render_plugins(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
         self.plugins
             .list()
             .into_iter()
             .map(|plugin| {
-                let url = plugin.url();
+                let name = plugin.name.clone();
                 div()
                     .id(SharedString::from(format!("plugin-{}", plugin.name)))
                     .debug_selector(|| format!("plugin-{}", plugin.name))
@@ -577,7 +549,7 @@ impl Stage {
                     .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
                     .child(plugin.title)
                     .on_click(cx.listener(move |stage, _, window, cx| {
-                        stage.open(&url, window, cx);
+                        stage.show_plugin(&name, "", window, cx);
                     }))
             })
             .collect()

@@ -796,9 +796,7 @@ impl ShowsFile for Code {
             | tab::TabContent::Document(_)
             | tab::TabContent::Tree(_)
             | tab::TabContent::Changes(_)
-            | tab::TabContent::Map(_)
             | tab::TabContent::Flow(_)
-            | tab::TabContent::Parts(_)
             | tab::TabContent::Terminal(_) => None,
         }
     }

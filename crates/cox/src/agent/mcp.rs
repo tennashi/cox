@@ -85,7 +85,8 @@ pub enum ToolRequest {
     /// `folder`, an absolute path, on a tab of the stage.
     ShowChanges { folder: PathBuf },
     /// Show the human the map of the project on a tab of the stage, open
-    /// `at` (see [`cox_core::tabs::KeptTab::Map`]).
+    /// `at`: the crate, and the modules in it from the crate down, or the
+    /// crates when empty.
     ShowMap { at: Vec<String> },
     /// Run `command` in a terminal on the stage, working in `cwd`, and
     /// answer how it went, or why it could not start, once it ends. The
