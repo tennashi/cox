@@ -3,15 +3,6 @@
   <head>
     <meta charset="utf-8" />
     <title>Map</title>
-    <script type="importmap">
-      {
-        "imports": {
-          "preact": "cox://vendor/preact.mjs",
-          "preact/hooks": "cox://vendor/hooks.mjs",
-          "htm": "cox://vendor/htm.mjs"
-        }
-      }
-    </script>
     <style>
       :root {
         color-scheme: dark;
@@ -19,20 +10,16 @@
         --background: #1e1e1e;
         --card: #252628;
         --card-hover: #2c2e31;
+        --focus: #212121;
         --dim: #9a9a9a;
         --faint: #6e6e6e;
         --link: #7fb4ff;
         --border: #3a3b3e;
-        --failed: #f08080;
-        --changed: #8fd19e;
-        --crate: #e5a85a;
-        --module: #6cb8ff;
-        --file: #c9a7ff;
-        --uses: #1f2d40;
-        --uses-text: #7fb4ff;
-        --used-by: #3a2e1c;
-        --used-by-text: #e0b060;
-        --both: #2e2b3a;
+        --line: #8a8a8a;
+        --changed: #e5a85a;
+        --stale: #e07070;
+        --note: #c9a7ff;
+        --hold: #6cb8ff;
         --sans: -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
         --mono: Menlo, "DejaVu Sans Mono", monospace;
       }
@@ -46,171 +33,403 @@
       #app {
         display: flex;
         flex-direction: column;
-        min-height: 100vh;
-      }
-      .heading {
-        position: sticky;
-        top: 0;
-        z-index: 1;
-        display: flex;
-        align-items: center;
         gap: 12px;
-        padding: 7px 16px;
-        background: var(--background);
-        border-bottom: 1px solid var(--border);
+        min-height: 100vh;
+        padding: 10px 16px 32px;
+        box-sizing: border-box;
       }
-      .steps {
-        display: flex;
-        flex: none;
-        gap: 4px;
-      }
-      .steps span {
-        padding: 0 5px;
-        border-radius: 3px;
-        color: var(--foreground);
-        cursor: pointer;
-        user-select: none;
-      }
-      .steps span:hover {
-        background: #404040;
+      button {
+        all: unset;
       }
       .crumbs {
         display: flex;
-        flex: none;
-        align-items: baseline;
+        flex-wrap: wrap;
+        align-items: center;
         gap: 6px;
-        font-weight: 600;
-      }
-      .crumbs a {
-        color: var(--link);
-        text-decoration: none;
-      }
-      .crumbs a:hover {
-        text-decoration: underline;
-      }
-      .crumbs .sep {
+        font-size: 13px;
         color: var(--dim);
-        font-weight: 400;
       }
-      .aside {
-        flex: 1 1 0;
-        min-width: 0;
-        overflow: hidden;
-        white-space: nowrap;
-        text-overflow: ellipsis;
-        color: var(--dim);
-        font-size: 12px;
+      .crumbs button {
+        cursor: pointer;
+        color: var(--foreground);
+        border-radius: 4px;
+        padding: 1px 6px;
       }
-      .aside .name {
+      .crumbs button:hover,
+      .crumbs button:focus-visible {
+        background: #404040;
+      }
+      .crumbs .here {
         color: var(--foreground);
         font-weight: 600;
-        font-family: var(--mono);
+        padding: 1px 6px;
       }
-      .aside .uses {
-        color: var(--uses-text);
+      .crumbs .depth {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        color: var(--faint);
+        margin-right: 2px;
       }
-      .aside .used-by {
-        color: var(--used-by-text);
-      }
-      .aside .dot {
-        margin: 0 4px;
-      }
-      .said {
-        padding: 10px 16px;
-        color: var(--dim);
-      }
-      .said.failed {
-        color: var(--failed);
-      }
-      .boxes {
+      .source {
         display: flex;
         flex-wrap: wrap;
-        align-content: flex-start;
-        gap: 10px;
-        padding: 12px 16px 32px;
-      }
-      .box {
-        box-sizing: border-box;
-        flex: 1 1 200px;
-        max-width: 260px;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        padding: 9px 11px 8px 12px;
-        border: 1px solid var(--border);
-        border-left: 3px solid var(--kind);
-        border-radius: 6px;
-        background: var(--card);
-        color: inherit;
-        text-decoration: none;
-        cursor: pointer;
-      }
-      .box:hover,
-      .box.hovered {
-        background: var(--card-hover);
-      }
-      .box.changed {
-        border-color: color-mix(in srgb, var(--changed) 55%, var(--border));
-        border-left-color: var(--kind);
-      }
-      .box.uses {
-        background: var(--uses);
-      }
-      .box.used-by {
-        background: var(--used-by);
-      }
-      .box.both {
-        background: var(--both);
-      }
-      .box .kind {
-        font-size: 9.5px;
-        font-weight: 600;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--kind);
-      }
-      .box .name {
-        font-size: 14px;
-        font-weight: 600;
-        font-family: var(--mono);
-        overflow-wrap: anywhere;
-      }
-      .box.opens .name {
-        color: var(--link);
-      }
-      .box .counts {
-        font-size: 11.5px;
-        color: var(--dim);
-      }
-      .box .says {
+        gap: 4px 14px;
+        align-items: baseline;
         font-size: 12px;
-        line-height: 1.4;
-        display: -webkit-box;
-        -webkit-box-orient: vertical;
-        -webkit-line-clamp: 3;
-        overflow: hidden;
-      }
-      .box .note {
-        font-size: 11.5px;
         color: var(--dim);
       }
-      .box .diff {
-        margin-top: auto;
-        padding-top: 2px;
-        font: 11.5px var(--mono);
+      .source .file {
+        font-family: var(--mono);
+        color: var(--foreground);
+      }
+      .source .since {
         color: var(--changed);
       }
-      .box .foot {
-        margin-top: auto;
-        padding-top: 2px;
-        font: 11px var(--mono);
-        color: var(--faint);
+      .says {
+        font-size: 13px;
+        color: var(--dim);
+        max-width: 72em;
       }
-      .box.opens .foot {
+      .says.failed {
+        color: var(--stale);
+      }
+      .says.empty {
+        padding: 24px 0;
+        color: var(--foreground);
+      }
+      .says.empty code {
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      /* The tier: its rows of cards, with the frame of the tiers above beside it. */
+      .drill {
+        position: relative;
+        display: grid;
+        grid-template-columns: 104px minmax(0, 1fr) 104px;
+        gap: 0 40px;
+        align-items: stretch;
+      }
+      .drill.noframe {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+      }
+      .drill svg.wires,
+      .drill svg.labels {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        overflow: visible;
+        color: var(--line);
+      }
+      .drill svg.wires path,
+      .line svg.wires path {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.3;
+      }
+      .drill svg.labels text,
+      .line svg.labels text {
+        font: 10.5px var(--sans);
+        fill: var(--dim);
+        paint-order: stroke;
+        stroke: var(--background);
+        stroke-width: 4px;
+        stroke-linejoin: round;
+      }
+      .focus svg.labels text {
+        stroke: var(--focus);
+      }
+      .side {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-evenly;
+        gap: 28px;
+        padding: 20px 0;
+        min-width: 0;
+      }
+      .side.left:has(.part:only-child) {
+        justify-content: flex-start;
+        padding-top: 56px;
+      }
+      .side .part {
+        width: 100%;
+        max-width: none;
+        min-width: 0;
+        flex: 0 0 auto;
+      }
+      .focus {
+        border: 1px solid var(--dim);
+        border-radius: 12px;
+        padding: 10px 10px 12px;
+        display: grid;
+        gap: 14px;
+        background: var(--focus);
+        min-width: 0;
+      }
+      .noframe .focus {
+        border: none;
+        background: transparent;
+        padding: 4px 0;
+      }
+      .noframe .part {
+        min-width: 110px;
+      }
+      .focushead {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+      }
+      .focushead .name {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .focushead .open {
+        margin-left: auto;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        color: var(--dim);
+      }
+      .row {
+        display: grid;
+        gap: 6px;
+      }
+      .row .rowname {
+        font-size: 11.5px;
+        color: var(--dim);
+        letter-spacing: 0.04em;
+      }
+      .line {
+        position: relative;
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: stretch;
+        gap: 6px 4px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        padding: 2px 2px 12px;
+      }
+      .line::-webkit-scrollbar {
+        display: none;
+      }
+      .line svg.wires,
+      .line svg.labels {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        color: var(--line);
+      }
+      .line .gap {
+        flex: 0 0 auto;
+      }
+      .line .space {
+        flex: 0 0 14px;
+      }
+      /* A card. */
+      .part {
+        box-sizing: border-box;
+        display: grid;
+        gap: 4px;
+        align-content: start;
+        flex: 1 1 150px;
+        min-width: 140px;
+        max-width: 210px;
+        padding: 9px 11px;
+        border-radius: 8px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        color: inherit;
+      }
+      .part.goes {
+        cursor: pointer;
+      }
+      .part.goes:hover,
+      .part.goes:focus-visible {
+        border-color: var(--dim);
+        background: var(--card-hover);
+      }
+      .part.many {
+        box-shadow:
+          4px 4px 0 -1px var(--focus),
+          4px 4px 0 0 var(--border);
+        margin-right: 4px;
+        margin-bottom: 4px;
+      }
+      .part.lit {
+        border-color: var(--changed);
+        box-shadow: inset 0 0 0 1px rgba(229, 168, 90, 0.25);
+      }
+      .part.lit.many {
+        box-shadow:
+          inset 0 0 0 1px rgba(229, 168, 90, 0.25),
+          4px 4px 0 -1px var(--focus),
+          4px 4px 0 0 var(--border);
+      }
+      .part.stale {
+        border-style: dashed;
+      }
+      .part.outer {
+        font-size: 12px;
+      }
+      .part .pname {
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1.3;
+      }
+      .part .each {
+        font-size: 10.5px;
+        color: var(--dim);
+        letter-spacing: 0.04em;
+        justify-self: start;
+        white-space: nowrap;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0 7px;
+      }
+      .part.many .each {
+        color: var(--foreground);
+      }
+      .part .psays {
+        font-size: 12px;
+        color: var(--dim);
+        line-height: 1.45;
+      }
+      .part .kinds {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--dim);
+      }
+      .part .badge {
+        font-size: 11px;
+        color: var(--changed);
+        font-family: var(--mono);
+      }
+      .part .gone {
+        font-size: 11px;
+        color: var(--stale);
+        display: grid;
+        gap: 2px;
+      }
+      .part .gone b {
+        font-weight: 500;
+      }
+      .part .note {
+        font-size: 11px;
+        color: var(--note);
+        display: grid;
+        gap: 2px;
+      }
+      .part .note b {
+        font-weight: 500;
+      }
+      .part .holds {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px;
+        margin-top: 2px;
+      }
+      .part .holds .chip {
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--hold);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0 5px;
+        line-height: 1.5;
+      }
+      .part .holds .chip.hot {
+        color: var(--changed);
+        border-color: rgba(229, 168, 90, 0.5);
+      }
+      .part .holds .chip.missing {
+        color: var(--stale);
+        text-decoration: line-through;
+      }
+      .part .go {
+        font-size: 11.5px;
+        color: var(--link);
+        justify-self: end;
+      }
+      /* A box on its own: the code it holds. */
+      .leaf {
+        display: grid;
+        gap: 10px;
+      }
+      .hold {
+        display: grid;
+        gap: 6px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 9px 11px;
+        background: var(--card);
+        text-decoration: none;
+        color: inherit;
+      }
+      .hold.lit {
+        border-color: var(--changed);
+      }
+      .hold.missing {
+        border-style: dashed;
+      }
+      a.hold:hover {
+        background: var(--card-hover);
+      }
+      .hold .head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 10px;
+        align-items: baseline;
+      }
+      .hold .path {
+        font-family: var(--mono);
+        font-size: 12.5px;
+        color: var(--foreground);
+      }
+      a.hold .path {
         color: var(--link);
       }
-      .box.opens:hover .foot {
-        text-decoration: underline;
+      .hold .path .ln {
+        color: var(--dim);
+      }
+      .hold .n {
+        font-size: 11.5px;
+        color: var(--dim);
+      }
+      .hold .badge {
+        font-size: 11px;
+        color: var(--changed);
+        font-family: var(--mono);
+      }
+      .hold .missing {
+        font-size: 11px;
+        color: var(--stale);
+      }
+      .foot {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 10px;
+        font-size: 11.5px;
+        color: var(--faint);
+        margin-top: auto;
+      }
+      @container (max-width: 640px) {
+        .drill {
+          grid-template-columns: 1fr;
+          gap: 28px 0;
+        }
+        .side {
+          flex-direction: row;
+          flex-wrap: wrap;
+          justify-content: center;
+          padding: 0;
+          gap: 10px;
+        }
+        .side .part {
+          width: auto;
+          min-width: 120px;
+        }
+      }
+      #app {
+        container-type: inline-size;
       }
     </style>
   </head>

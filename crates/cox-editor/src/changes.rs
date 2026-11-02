@@ -7,6 +7,7 @@
 //! of a project starts from, or the empty tree, for a trial from nothing,
 //! so that all it made counts as changed, whatever it commits.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -102,6 +103,17 @@ pub enum Kind {
     Same,
     Added,
     Removed,
+}
+
+/// The lines each file that changed gained and lost, by its absolute
+/// path, as the diff tells it. A file that was removed counts where it
+/// was.
+#[must_use]
+pub fn changed_files(diff: &Diff) -> HashMap<PathBuf, (usize, usize)> {
+    diff.files
+        .iter()
+        .map(|file| (diff.top.join(&file.path), (file.added, file.removed)))
+        .collect()
 }
 
 impl Since {

@@ -12,8 +12,8 @@
 //! - `cox://api/parts`: the parts the chat runs with (see
 //!   [`crate::stage::parts`]), with the file and line of the code that
 //!   starts each.
-//! - `cox://api/map/<crate>/<module>…`: the map of the project, open at
-//!   the crate and the modules named, or at the crates when none is (see
+//! - `cox://api/map`: the map of the project, as its `.cox/map.json`
+//!   has it, with what changed and what is stale laid over its boxes (see
 //!   [`crate::stage::map`]).
 //!
 //! A plugin opens a file on a tab of the stage by going to
@@ -204,14 +204,7 @@ impl Plugins {
                     .clone();
                 parts::told(&self.root, started.as_ref())
             }
-            "map" => {
-                let at: Vec<String> = rest
-                    .split('/')
-                    .filter(|name| !name.is_empty())
-                    .map(str::to_owned)
-                    .collect();
-                map::told(&self.root, &at)
-            }
+            "map" if rest.is_empty() => map::told(&self.root),
             _ => return None,
         };
         Some(Resource {
@@ -348,21 +341,22 @@ mod tests {
     }
 
     #[test]
-    fn the_map_is_told_as_json_at_the_names_given() {
+    fn the_map_is_told_as_json() {
         let root = scratch("map");
-        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"one\"\n").unwrap();
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(root.join("src/lib.rs"), "mod a;\n").unwrap();
-        std::fs::write(root.join("src/a.rs"), "").unwrap();
+        std::fs::create_dir_all(root.join(".cox")).unwrap();
+        std::fs::write(
+            root.join(cox_editor::map::MAP_FILE),
+            r#"{ "tiers": [{ "id": "whole", "name": "Whole", "rows": [{ "parts": ["one"] }] }],
+                 "parts": { "one": { "name": "One", "holds": ["src"] } } }"#,
+        )
+        .unwrap();
         let plugins = Plugins::new(root);
 
         let answer = plugins.resource("cox://api/map").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["boxes"][0]["name"], "one");
-        let answer = plugins.resource("cox://api/map/one/").unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["at"], serde_json::json!(["one"]));
-        assert_eq!(json["boxes"][1]["name"], "a");
+        assert_eq!(json["map"]["tiers"][0]["id"], "whole");
+        assert_eq!(json["facts"]["one"]["stale"], serde_json::json!(["src"]));
+        assert_eq!(plugins.resource("cox://api/map/one/"), None);
     }
 
     #[test]

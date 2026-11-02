@@ -116,7 +116,7 @@ impl ToolRequest {
                 None => format!("show {}", path.display()),
             },
             Self::ShowChanges { folder } => format!("show what changed in {}", folder.display()),
-            Self::ShowMap { at } if at.is_empty() => "show the map at the crates".to_owned(),
+            Self::ShowMap { at } if at.is_empty() => "show the map at its top".to_owned(),
             Self::ShowMap { at } => format!("show the map at {}", at.join(" › ")),
             Self::RunCommand { command, cwd, .. } => {
                 format!("run `{command}` in {}", cwd.display())

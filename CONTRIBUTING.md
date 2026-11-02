@@ -298,32 +298,38 @@ where it starts with a ref of its worktree's own,
 for a trial from nothing, which then counts all it made; a trial opened
 as a project forgets it.
 
-"Map" beside it opens a tab of the project as a map, for the human to
-see where things are before they read them: the crates of the Cargo
-workspace, or the one crate, as cards, each with the first paragraph of
-what its `lib.rs` or `main.rs` says of itself (its `//!` lines), how many
-lines it has, and which crates of the project it uses. A click on a
-crate opens the map at it: the files it starts from, and its modules as
-cards, each with what its file says of itself, and a click on a module
-with modules of its own opens the map at that, down to the files; the
-path above the cards leads back up. A click on a file opens it, as a
-link to it does. What changed, as "Changes" shows it, is laid over the
-map: a card with a file that changed in it is marked, with how many lines
-changed in how many files, so that the human sees where a change falls
-in the project before they read it. The mouse resting on a card shows
-what it has to do with the others: the cards it uses are colored one
-way, and those that use it another, and the line above the cards names
-them. A crate uses another when its `Cargo.toml` says so, and a module
-uses another when a file in it names the other, in a `use` line or a
-path in its code, as `crate::stage::Stage` or `cox_core::tabs`. The ‹
-and › above the cards go back and forward between the places the map was
-open at. The agent opens it with Cox's `show_map` tool, at a crate or
-module, to show the human where what it talks of is before it talks it
-through, and hears what the map shows there. The tab follows the project
-as it changes, and a closed chat's stage opens it again where it was
-open. The map is a page of the stage, one of its plugins (see below),
-at `cox://map/`, where the map is open being the page's hash, as
-`cox://map/#cox/stage`.
+"Map" beside it opens a tab of the project's map, for the human to see
+where things are before they read them: not the files, which "Files"
+lists, but what the parts of the project mean, in tiers, which an agent
+writes. The top tier is the few things the project is among, such as
+its user, the program, and what the program talks to; each box of a tier
+opens a tier of its own, down to boxes that hold paths of the code; and
+the boxes of the tiers above stay beside the tier that is open, so that
+the lines out of it reach them, the user's side on the left and the
+code's on the right. Each box has a line on what it is, for a reader
+who does not know the project, how many of it there are, and the paths
+it holds. A click on a box opens the tier inside it, or, for a box that
+holds paths, the box on its own, with its files, each of which a click
+opens as a link to it does; the path above the boxes leads back up.
+The map is a file in the project's folder, `.cox/map.json`, written by
+an agent once and kept up to date by the agents that change the code,
+so that it is there whenever the tab is opened, the same whatever
+changed; a project tracks it or not as it likes, and Cox's own
+repository does not, so a clone of Cox gets its map written where it
+is. Over it Cox lays what it knows: what changed, as
+"Changes" shows it, falls on the boxes that hold the files, with how
+many lines changed in how many files, so that the human sees where a
+change falls in the project before they read it; and a box whose paths
+the project no longer has is marked stale, for an agent to bring the
+map up to date. A project with no map gets a tab that says so, and an
+agent asked to show the map is told how to write one. The agent opens
+the map with Cox's `show_map` tool, at a tier, or a box in it, to show
+the human where what it talks of is before it talks it through, and
+hears what the map shows there, box by box. The tab follows the file
+and the project as they change, and a closed chat's stage opens it
+again where it was open. The map is a page of the stage, one of its
+plugins (see below), at `cox://map/`, where the map is open being the
+page's hash, as `cox://map/#cox/stage`.
 
 "Parts" beside it opens a tab of the parts the chat runs with, and how
 they reach each other, for the human to see what is running before they
@@ -355,19 +361,20 @@ drawn as a tab Cox draws, without the toolbar a page of the web has,
 since the page is the tab. A plugin reads what Cox knows as JSON from
 `cox://api/<what>`: `cox://api/parts` is the parts the chat runs with,
 with the file and line of the code that starts each, and
-`cox://api/map/<crate>/<module>…` is the map of the project open at the
-crate and modules named, or at the crates when none is: each card with
-what it is, its path, what it says of itself, its counts, what changed
-in it, and which of the other cards it uses. It opens a file on a tab
+`cox://api/map` is the map of the project, as its `.cox/map.json` has
+it, with what Cox knows of each box laid over: the files it holds, as
+the project has them now, what changed in them, and which are gone. It
+opens a file on a tab
 by going to `cox://open/<path>#L<line>`, which the stage takes as it
 takes a link to a file (a page that is not itself a file may not link
-to one). The built-in plugins are drawn with
+to one). The Parts plugin is drawn with
 [Preact](https://preactjs.com) and
 [htm](https://github.com/developit/htm), which the stage serves at
 `cox://vendor/` from `crates/cox/plugins/vendor`, for a project's
-plugin to use too, so that none needs a build step or the network, and
-they read their JSON again every two seconds, as Cox's own tabs follow
-what they show.
+plugin to use too, so that none needs a build step or the network; the
+Map plugin draws its own cards and lines, with no library. Both read
+their JSON again every two seconds, as Cox's own tabs follow what they
+show.
 
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
