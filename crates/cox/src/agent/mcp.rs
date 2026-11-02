@@ -54,6 +54,20 @@ mod calls;
 /// The option that runs `cox` as the bridge, followed by the socket.
 pub const OPTION: &str = "--mcp";
 
+/// The target under which each line the agent and the server send each
+/// other over the socket is said, at `debug`, with `from` saying whose it
+/// is: `cox` or `agent`.
+pub const WIRE: &str = "cox::agent::mcp::wire";
+
+/// The target under which a tool asking something of the chat's stage is
+/// said, at `debug`, as "asks the stage to " and [`ToolRequest::said`].
+pub const ASKS: &str = "cox::agent::mcp::asks";
+
+/// The target under which the stage carrying out what a tool asked is
+/// said, at `debug`, as "the stage carries it out: " and
+/// [`ToolRequest::said`].
+pub const ASKED: &str = "cox::stage::asked";
+
 /// What the agent's tools ask of its chat.
 #[derive(Debug)]
 pub enum ToolRequest {
@@ -82,6 +96,32 @@ pub enum ToolRequest {
         cwd: PathBuf,
         answer: oneshot::Sender<Result<Ran, String>>,
     },
+}
+
+impl ToolRequest {
+    /// What is asked, in a few words, as the log says it: "show the map
+    /// at cox › stage", "run `cargo test` in /work".
+    #[must_use]
+    pub fn said(&self) -> String {
+        match self {
+            Self::ShowMarkdown { path, .. } => format!("show {} as Markdown", path.display()),
+            Self::ShowFile { path, lines, .. } => match lines {
+                Some(lines) => format!(
+                    "show {} at lines {}–{}",
+                    path.display(),
+                    lines.first,
+                    lines.last
+                ),
+                None => format!("show {}", path.display()),
+            },
+            Self::ShowChanges { folder } => format!("show what changed in {}", folder.display()),
+            Self::ShowMap { at } if at.is_empty() => "show the map at the crates".to_owned(),
+            Self::ShowMap { at } => format!("show the map at {}", at.join(" › ")),
+            Self::RunCommand { command, cwd, .. } => {
+                format!("run `{command}` in {}", cwd.display())
+            }
+        }
+    }
 }
 
 /// What the agent's tools ask of the window its chat is in: of the chat's
@@ -376,6 +416,7 @@ async fn talk(stream: UnixStream, served: Arc<dyn Serves>) -> anyhow::Result<()>
     let sending = tokio::spawn(async move {
         while let Some(answer) = ready.recv().await {
             let mut line = answer.to_string();
+            tracing::debug!(target: WIRE, from = "cox", "{line}");
             line.push('\n');
             said.write_all(line.as_bytes()).await?;
         }
@@ -388,6 +429,7 @@ async fn talk(stream: UnixStream, served: Arc<dyn Serves>) -> anyhow::Result<()>
         if line.trim().is_empty() {
             continue;
         }
+        tracing::debug!(target: WIRE, from = "agent", "{line}");
         let message = match serde_json::from_str::<Value>(&line) {
             Ok(message) => message,
             Err(error) => {

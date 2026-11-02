@@ -51,6 +51,7 @@ mod asked;
 pub mod changes;
 pub mod code;
 pub mod document;
+pub mod flow;
 pub mod follow;
 mod links;
 pub mod map;
@@ -212,6 +213,9 @@ impl Stage {
                 KeptTab::Map { at } => {
                     stage.push_map(at, show, window, cx);
                 }
+                KeptTab::Flow { call } => {
+                    stage.push_flow(call, show, window, cx);
+                }
                 KeptTab::Terminal { .. } => {}
             }
         }
@@ -273,6 +277,7 @@ impl Stage {
             | TabContent::Tree(_)
             | TabContent::Changes(_)
             | TabContent::Map(_)
+            | TabContent::Flow(_)
             | TabContent::Terminal(_) => false,
         })
     }
