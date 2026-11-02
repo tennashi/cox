@@ -359,6 +359,35 @@ after the time its run started and its process id, as
 `20261101T160000Z-4242.jsonl`. Cox keeps the files of the last twenty
 runs. A panic is kept there too, with its backtrace.
 
+## A fake agent
+
+`cox-fake-agent <scenario>` is an agent to run Cox with when no model
+should answer: to try Cox out, to see a change working, or to make a
+fault happen again. It speaks ACP as `claude-agent-acp` does, and answers
+each line sent to it with a turn of the scenario, a JSON file, as
+[`crates/cox-fake-agent/scenarios/tour.json`](crates/cox-fake-agent/scenarios/tour.json)
+shows:
+
+```sh
+cargo build --bin cox-fake-agent
+cox target/debug/cox-fake-agent crates/cox-fake-agent/scenarios/tour.json
+```
+
+Each line takes the first turn not taken yet whose `when`, if it has one,
+is in what the line says, as a goal's judge is told, and the turn takes
+its steps one after another: `say`, `think`, `tool` and `tool_update`
+(the fields of ACP's `tool_call` and `tool_call_update`, with
+`toolCallId` as `id`), `update` (any of ACP's `session/update`, as it
+is), `ask` (ACP's `session/request_permission`, with `then`, the steps
+for each option chosen, by its `optionId`, or `cancelled`), `call` (a
+tool of an MCP server Cox hands the agent, `cox` unless `server` says
+another, with `arguments`), `sleep` (milliseconds), `stderr`, and
+`fail`. In a step, `{result}` stands for what the last call answered,
+and a value that is just `"{result:number after as chat }"` for the
+number after `as chat ` in it, as `open_chat` answers, to give
+`wait_chat`. The turn ends with its `stop`, `end_turn` unless it says
+another, or as `cancelled` when Cox cancels it.
+
 ## Using Cox to build Cox
 
 The Cox in use runs from where `cargo xtask install` puts it, so that
