@@ -9,6 +9,12 @@
 //! What changed in the project (see [`crate::changes`]) is laid over the
 //! map by file: a module changed when its file did, or a file of a module
 //! in it, and a crate when a file in its folder did.
+//!
+//! Each file also names what it uses, in its `use` lines and in the paths
+//! in its code, as `crate::stage::Stage` or `cox_core::tabs`: the map
+//! keeps those that lead into a crate of the project, resolved from the
+//! crate's name down, so that for any two parts of the map it can tell
+//! whether one uses the other.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,11 +58,18 @@ pub struct Module {
     pub name: String,
     /// Its file, an absolute path.
     pub path: PathBuf,
+    /// Where it is in its crate: the names from the crate down to it, or
+    /// none for a file a crate starts from.
+    pub at: Vec<String>,
     /// The first paragraph of what the file says of itself, in its `//!`
     /// lines, or nothing when it says nothing.
     pub said: String,
     /// How many lines the file has.
     pub lines: usize,
+    /// What the file names that is in a crate of the project, each once,
+    /// in order: a path of the crate's name and the names after it, as
+    /// `["cox", "stage", "Stage"]` for `crate::stage::Stage` in `cox`.
+    pub names: Vec<Vec<String>>,
     /// The modules it declares, in the order it declares them, that have
     /// a file.
     pub modules: Vec<Module>,
@@ -156,6 +169,35 @@ impl Module {
         self.modules.len() + self.modules.iter().map(Self::modules_in_all).sum::<usize>()
     }
 
+    /// What the module's file names, and the files of the modules in it.
+    pub fn names_in_all(&self) -> impl Iterator<Item = &[String]> {
+        let own = self.names.iter().map(Vec::as_slice);
+        let within = self.modules.iter().flat_map(|module| {
+            Box::new(module.names_in_all()) as Box<dyn Iterator<Item = &[String]>>
+        });
+        own.chain(within)
+    }
+
+    /// Whether `name`, a path from a crate's name down as [`Self::names`]
+    /// has them, leads into the module of crate `krate`, or is it: into
+    /// its file, or a module in it.
+    #[must_use]
+    pub fn is_named(&self, krate: &str, name: &[String]) -> bool {
+        name.first().is_some_and(|first| first == krate) && name[1..].starts_with(&self.at)
+    }
+
+    /// Whether `name` leads into the module's own file, and not a module
+    /// in it: it is the module, or one thing in it.
+    #[must_use]
+    pub fn file_is_named(&self, krate: &str, name: &[String]) -> bool {
+        self.is_named(krate, name)
+            && match name.get(1 + self.at.len()..) {
+                None | Some([]) => true,
+                Some([one]) => !self.modules.iter().any(|module| module.name == *one),
+                Some(_) => false,
+            }
+    }
+
     /// What changed in the module's file, and in those of the modules in
     /// it, among `files`.
     #[must_use]
@@ -225,7 +267,7 @@ pub fn read(root: &Path) -> Result<Map, String> {
                 .into_iter()
                 .map(|file| folder.join("src").join(file))
                 .filter(|path| path.is_file())
-                .map(|path| module(path, 0))
+                .map(|path| module(path, &name, Vec::new(), &names, 0))
                 .collect();
             Crate {
                 name,
@@ -266,9 +308,10 @@ fn members(root: &Path, member: &str) -> Vec<PathBuf> {
     }
 }
 
-/// The module whose file is at `path`, `depth` modules under the file its
+/// The module whose file is at `path`, `at` in crate `krate` of the
+/// project whose crates are `crates`, `depth` modules under the file its
 /// crate starts from, with the modules it declares.
-fn module(path: PathBuf, depth: usize) -> Module {
+fn module(path: PathBuf, krate: &str, at: Vec<String>, crates: &[String], depth: usize) -> Module {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -277,21 +320,209 @@ fn module(path: PathBuf, depth: usize) -> Module {
     let modules = if depth < DEEPEST {
         declared_in(&path, &text)
             .into_iter()
-            .map(|(name, path)| Module {
-                name: name.clone(),
-                ..module(path, depth + 1)
+            .map(|(name, path)| {
+                let mut within = at.clone();
+                within.push(name.clone());
+                Module {
+                    name,
+                    ..module(path, krate, within, crates, depth + 1)
+                }
             })
             .collect()
     } else {
         Vec::new()
     };
+    let names = names_in(&text, krate, &at, crates);
     Module {
         name,
         path,
+        at,
         said: said(&text),
         lines: text.lines().count(),
+        names,
         modules,
     }
+}
+
+/// What `text`, the file `at` in crate `krate`, names that is in one of
+/// `crates`: the paths of its `use` lines and of its code, resolved from
+/// the crate's name down (see [`Module::names`]), each once, in order.
+fn names_in(text: &str, krate: &str, at: &[String], crates: &[String]) -> Vec<Vec<String>> {
+    let code = without_comments(text);
+    let mut names: Vec<Vec<String>> = Vec::new();
+    let paths = use_paths(&code).into_iter().chain(inline_paths(&code));
+    for path in paths {
+        if let Some(name) = resolved(&path, krate, at, crates)
+            && !names.contains(&name)
+        {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// `text` without its `//` comments, so that what they say is not taken
+/// for code; `://`, as in an address, is not a comment.
+fn without_comments(text: &str) -> String {
+    let mut code = String::with_capacity(text.len());
+    for line in text.lines() {
+        let mut kept = line;
+        let mut from = 0;
+        while let Some(found) = kept[from..].find("//") {
+            let index = from + found;
+            if index > 0 && kept.as_bytes()[index - 1] == b':' {
+                from = index + 2;
+            } else {
+                kept = &kept[..index];
+                break;
+            }
+        }
+        code.push_str(kept);
+        code.push('\n');
+    }
+    code
+}
+
+/// The paths of the `use` lines in `code`, each in full: `use a::{b, c::d};`
+/// is `a::b` and `a::c::d`. A `*` ends a path at the path before it.
+fn use_paths(code: &str) -> Vec<Vec<String>> {
+    let mut paths = Vec::new();
+    let mut from = 0;
+    while let Some(found) = code[from..].find("use ") {
+        let index = from + found;
+        let before = code[..index].chars().next_back();
+        from = index + 4;
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        let Some(end) = code[from..].find(';') else {
+            break;
+        };
+        let tree = &code[from..from + end];
+        from += end + 1;
+        let tokens: Vec<&str> = use_tokens(tree);
+        let mut index = 0;
+        use_tree(&tokens, &mut index, &[], &mut paths);
+    }
+    paths
+}
+
+/// The tokens of a `use` tree: names, `::`, `{`, `}`, `,`, `*` and `as`.
+fn use_tokens(tree: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut rest = tree;
+    while !rest.is_empty() {
+        let next = rest.chars().next().unwrap_or(' ');
+        if next.is_whitespace() {
+            rest = rest.trim_start();
+        } else if let Some(after) = rest.strip_prefix("::") {
+            tokens.push("::");
+            rest = after;
+        } else if next.is_alphanumeric() || next == '_' {
+            let len = rest
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            tokens.push(&rest[..len]);
+            rest = &rest[len..];
+        } else {
+            tokens.push(&rest[..next.len_utf8()]);
+            rest = &rest[next.len_utf8()..];
+        }
+    }
+    tokens
+}
+
+/// Reads one tree of `tokens` from `index`, under `prefix`, into `paths`,
+/// up to a `,` or `}` of the tree around it, or the end.
+fn use_tree(tokens: &[&str], index: &mut usize, prefix: &[String], paths: &mut Vec<Vec<String>>) {
+    let mut path = prefix.to_vec();
+    while *index < tokens.len() {
+        let token = tokens[*index];
+        *index += 1;
+        match token {
+            "::" => {}
+            "{" => loop {
+                use_tree(tokens, index, &path, paths);
+                match tokens.get(*index - 1) {
+                    Some(&",") => {}
+                    _ => return,
+                }
+            },
+            "," | "}" | "*" => break,
+            "as" => {
+                // The alias: not a name of the path's.
+                *index += 1;
+            }
+            "self" if path.len() > prefix.len() || !prefix.is_empty() => {}
+            name => path.push(name.to_owned()),
+        }
+    }
+    if !path.is_empty() {
+        paths.push(path);
+    }
+}
+
+/// The paths of two or more names in `code`, as `crate::stage::Stage`
+/// where it is written, whatever is before or after them.
+fn inline_paths(code: &str) -> Vec<Vec<String>> {
+    let mut paths = Vec::new();
+    let bytes = code.as_bytes();
+    let is_name = |index: usize| {
+        bytes
+            .get(index)
+            .is_some_and(|&b| b.is_ascii_alphanumeric() || b == b'_')
+    };
+    let mut index = 0;
+    while index < bytes.len() {
+        if !is_name(index) || (index > 0 && is_name(index - 1)) {
+            index += 1;
+            continue;
+        }
+        let mut path = Vec::new();
+        loop {
+            let start = index;
+            while is_name(index) {
+                index += 1;
+            }
+            path.push(code[start..index].to_owned());
+            if bytes.get(index..index + 2) == Some(b"::") && is_name(index + 2) {
+                index += 2;
+            } else {
+                break;
+            }
+        }
+        if path.len() > 1 {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+/// `path`, as written in the file `at` in crate `krate`, from the name of
+/// the crate it leads into down, if it leads into one of `crates`:
+/// `crate::` is `krate`, `self::` is the file's module, `super::` the
+/// module it is in, and a crate's name, with `_` for `-`, is that crate.
+fn resolved(path: &[String], krate: &str, at: &[String], crates: &[String]) -> Option<Vec<String>> {
+    let (first, rest) = path.split_first()?;
+    let mut name = vec![krate.to_owned()];
+    match first.as_str() {
+        "crate" => {}
+        "self" => name.extend(at.iter().cloned()),
+        "super" => {
+            if rest.is_empty() {
+                return None;
+            }
+            name.extend(at.iter().take(at.len().checked_sub(1)?).cloned());
+        }
+        other => {
+            let found = crates
+                .iter()
+                .find(|known| known.replace('-', "_") == *other)?;
+            name = vec![found.clone()];
+        }
+    }
+    name.extend(rest.iter().cloned());
+    Some(name)
 }
 
 /// The modules the file at `path`, which says `text`, declares, by name
@@ -535,7 +766,10 @@ not-mine = "1"
                     "crates/app/src/stage.rs",
                     "//! The stage,\n//! beside the chat.\nmod tab;\npub(crate) mod code;\n",
                 ),
-                ("crates/app/src/stage/tab.rs", "//! A tab.\n"),
+                (
+                    "crates/app/src/stage/tab.rs",
+                    "//! A tab, see [`crate::ui`].\nuse core::Thing;\nuse super::code;\nfn f() { crate::ui::draw(); }\n",
+                ),
                 ("crates/app/src/stage/code/mod.rs", "// no doc\n"),
                 ("crates/app/src/ui.rs", ""),
                 ("crates/core/Cargo.toml", "[package]\nname = \"core\"\n"),
@@ -572,10 +806,26 @@ not-mine = "1"
                 ("code", root.join("crates/app/src/stage/code/mod.rs")),
             ]
         );
+        assert_eq!(stage.at, ["stage"]);
+        let tab = &stage.modules[0];
+        assert_eq!(tab.at, ["stage", "tab"]);
+        let names: Vec<Vec<&str>> = tab
+            .names
+            .iter()
+            .map(|name| name.iter().map(String::as_str).collect())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                vec!["core", "Thing"],
+                vec!["app", "stage", "code"],
+                vec!["app", "ui", "draw"],
+            ]
+        );
         assert_eq!(stage.modules_in_all(), 2);
-        assert_eq!(stage.lines_in_all(), 4 + 1 + 1);
+        assert_eq!(stage.lines_in_all(), 4 + 4 + 1);
         // lib.rs and main.rs, stage.rs and the two in it, and ui.rs.
-        assert_eq!(app.lines(), 7 + 1 + 6);
+        assert_eq!(app.lines(), 7 + 1 + 9);
         assert_eq!(map.crates[1].uses, Vec::<String>::new());
         assert_eq!(map.crates[1].said(), "The core.");
     }
@@ -607,20 +857,109 @@ not-mine = "1"
     }
 
     #[test]
+    fn a_file_names_what_its_use_lines_and_its_code_lead_to() {
+        let text = r#"
+//! Docs name [`crate::ui`], which is not a use.
+use std::path::{Path, PathBuf};
+pub(crate) use crate::stage::{Stage, tab::{self, TabContent as Content}};
+use super::*;
+use cox_core::tabs::Lines;
+use self::inner::Thing;
+
+fn f(x: &crate::ui::Link) {
+    let url = "https://example.com//not/a/comment";
+    super::page::open(x); // a comment: crate::nowhere
+    cox_browser::start();
+}
+"#;
+        let crates: Vec<String> = ["cox", "cox-core", "cox-browser"].map(str::to_owned).into();
+        let at: Vec<String> = ["stage", "links"].map(str::to_owned).into();
+        let names: Vec<String> = names_in(text, "cox", &at, &crates)
+            .iter()
+            .map(|name| name.join("::"))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "cox::stage::Stage",
+                "cox::stage::tab",
+                "cox::stage::tab::TabContent",
+                "cox-core::tabs::Lines",
+                "cox::stage::links::inner::Thing",
+                "cox::stage",
+                "cox::ui::Link",
+                "cox::stage::page::open",
+                "cox-browser::start",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_leads_into_a_module_or_its_own_file() {
+        let name = |path: &str| -> Vec<String> { path.split("::").map(str::to_owned).collect() };
+        let tab = Module {
+            name: "tab".to_owned(),
+            path: PathBuf::from("/p/src/stage/tab.rs"),
+            at: name("stage::tab"),
+            said: String::new(),
+            lines: 1,
+            names: Vec::new(),
+            modules: Vec::new(),
+        };
+        let stage = Module {
+            name: "stage".to_owned(),
+            path: PathBuf::from("/p/src/stage.rs"),
+            at: name("stage"),
+            said: String::new(),
+            lines: 1,
+            names: Vec::new(),
+            modules: Vec::from([tab]),
+        };
+        assert!(stage.is_named("cox", &name("cox::stage::Stage")));
+        assert!(stage.is_named("cox", &name("cox::stage::tab::Tab")));
+        assert!(stage.is_named("cox", &name("cox::stage")));
+        assert!(!stage.is_named("cox", &name("cox::ui::stage")));
+        assert!(!stage.is_named("other", &name("cox::stage::Stage")));
+        assert!(stage.file_is_named("cox", &name("cox::stage::Stage")));
+        assert!(!stage.file_is_named("cox", &name("cox::stage::tab")));
+        assert!(!stage.file_is_named("cox", &name("cox::stage::tab::Tab")));
+        let lib = Module {
+            name: "lib.rs".to_owned(),
+            path: PathBuf::from("/p/src/lib.rs"),
+            at: Vec::new(),
+            said: String::new(),
+            lines: 1,
+            names: Vec::new(),
+            modules: Vec::from([stage]),
+        };
+        assert!(lib.is_named("cox", &name("cox::stage::Stage")));
+        assert!(lib.file_is_named("cox", &name("cox::Top")));
+        assert!(!lib.file_is_named("cox", &name("cox::stage::Stage")));
+        assert!(lib.is_named("cox", &name("cox")));
+        assert!(lib.file_is_named("cox", &name("cox")));
+        let all: Vec<String> = lib.names_in_all().map(|name| name.join("::")).collect();
+        assert_eq!(all, Vec::<String>::new());
+    }
+
+    #[test]
     fn changes_lay_over_modules_and_crates_by_file() {
         let root = Path::new("/p");
         let tab = Module {
             name: "tab".to_owned(),
             path: root.join("crates/app/src/stage/tab.rs"),
+            at: vec!["stage".to_owned(), "tab".to_owned()],
             said: String::new(),
             lines: 1,
+            names: Vec::new(),
             modules: Vec::new(),
         };
         let stage = Module {
             name: "stage".to_owned(),
             path: root.join("crates/app/src/stage.rs"),
+            at: vec!["stage".to_owned()],
             said: String::new(),
             lines: 1,
+            names: Vec::new(),
             modules: Vec::from([tab]),
         };
         let app = Crate {
@@ -630,8 +969,10 @@ not-mine = "1"
             entries: Vec::from([Module {
                 name: "lib.rs".to_owned(),
                 path: root.join("crates/app/src/lib.rs"),
+                at: Vec::new(),
                 said: String::new(),
                 lines: 1,
+                names: Vec::new(),
                 modules: Vec::from([stage]),
             }]),
         };

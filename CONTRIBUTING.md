@@ -295,8 +295,16 @@ path above the boxes leads back up. A click on a file opens it, as a
 link to it does. What changed, as "Changes" shows it, is laid over the
 map: a box with a file that changed in it is marked, with how many lines
 changed in how many files, so that the human sees where a change falls
-in the project before they read it. The tab follows the project as it
-changes, and a closed chat's stage opens it again where it was open.
+in the project before they read it. The mouse resting on a box shows
+what it has to do with the others: the boxes it uses are colored one
+way, and those that use it another, and the line above the boxes names
+them. A crate uses another when its `Cargo.toml` says so, and a module
+uses another when a file in it names the other, in a `use` line or a
+path in its code, as `crate::stage::Stage` or `cox_core::tabs`. The ‹
+and › above the boxes go back and forward between the places the map was
+open at, as Command-[ and Command-] do (Alt-Left and Alt-Right, and
+Control off macOS), as in a tab of code. The tab follows the project as
+it changes, and a closed chat's stage opens it again where it was open.
 
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The

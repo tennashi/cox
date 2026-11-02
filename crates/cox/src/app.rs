@@ -197,6 +197,7 @@ fn bind_keys(cx: &mut App) {
     crate::chat::view::bind_keys(cx);
     crate::stage::document::bind_keys(cx);
     crate::stage::code::bind_keys(cx);
+    crate::stage::map::bind_keys(cx);
     crate::workspace::bind_keys(cx);
     // After the window's, which a terminal's own keys stand before.
     crate::stage::terminal::bind_keys(cx);
