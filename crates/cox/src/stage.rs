@@ -46,6 +46,8 @@
 //!   changed laid over them, for the human to see where things are.
 //! - [`terminal`] is a terminal the human types into, and the agent runs
 //!   commands in.
+//! - [`plugins`] are pages that draw what Cox knows, as a tab would, which
+//!   the stage serves its pages itself at `cox:` addresses.
 
 mod asked;
 pub mod changes;
@@ -57,6 +59,7 @@ mod links;
 pub mod map;
 pub mod page;
 pub mod parts;
+pub mod plugins;
 pub mod servers;
 pub mod tab;
 pub mod terminal;
@@ -68,8 +71,8 @@ use cox_core::list::List;
 use cox_core::store::Record;
 use cox_core::tabs::{KeptTab, KeptTabs};
 use gpui::{
-    App, Context, Div, Entity, Focusable, Stateful, Subscription, Task, Window, div, prelude::*,
-    px, rgb,
+    App, Context, Div, Entity, Focusable, SharedString, Stateful, Subscription, Task, Window, div,
+    prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -81,6 +84,7 @@ use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::page::{Opens, Page};
 use crate::stage::parts::Started;
+use crate::stage::plugins::Plugins;
 use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
 use crate::ui::Panel;
@@ -115,6 +119,9 @@ pub struct Stage {
     heard: Vec<Task<()>>,
     /// What the chat runs with, once its agent runs.
     started: Option<Started>,
+    /// The plugins the stage shows as pages, and what they read of the
+    /// chat.
+    plugins: Plugins,
 }
 
 impl Stage {
@@ -138,6 +145,7 @@ impl Stage {
     fn empty(cef: Cef, cwd: PathBuf, panel: Entity<Panel>) -> Self {
         Self {
             cef,
+            plugins: Plugins::new(cwd.clone()),
             cwd,
             tabs: List::new(),
             pages: None,
@@ -167,6 +175,7 @@ impl Stage {
                 parts.update(cx, |parts, cx| parts.runs(started.clone(), cx));
             }
         }
+        self.plugins.runs(started.clone());
         self.started = Some(started);
         if let Some(relay) = relay {
             for tab in &self.tabs {
@@ -310,7 +319,7 @@ impl Stage {
     ) -> TargetId {
         // The relay hears of the page before CEF makes it.
         let opening = self.pages.as_ref().map(Pages::opening);
-        let (browser, events) = self.cef.open(url);
+        let (browser, events) = self.cef.open(url, Some(self.plugins.serve()));
         let target = browser.target_id();
         if let Some(opening) = opening {
             opening.is(target.clone());
@@ -546,6 +555,32 @@ impl Stage {
                     .child("Parts")
                     .on_click(cx.listener(|stage, _, window, cx| stage.show_parts(window, cx))),
             )
+            .children(self.render_plugins(cx))
+    }
+
+    /// A button for each plugin, after the tabs Cox draws, which opens its
+    /// page, or shows the tab that does.
+    fn render_plugins(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+        self.plugins
+            .list()
+            .into_iter()
+            .map(|plugin| {
+                let url = plugin.url();
+                div()
+                    .id(SharedString::from(format!("plugin-{}", plugin.name)))
+                    .debug_selector(|| format!("plugin-{}", plugin.name))
+                    .flex_shrink_0()
+                    .px_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(rgb(0x80_8080))
+                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .child(plugin.title)
+                    .on_click(cx.listener(move |stage, _, window, cx| {
+                        stage.open(&url, window, cx);
+                    }))
+            })
+            .collect()
     }
 }
 

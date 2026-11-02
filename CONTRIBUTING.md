@@ -337,6 +337,27 @@ socket, the ports. A click on a box opens the code that starts the
 part, when the project has the file, as it does when the project is
 Cox.
 
+A tab can show a plugin too: a page, in HTML and JavaScript, that draws
+what Cox knows as a tab Cox draws would, for whoever wants a view of
+their own on the stage, the agent included, since it writes HTML and
+reads pages. A plugin is a folder with an `index.html`, and a
+`plugin.json` naming its `title` if it has one: those built into Cox, in
+`crates/cox/plugins`, and the project's, in `.cox/plugins/<name>` under
+its folder. The tab bar has a button for each, after "Parts", which
+opens the plugin's page at `cox://<name>/`, an address the stage serves
+itself, through CEF, from the plugin's files; the agent opens it as any
+page. A plugin reads what Cox knows as JSON from `cox://api/<what>`:
+`cox://api/parts` is the parts the chat runs with, as "Parts" shows
+them, with the file and line of the code that starts each. It opens a
+file on a tab by going to `cox://open/<path>#L<line>`, which the stage
+takes as it takes a link to a file (a page that is not itself a file may
+not link to one). "Parts (web)" is the one built in: the same picture as
+"Parts", drawn by a page with [Preact](https://preactjs.com) and
+[htm](https://github.com/developit/htm), vendored under
+`crates/cox/plugins/parts/vendor` so that it needs no build step and
+no network, which reads `cox://api/parts` again every two seconds, as
+Cox's own tabs follow what they show.
+
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
 `>_` beside the tabs opens one with the human's shell, working in the
