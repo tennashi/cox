@@ -255,6 +255,11 @@ impl Map {
         &self.at
     }
 
+    /// Opens the map `at`, as the agent asks (see [`KeptTab::Map`]).
+    pub fn open_at(&mut self, at: Vec<String>, cx: &mut Context<Self>) {
+        self.go(at, cx);
+    }
+
     /// The tab read the project again: draws it again if it changed.
     fn looked(
         &mut self,
@@ -354,36 +359,19 @@ impl Map {
     /// Where the map is open, and what it shows there, once it is read.
     fn place(&self) -> Option<Place<'_>> {
         let map = self.read.as_ref()?.as_ref().ok()?;
-        let Some(krate) = self
-            .at
-            .first()
-            .and_then(|name| map.crates.iter().find(|krate| krate.name == *name))
-        else {
-            return Some(Place {
-                depth: 0,
-                krate: None,
-                boxes: map.crates.iter().map(Shown::Crate).collect(),
-            });
+        let place = map.place(&self.at);
+        let boxes = match place.krate {
+            None => map.crates.iter().map(Shown::Crate).collect(),
+            Some(_) => place
+                .files
+                .into_iter()
+                .map(Shown::File)
+                .chain(place.modules.into_iter().map(Shown::Module))
+                .collect(),
         };
-        let mut depth = 1;
-        let mut files: Vec<&Module> = krate.entries.iter().collect();
-        let mut modules: Vec<&Module> = krate.modules();
-        for name in self.at.iter().skip(1) {
-            let Some(module) = modules.iter().find(|module| module.name == *name) else {
-                break;
-            };
-            files = Vec::from([*module]);
-            modules = module.modules.iter().collect();
-            depth += 1;
-        }
-        let boxes = files
-            .into_iter()
-            .map(Shown::File)
-            .chain(modules.into_iter().map(Shown::Module))
-            .collect();
         Some(Place {
-            depth,
-            krate: Some(krate),
+            depth: place.depth,
+            krate: place.krate,
             boxes,
         })
     }
