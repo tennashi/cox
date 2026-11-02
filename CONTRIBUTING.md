@@ -6,6 +6,8 @@
 - `cargo xtask ci` runs every check. A change is ready only when it passes.
 - `cargo xtask install` builds Cox for release and installs it apart from
   `target/` (see [Using Cox to build Cox](#using-cox-to-build-cox)).
+- `cargo xtask run` builds Cox and runs it with a fake agent, apart from
+  what it kept before (see [A fake agent](#a-fake-agent)).
 
 ## Building on macOS
 
@@ -33,7 +35,7 @@ its own, through the [cef](https://crates.io/crates/cef) crate. The crate's
 build downloads the matching CEF distribution from the official builds
 (about 200 MB, once per target directory).
 
-`cox [--stage <url>] [--home <dir>] <agent command>` opens a window with
+`cox [--stage <url>] [--home <dir>] [--data <dir>] <agent command>` opens a window with
 no chat in it. The list on the left of the window shows the chats under
 the projects they are in. A project is a folder: "Open folder…"
 (Command-O on macOS, Control-O elsewhere) opens a chat in the project of a
@@ -318,7 +320,10 @@ across runs, one for each place Cox runs from. The Cox that
 second Cox from the same place gets a profile for that run only. The
 chats are kept the same way, in a SQLite database: `chats.sqlite` beside
 the installed Cox's `stage`, and `cox-chats.sqlite` beside any other, as
-in `target/debug/cox-chats.sqlite`.
+in `target/debug/cox-chats.sqlite`. A Cox given `--data <dir>` keeps all
+of that, and the rest it keeps, in `<dir>` instead, without the `cox-`:
+`<dir>/stage`, `<dir>/chats.sqlite`, and so on, to run apart from what it
+kept before, or on a copy of what another Cox kept.
 
 On Linux, `cargo run` is enough: CEF is linked into `cox`, and its helper
 processes run `cox` again.
@@ -358,6 +363,59 @@ and `cox-logs` beside any other, as `target/debug/cox-logs`, each named
 after the time its run started and its process id, as
 `20261101T160000Z-4242.jsonl`. Cox keeps the files of the last twenty
 runs. A panic is kept there too, with its backtrace.
+
+## A fake agent
+
+`cox-fake-agent <scenario>` is an agent to run Cox with when no model
+should answer: to try Cox out, to see a change working, or to make a
+fault happen again. It speaks ACP as `claude-agent-acp` does, and answers
+each line sent to it with a turn of the scenario, a JSON file, as
+[`crates/cox-fake-agent/scenarios/tour.json`](crates/cox-fake-agent/scenarios/tour.json)
+shows.
+
+`cargo xtask run [--headless] [--data <dir>] [<scenario> | -- <agent command>...]`
+builds Cox and runs it with the fake agent playing `<scenario>`, the tour
+unless given, or with `<agent command>`, keeping what lasts in `<dir>`,
+or afresh in `target/debug/cox-run` each time (see `--data` in
+[The stage](#the-stage)), and says where the files of its runs are.
+`--headless`, on Linux, runs Cox on a display of its own, which Xvfb
+draws in memory, and says which, for an agent to look at it and type
+into it without a screen, as with `xdotool` and ImageMagick's `import`:
+
+```sh
+sudo apt-get install xvfb mesa-vulkan-drivers xdotool imagemagick
+cargo xtask run --headless
+DISPLAY=:99 xdotool key ctrl+n; DISPLAY=:99 xdotool type 'hello'; DISPLAY=:99 xdotool key Return
+DISPLAY=:99 import -window root shot.png
+```
+
+gpui draws with Vulkan, which `mesa-vulkan-drivers` gives a machine
+with no GPU.
+
+Each line takes the first turn not taken yet whose `when`, if it has one,
+is in what the line says, as a goal's judge is told, and the turn takes
+its steps one after another: `say`, `think`, `tool` and `tool_update`
+(the fields of ACP's `tool_call` and `tool_call_update`, with
+`toolCallId` as `id`), `update` (any of ACP's `session/update`, as it
+is), `ask` (ACP's `session/request_permission`, with `then`, the steps
+for each option chosen, by its `optionId`, or `cancelled`), `call` (a
+tool of an MCP server Cox hands the agent, `cox` unless `server` says
+another, with `arguments`), `sleep` (milliseconds), `stderr`, and
+`fail`. In a step, `{result}` stands for what the last call answered,
+and a value that is just `"{result:number after as chat }"` for the
+number after `as chat ` in it, as `open_chat` answers, to give
+`wait_chat`. The turn ends with its `stop`, `end_turn` unless it says
+another, or as `cancelled` when Cox cancels it.
+
+`cox-fake-agent --from-log <run> [--chat <id>]` writes, as a scenario,
+what a chat's agent did in a run Cox kept (see
+[What Cox keeps of each run](#what-cox-keeps-of-each-run)), the chat
+named by the number its span gives, or `judge` for a goal's judge: the
+updates the agent sent, its permission requests, and what it wrote to
+its standard error, turn by turn, with the waits between them, so that
+what happened in the run happens again, as on another machine. The
+agent's calls of Cox's own tools do not go over ACP, so the scenario
+does not make them.
 
 ## Using Cox to build Cox
 

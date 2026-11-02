@@ -36,12 +36,14 @@ use cox_browser::Cef;
 
 actions!(cox, [Quit]);
 
-pub const USAGE: &str = "Usage: cox [--stage <url>] [--home <dir>] <agent command> [args...]";
+pub const USAGE: &str =
+    "Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] <agent command> [args...]";
 
 /// What the command line asks `cox` to be.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// The app, as `cox [--stage <url>] [--home <dir>] <agent command>`.
+    /// The app, as `cox [--stage <url>] [--home <dir>] [--data <dir>]
+    /// <agent command>`.
     App(Settings),
     /// The bridge between an agent and the server of its chat's tools on
     /// the socket given, as `cox --mcp <socket>` (see [`crate::agent::mcp`]).
@@ -57,6 +59,9 @@ pub struct Settings {
     pub stage: String,
     /// Where chats in no project work, if not in `~/Cox`.
     pub home: Option<PathBuf>,
+    /// Where Cox keeps what lasts across its runs, if not where it keeps
+    /// it from the place it runs from (see [`crate::storage`]).
+    pub data: Option<PathBuf>,
     /// The agent each chat starts, and its arguments.
     pub command: Vec<String>,
 }
@@ -82,6 +87,7 @@ impl Settings {
         let mut args = args.into_iter().peekable();
         let mut stage = "about:blank".to_owned();
         let mut home = None;
+        let mut data = None;
         loop {
             match args.peek().map(String::as_str) {
                 Some("--stage") => {
@@ -92,12 +98,17 @@ impl Settings {
                     args.next();
                     home = args.next().map(PathBuf::from).or(home);
                 }
+                Some("--data") => {
+                    args.next();
+                    data = args.next().map(PathBuf::from).or(data);
+                }
                 _ => break,
             }
         }
         Self {
             stage,
             home,
+            data,
             command: args.collect(),
         }
     }
@@ -297,24 +308,28 @@ mod tests {
                 "http://localhost:3000/",
                 "--home",
                 "/tmp/cox",
+                "--data",
+                "/tmp/cox-data",
                 "node",
                 "agent.mjs"
             ]),
             Mode::App(Settings {
                 stage: "http://localhost:3000/".to_owned(),
                 home: Some(PathBuf::from("/tmp/cox")),
+                data: Some(PathBuf::from("/tmp/cox-data")),
                 command: vec!["node".to_owned(), "agent.mjs".to_owned()],
             })
         );
     }
 
     #[test]
-    fn the_stage_is_blank_and_home_is_the_default_unless_asked() {
+    fn the_stage_is_blank_and_home_and_data_are_the_defaults_unless_asked() {
         assert_eq!(
             parse(&["node", "agent.mjs"]),
             Mode::App(Settings {
                 stage: "about:blank".to_owned(),
                 home: None,
+                data: None,
                 command: vec!["node".to_owned(), "agent.mjs".to_owned()],
             })
         );

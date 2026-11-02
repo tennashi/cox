@@ -1,0 +1,53 @@
+{
+  "turns": [
+    {
+      "steps": [
+        { "think": "Look at what the program prints before changing anything." },
+        { "tool": { "id": "read-1", "title": "Read src/main.rs", "kind": "read", "status": "completed" } },
+        { "sleep": 500 },
+        { "say": "The program prints a bare `hello` from `src/main.rs:2`. To name the user, it needs to know who they are." }
+      ]
+    },
+    {
+      "steps": [
+        { "tool": { "id": "edit-1", "title": "Edit src/main.rs", "kind": "edit", "status": "pending" } },
+        {
+          "ask": {
+            "toolCall": {
+              "toolCallId": "edit-1",
+              "title": "Edit src/main.rs",
+              "content": [
+                {
+                  "type": "diff",
+                  "path": "src/main.rs",
+                  "oldText": "fn main() {\n    println!(\"hello\");\n}\n",
+                  "newText": "fn main() {\n    println!(\"hello, {}\", whoami::username());\n}\n"
+                }
+              ]
+            },
+            "options": [
+              { "optionId": "allow", "name": "Yes", "kind": "allow_once" },
+              { "optionId": "reject", "name": "No", "kind": "reject_once" }
+            ],
+            "then": {
+              "allow": [
+                { "tool_update": { "id": "edit-1", "status": "completed" } },
+                { "say": "The greeting in `src/main.rs` names the user now." }
+              ],
+              "reject": [
+                { "tool_update": { "id": "edit-1", "status": "failed" } },
+                { "say": "Left as it was. The change would go in `src/main.rs:2`." }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "steps": [
+        { "call": { "tool": "show_file", "arguments": { "path": "src/main.rs", "first_line": 1, "last_line": 3 } } },
+        { "say": "It is on the stage: {result}" }
+      ]
+    }
+  ]
+}

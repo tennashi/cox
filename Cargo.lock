@@ -1562,6 +1562,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cox-fake-agent"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
