@@ -278,6 +278,21 @@ where it starts with a ref of its worktree's own,
 for a trial from nothing, which then counts all it made; a trial opened
 as a project forgets it.
 
+"Map" beside it opens a tab of the project as a map, for the human to
+see where things are before they read them: the crates of the Cargo
+workspace, or the one crate, as boxes, each with the first paragraph of
+what its `lib.rs` or `main.rs` says of itself (its `//!` lines), how many
+lines it has, and which crates of the project it uses. A click on a
+crate opens the map at it: the files it starts from, and its modules as
+boxes, each with what its file says of itself, and a click on a module
+with modules of its own opens the map at that, down to the files; the
+path above the boxes leads back up. A click on a file opens it, as a
+link to it does. What changed, as "Changes" shows it, is laid over the
+map: a box with a file that changed in it is marked, with how many lines
+changed in how many files, so that the human sees where a change falls
+in the project before they read it. The tab follows the project as it
+changes, and a closed chat's stage opens it again where it was open.
+
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
 `>_` beside the tabs opens one with the human's shell, working in the

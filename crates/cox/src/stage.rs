@@ -3,7 +3,8 @@
 //! the browser (see [`crate::stage::page`]), a Markdown file (see
 //! [`crate::stage::document`]), a file as it is written, such as code (see
 //! [`crate::stage::code`]), the project's files as a tree (see [`crate::stage::tree`]),
-//! what changed in them (see [`crate::stage::changes`]), or a terminal (see
+//! what changed in them (see [`crate::stage::changes`]), the map of the
+//! project (see [`crate::stage::map`]), or a terminal (see
 //! [`crate::stage::terminal`]). The first shows the page the
 //! stage starts on; the human opens more pages and terminals, and the
 //! tree, and closes tabs, and the agent opens and closes pages
@@ -40,6 +41,8 @@
 //! - [`tree`] shows the project's files, for the human to open one.
 //! - [`changes`] shows what changed in them, for the human to read, and
 //!   to open a file where it changed.
+//! - [`map`] shows the project as its crates and modules, with what
+//!   changed laid over them, for the human to see where things are.
 //! - [`terminal`] is a terminal the human types into, and the agent runs
 //!   commands in.
 
@@ -49,6 +52,7 @@ pub mod code;
 pub mod document;
 pub mod follow;
 mod links;
+pub mod map;
 pub mod page;
 pub mod servers;
 pub mod tab;
@@ -204,6 +208,9 @@ impl Stage {
                 KeptTab::Changes { folder } => {
                     stage.push_changes(folder, show, window, cx);
                 }
+                KeptTab::Map { at } => {
+                    stage.push_map(at, show, window, cx);
+                }
                 KeptTab::Terminal { .. } => {}
             }
         }
@@ -264,6 +271,7 @@ impl Stage {
             | TabContent::Code(_)
             | TabContent::Tree(_)
             | TabContent::Changes(_)
+            | TabContent::Map(_)
             | TabContent::Terminal(_) => false,
         })
     }
@@ -485,6 +493,19 @@ impl Stage {
                         let cwd = stage.cwd.clone();
                         stage.show_changes(cwd, window, cx);
                     })),
+            )
+            .child(
+                div()
+                    .id("show-map")
+                    .debug_selector(|| "show-map".to_owned())
+                    .flex_shrink_0()
+                    .px_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(rgb(0x80_8080))
+                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .child("Map")
+                    .on_click(cx.listener(|stage, _, window, cx| stage.show_map(window, cx))),
             )
     }
 }

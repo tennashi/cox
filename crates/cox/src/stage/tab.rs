@@ -1,6 +1,6 @@
 //! A tab of the stage, and what it shows: a page of the browser, a
 //! Markdown file, a file as it is written, the project's files, what
-//! changed in them, or a terminal. What the stage asks of every kind alike, the name the tab
+//! changed in them, the map of the project, or a terminal. What the stage asks of every kind alike, the name the tab
 //! goes by, how it is kept for a closed chat's stage to open again, the
 //! keyboard's place in it and the view drawn, each kind answers as
 //! [`Shows`], and [`TabContent`] turns to that in one place. What the stage
@@ -17,6 +17,7 @@ use gpui::{
 use super::changes::Changes;
 use super::code::Code;
 use super::document::Document;
+use super::map::Map;
 use super::page::Page;
 use super::terminal::{Program, Terminal};
 use super::tree::Tree;
@@ -79,6 +80,7 @@ pub(super) enum TabContent {
     Code(Entity<Code>),
     Tree(Entity<Tree>),
     Changes(Entity<Changes>),
+    Map(Entity<Map>),
     Terminal(Entity<Terminal>),
 }
 
@@ -117,6 +119,7 @@ impl TabContent {
             Self::Code(code) => code,
             Self::Tree(tree) => tree,
             Self::Changes(changes) => changes,
+            Self::Map(map) => map,
             Self::Terminal(terminal) => terminal,
         }
     }
@@ -149,6 +152,7 @@ impl TabContent {
             | Self::Code(_)
             | Self::Tree(_)
             | Self::Changes(_)
+            | Self::Map(_)
             | Self::Terminal(_) => None,
         }
     }
@@ -164,7 +168,8 @@ impl TabContent {
             | Self::Document(_)
             | Self::Code(_)
             | Self::Tree(_)
-            | Self::Changes(_) => false,
+            | Self::Changes(_)
+            | Self::Map(_) => false,
         }
     }
 }

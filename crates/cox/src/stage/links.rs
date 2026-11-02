@@ -2,7 +2,8 @@
 //! showing its page already or a new one; a file, as Markdown or as it is
 //! written, on the tab showing it already or a new one, from the link's
 //! own folder; and the tree of the project's files, from which a click
-//! opens a file the same way, as one does from what changed in them.
+//! opens a file the same way, as one does from what changed in them, and
+//! from the map of the project.
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,7 @@ use crate::stage::Stage;
 use crate::stage::changes::{self, Changes};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
+use crate::stage::map::{self, Map};
 use crate::stage::tab::{ShowsFile, TabContent};
 use crate::stage::tree::{Chosen, Tree};
 use crate::ui::LinkClicked;
@@ -221,6 +223,42 @@ impl Stage {
             },
         );
         self.push(TabContent::Changes(shown), changes, Some(opens), show, cx);
+    }
+
+    /// Shows the map of the project: on its tab, or a new one, with the
+    /// keyboard in it.
+    pub(super) fn show_map(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let showing = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab.content, TabContent::Map(_)));
+        if let Some(index) = showing {
+            self.show(index, window, cx);
+        } else {
+            self.push_map(Vec::new(), true, window, cx);
+            self.focus_shown(window, cx);
+        }
+    }
+
+    /// Puts a tab showing the map of the project, open `at` (see
+    /// [`cox_core::tabs::KeptTab::Map`]), after the others, shown if
+    /// `show` is.
+    pub(super) fn push_map(
+        &mut self,
+        at: Vec<String>,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = cx.new(|cx| Map::new(self.cwd.clone(), at, cx));
+        let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
+        let opens = cx.subscribe_in(&shown, window, |stage, _, map::Chosen(path), window, cx| {
+            if stage.open_path(path, None, window, cx).is_err() {
+                stage.show_file::<Code>(path.clone(), "", None, window, cx);
+                stage.focus_shown(window, cx);
+            }
+        });
+        self.push(TabContent::Map(shown), changes, Some(opens), show, cx);
     }
 }
 

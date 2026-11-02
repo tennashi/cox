@@ -246,6 +246,8 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
             },
             KeptTab::Files { open } => format!("files, {} folders open", open.len()),
             KeptTab::Changes { folder } => format!("changes in {}", folder.display()),
+            KeptTab::Map { at } if at.is_empty() => "map at the crates".to_owned(),
+            KeptTab::Map { at } => format!("map at {}", at.join(" › ")),
             KeptTab::Terminal { title } => format!("terminal {title:?}"),
         };
         let _ = write!(told, " {}. {what}", index + 1);
