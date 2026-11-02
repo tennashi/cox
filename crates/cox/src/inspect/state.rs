@@ -249,6 +249,7 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
             KeptTab::Map { at } if at.is_empty() => "map at the crates".to_owned(),
             KeptTab::Map { at } => format!("map at {}", at.join(" › ")),
             KeptTab::Flow { call } => format!("flow of tool call {call}"),
+            KeptTab::Parts => "parts the chat runs with".to_owned(),
             KeptTab::Terminal { title } => format!("terminal {title:?}"),
         };
         let _ = write!(told, " {}. {what}", index + 1);

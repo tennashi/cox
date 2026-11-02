@@ -324,6 +324,19 @@ talks of is before it talks it through, and hears what the map shows
 there. The tab follows the project as it changes, and a closed chat's
 stage opens it again where it was open.
 
+"Parts" beside it opens a tab of the parts the chat runs with, and how
+they reach each other, for the human to see what is running before they
+read the code: the agent's process and Cox's thread for it, speaking
+ACP; the `cox --mcp` the agent starts and the chat's tool server it
+reaches over the socket, which asks the stage; the Chrome DevTools MCP
+server the agent starts, the relay it goes through and CEF behind it;
+`rust-analyzer`, when a tab shows Rust code; and the judge of a goal in
+words. Each part is a box, with what it is, who starts it, and, while
+the chat's agent runs, how it was started: the agent's command, the
+socket, the ports. A click on a box opens the code that starts the
+part, when the project has the file, as it does when the project is
+Cox.
+
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
 `>_` beside the tabs opens one with the human's shell, working in the

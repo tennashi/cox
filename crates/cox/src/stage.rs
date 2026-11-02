@@ -56,6 +56,7 @@ pub mod follow;
 mod links;
 pub mod map;
 pub mod page;
+pub mod parts;
 pub mod servers;
 pub mod tab;
 pub mod terminal;
@@ -79,6 +80,7 @@ use cox_browser::{Cef, TargetId};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::page::{Opens, Page};
+use crate::stage::parts::Started;
 use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
 use crate::ui::Panel;
@@ -111,6 +113,8 @@ pub struct Stage {
     /// What carries out what the relay and the agent's tools ask, once
     /// the stage works with the agent.
     heard: Vec<Task<()>>,
+    /// What the chat runs with, once its agent runs.
+    started: Option<Started>,
 }
 
 impl Stage {
@@ -141,20 +145,29 @@ impl Stage {
             record: None,
             kept: None,
             heard: Vec::new(),
+            started: None,
         }
     }
 
-    /// The chat's agent starts: from now on, the stage tells `relay` of
-    /// its pages, those open and those it opens, carries out what the
-    /// agent's tools ask in `from_tools`, and keeps its tabs in `record`.
+    /// The chat's agent starts, with `started`: from now on, the stage
+    /// tells `relay` of its pages, those open and those it opens, carries
+    /// out what the agent's tools ask in `from_tools`, and keeps its tabs
+    /// in `record`.
     pub fn work(
         &mut self,
         relay: Option<Relay>,
         from_tools: Option<UnboundedReceiver<ToolRequest>>,
         record: Option<Record>,
+        started: Started,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        for tab in &self.tabs {
+            if let TabContent::Parts(parts) = &tab.content {
+                parts.update(cx, |parts, cx| parts.runs(started.clone(), cx));
+            }
+        }
+        self.started = Some(started);
         if let Some(relay) = relay {
             for tab in &self.tabs {
                 if let TabContent::Page { target, .. } = &tab.content {
@@ -215,6 +228,9 @@ impl Stage {
                 }
                 KeptTab::Flow { call } => {
                     stage.push_flow(call, show, window, cx);
+                }
+                KeptTab::Parts => {
+                    stage.push_parts(show, window, cx);
                 }
                 KeptTab::Terminal { .. } => {}
             }
@@ -278,6 +294,7 @@ impl Stage {
             | TabContent::Changes(_)
             | TabContent::Map(_)
             | TabContent::Flow(_)
+            | TabContent::Parts(_)
             | TabContent::Terminal(_) => false,
         })
     }
@@ -515,6 +532,19 @@ impl Stage {
                     .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
                     .child("Map")
                     .on_click(cx.listener(|stage, _, window, cx| stage.show_map(window, cx))),
+            )
+            .child(
+                div()
+                    .id("show-parts")
+                    .debug_selector(|| "show-parts".to_owned())
+                    .flex_shrink_0()
+                    .px_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(rgb(0x80_8080))
+                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .child("Parts")
+                    .on_click(cx.listener(|stage, _, window, cx| stage.show_parts(window, cx))),
             )
     }
 }
