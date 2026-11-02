@@ -388,6 +388,16 @@ number after `as chat ` in it, as `open_chat` answers, to give
 `wait_chat`. The turn ends with its `stop`, `end_turn` unless it says
 another, or as `cancelled` when Cox cancels it.
 
+`cox-fake-agent --from-log <run> [--chat <id>]` writes, as a scenario,
+what a chat's agent did in a run Cox kept (see
+[What Cox keeps of each run](#what-cox-keeps-of-each-run)), the chat
+named by the number its span gives, or `judge` for a goal's judge: the
+updates the agent sent, its permission requests, and what it wrote to
+its standard error, turn by turn, with the waits between them, so that
+what happened in the run happens again, as on another machine. The
+agent's calls of Cox's own tools do not go over ACP, so the scenario
+does not make them.
+
 ## Using Cox to build Cox
 
 The Cox in use runs from where `cargo xtask install` puts it, so that
