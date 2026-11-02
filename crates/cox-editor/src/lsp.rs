@@ -17,8 +17,8 @@
 //!
 //! - [`position`] is a place in a file as the server counts it.
 //! - [`wire`] reads and writes the messages, and acts on the server's own.
-//! - [`answers`] is what the server answers about a name, read from its
-//!   JSON.
+//! - [`answers`] is what the server answers about a name, and the symbols
+//!   of a file, read from its JSON.
 
 mod answers;
 mod position;
@@ -36,8 +36,8 @@ use serde_json::{Value, json};
 use tokio::sync::{oneshot, watch};
 use url::Url;
 
-pub use self::answers::{Hover, Location};
-use self::answers::{hover, locations};
+pub use self::answers::{Hover, Location, Symbol};
+use self::answers::{hover, locations, symbols};
 pub use self::position::{Encoding, Position};
 use self::wire::{Reader, write};
 
@@ -267,6 +267,7 @@ impl Client {
                         "hover": { "contentFormat": ["markdown", "plaintext"] },
                         "definition": { "linkSupport": true },
                         "references": {},
+                        "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
                     },
                 },
             }),
@@ -384,6 +385,23 @@ impl Client {
         params["context"] = json!({ "includeDeclaration": true });
         let answered = self.shared.request("textDocument/references", &params);
         async move { Ok(locations(&answered.await?)) }
+    }
+
+    /// The symbols `document` defines, such as its functions and types,
+    /// as the server lists them (see [`Symbol`]).
+    ///
+    /// # Errors
+    ///
+    /// When the server fails to answer, or stops.
+    pub fn symbols(
+        &self,
+        document: &OpenFile,
+    ) -> impl Future<Output = Result<Vec<Symbol>, Error>> + use<> {
+        let answered = self.shared.request(
+            "textDocument/documentSymbol",
+            &json!({ "textDocument": { "uri": document.uri } }),
+        );
+        async move { Ok(symbols(&answered.await?)) }
     }
 }
 
@@ -540,6 +558,21 @@ mod tests {
                             },
                         })));
                     }
+                    Some("textDocument/documentSymbol") => {
+                        write(answer(json!([{
+                            "name": "main",
+                            "kind": 12,
+                            "detail": "fn main()",
+                            "range": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 12 },
+                            },
+                            "selectionRange": {
+                                "start": { "line": 0, "character": 3 },
+                                "end": { "line": 0, "character": 7 },
+                            },
+                        }])));
+                    }
                     Some("textDocument/references") => write(json!({
                         "jsonrpc": "2.0",
                         "id": id,
@@ -600,6 +633,10 @@ mod tests {
             client.references(&document, at).await,
             Err(Error::Answered { code: -32801, .. })
         ));
+        let symbols = client.symbols(&document).await.unwrap();
+        assert_eq!(symbols[0].name, "main");
+        assert_eq!(symbols[0].kind, "function");
+        assert_eq!(symbols[0].selection.start.character, 3);
         drop(again);
         drop(document);
         drop(client);
@@ -616,6 +653,7 @@ mod tests {
                 "textDocument/hover",
                 "textDocument/definition",
                 "textDocument/references",
+                "textDocument/documentSymbol",
                 "textDocument/didClose",
                 "shutdown",
                 "exit",

@@ -15,6 +15,10 @@
 //! - `cox://api/map`: the map of the project, as its `.cox/map.json`
 //!   has it, with what changed and what is stale laid over its boxes (see
 //!   [`crate::stage::map`]).
+//! - `cox://api/file/<path>`: what the project's language server says of
+//!   the file at `<path>`, an absolute path in the project: the symbols
+//!   it defines and what uses them, once the server has answered, which
+//!   the page reads again for (see [`crate::stage::outline`]).
 //!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Parts plugin does for a part's code.
@@ -26,9 +30,10 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use cox_browser::scheme::{Resource, Serve};
+use cox_browser::scheme::{Resource, Serve, percent_decoded};
 
 use crate::stage::map;
+use crate::stage::outline::Outlines;
 use crate::stage::parts::{self, Started};
 
 /// Where a project keeps its plugins, under its folder.
@@ -114,14 +119,19 @@ pub struct Plugins {
     root: PathBuf,
     /// What the chat runs with, once its agent runs.
     started: Arc<Mutex<Option<Started>>>,
+    /// What the project's language server says of its files.
+    outlines: Outlines,
 }
 
 impl Plugins {
+    /// The plugins of a chat working in `root`, whose pages ask
+    /// `outlines` what the project's files define.
     #[must_use]
-    pub fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf, outlines: Outlines) -> Self {
         Self {
             root,
             started: Arc::new(Mutex::new(None)),
+            outlines,
         }
     }
 
@@ -205,6 +215,10 @@ impl Plugins {
                 parts::told(&self.root, started.as_ref())
             }
             "map" if rest.is_empty() => map::told(&self.root),
+            "file" if !rest.is_empty() => {
+                let path = PathBuf::from(format!("/{}", percent_decoded(rest)));
+                self.outlines.told(&self.root, &path)?
+            }
             _ => return None,
         };
         Some(Resource {
@@ -309,7 +323,7 @@ mod tests {
 
     #[test]
     fn the_built_in_plugin_is_served_with_its_files() {
-        let plugins = Plugins::new(scratch("built-in"));
+        let plugins = Plugins::new(scratch("built-in"), Outlines::new().0);
 
         let page = plugins.resource("cox://parts/").unwrap();
         assert_eq!(page.mime, "text/html");
@@ -329,7 +343,7 @@ mod tests {
 
     #[test]
     fn the_parts_are_told_as_json() {
-        let plugins = Plugins::new(scratch("api"));
+        let plugins = Plugins::new(scratch("api"), Outlines::new().0);
 
         let answer = plugins.resource("cox://api/parts").unwrap();
         assert_eq!(answer.mime, "application/json");
@@ -350,13 +364,30 @@ mod tests {
                  "parts": { "one": { "name": "One", "holds": ["src"] } } }"#,
         )
         .unwrap();
-        let plugins = Plugins::new(root);
+        let plugins = Plugins::new(root, Outlines::new().0);
 
         let answer = plugins.resource("cox://api/map").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
         assert_eq!(json["map"]["tiers"][0]["id"], "whole");
         assert_eq!(json["facts"]["one"]["stale"], serde_json::json!(["src"]));
         assert_eq!(plugins.resource("cox://api/map/one/"), None);
+    }
+
+    #[test]
+    fn a_file_is_told_as_json_within_the_project() {
+        let root = scratch("file");
+        std::fs::create_dir_all(root.join("my src")).unwrap();
+        std::fs::write(root.join("my src/main.rs"), "fn main() {}\n").unwrap();
+        let plugins = Plugins::new(root.clone(), Outlines::new().0);
+        let url = format!("cox://api/file{}/my%20src/main.rs", root.display());
+        let answer = plugins.resource(&url).unwrap();
+        assert_eq!(answer.mime, "application/json");
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["name"], "my src/main.rs");
+        assert_eq!(json["lines"], 1);
+        assert_eq!(json["pending"], true);
+        assert_eq!(plugins.resource("cox://api/file"), None);
+        assert_eq!(plugins.resource("cox://api/file/etc/hostname"), None);
     }
 
     #[test]
@@ -367,7 +398,7 @@ mod tests {
         std::fs::write(folder.join("index.html"), "<h1>Tour</h1>").unwrap();
         std::fs::write(folder.join("plugin.json"), r#"{"title": "A tour"}"#).unwrap();
         std::fs::write(root.join("secret.txt"), "no").unwrap();
-        let plugins = Plugins::new(root);
+        let plugins = Plugins::new(root, Outlines::new().0);
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
