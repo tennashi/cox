@@ -22,6 +22,8 @@
 //!   fits the page to the stage's size, [`events`] makes CEF's mouse
 //!   and key events of the stage's, and [`links`] tells which of a
 //!   page's navigations is a link to a file.
+//! - [`scheme`] serves the `cox:` addresses a stage's pages read what Cox
+//!   knows from, as the stage [serves](scheme::Serve) them.
 //! - [`quit`] lets signals, and CEF on macOS, ask the app to quit, and
 //!   [`macos`] gives CEF what it expects of the app there.
 
@@ -34,6 +36,7 @@ pub mod pointer;
 pub mod profile;
 pub mod quit;
 pub mod relay;
+pub mod scheme;
 mod viewport;
 
 use std::os::raw::c_int;
@@ -51,12 +54,13 @@ use cef::{
     ImplBrowserHost, ImplBrowserProcessHandler, ImplClient, ImplCommandLine,
     ImplDevToolsMessageObserver, ImplDisplayHandler, ImplFrame, ImplLifeSpanHandler,
     ImplLoadHandler, ImplRenderHandler, ImplRequest, ImplRequestHandler, ImplTask, LifeSpanHandler,
-    LoadHandler, Registration, RenderHandler, RequestHandler, Settings, Task, ThreadId, WindowInfo,
-    WrapApp, WrapBrowserProcessHandler, WrapClient, WrapDevToolsMessageObserver,
-    WrapDisplayHandler, WrapLifeSpanHandler, WrapLoadHandler, WrapRenderHandler,
-    WrapRequestHandler, WrapTask, wrap_app, wrap_browser_process_handler, wrap_client,
-    wrap_dev_tools_message_observer, wrap_display_handler, wrap_life_span_handler,
-    wrap_load_handler, wrap_render_handler, wrap_request_handler, wrap_task,
+    LoadHandler, Registration, RenderHandler, RequestHandler, ResourceRequestHandler,
+    SchemeRegistrar, Settings, Task, ThreadId, WindowInfo, WrapApp, WrapBrowserProcessHandler,
+    WrapClient, WrapDevToolsMessageObserver, WrapDisplayHandler, WrapLifeSpanHandler,
+    WrapLoadHandler, WrapRenderHandler, WrapRequestHandler, WrapTask, wrap_app,
+    wrap_browser_process_handler, wrap_client, wrap_dev_tools_message_observer,
+    wrap_display_handler, wrap_life_span_handler, wrap_load_handler, wrap_render_handler,
+    wrap_request_handler, wrap_task,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::watch;
@@ -99,8 +103,9 @@ pub enum Event {
     /// The page asks for a window of its own, showing this address.
     Popup(String),
     /// The human clicked a link in the page to a file, at this `file:`
-    /// address, with lines after it if it names any (see [`links`]): the
-    /// page stays, for the stage to open the file on a tab of its own.
+    /// address, with lines after it if it names any (see [`links`]), or
+    /// the page went to a `cox://open/` address for it (see [`scheme`]):
+    /// the page stays, for the stage to open the file on a tab of its own.
     FileLink(String),
 }
 
@@ -228,6 +233,8 @@ struct NewBrowser {
     events: UnboundedSender<Event>,
     target: Arc<watch::Sender<Option<String>>>,
     url: String,
+    /// What its pages get at `cox:` addresses, if anything.
+    serve: Option<scheme::Serve>,
 }
 
 /// The browsers of the app, as far as CEF's start and end are concerned.
@@ -438,10 +445,16 @@ impl Cef {
         self.devtools_port
     }
 
-    /// Opens a browser showing `url`, and returns the handle to it with the
-    /// events CEF will send. The browser lives until [`Browser::close`].
+    /// Opens a browser showing `url`, whose pages get what `serve` answers
+    /// at `cox:` addresses (see [`scheme`]), and returns the handle to it
+    /// with the events CEF will send. The browser lives until
+    /// [`Browser::close`].
     #[must_use]
-    pub fn open(&self, url: &str) -> (Browser, UnboundedReceiver<Event>) {
+    pub fn open(
+        &self,
+        url: &str,
+        serve: Option<scheme::Serve>,
+    ) -> (Browser, UnboundedReceiver<Event>) {
         let shared = Arc::new(Mutex::new(Shared::new(url)));
         let (events, receiver) = unbounded_channel();
         let (target, target_id) = watch::channel(None);
@@ -450,6 +463,7 @@ impl Cef {
             events,
             target: Arc::new(target),
             url: url.to_owned(),
+            serve,
         };
         let mut browsers = lock(&self.browsers);
         browsers.all.retain(|browser| browser.strong_count() > 0);

@@ -309,31 +309,7 @@ impl Parts {
 
     /// How `part` was started, while the agent runs, as its box says it.
     fn detail(&self, part: &Part) -> Option<String> {
-        let started = self.started.as_ref()?;
-        let server = |name: &str| {
-            started
-                .servers
-                .iter()
-                .find(|server| server.name == name)
-                .map(|server| {
-                    let mut words = vec![server.command.to_string_lossy().into_owned()];
-                    words.extend(server.args.iter().cloned());
-                    words.join(" ")
-                })
-        };
-        match part.name {
-            "the agent" => Some(started.command.join(" ")),
-            "cox --mcp" => started
-                .socket
-                .as_ref()
-                .map(|socket| format!("on {}", shortened(socket))),
-            "chrome-devtools-mcp" => server("stage"),
-            "relay" => started.relay_port.map(|port| format!("port {port}")),
-            "CEF" => started
-                .devtools_port
-                .map(|port| format!("DevTools on port {port}")),
-            _ => None,
-        }
+        detail(self.started.as_ref(), part)
     }
 
     /// The line above the picture.
@@ -473,6 +449,82 @@ fn render_between(between: &Between) -> AnyElement {
                 .children(right),
         )
         .into_any_element()
+}
+
+/// How `part` was started, as `started` says, while the agent runs: its
+/// box says it under what it is.
+fn detail(started: Option<&Started>, part: &Part) -> Option<String> {
+    let started = started?;
+    let server = |name: &str| {
+        started
+            .servers
+            .iter()
+            .find(|server| server.name == name)
+            .map(|server| {
+                let mut words = vec![server.command.to_string_lossy().into_owned()];
+                words.extend(server.args.iter().cloned());
+                words.join(" ")
+            })
+    };
+    match part.name {
+        "the agent" => Some(started.command.join(" ")),
+        "cox --mcp" => started
+            .socket
+            .as_ref()
+            .map(|socket| format!("on {}", shortened(socket))),
+        "chrome-devtools-mcp" => server("stage"),
+        "relay" => started.relay_port.map(|port| format!("port {port}")),
+        "CEF" => started
+            .devtools_port
+            .map(|port| format!("DevTools on port {port}")),
+        _ => None,
+    }
+}
+
+/// The picture as JSON, for a page of the stage to draw it (see
+/// [`crate::stage::plugins`]): whether the agent runs, and the rows, each
+/// with its parts and what goes between them. A part names the file and
+/// line of the code that starts it, as absolute paths, when the project
+/// in `root` has the file.
+#[must_use]
+pub fn told(root: &Path, started: Option<&Started>) -> serde_json::Value {
+    let rows: Vec<serde_json::Value> = rows()
+        .iter()
+        .map(|row| {
+            let parts: Vec<serde_json::Value> = row
+                .parts
+                .iter()
+                .map(|part| {
+                    let path = root.join(part.file);
+                    let has = path.is_file();
+                    serde_json::json!({
+                        "name": part.name,
+                        "says": part.says,
+                        "started": part.started,
+                        "detail": detail(started, part),
+                        "file": has.then(|| path.to_string_lossy().into_owned()),
+                        "line": has.then(|| line_saying(&path, part.find)).flatten(),
+                    })
+                })
+                .collect();
+            let between: Vec<serde_json::Value> = row
+                .between
+                .iter()
+                .map(|between| {
+                    serde_json::json!({
+                        "says": between.says,
+                        "way": match between.way {
+                            Way::Right => "right",
+                            Way::Left => "left",
+                            Way::Both => "both",
+                        },
+                    })
+                })
+                .collect();
+            serde_json::json!({ "when": row.when, "parts": parts, "between": between })
+        })
+        .collect();
+    serde_json::json!({ "running": started.is_some(), "rows": rows })
 }
 
 /// The line of the file at `path` that first says `find`, as people

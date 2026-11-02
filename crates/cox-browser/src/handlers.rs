@@ -44,6 +44,14 @@ wrap_app! {
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
             Some(StageProcessHandler::new(Arc::clone(&self.browsers)))
         }
+
+        /// Each process of CEF learns the `cox:` scheme the stage serves
+        /// (see [`crate::scheme`]).
+        fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
+            if let Some(registrar) = registrar {
+                crate::scheme::register(*registrar);
+            }
+        }
     }
 }
 
@@ -90,6 +98,7 @@ fn create(new: NewBrowser) {
         events,
         target,
         url,
+        serve,
     } = new;
     let (width, height) = {
         let shared = lock(&shared);
@@ -110,7 +119,7 @@ fn create(new: NewBrowser) {
         StageLifeSpanHandler::new(Arc::clone(&shared), events.clone(), target),
         StageLoadHandler::new(Arc::clone(&shared), events.clone()),
         StageDisplayHandler::new(Arc::clone(&shared), events.clone()),
-        StageRequestHandler::new(events),
+        StageRequestHandler::new(events, serve),
     );
     let settings = BrowserSettings {
         windowless_frame_rate: 60,
@@ -193,12 +202,15 @@ wrap_client! {
 wrap_request_handler! {
     struct StageRequestHandler {
         events: UnboundedSender<Event>,
+        // What the pages get at `cox:` addresses, if anything.
+        serve: Option<crate::scheme::Serve>,
     }
 
     impl RequestHandler {
         /// The page is about to go somewhere. When that is a link to a
-        /// file the human clicked (see [`crate::links`]), the page stays
-        /// and the stage opens the file on a tab of its own.
+        /// file the human clicked (see [`crate::links`]), or a `cox://open/`
+        /// address for a file (see [`crate::scheme`]), the page stays and
+        /// the stage opens the file on a tab of its own.
         fn on_before_browse(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -209,7 +221,10 @@ wrap_request_handler! {
         ) -> c_int {
             let is_main = frame.is_some_and(|frame| frame.is_main() == 1);
             let url = request.map(|request| CefString::from(&request.url()).to_string());
-            let linked = url.and_then(|url| crate::links::file_linked(&url, user_gesture == 1));
+            let linked = url.and_then(|url| {
+                crate::scheme::opened(&url)
+                    .or_else(|| crate::links::file_linked(&url, user_gesture == 1))
+            });
             match linked {
                 Some(url) if is_main => {
                     let _ = self.events.send(Event::FileLink(url));
@@ -218,6 +233,24 @@ wrap_request_handler! {
                 }
                 _ => 0,
             }
+        }
+
+        /// A request of the page's at a `cox:` address is answered by what
+        /// the stage serves (see [`crate::scheme`]); the rest go to the
+        /// network, or the file, as usual.
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            _is_navigation: c_int,
+            _is_download: c_int,
+            _request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut c_int>,
+        ) -> Option<ResourceRequestHandler> {
+            let serve = self.serve.as_ref()?;
+            let url = CefString::from(&request?.url()).to_string();
+            crate::scheme::is_served(&url).then(|| crate::scheme::handler(Arc::clone(serve)))
         }
     }
 }
