@@ -346,7 +346,18 @@ names the one in the box the step goes to, or else the last of the
 project's own called on the line; the name opens the function on a tab,
 and the line under the flows names them all. A line that calls nothing,
 as when the code moved, says so, for an agent to bring the map up to
-date. "on the map" draws the flow on the tier
+date. A box that holds paths, opened from a column of the diagram, or
+from its card, while a flow is chosen, draws the flow one step deeper,
+over its files: the box itself as the functions of its code the flow
+runs, as the server says of the places its steps are made, a step
+into the box arriving at the function its line calls in the box, a
+step out of it leaving the function its line is in, and a step inside
+it going from the one to the other, each a column that opens the
+function on a tab, between the other boxes, those of its tier and of
+the tiers above; and the files' symbols below mark those the flow
+runs. So a flow is drilled down to the functions that make it, and a
+step whose place the server has not told stays on the box itself.
+"on the map" draws the flow on the tier
 instead, its steps numbered on the lines between the boxes, with the
 step chosen lit and the other lines dimmed. Either way the ← and →
 keys go from step to step.
