@@ -13,10 +13,11 @@
 // the page is open is its hash: a tier's id, and after it the id of a
 // card open on its own, as `#cox/stage`, and after `@` the flow
 // chosen, drawn as a sequence diagram of the tier's boxes, or, with
-// `+map`, numbered on the lines of the tier. Drawn between the boxes
-// it is written between, a step is named by the function it runs,
-// which the page reads from `cox://api/call/<path>:<line>` for the
-// place the step is made.
+// `+map`, numbered on the lines of the tier, or, for a card open on
+// its own, of the functions of its code that the flow runs. Drawn
+// between the boxes it is written between, a step is named by the
+// function it runs, which the page reads from
+// `cox://api/call/<path>:<line>` for the place the step is made.
 
 const API = "cox://api/map";
 const EVERY = 2000;
@@ -41,6 +42,9 @@ let wanted = [];
 const callText = {};
 const callData = {};
 let wantedAt = [];
+// The functions the flow chosen runs in the box open on its own, by
+// `path:line`, which the files' outlines mark.
+let onFlow = new Set();
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -174,6 +178,38 @@ function runs(st) {
 /// A function, as a `cox://open` address at its line.
 function fnHref(fn) {
   return `cox://open${absolute(fn.path)}#L${fn.line}`;
+}
+
+/// The flows the map has, as chips, the flow chosen among them lit,
+/// with `views` after them.
+function flowBarEl(flow, views = "") {
+  if (!flows().length) return "";
+  const chips = flows()
+    .map((f) => `<button class="flowchip ${flow && f.id === flow.id ? "on" : ""}" data-flow="${esc(f.id)}" title="${esc(f.says)}">${esc(f.name)}</button>`)
+    .join("");
+  return `<div class="flows"><span class="flowsname">flows</span>${chips}${views}</div>`;
+}
+
+/// What a flow is, while none of its steps is chosen.
+function flowSaysEl(flow) {
+  return `<div class="stepsays faint">${esc(flow.says)} <span class="where">← → go from step to step</span></div>`;
+}
+
+/// What the step chosen, `cur`, says: its number, the boxes it goes
+/// between, its words, `where_`, where it is made, and what the line
+/// calls, as the server says, once it has.
+function stepSaysEl(cur, where_) {
+  const at = cur.step.at ? `<a class="at" href="${esc(atHref(cur.step.at))}">${esc(cur.step.at)}</a>` : "";
+  const back = cur.step.back ? '<span class="where">a step back</span>' : "";
+  const c = cur.step.at ? callOf(cur.step) : null;
+  let calls = "";
+  if (c && c.calls && c.calls.length) {
+    const named = c.calls.slice(0, 3).map((fn) => `<a class="at fn" href="${esc(fnHref(fn))}" title="${esc(fn.detail || fn.name)}">${esc(fn.name)}</a>`).join("");
+    calls = `<span class="where">calls</span>${named}${c.function ? `<span class="where">in ${esc(c.function.name)}</span>` : ""}`;
+  } else if (c && c.pending) calls = `<span class="where faint">${esc(c.said || "asking the language server what the line calls…")}</span>`;
+  else if (c && c.error) calls = `<span class="where stale">${esc(c.error)}</span>`;
+  else if (c && c.server) calls = `<span class="where stale">${c.function ? "no call found on that line" : "no function at that line"}: an agent is to bring the map up to date</span>`;
+  return `<div class="stepsays"><span class="n">${cur.n}</span><span class="who">${esc(nameOf(cur.step.from))} → ${esc(nameOf(cur.step.to))}</span><span class="what">${esc(cur.step.says)}</span>${back}${where_}${at}${calls}</div>`;
 }
 
 /// Where a step is made, as a `cox://open` address.
@@ -320,11 +356,7 @@ function renderTier(tierId) {
   const views = flow
     ? `<span class="views"><button class="view ${seq ? "on" : ""}" data-view="seq" title="the steps in order, between the boxes as columns">sequence</button><button class="view ${onMap ? "on" : ""}" data-view="map" title="the steps numbered on the lines of the map">on the map</button></span>`
     : "";
-  const flowBar = flows().length
-    ? `<div class="flows"><span class="flowsname">flows</span>${flows()
-        .map((f) => `<button class="flowchip ${flow && f.id === flow.id ? "on" : ""}" data-flow="${esc(f.id)}" title="${esc(f.says)}">${esc(f.name)}</button>`)
-        .join("")}${views}</div>`
-    : "";
+  const flowBar = flowBarEl(flow, views);
   let stepsBar = "";
   if (flow) {
     const chips = seq
@@ -345,19 +377,8 @@ function renderTier(tierId) {
             : cur.kind === "outside"
               ? `<span class="where">${seq ? "in no tier of the map" : "elsewhere in the map"}</span>`
               : "";
-      const at = cur.step.at ? `<a class="at" href="${esc(atHref(cur.step.at))}">${esc(cur.step.at)}</a>` : "";
-      const back = cur.step.back ? '<span class="where">a step back</span>' : "";
-      // What the line calls, as the server says, once it has.
-      const c = cur.step.at ? callOf(cur.step) : null;
-      let calls = "";
-      if (c && c.calls && c.calls.length) {
-        const named = c.calls.slice(0, 3).map((fn) => `<a class="at fn" href="${esc(fnHref(fn))}" title="${esc(fn.detail || fn.name)}">${esc(fn.name)}</a>`).join("");
-        calls = `<span class="where">calls</span>${named}${c.function ? `<span class="where">in ${esc(c.function.name)}</span>` : ""}`;
-      } else if (c && c.pending) calls = `<span class="where faint">${esc(c.said || "asking the language server what the line calls…")}</span>`;
-      else if (c && c.error) calls = `<span class="where stale">${esc(c.error)}</span>`;
-      else if (c && c.server) calls = `<span class="where stale">${c.function ? "no call found on that line" : "no function at that line"}: an agent is to bring the map up to date</span>`;
-      says = `<div class="stepsays"><span class="n">${cur.n}</span><span class="who">${esc(nameOf(cur.step.from))} → ${esc(nameOf(cur.step.to))}</span><span class="what">${esc(cur.step.says)}</span>${back}${where_}${at}${calls}</div>`;
-    } else says = `<div class="stepsays faint">${esc(flow.says)} <span class="where">← → go from step to step</span></div>`;
+      says = stepSaysEl(cur, where_);
+    } else says = flowSaysEl(flow);
     stepsBar = `${chips}${says}`;
   }
   const opener = openerOf(tierId);
@@ -366,7 +387,7 @@ function renderTier(tierId) {
   const legend = head ? `<div class="legend"><span class="name">${esc(head.name)}</span>${head.each ? `<span class="each">${esc(head.each)}</span>` : ""}</div>` : "";
   const focus = rows.filter((_, ri) => !lines[ri].side).join("");
   const body = seq
-    ? seqEl(t, shown, stepNo)
+    ? seqEl(tierView(t), shown, stepNo)
     : `<div class="drill ${noframe ? "noframe" : ""}" data-wires="${esc(JSON.stringify(wires))}" data-keys="${esc(JSON.stringify(keyOf))}">
     ${aboveIds.length ? rows[0] : ""}
     <div class="focus">${legend}${focus}</div>
@@ -381,27 +402,78 @@ function renderTier(tierId) {
   wired();
 }
 
-/// A flow as a sequence diagram of tier `t`: the boxes its steps go
-/// between, as `stepsIn` rolled them up, as columns, each with a
-/// lifeline down the page: the tier's own in the box the tier is the
-/// inside of, named over its top as the map names it, in the order the
-/// tier draws them; and the others, the frame's and those of the tiers
-/// above, outside it, in the order the flow reaches them, those it
-/// reaches before it comes into the box on the left of it, and the rest
-/// on the right. And the steps as rows from the top, an arrow from the
-/// box that talks to the one it talks to, with
-/// what the step says over it; a step back, the answer to an earlier
-/// step, dashed. A bar on a lifeline shows the box at work, from a step
-/// into it until its step back, or the last step. A step inside a box is
-/// a loop on its lifeline, which opens the box when it opens a tier; a
-/// step of a box in no tier is a dim row. The step chosen, `stepNo`, is
-/// lit.
-function seqEl(t, shown, stepNo) {
+/// A tier as the sequence diagram draws it: `own`, the box it is the
+/// inside of; `inner`, that box and the tier's own, in the order the
+/// tier draws them; and `near`, those and the frame's, the boxes that
+/// are not of the tiers above.
+function tierView(t) {
   const own = openerOf(t.id);
   const frame = t.frame || {};
-  const near = new Set([...(frame.above || frame.left || []), ...(own ? [own] : []), ...partsOf(t), ...(frame.below || frame.right || [])]);
-  const own_ = [...(own ? [own] : []), ...partsOf(t)];
+  const inner = [...(own ? [own] : []), ...partsOf(t)];
+  return { own, inner, near: new Set([...(frame.above || frame.left || []), ...inner, ...(frame.below || frame.right || [])]) };
+}
+
+/// A flow's steps as box `id`, which holds code, shows them, as deep as
+/// the map goes and one step deeper: the other boxes rolled up as tier
+/// `t`, which holds the box, shows them with `far`, and the box itself
+/// as the functions its steps run, as the server says of the places the
+/// steps are made: a step into the box arrives at the function its line
+/// calls in the box, a step out of it leaves the function its line is
+/// in, and a step inside it goes from the one to the other, or loops on
+/// the one when the server names no other. A step whose place the
+/// server has not told stays on the box itself. Answers the steps, the
+/// view for `seqEl`, and the functions as columns, by `path:line`.
+function stepsAt(t, flow, id) {
+  const held = facts(id).holds.map((h) => h.path);
+  const within = (fn) => held.some((p) => absolute(fn.path) === p || absolute(fn.path).startsWith(`${p}/`));
+  const extra = {}, inner = [], places = new Set();
+  const column = (fn) => {
+    const key = `fn:${absolute(fn.path)}:${fn.line}`;
+    if (!extra[key]) {
+      extra[key] = { name: fn.name, says: fn.detail || "", each: `${fn.path.split("/").pop()}:${fn.line}`, href: fnHref(fn), fn };
+      inner.push(key);
+      places.add(`${absolute(fn.path)}:${fn.line}`);
+    }
+    return key;
+  };
+  const shown = flow.steps.map((step, k) => {
+    let a = upTo(t, step.from, true), b = upTo(t, step.to, true);
+    const c = callOf(step);
+    if (c) {
+      if (a === id && c.function && within(c.function)) a = column(c.function);
+      if (b === id) {
+        const entry = (c.calls || []).find(within);
+        if (entry) b = column(entry);
+        else if (a !== id && a && a.startsWith("fn:")) b = a;
+      }
+    }
+    const kind = !a || !b ? "outside" : a === b ? "inside" : "line";
+    return { n: k + 1, step, a, b, kind };
+  });
+  const view = { own: id, inner: [id, ...inner], near: new Set([...shownIn(t), id, ...inner]), extra };
+  return { shown, view, places };
+}
+
+/// A flow as a sequence diagram of `view`, a tier's or a box's that
+/// holds code: the boxes its steps go between, as `stepsIn` or
+/// `stepsAt` rolled them up, as columns, each with a lifeline down the
+/// page: the view's own in the box it is the inside of, named over its
+/// top as the map names it, in the view's order; and the others, the
+/// frame's and those of the tiers above, outside it, in the order the
+/// flow reaches them, those it reaches before it comes into the box on
+/// the left of it, and the rest on the right. And the steps as rows
+/// from the top, an arrow from the box that talks to the one it talks
+/// to, with what the step says over it; a step back, the answer to an
+/// earlier step, dashed. A bar on a lifeline shows the box at work,
+/// from a step into it until its step back, or the last step. A step
+/// inside a box is a loop on its lifeline, which opens the box when it
+/// opens a tier; a step of a box in no tier is a dim row. The step
+/// chosen, `stepNo`, is lit.
+function seqEl(view, shown, stepNo) {
+  const { own, near, extra = {} } = view;
+  const own_ = view.inner;
   const inner = new Set(own_);
+  const partOf = (id) => parts()[id] || extra[id] || { name: id, says: "" };
   const used = new Set(shown.filter((st) => st.kind !== "outside").flatMap((st) => [st.a, st.b]));
   const arrived = shown.findIndex((st) => st.kind !== "outside" && (inner.has(st.a) || inner.has(st.b)));
   const left = [], right = [];
@@ -529,7 +601,7 @@ function seqEl(t, shown, stepNo) {
       drawn = `<text class="what" x="${22 + Math.max(9, textW(span, 9.5) / 2 + 5) + 10}" y="${yc + 3.5}">${text}</text>`;
     } else if (st.a === st.b) {
       const x = ends[st.n].xa;
-      const p = parts()[st.a];
+      const p = partOf(st.a);
       const intoAt = x + LOOP + 8 + loopW[st.a] + 10;
       const into = p && p.tier ? `<text class="into" data-into="${esc(st.a)}" x="${intoAt}" y="${yc + 4}">inside ${esc(nameOf(st.a))} ›</text>` : "";
       W = Math.max(W, intoAt + (into ? textW(`inside ${nameOf(st.a)} ›`) : 0) + 16);
@@ -567,14 +639,15 @@ function seqEl(t, shown, stepNo) {
   const lives = cols.map((id) => `<line class="life" x1="${xs[col[id]]}" y1="${TOP + HEAD_H}" x2="${xs[col[id]]}" y2="${H - 8}"/>`).join("");
   const heads = cols
     .map((id) => {
-      const p = parts()[id] || { name: id, says: "" };
-      const goes = p.tier ? "tier" : p.holds && p.holds.length ? "leaf" : "";
+      const p = partOf(id);
+      const goes = p.tier ? "tier" : p.holds && p.holds.length ? "leaf" : p.href ? "fn" : "";
       const far = !near.has(id);
       const sub = id === own ? "the box itself" : far ? `in ${(tierOf(id) || { name: "?" }).name}` : p.each || "";
       const fit = Math.floor((HEAD_W - 16) / 7);
       const name = `<text class="name" x="${HEAD_W / 2}" y="${sub ? 17 : 24}" text-anchor="middle">${esc(trunc(p.name, fit))}</text>`;
       const each = sub ? `<text class="each" x="${HEAD_W / 2}" y="31" text-anchor="middle">${esc(trunc(sub, fit + 5))}</text>` : "";
-      return `<g class="who ${goes ? "goes" : ""} ${id === own ? "own" : ""} ${far ? "far" : ""}" data-seq="${esc(id)}" transform="translate(${xs[col[id]] - HEAD_W / 2} ${TOP})"><title>${esc(p.name)}${p.says ? ` — ${esc(p.says)}` : ""}</title><rect width="${HEAD_W}" height="${HEAD_H}" rx="7"/>${name}${each}</g>`;
+      const g = `<g class="who ${goes ? "goes" : ""} ${id === own ? "own" : ""} ${far ? "far" : ""} ${p.href ? "fn" : ""}" data-seq="${esc(id)}" transform="translate(${xs[col[id]] - HEAD_W / 2} ${TOP})"><title>${esc(p.name)}${p.says ? ` — ${esc(p.says)}` : ""}</title><rect width="${HEAD_W}" height="${HEAD_H}" rx="7"/>${name}${each}</g>`;
+      return p.href ? `<a class="fnlink" href="${esc(p.href)}">${g}</a>` : g;
     })
     .join("");
   const width = Math.round(W);
@@ -604,6 +677,33 @@ function renderLeaf(tierId, id) {
   const p = parts()[id] || { name: id, says: "" };
   const f = facts(id);
   wanted = f.holds.filter((h) => h.exists && h.lines !== null).map((h) => h.path);
+  // The flow chosen, as a sequence diagram of the functions of the box's
+  // files that its steps run, between the other boxes; the functions it
+  // runs are marked in the files' outlines below.
+  const { flow: flowId, step: stepNo } = where();
+  const flow = flowId ? flows().find((x) => x.id === flowId) : null;
+  wantedAt = flow ? flow.steps.map((s) => s.at).filter(Boolean) : [];
+  onFlow = new Set();
+  let flowEls = "";
+  if (flow) {
+    const { shown, view, places } = stepsAt(tier(tierId), flow, id);
+    onFlow = places;
+    const cur = stepNo ? shown[stepNo - 1] : null;
+    let says;
+    if (cur) {
+      const fn = (key) => view.extra[key];
+      const where_ =
+        cur.kind === "inside"
+          ? `<span class="where">inside ${esc(fn(cur.a) ? fn(cur.a).name : nameOf(cur.a))}</span>`
+          : cur.kind === "outside"
+            ? '<span class="where">in no tier of the map</span>'
+            : fn(cur.a) || fn(cur.b)
+              ? `<span class="where">${fn(cur.a) ? `from ${esc(fn(cur.a).name)}` : ""}${fn(cur.a) && fn(cur.b) ? " " : ""}${fn(cur.b) ? `into ${esc(fn(cur.b).name)}` : ""}</span>`
+              : "";
+      says = stepSaysEl(cur, where_);
+    } else says = flowSaysEl(flow);
+    flowEls = `${flowBarEl(flow)}${says}${seqEl(view, shown, stepNo)}`;
+  } else flowEls = flowBarEl(null);
   const holds = f.holds
     .map((h) => {
       const name = h.said.split(":")[0];
@@ -623,8 +723,10 @@ function renderLeaf(tierId, id) {
     ${p.kinds && p.kinds.length ? `<div class="says" style="font-family:var(--mono);font-size:11.5px">${p.kinds.map(esc).join(" · ")}</div>` : ""}
     ${p.note ? `<div class="says" style="color:var(--note)"><b>note</b> ${esc(p.note)}</div>` : ""}
     ${f.stale.length ? `<div class="says" style="color:var(--stale)"><b>stale</b> the project no longer has ${f.stale.map(esc).join(", ")}; an agent is to bring the map up to date</div>` : ""}
+    ${flowEls}
     <div class="leaf">${holds || '<div class="says">This box holds no paths.</div>'}</div>
-    <div class="foot"><span>a file, or a symbol in it, opens on a tab of the stage, at its line</span><span>·</span><span>the symbols and their uses are as the project's language server says</span></div>`;
+    <div class="foot">${flow ? "<span>a column is a function the flow runs, as the language server says of where each step is made; it opens on a tab</span><span>·</span><span>← → go from step to step</span><span>·</span>" : ""}<span>a file, or a symbol in it, opens on a tab of the stage, at its line</span><span>·</span><span>the symbols and their uses are as the project's language server says</span></div>`;
+  if (flow) seqScrolled();
 }
 
 /// What the language server says of the file at `path`, an absolute
@@ -666,7 +768,8 @@ function symEl(path, line, depth) {
     // The innermost symbol the line is in is marked.
     const holds = (sym) => line && sym.line <= line && line <= sym.end;
     const here = holds(s) && !kids.some(holds) ? "here" : "";
-    return `<div class="sym ${here}"><a href="cox://open${esc(path)}#L${s.line}"><span class="ln">${s.line}</span>${kind ? `<span class="kind">${esc(kind)}</span>` : ""}${label}${counted}${uses}</a>${within}</div>`;
+    const ran = onFlow.has(`${path}:${s.line}`) ? "flow" : "";
+    return `<div class="sym ${here} ${ran}"><a href="cox://open${esc(path)}#L${s.line}"><span class="ln">${s.line}</span>${kind ? `<span class="kind">${esc(kind)}</span>` : ""}${label}${counted}${uses}${ran ? '<span class="onflow">on the flow</span>' : ""}</a>${within}</div>`;
   };
 }
 
@@ -1093,18 +1196,18 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => wire
 app.addEventListener("click", (event) => {
   const t = event.target.closest("[data-goes],[data-tier],[data-flow],[data-step],[data-into],[data-view],[data-seq]");
   if (!t) return;
-  const { tier: here, flow, step, onMap } = where();
+  const { tier: here, part, flow, step, onMap } = where();
   const kept = { flow, step, onMap };
   if (t.dataset.tier) {
     go(t.dataset.tier, t.dataset.part, kept);
     return;
   }
   if ("flow" in t.dataset) {
-    go(here, null, { flow: t.dataset.flow === flow ? null : t.dataset.flow, onMap });
+    go(here, part, { flow: t.dataset.flow === flow ? null : t.dataset.flow, onMap });
     return;
   }
   if (t.dataset.step) {
-    go(here, null, { flow, step: Number(t.dataset.step) === step ? null : Number(t.dataset.step), onMap });
+    go(here, part, { flow, step: Number(t.dataset.step) === step ? null : Number(t.dataset.step), onMap });
     return;
   }
   if (t.dataset.view) {
@@ -1134,8 +1237,8 @@ window.addEventListener("keydown", (event) => {
   const { tier: here, part, flow, step, onMap } = where();
   const f = flow && flows().find((x) => x.id === flow);
   if (!f || part || !f.steps.length) return;
-  if (event.key === "ArrowRight") go(here, null, { flow, step: Math.min(f.steps.length, (step || 0) + 1), onMap });
-  else if (event.key === "ArrowLeft") go(here, null, { flow, step: Math.max(1, (step || f.steps.length + 1) - 1), onMap });
+  if (event.key === "ArrowRight") go(here, part, { flow, step: Math.min(f.steps.length, (step || 0) + 1), onMap });
+  else if (event.key === "ArrowLeft") go(here, part, { flow, step: Math.max(1, (step || f.steps.length + 1) - 1), onMap });
   else return;
   event.preventDefault();
 });
@@ -1144,8 +1247,8 @@ window.addEventListener("hashchange", render);
 // is drawn again when the width changes.
 let seqWidth = 0;
 window.addEventListener("resize", () => {
-  const { flow, part, onMap } = where();
-  if (!flow || part || onMap || app.clientWidth === seqWidth) return;
+  const { flow, onMap } = where();
+  if (!flow || onMap || app.clientWidth === seqWidth) return;
   seqWidth = app.clientWidth;
   render();
 });

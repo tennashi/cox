@@ -348,6 +348,14 @@
       .seq .who.far .name {
         fill: var(--dim);
       }
+      /* A function the flow runs, as a column of the box that holds it. */
+      .seq .who.fn .name {
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      .seq .fnlink {
+        text-decoration: none;
+      }
       .seq .who.goes {
         cursor: pointer;
       }
@@ -773,6 +781,20 @@
       }
       .sym.here > a {
         background: rgba(229, 168, 90, 0.12);
+      }
+      /* A function the flow chosen runs. */
+      .sym.flow > a .name,
+      .sym.flow > a .detail {
+        color: var(--hold);
+      }
+      .sym .onflow {
+        color: var(--hold);
+        font-family: var(--sans);
+        font-size: 10px;
+        border: 1px solid var(--hold);
+        border-radius: 999px;
+        padding: 0 6px;
+        flex: 0 0 auto;
       }
       .sym .ln {
         color: var(--faint);
