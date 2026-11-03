@@ -1,7 +1,7 @@
 //! A tab of the stage, and what it shows: a page of the browser, a
 //! Markdown file, a file as it is written, the project's files, what
-//! changed in them, the map of the project, the flow of a tool call, the
-//! parts the chat runs with, or a terminal. What the stage asks of every kind alike, the name the tab
+//! changed in them, the map of the project, the flow of a tool call, or
+//! a terminal. What the stage asks of every kind alike, the name the tab
 //! goes by, how it is kept for a closed chat's stage to open again, the
 //! keyboard's place in it and the view drawn, each kind answers as
 //! [`Shows`], and [`TabContent`] turns to that in one place. What the stage

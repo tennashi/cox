@@ -44,7 +44,6 @@ use crate::chat::judge::Starts;
 use crate::chat::view::{Again, ChatView, OpenLink, StageView};
 use crate::chat::{Closed, Opens};
 use crate::stage::Stage;
-use crate::stage::parts::Started;
 use crate::ui::Panel;
 use cox_browser::relay::Relay;
 
@@ -208,13 +207,6 @@ impl Launcher {
         let server = self.server(&cwd, setup.and_then(|setup| setup.tools.clone()));
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(relay.as_ref(), server.as_ref());
-        let started = Started {
-            command: self.command.clone(),
-            socket: server.as_ref().map(|(_, server)| server.socket.clone()),
-            relay_port: relay.as_ref().map(|relay| relay.port),
-            devtools_port: self.cef.devtools_port(),
-            servers: tools.clone(),
-        };
         // 4. The stage works with the relay and the tools, and keeps its tabs.
         let (requests, asks, chat_requests) = match server {
             Some((_, server)) => (
@@ -225,7 +217,7 @@ impl Launcher {
             None => (None, None, None),
         };
         stage.update(cx, |stage, cx| {
-            stage.work(relay, requests, record, started, window, cx);
+            stage.work(relay, requests, record, window, cx);
         });
         // 5. The agent, on a thread of its own, which the chat asks of the
         // stage through what its tools ask, and hears ask of the window.

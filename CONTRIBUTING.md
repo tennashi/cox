@@ -338,25 +338,10 @@ again where it was open. The map is a page of the stage, one of its
 plugins (see below), at `cox://map/`, where the map is open being the
 page's hash, as `cox://map/#cox/stage`.
 
-"Parts" beside it opens a tab of the parts the chat runs with, and how
-they reach each other, for the human to see what is running before they
-read the code: the agent's process and Cox's thread for it, speaking
-ACP; the `cox --mcp` the agent starts and the chat's tool server it
-reaches over the socket, which asks the stage; the Chrome DevTools MCP
-server the agent starts, the relay it goes through and CEF behind it;
-`rust-analyzer`, when a tab shows Rust code; and the judge of a goal in
-words. Each part is a card, in a named row, colored by what it is (a
-process of its own, a thread of Cox's, or part of the window), with what
-it is, who starts it, and, while the chat's agent runs, how it was
-started: the agent's command, the socket, the ports; and arrows between
-the cards for what goes between them. A click on a card opens the code
-that starts the part, when the project has the file, as it does when
-the project is Cox. It is a page of the stage too, at `cox://parts/`.
-
 A tab can show a plugin: a page, in HTML and JavaScript, that draws
 what Cox knows as a tab Cox draws would, for whoever wants a view of
 their own on the stage, the agent included, since it writes HTML and
-reads pages. "Map" and "Parts" are the two built in. A plugin is a
+reads pages. "Map" is the one built in. A plugin is a
 folder with an `index.html`, and a `plugin.json` naming its `title` if
 it has one: those built into Cox, in `crates/cox/plugins`, and the
 project's, in `.cox/plugins/<name>` under its folder. The tab bar has a
@@ -366,9 +351,7 @@ the plugin's files, or shows the tab that has it, wherever the page has
 gone; the agent opens it as any page. A page at a `cox:` address is
 drawn as a tab Cox draws, without the toolbar a page of the web has,
 since the page is the tab. A plugin reads what Cox knows as JSON from
-`cox://api/<what>`: `cox://api/parts` is the parts the chat runs with,
-with the file and line of the code that starts each, and
-`cox://api/map` is the map of the project, as its `.cox/map.json` has
+`cox://api/<what>`: `cox://api/map` is the map of the project, as its `.cox/map.json` has
 it, with what Cox knows of each box laid over: the files it holds, as
 the project has them now, what changed in them, and which are gone; and
 `cox://api/file/<path>` is what the project's language server says of
@@ -378,14 +361,9 @@ many places use each, and which files use them. It
 opens a file on a tab
 by going to `cox://open/<path>#L<line>`, which the stage takes as it
 takes a link to a file (a page that is not itself a file may not link
-to one). The Parts plugin is drawn with
-[Preact](https://preactjs.com) and
-[htm](https://github.com/developit/htm), which the stage serves at
-`cox://vendor/` from `crates/cox/plugins/vendor`, for a project's
-plugin to use too, so that none needs a build step or the network; the
-Map plugin draws its own cards and lines, with no library. Both read
-their JSON again every two seconds, as Cox's own tabs follow what they
-show.
+to one). The Map plugin draws its own cards and lines, with no
+library, and reads its JSON again every two seconds, as Cox's own tabs
+follow what they show.
 
 A tab can be a terminal too, through
 [alacritty_terminal](https://crates.io/crates/alacritty_terminal). The

@@ -43,9 +43,9 @@ pub enum KeptTab {
     /// The flow of one tool call through Cox, the call by the id the
     /// agent gave it.
     Flow { call: String },
-    /// The parts the chat runs with, and how they reach each other: a tab
-    /// Cox drew in earlier runs, which opens again as the page that draws
-    /// them now.
+    /// The parts the chat ran with, and how they reached each other: a
+    /// tab Cox drew in earlier runs, and no longer does, so it does not
+    /// open again.
     Parts,
 }
 

@@ -273,9 +273,6 @@ impl Stage {
     }
 }
 
-/// The address of the Parts page.
-pub(super) const PARTS_URL: &str = "cox://parts/";
-
 /// The address of the Map page, at its top.
 pub(super) const MAP_URL: &str = "cox://map/";
 
