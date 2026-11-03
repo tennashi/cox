@@ -53,8 +53,10 @@ of `{\"id\", \"name\", \"says\", \"steps\"}`, the orders in which boxes talk, ea
 `{\"from\", \"to\", \"says\", \"at\", \"back\"}` from one box to another, by id, written between \
 the boxes that hold the code: the tab rolls the steps up to the boxes of the tier it shows, or \
 of the tiers above it, draws them in sequence, and opens the box a step happens inside of; `at` is where the step is \
-made, a path with a line; `back: true` marks a step back, the answer to an earlier step, which \
-ends what the box was doing since that step. A box opens the tier \
+made, a path with a line, the line of the call, which the tab asks the project's language server what it calls, to \
+name the step by that function where it is drawn between the boxes it is written between, so give every step its \
+`at`; `back: true` marks a step \
+back, the answer to an earlier step, which ends what the box was doing since that step. A box opens the tier \
 it names, or, holding paths, the code; a box may be in more than one tier. The tab lays what \
 changed since the last commit on the boxes that hold the files, and up on the boxes that open \
 their tiers, so a box that opens a tier holds paths only for the code that is its own, and \

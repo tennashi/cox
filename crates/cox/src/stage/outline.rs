@@ -31,19 +31,19 @@ use crate::stage::servers::{LanguageServer, Servers};
 /// How long an answer is good for while the file is still looked at,
 /// before it is asked of the server again: what uses it changes as other
 /// files do.
-const GOOD_FOR: Duration = Duration::from_secs(90);
+pub(super) const GOOD_FOR: Duration = Duration::from_secs(90);
 
 /// How often the server is looked at while it starts, or reads the
 /// project.
-const LOOK_EVERY: Duration = Duration::from_millis(300);
+pub(super) const LOOK_EVERY: Duration = Duration::from_millis(300);
 
 /// How long the server has to have been through with the project before
 /// it is asked what uses a symbol: it is through, for a moment, between
 /// one piece of work it tells of and the next.
-const SETTLED: Duration = Duration::from_secs(1);
+pub(super) const SETTLED: Duration = Duration::from_secs(1);
 
 /// How long the server is waited for, at most.
-const PATIENCE: Duration = Duration::from_mins(3);
+pub(super) const PATIENCE: Duration = Duration::from_mins(3);
 
 /// Of how many symbols of a file the uses are asked, at most.
 const MOST_ASKED: usize = 60;
@@ -276,10 +276,17 @@ async fn learn(path: &Path, cwd: &Path, outlines: &Outlines, cx: &mut AsyncApp) 
     let Some(language) = Language::of_path(path) else {
         return Told::default();
     };
-    let (server, name) = match running(path, cwd, outlines, cx).await {
+    let saying = |said: Option<String>| outlines.saying(path, said);
+    let (server, name) = match running(path, cwd, &saying, cx).await {
         Ok(Some(server)) => server,
         Ok(None) => return Told::default(),
-        Err(told) => return told,
+        Err((name, error)) => {
+            return Told {
+                server: Some(name),
+                error: Some(error),
+                ..Told::default()
+            };
+        }
     };
     let failed = |error: String| Told {
         server: Some(name.clone()),
@@ -296,35 +303,10 @@ async fn learn(path: &Path, cwd: &Path, outlines: &Outlines, cx: &mut AsyncApp) 
     let Ok(Some(document)) = opened else {
         return failed(format!("{name} stopped"));
     };
-
-    // The server answers the symbols as soon as it has the file, but may
-    // answer nothing, or that it is busy, while it still reads the
-    // project: then it is asked again.
     let began = Instant::now();
-    let symbols = loop {
-        let asked = server.read_with(cx, |server, _| {
-            server.client().map(|client| client.symbols(&document))
-        });
-        let Ok(Some(asked)) = asked else {
-            return failed(format!("{name} stopped"));
-        };
-        let busy = server
-            .read_with(cx, |server, _| server.said())
-            .unwrap_or_default();
-        match asked.await {
-            Ok(symbols) if !symbols.is_empty() || busy.is_none() => break symbols,
-            Ok(_) => {}
-            Err(error) if busy.is_some() => tracing::debug!("{name} said: {error}"),
-            Err(error) => return failed(error.to_string()),
-        }
-        if began.elapsed() > PATIENCE {
-            return failed(format!(
-                "{name} is not ready after {} minutes",
-                PATIENCE.as_secs() / 60
-            ));
-        }
-        outlines.saying(path, busy);
-        cx.background_executor().timer(LOOK_EVERY).await;
+    let symbols = match symbols_of(&server, &document, &name, began, &saying, cx).await {
+        Ok(symbols) => symbols,
+        Err(error) => return failed(error),
     };
     let mut nodes: Vec<Outlined> = symbols.iter().map(|symbol| outline(symbol, 0)).collect();
     outlines.partly(
@@ -336,27 +318,8 @@ async fn learn(path: &Path, cwd: &Path, outlines: &Outlines, cx: &mut AsyncApp) 
             error: None,
         },
     );
-
-    // The uses, once the server has been through with the project for a
-    // moment: it is through, between one piece of work and the next.
-    let mut through_since: Option<Instant> = None;
-    loop {
-        let Ok(said) = server.read_with(cx, |server, _| server.said()) else {
-            return failed("Cox is quitting".to_owned());
-        };
-        if said.is_none() {
-            let since = *through_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= SETTLED {
-                break;
-            }
-        } else {
-            through_since = None;
-            outlines.saying(path, said);
-        }
-        if began.elapsed() > PATIENCE {
-            break;
-        }
-        cx.background_executor().timer(LOOK_EVERY).await;
+    if let Err(error) = settled(&server, began, &saying, cx).await {
+        return failed(error);
     }
     outlines.saying(path, Some(format!("{name}: finding what uses them")));
     let used_by = uses(&server, &document, path, cwd, &symbols, &mut nodes, cx).await;
@@ -370,15 +333,15 @@ async fn learn(path: &Path, cwd: &Path, outlines: &Outlines, cx: &mut AsyncApp) 
 }
 
 /// The project's server for the file at `path`, and its name, once it
-/// runs, or `None` when the editor knows none for the file; or what to
-/// tell of the file when the server will not run. Until it runs,
-/// `outlines` hears what it is doing.
-async fn running(
+/// runs, or `None` when the editor knows none for the file; or its name
+/// and why it will not run. Until it runs, `saying` hears what it is
+/// doing.
+pub(super) async fn running(
     path: &Path,
     cwd: &Path,
-    outlines: &Outlines,
+    saying: &dyn Fn(Option<String>),
     cx: &mut AsyncApp,
-) -> Result<Option<(Entity<LanguageServer>, String)>, Told> {
+) -> Result<Option<(Entity<LanguageServer>, String)>, (String, String)> {
     let server: Option<Entity<LanguageServer>> = cx
         .update(|cx| {
             cx.try_global::<Servers>()
@@ -393,17 +356,12 @@ async fn running(
     let name = server
         .read_with(cx, |server, _| server.name().to_owned())
         .unwrap_or_default();
-    let failed = |error: String| Told {
-        server: Some(name.clone()),
-        error: Some(error),
-        ..Told::default()
-    };
     let began = Instant::now();
     loop {
         let Ok((runs, said)) =
             server.read_with(cx, |server, _| (server.client().is_some(), server.said()))
         else {
-            return Err(failed("Cox is quitting".to_owned()));
+            return Err((name, "Cox is quitting".to_owned()));
         };
         if runs {
             return Ok(Some((server, name)));
@@ -411,15 +369,89 @@ async fn running(
         if let Some(said) = &said
             && (said.contains("did not start") || said.ends_with("stopped"))
         {
-            return Err(failed(said.clone()));
+            return Err((name, said.clone()));
         }
         if began.elapsed() > PATIENCE {
-            return Err(failed(format!(
-                "{name} did not start in {} minutes",
-                PATIENCE.as_secs() / 60
-            )));
+            return Err((
+                name.clone(),
+                format!(
+                    "{name} did not start in {} minutes",
+                    PATIENCE.as_secs() / 60
+                ),
+            ));
         }
-        outlines.saying(path, said);
+        saying(said);
+        cx.background_executor().timer(LOOK_EVERY).await;
+    }
+}
+
+/// The symbols of `document` on `server`, named `name`: the server
+/// answers them as soon as it has the file, but may answer nothing, or
+/// that it is busy, while it still reads the project; then it is asked
+/// again, `saying` hearing what it is doing, until `began` is a while
+/// ago; or why it did not answer.
+pub(super) async fn symbols_of(
+    server: &Entity<LanguageServer>,
+    document: &OpenFile,
+    name: &str,
+    began: Instant,
+    saying: &dyn Fn(Option<String>),
+    cx: &mut AsyncApp,
+) -> Result<Vec<Symbol>, String> {
+    loop {
+        let asked = server.read_with(cx, |server, _| {
+            server.client().map(|client| client.symbols(document))
+        });
+        let Ok(Some(asked)) = asked else {
+            return Err(format!("{name} stopped"));
+        };
+        let busy = server
+            .read_with(cx, |server, _| server.said())
+            .unwrap_or_default();
+        match asked.await {
+            Ok(symbols) if !symbols.is_empty() || busy.is_none() => return Ok(symbols),
+            Ok(_) => {}
+            Err(error) if busy.is_some() => tracing::debug!("{name} said: {error}"),
+            Err(error) => return Err(error.to_string()),
+        }
+        if began.elapsed() > PATIENCE {
+            return Err(format!(
+                "{name} is not ready after {} minutes",
+                PATIENCE.as_secs() / 60
+            ));
+        }
+        saying(busy);
+        cx.background_executor().timer(LOOK_EVERY).await;
+    }
+}
+
+/// Waits until `server` has been through with the project for a moment,
+/// as it is between one piece of work it tells of and the next, which
+/// `saying` hears meanwhile, or until `began` is a while ago; or why it
+/// cannot wait.
+pub(super) async fn settled(
+    server: &Entity<LanguageServer>,
+    began: Instant,
+    saying: &dyn Fn(Option<String>),
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    let mut through_since: Option<Instant> = None;
+    loop {
+        let Ok(said) = server.read_with(cx, |server, _| server.said()) else {
+            return Err("Cox is quitting".to_owned());
+        };
+        if said.is_none() {
+            let since = *through_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= SETTLED {
+                return Ok(());
+            }
+        } else {
+            through_since = None;
+            saying(said);
+        }
+        if began.elapsed() > PATIENCE {
+            return Ok(());
+        }
         cx.background_executor().timer(LOOK_EVERY).await;
     }
 }

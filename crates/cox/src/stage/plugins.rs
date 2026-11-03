@@ -16,6 +16,10 @@
 //!   the file at `<path>`, an absolute path in the project: the symbols
 //!   it defines and what uses them, once the server has answered, which
 //!   the page reads again for (see [`crate::stage::outline`]).
+//! - `cox://api/call/<path>:<line>`: what the server says a line of the
+//!   file at `<path>` calls, for a step of a flow made there: the
+//!   function the line is in and the functions it calls, once the server
+//!   has answered (see [`crate::stage::calls`]).
 //!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Map plugin does for a box's code.
@@ -25,6 +29,7 @@ use std::sync::Arc;
 
 use cox_browser::scheme::{Resource, Serve, percent_decoded};
 
+use crate::stage::calls::Calls;
 use crate::stage::map;
 use crate::stage::outline::Outlines;
 
@@ -72,14 +77,19 @@ pub struct Plugins {
     root: PathBuf,
     /// What the project's language server says of its files.
     outlines: Outlines,
+    calls: Calls,
 }
 
 impl Plugins {
     /// The plugins of a chat working in `root`, whose pages ask
     /// `outlines` what the project's files define.
     #[must_use]
-    pub fn new(root: PathBuf, outlines: Outlines) -> Self {
-        Self { root, outlines }
+    pub fn new(root: PathBuf, outlines: Outlines, calls: Calls) -> Self {
+        Self {
+            root,
+            outlines,
+            calls,
+        }
     }
 
     /// The plugins there are: the built-in ones, then the project's, by
@@ -149,6 +159,13 @@ impl Plugins {
             "file" if !rest.is_empty() => {
                 let path = PathBuf::from(format!("/{}", percent_decoded(rest)));
                 self.outlines.told(&self.root, &path)?
+            }
+            "call" if !rest.is_empty() => {
+                let spec = percent_decoded(rest);
+                let (path, line) = spec.rsplit_once(':')?;
+                let line: usize = line.parse().ok()?;
+                let path = PathBuf::from(format!("/{path}"));
+                self.calls.told(&self.root, &path, line)?
             }
             _ => return None,
         };
@@ -251,7 +268,7 @@ mod tests {
 
     #[test]
     fn the_built_in_plugin_is_served_with_its_files() {
-        let plugins = Plugins::new(scratch("built-in"), Outlines::new().0);
+        let plugins = Plugins::new(scratch("built-in"), Outlines::new().0, Calls::new().0);
 
         let page = plugins.resource("cox://map/").unwrap();
         assert_eq!(page.mime, "text/html");
@@ -275,7 +292,7 @@ mod tests {
                  "parts": { "one": { "name": "One", "holds": ["src"] } } }"#,
         )
         .unwrap();
-        let plugins = Plugins::new(root, Outlines::new().0);
+        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
 
         let answer = plugins.resource("cox://api/map").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
@@ -289,7 +306,7 @@ mod tests {
         let root = scratch("file");
         std::fs::create_dir_all(root.join("my src")).unwrap();
         std::fs::write(root.join("my src/main.rs"), "fn main() {}\n").unwrap();
-        let plugins = Plugins::new(root.clone(), Outlines::new().0);
+        let plugins = Plugins::new(root.clone(), Outlines::new().0, Calls::new().0);
         let url = format!("cox://api/file{}/my%20src/main.rs", root.display());
         let answer = plugins.resource(&url).unwrap();
         assert_eq!(answer.mime, "application/json");
@@ -299,6 +316,16 @@ mod tests {
         assert_eq!(json["pending"], true);
         assert_eq!(plugins.resource("cox://api/file"), None);
         assert_eq!(plugins.resource("cox://api/file/etc/hostname"), None);
+
+        let url = format!("cox://api/call{}/my%20src/main.rs:1", root.display());
+        let answer = plugins.resource(&url).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["name"], "my src/main.rs");
+        assert_eq!(json["line"], 1);
+        assert_eq!(json["pending"], true);
+        let url = format!("cox://api/call{}/my%20src/main.rs", root.display());
+        assert_eq!(plugins.resource(&url), None);
+        assert_eq!(plugins.resource("cox://api/call/etc/hostname:1"), None);
     }
 
     #[test]
@@ -309,7 +336,7 @@ mod tests {
         std::fs::write(folder.join("index.html"), "<h1>Tour</h1>").unwrap();
         std::fs::write(folder.join("plugin.json"), r#"{"title": "A tour"}"#).unwrap();
         std::fs::write(root.join("secret.txt"), "no").unwrap();
-        let plugins = Plugins::new(root, Outlines::new().0);
+        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();

@@ -1,6 +1,6 @@
 //! What the server answers, read from the JSON it says it in: what it
-//! says of a name, where the name is defined and used, and the symbols a
-//! file defines.
+//! says of a name, where the name is defined and used, the symbols a
+//! file defines, and the functions a function calls.
 
 use std::ops::Range;
 use std::path::PathBuf;
@@ -41,6 +41,29 @@ pub struct Symbol {
     /// Its name, within `range`.
     pub selection: Range<Position>,
     pub children: Vec<Symbol>,
+}
+
+/// A function, as the server has it in a call hierarchy: its name and
+/// kind, what the server adds of it, such as its signature, the file it
+/// is in, the whole of it, and where its name is within that.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Callable {
+    pub name: String,
+    /// The kind's name, in lower case, as `function` or `method`.
+    pub kind: String,
+    pub detail: Option<String>,
+    /// The file, as an absolute path.
+    pub path: PathBuf,
+    pub range: Range<Position>,
+    pub selection: Range<Position>,
+}
+
+/// A call a function makes: the function it calls, and where in the
+/// caller it calls it, each place a stretch of a line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Call {
+    pub to: Callable,
+    pub from: Vec<Range<Position>>,
 }
 
 /// The position `value` says.
@@ -166,6 +189,52 @@ pub(super) fn symbols(value: &Value) -> Vec<Symbol> {
         .collect()
 }
 
+/// The function `value`, an item of a call hierarchy, says, when it is
+/// one in a file.
+pub(super) fn callable(value: &Value) -> Option<Callable> {
+    let whole = range(value.get("range")?)?;
+    Some(Callable {
+        name: value.get("name")?.as_str()?.to_owned(),
+        kind: kind_name(value.get("kind").and_then(Value::as_u64).unwrap_or(0)),
+        detail: value
+            .get("detail")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|detail| !detail.is_empty())
+            .map(str::to_owned),
+        path: Url::parse(value.get("uri")?.as_str()?)
+            .ok()?
+            .to_file_path()
+            .ok()?,
+        selection: value
+            .get("selectionRange")
+            .and_then(range)
+            .unwrap_or_else(|| whole.clone()),
+        range: whole,
+    })
+}
+
+/// The calls `value`, the outgoing calls of a function, says, leaving out
+/// those to no function in a file.
+pub(super) fn calls(value: &Value) -> Vec<Call> {
+    let Value::Array(values) = value else {
+        return Vec::new();
+    };
+    values
+        .iter()
+        .filter_map(|value| {
+            Some(Call {
+                to: callable(value.get("to")?)?,
+                from: value
+                    .get("fromRanges")
+                    .and_then(Value::as_array)
+                    .map(|ranges| ranges.iter().filter_map(range).collect())
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
 /// The name of the kind of symbol the protocol numbers `kind`.
 fn kind_name(kind: u64) -> String {
     let name = match kind {
@@ -206,7 +275,7 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{Hover, Location, hover, locations, symbols};
+    use super::{Hover, Location, calls, hover, locations, symbols};
     use crate::lsp::Position;
 
     #[test]
@@ -298,6 +367,22 @@ mod tests {
         assert_eq!(read[0].name, "Stage");
         assert_eq!(read[0].kind, "struct");
         assert_eq!(read[0].detail.as_deref(), Some("pub struct Stage"));
+        let outgoing = json!([{
+            "to": {
+                "name": "show_file", "kind": 6, "detail": "fn show_file(&mut self)",
+                "uri": "file:///src/stage.rs",
+                "range": { "start": { "line": 40, "character": 4 }, "end": { "line": 60, "character": 5 } },
+                "selectionRange": { "start": { "line": 40, "character": 11 }, "end": { "line": 40, "character": 20 } },
+            },
+            "fromRanges": [{ "start": { "line": 12, "character": 8 }, "end": { "line": 12, "character": 17 } }],
+        }, { "to": { "name": "nowhere", "kind": 12 }, "fromRanges": [] }]);
+        let called = calls(&outgoing);
+        assert_eq!(called.len(), 1);
+        assert_eq!(called[0].to.name, "show_file");
+        assert_eq!(called[0].to.kind, "method");
+        assert_eq!(called[0].to.path, PathBuf::from("/src/stage.rs"));
+        assert_eq!(called[0].to.selection.start.line, 40);
+        assert_eq!(called[0].from[0].start.line, 12);
         assert_eq!(read[0].selection.start.line, 10);
         assert_eq!(read[0].selection.start.character, 11);
         assert_eq!(read[0].children[0].name, "cwd");

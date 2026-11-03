@@ -39,8 +39,8 @@
 //! - [`document`] shows a Markdown file, and [`code`] a file as it is
 //!   written, such as code: both [`follow`] the file as it changes.
 //! - [`servers`] holds the language servers a tab of code asks what the
-//!   code means, and [`outline`] asks them what a file defines, for the
-//!   map.
+//!   code means, and [`outline`] asks them what a file defines, and
+//!   [`calls`] what a line of it calls, for the map.
 //! - [`tree`] shows the project's files, for the human to open one.
 //! - [`changes`] shows what changed in them, for the human to read, and
 //!   to open a file where it changed.
@@ -52,6 +52,7 @@
 //!   its boxes, for the human to see where things are.
 
 mod asked;
+pub mod calls;
 pub mod changes;
 pub mod code;
 pub mod document;
@@ -82,6 +83,7 @@ use crate::agent::mcp::ToolRequest;
 use cox_browser::relay::{Pages, Relay};
 use cox_browser::{Cef, TargetId};
 
+use crate::stage::calls::Calls;
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::outline::Outlines;
@@ -142,20 +144,22 @@ impl Stage {
     }
 
     /// A stage with no tab yet, whose pages can ask what the project's
-    /// files define (see [`outline`]).
+    /// files define (see [`outline`]) and call (see [`calls`]).
     fn empty(cef: Cef, cwd: PathBuf, panel: Entity<Panel>, cx: &mut Context<Self>) -> Self {
         let (outlines, asked) = Outlines::new();
         let answering = outline::answer(asked, outlines.clone(), cwd.clone(), cx);
+        let (calls, asked_calls) = Calls::new();
+        let answering_calls = calls::answer(asked_calls, calls.clone(), cwd.clone(), cx);
         Self {
             cef,
-            plugins: Plugins::new(cwd.clone(), outlines),
+            plugins: Plugins::new(cwd.clone(), outlines, calls),
             cwd,
             tabs: List::new(),
             pages: None,
             panel,
             record: None,
             kept: None,
-            heard: vec![answering],
+            heard: vec![answering, answering_calls],
         }
     }
 
