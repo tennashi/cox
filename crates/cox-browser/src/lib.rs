@@ -310,7 +310,13 @@ fn load_framework(process: Process) {
 
 /// Runs a helper process of the app on macOS, the work CEF gives it on
 /// the command line, and returns its exit code. Each helper app under
-/// `Cox.app/Contents/Frameworks` does only this.
+/// `Cox.app/Contents/Frameworks` does only this. The helper gets the
+/// same app handler as the main process, since CEF asks each process
+/// for the schemes it knows: a renderer that did not register the
+/// `cox:` scheme (see [`scheme`]) would take a `cox:` page for one at
+/// an address with no host or path, and the page could neither load
+/// its scripts by relative addresses nor `fetch` from another `cox:`
+/// address, so it would stay blank.
 ///
 /// # Panics
 ///
@@ -322,9 +328,10 @@ pub fn run_helper() -> i32 {
     load_framework(Process::Helper);
     cef::api_hash(cef::sys::CEF_API_VERSION, 0);
     let args = Args::new();
+    let mut app = handlers::StageApp::new(BrowsersRef::default());
     cef::execute_process(
         Some(args.as_main_args()),
-        None::<&mut cef::App>,
+        Some(&mut app),
         std::ptr::null_mut(),
     )
 }
