@@ -1,10 +1,13 @@
 //! The map of a project: a picture of it in tiers, for the human to see
 //! where things are before they read them. Not what the files say, which
 //! a tree of them shows, but what the parts of the project mean, which
-//! an agent writes: the top tier is the project among the few things
-//! around it, its user, the program, and what the program talks to, as a
-//! C4 context diagram draws them; a box of a tier opens a tier of its own,
-//! down to boxes that hold paths of the code, where the human reads on. The map is a file of the project,
+//! an agent writes: the top tier is the project, all its repository
+//! writes, among the few things around it that the repository does not
+//! write, its user and the programs and files it talks to, as a C4
+//! context diagram draws them, so a box outside holds no paths, and the
+//! code that talks to it is inside; a box of a tier opens a tier of its
+//! own, down to boxes that hold paths of the code, where the human reads
+//! on. The map is a file of the project,
 //! [`MAP_FILE`], so that it is there whenever it is opened, written by an
 //! agent once and kept by the agents that change the code, in the change
 //! that moves it.
@@ -27,9 +30,11 @@ pub const MAP_FILE: &str = ".cox/map.json";
 /// write one, or to keep one.
 pub const HOW_WRITTEN: &str = "\
 The map is `.cox/map.json` in the project's folder, a JSON object with `tiers`, `parts` and \
-`edges`. The top tier is the project among the few things around it, its user, the program \
-and what the program talks to, as a C4 context diagram draws them; each tier below is the \
-inside of one box of a tier above, down to the code. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
+`edges`. The top tier is the project, all its repository writes, in one box among the few \
+things around it that the repository does not write, its user and the programs and files it \
+talks to, as a C4 context diagram draws them: a box outside holds no paths, and the code that \
+talks to it is inside. Each tier below is the inside of one box of a tier above, down to the \
+code. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
 \"frame\"}`: `says` is one line on what the tier shows; `rows` are the lines of boxes, each \
 `{\"name\", \"parts\": [ids], \"under\": id}`, where `under` hangs the row under a box of a row \
 above, as what that box holds; `frame` is `{\"left\": [ids], \"right\": [ids]}`, boxes of the \
