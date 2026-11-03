@@ -273,7 +273,7 @@ function renderEmpty() {
     app.innerHTML = `<div class="says failed">${esc(data.error)}</div><div class="says">The map is <code>${esc(data.file)}</code>. An agent fixes it; ask it to.</div>`;
     return;
   }
-  app.innerHTML = `<div class="says empty">This project has no map yet. An agent writes one at <code>.cox/map.json</code>: ask it to map the project, or to show the map, and it learns how.</div>`;
+  app.innerHTML = `<div class="says empty">This project has no map yet. An agent writes one at <code>.cox/map.json</code>: ask it, in the chat, to map the project.</div>`;
 }
 
 function render() {

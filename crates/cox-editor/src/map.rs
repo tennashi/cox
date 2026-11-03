@@ -1,16 +1,14 @@
 //! The map of a project: a picture of it in tiers, for the human to see
 //! where things are before they read them. Not what the files say, which
 //! a tree of them shows, but what the parts of the project mean, which
-//! an agent writes: the top tier is the project, all its repository
-//! writes, among the few things around it that the repository does not
-//! write, its user and the programs and files it talks to, as a C4
-//! context diagram draws them, so a box outside holds no paths, and the
-//! code that talks to it is inside; a box of a tier opens a tier of its
+//! an agent writes: a tier is rows of boxes; a box opens a tier of its
 //! own, down to boxes that hold paths of the code, where the human reads
-//! on. The map is a file of the project,
-//! [`MAP_FILE`], so that it is there whenever it is opened, written by an
-//! agent once and kept by the agents that change the code, in the change
-//! that moves it.
+//! on; and boxes of other tiers can stay around a tier that is open,
+//! above and below it. What the tiers are, and what goes in each, is
+//! the project's to decide, in its chats; this module only reads the
+//! file. The map is a file of the project, [`MAP_FILE`], so that it is
+//! there whenever it is opened, written by an agent once and kept by the
+//! agents that change the code, in the change that moves it.
 //!
 //! Over it goes what the project is now: what changed, as
 //! [`crate::changes`] tells it, falls on the boxes that hold the files,
@@ -25,36 +23,6 @@ use serde::{Deserialize, Serialize};
 
 /// Where a project keeps its map, under its folder.
 pub const MAP_FILE: &str = ".cox/map.json";
-
-/// How the map's file is written, as the agent is told it when it is to
-/// write one, or to keep one.
-pub const HOW_WRITTEN: &str = "\
-The map is `.cox/map.json` in the project's folder, a JSON object with `tiers`, `parts` and \
-`edges`. The top tier is the project, all its repository writes, in one box among the few \
-things around it that the repository does not write, its user and the programs and files it \
-talks to, as a C4 context diagram draws them: a box outside holds no paths, and the code that \
-talks to it is inside. Each tier below is the inside of one box of a tier above, down to the \
-code. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
-\"frame\"}`: `says` is one line on what the tier shows; `rows` are the lines of boxes, each \
-`{\"name\", \"parts\": [ids], \"under\": id}`, where `under` hangs the row under a box of a row \
-above, as what that box holds; `frame` is `{\"above\": [ids], \"below\": [ids]}`, boxes of the \
-tiers above that stay around the tier when it is open, for the lines out of it to reach, the \
-user's side above it and the code's side below, so that a tier reads from the top down as the \
-top tier does. `parts` is an object of the boxes by id, each \
-`{\"name\", \"says\", \"each\", \"many\", \"holds\", \"tier\", \"kinds\", \"note\"}`: `says` is \
-one line for a reader who does not know the project; `each` says how many there are and of what \
-(\"one per chat\"), with `many: true` when there are several; `holds` are the paths of the \
-code it is, from the project's folder, a file or a folder, a file with a line as `path:12`; \
-`tier` is the id of the tier that opens inside it; `kinds` names the kinds of a box that is \
-not one thing; `note` is a remark, such as where the code does not match the map. `edges` is a \
-list of `{\"from\", \"to\", \"says\", \"dir\"}` between boxes, by id, `dir` being `to` (an \
-arrow into `to`, the default), `both` or `none`; a tier draws the edges among its boxes and \
-those to the boxes in its frame. Keep each tier small, five or six boxes, and every box \
-either opening a tier or holding paths, so that the human can go from the top down to the \
-code. What changed in a tier's boxes shows on the box that opens the tier, so a box that opens \
-a tier holds paths only for the code that is its own, as where it is defined, not for the code \
-of its tier. Boxes may be in more than one tier. Write the map once, in the project's language, and \
-change it as you move the code it holds.";
 
 /// A project's map, as its file has it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

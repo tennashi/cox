@@ -301,16 +301,13 @@ as a project forgets it.
 "Map" beside it opens a tab of the project's map, for the human to see
 where things are before they read them: not the files, which "Files"
 lists, but what the parts of the project mean, in tiers, which an agent
-writes. The top tier is the project, all its repository writes, in one
-box among the few things around it that the repository does not write,
-its user and the programs and files it talks to, as a C4 context
-diagram draws them, so a box outside holds no paths, and the code that
-talks to it is inside; each box of a tier
-opens a tier of its own, down to boxes that hold paths of the code; and
-the boxes of the tiers above stay around the tier that is open, so that
-the lines out of it reach them, the user's side above it and the code's
-side below, so that a tier reads from the top down as the top tier
-does. Each box has a line on what it is, for a reader
+writes. A tier is rows of boxes; each box of a tier opens a tier of its
+own, down to boxes that hold paths of the code; and boxes of other
+tiers can stay around the tier that is open, above and below it, so
+that the lines out of it reach them, and a tier reads from the top down
+as the top tier does. What the tiers are, and what goes in each, is the
+project's to decide, in its chats and its `COX.md`; Cox only draws the
+file. Each box has a line on what it is, for a reader
 who does not know the project, how many of it there are, and the paths
 it holds. A click on a box opens the tier inside it, or, for a box that
 holds paths, the box on its own, with its files, each of which a click
@@ -332,7 +329,7 @@ many files, so that the human sees where a change falls in the project
 before they read it; and a box whose paths
 the project no longer has is marked stale, for an agent to bring the
 map up to date. A project with no map gets a tab that says so, and an
-agent asked to show the map is told how to write one. The agent opens
+agent asked to show the map is told how the file is written. The agent opens
 the map with Cox's `show_map` tool, at a tier, or a box in it, to show
 the human where what it talks of is before it talks it through, and
 hears what the map shows there, box by box. The tab follows the file
