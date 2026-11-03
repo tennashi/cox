@@ -325,6 +325,9 @@ up to the tier's, as columns in the order the tier draws them, each
 with a lifeline, the tier's own in the box the tier is the inside of
 and the frame's outside it, and the steps as rows from the top, an arrow from the
 box that talks to the one it talks to, with what the step says; a step
+back, the answer to an earlier step, which the file marks `back`, is
+dashed, and a bar on a box's lifeline shows it at work, from a step
+into it until its step back; a step
 inside a box is a loop on its lifeline, which opens the box at the
 step, so a flow is read from the top down as the map is, and a column
 opens its box as a card does. "on the map" draws the flow on the tier
