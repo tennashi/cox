@@ -18,7 +18,8 @@ use cox_editor::map::{self, MAP_FILE};
 /// `error`, why it could not be read, if it could not; `since`, what the
 /// changes are since, when the project is in a repository, and how many
 /// files changed; `map`, the file as it is (see [`Map`]); and `facts`,
-/// what Cox knows of each box by id (see [`Facts`]).
+/// what Cox knows of each box by id (see [`Facts`]), what changed in the
+/// boxes of its tier counted into it.
 #[must_use]
 pub fn told(root: &Path) -> serde_json::Value {
     let project = root.file_name().map_or_else(
@@ -54,15 +55,9 @@ pub fn told(root: &Path) -> serde_json::Value {
         .as_ref()
         .map(changes::changed_files)
         .unwrap_or_default();
-    let facts: serde_json::Map<String, serde_json::Value> = map
-        .parts
-        .iter()
-        .map(|(id, part)| {
-            (
-                id.clone(),
-                serde_json::to_value(map::facts(root, part, &changed)).unwrap_or_default(),
-            )
-        })
+    let facts: serde_json::Map<String, serde_json::Value> = map::all_facts(root, &map, &changed)
+        .into_iter()
+        .map(|(id, facts)| (id, serde_json::to_value(facts).unwrap_or_default()))
         .collect();
     json["facts"] = serde_json::Value::Object(facts);
     json["map"] = serde_json::to_value(&map).unwrap_or_default();
