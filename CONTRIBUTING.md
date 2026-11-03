@@ -307,9 +307,10 @@ its user and the programs and files it talks to, as a C4 context
 diagram draws them, so a box outside holds no paths, and the code that
 talks to it is inside; each box of a tier
 opens a tier of its own, down to boxes that hold paths of the code; and
-the boxes of the tiers above stay beside the tier that is open, so that
-the lines out of it reach them, the user's side on the left and the
-code's on the right. Each box has a line on what it is, for a reader
+the boxes of the tiers above stay around the tier that is open, so that
+the lines out of it reach them, the user's side above it and the code's
+side below, so that a tier reads from the top down as the top tier
+does. Each box has a line on what it is, for a reader
 who does not know the project, how many of it there are, and the paths
 it holds. A click on a box opens the tier inside it, or, for a box that
 holds paths, the box on its own, with its files, each of which a click

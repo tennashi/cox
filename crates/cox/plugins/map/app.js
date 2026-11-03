@@ -3,7 +3,8 @@
 // JSON from `cox://api/map` with what Cox knows laid over it, and read
 // again every two seconds, as Cox's own tabs follow what they show. A
 // tier is rows of cards, with the cards of the tiers above that stay
-// beside it as a frame, and lines between them for the edges; a card
+// around it as a frame, the user's side above and the code's side below,
+// and lines between them for the edges; a card
 // opens the tier inside it, or, on its own, the paths of the code it
 // holds, each of which opens on a tab of the stage through a
 // `cox://open/` address, with what the project's language server says
@@ -137,73 +138,64 @@ function pointing(e, a, b) {
 
 function renderTier(tierId) {
   const t = tier(tierId);
-  const inRows = partsOf(t);
-  const frame = t.frame || { left: [], right: [] };
-  const frameIds = [...(frame.left || []), ...(frame.right || [])];
+  const frame = t.frame || {};
+  const aboveIds = frame.above || frame.left || [];
+  const belowIds = frame.below || frame.right || [];
+  // The lines of cards the tier draws, from the top: the frame's cards of
+  // the user's side, the tier's own rows, and the frame's cards of the
+  // code's side, so that a tier reads from the top down as the top tier
+  // does. Each card is keyed by its place, for the wires.
+  const lines = [];
+  if (aboveIds.length) lines.push({ parts: aboveIds, side: "above" });
+  lines.push(...t.rows);
+  if (belowIds.length) lines.push({ parts: belowIds, side: "below" });
   const keyOf = {};
+  lines.forEach((row, ri) => row.parts.forEach((id, i) => (keyOf[id] = `r${ri}c${i}`)));
+  const placeOf = (id) => (keyOf[id] || "r-1c-1").match(/^r(-?\d+)c(-?\d+)$/).slice(1).map(Number);
   const wires = [];
-  const rows = t.rows
-    .map((row, ri) => {
-      row.parts.forEach((id, i) => (keyOf[id] = `r${ri}c${i}`));
-      if (row.under && !(row.parts[0] && edgeBetween(row.under, row.parts[0]))) wires.push({ from: row.under, toKey: `r${ri}c0`, tree: true });
-      const line = row.parts
-        .map((id, i) => {
-          let gap = "";
-          if (i) {
-            const e = edgeBetween(row.parts[i - 1], id);
-            if (e) {
-              const dir = pointing(e, row.parts[i - 1], id);
-              gap = `<span class="gap" data-label="${esc(e.says)}" data-dir="${dir}" style="flex-basis:${Math.max(44, e.says.length * 6.5 + 16)}px"></span>`;
-            } else gap = '<span class="space"></span>';
-          }
-          return gap + partEl(id, { key: `r${ri}c${i}` });
-        })
-        .join("");
-      return `<div class="row" ${row.under ? `data-parent="${row.under}"` : ""}>${row.name ? `<span class="rowname">${esc(row.name)}</span>` : ""}<div class="line">${line}</div></div>`;
-    })
-    .join("");
-  // The edges the tier draws past its gaps: between rows, to the frame,
-  // and along the frame.
+  const lineEl = (row, ri) =>
+    row.parts
+      .map((id, i) => {
+        let gap = "";
+        if (i) {
+          const e = edgeBetween(row.parts[i - 1], id);
+          if (e) {
+            const dir = pointing(e, row.parts[i - 1], id);
+            gap = `<span class="gap" data-label="${esc(e.says)}" data-dir="${dir}" style="flex-basis:${Math.max(44, e.says.length * 6.5 + 16)}px"></span>`;
+          } else gap = '<span class="space"></span>';
+        }
+        return gap + partEl(id, { key: `r${ri}c${i}`, outer: Boolean(row.side) });
+      })
+      .join("");
+  const rows = lines.map((row, ri) => {
+    if (row.side) return `<div class="side ${row.side}"><div class="line">${lineEl(row, ri)}</div></div>`;
+    if (row.under && !(row.parts[0] && edgeBetween(row.under, row.parts[0]))) wires.push({ from: row.under, toKey: `r${ri}c0`, tree: true });
+    return `<div class="row" ${row.under ? `data-parent="${row.under}"` : ""}>${row.name ? `<span class="rowname">${esc(row.name)}</span>` : ""}<div class="line">${lineEl(row, ri)}</div></div>`;
+  });
+  // The edges the tier draws past its gaps: between its rows, and between
+  // them and the frame. Those among the frame's cards are the tiers
+  // above's to draw.
   for (const e of edges()) {
-    const aIn = inRows.includes(e.from), bIn = inRows.includes(e.to);
-    const aFrame = frameIds.includes(e.from), bFrame = frameIds.includes(e.to);
-    if (aIn && bIn) {
-      const [ra, ia] = place(t, e.from), [rb, ib] = place(t, e.to);
-      if (ra === rb && Math.abs(ia - ib) === 1) continue; // drawn in the gap
-      wires.push({ from: e.from, to: e.to, inner: true, label: e.says, dir: e.dir || "to" });
-    } else if ((aIn && bFrame) || (aFrame && bIn)) {
-      const inner = aIn ? e.from : e.to, outer = aIn ? e.to : e.from;
-      const [ri, ci] = place(t, inner);
-      const last = ci === t.rows[ri].parts.length - 1;
-      const side = (frame.right || []).includes(outer) ? "right" : "left";
-      wires.push({ from: inner, outer, label: e.says, dir: pointing(e, inner, outer), under: side === "right" && !last, side });
-    } else if (aFrame && bFrame) {
-      const side = [frame.left || [], frame.right || []].find((ids) => ids.includes(e.from) && ids.includes(e.to));
-      if (side && Math.abs(side.indexOf(e.from) - side.indexOf(e.to)) === 1) wires.push({ outerFrom: e.from, outerTo: e.to, label: e.says, dir: e.dir || "to" });
-    }
+    const [ra, ia] = placeOf(e.from), [rb, ib] = placeOf(e.to);
+    if (ra < 0 || rb < 0) continue;
+    if (ra === rb && Math.abs(ia - ib) === 1 && edgeBetween(e.from, e.to) === e) continue; // drawn in the gap
+    if (lines[ra].side && lines[rb].side) continue;
+    wires.push({ from: e.from, to: e.to, label: e.says, dir: e.dir || "to" });
   }
-  const side = (ids) => (ids || []).map((id) => partEl(id, { outer: true })).join("");
   const opener = openerOf(tierId);
   const head = opener ? parts()[opener] : null;
-  const noframe = !frameIds.length;
+  const noframe = !aboveIds.length && !belowIds.length;
+  const legend = head ? `<div class="legend"><span class="name">${esc(head.name)}</span>${head.each ? `<span class="each">${esc(head.each)}</span>` : ""}</div>` : "";
+  const focus = rows.filter((_, ri) => !lines[ri].side).join("");
   const body = `<div class="drill ${noframe ? "noframe" : ""}" data-wires="${esc(JSON.stringify(wires))}" data-keys="${esc(JSON.stringify(keyOf))}">
-    ${noframe ? "" : `<div class="side left">${side(frame.left)}</div>`}
-    <div class="focus">${head ? `<div class="focushead"><span class="name">${esc(head.name)}</span>${head.each ? `<span class="each">${esc(head.each)}</span>` : ""}<span class="open">open</span></div>` : ""}${rows}</div>
-    ${noframe ? "" : `<div class="side right">${side(frame.right)}</div>`}
+    ${aboveIds.length ? rows[0] : ""}
+    <div class="focus">${legend}${focus}</div>
+    ${belowIds.length ? rows[rows.length - 1] : ""}
   </div>`;
   const chain = [...above(tierId), tierId].map((id) => ({ text: tier(id).name, tier: id }));
   app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${body}
     <div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>orange is what changed, as Changes shows it</span></div>`;
   wired();
-}
-
-/// The row and the place in it of a box in a tier.
-function place(t, id) {
-  for (let ri = 0; ri < t.rows.length; ri++) {
-    const ci = t.rows[ri].parts.indexOf(id);
-    if (ci >= 0) return [ri, ci];
-  }
-  return [-1, -1];
 }
 
 function renderLeaf(tierId, id) {
@@ -331,24 +323,229 @@ function wireLine(line) {
   labels.innerHTML = texts.join("");
 }
 
-/// A curve from card `A` to card `B`, side to side, or down when `B` is
-/// under `A`; and where its label goes.
-function curve(A, B) {
-  const vertical = B.t >= A.t + A.h - 4 && Math.min(A.l + A.w, B.l + B.w) - Math.max(A.l, B.l) > 40;
-  if (vertical) {
-    const x = Math.max(A.l, B.l) + 44;
-    const y1 = A.t + A.h + (A.many ? 8 : 0) + 2, y2 = B.t - 2;
-    return { d: `M${x},${y1} L${x},${y2}`, tx: x + 8, ty: (y1 + y2) / 2 + 4, anchor: "start" };
+/// How far apart the lines run in a channel between two lines of cards,
+/// how far the first runs from the line above, and the last from the
+/// line below.
+const LANE = 16, LANE_FIRST = 14, LANE_LAST = 10;
+/// How close a line comes to a card it passes beside.
+const CLEAR = 10;
+
+/// A path along `points`, its corners rounded where the segments allow.
+function rounded(points) {
+  const pts = points.filter((q, i) => i === 0 || Math.abs(q.x - points[i - 1].x) > 0.5 || Math.abs(q.y - points[i - 1].y) > 0.5);
+  if (pts.length < 2) return "";
+  let d = `M${pts[0].x},${pts[0].y}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1], c = pts[i], b = pts[i + 1];
+    const r = Math.min(6, Math.hypot(c.x - a.x, c.y - a.y) / 2, Math.hypot(b.x - c.x, b.y - c.y) / 2);
+    const ua = { x: Math.sign(a.x - c.x), y: Math.sign(a.y - c.y) }, ub = { x: Math.sign(b.x - c.x), y: Math.sign(b.y - c.y) };
+    d += ` L${c.x + ua.x * r},${c.y + ua.y * r} Q${c.x},${c.y} ${c.x + ub.x * r},${c.y + ub.y * r}`;
   }
-  const leftward = B.l + B.w / 2 < A.l + A.w / 2;
-  const ax = leftward ? A.l : A.l + A.w, bx = leftward ? B.l + B.w : B.l;
-  const ay = A.t + Math.min(A.h, 72) / 2 + (A.h > 72 ? 10 : 0), by = B.t + Math.min(B.h, 72) / 2 + (B.h > 72 ? 10 : 0);
-  const dx = Math.max(24, Math.abs(bx - ax) * 0.45) * (leftward ? -1 : 1);
-  return { d: `M${ax},${ay} C${ax + dx},${ay} ${bx - dx},${by} ${bx},${by}`, tx: (ax + bx) / 2, ty: (ay + by) / 2 - 6, anchor: "middle" };
+  const last = pts[pts.length - 1];
+  return d + ` L${last.x},${last.y}`;
+}
+
+/// Where a line's label goes: over the widest stretch of the run that no
+/// other line crosses, at `crossings`, when it is wide enough for the
+/// label, or else beside the line where it turns down at the run's end.
+function labelAt(run, text, crossings = [], width = 0) {
+  const need = (text || "").length * 6.3 + 12;
+  const cuts = [run.x1, ...crossings.filter((x) => x > run.x1 && x < run.x2).sort((a, b) => a - b), run.x2];
+  let best = null;
+  for (let i = 1; i < cuts.length; i++) {
+    const width = cuts[i] - cuts[i - 1];
+    if (width >= need && (!best || width > best[1] - best[0])) best = [cuts[i - 1], cuts[i]];
+  }
+  if (best) return [(best[0] + best[1]) / 2, run.y - 4, "middle"];
+  // Beside the line where it turns, past the run's end or before its
+  // start, whichever fewer lines cross and the page has room for.
+  const all = [...crossings, run.xs, run.xe];
+  const choices = [
+    [run.xe + 7, "start", [run.xe + 7, run.xe + 7 + need]],
+    [run.xs - 7, "end", [run.xs - 7 - need, run.xs - 7]],
+  ].filter(([, , [x1, x2]]) => x1 >= 4 && (!width || x2 <= width - 4));
+  const crossed = ([, , [x1, x2]]) => all.filter((x) => x > x1 && x < x2).length;
+  const pick = choices.sort((a, b) => crossed(a) - crossed(b))[0] || [run.xe + 7, "start"];
+  return [pick[0], run.y - 4, pick[1]];
+}
+
+/// The lines of a tier, past the gaps of its lines of cards: the frame's
+/// cards above, its rows, and the frame's cards below. Each runs from the
+/// bottom of a card into the channel under its line, along it, and down
+/// into the top of a lower card, up from the lower card the same way, or
+/// back up into the bottom of another card of the line; one that skips
+/// lines runs down beside the cards of the lines between, where none is,
+/// or the nearest free way. The channel under the frame's cards above
+/// lies over the focus, and a line into the frame's cards below runs
+/// along a channel under the focus, so that the focus holds only the
+/// lines among its own rows, which keep clear of its legend. The lines of
+/// one channel each take a lane of their own, so their labels, on the
+/// lanes, never meet, and what is under the channel moves down to make
+/// room for the lanes.
+function route(wires, ctx) {
+  const { rows, rowOf, card, width, focus, legend, first, last } = ctx;
+  // The frame's line below the focus, if it has one.
+  const below = last + 1 < rows.length ? last + 1 : -1;
+  // What a line passing a line of cards keeps clear of: its cards, and
+  // the legend over the focus's first row.
+  const blocks = (ri) => (ri === first && legend ? [...rows[ri].cards, legend] : rows[ri].cards);
+  // Each card's ports, each sorted by where its line goes.
+  const ports = {};
+  const port = (id, which, toward) => {
+    const key = `${id}/${which}`;
+    (ports[key] = ports[key] || []).push(toward);
+    return key;
+  };
+  const jobs = [];
+  for (const w of wires) {
+    const A = card(w.from), B = card(w.to);
+    if (!A || !B) continue;
+    const ra = rowOf(w.from), rb = rowOf(w.to);
+    if (ra === rb) {
+      jobs.push({ w, kind: "loop", A, B, row: ra, pa: port(w.from, "bottom", B.l + B.w / 2), pb: port(w.to, "bottom", A.l + A.w / 2) });
+      continue;
+    }
+    const upward = rb < ra;
+    const U = upward ? B : A, L = upward ? A : B, rU = Math.min(ra, rb), rL = Math.max(ra, rb);
+    const want = L.l + L.w / 2;
+    const skips = rL - rU > 1;
+    const between = [];
+    for (let ri = rU + 1; ri < rL; ri++) between.push(...blocks(ri));
+    const via = skips ? freeWay(want, between, width) : { x: want };
+    jobs.push({ w, kind: "down", upward, U, L, rU, rL, skips, via: via.x, interval: via.interval, pu: port(upward ? w.to : w.from, "bottom", skips ? via.x : want), pl: port(upward ? w.from : w.to, "top", U.l + U.w / 2) });
+  }
+  // Lines through one narrow way, a gap with a line and a label of its
+  // own in the middle, keep to its two ends, the first at the left.
+  const ways = {};
+  for (const q of jobs) if (q.kind === "down" && q.interval) (ways[q.interval.join()] = ways[q.interval.join()] || []).push(q);
+  for (const group of Object.values(ways)) {
+    const [x1, x2] = group[0].interval;
+    group.sort((a, b) => a.via - b.via).forEach((q, k) => (q.via = k % 2 ? x2 - Math.floor(k / 2) * 12 : x1 + Math.floor(k / 2) * 12));
+  }
+  // A port's place: the card's edge shared out among its lines, in the
+  // order of where they go, so that they do not cross as they leave. A
+  // line into the top of the focus's first row keeps clear of the legend.
+  const portAt = {};
+  for (const [key, towards] of Object.entries(ports)) {
+    const [id, which] = key.split("/");
+    const c = card(id);
+    const order = towards.map((x, i) => [x, i]).sort((a, b) => a[0] - b[0]);
+    const at = {};
+    order.forEach(([, i], k) => (at[i] = c.l + (c.w * (k + 1)) / (order.length + 1)));
+    if (which === "top" && legend && rowOf(id) === first) {
+      for (const i of Object.keys(at)) if (at[i] > legend.l - 8 && at[i] < legend.l + legend.w + 8) at[i] = Math.min(legend.l + legend.w + 10, c.l + c.w - 8);
+    }
+    portAt[key] = towards.map((_, i) => at[i]);
+  }
+  const used = {};
+  const at = (key) => {
+    const n = used[key] || 0;
+    used[key] = n + 1;
+    return portAt[key][n];
+  };
+  // The channels: one under each line of cards, from the bottom of its
+  // cards, and one under the focus, for the lines into the frame below.
+  const channels = rows.map((r) => ({ runs: [], top: r.bottom }));
+  if (below >= 0) channels.push({ runs: [], top: focus.t + focus.h });
+  const under = (rU, rL) => (rL === below ? channels.length - 1 : rU);
+  for (const q of jobs) {
+    if (q.kind === "loop") {
+      const xa = at(q.pa), xb = at(q.pb);
+      q.runs = [{ q, loop: true, x1: Math.min(xa, xb), x2: Math.max(xa, xb), xs: xa, xe: xb, label: true }];
+      channels[q.row].runs.push(q.runs[0]);
+    } else {
+      const xu = at(q.pu), xl = at(q.pl);
+      if (!q.skips) {
+        q.runs = [{ q, xs: xu, xe: xl, x1: Math.min(xu, xl), x2: Math.max(xu, xl), label: true }];
+        channels[under(q.rU, q.rL)].runs.push(q.runs[0]);
+      } else {
+        const first = { q, xs: xu, xe: q.via, x1: Math.min(xu, q.via), x2: Math.max(xu, q.via), label: true };
+        const last = { q, xs: q.via, xe: xl, x1: Math.min(q.via, xl), x2: Math.max(q.via, xl), label: false };
+        if (last.x2 - last.x1 > first.x2 - first.x1 + 40) [first.label, last.label] = [false, true];
+        channels[q.rU].runs.push(first);
+        channels[under(q.rL - 1, q.rL)].runs.push(last);
+        q.runs = [first, last];
+      }
+    }
+  }
+  // The lanes of each channel: loops first, the shorter the higher, then
+  // the runs, those going right from further right first and those going
+  // left from further left first, which keeps them from crossing.
+  const needed = channels.map(() => 0);
+  channels.forEach(({ runs, top }, c) => {
+    runs.sort((a, b) => {
+      if (Boolean(a.loop) !== Boolean(b.loop)) return a.loop ? -1 : 1;
+      if (a.loop) return a.x2 - a.x1 - (b.x2 - b.x1);
+      const ar = a.xe >= a.xs, br = b.xe >= b.xs;
+      if (ar !== br) return ar ? -1 : 1;
+      return ar ? b.xs - a.xs : a.xs - b.xs;
+    });
+    runs.forEach((run, k) => (run.y = top + LANE_FIRST + k * LANE));
+    needed[c] = runs.length ? LANE_FIRST + (runs.length - 1) * LANE + LANE_LAST : 0;
+    // Where the other lines of the channel cross each lane: a line drops
+    // from above to its lane, and from its lane down, so a loop's two
+    // ends and a run's start cross the lanes above it, and a run's end
+    // the lanes below.
+    for (const run of runs) {
+      run.crossings = [];
+      for (const other of runs) {
+        if (other === run) continue;
+        if (other.y > run.y) run.crossings.push(other.xs, ...(other.loop ? [other.xe] : []));
+        else if (!other.loop) run.crossings.push(other.xe);
+      }
+    }
+  });
+  const drawn = [];
+  for (const q of jobs) {
+    const w = q.w;
+    let points, label = null;
+    const bottom = (c) => c.t + c.h + (c.many ? 8 : 0);
+    if (q.kind === "loop") {
+      const [run] = q.runs;
+      points = [{ x: run.xs, y: bottom(q.A) }, { x: run.xs, y: run.y }, { x: run.xe, y: run.y }, { x: run.xe, y: bottom(q.B) }];
+      label = labelAt({ ...run, xe: run.x2 }, w.label, run.crossings, width);
+    } else {
+      const [first, last] = q.runs;
+      points = [{ x: first.xs, y: bottom(q.U) }, { x: first.xs, y: first.y }, { x: first.xe, y: first.y }];
+      if (last) points.push({ x: last.xs, y: last.y }, { x: last.xe, y: last.y });
+      points.push({ x: (last || first).xe, y: q.L.t });
+      if (q.upward) points.reverse();
+      const on = first.label ? first : last;
+      label = labelAt(on, w.label, on.crossings, width);
+    }
+    const end = w.dir === "to" || w.dir === "both", start = w.dir === "from" || w.dir === "both";
+    drawn.push({ d: rounded(points), end, start, text: w.label, label });
+  }
+  return { drawn, needed };
+}
+
+/// Where a line passes the lines of cards between, by `want` where nothing
+/// is in the way among `cards`, or else the nearest free way: not a narrow
+/// one, which is a gap with a line of its own in it, unless it is much
+/// nearer.
+function freeWay(want, cards, width) {
+  const blocked = cards.some((c) => c.l - CLEAR < want && want < c.l + c.w + CLEAR);
+  if (!blocked) return { x: want };
+  const sorted = [...cards].sort((a, b) => a.l - b.l);
+  const free = [];
+  let edge = 8;
+  for (const c of sorted) {
+    if (c.l - CLEAR > edge) free.push([edge, c.l - CLEAR]);
+    edge = Math.max(edge, c.l + c.w + CLEAR);
+  }
+  free.push([edge, Math.max(edge, width - 8)]);
+  let best = null, cost = Infinity;
+  for (const [x1, x2] of free) {
+    const x = Math.min(Math.max(want, x1), x2);
+    const narrow = x2 - x1 < 60;
+    const c = Math.abs(x - want) + (narrow ? 80 : 0);
+    if (c < cost) [best, cost] = [{ x, interval: narrow ? [x1, x2] : null }, c];
+  }
+  return best;
 }
 
 /// The lines of a tier past the gaps: guides from a card to the rows under
-/// it, lines between rows, to the frame, and along the frame.
+/// it, and the lines between its lines of cards, the frame's included.
 function wireDrill(d) {
   const keys = JSON.parse(d.dataset.keys || "{}");
   // A row under a card starts under that card, wherever the card is in
@@ -365,54 +562,68 @@ function wireDrill(d) {
     const r = el.getBoundingClientRect();
     return { l: r.left - box.left, t: r.top - box.top, w: r.width, h: r.height, many: el.classList.contains("many") };
   };
-  const inner = (id) => d.querySelector(`.focus [data-k="${keys[id]}"]`);
-  const outer = (id) => d.querySelector(`.side [data-outer="${CSS.escape(id)}"]`);
   const out = [], texts = [];
-  const underCount = {};
-  const cards = [...d.querySelectorAll(".focus .part")].map(rel);
-  for (let w of JSON.parse(d.dataset.wires || "[]")) {
-    let a, b;
-    if (w.tree) [a, b] = [inner(w.from), d.querySelector(`[data-k="${w.toKey}"]`)];
-    else if (w.inner) [a, b] = [inner(w.from), inner(w.to)];
-    else if (w.outer) [a, b] = [inner(w.from), outer(w.outer)];
-    else [a, b] = [outer(w.outerFrom), outer(w.outerTo)];
-    if (!a || !b) continue;
-    const A = rel(a), B = rel(b);
-    let { d: path, tx, ty, anchor } = curve(A, B);
-    let end = w.dir === "to" || w.dir === "both", start = w.dir === "from" || w.dir === "both";
-    // A line to the frame that would cross cards of the rows below goes
-    // under its own card first, across between the rows, and on.
-    if (w.outer && w.side === "right" && !w.under) {
-      const right = A.l + A.w, ay = A.t + A.h / 2, by = B.t + B.h / 2;
-      const blocked = cards.some((c) => c !== A && c.l < B.l && c.l + c.w > right + 4 && c.t < Math.max(ay, by) && c.t + c.h > Math.min(ay, by) && c.t > A.t);
-      if (blocked) w = { ...w, under: true };
+  // The lines of cards, from the top: the frame's above, the focus's rows,
+  // and the frame's below.
+  const rows = [...d.querySelectorAll(":scope > .side, :scope > .focus > .row")].map((row) => {
+    const cs = [...row.querySelectorAll(":scope > .line > .part")].map(rel);
+    const name = row.querySelector(":scope > .rowname");
+    return { el: row, side: row.classList.contains("side"), cards: cs, bottom: Math.max(...cs.map((c) => c.t + c.h + (c.many ? 8 : 0)), 0), nameHeight: name ? name.getBoundingClientRect().height + 6 : 0 };
+  });
+  const first = rows.findIndex((r) => !r.side);
+  const last = rows.length - 1 - [...rows].reverse().findIndex((r) => !r.side);
+  const rowOf = (id) => Number((keys[id] || "r-1").match(/^r(-?\d+)/)[1]);
+  const measured = {};
+  const card = (id) => {
+    if (!(id in measured)) {
+      const el = keys[id] ? d.querySelector(`[data-k="${keys[id]}"]`) : null;
+      measured[id] = el ? rel(el) : null;
     }
-    if (w.tree) {
-      const x = A.l + 12, y1 = A.t + A.h + (A.many ? 8 : 0), y2 = B.t + B.h / 2;
-      path = `M${x},${y1} L${x},${y2 - 8} Q${x},${y2} ${x + 8},${y2} L${B.l},${y2}`;
-      tx = null;
-      end = true;
-      start = false;
-    } else if (w.inner && Math.abs(A.t - B.t) < 8) {
-      // Along one row, past the cards between: down, across under them, and up.
-      const k = (underCount[A.t] = (underCount[A.t] || 0) + 1);
-      const ax = A.l + A.w * 0.6, bx = B.l + B.w * 0.4, ay = A.t + A.h + (A.many ? 8 : 0), yy = Math.max(A.t + A.h, B.t + B.h) + 10 + k * 14;
-      path = `M${ax},${ay} L${ax},${yy - 8} Q${ax},${yy} ${ax + 8},${yy} L${bx - 8},${yy} Q${bx},${yy} ${bx},${yy - 8} L${bx},${B.t + B.h + (B.many ? 8 : 0)}`;
-      tx = (ax + bx) / 2;
-      ty = yy - 5;
-      anchor = "middle";
-    } else if (w.under) {
-      // From a card that is not the last of its row, under the rest of
-      // the row and on to the frame.
-      const k = (underCount[w.from] = (underCount[w.from] || 0) + 1) - 1;
-      const ax = A.l + A.w * 0.6, ay = A.t + A.h + (A.many ? 8 : 0), yy = ay + 16 + k * 14, bx = B.l, by = B.t + B.h / 2;
-      path = `M${ax},${ay} L${ax},${yy - 10} Q${ax},${yy} ${ax + 10},${yy} L${bx - 34},${yy} C${bx - 12},${yy} ${bx - 12},${by} ${bx},${by}`;
-      tx = ax + 16;
-      ty = yy - 5;
-      anchor = "start";
+    return measured[id];
+  };
+  const focusEl = d.querySelector(".focus");
+  const focus = rel(focusEl);
+  const legendEl = d.classList.contains("noframe") ? null : focusEl.querySelector(":scope > .legend");
+  const legend = legendEl ? rel(legendEl) : null;
+  const all = JSON.parse(d.dataset.wires || "[]");
+  for (const w of all) {
+    if (!w.tree) continue;
+    const A = card(w.from), b = d.querySelector(`[data-k="${w.toKey}"]`);
+    if (!A || !b) continue;
+    const B = rel(b);
+    const x = A.l + 12, y1 = A.t + A.h + (A.many ? 8 : 0), y2 = B.t + B.h / 2;
+    out.push(`<path d="M${x},${y1} L${x},${y2 - 8} Q${x},${y2} ${x + 8},${y2} L${B.l},${y2}" marker-end="url(#arr)"/>`);
+  }
+  if (first >= 0) {
+    const { drawn, needed } = route(all.filter((w) => !w.tree), { rows, rowOf, card, width: box.width, focus, legend, first, last });
+    for (const { d: path, end, start, text, label } of drawn) {
+      out.push(`<path d="${path}"${end ? ' marker-end="url(#arr)"' : ""}${start ? ' marker-start="url(#arr)"' : ""}/>`);
+      if (text && label) texts.push(`<text x="${label[0]}" y="${label[1]}" text-anchor="${label[2]}">${esc(text)}</text>`);
     }
-    out.push(`<path d="${path}"${end ? ' marker-end="url(#arr)"' : ""}${start ? ' marker-start="url(#arr)"' : ""}/>`);
-    if (w.label && tx !== null) texts.push(`<text x="${tx}" y="${ty}" text-anchor="${anchor}">${esc(w.label)}</text>`);
+    // What is under a channel moves down to make room for its lanes: the
+    // next line of cards, the focus as a whole under the frame's cards
+    // above, and the frame's cards below under the channel under the
+    // focus; the focus grows under its last row for the lanes there.
+    const move = (el, natural, need) => {
+      const margin = parseFloat(el.style.marginTop) || 0;
+      const want = Math.max(0, Math.round(need - (natural - margin)));
+      if (Math.abs(want - margin) > 1) el.style.marginTop = want ? want + "px" : "";
+    };
+    const topOf = (row) => Math.min(...row.cards.map((c) => c.t), Infinity);
+    rows.forEach((row, i) => {
+      const next = rows[i + 1];
+      if (!next) return;
+      if (i === last) {
+        const want = needed[i] ? Math.round(needed[i] + 4) : 0;
+        const has = parseFloat(focusEl.style.paddingBottom) || 0;
+        if (Math.abs(want - has) > 1) focusEl.style.paddingBottom = want ? want + "px" : "";
+        const need = needed[needed.length - 1];
+        move(next.el, topOf(next) - (focus.t + focus.h), need ? need + 6 : 0);
+        return;
+      }
+      if (i + 1 === first) move(focusEl, focus.t - row.bottom, needed[i] ? needed[i] + 6 : 0);
+      else move(next.el, topOf(next) - row.bottom, needed[i] + 6 + (needed[i] ? next.nameHeight : 0));
+    });
   }
   svg.innerHTML = DEFS + out.join("");
   labels.innerHTML = texts.join("");

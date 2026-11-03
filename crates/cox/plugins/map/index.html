@@ -101,17 +101,11 @@
         font-family: var(--mono);
         font-size: 12px;
       }
-      /* The tier: its rows of cards, with the frame of the tiers above beside it. */
+      /* The tier: its rows of cards, with the frame of the tiers above around it, above and below. */
       .drill {
         position: relative;
         display: grid;
-        grid-template-columns: 104px minmax(0, 1fr) 104px;
-        gap: 0 40px;
-        align-items: stretch;
-      }
-      .drill.noframe {
         grid-template-columns: minmax(0, 1fr);
-        gap: 0;
       }
       .drill svg.wires,
       .drill svg.labels {
@@ -140,22 +134,21 @@
         stroke: var(--focus);
       }
       .side {
-        display: flex;
-        flex-direction: column;
-        justify-content: space-evenly;
-        gap: 28px;
-        padding: 20px 0;
         min-width: 0;
       }
-      .side.left:has(.part:only-child) {
-        justify-content: flex-start;
-        padding-top: 56px;
+      .side.above {
+        padding-bottom: 22px;
+      }
+      .side.below {
+        padding-top: 22px;
+      }
+      .side .line {
+        padding-left: 12px;
+        padding-right: 12px;
       }
       .side .part {
-        width: 100%;
-        max-width: none;
-        min-width: 0;
-        flex: 0 0 auto;
+        flex-basis: 120px;
+        min-width: 120px;
       }
       .focus {
         border: 1px solid var(--dim);
@@ -174,20 +167,44 @@
       .noframe .part {
         min-width: 110px;
       }
-      .focushead {
+      /* The box the tier is the inside of, named over the focus's top border. */
+      .legend {
+        position: relative;
+        z-index: 1;
+        top: -20px;
+        margin-bottom: -32px;
+        justify-self: start;
+        max-width: 50%;
         display: flex;
         align-items: baseline;
-        gap: 10px;
+        gap: 8px;
+        padding: 0 6px;
+        line-height: 18px;
+        background: var(--background);
+        white-space: nowrap;
       }
-      .focushead .name {
-        font-size: 15px;
+      .legend .name {
+        font-size: 13px;
         font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
-      .focushead .open {
-        margin-left: auto;
-        font-size: 11px;
-        letter-spacing: 0.06em;
+      .legend .each {
+        font-size: 10.5px;
         color: var(--dim);
+        letter-spacing: 0.04em;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0 7px;
+      }
+      .noframe .legend {
+        position: static;
+        margin-bottom: 0;
+        padding: 0;
+        background: transparent;
+      }
+      .noframe .legend .name {
+        font-size: 15px;
       }
       .row {
         display: grid;
@@ -197,6 +214,14 @@
         font-size: 11.5px;
         color: var(--dim);
         letter-spacing: 0.04em;
+        position: relative;
+        z-index: 1;
+        justify-self: start;
+        padding-right: 6px;
+        background: var(--background);
+      }
+      .focus:not(.noframe .focus) .rowname {
+        background: var(--focus);
       }
       .line {
         position: relative;
@@ -519,26 +544,6 @@
         font-size: 11.5px;
         color: var(--faint);
         margin-top: auto;
-      }
-      @container (max-width: 640px) {
-        .drill {
-          grid-template-columns: 1fr;
-          gap: 28px 0;
-        }
-        .side {
-          flex-direction: row;
-          flex-wrap: wrap;
-          justify-content: center;
-          padding: 0;
-          gap: 10px;
-        }
-        .side .part {
-          width: auto;
-          min-width: 120px;
-        }
-      }
-      #app {
-        container-type: inline-size;
       }
     </style>
   </head>
