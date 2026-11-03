@@ -322,11 +322,13 @@ function renderTier(tierId) {
 /// A flow as a sequence diagram of tier `t`: the boxes its steps go
 /// between, as `stepsIn` rolled them up, as columns in the order the
 /// tier draws them, the user's side first, each with a lifeline down the
-/// page; and the steps as rows from the top, an arrow from the box that
-/// talks to the one it talks to, with what the step says over it. A step
-/// inside a box is a loop on its lifeline, which opens the box when it
-/// opens a tier; a step elsewhere in the map is a dim row. The step
-/// chosen, `stepNo`, is lit.
+/// page, the tier's own in the box the tier is the inside of, named over
+/// its top as the map names it, and the frame's outside it; and the
+/// steps as rows from the top, an arrow from the box that talks to the
+/// one it talks to, with what the step says over it. A step inside a box
+/// is a loop on its lifeline, which opens the box when it opens a tier;
+/// a step elsewhere in the map is a dim row. The step chosen, `stepNo`,
+/// is lit.
 function seqEl(t, shown, stepNo) {
   const own = openerOf(t.id);
   const frame = t.frame || {};
@@ -337,12 +339,22 @@ function seqEl(t, shown, stepNo) {
   const col = Object.fromEntries(cols.map((id, i) => [id, i]));
   const textW = (s, size = 11) => String(s).length * size * 0.56;
   const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
-  const LEFT = 108, HEAD_W = 132, HEAD_H = 40, TOP = 6, ROW = 30, THIN = 22, LOOP = 22;
-  // The columns share the width the page has, up to 150 apart, and are
-  // a step's label apart at least, shared over the columns a long step
-  // crosses.
-  const avail = (app.clientWidth || 800) - 32 - LEFT - HEAD_W / 2 - 16;
-  const base = Math.max(HEAD_W + 10, Math.min(150, Math.floor(cols.length > 1 ? avail / (cols.length - 1) : 150)));
+  const HEAD_H = 40, ROW = 30, THIN = 22, LOOP = 22, PAD = 14;
+  // The tier's own columns, the box it is the inside of among them, are
+  // boxed as the map boxes the tier, apart from the frame's.
+  const inner = new Set([...(own ? [own] : []), ...partsOf(t)]);
+  const first = cols.findIndex((id) => inner.has(id));
+  const last = cols.length - 1 - [...cols].reverse().findIndex((id) => inner.has(id));
+  const boxed = Boolean(own) && first >= 0;
+  const TOP = boxed ? 22 : 6;
+  // The columns share the width the page has, up to 150 apart, their
+  // heads narrower where the page is narrow, and are a step's label
+  // apart at least, shared over the columns a long step crosses.
+  const avail = (app.clientWidth || 800) - 32;
+  const pitch = (avail - 56 - 132 - (boxed ? 2 * PAD : 0)) / Math.max(1, cols.length - 1);
+  const HEAD_W = Math.round(Math.max(96, Math.min(132, pitch - 10)));
+  const LEFT = 40 + HEAD_W / 2;
+  const base = Math.max(HEAD_W + 10, Math.min(150, Math.floor(pitch)));
   const gaps = cols.slice(1).map(() => base);
   for (const st of shown) {
     if (st.kind === "outside" || st.a === st.b) continue;
@@ -350,9 +362,13 @@ function seqEl(t, shown, stepNo) {
     const need = (textW(st.step.says) + 28) / (j - i);
     for (let k = i; k < j; k++) gaps[k] = Math.max(gaps[k], need);
   }
+  if (boxed) {
+    if (first > 0) gaps[first - 1] += 2 * PAD;
+    if (last < cols.length - 1) gaps[last] += 2 * PAD;
+  }
   const xs = [LEFT];
   for (const g of gaps) xs.push(xs[xs.length - 1] + g);
-  let W = xs[xs.length - 1] + HEAD_W / 2 + 16;
+  let W = xs[xs.length - 1] + HEAD_W / 2 + 16 + (boxed && last === cols.length - 1 ? PAD : 0);
   let y = TOP + HEAD_H + 24;
   const said = (st) => `${esc(nameOf(st.step.from))} → ${esc(nameOf(st.step.to))}: ${esc(st.step.says)}`;
   const badgeEl = (label, yc) => {
@@ -402,20 +418,28 @@ function seqEl(t, shown, stepNo) {
     return `<g class="row ${st.kind} ${on ? "on" : ""}" data-step="${st.n}">${title}<rect class="band" x="4" y="${yc - h / 2 + 1}" width="__W__" height="${h - 2}" rx="6"/>${badge}${drawn}</g>`;
   });
   const H = y + 18;
+  let box = "";
+  if (boxed) {
+    const head = parts()[own] || { name: own };
+    const x0 = xs[first] - HEAD_W / 2 - PAD, x1 = xs[last] + HEAD_W / 2 + PAD;
+    const each = head.each ? `<text class="each" x="${x0 + 14 + textW(head.name, 13) + 10}" y="${TOP - 4}">${esc(head.each)}</text>` : "";
+    box = `<g class="box"><rect x="${x0}" y="${TOP - 8}" width="${x1 - x0}" height="${H - 4 - (TOP - 8)}" rx="12"/><text class="name" x="${x0 + 14}" y="${TOP - 4}">${esc(head.name)}</text>${each}</g>`;
+  }
   const lives = cols.map((id) => `<line class="life" x1="${xs[col[id]]}" y1="${TOP + HEAD_H}" x2="${xs[col[id]]}" y2="${H - 8}"/>`).join("");
   const heads = cols
     .map((id) => {
       const p = parts()[id] || { name: id, says: "" };
       const goes = p.tier ? "tier" : p.holds && p.holds.length ? "leaf" : "";
-      const sub = id === own ? "this tier" : p.each || "";
-      const name = `<text class="name" x="${HEAD_W / 2}" y="${sub ? 17 : 24}" text-anchor="middle">${esc(trunc(p.name, 19))}</text>`;
-      const each = sub ? `<text class="each" x="${HEAD_W / 2}" y="31" text-anchor="middle">${esc(trunc(sub, 24))}</text>` : "";
+      const sub = id === own ? "the box itself" : p.each || "";
+      const fit = Math.floor((HEAD_W - 16) / 7);
+      const name = `<text class="name" x="${HEAD_W / 2}" y="${sub ? 17 : 24}" text-anchor="middle">${esc(trunc(p.name, fit))}</text>`;
+      const each = sub ? `<text class="each" x="${HEAD_W / 2}" y="31" text-anchor="middle">${esc(trunc(sub, fit + 5))}</text>` : "";
       return `<g class="who ${goes ? "goes" : ""} ${id === own ? "own" : ""}" data-seq="${esc(id)}" transform="translate(${xs[col[id]] - HEAD_W / 2} ${TOP})"><title>${esc(p.name)}${p.says ? ` — ${esc(p.says)}` : ""}</title><rect width="${HEAD_W}" height="${HEAD_H}" rx="7"/>${name}${each}</g>`;
     })
     .join("");
   const width = Math.round(W);
   const body = rows.map((r) => r.replace("__W__", String(width - 8))).join("");
-  return `<div class="seq"><svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${DEFS}${lives}${body}${heads}</svg></div>`;
+  return `<div class="seq"><svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${DEFS}${box}${lives}${body}${heads}</svg></div>`;
 }
 
 function renderLeaf(tierId, id) {

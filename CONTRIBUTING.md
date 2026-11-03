@@ -322,7 +322,8 @@ box to another, written between the boxes that hold the code: "flows"
 above the boxes lists them, and a flow chosen is drawn as a sequence
 diagram of the tier that is open: the boxes its steps go between, rolled
 up to the tier's, as columns in the order the tier draws them, each
-with a lifeline, and the steps as rows from the top, an arrow from the
+with a lifeline, the tier's own in the box the tier is the inside of
+and the frame's outside it, and the steps as rows from the top, an arrow from the
 box that talks to the one it talks to, with what the step says; a step
 inside a box is a loop on its lifeline, which opens the box at the
 step, so a flow is read from the top down as the map is, and a column
