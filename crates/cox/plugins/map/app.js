@@ -11,13 +11,16 @@
 // of each file, read from `cox://api/file/<path>`: the symbols it
 // defines, how many places use each, and which files use them. Where
 // the page is open is its hash: a tier's id, and after it the id of a
-// card open on its own, as `#cox/stage`.
+// card open on its own, as `#cox/stage`, and after `@` the flow
+// chosen, drawn as a sequence diagram of the tier's boxes, or, with
+// `+map`, numbered on the lines of the tier.
 
 const API = "cox://api/map";
 const EVERY = 2000;
 const NS = "http://www.w3.org/2000/svg";
 const DEFS =
-  '<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>';
+  '<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>' +
+  '<marker id="arrlit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--hold)"/></marker></defs>';
 
 const app = document.getElementById("app");
 let data = null;
@@ -36,6 +39,8 @@ const esc = (s) =>
 const parts = () => (data && data.map && data.map.parts) || {};
 const tiers = () => (data && data.map && data.map.tiers) || [];
 const edges = () => (data && data.map && data.map.edges) || [];
+const flows = () => (data && data.map && data.map.flows) || [];
+const nameOf = (id) => (parts()[id] && parts()[id].name) || id;
 const facts = (id) => (data && data.facts && data.facts[id]) || { holds: [], changed: { files: 0, added: 0, removed: 0 }, stale: [] };
 const tier = (id) => tiers().find((t) => t.id === id);
 const partsOf = (t) => t.rows.flatMap((row) => row.parts);
@@ -67,15 +72,73 @@ function above(tierId) {
 
 // --- Where the page is open.
 
+// The hash is `tier`, or `tier/part` for a card open on its own, and
+// after `@` the flow chosen, with `:` and the number of its step chosen,
+// and `+map` when the flow is drawn on the map instead of in order.
 function where() {
   const hash = decodeURIComponent(location.hash.replace(/^#/, ""));
-  const [tierId, partId] = hash.split("/");
+  const [place, chosen = ""] = hash.split("@");
+  const [tierId, partId] = place.split("/");
+  const onMap = chosen.endsWith("+map");
+  const [flowId, stepNo] = (onMap ? chosen.slice(0, -4) : chosen).split(":");
   const first = tiers()[0];
-  return { tier: (tierId && tier(tierId) ? tierId : first && first.id) || null, part: partId || null };
+  const flow = flowId && flows().some((f) => f.id === flowId) ? flowId : null;
+  const step = flow && /^\d+$/.test(stepNo || "") ? Number(stepNo) : null;
+  return { tier: (tierId && tier(tierId) ? tierId : first && first.id) || null, part: partId || null, flow, step, onMap: Boolean(flow) && onMap };
 }
-function go(tierId, partId) {
-  location.hash = partId ? `${tierId}/${partId}` : tierId;
+function go(tierId, partId, { flow, step, onMap } = {}) {
+  let hash = partId ? `${tierId}/${partId}` : tierId;
+  if (flow) hash += `@${flow}${step ? `:${step}` : ""}${onMap ? "+map" : ""}`;
+  location.hash = hash;
 }
+
+// --- Flows: the orders in which the boxes talk, rolled up to a tier.
+
+/// The boxes a tier shows: those of its rows and of its frame.
+function shownIn(t) {
+  const f = t.frame || {};
+  return [...partsOf(t), ...(f.above || f.left || []), ...(f.below || f.right || [])];
+}
+
+/// The box of tier `t` that `id` is, or is inside of, through the boxes
+/// that open the tiers between: one the tier shows, or the box the tier
+/// is the inside of; null when the tier does not show it.
+function upTo(t, id) {
+  const shown = shownIn(t), own = openerOf(t.id);
+  let current = id;
+  for (let i = 0; i < 12 && current; i++) {
+    if (shown.includes(current) || current === own) return current;
+    const within = tierOf(current);
+    current = within ? openerOf(within.id) : null;
+  }
+  return null;
+}
+
+/// A flow's steps as tier `t` shows them: each between two of its boxes
+/// ("line"), inside one of them ("inside"), between one of them and the
+/// box the tier is the inside of ("own"), or elsewhere ("outside").
+function stepsIn(t, flow) {
+  const own = openerOf(t.id);
+  return flow.steps.map((step, k) => {
+    const a = upTo(t, step.from), b = upTo(t, step.to);
+    const kind = !a || !b ? "outside" : a === b ? "inside" : a === own || b === own ? "own" : "line";
+    return { n: k + 1, step, a, b, kind };
+  });
+}
+
+/// Where a step is made, as a `cox://open` address.
+function atHref(at) {
+  const m = /^(.*):(\d+)$/.exec(at);
+  const path = m ? m[1] : at;
+  return `cox://open${path.startsWith("/") ? "" : data.root + "/"}${path}${m ? `#L${m[2]}` : ""}`;
+}
+
+/// While a flow is chosen: the steps on each line, by `from>to`, each
+/// with its number and whether it is the step chosen.
+let flowMarks = {};
+let flowOn = false;
+/// The pairs `from>to` some line of the tier has an arrow into `to` for.
+let flowPointed = new Set();
 
 // --- Drawing.
 
@@ -161,7 +224,7 @@ function renderTier(tierId) {
           const e = edgeBetween(row.parts[i - 1], id);
           if (e) {
             const dir = pointing(e, row.parts[i - 1], id);
-            gap = `<span class="gap" data-label="${esc(e.says)}" data-dir="${dir}" style="flex-basis:${Math.max(44, e.says.length * 6.5 + 16)}px"></span>`;
+            gap = `<span class="gap" data-label="${esc(e.says)}" data-dir="${dir}" data-from="${esc(row.parts[i - 1])}" data-to="${esc(id)}" style="flex-basis:${Math.max(44, e.says.length * 6.5 + 16)}px"></span>`;
           } else gap = '<span class="space"></span>';
         }
         return gap + partEl(id, { key: `r${ri}c${i}`, outer: Boolean(row.side) });
@@ -182,20 +245,177 @@ function renderTier(tierId) {
     if (lines[ra].side && lines[rb].side) continue;
     wires.push({ from: e.from, to: e.to, label: e.says, dir: e.dir || "to" });
   }
+  // The flow chosen: its steps rolled up to this tier's boxes, numbered
+  // on the lines between them, a line of the flow's own where the map
+  // has no edge.
+  const { flow: flowId, step: stepNo, onMap } = where();
+  const flow = flowId ? flows().find((f) => f.id === flowId) : null;
+  const shown = flow ? stepsIn(t, flow) : [];
+  const seq = Boolean(flow) && !onMap;
+  flowMarks = {};
+  flowOn = Boolean(flow);
+  flowPointed = new Set();
+  for (const e of edges()) {
+    const dir = e.dir || "to";
+    if (dir === "to" || dir === "both") flowPointed.add(`${e.from}>${e.to}`);
+    if (dir === "both") flowPointed.add(`${e.to}>${e.from}`);
+  }
+  for (const st of shown) {
+    if (st.kind !== "line") continue;
+    (flowMarks[`${st.a}>${st.b}`] = flowMarks[`${st.a}>${st.b}`] || []).push({ n: st.n, lit: st.n === stepNo });
+    const drawn = edgeBetween(st.a, st.b) || wires.some((w) => (w.from === st.a && w.to === st.b) || (w.from === st.b && w.to === st.a));
+    if (!drawn) wires.push({ from: st.a, to: st.b, label: "", dir: "to", flow: true });
+  }
+  const views = flow
+    ? `<span class="views"><button class="view ${seq ? "on" : ""}" data-view="seq" title="the steps in order, between the boxes as columns">sequence</button><button class="view ${onMap ? "on" : ""}" data-view="map" title="the steps numbered on the lines of the map">on the map</button></span>`
+    : "";
+  const flowBar = flows().length
+    ? `<div class="flows"><span class="flowsname">flows</span>${flows()
+        .map((f) => `<button class="flowchip ${flow && f.id === flow.id ? "on" : ""}" data-flow="${esc(f.id)}" title="${esc(f.says)}">${esc(f.name)}</button>`)
+        .join("")}${views}</div>`
+    : "";
+  let stepsBar = "";
+  if (flow) {
+    const chips = seq
+      ? ""
+      : `<div class="steps">${shown
+          .map((st) => `<button class="step ${st.kind} ${st.n === stepNo ? "on" : ""}" data-step="${st.n}" title="${esc(nameOf(st.step.from))} → ${esc(nameOf(st.step.to))}: ${esc(st.step.says)}">${st.n}</button>`)
+          .join("")}</div>`;
+    const cur = stepNo ? shown[stepNo - 1] : null;
+    let says;
+    if (cur) {
+      const where_ =
+        cur.kind === "inside"
+          ? parts()[cur.a] && parts()[cur.a].tier
+            ? `<button class="into" data-into="${esc(cur.a)}">inside ${esc(nameOf(cur.a))} ›</button>`
+            : `<span class="where">inside ${esc(nameOf(cur.a))}</span>`
+          : cur.kind === "own"
+            ? `<span class="where">${cur.a === openerOf(tierId) ? "from" : "into"} ${esc(nameOf(openerOf(tierId)))}, the box this tier is the inside of</span>`
+            : cur.kind === "outside"
+              ? '<span class="where">elsewhere in the map</span>'
+              : "";
+      const at = cur.step.at ? `<a class="at" href="${esc(atHref(cur.step.at))}">${esc(cur.step.at)}</a>` : "";
+      says = `<div class="stepsays"><span class="n">${cur.n}</span><span class="who">${esc(nameOf(cur.step.from))} → ${esc(nameOf(cur.step.to))}</span><span class="what">${esc(cur.step.says)}</span>${where_}${at}</div>`;
+    } else says = `<div class="stepsays faint">${esc(flow.says)} <span class="where">← → go from step to step</span></div>`;
+    stepsBar = `${chips}${says}`;
+  }
   const opener = openerOf(tierId);
   const head = opener ? parts()[opener] : null;
   const noframe = !aboveIds.length && !belowIds.length;
   const legend = head ? `<div class="legend"><span class="name">${esc(head.name)}</span>${head.each ? `<span class="each">${esc(head.each)}</span>` : ""}</div>` : "";
   const focus = rows.filter((_, ri) => !lines[ri].side).join("");
-  const body = `<div class="drill ${noframe ? "noframe" : ""}" data-wires="${esc(JSON.stringify(wires))}" data-keys="${esc(JSON.stringify(keyOf))}">
+  const body = seq
+    ? seqEl(t, shown, stepNo)
+    : `<div class="drill ${noframe ? "noframe" : ""}" data-wires="${esc(JSON.stringify(wires))}" data-keys="${esc(JSON.stringify(keyOf))}">
     ${aboveIds.length ? rows[0] : ""}
     <div class="focus">${legend}${focus}</div>
     ${belowIds.length ? rows[rows.length - 1] : ""}
   </div>`;
+  const foot = seq
+    ? `<div class="foot"><span>a column opens the tier inside it, or the code it holds</span><span>·</span><span>a row is a step of the flow; a loop is a step inside a box, which opens it</span><span>·</span><span>← → go from step to step</span></div>`
+    : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>orange is what changed, as Changes shows it</span></div>`;
   const chain = [...above(tierId), tierId].map((id) => ({ text: tier(id).name, tier: id }));
-  app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${body}
-    <div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>orange is what changed, as Changes shows it</span></div>`;
+  app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${body}${foot}`;
   wired();
+}
+
+/// A flow as a sequence diagram of tier `t`: the boxes its steps go
+/// between, as `stepsIn` rolled them up, as columns in the order the
+/// tier draws them, the user's side first, each with a lifeline down the
+/// page; and the steps as rows from the top, an arrow from the box that
+/// talks to the one it talks to, with what the step says over it. A step
+/// inside a box is a loop on its lifeline, which opens the box when it
+/// opens a tier; a step elsewhere in the map is a dim row. The step
+/// chosen, `stepNo`, is lit.
+function seqEl(t, shown, stepNo) {
+  const own = openerOf(t.id);
+  const frame = t.frame || {};
+  const order = [...(frame.above || frame.left || []), ...(own ? [own] : []), ...partsOf(t), ...(frame.below || frame.right || [])];
+  const used = new Set(shown.filter((st) => st.kind !== "outside").flatMap((st) => [st.a, st.b]));
+  const cols = order.filter((id, i) => used.has(id) && order.indexOf(id) === i);
+  if (!cols.length) return '<div class="says faint">None of the steps of this flow go between the boxes this tier shows.</div>';
+  const col = Object.fromEntries(cols.map((id, i) => [id, i]));
+  const textW = (s, size = 11) => String(s).length * size * 0.56;
+  const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const LEFT = 108, HEAD_W = 132, HEAD_H = 40, TOP = 6, ROW = 30, THIN = 22, LOOP = 22;
+  // The columns share the width the page has, up to 150 apart, and are
+  // a step's label apart at least, shared over the columns a long step
+  // crosses.
+  const avail = (app.clientWidth || 800) - 32 - LEFT - HEAD_W / 2 - 16;
+  const base = Math.max(HEAD_W + 10, Math.min(150, Math.floor(cols.length > 1 ? avail / (cols.length - 1) : 150)));
+  const gaps = cols.slice(1).map(() => base);
+  for (const st of shown) {
+    if (st.kind === "outside" || st.a === st.b) continue;
+    const i = Math.min(col[st.a], col[st.b]), j = Math.max(col[st.a], col[st.b]);
+    const need = (textW(st.step.says) + 28) / (j - i);
+    for (let k = i; k < j; k++) gaps[k] = Math.max(gaps[k], need);
+  }
+  const xs = [LEFT];
+  for (const g of gaps) xs.push(xs[xs.length - 1] + g);
+  let W = xs[xs.length - 1] + HEAD_W / 2 + 16;
+  let y = TOP + HEAD_H + 24;
+  const said = (st) => `${esc(nameOf(st.step.from))} → ${esc(nameOf(st.step.to))}: ${esc(st.step.says)}`;
+  const badgeEl = (label, yc) => {
+    const w = Math.max(18, textW(label, 9.5) + 10);
+    return `<g class="n"><rect x="${22 - w / 2}" y="${yc - 9}" width="${w}" height="18" rx="9"/><text x="22" y="${yc + 3.3}">${label}</text></g>`;
+  };
+  // Steps elsewhere in the map one after another share a row, which
+  // says the one chosen among them, or how many they are.
+  // The links out of the loops on a lifeline line up, past its longest
+  // label.
+  const loopW = {};
+  for (const st of shown) if (st.kind !== "outside" && st.a === st.b) loopW[st.a] = Math.max(loopW[st.a] || 0, textW(st.step.says));
+  const groups = [];
+  for (const st of shown) {
+    const last = groups[groups.length - 1];
+    if (st.kind === "outside" && last && last.outside) last.steps.push(st);
+    else groups.push({ outside: st.kind === "outside", steps: [st] });
+  }
+  const rows = groups.map((group) => {
+    const st = group.steps.find((x) => x.n === stepNo) || group.steps[0];
+    const h = group.outside ? THIN : ROW;
+    const yc = y + h / 2;
+    y += h;
+    const on = group.steps.some((x) => x.n === stepNo);
+    const span = group.steps.length > 1 ? `${group.steps[0].n}–${group.steps[group.steps.length - 1].n}` : String(st.n);
+    const badge = badgeEl(on || group.steps.length === 1 ? String(st.n) : span, yc);
+    let drawn;
+    if (group.outside) {
+      const text =
+        on || group.steps.length === 1
+          ? `${said(st)} · elsewhere in the map`
+          : `${group.steps.length} steps elsewhere in the map, ${esc(nameOf(st.step.from))} → … → ${esc(nameOf(group.steps[group.steps.length - 1].step.to))}`;
+      drawn = `<text class="what" x="${22 + Math.max(9, textW(span, 9.5) / 2 + 5) + 10}" y="${yc + 3.5}">${text}</text>`;
+    } else if (st.a === st.b) {
+      const x = xs[col[st.a]];
+      const p = parts()[st.a];
+      const intoAt = x + LOOP + 8 + loopW[st.a] + 10;
+      const into = p && p.tier ? `<text class="into" data-into="${esc(st.a)}" x="${intoAt}" y="${yc + 4}">inside ${esc(nameOf(st.a))} ›</text>` : "";
+      W = Math.max(W, intoAt + (into ? textW(`inside ${nameOf(st.a)} ›`) : 0) + 16);
+      drawn = `<path class="arrow loop" d="M${x} ${yc - 7} H${x + LOOP} V${yc + 7} H${x + 2}" marker-end="url(#${on ? "arrlit" : "arr"})"/><text class="what" x="${x + LOOP + 8}" y="${yc + 4}">${esc(st.step.says)}</text>${into}`;
+    } else {
+      const xa = xs[col[st.a]], xb = xs[col[st.b]];
+      const end = xb > xa ? xb - 1 : xb + 1;
+      drawn = `<path class="arrow" d="M${xa} ${yc} L${end} ${yc}" marker-end="url(#${on ? "arrlit" : "arr"})"/><text class="what" x="${(xa + xb) / 2}" y="${yc - 5}" text-anchor="middle">${esc(st.step.says)}</text>`;
+    }
+    const title = `<title>${group.steps.map((x) => `${x.n}. ${said(x)}${x.step.at ? ` (${esc(x.step.at)})` : ""}`).join("\n")}</title>`;
+    return `<g class="row ${st.kind} ${on ? "on" : ""}" data-step="${st.n}">${title}<rect class="band" x="4" y="${yc - h / 2 + 1}" width="__W__" height="${h - 2}" rx="6"/>${badge}${drawn}</g>`;
+  });
+  const H = y + 18;
+  const lives = cols.map((id) => `<line class="life" x1="${xs[col[id]]}" y1="${TOP + HEAD_H}" x2="${xs[col[id]]}" y2="${H - 8}"/>`).join("");
+  const heads = cols
+    .map((id) => {
+      const p = parts()[id] || { name: id, says: "" };
+      const goes = p.tier ? "tier" : p.holds && p.holds.length ? "leaf" : "";
+      const sub = id === own ? "this tier" : p.each || "";
+      const name = `<text class="name" x="${HEAD_W / 2}" y="${sub ? 17 : 24}" text-anchor="middle">${esc(trunc(p.name, 19))}</text>`;
+      const each = sub ? `<text class="each" x="${HEAD_W / 2}" y="31" text-anchor="middle">${esc(trunc(sub, 24))}</text>` : "";
+      return `<g class="who ${goes ? "goes" : ""} ${id === own ? "own" : ""}" data-seq="${esc(id)}" transform="translate(${xs[col[id]] - HEAD_W / 2} ${TOP})"><title>${esc(p.name)}${p.says ? ` — ${esc(p.says)}` : ""}</title><rect width="${HEAD_W}" height="${HEAD_H}" rx="7"/>${name}${each}</g>`;
+    })
+    .join("");
+  const width = Math.round(W);
+  const body = rows.map((r) => r.replace("__W__", String(width - 8))).join("");
+  return `<div class="seq"><svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${DEFS}${lives}${body}${heads}</svg></div>`;
 }
 
 function renderLeaf(tierId, id) {
@@ -316,12 +536,49 @@ function wireLine(line) {
     const x1 = p.right - box.left + line.scrollLeft + 2, x2 = n.left - box.left + line.scrollLeft - 2;
     const dir = gap.dataset.dir;
     const end = dir === "to" || dir === "both", start = dir === "from" || dir === "both";
-    out.push(`<path d="M${x1},${y} L${x2},${y}"${end ? ' marker-end="url(#arr)"' : ""}${start ? ' marker-start="url(#arr)"' : ""}/>`);
-    if (gap.dataset.label) texts.push(`<text x="${(x1 + x2) / 2}" y="${y - 6}" text-anchor="middle">${esc(gap.dataset.label)}</text>`);
+    const { cls, badges } = flowDress(gap.dataset.from, gap.dataset.to, [{ x: x1, y }, { x: x2, y }], false, end, start);
+    out.push(`<path class="${cls}" d="M${x1},${y} L${x2},${y}"${markers(end, start, cls)}/>`);
+    if (gap.dataset.label) texts.push(`<text class="${cls}" x="${(x1 + x2) / 2}" y="${y - 6}" text-anchor="middle">${esc(gap.dataset.label)}</text>`);
+    badges.forEach((b) => texts.push(badgeEl(b)));
   }
   svg.innerHTML = DEFS + out.join("");
   labels.innerHTML = texts.join("");
 }
+
+/// The arrow heads of a line, lit with it.
+function markers(end, start, cls) {
+  const arrow = cls.includes("lit") ? "url(#arrlit)" : "url(#arr)";
+  return `${end ? ` marker-end="${arrow}"` : ""}${start ? ` marker-start="${arrow}"` : ""}`;
+}
+
+/// How a line from `from` to `to`, along `points`, is drawn while a flow
+/// is chosen: dashed when it is the flow's own, with no edge in the map,
+/// lit when the step chosen takes it, dimmed when no step does; and the
+/// badges of the steps that take it, numbered, each near the end the
+/// step goes into. Of several lines between two boxes, a step takes the
+/// one whose arrow points its way (`end` into `to`, `start` into
+/// `from`), or any when none does.
+function flowDress(from, to, points, flowOnly, end = true, start = false) {
+  const cls = flowOnly ? ["flow"] : [];
+  if (!flowOn) return { cls: cls.join(" "), badges: [] };
+  const takes = (a, b, pointed) => (pointed || !flowPointed.has(`${a}>${b}`) ? flowMarks[`${a}>${b}`] || [] : []);
+  const forth = takes(from, to, end), back = takes(to, from, start);
+  if (!forth.length && !back.length) return { cls: "off", badges: [] };
+  if ([...forth, ...back].some((m) => m.lit)) cls.push("lit");
+  const badges = [];
+  const along = (pts, marks) => {
+    const clean = pts.filter((p, i) => i === 0 || Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) > 0.5);
+    if (clean.length < 2 || !marks.length) return;
+    const E = clean[clean.length - 1], P = clean[clean.length - 2];
+    const len = Math.hypot(P.x - E.x, P.y - E.y) || 1, ux = (P.x - E.x) / len, uy = (P.y - E.y) / len;
+    marks.forEach((m, k) => badges.push({ x: E.x + ux * (17 + 16 * k), y: E.y + uy * (17 + 16 * k), n: m.n, lit: m.lit }));
+  };
+  along(points, forth);
+  along([...points].reverse(), back);
+  return { cls: cls.join(" "), badges };
+}
+const badgeEl = (b) =>
+  `<g class="badge ${b.lit ? "lit" : ""}"><circle cx="${b.x}" cy="${b.y}" r="7.5"/><text x="${b.x}" y="${b.y}" dy="3.4" text-anchor="middle">${b.n}</text></g>`;
 
 /// How far apart the lines run in a channel between two lines of cards,
 /// how far the first runs from the line above, and the last from the
@@ -514,7 +771,7 @@ function route(wires, ctx) {
       label = labelAt(on, w.label, on.crossings, width);
     }
     const end = w.dir === "to" || w.dir === "both", start = w.dir === "from" || w.dir === "both";
-    drawn.push({ d: rounded(points), end, start, text: w.label, label });
+    drawn.push({ d: rounded(points), end, start, text: w.label, label, from: w.from, to: w.to, points, flow: Boolean(w.flow) });
   }
   return { drawn, needed };
 }
@@ -596,9 +853,11 @@ function wireDrill(d) {
   }
   if (first >= 0) {
     const { drawn, needed } = route(all.filter((w) => !w.tree), { rows, rowOf, card, width: box.width, focus, legend, first, last });
-    for (const { d: path, end, start, text, label } of drawn) {
-      out.push(`<path d="${path}"${end ? ' marker-end="url(#arr)"' : ""}${start ? ' marker-start="url(#arr)"' : ""}/>`);
-      if (text && label) texts.push(`<text x="${label[0]}" y="${label[1]}" text-anchor="${label[2]}">${esc(text)}</text>`);
+    for (const { d: path, end, start, text, label, from, to, points, flow } of drawn) {
+      const { cls, badges } = flowDress(from, to, points, flow, end, start);
+      out.push(`<path class="${cls}" d="${path}"${markers(end, start, cls)}/>`);
+      if (text && label) texts.push(`<text class="${cls}" x="${label[0]}" y="${label[1]}" text-anchor="${label[2]}">${esc(text)}</text>`);
+      badges.forEach((b) => texts.push(badgeEl(b)));
     }
     // What is under a channel moves down to make room for its lanes: the
     // next line of cards, the focus as a whole under the frame's cards
@@ -649,22 +908,64 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => wire
 // --- Going places.
 
 app.addEventListener("click", (event) => {
-  const t = event.target.closest("[data-goes],[data-tier]");
+  const t = event.target.closest("[data-goes],[data-tier],[data-flow],[data-step],[data-into],[data-view],[data-seq]");
   if (!t) return;
+  const { tier: here, flow, step, onMap } = where();
+  const kept = { flow, step, onMap };
   if (t.dataset.tier) {
-    go(t.dataset.tier, t.dataset.part);
+    go(t.dataset.tier, t.dataset.part, kept);
+    return;
+  }
+  if ("flow" in t.dataset) {
+    go(here, null, { flow: t.dataset.flow === flow ? null : t.dataset.flow, onMap });
+    return;
+  }
+  if (t.dataset.step) {
+    go(here, null, { flow, step: Number(t.dataset.step) === step ? null : Number(t.dataset.step), onMap });
+    return;
+  }
+  if (t.dataset.view) {
+    go(here, null, { flow, step, onMap: t.dataset.view === "map" });
+    return;
+  }
+  if (t.dataset.into) {
+    go(parts()[t.dataset.into].tier, null, kept);
+    return;
+  }
+  if (t.dataset.seq) {
+    const p = parts()[t.dataset.seq];
+    if (p && p.tier) go(p.tier, null, kept);
+    else if (p && p.holds && p.holds.length) go(here, t.dataset.seq, kept);
     return;
   }
   const id = t.dataset.id, p = parts()[id];
-  const { tier: here } = where();
-  if (t.dataset.goes === "tier") go(p.tier);
-  else if (t.dataset.goes === "leaf") go(here, id);
+  if (t.dataset.goes === "tier") go(p.tier, null, kept);
+  else if (t.dataset.goes === "leaf") go(here, id, kept);
   else if (t.dataset.goes === "up") {
     const up = tierOf(id);
-    if (up) go(up.id);
+    if (up) go(up.id, null, kept);
   }
 });
+// With a flow chosen, the arrow keys go from step to step.
+window.addEventListener("keydown", (event) => {
+  const { tier: here, part, flow, step, onMap } = where();
+  const f = flow && flows().find((x) => x.id === flow);
+  if (!f || part || !f.steps.length) return;
+  if (event.key === "ArrowRight") go(here, null, { flow, step: Math.min(f.steps.length, (step || 0) + 1), onMap });
+  else if (event.key === "ArrowLeft") go(here, null, { flow, step: Math.max(1, (step || f.steps.length + 1) - 1), onMap });
+  else return;
+  event.preventDefault();
+});
 window.addEventListener("hashchange", render);
+// The sequence diagram shares the page's width among its columns, so it
+// is drawn again when the width changes.
+let seqWidth = 0;
+window.addEventListener("resize", () => {
+  const { flow, part, onMap } = where();
+  if (!flow || part || onMap || app.clientWidth === seqWidth) return;
+  seqWidth = app.clientWidth;
+  render();
+});
 
 // --- Following what Cox knows.
 
