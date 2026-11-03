@@ -301,9 +301,11 @@ as a project forgets it.
 "Map" beside it opens a tab of the project's map, for the human to see
 where things are before they read them: not the files, which "Files"
 lists, but what the parts of the project mean, in tiers, which an agent
-writes. The top tier is the project among the few things around it, its
-user, the program, and what the program talks to, as a C4 context
-diagram draws them; each box of a tier
+writes. The top tier is the project, all its repository writes, in one
+box among the few things around it that the repository does not write,
+its user and the programs and files it talks to, as a C4 context
+diagram draws them, so a box outside holds no paths, and the code that
+talks to it is inside; each box of a tier
 opens a tier of its own, down to boxes that hold paths of the code; and
 the boxes of the tiers above stay beside the tier that is open, so that
 the lines out of it reach them, the user's side on the left and the
