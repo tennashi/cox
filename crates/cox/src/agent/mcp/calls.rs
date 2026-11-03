@@ -48,7 +48,12 @@ folder, a file with a line as `path:12`; `tier` is the id of the tier that opens
 `kinds` names the kinds of a box that is not one thing; `note` is a remark, such as where the \
 code does not match the map. `edges` is a list of `{\"from\", \"to\", \"says\", \"dir\"}` \
 between boxes, by id, `dir` being `to` (an arrow into `to`, the default), `both` or `none`; a \
-tier draws the edges among its boxes and those to the boxes in its frame. A box opens the tier \
+tier draws the edges among its boxes and those to the boxes in its frame. `flows` is a list \
+of `{\"id\", \"name\", \"says\", \"steps\"}`, the orders in which boxes talk, each step \
+`{\"from\", \"to\", \"says\", \"at\"}` from one box to another, by id, written between the boxes \
+that hold the code: the tab rolls the steps up to the boxes of the tier it shows, numbers them \
+on its lines, and opens the box a step happens inside of; `at` is where the step is made, a \
+path with a line. A box opens the tier \
 it names, or, holding paths, the code; a box may be in more than one tier. The tab lays what \
 changed since the last commit on the boxes that hold the files, and up on the boxes that open \
 their tiers, so a box that opens a tier holds paths only for the code that is its own, and \

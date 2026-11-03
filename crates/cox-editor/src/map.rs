@@ -36,6 +36,37 @@ pub struct Map {
     /// The lines between boxes.
     #[serde(default)]
     pub edges: Vec<Edge>,
+    /// The orders in which the boxes talk.
+    #[serde(default)]
+    pub flows: Vec<Flow>,
+}
+
+/// An order in which boxes talk: steps from one box to another, written
+/// between the boxes that hold the code, which the tab rolls up to the
+/// boxes of the tier it shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Flow {
+    pub id: String,
+    pub name: String,
+    /// One line on what the flow is.
+    #[serde(default)]
+    pub says: String,
+    /// The steps, in order.
+    #[serde(default)]
+    pub steps: Vec<Step>,
+}
+
+/// A step of a flow: what passes from one box to another.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Step {
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub says: String,
+    /// Where the step is made, a path from the project's folder, with a
+    /// line as `path:12`.
+    #[serde(default)]
+    pub at: Option<String>,
 }
 
 /// One tier of the map: a picture at one depth.
@@ -382,7 +413,9 @@ mod tests {
         "main": { "name": "main.rs", "says": "Where it starts.", "holds": ["src/main.rs:2"] },
         "gone": { "name": "Gone", "says": "Was here.", "holds": ["src/gone.rs"] }
       },
-      "edges": [{ "from": "user", "to": "app", "says": "runs", "dir": "both" }]
+      "edges": [{ "from": "user", "to": "app", "says": "runs", "dir": "both" }],
+      "flows": [{ "id": "run", "name": "A run", "says": "From the user to main.",
+        "steps": [{ "from": "user", "to": "main", "says": "starts", "at": "src/main.rs:2" }] }]
     }"#;
 
     #[test]
@@ -404,6 +437,8 @@ mod tests {
         assert_eq!(map.parts["main"].holds, ["src/main.rs:2"]);
         assert_eq!(map.tier("app").unwrap().frame.above, ["user"]);
         assert_eq!(map.edges[0].dir.as_deref(), Some("both"));
+        assert_eq!(map.flows[0].steps[0].to, "main");
+        assert_eq!(map.flows[0].steps[0].at.as_deref(), Some("src/main.rs:2"));
 
         std::fs::write(root.join(MAP_FILE), "{ not json").unwrap();
         assert!(
