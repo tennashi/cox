@@ -6,8 +6,7 @@
 //! what changed in them (see [`crate::stage::changes`]), or a terminal
 //! (see [`crate::stage::terminal`]); and the pages of the stage's
 //! plugins (see [`crate::stage::plugins`]), such as the map of the
-//! project (see [`crate::stage::map`]) and the parts the chat runs with
-//! (see [`crate::stage::parts`]), are pages of the browser. The first shows the page the
+//! project (see [`crate::stage::map`]), are pages of the browser. The first shows the page the
 //! stage starts on; the human opens more pages and terminals, and the
 //! tree, and closes tabs, and the agent opens and closes pages
 //! too, through the chat's relay. A page that asks for a window of its own
@@ -50,8 +49,7 @@
 //! - [`plugins`] are pages that draw what Cox knows, as a tab would, which
 //!   the stage serves its pages itself at `cox:` addresses: [`map`] tells
 //!   the project's map, as an agent wrote it, with what changed laid over
-//!   its boxes, for the human to see where things are, and [`parts`] what
-//!   the chat runs with.
+//!   its boxes, for the human to see where things are.
 
 mod asked;
 pub mod changes;
@@ -63,7 +61,6 @@ mod links;
 pub mod map;
 pub mod outline;
 pub mod page;
-pub mod parts;
 pub mod plugins;
 pub mod servers;
 pub mod tab;
@@ -89,7 +86,6 @@ use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::outline::Outlines;
 use crate::stage::page::{Opens, Page};
-use crate::stage::parts::Started;
 use crate::stage::plugins::Plugins;
 use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
@@ -123,8 +119,6 @@ pub struct Stage {
     /// What carries out what the relay and the agent's tools ask, once
     /// the stage works with the agent.
     heard: Vec<Task<()>>,
-    /// What the chat runs with, once its agent runs.
-    started: Option<Started>,
     /// The plugins the stage shows as pages, and what they read of the
     /// chat.
     plugins: Plugins,
@@ -162,11 +156,10 @@ impl Stage {
             record: None,
             kept: None,
             heard: vec![answering],
-            started: None,
         }
     }
 
-    /// The chat's agent starts, with `started`: from now on, the stage
+    /// The chat's agent starts: from now on, the stage
     /// tells `relay` of its pages, those open and those it opens, carries
     /// out what the agent's tools ask in `from_tools`, and keeps its tabs
     /// in `record`.
@@ -175,12 +168,9 @@ impl Stage {
         relay: Option<Relay>,
         from_tools: Option<UnboundedReceiver<ToolRequest>>,
         record: Option<Record>,
-        started: Started,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.plugins.runs(started.clone());
-        self.started = Some(started);
         if let Some(relay) = relay {
             for tab in &self.tabs {
                 if let TabContent::Page { target, .. } = &tab.content {
@@ -245,10 +235,9 @@ impl Stage {
                 KeptTab::Map { .. } => {
                     stage.open_tab(links::MAP_URL, show, window, cx);
                 }
-                KeptTab::Parts => {
-                    stage.open_tab(links::PARTS_URL, show, window, cx);
-                }
-                KeptTab::Terminal { .. } => {}
+                // The tab of the parts the chat ran with, which Cox no
+                // longer draws, does not open again.
+                KeptTab::Terminal { .. } | KeptTab::Parts => {}
             }
         }
         if stage.tabs.is_empty() {

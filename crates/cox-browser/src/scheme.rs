@@ -1,12 +1,12 @@
 //! `cox:` addresses: pages a stage serves itself, from what Cox knows,
 //! for a page of the stage to show what a tab drawn by Cox would, such
-//! as the parts a chat runs with, in HTML and JavaScript instead. The
+//! as the map of the project, in HTML and JavaScript instead. The
 //! stage gives each browser it opens what to [`Serve`] at a `cox:`
 //! address; CEF asks it on its own thread for each request of a page,
 //! and [`Served`] hands the answer to CEF as a response. The scheme is
 //! registered as a standard, secure one that pages fetch from, so a
 //! page at one `cox:` address reads JSON from another, as
-//! `cox://parts/` reads `cox://api/parts`.
+//! `cox://map/` reads `cox://api/map`.
 //!
 //! A `cox://open/<path>#L<line>` address is not served: a page going
 //! there asks the stage to open the file on a tab of its own, as a link
@@ -215,8 +215,8 @@ mod tests {
 
     #[test]
     fn cox_addresses_are_served() {
-        assert!(is_served("cox://parts/"));
-        assert!(is_served("cox://api/parts"));
+        assert!(is_served("cox://map/"));
+        assert!(is_served("cox://api/map"));
         assert!(!is_served("https://example.com/cox://"));
         assert!(!is_served("file:///home/me/cox"));
     }
@@ -228,7 +228,7 @@ mod tests {
             Some("file:///home/me/src/main.rs#L12")
         );
         assert_eq!(opened("cox://open/"), None);
-        assert_eq!(opened("cox://parts/open/x"), None);
+        assert_eq!(opened("cox://map/open/x"), None);
         assert_eq!(opened("file:///home/me/open/x"), None);
     }
 }
