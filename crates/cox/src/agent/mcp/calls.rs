@@ -30,6 +30,30 @@ const WAIT_CHAT: &str = "wait_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const START_TRIAL: &str = "start_trial";
 
+/// How the map's file is written, as the agent is told it when it is to
+/// write one: the form the Map tab draws, not what to put in it, which is
+/// the project's to decide.
+const MAP_FORMAT: &str = "\
+The map is `.cox/map.json` in the project's folder, a JSON object with `tiers`, `parts` and \
+`edges`. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
+\"frame\"}`: `says` is one line on what the tier shows; `rows` are the lines of boxes, from the \
+top, each `{\"name\", \"parts\": [ids], \"under\": id}`, where `under` hangs the row under a \
+box of a row above, as what that box holds; `frame` is `{\"above\": [ids], \"below\": [ids]}`, \
+boxes of other tiers drawn above and below the tier when it is open, for the lines out of it \
+to reach. `parts` is an object of the boxes by id, each `{\"name\", \"says\", \"each\", \
+\"many\", \"holds\", \"tier\", \"kinds\", \"note\"}`: `says` is one line on what it is; `each` \
+says how many there are and of what (\"one per chat\"), with `many: true` when there are \
+several; `holds` are the paths of the code it is, from the project's folder, a file or a \
+folder, a file with a line as `path:12`; `tier` is the id of the tier that opens inside it; \
+`kinds` names the kinds of a box that is not one thing; `note` is a remark, such as where the \
+code does not match the map. `edges` is a list of `{\"from\", \"to\", \"says\", \"dir\"}` \
+between boxes, by id, `dir` being `to` (an arrow into `to`, the default), `both` or `none`; a \
+tier draws the edges among its boxes and those to the boxes in its frame. A box opens the tier \
+it names, or, holding paths, the code; a box may be in more than one tier. The tab lays what \
+changed since the last commit on the boxes that hold the files, and up on the boxes that open \
+their tiers, so a box that opens a tier holds paths only for the code that is its own, and \
+marks a box whose paths are gone stale. Change the map as you move the code it holds.";
+
 /// The most files the agent is told of, of those that changed.
 const FILES_TOLD: usize = 50;
 
@@ -181,7 +205,7 @@ fn show_map_tool() -> Value {
     json!(
     {
         "name": SHOW_MAP,
-        "description": format!("Shows the human the map of the project on a tab of the stage \
+        "description": "Shows the human the map of the project on a tab of the stage \
             beside the conversation: a picture of the project in tiers, from the few things \
             it is among at the top, through what is inside each, down to boxes that hold \
             paths of the code, with what changed since the last commit laid over the boxes, \
@@ -189,9 +213,10 @@ fn show_map_tool() -> Value {
             inside it, or the code it holds. Use it to show the human where what you talk \
             of is in the project, before you talk it through or show the diff: open it at \
             the tier or box you talk of, and the human sees the boxes around it. Answers \
-            what the map shows there, box by box. The map is a file of the project, which \
-            you write when the project has none, and keep as you change the code it holds. \
-            {}", map::HOW_WRITTEN),
+            what the map shows there, box by box. The map is a file of the project, \
+            `.cox/map.json`, which you write when the project has none, deciding with the \
+            human what it is to show, and keep as you change the code it holds; shown with \
+            none, the tool says how the file is written.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -519,8 +544,10 @@ fn show_map(
         ask(requests, ToolRequest::ShowMap { at: Vec::new() })?;
         return Ok(format!(
             "The project has no map yet: the Map tab on the stage says so. Write one, and \
-             show it again. {}",
-            map::HOW_WRITTEN
+             show it again. What the tiers are, and what goes in each, is for you and the \
+             human to decide for this project, as its COX.md may say: the map says what the \
+             parts of the project mean, for a reader who does not know it, not what its \
+             files are. {MAP_FORMAT}"
         ));
     };
     let tier = match at.first() {
