@@ -51,8 +51,8 @@ between boxes, by id, `dir` being `to` (an arrow into `to`, the default), `both`
 tier draws the edges among its boxes and those to the boxes in its frame. `flows` is a list \
 of `{\"id\", \"name\", \"says\", \"steps\"}`, the orders in which boxes talk, each step \
 `{\"from\", \"to\", \"says\", \"at\", \"back\"}` from one box to another, by id, written between \
-the boxes that hold the code: the tab rolls the steps up to the boxes of the tier it shows, \
-draws them in sequence, and opens the box a step happens inside of; `at` is where the step is \
+the boxes that hold the code: the tab rolls the steps up to the boxes of the tier it shows, or \
+of the tiers above it, draws them in sequence, and opens the box a step happens inside of; `at` is where the step is \
 made, a path with a line; `back: true` marks a step back, the answer to an earlier step, which \
 ends what the box was doing since that step. A box opens the tier \
 it names, or, holding paths, the code; a box may be in more than one tier. The tab lays what \
