@@ -37,9 +37,10 @@ talks to it is inside. Each tier below is the inside of one box of a tier above,
 code. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
 \"frame\"}`: `says` is one line on what the tier shows; `rows` are the lines of boxes, each \
 `{\"name\", \"parts\": [ids], \"under\": id}`, where `under` hangs the row under a box of a row \
-above, as what that box holds; `frame` is `{\"left\": [ids], \"right\": [ids]}`, boxes of the \
-tiers above that stay beside the tier when it is open, for the lines out of it to reach, the \
-user's side left and the code's side right. `parts` is an object of the boxes by id, each \
+above, as what that box holds; `frame` is `{\"above\": [ids], \"below\": [ids]}`, boxes of the \
+tiers above that stay around the tier when it is open, for the lines out of it to reach, the \
+user's side above it and the code's side below, so that a tier reads from the top down as the \
+top tier does. `parts` is an object of the boxes by id, each \
 `{\"name\", \"says\", \"each\", \"many\", \"holds\", \"tier\", \"kinds\", \"note\"}`: `says` is \
 one line for a reader who does not know the project; `each` says how many there are and of what \
 (\"one per chat\"), with `many: true` when there are several; `holds` are the paths of the \
@@ -80,7 +81,7 @@ pub struct Tier {
     /// The lines of boxes, from the top.
     #[serde(default)]
     pub rows: Vec<Row>,
-    /// The boxes of the tiers above that stay beside this one.
+    /// The boxes of the tiers above that stay around this one.
     #[serde(default)]
     pub frame: Frame,
 }
@@ -99,13 +100,15 @@ pub struct Row {
     pub parts: Vec<String>,
 }
 
-/// The boxes beside an open tier.
+/// The boxes around an open tier: the user's side above it, and the
+/// code's side below. Maps written when the frame stood beside the tier
+/// name them `left` and `right`, which still read.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frame {
-    #[serde(default)]
-    pub left: Vec<String>,
-    #[serde(default)]
-    pub right: Vec<String>,
+    #[serde(default, alias = "left")]
+    pub above: Vec<String>,
+    #[serde(default, alias = "right")]
+    pub below: Vec<String>,
 }
 
 /// A box of the map.
@@ -403,7 +406,7 @@ mod tests {
       "tiers": [
         { "id": "whole", "name": "Whole", "says": "The few things.", "rows": [{ "parts": ["user", "app"] }] },
         { "id": "app", "name": "The app", "rows": [{ "name": "inside", "parts": ["main", "gone"] }],
-          "frame": { "left": ["user"], "right": [] } }
+          "frame": { "above": ["user"], "below": [] } }
       ],
       "parts": {
         "user": { "name": "User", "says": "Who runs it." },
@@ -431,6 +434,7 @@ mod tests {
             ["main", "gone"]
         );
         assert_eq!(map.parts["main"].holds, ["src/main.rs:2"]);
+        assert_eq!(map.tier("app").unwrap().frame.above, ["user"]);
         assert_eq!(map.edges[0].dir.as_deref(), Some("both"));
 
         std::fs::write(root.join(MAP_FILE), "{ not json").unwrap();
@@ -478,6 +482,18 @@ mod tests {
         assert_eq!(facts.holds[0].lines, None);
         assert_eq!(facts.changed.files, 1);
         assert_eq!(facts.changed.added, 3);
+    }
+
+    #[test]
+    fn a_frame_written_as_left_and_right_still_reads() {
+        let frame: Frame =
+            serde_json::from_str(r#"{ "left": ["user"], "right": ["os"] }"#).unwrap();
+        assert_eq!(frame.above, ["user"]);
+        assert_eq!(frame.below, ["os"]);
+        assert_eq!(
+            serde_json::to_string(&frame).unwrap(),
+            r#"{"above":["user"],"below":["os"]}"#
+        );
     }
 
     #[test]
