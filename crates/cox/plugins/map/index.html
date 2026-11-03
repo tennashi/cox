@@ -303,6 +303,28 @@
         display: block;
         font-family: var(--sans);
       }
+      .seq .box rect {
+        fill: var(--focus);
+        stroke: var(--dim);
+      }
+      .seq .box .name {
+        font-size: 13px;
+        font-weight: 600;
+        fill: var(--foreground);
+        paint-order: stroke;
+        stroke: var(--background);
+        stroke-width: 6px;
+        stroke-linejoin: round;
+      }
+      .seq .box .each {
+        font-size: 10.5px;
+        fill: var(--dim);
+        letter-spacing: 0.04em;
+        paint-order: stroke;
+        stroke: var(--background);
+        stroke-width: 6px;
+        stroke-linejoin: round;
+      }
       .seq .life {
         stroke: var(--border);
         stroke-dasharray: 3 4;
