@@ -104,13 +104,16 @@ function shownIn(t) {
 
 /// The box of tier `t` that `id` is, or is inside of, through the boxes
 /// that open the tiers between: one the tier shows, or the box the tier
-/// is the inside of; null when the tier does not show it.
-function upTo(t, id) {
-  const shown = shownIn(t), own = openerOf(t.id);
+/// is the inside of; with `far`, else the box of a tier above `t` that
+/// holds it, which every box of the map is or is inside of; null when
+/// there is none.
+function upTo(t, id, far = false) {
+  const shown = shownIn(t), own = openerOf(t.id), over = far ? above(t.id) : [];
   let current = id;
   for (let i = 0; i < 12 && current; i++) {
     if (shown.includes(current) || current === own) return current;
     const within = tierOf(current);
+    if (within && over.includes(within.id)) return current;
     current = within ? openerOf(within.id) : null;
   }
   return null;
@@ -118,11 +121,14 @@ function upTo(t, id) {
 
 /// A flow's steps as tier `t` shows them: each between two of its boxes
 /// ("line"), inside one of them ("inside"), between one of them and the
-/// box the tier is the inside of ("own"), or elsewhere ("outside").
-function stepsIn(t, flow) {
+/// box the tier is the inside of ("own"), or elsewhere ("outside"). With
+/// `far`, a box the tier does not show counts as the box of a tier above
+/// that holds it, so that a step is elsewhere only when a box of it is
+/// in no tier.
+function stepsIn(t, flow, far = false) {
   const own = openerOf(t.id);
   return flow.steps.map((step, k) => {
-    const a = upTo(t, step.from), b = upTo(t, step.to);
+    const a = upTo(t, step.from, far), b = upTo(t, step.to, far);
     const kind = !a || !b ? "outside" : a === b ? "inside" : a === own || b === own ? "own" : "line";
     return { n: k + 1, step, a, b, kind };
   });
@@ -252,8 +258,8 @@ function renderTier(tierId) {
   // has no edge.
   const { flow: flowId, step: stepNo, onMap } = where();
   const flow = flowId ? flows().find((f) => f.id === flowId) : null;
-  const shown = flow ? stepsIn(t, flow) : [];
   const seq = Boolean(flow) && !onMap;
+  const shown = flow ? stepsIn(t, flow, seq) : [];
   flowMarks = {};
   flowOn = Boolean(flow);
   flowPointed = new Set();
@@ -294,7 +300,7 @@ function renderTier(tierId) {
           : cur.kind === "own"
             ? `<span class="where">${cur.a === openerOf(tierId) ? "from" : "into"} ${esc(nameOf(openerOf(tierId)))}, the box this tier is the inside of</span>`
             : cur.kind === "outside"
-              ? '<span class="where">elsewhere in the map</span>'
+              ? `<span class="where">${seq ? "in no tier of the map" : "elsewhere in the map"}</span>`
               : "";
       const at = cur.step.at ? `<a class="at" href="${esc(atHref(cur.step.at))}">${esc(cur.step.at)}</a>` : "";
       const back = cur.step.back ? '<span class="where">a step back</span>' : "";
@@ -319,35 +325,50 @@ function renderTier(tierId) {
     : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>orange is what changed, as Changes shows it</span></div>`;
   const chain = [...above(tierId), tierId].map((id) => ({ text: tier(id).name, tier: id }));
   app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${body}${foot}`;
+  if (seq) seqScrolled();
   wired();
 }
 
 /// A flow as a sequence diagram of tier `t`: the boxes its steps go
-/// between, as `stepsIn` rolled them up, as columns in the order the
-/// tier draws them, the user's side first, each with a lifeline down the
-/// page, the tier's own in the box the tier is the inside of, named over
-/// its top as the map names it, and the frame's outside it; and the
-/// steps as rows from the top, an arrow from the box that talks to the
-/// one it talks to, with what the step says over it; a step back, the
-/// answer to an earlier step, dashed. A bar on a lifeline shows the box
-/// at work, from a step into it until its step back, or the last step. A
-/// step inside a box is a loop on its lifeline, which opens the box when
-/// it opens a tier; a step elsewhere in the map is a dim row. The step
-/// chosen, `stepNo`, is lit.
+/// between, as `stepsIn` rolled them up, as columns, each with a
+/// lifeline down the page: the tier's own in the box the tier is the
+/// inside of, named over its top as the map names it, in the order the
+/// tier draws them; and the others, the frame's and those of the tiers
+/// above, outside it, in the order the flow reaches them, those it
+/// reaches before it comes into the box on the left of it, and the rest
+/// on the right. And the steps as rows from the top, an arrow from the
+/// box that talks to the one it talks to, with
+/// what the step says over it; a step back, the answer to an earlier
+/// step, dashed. A bar on a lifeline shows the box at work, from a step
+/// into it until its step back, or the last step. A step inside a box is
+/// a loop on its lifeline, which opens the box when it opens a tier; a
+/// step of a box in no tier is a dim row. The step chosen, `stepNo`, is
+/// lit.
 function seqEl(t, shown, stepNo) {
   const own = openerOf(t.id);
   const frame = t.frame || {};
-  const order = [...(frame.above || frame.left || []), ...(own ? [own] : []), ...partsOf(t), ...(frame.below || frame.right || [])];
+  const near = new Set([...(frame.above || frame.left || []), ...(own ? [own] : []), ...partsOf(t), ...(frame.below || frame.right || [])]);
+  const own_ = [...(own ? [own] : []), ...partsOf(t)];
+  const inner = new Set(own_);
   const used = new Set(shown.filter((st) => st.kind !== "outside").flatMap((st) => [st.a, st.b]));
+  const arrived = shown.findIndex((st) => st.kind !== "outside" && (inner.has(st.a) || inner.has(st.b)));
+  const left = [], right = [];
+  shown.forEach((st, i) => {
+    if (st.kind === "outside") return;
+    for (const id of [st.a, st.b]) {
+      if (inner.has(id) || left.includes(id) || right.includes(id)) continue;
+      (arrived < 0 || i <= arrived ? left : right).push(id);
+    }
+  });
+  const order = [...left, ...own_, ...right];
   const cols = order.filter((id, i) => used.has(id) && order.indexOf(id) === i);
-  if (!cols.length) return '<div class="says faint">None of the steps of this flow go between the boxes this tier shows.</div>';
+  if (!cols.length) return '<div class="says faint">None of the steps of this flow go between boxes the map has.</div>';
   const col = Object.fromEntries(cols.map((id, i) => [id, i]));
   const textW = (s, size = 11) => String(s).length * size * 0.56;
   const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
   const HEAD_H = 40, ROW = 30, THIN = 22, LOOP = 22, PAD = 14;
   // The tier's own columns, the box it is the inside of among them, are
   // boxed as the map boxes the tier, apart from the frame's.
-  const inner = new Set([...(own ? [own] : []), ...partsOf(t)]);
   const first = cols.findIndex((id) => inner.has(id));
   const last = cols.length - 1 - [...cols].reverse().findIndex((id) => inner.has(id));
   const boxed = Boolean(own) && first >= 0;
@@ -438,8 +459,8 @@ function seqEl(t, shown, stepNo) {
     if (group.outside) {
       const text =
         on || group.steps.length === 1
-          ? `${said(st)} · elsewhere in the map`
-          : `${group.steps.length} steps elsewhere in the map, ${esc(nameOf(st.step.from))} → … → ${esc(nameOf(group.steps[group.steps.length - 1].step.to))}`;
+          ? `${said(st)} · a box in no tier of the map`
+          : `${group.steps.length} steps of boxes in no tier of the map, ${esc(nameOf(st.step.from))} → … → ${esc(nameOf(group.steps[group.steps.length - 1].step.to))}`;
       drawn = `<text class="what" x="${22 + Math.max(9, textW(span, 9.5) / 2 + 5) + 10}" y="${yc + 3.5}">${text}</text>`;
     } else if (st.a === st.b) {
       const x = ends[st.n].xa;
@@ -462,10 +483,19 @@ function seqEl(t, shown, stepNo) {
   const acts = bars
     .map((bar) => `<rect class="act" x="${xs[col[bar.id]] + (bar.k - 1) * 4 - BAR / 2}" y="${bar.y0 - 4}" width="${BAR}" height="${bar.y1 - bar.y0 + 8}" rx="1"/>`)
     .join("");
+  // What the page scrolls into view when it is wider than the page: the
+  // step chosen, or the box.
+  let focus = [0, 0];
+  const lit = stepNo ? shown[stepNo - 1] : null;
+  if (lit && lit.kind !== "outside") {
+    const { xa, xb } = ends[lit.n];
+    focus = lit.a === lit.b ? [xa, xa + LOOP + 8 + textW(lit.step.says)] : [Math.min(xa, xb), Math.max(xa, xb)];
+  }
   let box = "";
   if (boxed) {
     const head = parts()[own] || { name: own };
     const x0 = xs[first] - HEAD_W / 2 - PAD, x1 = xs[last] + HEAD_W / 2 + PAD;
+    if (!lit || lit.kind === "outside") focus = [x0, x1];
     const each = head.each ? `<text class="each" x="${x0 + 14 + textW(head.name, 13) + 10}" y="${TOP - 4}">${esc(head.each)}</text>` : "";
     box = `<g class="box"><rect x="${x0}" y="${TOP - 8}" width="${x1 - x0}" height="${H - 4 - (TOP - 8)}" rx="12"/><text class="name" x="${x0 + 14}" y="${TOP - 4}">${esc(head.name)}</text>${each}</g>`;
   }
@@ -474,16 +504,35 @@ function seqEl(t, shown, stepNo) {
     .map((id) => {
       const p = parts()[id] || { name: id, says: "" };
       const goes = p.tier ? "tier" : p.holds && p.holds.length ? "leaf" : "";
-      const sub = id === own ? "the box itself" : p.each || "";
+      const far = !near.has(id);
+      const sub = id === own ? "the box itself" : far ? `in ${(tierOf(id) || { name: "?" }).name}` : p.each || "";
       const fit = Math.floor((HEAD_W - 16) / 7);
       const name = `<text class="name" x="${HEAD_W / 2}" y="${sub ? 17 : 24}" text-anchor="middle">${esc(trunc(p.name, fit))}</text>`;
       const each = sub ? `<text class="each" x="${HEAD_W / 2}" y="31" text-anchor="middle">${esc(trunc(sub, fit + 5))}</text>` : "";
-      return `<g class="who ${goes ? "goes" : ""} ${id === own ? "own" : ""}" data-seq="${esc(id)}" transform="translate(${xs[col[id]] - HEAD_W / 2} ${TOP})"><title>${esc(p.name)}${p.says ? ` — ${esc(p.says)}` : ""}</title><rect width="${HEAD_W}" height="${HEAD_H}" rx="7"/>${name}${each}</g>`;
+      return `<g class="who ${goes ? "goes" : ""} ${id === own ? "own" : ""} ${far ? "far" : ""}" data-seq="${esc(id)}" transform="translate(${xs[col[id]] - HEAD_W / 2} ${TOP})"><title>${esc(p.name)}${p.says ? ` — ${esc(p.says)}` : ""}</title><rect width="${HEAD_W}" height="${HEAD_H}" rx="7"/>${name}${each}</g>`;
     })
     .join("");
   const width = Math.round(W);
   const body = rows.map((r) => r.replace("__W__", String(width - 8))).join("");
-  return `<div class="seq"><svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${DEFS}${box}${lives}${acts}${body}${heads}</svg></div>`;
+  return `<div class="seq" data-focus="${focus.map(Math.round).join(",")}"><svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${DEFS}${box}${lives}${acts}${body}${heads}</svg></div>`;
+}
+
+// A sequence diagram wider than the page keeps where it was scrolled to
+// while the page is drawn again at the same place, and scrolls what it
+// focuses on into view when the place changes.
+let seqAt = "", seqScroll = 0;
+function seqScrolled() {
+  const el = app.querySelector(".seq");
+  if (!el) return;
+  const [x0, x1] = (el.dataset.focus || "0,0").split(",").map(Number);
+  const width = el.clientWidth;
+  const at = String(el.scrollWidth);
+  let want = at === seqAt ? seqScroll : 0;
+  if (x1 > x0 && (x0 < want + 40 || x1 > want + width - 8)) want = x1 - x0 <= width - 48 ? (x0 + x1) / 2 - width / 2 : x0 - 48;
+  el.scrollLeft = Math.max(0, want);
+  seqAt = at;
+  seqScroll = el.scrollLeft;
+  el.addEventListener("scroll", () => (seqScroll = el.scrollLeft));
 }
 
 function renderLeaf(tierId, id) {
