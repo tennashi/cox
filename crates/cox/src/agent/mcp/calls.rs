@@ -552,11 +552,8 @@ fn show_map(
         .ok()
         .map(|diff| changes::changed_files(&diff))
         .unwrap_or_default();
-    let facts = |id: &str| {
-        map.parts
-            .get(id)
-            .map(|part| map::facts(cwd, part, &changed))
-    };
+    let all = map::all_facts(cwd, &map, &changed);
+    let facts = |id: &str| all.get(id).cloned();
     ask(requests, ToolRequest::ShowMap { at: at.clone() })?;
     Ok(told_map(&map, tier, part.as_deref(), &facts))
 }

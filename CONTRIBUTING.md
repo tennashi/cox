@@ -301,8 +301,9 @@ as a project forgets it.
 "Map" beside it opens a tab of the project's map, for the human to see
 where things are before they read them: not the files, which "Files"
 lists, but what the parts of the project mean, in tiers, which an agent
-writes. The top tier is the few things the project is among, such as
-its user, the program, and what the program talks to; each box of a tier
+writes. The top tier is the project among the few things around it, its
+user, the program, and what the program talks to, as a C4 context
+diagram draws them; each box of a tier
 opens a tier of its own, down to boxes that hold paths of the code; and
 the boxes of the tiers above stay beside the tier that is open, so that
 the lines out of it reach them, the user's side on the left and the
@@ -322,9 +323,10 @@ so that it is there whenever the tab is opened, the same whatever
 changed; a project tracks it or not as it likes, and Cox's own
 repository does not, so a clone of Cox gets its map written where it
 is. Over it Cox lays what it knows: what changed, as
-"Changes" shows it, falls on the boxes that hold the files, with how
-many lines changed in how many files, so that the human sees where a
-change falls in the project before they read it; and a box whose paths
+"Changes" shows it, falls on the boxes that hold the files, and up on
+the boxes that open their tiers, with how many lines changed in how
+many files, so that the human sees where a change falls in the project
+before they read it; and a box whose paths
 the project no longer has is marked stale, for an agent to bring the
 map up to date. A project with no map gets a tab that says so, and an
 agent asked to show the map is told how to write one. The agent opens

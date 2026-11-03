@@ -1,20 +1,21 @@
 //! The map of a project: a picture of it in tiers, for the human to see
 //! where things are before they read them. Not what the files say, which
 //! a tree of them shows, but what the parts of the project mean, which
-//! an agent writes: the top tier is the few things the project is among,
-//! such as its user, the program, and what the program talks to; a box of
-//! a tier opens a tier of its own, down to boxes that hold paths of the
-//! code, where the human reads on. The map is a file of the project,
+//! an agent writes: the top tier is the project among the few things
+//! around it, its user, the program, and what the program talks to, as a
+//! C4 context diagram draws them; a box of a tier opens a tier of its own,
+//! down to boxes that hold paths of the code, where the human reads on. The map is a file of the project,
 //! [`MAP_FILE`], so that it is there whenever it is opened, written by an
 //! agent once and kept by the agents that change the code, in the change
 //! that moves it.
 //!
 //! Over it goes what the project is now: what changed, as
 //! [`crate::changes`] tells it, falls on the boxes that hold the files,
-//! and a box whose paths are gone is stale, for an agent to bring the
-//! map up to date (see [`facts`]).
+//! and up on the boxes that open their tiers, and a box whose paths are
+//! gone is stale, for an agent to bring the map up to date (see
+//! [`all_facts`]).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,9 @@ pub const MAP_FILE: &str = ".cox/map.json";
 /// write one, or to keep one.
 pub const HOW_WRITTEN: &str = "\
 The map is `.cox/map.json` in the project's folder, a JSON object with `tiers`, `parts` and \
-`edges`. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
+`edges`. The top tier is the project among the few things around it, its user, the program \
+and what the program talks to, as a C4 context diagram draws them; each tier below is the \
+inside of one box of a tier above, down to the code. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
 \"frame\"}`: `says` is one line on what the tier shows; `rows` are the lines of boxes, each \
 `{\"name\", \"parts\": [ids], \"under\": id}`, where `under` hangs the row under a box of a row \
 above, as what that box holds; `frame` is `{\"left\": [ids], \"right\": [ids]}`, boxes of the \
@@ -42,7 +45,9 @@ list of `{\"from\", \"to\", \"says\", \"dir\"}` between boxes, by id, `dir` bein
 arrow into `to`, the default), `both` or `none`; a tier draws the edges among its boxes and \
 those to the boxes in its frame. Keep each tier small, five or six boxes, and every box \
 either opening a tier or holding paths, so that the human can go from the top down to the \
-code. Boxes may be in more than one tier. Write the map once, in the project's language, and \
+code. What changed in a tier's boxes shows on the box that opens the tier, so a box that opens \
+a tier holds paths only for the code that is its own, as where it is defined, not for the code \
+of its tier. Boxes may be in more than one tier. Write the map once, in the project's language, and \
 change it as you move the code it holds.";
 
 /// A project's map, as its file has it.
@@ -200,8 +205,9 @@ pub struct Hold {
     pub removed: usize,
 }
 
-/// What changed in a box: in how many of the files it holds, and how many
-/// lines they gained and lost.
+/// What changed in a box: in how many of the files it holds, and those
+/// the boxes of its tier hold, all the way down, and how many lines they
+/// gained and lost.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Changed {
     pub files: usize,
@@ -227,16 +233,96 @@ pub struct Facts {
     pub stale: Vec<String>,
 }
 
+/// What Cox knows of each box of `map`, by id, for the project in
+/// `root`, among `changed`, the lines each file that changed gained and
+/// lost, by its absolute path (see [`crate::changes::changed_files`]):
+/// what a box holds, and what changed in it, counting the files its own
+/// holds have and those the boxes of the tier it opens have, all the way
+/// down, each once.
+#[must_use]
+pub fn all_facts<S: std::hash::BuildHasher>(
+    root: &Path,
+    map: &Map,
+    changed: &HashMap<PathBuf, (usize, usize), S>,
+) -> BTreeMap<String, Facts> {
+    let own: BTreeMap<&str, (Facts, HashSet<PathBuf>)> = map
+        .parts
+        .iter()
+        .map(|(id, part)| (id.as_str(), own_facts(root, part, changed)))
+        .collect();
+    let mut rolled: HashMap<&str, HashSet<PathBuf>> = HashMap::new();
+    for id in map.parts.keys() {
+        roll(id, map, &own, &mut rolled, &mut Vec::new());
+    }
+    own.into_iter()
+        .map(|(id, (mut facts, _))| {
+            let files = rolled.remove(id).unwrap_or_default();
+            facts.changed = counted(&files, changed);
+            (id.to_owned(), facts)
+        })
+        .collect()
+}
+
+/// The files that changed in the box `id`, and in the boxes of the tier
+/// it opens, all the way down, kept in `rolled` once found; `path` is the
+/// boxes above on the way, which a box in its own tier is not counted
+/// into again.
+fn roll<'a>(
+    id: &'a str,
+    map: &'a Map,
+    own: &BTreeMap<&str, (Facts, HashSet<PathBuf>)>,
+    rolled: &mut HashMap<&'a str, HashSet<PathBuf>>,
+    path: &mut Vec<&'a str>,
+) -> HashSet<PathBuf> {
+    if let Some(files) = rolled.get(id) {
+        return files.clone();
+    }
+    if path.contains(&id) {
+        return HashSet::new();
+    }
+    let mut files: HashSet<PathBuf> = own
+        .get(id)
+        .map(|(_, files)| files.clone())
+        .unwrap_or_default();
+    let inside: Vec<&'a str> = map
+        .parts
+        .get(id)
+        .and_then(|part| part.tier.as_deref())
+        .and_then(|tier| map.tier(tier))
+        .map(|tier| tier.parts().collect())
+        .unwrap_or_default();
+    if !inside.is_empty() {
+        path.push(id);
+        for within in inside {
+            files.extend(roll(within, map, own, rolled, path));
+        }
+        path.pop();
+    }
+    rolled.insert(id, files.clone());
+    files
+}
+
 /// What Cox knows of the box `part` of the project in `root`, among
-/// `changed`, the lines each file that changed gained and lost, by its
-/// absolute path (see [`crate::changes::changed_files`]).
+/// `changed`, as [`all_facts`] tells it, but of the box's own holds
+/// alone, with nothing of its tier.
 #[must_use]
 pub fn facts<S: std::hash::BuildHasher>(
     root: &Path,
     part: &Part,
     changed: &HashMap<PathBuf, (usize, usize), S>,
 ) -> Facts {
+    own_facts(root, part, changed).0
+}
+
+/// What Cox knows of the box `part` from its own holds, and the files
+/// among `changed` that they have, each once.
+fn own_facts<S: std::hash::BuildHasher>(
+    root: &Path,
+    part: &Part,
+    changed: &HashMap<PathBuf, (usize, usize), S>,
+) -> (Facts, HashSet<PathBuf>) {
     let mut facts = Facts::default();
+    let mut files: HashSet<PathBuf> = HashSet::new();
     for said in &part.holds {
         let (relative, line) = split_line(said);
         let path = root.join(relative);
@@ -250,13 +336,11 @@ pub fn facts<S: std::hash::BuildHasher>(
         let (mut added, mut removed) = (0, 0);
         for (file, (more, less)) in changed {
             if *file == path || (path.is_dir() && file.starts_with(&path)) {
-                facts.changed.files += 1;
+                files.insert(file.clone());
                 added += more;
                 removed += less;
             }
         }
-        facts.changed.added += added;
-        facts.changed.removed += removed;
         if !exists {
             facts.stale.push(said.clone());
         }
@@ -270,7 +354,21 @@ pub fn facts<S: std::hash::BuildHasher>(
             removed,
         });
     }
-    facts
+    facts.changed = counted(&files, changed);
+    (facts, files)
+}
+
+/// What changed in `files`, among `changed`.
+fn counted<S: std::hash::BuildHasher>(
+    files: &HashSet<PathBuf>,
+    changed: &HashMap<PathBuf, (usize, usize), S>,
+) -> Changed {
+    let lines = files.iter().filter_map(|file| changed.get(file));
+    Changed {
+        files: files.len(),
+        added: lines.clone().map(|(added, _)| added).sum(),
+        removed: lines.map(|(_, removed)| removed).sum(),
+    }
 }
 
 /// A path as the map writes it, and the line after it, if any: `a.rs:12`
@@ -382,5 +480,58 @@ mod tests {
         assert_eq!(split_line("src/a.rs:12"), ("src/a.rs", Some(12)));
         assert_eq!(split_line("src/a.rs"), ("src/a.rs", None));
         assert_eq!(split_line("src/a:b.rs"), ("src/a:b.rs", None));
+    }
+    #[test]
+    fn what_changed_rolls_up_to_the_box_that_opens_the_tier() {
+        let root = scratch("rollup");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(root.join("src/lib.rs"), "\n").unwrap();
+        let map: Map = serde_json::from_str(
+            r#"{
+              "tiers": [
+                { "id": "whole", "name": "Whole", "rows": [{ "parts": ["app", "folder", "loop"] }] },
+                { "id": "app", "name": "App", "rows": [{ "parts": ["main", "lib"] }] },
+                { "id": "loop", "name": "Loop", "rows": [{ "parts": ["loop", "main"] }] }
+              ],
+              "parts": {
+                "app": { "name": "App", "tier": "app" },
+                "folder": { "name": "Folder", "tier": "app", "holds": ["src"] },
+                "loop": { "name": "Loop", "tier": "loop" },
+                "main": { "name": "main", "holds": ["src/main.rs"] },
+                "lib": { "name": "lib", "holds": ["src/lib.rs", "src/lib.rs:1"] }
+              }
+            }"#,
+        )
+        .unwrap();
+        let mut changed = HashMap::new();
+        changed.insert(root.join("src/main.rs"), (3, 1));
+        changed.insert(root.join("src/lib.rs"), (2, 0));
+        let all = all_facts(&root, &map, &changed);
+        // A box with no holds of its own lights from its tier.
+        assert_eq!(
+            all["app"].changed,
+            Changed {
+                files: 2,
+                added: 5,
+                removed: 1
+            }
+        );
+        assert_eq!(all["app"].holds, Vec::<Hold>::new());
+        // A file is counted once, under a folder and in the tier alike,
+        // and under two holds of one box.
+        assert_eq!(all["folder"].changed.files, 2);
+        assert_eq!(
+            all["lib"].changed,
+            Changed {
+                files: 1,
+                added: 2,
+                removed: 0
+            }
+        );
+        assert_eq!(all["lib"].holds[1].added, 2);
+        // A box in its own tier does not go round for ever.
+        assert_eq!(all["loop"].changed.files, 1);
+        assert_eq!(facts(&root, &map.parts["app"], &changed).changed.files, 0);
     }
 }
