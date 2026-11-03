@@ -20,7 +20,9 @@ const EVERY = 2000;
 const NS = "http://www.w3.org/2000/svg";
 const DEFS =
   '<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>' +
-  '<marker id="arrlit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--hold)"/></marker></defs>';
+  '<marker id="arrlit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--hold)"/></marker>' +
+  '<marker id="back" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="currentColor" stroke-width="1.4"/></marker>' +
+  '<marker id="backlit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="var(--hold)" stroke-width="1.6"/></marker></defs>';
 
 const app = document.getElementById("app");
 let data = null;
@@ -295,7 +297,8 @@ function renderTier(tierId) {
               ? '<span class="where">elsewhere in the map</span>'
               : "";
       const at = cur.step.at ? `<a class="at" href="${esc(atHref(cur.step.at))}">${esc(cur.step.at)}</a>` : "";
-      says = `<div class="stepsays"><span class="n">${cur.n}</span><span class="who">${esc(nameOf(cur.step.from))} → ${esc(nameOf(cur.step.to))}</span><span class="what">${esc(cur.step.says)}</span>${where_}${at}</div>`;
+      const back = cur.step.back ? '<span class="where">a step back</span>' : "";
+      says = `<div class="stepsays"><span class="n">${cur.n}</span><span class="who">${esc(nameOf(cur.step.from))} → ${esc(nameOf(cur.step.to))}</span><span class="what">${esc(cur.step.says)}</span>${back}${where_}${at}</div>`;
     } else says = `<div class="stepsays faint">${esc(flow.says)} <span class="where">← → go from step to step</span></div>`;
     stepsBar = `${chips}${says}`;
   }
@@ -325,10 +328,12 @@ function renderTier(tierId) {
 /// page, the tier's own in the box the tier is the inside of, named over
 /// its top as the map names it, and the frame's outside it; and the
 /// steps as rows from the top, an arrow from the box that talks to the
-/// one it talks to, with what the step says over it. A step inside a box
-/// is a loop on its lifeline, which opens the box when it opens a tier;
-/// a step elsewhere in the map is a dim row. The step chosen, `stepNo`,
-/// is lit.
+/// one it talks to, with what the step says over it; a step back, the
+/// answer to an earlier step, dashed. A bar on a lifeline shows the box
+/// at work, from a step into it until its step back, or the last step. A
+/// step inside a box is a loop on its lifeline, which opens the box when
+/// it opens a tier; a step elsewhere in the map is a dim row. The step
+/// chosen, `stepNo`, is lit.
 function seqEl(t, shown, stepNo) {
   const own = openerOf(t.id);
   const frame = t.frame || {};
@@ -387,11 +392,45 @@ function seqEl(t, shown, stepNo) {
     if (st.kind === "outside" && last && last.outside) last.steps.push(st);
     else groups.push({ outside: st.kind === "outside", steps: [st] });
   }
+  for (const group of groups) {
+    group.h = group.outside ? THIN : ROW;
+    group.yc = y + group.h / 2;
+    y += group.h;
+  }
+  const ycOf = {};
+  for (const group of groups) for (const st of group.steps) ycOf[st.n] = group.yc;
+  // The bars: a step into a box starts one on its lifeline, beside those
+  // it has already, and the box's step back ends the last; the arrows
+  // leave and arrive at the bars' edges.
+  const BAR = 8;
+  const open = {}, bars = [], ends = {};
+  const edge = (id, k, side) => xs[col[id]] + (k ? (k - 1) * 4 + (side * BAR) / 2 : 0);
+  for (const st of shown) {
+    if (st.kind === "outside") continue;
+    const oa = open[st.a] || (open[st.a] = []), ob = open[st.b] || (open[st.b] = []);
+    if (st.a === st.b) {
+      ends[st.n] = { xa: edge(st.a, oa.length, 1) };
+      continue;
+    }
+    const side = xs[col[st.b]] > xs[col[st.a]] ? 1 : -1;
+    if (st.step.back) {
+      const bar = oa.pop();
+      if (bar) {
+        bar.y1 = ycOf[st.n];
+        bars.push(bar);
+      }
+      ends[st.n] = { xa: edge(st.a, bar ? bar.k : 0, side), xb: edge(st.b, ob.length, -side) };
+    } else {
+      const xa = edge(st.a, oa.length, side);
+      ob.push({ id: st.b, k: ob.length + 1, y0: ycOf[st.n] });
+      ends[st.n] = { xa, xb: edge(st.b, ob.length, -side) };
+    }
+  }
+  const lastY = groups.length ? groups[groups.length - 1].yc : y;
+  for (const id in open) for (const bar of open[id]) bars.push({ ...bar, y1: lastY });
   const rows = groups.map((group) => {
     const st = group.steps.find((x) => x.n === stepNo) || group.steps[0];
-    const h = group.outside ? THIN : ROW;
-    const yc = y + h / 2;
-    y += h;
+    const { h, yc } = group;
     const on = group.steps.some((x) => x.n === stepNo);
     const span = group.steps.length > 1 ? `${group.steps[0].n}–${group.steps[group.steps.length - 1].n}` : String(st.n);
     const badge = badgeEl(on || group.steps.length === 1 ? String(st.n) : span, yc);
@@ -403,21 +442,26 @@ function seqEl(t, shown, stepNo) {
           : `${group.steps.length} steps elsewhere in the map, ${esc(nameOf(st.step.from))} → … → ${esc(nameOf(group.steps[group.steps.length - 1].step.to))}`;
       drawn = `<text class="what" x="${22 + Math.max(9, textW(span, 9.5) / 2 + 5) + 10}" y="${yc + 3.5}">${text}</text>`;
     } else if (st.a === st.b) {
-      const x = xs[col[st.a]];
+      const x = ends[st.n].xa;
       const p = parts()[st.a];
       const intoAt = x + LOOP + 8 + loopW[st.a] + 10;
       const into = p && p.tier ? `<text class="into" data-into="${esc(st.a)}" x="${intoAt}" y="${yc + 4}">inside ${esc(nameOf(st.a))} ›</text>` : "";
       W = Math.max(W, intoAt + (into ? textW(`inside ${nameOf(st.a)} ›`) : 0) + 16);
       drawn = `<path class="arrow loop" d="M${x} ${yc - 7} H${x + LOOP} V${yc + 7} H${x + 2}" marker-end="url(#${on ? "arrlit" : "arr"})"/><text class="what" x="${x + LOOP + 8}" y="${yc + 4}">${esc(st.step.says)}</text>${into}`;
     } else {
-      const xa = xs[col[st.a]], xb = xs[col[st.b]];
+      const { xa, xb } = ends[st.n];
       const end = xb > xa ? xb - 1 : xb + 1;
-      drawn = `<path class="arrow" d="M${xa} ${yc} L${end} ${yc}" marker-end="url(#${on ? "arrlit" : "arr"})"/><text class="what" x="${(xa + xb) / 2}" y="${yc - 5}" text-anchor="middle">${esc(st.step.says)}</text>`;
+      const back = st.step.back;
+      const marker = back ? (on ? "backlit" : "back") : on ? "arrlit" : "arr";
+      drawn = `<path class="arrow ${back ? "back" : ""}" d="M${xa} ${yc} L${end} ${yc}" marker-end="url(#${marker})"/><text class="what" x="${(xa + xb) / 2}" y="${yc - 5}" text-anchor="middle">${esc(st.step.says)}</text>`;
     }
     const title = `<title>${group.steps.map((x) => `${x.n}. ${said(x)}${x.step.at ? ` (${esc(x.step.at)})` : ""}`).join("\n")}</title>`;
     return `<g class="row ${st.kind} ${on ? "on" : ""}" data-step="${st.n}">${title}<rect class="band" x="4" y="${yc - h / 2 + 1}" width="__W__" height="${h - 2}" rx="6"/>${badge}${drawn}</g>`;
   });
   const H = y + 18;
+  const acts = bars
+    .map((bar) => `<rect class="act" x="${xs[col[bar.id]] + (bar.k - 1) * 4 - BAR / 2}" y="${bar.y0 - 4}" width="${BAR}" height="${bar.y1 - bar.y0 + 8}" rx="1"/>`)
+    .join("");
   let box = "";
   if (boxed) {
     const head = parts()[own] || { name: own };
@@ -439,7 +483,7 @@ function seqEl(t, shown, stepNo) {
     .join("");
   const width = Math.round(W);
   const body = rows.map((r) => r.replace("__W__", String(width - 8))).join("");
-  return `<div class="seq"><svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${DEFS}${box}${lives}${body}${heads}</svg></div>`;
+  return `<div class="seq"><svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${DEFS}${box}${lives}${acts}${body}${heads}</svg></div>`;
 }
 
 function renderLeaf(tierId, id) {

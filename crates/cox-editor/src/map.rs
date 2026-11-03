@@ -67,6 +67,10 @@ pub struct Step {
     /// line as `path:12`.
     #[serde(default)]
     pub at: Option<String>,
+    /// Whether the step is one back: the answer to an earlier step, as
+    /// a reply is to a request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub back: bool,
 }
 
 /// One tier of the map: a picture at one depth.
@@ -415,7 +419,8 @@ mod tests {
       },
       "edges": [{ "from": "user", "to": "app", "says": "runs", "dir": "both" }],
       "flows": [{ "id": "run", "name": "A run", "says": "From the user to main.",
-        "steps": [{ "from": "user", "to": "main", "says": "starts", "at": "src/main.rs:2" }] }]
+        "steps": [{ "from": "user", "to": "main", "says": "starts", "at": "src/main.rs:2" },
+                  { "from": "main", "to": "user", "says": "greets", "back": true }] }]
     }"#;
 
     #[test]
@@ -439,6 +444,8 @@ mod tests {
         assert_eq!(map.edges[0].dir.as_deref(), Some("both"));
         assert_eq!(map.flows[0].steps[0].to, "main");
         assert_eq!(map.flows[0].steps[0].at.as_deref(), Some("src/main.rs:2"));
+        assert!(!map.flows[0].steps[0].back);
+        assert!(map.flows[0].steps[1].back);
 
         std::fs::write(root.join(MAP_FILE), "{ not json").unwrap();
         assert!(
