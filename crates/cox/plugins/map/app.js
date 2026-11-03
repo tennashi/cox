@@ -13,7 +13,10 @@
 // the page is open is its hash: a tier's id, and after it the id of a
 // card open on its own, as `#cox/stage`, and after `@` the flow
 // chosen, drawn as a sequence diagram of the tier's boxes, or, with
-// `+map`, numbered on the lines of the tier.
+// `+map`, numbered on the lines of the tier. Drawn between the boxes
+// it is written between, a step is named by the function it runs,
+// which the page reads from `cox://api/call/<path>:<line>` for the
+// place the step is made.
 
 const API = "cox://api/map";
 const EVERY = 2000;
@@ -32,6 +35,12 @@ let lastText = null;
 const fileText = {};
 const fileData = {};
 let wanted = [];
+// What the server says the steps of the flow chosen call, by the place
+// each is made, `path:line`, as the page has heard it; the places the
+// page shows now, which `loadFiles` reads again.
+const callText = {};
+const callData = {};
+let wantedAt = [];
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -132,6 +141,39 @@ function stepsIn(t, flow, far = false) {
     const kind = !a || !b ? "outside" : a === b ? "inside" : a === own || b === own ? "own" : "line";
     return { n: k + 1, step, a, b, kind };
   });
+}
+
+/// Where a step is made, as the page asks the server of it: the file, as
+/// an absolute path, and the line; null when `at` names no line.
+function atPlace(at) {
+  const m = /^(.*):(\d+)$/.exec(at || "");
+  return m ? { path: absolute(m[1]), line: Number(m[2]) } : null;
+}
+
+/// What the server says of the place a step is made, as heard so far:
+/// null until it is asked.
+function callOf(step) {
+  const place = atPlace(step.at);
+  return place ? callData[`${place.path}:${place.line}`] || null : null;
+}
+
+/// The function a step runs, to name the step by where the map goes no
+/// deeper: of the functions the server says its line calls, in the
+/// order they are called on it, the one in the box the step goes to,
+/// or else the last in the project, as a chain of calls ends in what it
+/// does, or else the first; null when none is known.
+function runs(st) {
+  const c = callOf(st.step);
+  if (!c || !c.calls || !c.calls.length) return null;
+  const held = facts(st.b).holds.map((h) => h.path);
+  const within = (call) => held.some((p) => absolute(call.path) === p || absolute(call.path).startsWith(`${p}/`));
+  const own = c.calls.filter((call) => !call.path.startsWith("/"));
+  return c.calls.find(within) || own[own.length - 1] || c.calls[0];
+}
+
+/// A function, as a `cox://open` address at its line.
+function fnHref(fn) {
+  return `cox://open${absolute(fn.path)}#L${fn.line}`;
 }
 
 /// Where a step is made, as a `cox://open` address.
@@ -258,6 +300,7 @@ function renderTier(tierId) {
   // has no edge.
   const { flow: flowId, step: stepNo, onMap } = where();
   const flow = flowId ? flows().find((f) => f.id === flowId) : null;
+  wantedAt = flow ? flow.steps.map((s) => s.at).filter(Boolean) : [];
   const seq = Boolean(flow) && !onMap;
   const shown = flow ? stepsIn(t, flow, seq) : [];
   flowMarks = {};
@@ -304,7 +347,16 @@ function renderTier(tierId) {
               : "";
       const at = cur.step.at ? `<a class="at" href="${esc(atHref(cur.step.at))}">${esc(cur.step.at)}</a>` : "";
       const back = cur.step.back ? '<span class="where">a step back</span>' : "";
-      says = `<div class="stepsays"><span class="n">${cur.n}</span><span class="who">${esc(nameOf(cur.step.from))} → ${esc(nameOf(cur.step.to))}</span><span class="what">${esc(cur.step.says)}</span>${back}${where_}${at}</div>`;
+      // What the line calls, as the server says, once it has.
+      const c = cur.step.at ? callOf(cur.step) : null;
+      let calls = "";
+      if (c && c.calls && c.calls.length) {
+        const named = c.calls.slice(0, 3).map((fn) => `<a class="at fn" href="${esc(fnHref(fn))}" title="${esc(fn.detail || fn.name)}">${esc(fn.name)}</a>`).join("");
+        calls = `<span class="where">calls</span>${named}${c.function ? `<span class="where">in ${esc(c.function.name)}</span>` : ""}`;
+      } else if (c && c.pending) calls = `<span class="where faint">${esc(c.said || "asking the language server what the line calls…")}</span>`;
+      else if (c && c.error) calls = `<span class="where stale">${esc(c.error)}</span>`;
+      else if (c && c.server) calls = `<span class="where stale">${c.function ? "no call found on that line" : "no function at that line"}: an agent is to bring the map up to date</span>`;
+      says = `<div class="stepsays"><span class="n">${cur.n}</span><span class="who">${esc(nameOf(cur.step.from))} → ${esc(nameOf(cur.step.to))}</span><span class="what">${esc(cur.step.says)}</span>${back}${where_}${at}${calls}</div>`;
     } else says = `<div class="stepsays faint">${esc(flow.says)} <span class="where">← → go from step to step</span></div>`;
     stepsBar = `${chips}${says}`;
   }
@@ -382,10 +434,23 @@ function seqEl(t, shown, stepNo) {
   const LEFT = 40 + HEAD_W / 2;
   const base = Math.max(HEAD_W + 10, Math.min(150, Math.floor(pitch)));
   const gaps = cols.slice(1).map(() => base);
+  // Drawn between the boxes it is written between, as deep as the map
+  // goes for it, a step is named by the function it runs, once the
+  // server says which; rolled up, it says what it is in words.
+  const fnOf = {};
+  for (const st of shown) if (st.kind !== "outside" && st.a === st.step.from && st.b === st.step.to) fnOf[st.n] = runs(st);
+  const labelOf = (st) => (fnOf[st.n] ? fnOf[st.n].name : st.step.says);
+  const labelEl = (st, x, y, anchor) => {
+    const fn = fnOf[st.n];
+    const at = `x="${x}" y="${y}"${anchor ? ` text-anchor="${anchor}"` : ""}`;
+    return fn
+      ? `<a class="fnlink" href="${esc(fnHref(fn))}"><title>${esc(fn.detail || fn.name)}</title><text class="what fn" ${at}>${esc(fn.name)}</text></a>`
+      : `<text class="what" ${at}>${esc(st.step.says)}</text>`;
+  };
   for (const st of shown) {
     if (st.kind === "outside" || st.a === st.b) continue;
     const i = Math.min(col[st.a], col[st.b]), j = Math.max(col[st.a], col[st.b]);
-    const need = (textW(st.step.says) + 28) / (j - i);
+    const need = (textW(labelOf(st)) + 28) / (j - i);
     for (let k = i; k < j; k++) gaps[k] = Math.max(gaps[k], need);
   }
   if (boxed) {
@@ -406,7 +471,7 @@ function seqEl(t, shown, stepNo) {
   // The links out of the loops on a lifeline line up, past its longest
   // label.
   const loopW = {};
-  for (const st of shown) if (st.kind !== "outside" && st.a === st.b) loopW[st.a] = Math.max(loopW[st.a] || 0, textW(st.step.says));
+  for (const st of shown) if (st.kind !== "outside" && st.a === st.b) loopW[st.a] = Math.max(loopW[st.a] || 0, textW(labelOf(st)));
   const groups = [];
   for (const st of shown) {
     const last = groups[groups.length - 1];
@@ -468,13 +533,13 @@ function seqEl(t, shown, stepNo) {
       const intoAt = x + LOOP + 8 + loopW[st.a] + 10;
       const into = p && p.tier ? `<text class="into" data-into="${esc(st.a)}" x="${intoAt}" y="${yc + 4}">inside ${esc(nameOf(st.a))} ›</text>` : "";
       W = Math.max(W, intoAt + (into ? textW(`inside ${nameOf(st.a)} ›`) : 0) + 16);
-      drawn = `<path class="arrow loop" d="M${x} ${yc - 7} H${x + LOOP} V${yc + 7} H${x + 2}" marker-end="url(#${on ? "arrlit" : "arr"})"/><text class="what" x="${x + LOOP + 8}" y="${yc + 4}">${esc(st.step.says)}</text>${into}`;
+      drawn = `<path class="arrow loop" d="M${x} ${yc - 7} H${x + LOOP} V${yc + 7} H${x + 2}" marker-end="url(#${on ? "arrlit" : "arr"})"/>${labelEl(st, x + LOOP + 8, yc + 4)}${into}`;
     } else {
       const { xa, xb } = ends[st.n];
       const end = xb > xa ? xb - 1 : xb + 1;
       const back = st.step.back;
       const marker = back ? (on ? "backlit" : "back") : on ? "arrlit" : "arr";
-      drawn = `<path class="arrow ${back ? "back" : ""}" d="M${xa} ${yc} L${end} ${yc}" marker-end="url(#${marker})"/><text class="what" x="${(xa + xb) / 2}" y="${yc - 5}" text-anchor="middle">${esc(st.step.says)}</text>`;
+      drawn = `<path class="arrow ${back ? "back" : ""}" d="M${xa} ${yc} L${end} ${yc}" marker-end="url(#${marker})"/>${labelEl(st, (xa + xb) / 2, yc - 5, "middle")}`;
     }
     const title = `<title>${group.steps.map((x) => `${x.n}. ${said(x)}${x.step.at ? ` (${esc(x.step.at)})` : ""}`).join("\n")}</title>`;
     return `<g class="row ${st.kind} ${on ? "on" : ""}" data-step="${st.n}">${title}<rect class="band" x="4" y="${yc - h / 2 + 1}" width="__W__" height="${h - 2}" rx="6"/>${badge}${drawn}</g>`;
@@ -489,7 +554,7 @@ function seqEl(t, shown, stepNo) {
   const lit = stepNo ? shown[stepNo - 1] : null;
   if (lit && lit.kind !== "outside") {
     const { xa, xb } = ends[lit.n];
-    focus = lit.a === lit.b ? [xa, xa + LOOP + 8 + textW(lit.step.says)] : [Math.min(xa, xb), Math.max(xa, xb)];
+    focus = lit.a === lit.b ? [xa, xa + LOOP + 8 + textW(labelOf(lit))] : [Math.min(xa, xb), Math.max(xa, xb)];
   }
   let box = "";
   if (boxed) {
@@ -616,6 +681,7 @@ function renderEmpty() {
 function render() {
   if (!data) return;
   wanted = [];
+  wantedAt = [];
   if (!data.map || !tiers().length) return renderEmpty();
   const { tier: tierId, part } = where();
   if (part && parts()[part]) renderLeaf(tierId, part);
@@ -1102,25 +1168,33 @@ async function load() {
   await loadFiles();
 }
 
-/// Reads again what the server says of the files the page shows, and
-/// draws the page again when it changed.
+/// Reads again what the server says of the files the page shows, and of
+/// the places the steps of the flow shown are made, and draws the page
+/// again when it changed.
 async function loadFiles() {
   let changed = false;
-  await Promise.all(
-    wanted.map(async (path) => {
-      try {
-        const response = await fetch(`cox://api/file${path}`);
-        if (!response.ok) return;
-        const text = await response.text();
-        if (text === fileText[path]) return;
-        fileText[path] = text;
-        fileData[path] = JSON.parse(text);
-        changed = true;
-      } catch {
-        // Asked again next time.
-      }
+  const read = async (url, texts, read, key) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return;
+      const text = await response.text();
+      if (text === texts[key]) return;
+      texts[key] = text;
+      read[key] = JSON.parse(text);
+      changed = true;
+    } catch {
+      // Asked again next time.
+    }
+  };
+  await Promise.all([
+    ...wanted.map((path) => read(`cox://api/file${path}`, fileText, fileData, path)),
+    ...wantedAt.map((at) => {
+      const place = atPlace(at);
+      if (!place) return null;
+      const key = `${place.path}:${place.line}`;
+      return read(`cox://api/call${key}`, callText, callData, key);
     }),
-  );
+  ]);
   if (changed) render();
 }
 load();

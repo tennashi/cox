@@ -336,7 +336,17 @@ dashed, and a bar on a box's lifeline shows it at work, from a step
 into it until its step back; a step
 inside a box is a loop on its lifeline, which opens the box at the
 step, so a flow is read from the top down as the map is, and a column
-opens its box as a card does. "on the map" draws the flow on the tier
+opens its box as a card does. A step rolled up to the tier's boxes says
+what it is in words, and drawn between the boxes it is written between,
+as deep as the map goes for it, is named by the function it runs, which
+Cox asks the project's language server for, at the place the step is
+made, its `at`: the function the line is in, and what it calls on that
+line, as `rust-analyzer`'s call hierarchy has them, of which the diagram
+names the one in the box the step goes to, or else the last of the
+project's own called on the line; the name opens the function on a tab,
+and the line under the flows names them all. A line that calls nothing,
+as when the code moved, says so, for an agent to bring the map up to
+date. "on the map" draws the flow on the tier
 instead, its steps numbered on the lines between the boxes, with the
 step chosen lit and the other lines dimmed. Either way the ← and →
 keys go from step to step.

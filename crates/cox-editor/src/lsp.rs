@@ -1,6 +1,6 @@
 //! Talking to a language server, which knows a project's code as its
-//! compiler does: what a name is, where it is defined, and where it is
-//! used. The editor starts the server of a language it knows one for (see
+//! compiler does: what a name is, where it is defined, where it is used,
+//! and what a function calls. The editor starts the server of a language it knows one for (see
 //! [`Language::server`](crate::language::Language::server)), in the
 //! project's folder, and talks to it over the Language Server Protocol:
 //! JSON-RPC messages on the server's standard input and output.
@@ -36,8 +36,8 @@ use serde_json::{Value, json};
 use tokio::sync::{oneshot, watch};
 use url::Url;
 
-pub use self::answers::{Hover, Location, Symbol};
-use self::answers::{hover, locations, symbols};
+pub use self::answers::{Call, Callable, Hover, Location, Symbol};
+use self::answers::{callable, calls, hover, locations, symbols};
 pub use self::position::{Encoding, Position};
 use self::wire::{Reader, write};
 
@@ -268,6 +268,7 @@ impl Client {
                         "definition": { "linkSupport": true },
                         "references": {},
                         "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+                        "callHierarchy": { "dynamicRegistration": false },
                     },
                 },
             }),
@@ -402,6 +403,37 @@ impl Client {
             &json!({ "textDocument": { "uri": document.uri } }),
         );
         async move { Ok(symbols(&answered.await?)) }
+    }
+
+    /// The function at `position` of `document`, as the server's call
+    /// hierarchy has it, and the functions it calls, with where it calls
+    /// each; `None` when no function is there. The server answers as it
+    /// knows the code: asked before it has read the project, it may know
+    /// of no calls yet.
+    ///
+    /// # Errors
+    ///
+    /// When the server fails to answer, or stops.
+    pub fn calls(
+        &self,
+        document: &OpenFile,
+        position: Position,
+    ) -> impl Future<Output = Result<Option<(Callable, Vec<Call>)>, Error>> + use<> {
+        let shared = Arc::clone(&self.shared);
+        let prepared = shared.request("textDocument/prepareCallHierarchy", &document.at(position));
+        async move {
+            let items = prepared.await?;
+            let Some(item) = items.as_array().and_then(|items| items.first()) else {
+                return Ok(None);
+            };
+            let Some(function) = callable(item) else {
+                return Ok(None);
+            };
+            let answered = shared
+                .request("callHierarchy/outgoingCalls", &json!({ "item": item }))
+                .await?;
+            Ok(Some((function, calls(&answered))))
+        }
     }
 }
 
@@ -573,6 +605,12 @@ mod tests {
                             },
                         }])));
                     }
+                    Some(
+                        method @ ("textDocument/prepareCallHierarchy"
+                        | "callHierarchy/outgoingCalls"),
+                    ) => {
+                        write(answer(hierarchy(method)));
+                    }
                     Some("textDocument/references") => write(json!({
                         "jsonrpc": "2.0",
                         "id": id,
@@ -584,6 +622,38 @@ mod tests {
             }
         });
         (output, input, server)
+    }
+
+    /// What the fake server answers of its call hierarchy: `main`, which
+    /// calls `run` in another file.
+    fn hierarchy(method: &str) -> Value {
+        let item = |name: &str, uri: &str, line: u64| {
+            json!({
+                "name": name,
+                "kind": 12,
+                "uri": uri,
+                "range": {
+                    "start": { "line": line, "character": 0 },
+                    "end": { "line": line + 2, "character": 1 },
+                },
+                "selectionRange": {
+                    "start": { "line": line, "character": 3 },
+                    "end": { "line": line, "character": 3 + name.len() },
+                },
+                "data": 7,
+            })
+        };
+        if method == "textDocument/prepareCallHierarchy" {
+            json!([item("main", "file:///src/main.rs", 0)])
+        } else {
+            json!([{
+                "to": item("run", "file:///src/lib.rs", 2),
+                "fromRanges": [{
+                    "start": { "line": 0, "character": 12 },
+                    "end": { "line": 0, "character": 15 },
+                }],
+            }])
+        }
     }
 
     /// What `heard` holds: each message's method, or `answer`.
@@ -637,6 +707,11 @@ mod tests {
         assert_eq!(symbols[0].name, "main");
         assert_eq!(symbols[0].kind, "function");
         assert_eq!(symbols[0].selection.start.character, 3);
+        let (function, calls) = client.calls(&document, at).await.unwrap().unwrap();
+        assert_eq!(function.name, "main");
+        assert_eq!(calls[0].to.name, "run");
+        assert_eq!(calls[0].to.path, Path::new("/src/lib.rs"));
+        assert_eq!(calls[0].from[0].start.line, 0);
         drop(again);
         drop(document);
         drop(client);
@@ -654,6 +729,8 @@ mod tests {
                 "textDocument/definition",
                 "textDocument/references",
                 "textDocument/documentSymbol",
+                "textDocument/prepareCallHierarchy",
+                "callHierarchy/outgoingCalls",
                 "textDocument/didClose",
                 "shutdown",
                 "exit",
@@ -667,6 +744,8 @@ mod tests {
         );
         assert_eq!(heard[2]["result"], json!([{ "fake": true }]));
         assert_eq!(heard[4]["params"]["textDocument"]["version"], 1);
+        // The item the server prepared goes back to it as it was.
+        assert_eq!(heard[10]["params"]["item"]["data"], 7);
         assert_eq!(
             heard[5]["params"]["textDocument"]["uri"],
             "file:///src/main.rs"
