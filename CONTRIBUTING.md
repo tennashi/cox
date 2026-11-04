@@ -316,11 +316,14 @@ language server says of it, once it has read the project: the symbols
 the file defines, as `rust-analyzer` lists them for Rust, each opening
 the file at its line, how many places use each, and which files use
 them; until the server has answered, the file says what the server is
-doing. The path above the boxes leads back up, and before it ‹ and ›
-go back and forward through the places the tab went to, as a code
-tab's do (Backspace, Alt-← and Alt-→, Command-[ and Command-] too),
-and ↑ goes up a tier (the ↑ key too), as does a click on the name of
-the box a tier is the inside of, over its boxes. A map can have flows
+doing. The path above the boxes leads back up, and over the boxes a
+line of buttons names the ways out: back to where the tab was, as a
+code tab's ‹ does, naming the place and the step chosen there
+(Backspace, Alt-← and Command-[ too); up a tier, naming it (the ↑ key
+too, and a click on the name of the box the tier is the inside of,
+marked ↑, over its boxes); and forward again (Alt-→ and Command-]). So
+a drill down and the way back are each a click, over and over. A map
+can have flows
 too, the orders in which the boxes talk, each a list of steps from one
 box to another, written between the boxes that hold the code: "flows"
 above the boxes lists them, and a flow chosen is drawn as a sequence

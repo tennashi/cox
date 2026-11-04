@@ -70,22 +70,30 @@
         color: var(--faint);
         margin-right: 2px;
       }
-      /* ‹ › go back and forward through the places the page went to, ↑ up a tier. */
-      .crumbs .ways {
-        display: inline-flex;
-        gap: 2px;
-        margin-right: 6px;
+      /* The ways out of the page, over what it shows: back to where it
+         was, up a tier, forward again, each naming where it goes. */
+      .waybar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 0 0 10px;
       }
-      .crumbs .way {
-        font-size: 15px;
-        line-height: 1;
-        padding: 1px 7px 3px;
+      .wayto {
+        font: 12.5px var(--sans);
         color: var(--foreground);
+        background: var(--card);
+        border: 1px solid var(--dim);
+        border-radius: 8px;
+        padding: 5px 12px;
+        cursor: pointer;
       }
-      .crumbs .way:disabled {
-        color: var(--faint);
-        cursor: default;
-        background: none;
+      .wayto b {
+        font-weight: 600;
+      }
+      .wayto:hover,
+      .wayto:focus-visible {
+        background: var(--card-hover);
+        border-color: var(--foreground);
       }
       .legend .name[data-goes],
       .seq .box .name[data-goes] {
@@ -94,6 +102,11 @@
       .legend .name[data-goes]:hover,
       .seq .box .name[data-goes]:hover {
         text-decoration: underline;
+      }
+      .upmark {
+        color: var(--link);
+        fill: var(--link);
+        font-weight: 400;
       }
       .source {
         display: flex;

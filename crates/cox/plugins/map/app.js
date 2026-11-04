@@ -129,6 +129,29 @@ function forward() {
   if (visitedAt < visited.length - 1) history.forward();
 }
 
+/// A place the page went to, as its hash names it, in words: the tier,
+/// or the box open on its own, and the step chosen there.
+function placeName(hash) {
+  const [place, chosen = ""] = (hash || "").replace(/^#/, "").split("@");
+  const [tierId, partId] = place.split("/");
+  const t = tier(tierId) || tiers()[0];
+  const name = partId && parts()[partId] ? nameOf(partId) : t ? t.name : "the map";
+  const step = chosen.replace(/\+map$/, "").split(":")[1];
+  return step ? `${name} · step ${step}` : name;
+}
+
+/// The ways out of the page open, over what it shows, each naming
+/// where it goes: back to where the page was, up a tier, and forward
+/// again; nothing when there is nowhere to go.
+function waysEl() {
+  const ways = [];
+  if (visitedAt > 0) ways.push(`<button class="wayto" data-back title="Backspace, Alt-←, ⌘[">‹ back to <b>${esc(placeName(visited[visitedAt - 1]))}</b></button>`);
+  const above_ = upFrom();
+  if (above_) ways.push(`<button class="wayto" data-up title="↑">↑ up to <b>${esc(placeName(above_.part ? `${above_.tier}/${above_.part}` : above_.tier))}</b></button>`);
+  if (visitedAt < visited.length - 1) ways.push(`<button class="wayto" data-forward title="Alt-→, ⌘]">forward to <b>${esc(placeName(visited[visitedAt + 1]))}</b> ›</button>`);
+  return ways.length ? `<div class="waybar">${ways.join("")}</div>` : "";
+}
+
 /// Where a step up from the page open is: the tier of a box open on its
 /// own, or the tier that holds the box the tier open is the inside of;
 /// null at the top.
@@ -306,8 +329,7 @@ function crumbs(items) {
         : `<button data-tier="${esc(item.tier)}" ${item.part ? `data-part="${esc(item.part)}"` : ""}>${esc(item.text)}</button><span>›</span>`,
     )
     .join("");
-  const ways = `<span class="ways"><button class="way" data-back title="back to where the page was (Backspace, Alt-←, ⌘[)" ${visitedAt > 0 ? "" : "disabled"}>‹</button><button class="way" data-forward title="forward again (Alt-→, ⌘])" ${visitedAt < visited.length - 1 ? "" : "disabled"}>›</button><button class="way" data-up title="up a tier (↑)" ${upFrom() ? "" : "disabled"}>↑</button></span>`;
-  return `<nav class="crumbs">${ways}<span class="depth">${items.length}</span>${html}</nav>`;
+  return `<nav class="crumbs"><span class="depth">${items.length}</span>${html}</nav>`;
 }
 
 function sourceLine() {
@@ -455,7 +477,7 @@ function renderTier(tierId) {
   const opener = openerOf(tierId);
   const head = opener ? parts()[opener] : null;
   const noframe = !aboveIds.length && !belowIds.length;
-  const legend = head ? `<div class="legend"><span class="name" data-goes="up" data-id="${esc(opener)}" title="up to ${esc((tierOf(opener) || { name: "the tier above" }).name)} (↑)">${esc(head.name)}</span>${head.each ? `<span class="each">${esc(head.each)}</span>` : ""}</div>` : "";
+  const legend = head ? `<div class="legend"><span class="name" data-goes="up" data-id="${esc(opener)}" title="up to ${esc((tierOf(opener) || { name: "the tier above" }).name)} (↑)">${esc(head.name)}<span class="upmark"> ↑</span></span>${head.each ? `<span class="each">${esc(head.each)}</span>` : ""}</div>` : "";
   const focus = rows.filter((_, ri) => !lines[ri].side).join("");
   const body = seq
     ? seqEl(tierView(t), shown, stepNo)
@@ -468,7 +490,7 @@ function renderTier(tierId) {
     ? `<div class="foot"><span>a column opens the tier inside it, or the code it holds</span><span>·</span><span>a row is a step of the flow; a loop is a step inside a box, and opens where the step is drawn apart</span><span>·</span><span>← → go from step to step, ↑ up a tier, Backspace back</span></div>`
     : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>orange is what changed, as Changes shows it</span><span>·</span><span>↑ goes up a tier, Backspace back</span></div>`;
   const chain = [...above(tierId), tierId].map((id) => ({ text: tier(id).name, tier: id }));
-  app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${body}${foot}`;
+  app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${waysEl()}${body}${foot}`;
   if (seq) seqScrolled();
   wired();
 }
@@ -705,8 +727,8 @@ function seqEl(view, shown, stepNo) {
     const head = parts()[own] || { name: own };
     const x0 = xs[first] - HEAD_W / 2 - PAD, x1 = xs[last] + HEAD_W / 2 + PAD;
     if (!lit || lit.kind === "outside") focus = [x0, x1];
-    const each = head.each ? `<text class="each" x="${x0 + 14 + textW(head.name, 13) + 10}" y="${TOP - 4}">${esc(head.each)}</text>` : "";
-    box = `<g class="box"><rect x="${x0}" y="${TOP - 8}" width="${x1 - x0}" height="${H - 4 - (TOP - 8)}" rx="12"/><text class="name" data-goes="up" data-id="${esc(own)}" x="${x0 + 14}" y="${TOP - 4}"><title>up to ${esc((tierOf(own) || { name: "the tier above" }).name)} (↑)</title>${esc(head.name)}</text>${each}</g>`;
+    const each = head.each ? `<text class="each" x="${x0 + 14 + textW(`${head.name} ↑`, 13) + 10}" y="${TOP - 4}">${esc(head.each)}</text>` : "";
+    box = `<g class="box"><rect x="${x0}" y="${TOP - 8}" width="${x1 - x0}" height="${H - 4 - (TOP - 8)}" rx="12"/><text class="name" data-goes="up" data-id="${esc(own)}" x="${x0 + 14}" y="${TOP - 4}"><title>up to ${esc((tierOf(own) || { name: "the tier above" }).name)} (↑)</title>${esc(head.name)}<tspan class="upmark"> ↑</tspan></text>${each}</g>`;
   }
   const lives = cols.map((id) => `<line class="life" x1="${xs[col[id]]}" y1="${TOP + HEAD_H}" x2="${xs[col[id]]}" y2="${H - 8}"/>`).join("");
   const heads = cols
@@ -774,8 +796,8 @@ function renderLeaf(tierId, id) {
               : "";
       says = stepSaysEl(cur, where_);
     } else says = flowSaysEl(flow);
-    flowEls = `${flowBarEl(flow)}${says}${seqEl(view, shown, stepNo)}`;
-  } else flowEls = flowBarEl(null);
+    flowEls = `${flowBarEl(flow)}${says}${waysEl()}${seqEl(view, shown, stepNo)}`;
+  } else flowEls = `${flowBarEl(null)}${waysEl()}`;
   const holds = f.holds
     .map((h) => {
       const name = h.said.split(":")[0];
