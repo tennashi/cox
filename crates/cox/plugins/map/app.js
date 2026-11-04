@@ -107,6 +107,44 @@ function go(tierId, partId, { flow, step, onMap } = {}) {
   location.hash = hash;
 }
 
+// Where the page has been, as its hashes, and where in them it is, so
+// that ‹ and › go back and forward through the places it went to, as a
+// code tab's do, after a drill down skipped tiers on the way.
+const visited = [];
+let visitedAt = -1;
+function track() {
+  const hash = location.hash;
+  if (hash === visited[visitedAt]) return;
+  if (hash === visited[visitedAt - 1]) visitedAt--;
+  else if (hash === visited[visitedAt + 1]) visitedAt++;
+  else {
+    visited.splice(visitedAt + 1, visited.length, hash);
+    visitedAt = visited.length - 1;
+  }
+}
+function back() {
+  if (visitedAt > 0) history.back();
+}
+function forward() {
+  if (visitedAt < visited.length - 1) history.forward();
+}
+
+/// Where a step up from the page open is: the tier of a box open on its
+/// own, or the tier that holds the box the tier open is the inside of;
+/// null at the top.
+function upFrom() {
+  const { tier: here, part } = where();
+  if (part) return { tier: here, part: null };
+  const opener = openerOf(here);
+  const up = opener && tierOf(opener);
+  return up ? { tier: up.id, part: null } : null;
+}
+function up() {
+  const to = upFrom();
+  const { flow, step, onMap } = where();
+  if (to) go(to.tier, to.part, { flow, step, onMap });
+}
+
 // --- Flows: the orders in which the boxes talk, rolled up to a tier.
 
 /// The boxes a tier shows: those of its rows and of its frame.
@@ -268,7 +306,8 @@ function crumbs(items) {
         : `<button data-tier="${esc(item.tier)}" ${item.part ? `data-part="${esc(item.part)}"` : ""}>${esc(item.text)}</button><span>›</span>`,
     )
     .join("");
-  return `<nav class="crumbs"><span class="depth">${items.length}</span>${html}</nav>`;
+  const ways = `<span class="ways"><button class="way" data-back title="back to where the page was (Backspace, Alt-←, ⌘[)" ${visitedAt > 0 ? "" : "disabled"}>‹</button><button class="way" data-forward title="forward again (Alt-→, ⌘])" ${visitedAt < visited.length - 1 ? "" : "disabled"}>›</button><button class="way" data-up title="up a tier (↑)" ${upFrom() ? "" : "disabled"}>↑</button></span>`;
+  return `<nav class="crumbs">${ways}<span class="depth">${items.length}</span>${html}</nav>`;
 }
 
 function sourceLine() {
@@ -416,7 +455,7 @@ function renderTier(tierId) {
   const opener = openerOf(tierId);
   const head = opener ? parts()[opener] : null;
   const noframe = !aboveIds.length && !belowIds.length;
-  const legend = head ? `<div class="legend"><span class="name">${esc(head.name)}</span>${head.each ? `<span class="each">${esc(head.each)}</span>` : ""}</div>` : "";
+  const legend = head ? `<div class="legend"><span class="name" data-goes="up" data-id="${esc(opener)}" title="up to ${esc((tierOf(opener) || { name: "the tier above" }).name)} (↑)">${esc(head.name)}</span>${head.each ? `<span class="each">${esc(head.each)}</span>` : ""}</div>` : "";
   const focus = rows.filter((_, ri) => !lines[ri].side).join("");
   const body = seq
     ? seqEl(tierView(t), shown, stepNo)
@@ -426,8 +465,8 @@ function renderTier(tierId) {
     ${belowIds.length ? rows[rows.length - 1] : ""}
   </div>`;
   const foot = seq
-    ? `<div class="foot"><span>a column opens the tier inside it, or the code it holds</span><span>·</span><span>a row is a step of the flow; a loop is a step inside a box, and opens where the step is drawn apart</span><span>·</span><span>← → go from step to step</span></div>`
-    : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>orange is what changed, as Changes shows it</span></div>`;
+    ? `<div class="foot"><span>a column opens the tier inside it, or the code it holds</span><span>·</span><span>a row is a step of the flow; a loop is a step inside a box, and opens where the step is drawn apart</span><span>·</span><span>← → go from step to step, ↑ up a tier, Backspace back</span></div>`
+    : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>orange is what changed, as Changes shows it</span><span>·</span><span>↑ goes up a tier, Backspace back</span></div>`;
   const chain = [...above(tierId), tierId].map((id) => ({ text: tier(id).name, tier: id }));
   app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${body}${foot}`;
   if (seq) seqScrolled();
@@ -667,7 +706,7 @@ function seqEl(view, shown, stepNo) {
     const x0 = xs[first] - HEAD_W / 2 - PAD, x1 = xs[last] + HEAD_W / 2 + PAD;
     if (!lit || lit.kind === "outside") focus = [x0, x1];
     const each = head.each ? `<text class="each" x="${x0 + 14 + textW(head.name, 13) + 10}" y="${TOP - 4}">${esc(head.each)}</text>` : "";
-    box = `<g class="box"><rect x="${x0}" y="${TOP - 8}" width="${x1 - x0}" height="${H - 4 - (TOP - 8)}" rx="12"/><text class="name" x="${x0 + 14}" y="${TOP - 4}">${esc(head.name)}</text>${each}</g>`;
+    box = `<g class="box"><rect x="${x0}" y="${TOP - 8}" width="${x1 - x0}" height="${H - 4 - (TOP - 8)}" rx="12"/><text class="name" data-goes="up" data-id="${esc(own)}" x="${x0 + 14}" y="${TOP - 4}"><title>up to ${esc((tierOf(own) || { name: "the tier above" }).name)} (↑)</title>${esc(head.name)}</text>${each}</g>`;
   }
   const lives = cols.map((id) => `<line class="life" x1="${xs[col[id]]}" y1="${TOP + HEAD_H}" x2="${xs[col[id]]}" y2="${H - 8}"/>`).join("");
   const heads = cols
@@ -1227,8 +1266,11 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => wire
 // --- Going places.
 
 app.addEventListener("click", (event) => {
-  const t = event.target.closest("[data-goes],[data-tier],[data-flow],[data-step],[data-drill],[data-view],[data-seq]");
+  const t = event.target.closest("[data-goes],[data-tier],[data-flow],[data-step],[data-drill],[data-view],[data-seq],[data-back],[data-forward],[data-up]");
   if (!t) return;
+  if ("back" in t.dataset) return back();
+  if ("forward" in t.dataset) return forward();
+  if ("up" in t.dataset) return up();
   const { tier: here, part, flow, step, onMap } = where();
   const kept = { flow, step, onMap };
   if (t.dataset.tier) {
@@ -1267,17 +1309,30 @@ app.addEventListener("click", (event) => {
     if (up) go(up.id, null, kept);
   }
 });
-// With a flow chosen, the arrow keys go from step to step.
+// The keys: Backspace, Alt-← and ⌘[ go back to where the page was, and
+// Alt-→ and ⌘] forward again; ↑ goes up a tier; and, with a flow
+// chosen, ← and → go from step to step.
 window.addEventListener("keydown", (event) => {
-  const { tier: here, part, flow, step, onMap } = where();
-  const f = flow && flows().find((x) => x.id === flow);
-  if (!f || part || !f.steps.length) return;
-  if (event.key === "ArrowRight") go(here, part, { flow, step: Math.min(f.steps.length, (step || 0) + 1), onMap });
-  else if (event.key === "ArrowLeft") go(here, part, { flow, step: Math.max(1, (step || f.steps.length + 1) - 1), onMap });
-  else return;
+  const alt = event.altKey && !event.metaKey && !event.ctrlKey;
+  const cmd = (event.metaKey || event.ctrlKey) && !event.altKey;
+  const plain = !event.altKey && !event.metaKey && !event.ctrlKey;
+  if ((plain && event.key === "Backspace") || (alt && event.key === "ArrowLeft") || (cmd && event.key === "[")) back();
+  else if ((alt && event.key === "ArrowRight") || (cmd && event.key === "]")) forward();
+  else if (plain && event.key === "ArrowUp") up();
+  else if (plain && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+    const { tier: here, part, flow, step, onMap } = where();
+    const f = flow && flows().find((x) => x.id === flow);
+    if (!f || !f.steps.length) return;
+    if (event.key === "ArrowRight") go(here, part, { flow, step: Math.min(f.steps.length, (step || 0) + 1), onMap });
+    else go(here, part, { flow, step: Math.max(1, (step || f.steps.length + 1) - 1), onMap });
+  } else return;
   event.preventDefault();
 });
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => {
+  track();
+  render();
+});
+track();
 // The sequence diagram shares the page's width among its columns, so it
 // is drawn again when the width changes.
 let seqWidth = 0;

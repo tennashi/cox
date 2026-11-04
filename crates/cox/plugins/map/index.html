@@ -70,6 +70,31 @@
         color: var(--faint);
         margin-right: 2px;
       }
+      /* ‹ › go back and forward through the places the page went to, ↑ up a tier. */
+      .crumbs .ways {
+        display: inline-flex;
+        gap: 2px;
+        margin-right: 6px;
+      }
+      .crumbs .way {
+        font-size: 15px;
+        line-height: 1;
+        padding: 1px 7px 3px;
+        color: var(--foreground);
+      }
+      .crumbs .way:disabled {
+        color: var(--faint);
+        cursor: default;
+        background: none;
+      }
+      .legend .name[data-goes],
+      .seq .box .name[data-goes] {
+        cursor: pointer;
+      }
+      .legend .name[data-goes]:hover,
+      .seq .box .name[data-goes]:hover {
+        text-decoration: underline;
+      }
       .source {
         display: flex;
         flex-wrap: wrap;

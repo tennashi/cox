@@ -316,7 +316,11 @@ language server says of it, once it has read the project: the symbols
 the file defines, as `rust-analyzer` lists them for Rust, each opening
 the file at its line, how many places use each, and which files use
 them; until the server has answered, the file says what the server is
-doing. The path above the boxes leads back up. A map can have flows
+doing. The path above the boxes leads back up, and before it ‹ and ›
+go back and forward through the places the tab went to, as a code
+tab's do (Backspace, Alt-← and Alt-→, Command-[ and Command-] too),
+and ↑ goes up a tier (the ↑ key too), as does a click on the name of
+the box a tier is the inside of, over its boxes. A map can have flows
 too, the orders in which the boxes talk, each a list of steps from one
 box to another, written between the boxes that hold the code: "flows"
 above the boxes lists them, and a flow chosen is drawn as a sequence
@@ -363,7 +367,8 @@ step whose place the server has not told stays on the box itself.
 "on the map" draws the flow on the tier
 instead, its steps numbered on the lines between the boxes, with the
 step chosen lit and the other lines dimmed. Either way the ← and →
-keys go from step to step.
+keys go from step to step, and the step chosen stays chosen through a
+drill down and back up.
 The map is a file in the project's folder, `.cox/map.json`, written by
 an agent once and kept up to date by the agents that change the code,
 so that it is there whenever the tab is opened, the same whatever
