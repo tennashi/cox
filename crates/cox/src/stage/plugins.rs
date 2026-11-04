@@ -21,8 +21,9 @@
 //!   function the line is in and the functions it calls, once the server
 //!   has answered (see [`crate::stage::calls`]).
 //! - `cox://api/lines/<path>:<line>`: the lines of the file at `<path>`
-//!   around `<line>`, for a page to show the code a step is made at (see
-//!   [`crate::stage::lines`]).
+//!   around `<line>`, each as its stretches with what the syntax says
+//!   each is, for a page to show the code a step is made at, colored as
+//!   the code tabs color it (see [`crate::stage::lines`]).
 //!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Map plugin does for a box's code.
@@ -340,7 +341,14 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
         assert_eq!(json["name"], "my src/main.rs");
         assert_eq!(json["from"], 1);
-        assert_eq!(json["lines"], serde_json::json!(["fn main() {}"]));
+        let line: String = json["lines"][0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|stretch| stretch[0].as_str().unwrap())
+            .collect();
+        assert_eq!(line, "fn main() {}");
+        assert_eq!(json["lines"][0][0], serde_json::json!(["fn", "keyword"]));
         assert_eq!(plugins.resource("cox://api/lines/etc/hostname:1"), None);
     }
 
