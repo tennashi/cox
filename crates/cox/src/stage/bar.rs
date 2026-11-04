@@ -29,6 +29,21 @@ const TAB_HEIGHT: f32 = 32.;
 const VIEW_RADIUS: f32 = 9.;
 const TAB_RADIUS: f32 = 10.;
 
+/// The keys of the menu's items, as the menu shows them (see
+/// [`crate::workspace::bind_keys`]).
+#[cfg(target_os = "macos")]
+const NEW_PAGE_KEY: &str = "⌘T";
+#[cfg(not(target_os = "macos"))]
+const NEW_PAGE_KEY: &str = "Ctrl+T";
+#[cfg(target_os = "macos")]
+const NEW_TERMINAL_KEY: &str = "⌃`";
+#[cfg(not(target_os = "macos"))]
+const NEW_TERMINAL_KEY: &str = "Ctrl+`";
+#[cfg(target_os = "macos")]
+const OPEN_FILE_KEY: &str = "⌘P";
+#[cfg(not(target_os = "macos"))]
+const OPEN_FILE_KEY: &str = "Ctrl+P";
+
 /// How often the bar counts the files that changed, as the tab of what
 /// changed looks again.
 const COUNT_EVERY: Duration = Duration::from_secs(2);
@@ -288,7 +303,7 @@ impl Stage {
     /// The menu of what the human opens on the stage: a page, a terminal,
     /// or a file.
     fn render_menu(cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let item = |id: &'static str, label: &'static str, glyph: Icon| {
+        let item = |id: &'static str, label: &'static str, glyph: Icon, key: &'static str| {
             div()
                 .id(id)
                 .debug_selector(move || id.to_owned())
@@ -302,7 +317,8 @@ impl Stage {
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(SELECTED)))
                 .child(icon(glyph, 15., DIM))
-                .child(label)
+                .child(div().flex_1().child(label))
+                .child(div().text_size(px(12.)).text_color(rgb(FAINT)).child(key))
         };
         let close = |stage: &mut Self, cx: &mut Context<Self>| {
             stage.menu_open = false;
@@ -327,7 +343,7 @@ impl Stage {
                 .text_color(rgb(FOREGROUND))
                 .on_mouse_down_out(cx.listener(move |stage, _, _, cx| close(stage, cx)))
                 .child(
-                    item("new-tab", "Web page", Icon::Globe).on_click(cx.listener(
+                    item("new-tab", "Web page", Icon::Globe, NEW_PAGE_KEY).on_click(cx.listener(
                         move |stage, _, window, cx| {
                             close(stage, cx);
                             stage.new_tab(window, cx);
@@ -335,25 +351,27 @@ impl Stage {
                     )),
                 )
                 .child(
-                    item("new-terminal", "Terminal", Icon::Terminal).on_click(cx.listener(
-                        move |stage, _, window, cx| {
+                    item("new-terminal", "Terminal", Icon::Terminal, NEW_TERMINAL_KEY).on_click(
+                        cx.listener(move |stage, _, window, cx| {
                             close(stage, cx);
                             stage.new_terminal(window, cx);
+                        }),
+                    ),
+                )
+                .child(
+                    item("open-file", "File…", Icon::Code, OPEN_FILE_KEY).on_click(cx.listener(
+                        move |stage, _, window, cx| {
+                            close(stage, cx);
+                            Self::choose_file(window, cx);
                         },
                     )),
-                )
-                .child(item("open-file", "File…", Icon::Code).on_click(cx.listener(
-                    move |stage, _, window, cx| {
-                        close(stage, cx);
-                        Self::choose_file(window, cx);
-                    },
-                ))),
+                ),
         )
         .with_priority(2)
     }
 
     /// Asks for a file, and opens it on a tab, as a link to it does.
-    fn choose_file(window: &mut Window, cx: &mut Context<Self>) {
+    pub fn choose_file(window: &mut Window, cx: &mut Context<Self>) {
         let chosen = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,

@@ -84,6 +84,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-v", Paste, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-n", gpui::NoAction, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-o", gpui::NoAction, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-t", gpui::NoAction, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-p", gpui::NoAction, Some(KEY_CONTEXT)),
     ]);
 }
 
