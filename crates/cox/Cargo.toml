@@ -41,6 +41,8 @@ tracing.workspace = true
 # `src/logs.rs`.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt", "json", "std", "tracing-log"] }
 unicode-segmentation = "1.12.0"
+# Fetching the ACP Registry's agents: see `src/agents.rs`.
+ureq = "3.4.2"
 
 # CEF is cox-browser's; the executables depend on its sys crate as well
 # only for `build.rs`, which has to know where the CEF distribution is to

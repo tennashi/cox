@@ -39,6 +39,7 @@ use crate::agent::instructions::Instructions;
 use crate::agent::mcp::ToolServer;
 use crate::agent::setup::{Setup, StageUse};
 use crate::agent::{Agent, Start};
+use crate::agents::Agents;
 use crate::chat::conversation::Conversation;
 use crate::chat::judge::Starts;
 use crate::chat::view::{Again, ChatView, OpenLink, StageView};
@@ -47,12 +48,13 @@ use crate::stage::Stage;
 use crate::ui::Panel;
 use cox_browser::relay::Relay;
 
-/// Opens chats, each with an agent of the same command: the [`Opens`] of
-/// the window when Cox runs.
+/// Opens chats, each with the agent it talks to: the [`Opens`] of the
+/// window when Cox runs.
 #[derive(Clone)]
 pub struct Launcher {
-    /// The agent to start, and its arguments.
-    pub command: Vec<String>,
+    /// The agents a chat can talk to, the first being the one it starts
+    /// with.
+    pub agents: Agents,
     /// The page each chat's stage shows first.
     pub stage: String,
     /// The `PATH` the agent's tools are found on.
@@ -101,13 +103,16 @@ impl Opens for Launcher {
             cx,
         );
         // 6. The view, talking to the agent, with the stage beside it.
+        let chosen = self.agent_of(record.as_ref());
+        let starts = self.starts(record.clone());
         cx.new(|cx| {
             ChatView::new(
                 agent,
                 Some(shown(&stage, panel)),
                 open_link(&stage),
                 record,
-                Some(self.starts()),
+                Some(starts),
+                Some((self.agents.clone(), chosen)),
                 cx,
             )
         })
@@ -153,6 +158,8 @@ impl Opens for Launcher {
             })
         });
         // 6. The view, with the stage beside it, and no agent yet.
+        let chosen = self.agent_of(record.as_ref());
+        let starts = self.starts(record.clone());
         cx.new(|cx| {
             ChatView::closed(
                 Conversation::closed(entries)
@@ -162,7 +169,8 @@ impl Opens for Launcher {
                 open_link(&stage),
                 record,
                 again,
-                Some(self.starts()),
+                Some(starts),
+                Some((self.agents.clone(), chosen)),
                 window,
                 cx,
             )
@@ -172,14 +180,30 @@ impl Opens for Launcher {
 
 impl Launcher {
     /// What starts an agent with no chat, such as the judge of a goal: the
-    /// same command, with no tools of Cox's own and none for the stage.
-    fn starts(&self) -> Starts {
+    /// agent of the chat kept in `record`, as it is when the judge
+    /// starts, with no tools of Cox's own and none for the stage.
+    fn starts(&self, record: Option<Record>) -> Starts {
         let launcher = self.clone();
         Rc::new(move |cwd, start| {
             let span = tracing::info_span!("judge", cwd = %cwd.display());
             let _entered = span.enter();
-            launcher.spawn(cwd, Vec::new(), start)
+            let agent = launcher.agent_of(record.as_ref());
+            launcher.spawn(cwd, Vec::new(), start, &agent)
         })
+    }
+
+    /// The id of the agent the chat kept in `record` talks to: the one the
+    /// human chose, while Cox knows it, or else the one a chat starts
+    /// with.
+    fn agent_of(&self, record: Option<&Record>) -> String {
+        let chosen = record.and_then(|record| {
+            record
+                .agent()
+                .inspect_err(|error| tracing::error!("the chat's agent cannot be read: {error:#}"))
+                .ok()
+                .flatten()
+        });
+        self.agents.of(chosen.as_deref()).id
     }
 
     /// Steps 2 to 5: starts the agent of a chat working in `cwd`, as
@@ -219,12 +243,13 @@ impl Launcher {
             ),
             None => (None, None, None),
         };
+        let chosen = self.agent_of(record.as_ref());
         stage.update(cx, |stage, cx| {
             stage.work(relay, requests, record, window, cx);
         });
         // 5. The agent, on a thread of its own, which the chat asks of the
         // stage through what its tools ask, and hears ask of the window.
-        let mut agent = self.spawn(cwd, tools, start);
+        let mut agent = self.spawn(cwd, tools, start, &chosen);
         agent.tools = asks;
         agent.chat_requests = chat_requests;
         agent
@@ -287,9 +312,12 @@ impl Launcher {
             .collect()
     }
 
-    /// Starts the agent working in `cwd` with `tools`, as `start` says.
-    fn spawn(&self, cwd: PathBuf, tools: Vec<McpServer>, start: Start) -> Agent {
-        let command = self.command.clone();
+    /// Starts the agent kept as `agent` working in `cwd` with `tools`, as
+    /// `start` says.
+    fn spawn(&self, cwd: PathBuf, tools: Vec<McpServer>, start: Start, agent: &str) -> Agent {
+        let known = self.agents.of(Some(agent));
+        tracing::info!(agent = %known.id, "starts the agent");
+        let command = known.command;
         crate::agent::spawn(move || cox_acp::launch(command), cwd, tools, start)
     }
 }

@@ -15,6 +15,7 @@ use cox::agent::Start;
 use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, Waited};
 use cox::agent::setup::{Policy, Setup};
+use cox::agents::{Agents as Choices, Known};
 use cox::chat::conversation::{Conversation, Entry, Goal, State};
 use cox::chat::judge::Starts;
 use cox::chat::trial::Trial;
@@ -53,11 +54,34 @@ fn open_window(
 /// Opens chats with no stage, each with its agent faked, added to
 /// `agents`. Sent to, a closed chat's agent starts again, faked, going on
 /// with its session as `resumes` says. The commands a chat runs for its
-/// goal run in a shell in place of a terminal.
+/// goal run in a shell in place of a terminal. A chat chooses between two
+/// agents, [`FIRST_AGENT`] and [`SECOND_AGENT`], which are faked alike.
 struct FakeOpens {
     agents: Agents,
     asks: Asks,
     resumes: Resumes,
+    choices: Choices,
+}
+
+/// The agent a chat starts with, and the other it can switch to.
+const FIRST_AGENT: &str = "fake-first";
+const SECOND_AGENT: &str = "Fake second";
+
+/// The two agents a chat chooses between.
+fn fake_choices() -> Choices {
+    let second = Known {
+        id: SECOND_AGENT.to_owned(),
+        name: SECOND_AGENT.to_owned(),
+        command: vec!["fake-second".to_owned()],
+        listed: false,
+    };
+    Choices::new(vec![FIRST_AGENT.to_owned()], vec![second], Vec::new())
+}
+
+/// The id of the agent the chat kept in `record` talks to.
+fn chosen(choices: &Choices, record: Option<&Record>) -> String {
+    let kept = record.and_then(|record| record.agent().unwrap());
+    choices.of(kept.as_deref()).id
 }
 
 /// Runs the commands a chat asks its stage to run, as a terminal would,
@@ -112,7 +136,19 @@ impl Opens for FakeOpens {
         self.asks.borrow_mut().push(asks);
         agent.chat_requests = Some(chat_requests);
         let starts = self.starts();
-        cx.new(|cx| ChatView::new(agent, None, Rc::new(|_, _, _| {}), record, Some(starts), cx))
+        let chosen = chosen(&self.choices, record.as_ref());
+        cx.new(|cx| {
+            let agents = Some((self.choices.clone(), chosen));
+            ChatView::new(
+                agent,
+                None,
+                Rc::new(|_, _, _| {}),
+                record,
+                Some(starts),
+                agents,
+                cx,
+            )
+        })
     }
 
     fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<ChatView> {
@@ -145,6 +181,7 @@ impl Opens for FakeOpens {
             .with_goal(goal)
             .with_settings(settings);
         let starts = self.starts();
+        let chosen = chosen(&self.choices, record.as_ref());
         cx.new(|cx| {
             ChatView::closed(
                 conversation,
@@ -153,6 +190,7 @@ impl Opens for FakeOpens {
                 record,
                 Some(again),
                 Some(starts),
+                Some((self.choices.clone(), chosen)),
                 window,
                 cx,
             )
@@ -180,6 +218,7 @@ fn opens(agents: &Agents, asks: &Asks, resumes: Resumes) -> Rc<dyn Opens> {
         agents: Rc::clone(agents),
         asks: Rc::clone(asks),
         resumes,
+        choices: fake_choices(),
     })
 }
 
@@ -479,6 +518,7 @@ async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
     assert!(
         told.ends_with(
             "Chat 2 \"Chat 2\":\n  idle\n  Input: \"not sent yet\"\n  \
+            Agent \"fake-first\" (fake-first), of 2 agents\n  \
             Setting \"Model\": \"Large\", of Large, Small\n  Setting \"Mode\": \"Ask\", of Ask, Plan\n  \
             Stage: none\n  Conversation, 0 entries:\n"
         ),
@@ -488,7 +528,8 @@ async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
     assert!(
         told.ends_with(
             "Chat 1 \"first\":\n  idle\n  Not shown: its input and stage are as they were left.\n  \
-            Input: \"\"\n  Setting \"Model\": \"Large\", of Large, Small\n  \
+            Input: \"\"\n  Agent \"fake-first\" (fake-first), of 2 agents\n  \
+            Setting \"Model\": \"Large\", of Large, Small\n  \
             Setting \"Mode\": \"Ask\", of Ask, Plan\n  Stage: none\n  Conversation, 2 entries:\n    1 human: first\n    2 reply: echo: first\n"
         ),
         "{told}"
@@ -925,7 +966,7 @@ async fn a_closed_chat_sets_its_session_as_it_was_set(cx: &mut TestAppContext) {
         fake_settings("large", "plan")
     );
     assert_eq!(
-        store.choices().unwrap(),
+        store.choices(FIRST_AGENT).unwrap(),
         [(fake_agent::MODEL.to_owned(), "large".to_owned())]
     );
 
@@ -947,8 +988,13 @@ async fn a_closed_chat_sets_its_session_as_it_was_set(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn a_new_chat_starts_on_the_model_chosen_last(cx: &mut TestAppContext) {
     let store = Rc::new(Store::in_memory().unwrap());
-    store.keep_choice(fake_agent::MODEL, "small").unwrap();
-    store.keep_choice("gone", "anything").unwrap();
+    store
+        .keep_choice(FIRST_AGENT, fake_agent::MODEL, "small")
+        .unwrap();
+    store.keep_choice(FIRST_AGENT, "gone", "anything").unwrap();
+    store
+        .keep_choice(SECOND_AGENT, fake_agent::MODE, "plan")
+        .unwrap();
     let (agents, workspace, cx) = open_window_keeping(cx, scratch("chosen"), Rc::clone(&store));
     click(cx, "new-chat");
     say(cx, &workspace, "hello").await;
@@ -964,6 +1010,83 @@ async fn a_new_chat_starts_on_the_model_chosen_last(cx: &mut TestAppContext) {
         store.settings(chats[0].id).unwrap(),
         fake_settings("small", "ask")
     );
+}
+
+#[gpui::test]
+async fn a_chat_switches_to_another_agent_which_goes_on_from_the_conversation(
+    cx: &mut TestAppContext,
+) {
+    let store = Rc::new(Store::in_memory().unwrap());
+    store
+        .keep_choice(SECOND_AGENT, fake_agent::MODE, "plan")
+        .unwrap();
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch("switch"), Rc::clone(&store));
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+    let kept = store.chats().unwrap()[0].id;
+    store.keep_session(kept, "session-1").unwrap();
+
+    click(cx, "agent");
+    click(cx, "choice-1");
+    let view = shown(cx, &workspace);
+    cx.condition(&view, |view, _| !view.conversation().settings().is_empty())
+        .await;
+
+    // The chat talks to the other agent, in a session of its own, set as
+    // the human chose last for that agent.
+    assert_eq!(store.agent(kept).unwrap().as_deref(), Some(SECOND_AGENT));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.agent_id().to_owned()),
+        SECOND_AGENT
+    );
+    assert_eq!(agents.borrow().len(), 2);
+    let second = Arc::clone(&agents.borrow()[1]);
+    assert_eq!(second.resumed(), Vec::<String>::new());
+    assert_eq!(
+        second.settings_set(),
+        [(fake_agent::MODE.to_owned(), "plan".to_owned())]
+    );
+    let switched = Entry::Switched {
+        from: FIRST_AGENT.to_owned(),
+        to: SECOND_AGENT.to_owned(),
+    };
+    assert!(shown_entries(cx, &workspace).contains(&switched));
+
+    // It goes on from the conversation, told who said what.
+    say(cx, &workspace, "go on").await;
+    let prompt = second.prompts().concat();
+    assert!(prompt.contains("[human]\nhello"), "{prompt}");
+    assert!(
+        prompt.contains(&format!(
+            "[the human switched the chat from the agent {FIRST_AGENT} to the agent {SECOND_AGENT}]"
+        )),
+        "{prompt}"
+    );
+    assert!(prompt.ends_with("go on"), "{prompt}");
+    assert_eq!(agents.borrow()[0].prompts(), ["hello"]);
+}
+
+#[gpui::test]
+async fn a_chat_switched_before_anything_was_said_starts_anew(cx: &mut TestAppContext) {
+    let store = Rc::new(Store::in_memory().unwrap());
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch("switch-new"), Rc::clone(&store));
+    click(cx, "new-chat");
+    let view = shown(cx, &workspace);
+    cx.condition(&view, |view, _| !view.conversation().settings().is_empty())
+        .await;
+
+    click(cx, "agent");
+    click(cx, "choice-1");
+    say(cx, &workspace, "hello").await;
+
+    assert_eq!(agents.borrow().len(), 2);
+    assert_eq!(agents.borrow()[1].prompts(), ["hello"]);
+    // A chat its agent opens talks to the same agent.
+    let chats = store.chats().unwrap();
+    let child = store
+        .add_chat_under(chats[0].id, None, "Chat 2", None)
+        .unwrap();
+    assert_eq!(store.agent(child).unwrap().as_deref(), Some(SECOND_AGENT));
 }
 
 /// The name of each chat kept, with where it came from and whether it is

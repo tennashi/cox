@@ -15,6 +15,8 @@
 //!   files, a tree of the project's files, and terminals.
 //! - [`agent`] is a chat's agent: the ACP connection, and the tools Cox
 //!   hands the agent.
+//! - [`agents`] is the agents a chat can talk to: the command line's,
+//!   the human's, and the ACP Registry's.
 //! - [`notices`] tells the human of chats that need them while they look
 //!   elsewhere.
 //! - [`inspect`] answers for the window to an agent that debugs Cox, on a
@@ -32,6 +34,7 @@
 //! its own, with no GPUI in it.
 
 pub mod agent;
+pub mod agents;
 pub mod app;
 pub mod chat;
 pub mod inspect;

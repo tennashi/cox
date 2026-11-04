@@ -91,6 +91,29 @@ the human's or one an agent opens, starts with the model, and what goes
 with it (ACP's categories `model`, `model_config` and `thought_level`),
 as the human chose last in any chat; its mode is its own.
 
+The bar starts with the agent the chat talks to, which a click on it
+chooses among the agents Cox knows, while no turn runs: first the
+`<agent command>`, which a new chat talks to, then those the human lists
+in `agents.json`, beside the chats' database (see
+[The stage](#the-stage)), as `[{"name": "Codex", "command": ["npx", "-y",
+"@agentclientprotocol/codex-acp"]}]`, with `NAME=value` ahead of the
+program setting its environment, as on the command line, then, under
+"ACP Registry", the agents of the
+[ACP Registry](https://agentclientprotocol.com/get-started/registry)
+that `npx` or `uvx` runs; those to be downloaded are not offered yet.
+Cox fetches the registry as it starts, and keeps it, as
+`registry.json` beside `agents.json`, for a run that cannot fetch it.
+An agent of the registry that runs the package one of the human's runs
+is left out, and the human's is named as the registry names it. Chosen,
+the agent starts at once, in a session of its own, in place of the
+chat's agent, which stops, and the chat notes the switch. The new agent
+is told the conversation so far ahead of the human's next line, as an
+agent that could not resume is, with where the chat switched from one
+agent to another, so that it knows which replies were another's. The
+chat keeps its agent, a chat its agent opens talks to the same agent,
+and the settings a new chat starts with, as the human chose them last,
+are of each agent apart.
+
 A chat can have a goal, which the chat works until it is met: a
 command, such as `cargo xtask ci`, which has to pass, or words, such as
 "The greeting names the user.", which an agent judges. "Set goal…" in
