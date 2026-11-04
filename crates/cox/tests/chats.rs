@@ -2063,11 +2063,15 @@ async fn a_trial_ends_kept_as_a_branch_or_discarded(cx: &mut TestAppContext) {
         "{last:?}"
     );
 
-    // The trial from nothing is discarded, its folder with it.
+    // The trial from nothing is discarded, its folder with it. Another
+    // test may make a trial from nothing in a folder of the same name once
+    // this one is gone, so what goes is what this trial made.
+    let made = empty.join("made.txt");
+    std::fs::write(&made, "made in the trial\n").unwrap();
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.discard_trial(2, window, cx);
     });
-    assert!(!empty.exists());
+    assert!(!made.exists());
     let (open, state, last) = ended(cx, 2);
     assert!(!open);
     assert_eq!(state, State::Closed);
