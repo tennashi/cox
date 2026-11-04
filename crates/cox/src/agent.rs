@@ -20,11 +20,12 @@ pub mod setup;
 pub mod tools;
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use cox_acp::{
-    McpServer, PermissionAnswer, PermissionKind, PlanEntry, PlanState, Session, StopReason,
+    McpServer, News, PermissionAnswer, PermissionKind, PlanEntry, PlanState, Session, StopReason,
     ToolCallContent, Transport, Update,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -32,6 +33,7 @@ use tokio::sync::oneshot;
 use tracing::Instrument as _;
 
 use cox_core::entry::{Answer, Content, Entry, Step, StepState, ToolCallResult};
+use cox_core::settings::{Choice, Setting};
 
 use crate::agent::instructions::Instructions;
 use crate::agent::setup::{Asked, Decision, Policy, Setup};
@@ -44,6 +46,13 @@ pub enum AgentEvent {
     Opened { id: String, how: Opened },
     /// The agent gave the session a title, in place of any it gave before.
     Titled(String),
+    /// What the agent lets the human choose of the session, such as its
+    /// model, each as it is set now: when the session opens, and each time
+    /// a setting changes, as the human or the agent changes it.
+    Settings(Vec<Setting>),
+    /// The agent did not set the setting `name` as the human asked, for
+    /// `error`.
+    SettingFailed { name: String, error: String },
     /// A piece of the agent's reply.
     ReplyText(String),
     /// A piece of what the agent thinks on its way to the reply.
@@ -120,6 +129,14 @@ pub enum Command {
     Answer(PermissionAnswer),
     /// Asks the agent to stop the turn it is taking.
     Cancel,
+    /// Asks the agent to set the setting `id` of its session to `value`,
+    /// when the session has the setting, offers the value, and is not set
+    /// to it already: one kept from before may be gone since. It is set
+    /// whether a turn runs or not.
+    Set {
+        id: String,
+        value: String,
+    },
 }
 
 /// The window's ends of the channels to the agent side.
@@ -300,29 +317,58 @@ async fn run<T: Transport + 'static>(
         Start::New { .. } => None,
         Start::Again { session, .. } => session.clone(),
     };
+    // The settings as they stand, which the agent changes as it tells, in
+    // between turns too.
+    let settings = Arc::new(Mutex::new(Vec::new()));
     let told = events.clone();
-    let titled = move |title| {
-        let _ = told.send(AgentEvent::Titled(title));
+    let known = Arc::clone(&settings);
+    let heard = move |news| match news {
+        News::Titled(title) => {
+            let _ = told.send(AgentEvent::Titled(title));
+        }
+        News::Settings(changed) => {
+            let _ = told.send(AgentEvent::Settings(shown_settings(&changed)));
+            *known.lock().expect("no one panics holding it") = changed;
+        }
     };
     cox_acp::connect(
         transport,
         cwd,
         mcp_servers,
         resume,
-        titled,
+        heard,
         async |mut session| {
             let (how, mut ahead) = opened(start, session.resumed());
             let _ = events.send(AgentEvent::Opened {
                 id: session.id(),
                 how,
             });
+            let _ = events.send(AgentEvent::Settings(shown_settings(session.settings())));
+            session
+                .settings()
+                .clone_into(&mut settings.lock().expect("no one panics holding it"));
             while let Some(command) = commands.recv().await {
                 // An answer with no permission request waiting has nothing to
                 // answer, and a cancel with no turn running nothing to stop.
-                if let Command::Prompt(text) = command {
-                    // What goes ahead of the first prompt goes once.
-                    let prompt = std::mem::take(&mut ahead).into_iter().chain([text]);
-                    take_turn(&mut session, prompt, policy, &mut commands, events).await?;
+                match command {
+                    Command::Prompt(text) => {
+                        // What goes ahead of the first prompt goes once.
+                        let prompt = std::mem::take(&mut ahead).into_iter().chain([text]);
+                        take_turn(
+                            &mut session,
+                            prompt,
+                            policy,
+                            &settings,
+                            &mut commands,
+                            events,
+                        )
+                        .await?;
+                    }
+                    Command::Set { id, value } => {
+                        let set = async |id: &str, value: &str| session.set(id, value).await;
+                        set_setting(set, &settings, &id, &value, events).await;
+                    }
+                    Command::Answer(_) | Command::Cancel => {}
                 }
             }
             Ok(())
@@ -371,10 +417,71 @@ fn told(instructions: Option<Instructions>, setup: Option<&Setup>) -> Vec<String
         .collect()
 }
 
+/// The settings of the session as the window shows them.
+fn shown_settings(settings: &[cox_acp::Setting]) -> Vec<Setting> {
+    settings
+        .iter()
+        .map(|setting| Setting {
+            id: setting.id.clone(),
+            name: setting.name.clone(),
+            description: setting.description.clone(),
+            category: setting.category.clone(),
+            value: setting.value.clone(),
+            choices: setting
+                .choices
+                .iter()
+                .map(|choice| Choice {
+                    id: choice.id.clone(),
+                    name: choice.name.clone(),
+                    description: choice.description.clone(),
+                    group: choice.group.clone(),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// Sets the setting `id` of the session to `value` with `set`, unless the
+/// session, whose settings stand as `settings` says, has no such setting,
+/// does not offer the value, or is set to it already, and tells the window
+/// how the settings stand then, or why the agent did not set it.
+async fn set_setting(
+    set: impl AsyncFnOnce(&str, &str) -> anyhow::Result<Vec<cox_acp::Setting>>,
+    settings: &Mutex<Vec<cox_acp::Setting>>,
+    id: &str,
+    value: &str,
+    events: &UnboundedSender<AgentEvent>,
+) {
+    let name = {
+        let settings = settings.lock().expect("no one panics holding it");
+        let Some(setting) = settings.iter().find(|setting| setting.id == id) else {
+            tracing::debug!("the session has no setting {id} to set");
+            return;
+        };
+        if setting.value == value || !setting.choices.iter().any(|choice| choice.id == value) {
+            return;
+        }
+        setting.name.clone()
+    };
+    let event = match set(id, value).await {
+        Ok(set) => {
+            let shown = shown_settings(&set);
+            *settings.lock().expect("no one panics holding it") = set;
+            AgentEvent::Settings(shown)
+        }
+        Err(error) => AgentEvent::SettingFailed {
+            name,
+            error: format!("{error:#}"),
+        },
+    };
+    let _ = events.send(event);
+}
+
 async fn take_turn(
     session: &mut Session,
     prompt: impl IntoIterator<Item = String>,
     policy: &Policy,
+    settings: &Mutex<Vec<cox_acp::Setting>>,
     commands: &mut UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
@@ -392,6 +499,10 @@ async fn take_turn(
                     Some(Command::Cancel) if !cancelled => {
                         cancelled = true;
                         turn.cancel()?;
+                    }
+                    Some(Command::Set { id, value }) => {
+                        let set = async |id: &str, value: &str| turn.set(id, value).await;
+                        set_setting(set, settings, &id, &value, events).await;
                     }
                     // The window sends no prompt while a turn runs, no
                     // answer while no permission request waits, and one
@@ -450,6 +561,10 @@ async fn take_turn(
                             cancelled = true;
                             turn.cancel()?;
                             break PermissionAnswer::Cancel;
+                        }
+                        Some(Command::Set { id, value }) => {
+                            let set = async |id: &str, value: &str| turn.set(id, value).await;
+                            set_setting(set, settings, &id, &value, events).await;
                         }
                         // The window sends no prompt while a turn runs.
                         Some(Command::Prompt(_)) => {}

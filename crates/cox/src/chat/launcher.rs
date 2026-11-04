@@ -123,6 +123,7 @@ impl Opens for Launcher {
             tabs,
             session,
             goal,
+            settings,
             setup,
             record,
         } = closed;
@@ -154,7 +155,9 @@ impl Opens for Launcher {
         // 6. The view, with the stage beside it, and no agent yet.
         cx.new(|cx| {
             ChatView::closed(
-                Conversation::closed(entries).with_goal(goal),
+                Conversation::closed(entries)
+                    .with_goal(goal)
+                    .with_settings(settings),
                 Some(shown(&stage, panel)),
                 open_link(&stage),
                 record,

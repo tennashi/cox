@@ -205,6 +205,18 @@ fn tell(told: &mut String, chat: &Chat, workspace: &Workspace, cx: &App) {
             goal.turns()
         );
     }
+    for setting in conversation.settings() {
+        let chosen = setting
+            .chosen()
+            .map_or(setting.value.as_str(), |choice| choice.name.as_str());
+        let choices: Vec<&str> = setting.choices.iter().map(|c| c.name.as_str()).collect();
+        let _ = writeln!(
+            told,
+            "  Setting {:?}: {chosen:?}, of {}",
+            setting.name,
+            choices.join(", ")
+        );
+    }
     tabs(told, view, cx);
     let entries = conversation.entries();
     let _ = writeln!(told, "  Conversation, {} entries:", entries.len());

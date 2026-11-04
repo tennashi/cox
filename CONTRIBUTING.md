@@ -77,6 +77,20 @@ conversation stays, and the next line can be sent once the agent has
 stopped. A click on a link in a chat's conversation opens it on that
 chat's stage.
 
+The bar above a chat's conversation shows what its agent lets the human
+choose of its session, such as the model it uses, its mode, or how hard
+it thinks: ACP's session config options, of the kind that chooses one of
+a list, as the agent names them and in its order, so Cox knows nothing
+of any agent's models. Each shows what it is set to, and a click opens
+what it can be set to, under the groups the agent puts them in; a click
+on one sets it (ACP's `session/set_config_option`), while a turn runs
+too, and the bar follows what the agent sets on its own. The chat keeps
+how each is set, a closed chat too, where a choice waits for its agent
+to start again, and sets its session so again when it does. A new chat,
+the human's or one an agent opens, starts with the model, and what goes
+with it (ACP's categories `model`, `model_config` and `thought_level`),
+as the human chose last in any chat; its mode is its own.
+
 A chat can have a goal, which the chat works until it is met: a
 command, such as `cargo xtask ci`, which has to pass, or words, such as
 "The greeting names the user.", which an agent judges. "Set goal…" in
@@ -598,6 +612,10 @@ target/debug/cox --data target/debug/cox-run --inspect screenshot shot.png
 
 gpui draws with Vulkan, which `mesa-vulkan-drivers` gives a machine
 with no GPU.
+
+A scenario's `configOptions`, beside its `turns`, are the settings of
+each session the agent opens, as ACP's `configOptions` says them, which
+it sets as Cox asks; the tour has a mode, a model and an effort.
 
 Each line takes the first turn not taken yet whose `when`, if it has one,
 is in what the line says, as a goal's judge is told, and the turn takes

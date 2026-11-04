@@ -266,6 +266,37 @@ done"#;
 }
 
 #[test]
+fn a_session_has_the_settings_of_the_scenario_and_sets_them() {
+    let model = json!({
+        "id": "model", "name": "Model", "category": "model", "type": "select",
+        "currentValue": "large",
+        "options": [
+            { "group": "big", "name": "Big", "options": [{ "value": "large", "name": "Large" }] },
+            { "group": "little", "name": "Little", "options": [{ "value": "small", "name": "Small" }] },
+        ],
+    });
+    let scenario = json!({ "configOptions": [model], "turns": [] });
+    let mut agent = Agent::play("settings", &scenario);
+    agent.ask("initialize", &json!({ "protocolVersion": 1 }));
+    let (_, opened) = agent.ask("session/new", &json!({ "cwd": "/", "mcpServers": [] }));
+    assert_eq!(opened["result"]["configOptions"], json!([model]));
+
+    let set = |value: &str| json!({ "sessionId": "fake-1", "configId": "model", "value": value });
+    let (_, answer) = agent.ask("session/set_config_option", &set("small"));
+    assert_eq!(
+        answer["result"]["configOptions"][0]["currentValue"],
+        "small"
+    );
+    let (_, refused) = agent.ask("session/set_config_option", &set("huge"));
+    assert!(refused["error"]["message"].is_string());
+    let (_, opened) = agent.ask("session/new", &json!({ "cwd": "/", "mcpServers": [] }));
+    assert_eq!(
+        opened["result"]["configOptions"][0]["currentValue"],
+        "small"
+    );
+}
+
+#[test]
 fn a_scenario_it_cannot_read_stops_it() {
     let path = scratch("broken");
     std::fs::write(&path, r#"{ "turns": [{ "steps": [{ "shout": "x" }] }] }"#).unwrap();

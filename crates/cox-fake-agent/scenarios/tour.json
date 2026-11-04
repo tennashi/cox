@@ -1,4 +1,30 @@
 {
+  "configOptions": [
+    {
+      "id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "default",
+      "options": [
+        { "value": "default", "name": "Ask", "description": "Ask before each edit" },
+        { "value": "acceptEdits", "name": "Accept edits", "description": "Edit without asking" },
+        { "value": "plan", "name": "Plan", "description": "Read and plan, change nothing" }
+      ]
+    },
+    {
+      "id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "large",
+      "options": [
+        { "value": "large", "name": "Large", "description": "The most able, and the slowest" },
+        { "value": "medium", "name": "Medium", "description": "For most work" },
+        { "value": "small", "name": "Small", "description": "The quickest, for small tasks" }
+      ]
+    },
+    {
+      "id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": "medium",
+      "options": [
+        { "value": "low", "name": "Low" },
+        { "value": "medium", "name": "Medium" },
+        { "value": "high", "name": "High" }
+      ]
+    }
+  ],
   "turns": [
     {
       "steps": [

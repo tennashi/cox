@@ -13,7 +13,8 @@
 //! `when`, if it has one, is in what the line says, and the agent takes its
 //! steps one after another, then ends the turn with its `stop`, `end_turn`
 //! unless it says otherwise. A step is an object with one key, which says
-//! what it is (see [`Step`]).
+//! what it is (see [`Step`]). `configOptions`, beside `turns`, are the
+//! settings of each session, as ACP says them, such as its model.
 
 use std::collections::HashMap;
 
@@ -24,6 +25,10 @@ use serde_json::{Map, Value};
 #[serde(deny_unknown_fields)]
 pub struct Scenario {
     pub turns: Vec<Turn>,
+    /// The settings each session has, as ACP's `configOptions` says them,
+    /// which Cox sets with `session/set_config_option`.
+    #[serde(default, rename = "configOptions")]
+    pub config_options: Vec<Value>,
 }
 
 #[derive(Debug, Deserialize)]
