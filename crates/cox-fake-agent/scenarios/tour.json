@@ -3,14 +3,14 @@
     {
       "steps": [
         { "think": "Look at what the program prints before changing anything." },
-        { "tool": { "id": "read-1", "title": "Read src/main.rs", "kind": "read", "status": "completed" } },
+        { "tool": { "id": "read-1", "title": "Read src/main.rs", "kind": "read", "locations": [{ "path": "{cwd}/src/main.rs" }], "status": "completed" } },
         { "sleep": 500 },
         { "say": "The program prints a bare `hello` from `src/main.rs:2`. To name the user, it needs to know who they are." }
       ]
     },
     {
       "steps": [
-        { "tool": { "id": "edit-1", "title": "Edit src/main.rs", "kind": "edit", "status": "pending" } },
+        { "tool": { "id": "edit-1", "title": "Edit src/main.rs", "kind": "edit", "locations": [{ "path": "{cwd}/src/main.rs" }], "status": "pending" } },
         {
           "ask": {
             "toolCall": {

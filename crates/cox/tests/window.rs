@@ -419,6 +419,7 @@ fn set_up(allow: &[&str], reject: &[&str]) -> Setup {
         policy: Policy {
             allow: allow.iter().map(|&s| s.to_owned()).collect(),
             reject: reject.iter().map(|&s| s.to_owned()).collect(),
+            within: None,
         },
         ..Setup::default()
     }
@@ -487,6 +488,49 @@ async fn a_request_the_policy_allows_goes_through_and_the_rest_wait_on_the_human
 
     // A setup that says nothing of the request asks the human.
     let (_agent, view, cx) = open_set_up(cx, set_up(&["Read *"], &["Write *"]));
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Asking).await;
+}
+
+#[gpui::test]
+async fn a_policy_answers_by_the_kind_the_call_was_told_to_be(cx: &mut TestAppContext) {
+    // The request leaves the kind out; the call told it before.
+    let (agent, view, cx) = open_set_up(cx, set_up(&["edit:*"], &[]));
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    assert_eq!(
+        agent.answers(),
+        [RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new("allow")
+        )]
+    );
+
+    // Kept to the folder the file is in, it goes through too.
+    let mut kept = set_up(&["edit:*"], &[]);
+    kept.policy.within = Some("/work".into());
+    let (agent, view, cx) = open_set_up(cx, kept);
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    assert_eq!(
+        agent.answers(),
+        [RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new("allow")
+        )]
+    );
+
+    // Kept to another folder, it is asked of the human.
+    let mut elsewhere = set_up(&["edit:*"], &[]);
+    elsewhere.policy.within = Some("/trials/scratch-1".into());
+    let (_agent, view, cx) = open_set_up(cx, elsewhere);
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Asking).await;
+
+    // A pattern of another kind says nothing of it.
+    let (_agent, view, cx) = open_set_up(cx, set_up(&["execute:*"], &[]));
     cx.simulate_input("permission");
     cx.simulate_keystrokes("enter");
     wait_for(cx, &view, State::Asking).await;

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::mcp::Server;
-use crate::scenario::{Ask, Call, Scenario, Step, fill};
+use crate::scenario::{Ask, Call, Scenario, Step, fill, put_in};
 
 /// How long the agent takes between the words it says.
 const WORD: Duration = Duration::from_millis(30);
@@ -44,6 +44,8 @@ pub struct Agent<W: Write> {
     started: HashMap<String, Server>,
     /// What the last call answered.
     result: String,
+    /// The folder the session works in, as Cox gave it.
+    cwd: String,
     sessions: u64,
     asked: u64,
     calls: u64,
@@ -80,6 +82,7 @@ impl<W: Write> Agent<W> {
             servers: HashMap::new(),
             started: HashMap::new(),
             result: String::new(),
+            cwd: String::new(),
             sessions: 0,
             asked: 0,
             calls: 0,
@@ -97,6 +100,10 @@ impl<W: Write> Agent<W> {
                     &json!({ "protocolVersion": 1, "agentCapabilities": {} }),
                 ),
                 ("session/new", Some(id)) => {
+                    message["params"]["cwd"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .clone_into(&mut self.cwd);
                     self.servers = message["params"]["mcpServers"]
                         .as_array()
                         .into_iter()
@@ -172,16 +179,21 @@ impl<W: Write> Agent<W> {
 
     fn step(&mut self, session: &Value, step: &Step) -> Went {
         let result = self.result.clone();
-        let text = |text: &String| text.replace("{result}", &result);
+        let cwd = self.cwd.clone();
+        let text = |text: &String| put_in(text, &cwd, &result);
         match step {
             Step::Say(said) => return self.say(session, &text(said)),
             Step::Think(thought) => self.update(
                 session,
                 &json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": text(thought) } }),
             ),
-            Step::Tool(fields) => self.update(session, &tool("tool_call", fields, &result)),
-            Step::ToolUpdate(fields) => self.update(session, &tool("tool_call_update", fields, &result)),
-            Step::Update(update) => self.update(session, &fill(update, &result)),
+            Step::Tool(fields) => {
+                self.update(session, &tool("tool_call", fields, &cwd, &result));
+            }
+            Step::ToolUpdate(fields) => {
+                self.update(session, &tool("tool_call_update", fields, &cwd, &result));
+            }
+            Step::Update(update) => self.update(session, &fill(update, &cwd, &result)),
             Step::Ask(ask) => return self.ask(session, ask),
             Step::Call(call) => self.call(session, call),
             Step::Sleep(milliseconds) => return self.pause(Duration::from_millis(*milliseconds)),
@@ -212,7 +224,7 @@ impl<W: Write> Agent<W> {
     fn ask(&mut self, session: &Value, ask: &Ask) -> Went {
         self.asked += 1;
         let id = Value::from(format!("fake-ask-{}", self.asked));
-        let mut params = match fill(&Value::Object(ask.request.clone()), &self.result) {
+        let mut params = match fill(&Value::Object(ask.request.clone()), &self.cwd, &self.result) {
             Value::Object(params) => params,
             _ => Map::new(),
         };
@@ -259,7 +271,7 @@ impl<W: Write> Agent<W> {
     fn call(&mut self, session: &Value, call: &Call) {
         self.calls += 1;
         let id = format!("fake-call-{}", self.calls);
-        let arguments = fill(&call.arguments, &self.result);
+        let arguments = fill(&call.arguments, &self.cwd, &self.result);
         self.update(
             session,
             &json!({
@@ -363,12 +375,12 @@ impl<W: Write> Agent<W> {
 
 /// ACP's update `kind` of a tool call, from the step's `fields`, with
 /// `toolCallId` as `id`.
-fn tool(kind: &str, fields: &Map<String, Value>, result: &str) -> Value {
+fn tool(kind: &str, fields: &Map<String, Value>, cwd: &str, result: &str) -> Value {
     let mut update = Map::new();
     update.insert("sessionUpdate".to_owned(), Value::from(kind));
     for (key, value) in fields {
         let key = if key == "id" { "toolCallId" } else { key };
-        update.insert(key.to_owned(), fill(value, result));
+        update.insert(key.to_owned(), fill(value, cwd, result));
     }
     Value::Object(update)
 }

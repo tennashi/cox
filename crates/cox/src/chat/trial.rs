@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use cox_editor::changes;
 
+use crate::agent::setup::Policy;
 use crate::chat::judge;
 
 /// What Cox calls the folder that holds the trials' folders.
@@ -64,21 +65,30 @@ impl Trial {
     }
 }
 
-/// The titles of the permission requests a trial's agent goes on with
-/// unasked, on top of what the chat that opened it said: changing files,
-/// which are the trial's own, and what a judge may run, which reads and
-/// tests.
-const ALLOWED: &[&str] = &["Edit *", "Write *", "MultiEdit *", "NotebookEdit *"];
+/// The permission requests a trial's agent goes on with unasked, on top
+/// of what the chat that opened it said, by ACP's kinds of tool: changing
+/// files, which [`allow`] keeps to the trial's own, and what a judge may
+/// run, which reads and tests.
+const ALLOWED: &[&str] = &["edit:*", "delete:*", "move:*"];
 
-/// The patterns of the titles of the permission requests a trial's agent
-/// goes on with unasked.
+/// `policy` with what a trial's agent, working in `folder`, goes on with
+/// unasked: changing the files in `folder`, and what a judge may run.
 #[must_use]
-pub fn allowed() -> Vec<String> {
-    ALLOWED
-        .iter()
-        .chain(judge::ALLOWED)
-        .map(|&title| title.to_owned())
-        .collect()
+pub fn allow(policy: Policy, folder: &Path) -> Policy {
+    Policy {
+        allow: policy
+            .allow
+            .into_iter()
+            .chain(
+                ALLOWED
+                    .iter()
+                    .chain(judge::ALLOWED)
+                    .map(|&pattern| pattern.to_owned()),
+            )
+            .collect(),
+        within: Some(folder.to_owned()),
+        ..policy
+    }
 }
 
 /// Makes the folder of a trial that starts from `trial`, for a chat of
@@ -250,7 +260,10 @@ fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use cox_acp::ToolKind;
+
     use super::*;
+    use crate::agent::setup::{Asked, Decision};
 
     fn scratch(name: &str) -> PathBuf {
         let folder = std::env::temp_dir().join(format!("cox-trial-{name}-{}", std::process::id()));
@@ -422,8 +435,43 @@ mod tests {
 
     #[test]
     fn a_trial_changes_its_files_unasked() {
-        let allowed = allowed();
-        assert!(allowed.contains(&"Edit *".to_owned()));
-        assert!(allowed.contains(&"cargo test*".to_owned()));
+        let opened = Policy {
+            allow: vec!["fetch:*".to_owned()],
+            reject: vec!["execute:git push*".to_owned()],
+            within: None,
+        };
+        let policy = allow(opened, Path::new("/trials/scratch-1"));
+        let decide = |title, kind, location: &str| {
+            policy.decide(Asked {
+                title,
+                kind: Some(kind),
+                locations: &[PathBuf::from(location)],
+            })
+        };
+        assert_eq!(
+            decide(
+                "Write notes.md",
+                ToolKind::Edit,
+                "/trials/scratch-1/notes.md"
+            ),
+            Some(Decision::Allow)
+        );
+        assert_eq!(
+            decide("Write notes.md", ToolKind::Edit, "/home/me/notes.md"),
+            None
+        );
+        assert_eq!(
+            decide("cargo test", ToolKind::Execute, "/trials/scratch-1"),
+            Some(Decision::Allow)
+        );
+        // What the chat that opened it said stays.
+        assert_eq!(
+            decide("Fetch https://example.com", ToolKind::Fetch, "/"),
+            Some(Decision::Allow)
+        );
+        assert_eq!(
+            decide("git push", ToolKind::Execute, "/trials/scratch-1"),
+            Some(Decision::Reject)
+        );
     }
 }

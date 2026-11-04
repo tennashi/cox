@@ -34,7 +34,7 @@ use tracing::Instrument as _;
 use cox_core::entry::{Answer, Content, Entry, Step, StepState, ToolCallResult};
 
 use crate::agent::instructions::Instructions;
-use crate::agent::setup::{Decision, Policy, Setup};
+use crate::agent::setup::{Asked, Decision, Policy, Setup};
 use crate::process::close_on_exec;
 
 /// What the agent side tells the window.
@@ -470,11 +470,16 @@ async fn take_turn(
 /// What a tool call shows, made ready for the window here, on the agent
 /// side, where working out a large change does not hold up the window.
 /// The option of `request` that `policy` chooses, if it has an answer to
-/// a request so titled, and the agent offers an option that means it: to
-/// allow once, or to reject once. The policy never answers for always:
-/// it is the setup's to keep, not the agent's.
+/// such a request, and the agent offers an option that means it: to allow
+/// once, or to reject once. The policy never answers for always: it is
+/// the setup's to keep, not the agent's.
 fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usize> {
-    let kind = match policy.decide(request.title()?)? {
+    let asked = Asked {
+        title: request.title().unwrap_or_default(),
+        kind: request.kind(),
+        locations: request.locations(),
+    };
+    let kind = match policy.decide(asked)? {
         Decision::Allow => PermissionKind::AllowOnce,
         Decision::Reject => PermissionKind::RejectOnce,
     };

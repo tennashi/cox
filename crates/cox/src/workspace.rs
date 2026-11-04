@@ -650,7 +650,7 @@ impl Workspace {
                         });
                     match made {
                         Ok(made) => {
-                            setup.policy.allow.extend(trial::allowed());
+                            setup.policy = trial::allow(setup.policy, &made);
                             setup.trial = Some(trial);
                             Some(made)
                         }
@@ -925,15 +925,7 @@ impl Workspace {
         let setup = Setup {
             folder: Some(folder.clone()),
             trial: Some(started),
-            policy: Policy {
-                allow: setup
-                    .policy
-                    .allow
-                    .into_iter()
-                    .chain(trial::allowed())
-                    .collect(),
-                ..setup.policy
-            },
+            policy: trial::allow(setup.policy, &folder),
             ..setup
         };
         let chat = &mut self.chats[index];

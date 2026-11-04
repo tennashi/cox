@@ -42,8 +42,9 @@ fn end_turn() -> String {
     "end_turn".to_owned()
 }
 
-/// One thing the agent does in a turn. In the text of a step, `{result}`
-/// stands for what the last [`Step::Call`] answered, and a value that is
+/// One thing the agent does in a turn. In the text of a step, `{cwd}`
+/// stands for the folder the session works in, as Cox gave it, `{result}`
+/// for what the last [`Step::Call`] answered, and a value that is
 /// just `"{result:number}"` for the first number in it, or
 /// `"{result:number after <text>}"` for the first number after `<text>`,
 /// as `"{result:number after as chat }"` stands for the chat `open_chat`
@@ -114,10 +115,11 @@ impl Turn {
 /// starts.
 const NUMBER: &str = "{result:number";
 
-/// `value` with what `{result}` and `{result:number}` stand for put in,
-/// from `result`, what the last call answered.
+/// `value` with what `{cwd}`, `{result}` and `{result:number}` stand for
+/// put in, from `cwd`, the folder the session works in, and `result`,
+/// what the last call answered.
 #[must_use]
-pub fn fill(value: &Value, result: &str) -> Value {
+pub fn fill(value: &Value, cwd: &str, result: &str) -> Value {
     match value {
         Value::String(text) if text.starts_with(NUMBER) && text.ends_with('}') => {
             let after = text[NUMBER.len()..text.len() - 1].strip_prefix(" after ");
@@ -127,16 +129,24 @@ pub fn fill(value: &Value, result: &str) -> Value {
             };
             rest.and_then(number).map_or(Value::Null, Value::from)
         }
-        Value::String(text) => Value::String(text.replace("{result}", result)),
-        Value::Array(items) => Value::Array(items.iter().map(|item| fill(item, result)).collect()),
+        Value::String(text) => Value::String(put_in(text, cwd, result)),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|item| fill(item, cwd, result)).collect())
+        }
         Value::Object(fields) => Value::Object(
             fields
                 .iter()
-                .map(|(key, value)| (key.clone(), fill(value, result)))
+                .map(|(key, value)| (key.clone(), fill(value, cwd, result)))
                 .collect(),
         ),
         _ => value.clone(),
     }
+}
+
+/// `text` with what `{cwd}` and `{result}` stand for put in.
+#[must_use]
+pub fn put_in(text: &str, cwd: &str, result: &str) -> String {
+    text.replace("{cwd}", cwd).replace("{result}", result)
 }
 
 /// The first number in `text`.
@@ -199,8 +209,10 @@ mod tests {
                 "first": "{result:number}",
                 "missing": "{result:number after nowhere}",
                 "text": "It said: {result}",
+                "path": "{cwd}/notes.md",
                 "n": 3
             }),
+            "/work",
             opened,
         );
         assert_eq!(
@@ -210,6 +222,7 @@ mod tests {
                 "first": 3,
                 "missing": null,
                 "text": format!("It said: {opened}"),
+                "path": "/work/notes.md",
                 "n": 3
             })
         );
