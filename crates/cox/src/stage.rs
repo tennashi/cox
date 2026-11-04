@@ -29,7 +29,9 @@
 //! at; its terminals are not started again. Once the human sends to the
 //! chat again, its agent works on those pages.
 //!
-//! - [`tab`] is a tab, and what it shows, whichever kind it is.
+//! - [`tab`] is a tab, and what it shows, whichever kind it is, and
+//!   [`bar`] the bar of the tabs, which keeps the views of the project,
+//!   its files, what changed and the plugins' pages, apart from the rest.
 //! - [`links`] is what opens on a tab, and which: a link, a file, or the
 //!   tree of the project's files.
 //! - [`asked`] is what the agent asks of the stage, through the relay and
@@ -52,6 +54,7 @@
 //!   its boxes, for the human to see where things are.
 
 mod asked;
+mod bar;
 pub mod calls;
 pub mod changes;
 pub mod code;
@@ -74,10 +77,7 @@ use std::path::PathBuf;
 use cox_core::list::List;
 use cox_core::store::Record;
 use cox_core::tabs::{KeptTab, KeptTabs};
-use gpui::{
-    App, Context, Div, Entity, Focusable, SharedString, Stateful, Subscription, Task, Window, div,
-    prelude::*, px, rgb,
-};
+use gpui::{App, Context, Entity, Focusable, Subscription, Task, Window, div, prelude::*};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::ToolRequest;
@@ -94,7 +94,6 @@ use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
 use crate::ui::Panel;
 use crate::ui::input::LineInput;
-use crate::ui::theme::{BORDER, BUTTON, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, SELECTED};
 
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";
@@ -126,6 +125,8 @@ pub struct Stage {
     /// The plugins the stage shows as pages, and what they read of the
     /// chat.
     plugins: Plugins,
+    /// Whether the menu that opens a page, a terminal or a file is open.
+    menu_open: bool,
 }
 
 impl Stage {
@@ -155,6 +156,7 @@ impl Stage {
         Self {
             cef,
             plugins: Plugins::new(cwd.clone(), outlines, calls),
+            menu_open: false,
             cwd,
             tabs: List::new(),
             pages: None,
@@ -415,146 +417,6 @@ impl Stage {
             address.update(cx, LineInput::select_whole);
         }
     }
-
-    fn render_tab(&self, index: usize, tab: &Tab, cx: &mut Context<Self>) -> Stateful<Div> {
-        let number = index + 1;
-        let title = tab.content.title(cx);
-        let title: String = title.chars().take(TITLE_LENGTH).collect();
-        let mut tab = div()
-            .id(("tab", number))
-            .debug_selector(move || format!("tab-{number}"))
-            .flex()
-            .items_center()
-            .gap_1()
-            .min_w_0()
-            .max_w(px(TAB_WIDTH))
-            .pl_2()
-            .pr_1()
-            .rounded_t_sm()
-            .cursor_pointer()
-            .on_click(cx.listener(move |stage, _, window, cx| stage.show(index, window, cx)))
-            .child(div().flex_1().min_w_0().truncate().child(title));
-        if self.tabs.len() > 1 {
-            tab = tab.child(
-                div()
-                    .id(("close-tab", number))
-                    .debug_selector(move || format!("close-tab-{number}"))
-                    .px_1()
-                    .rounded_sm()
-                    .text_color(rgb(FAINT))
-                    .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(FOREGROUND)))
-                    .child("×")
-                    .on_click(cx.listener(move |stage, _, window, cx| {
-                        cx.stop_propagation();
-                        let _ = stage.close_tab(index, window, cx);
-                    })),
-            );
-        }
-        if self.tabs.shown_index() == Some(index) {
-            tab.bg(rgb(SELECTED))
-        } else {
-            tab.text_color(rgb(DIM)).hover(|style| style.bg(rgb(HOVER)))
-        }
-    }
-
-    fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tabs: Vec<_> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(index, tab)| self.render_tab(index, tab, cx))
-            .collect();
-        div()
-            .flex()
-            .items_end()
-            .gap_1()
-            .px_2()
-            .pt_1()
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .children(tabs)
-            .child(
-                div()
-                    .id("new-tab")
-                    .debug_selector(|| "new-tab".to_owned())
-                    .flex_shrink_0()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(rgb(FAINT))
-                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
-                    .child("+")
-                    .on_click(cx.listener(|stage, _, window, cx| stage.new_tab(window, cx))),
-            )
-            .child(
-                div()
-                    .id("new-terminal")
-                    .debug_selector(|| "new-terminal".to_owned())
-                    .flex_shrink_0()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(rgb(FAINT))
-                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
-                    .child(">_")
-                    .on_click(cx.listener(|stage, _, window, cx| stage.new_terminal(window, cx))),
-            )
-            .child(
-                div()
-                    .id("show-tree")
-                    .debug_selector(|| "show-tree".to_owned())
-                    .flex_shrink_0()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(rgb(FAINT))
-                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
-                    .child("Files")
-                    .on_click(cx.listener(|stage, _, window, cx| stage.show_tree(window, cx))),
-            )
-            .child(
-                div()
-                    .id("show-changes")
-                    .debug_selector(|| "show-changes".to_owned())
-                    .flex_shrink_0()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(rgb(FAINT))
-                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
-                    .child("Changes")
-                    .on_click(cx.listener(|stage, _, window, cx| {
-                        let cwd = stage.cwd.clone();
-                        stage.show_changes(cwd, window, cx);
-                    })),
-            )
-            .children(self.render_plugins(cx))
-    }
-
-    /// A button for each plugin, after the tabs Cox draws, which opens its
-    /// page, or shows the tab that does, wherever the page has gone.
-    fn render_plugins(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
-        self.plugins
-            .list()
-            .into_iter()
-            .map(|plugin| {
-                let name = plugin.name.clone();
-                div()
-                    .id(SharedString::from(format!("plugin-{}", plugin.name)))
-                    .debug_selector(|| format!("plugin-{}", plugin.name))
-                    .flex_shrink_0()
-                    .px_2()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(rgb(FAINT))
-                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
-                    .child(plugin.title)
-                    .on_click(cx.listener(move |stage, _, window, cx| {
-                        stage.show_plugin(&name, "", window, cx);
-                    }))
-            })
-            .collect()
-    }
 }
 
 impl Render for Stage {
@@ -563,7 +425,7 @@ impl Render for Stage {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.render_tabs(cx))
+            .child(self.render_bar(cx))
             .child(
                 div()
                     .flex_1()

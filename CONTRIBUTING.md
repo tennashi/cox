@@ -319,9 +319,16 @@ A chat's stage holds pages in tabs, and opens on the left of the
 conversation only when it is used: "Show stage" above the conversation
 opens it, and it opens on its own when a link opens on it, or when the
 agent works on a page there (navigates it, clicks or types in it, or
-opens a tab), showing that page's tab. Closed, it keeps its tabs. The + beside the
-tabs opens another, and a page that asks for a window of its own, as a
-link with `target="_blank"` does, gets a tab instead. A link from the
+opens a tab), showing that page's tab. Closed, it keeps its tabs. The
+bar along its top keeps the views of the project in sight first, side
+by side: "Files", "Changes" and the plugins' pages, such as "Map" (see
+below), each a tab that the bar shows by its button, not among the
+others; then the other tabs, each with an icon of what it shows: a
+page, a Markdown file, code, a terminal, the flow of a tool call. The +
+at the bar's end opens a menu of what the human opens there: "Web page",
+a new tab, "Terminal" (see below), and "File…", which asks for a file
+and opens it as a link to it does. A page that asks for a window of its
+own, as a link with `target="_blank"` does, gets a tab instead. A link from the
 conversation gets a tab of its own, unless a tab shows it already. A link
 in a page to a file, as `file:///home/me/app/src/main.rs#L12`, opens the
 file on a tab as a link from the conversation does, at the lines it
@@ -378,13 +385,13 @@ that file: the ‹ and › beside its path go back and forward between the
 places it went to, as Command-[ and Command-] do (Alt-Left and
 Alt-Right, and Control off macOS), and the mouse's buttons for that.
 
-"Files" beside the tabs opens a tab of the project's files as a tree,
+"Files" opens a tab of the project's files as a tree,
 without what Git ignores, for the human to open one: a click on a
 folder opens or closes it, and a click on a file opens it, as a link to
 it does. The tab follows the folders open in it as files come and go,
 and a closed chat's stage opens it again with the same folders open.
 
-"Changes" beside it opens a tab of what changed in the project's files,
+"Changes" opens a tab of what changed in the project's files,
 as Git tells it, file by file and line by line, with the files Git does
 not track yet but does not ignore: in a trial, all it changed since it
 started, what it committed too, and elsewhere what changed since the
@@ -398,7 +405,7 @@ where it starts with a ref of its worktree's own,
 for a trial from nothing, which then counts all it made; a trial opened
 as a project forgets it.
 
-"Map" beside it opens a tab of the project's map, for the human to see
+"Map" opens a tab of the project's map, for the human to see
 where things are before they read them: not the files, which "Files"
 lists, but what the parts of the project mean, in tiers, which an agent
 writes. A tier is rows of boxes; each box of a tier opens a tier of its
@@ -515,7 +522,7 @@ their own on the stage, the agent included, since it writes HTML and
 reads pages. "Map" is the one built in. A plugin is a
 folder with an `index.html`, and a `plugin.json` naming its `title` if
 it has one: those built into Cox, in `crates/cox/plugins`, and the
-project's, in `.cox/plugins/<name>` under its folder. The tab bar has a
+project's, in `.cox/plugins/<name>` under its folder. The bar has a
 button for each, after "Changes", which opens the plugin's page at
 `cox://<name>/`, an address the stage serves itself, through CEF, from
 the plugin's files, or shows the tab that has it, wherever the page has
@@ -544,9 +551,9 @@ library, and reads its JSON again every two seconds, as Cox's own tabs
 follow what they show.
 
 A tab can be a terminal too, through
-[alacritty_terminal](https://crates.io/crates/alacritty_terminal). The
-`>_` beside the tabs opens one with the human's shell, working in the
-chat's folder. The agent runs a command in one with Cox's `run_command`
+[alacritty_terminal](https://crates.io/crates/alacritty_terminal).
+"Terminal" in the menu of the stage's + opens one with the human's
+shell, working in the chat's folder. The agent runs a command in one with Cox's `run_command`
 tool: the stage shows it running, the human can type into it, as to
 answer what it asks, and the agent gets what the terminal shows and the
 exit code once it ends. A command gets the tab of the agent's last one

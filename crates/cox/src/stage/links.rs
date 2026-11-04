@@ -126,7 +126,7 @@ impl Stage {
     /// its tab: as Markdown if it is a Markdown file and no lines are
     /// given, and as it is written otherwise. Opens nothing if the file
     /// cannot be read.
-    fn open_path(
+    pub(super) fn open_path(
         &mut self,
         path: &Path,
         lines: Option<Lines>,

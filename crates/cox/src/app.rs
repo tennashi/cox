@@ -32,6 +32,7 @@ use gpui::{
 use crate::agents::Agents;
 use crate::chat::launcher::Launcher;
 use crate::stage::servers::Servers;
+use crate::ui::icons::Icons;
 use crate::workspace::Workspace;
 use cox_browser::Cef;
 
@@ -158,15 +159,17 @@ pub fn run(settings: Settings) -> ExitCode {
         cef: cef.clone(),
     };
 
-    Application::new().run(move |cx: &mut App| {
-        bind_keys(cx);
-        cx.set_global(Servers::default());
-        serve_browser(&cef, cx);
-        quit_when_asked(cx);
-        shut_down_on_quit(cef, cx);
-        let window = open_window(home, store, launcher, cx);
-        crate::inspect::start(window, devtools, cx);
-    });
+    Application::new()
+        .with_assets(Icons)
+        .run(move |cx: &mut App| {
+            bind_keys(cx);
+            cx.set_global(Servers::default());
+            serve_browser(&cef, cx);
+            quit_when_asked(cx);
+            shut_down_on_quit(cef, cx);
+            let window = open_window(home, store, launcher, cx);
+            crate::inspect::start(window, devtools, cx);
+        });
     ExitCode::SUCCESS
 }
 
