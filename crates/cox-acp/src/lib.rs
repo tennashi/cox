@@ -7,16 +7,20 @@
 //! turn ends, and which [`Turn::cancel`] asks the agent to end early.
 //! The [`Setting`]s the agent lets the human choose of the session, such
 //! as its model, come with the session, and [`Session::set`] or
-//! [`Turn::set`] chooses one.
+//! [`Turn::set`] chooses one. An agent that asks the human to log in, as
+//! ACP's `auth_required` error does, offers [`LoginMethod`]s: one the
+//! agent carries out itself, through `authenticate`, or one the human
+//! carries out in a terminal, running the agent's own command for it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, ConfigOptionUpdate, Content, ContentBlock, ContentChunk,
-    Diff, InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio,
+    AgentCapabilities, AuthCapabilities, AuthMethod, AuthenticateRequest, CancelNotification,
+    ClientCapabilities, ConfigOptionUpdate, Content, ContentBlock, ContentChunk, Diff,
+    InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio,
     NewSessionRequest, PermissionOptionKind, Plan as AcpPlan, PlanEntry as AcpPlanEntry,
     PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
@@ -29,7 +33,7 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
 use agent_client_protocol::{
-    AcpAgent, Agent, Client, ConnectTo, ConnectionTo, LineDirection, Responder,
+    AcpAgent, Agent, Client, ConnectTo, ConnectionTo, ErrorCode, LineDirection, Responder,
 };
 use anyhow::Context;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -99,16 +103,22 @@ impl From<McpServer> for AcpMcpServer {
 /// tells whether it did. What the agent tells of the session's past while
 /// it resumes it is left out: the session starts from there.
 ///
+/// When the agent asks the human to log in before it opens a session,
+/// `login` is asked how, with the ways the agent offers and why the last
+/// way tried failed, if one did, and the session is asked for again once
+/// the human has logged in, until `login` gives up.
+///
 /// # Errors
 ///
-/// Returns the error `talk` returns, or an error if the connection fails or
-/// the agent refuses to open a session.
+/// Returns the error `talk` returns, or an error if the connection fails,
+/// the agent refuses to open a session, or `login` gives up.
 pub async fn connect<T>(
     agent: impl Transport,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     resume: Option<String>,
     heard: impl Fn(News) + Send + Sync,
+    login: impl AsyncFn(Vec<LoginMethod>, Option<String>) -> anyhow::Result<Login>,
     talk: impl AsyncFnOnce(Session) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     let (updates, received) = unbounded_channel();
@@ -150,11 +160,19 @@ pub async fn connect<T>(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
+            let started = match start(&cx, cwd, mcp_servers, resume, &login).await {
+                Ok(started) => started,
+                Err(error) => {
+                    outcome = Some(Err(error));
+                    return Ok(());
+                }
+            };
             let Started {
                 id,
                 resumed,
                 settings,
-            } = start(&cx, cwd, mcp_servers, resume).await?;
+                login_methods,
+            } = started;
             let mut received = received;
             if resumed {
                 // The agent tells what it heard of the session's past before
@@ -166,6 +184,7 @@ pub async fn connect<T>(
                 id,
                 resumed,
                 settings,
+                login_methods,
                 received,
                 tool_calls: HashMap::new(),
             };
@@ -183,20 +202,32 @@ struct Started {
     resumed: bool,
     /// What the agent lets the human choose of the session.
     settings: Vec<Setting>,
+    /// The ways the agent offers to log in.
+    login_methods: Vec<LoginMethod>,
 }
 
-/// Initializes the connection and opens a session working in `cwd`, or
-/// resumes the session `resume` when the agent can.
+/// Initializes the connection, saying Cox runs the agent's command in a
+/// terminal for the human to log in, and opens a session working in
+/// `cwd`, or resumes the session `resume` when the agent can. When the
+/// agent asks the human to log in first, `login` says how, and the session
+/// is asked for again once they have.
 async fn start(
     cx: &ConnectionTo<Agent>,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     resume: Option<String>,
-) -> agent_client_protocol::Result<Started> {
+    login: &impl AsyncFn(Vec<LoginMethod>, Option<String>) -> anyhow::Result<Login>,
+) -> anyhow::Result<Started> {
+    let capabilities = ClientCapabilities::new().auth(AuthCapabilities::new().terminal(true));
     let initialized = cx
-        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities))
         .block_task()
         .await?;
+    let login_methods: Vec<LoginMethod> = initialized
+        .auth_methods
+        .iter()
+        .map(LoginMethod::from)
+        .collect();
     let mcp_servers: Vec<AcpMcpServer> = mcp_servers.into_iter().map(Into::into).collect();
     if let Some(id) = resume
         && let Some(options) = resumed(
@@ -212,16 +243,100 @@ async fn start(
             id: SessionId::new(id),
             resumed: true,
             settings: settings(options.unwrap_or_default()),
+            login_methods,
         });
     }
-    let session = cx
-        .send_request(NewSessionRequest::new(cwd).mcp_servers(mcp_servers))
-        .block_task()
-        .await?;
+    let mut failed = None;
+    let session = loop {
+        let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers.clone());
+        match cx.send_request(request).block_task().await {
+            Ok(session) => break session,
+            Err(error) if error.code == ErrorCode::AuthRequired => {
+                let how = login(login_methods.clone(), failed.take()).await?;
+                failed = log_in(cx, how)
+                    .await
+                    .err()
+                    .map(|error| format!("{error:#}"));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
     Ok(Started {
         id: session.session_id,
         resumed: false,
         settings: settings(session.config_options.unwrap_or_default()),
+        login_methods,
+    })
+}
+
+/// Logs in as `how` says: through the agent, or as the human has, in a
+/// terminal, already.
+async fn log_in(cx: &ConnectionTo<Agent>, how: Login) -> anyhow::Result<()> {
+    if let Login::Authenticate(id) = how {
+        cx.send_request(AuthenticateRequest::new(id))
+            .block_task()
+            .await?;
+    }
+    Ok(())
+}
+
+/// A way the agent offers the human to log in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoginMethod {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// How to run the agent's command in a terminal for the human to log
+    /// in, for a way the human carries out there; `None` for one the agent
+    /// carries out itself, through `authenticate`.
+    pub terminal: Option<TerminalLogin>,
+}
+
+/// What to add to the agent's command, run in a terminal, for the human to
+/// log in there: it has logged in once the command exits with 0.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalLogin {
+    pub args: Vec<String>,
+    /// Over what the command sets of its environment.
+    pub env: BTreeMap<String, String>,
+}
+
+impl From<&AuthMethod> for LoginMethod {
+    fn from(method: &AuthMethod) -> Self {
+        let terminal = match method {
+            AuthMethod::Terminal(terminal) => Some(TerminalLogin {
+                args: terminal.args.clone(),
+                env: terminal.env.clone().into_iter().collect(),
+            }),
+            _ => None,
+        };
+        Self {
+            id: method.id().to_string(),
+            name: method.name().to_owned(),
+            description: method.description().map(str::to_owned),
+            terminal,
+        }
+    }
+}
+
+/// How the human logged in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Login {
+    /// Through the agent, the way of this id, which the agent carries out
+    /// when asked to.
+    Authenticate(String),
+    /// In a terminal, which the human has done.
+    Done,
+}
+
+/// Whether `error` is the agent's asking the human to log in, as when it
+/// refuses a prompt so.
+#[must_use]
+pub fn needs_login(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<agent_client_protocol::Error>()
+            .is_some_and(|error| error.code == ErrorCode::AuthRequired)
     })
 }
 
@@ -482,6 +597,7 @@ pub struct Session {
     id: SessionId,
     resumed: bool,
     settings: Vec<Setting>,
+    login_methods: Vec<LoginMethod>,
     received: UnboundedReceiver<Received>,
     /// What is known of each tool call of the turn that has not ended yet.
     tool_calls: HashMap<ToolCallId, Known>,
@@ -506,6 +622,23 @@ impl Session {
     #[must_use]
     pub fn settings(&self) -> &[Setting] {
         &self.settings
+    }
+
+    /// The ways the agent offers the human to log in.
+    #[must_use]
+    pub fn login_methods(&self) -> &[LoginMethod] {
+        &self.login_methods
+    }
+
+    /// Logs in as `how` says, as when the agent refused a prompt until the
+    /// human does.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent fails to log in, or the connection
+    /// fails.
+    pub async fn log_in(&self, how: Login) -> anyhow::Result<()> {
+        log_in(&self.cx, how).await
     }
 
     /// Asks the agent to set the setting `id` to `value`, and returns all

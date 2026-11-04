@@ -27,7 +27,7 @@ use cox_core::goal::Goal as KeptGoal;
 use cox_core::settings::{Choice, Setting};
 use cox_core::store::Named;
 use cox_core::store::{Record, Store};
-use fake_agent::{FakeAgent, Resumes, TITLE};
+use fake_agent::{FakeAgent, LogsIn, Resumes, TITLE};
 use gpui::{
     App, AppContext as _, Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
     TestAppContext, VisualTestContext, Window,
@@ -61,6 +61,8 @@ struct FakeOpens {
     asks: Asks,
     resumes: Resumes,
     choices: Choices,
+    /// How the agents of the chats the human opens ask to log in.
+    logs_in: LogsIn,
 }
 
 /// The agent a chat starts with, and the other it can switch to.
@@ -124,7 +126,7 @@ impl Opens for FakeOpens {
         _: &mut Window,
         cx: &mut App,
     ) -> Entity<ChatView> {
-        let agent = Arc::new(FakeAgent::default());
+        let agent = Arc::new(FakeAgent::logging_in(self.logs_in.clone()));
         self.agents.borrow_mut().push(Arc::clone(&agent));
         let start = Start::New {
             instructions,
@@ -219,6 +221,7 @@ fn opens(agents: &Agents, asks: &Asks, resumes: Resumes) -> Rc<dyn Opens> {
         asks: Rc::clone(asks),
         resumes,
         choices: fake_choices(),
+        logs_in: LogsIn::Never,
     })
 }
 
@@ -265,6 +268,34 @@ fn open_window_asking(
     let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, store, opens, cx));
     cx.update(|window, cx| window.focus(&workspace.focus_handle(cx)));
     (agents, asks, workspace, cx)
+}
+
+/// Opens the window like [`open_window`], with agents that ask to log in
+/// as `logs_in` says. The chats talk to `touch`, so that the agent's way to
+/// log in in a terminal, which names a file, makes it.
+fn open_window_logging_in(
+    cx: &mut TestAppContext,
+    home: PathBuf,
+    logs_in: LogsIn,
+) -> (Agents, Entity<Workspace>, &mut VisualTestContext) {
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        cox::ui::input::bind_keys(cx);
+        cox::chat::view::bind_keys(cx);
+        cox::workspace::bind_keys(cx);
+    });
+    let agents = Agents::default();
+    let opens = Rc::new(FakeOpens {
+        agents: Rc::clone(&agents),
+        asks: Asks::default(),
+        resumes: Resumes::Resume,
+        choices: Choices::new(vec!["touch".to_owned()], Vec::new(), Vec::new()),
+        logs_in,
+    });
+    let store = Rc::new(Store::in_memory().unwrap());
+    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, store, opens, cx));
+    cx.update(|window, cx| window.focus(&workspace.focus_handle(cx)));
+    (agents, workspace, cx)
 }
 
 /// A directory of its own for each test.
@@ -2175,4 +2206,34 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(waited.await.unwrap(), Err("no chat 99".to_owned()));
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[gpui::test]
+async fn logs_in_in_a_terminal_and_sends_the_line_again(cx: &mut TestAppContext) {
+    let home = scratch("login-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let file = home.join("logged in");
+    let (agents, workspace, cx) = open_window_logging_in(cx, home, LogsIn::AtPrompt(file.clone()));
+
+    click(cx, "new-chat");
+    let view = shown(cx, &workspace);
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("enter");
+    cx.condition(&view, |view, _| view.conversation().logging_in())
+        .await;
+    // The third way runs the agent's command in a terminal, as
+    // `touch '<file>'`, which logs the agent in.
+    cx.simulate_keystrokes("3");
+    wait_for_turn(cx, &view).await;
+
+    assert!(file.exists());
+    let agent = Arc::clone(&agents.borrow()[0]);
+    assert_eq!(agent.logged_in(), Vec::<String>::new());
+    assert_eq!(agent.prompts(), ["hello"]);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.conversation().entries().last(),
+            Some(&Entry::Reply("echo: hello".to_owned()))
+        );
+    });
 }

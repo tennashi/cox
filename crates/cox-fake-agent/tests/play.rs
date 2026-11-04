@@ -296,6 +296,57 @@ fn a_session_has_the_settings_of_the_scenario_and_sets_them() {
     );
 }
 
+/// Ways to log in: one the agent carries out, and one in a terminal.
+fn ways_to_log_in() -> Value {
+    json!([
+        { "id": "key", "name": "API key" },
+        { "id": "terminal", "name": "Terminal", "type": "terminal", "args": ["--log-in"] },
+    ])
+}
+
+#[test]
+fn an_agent_that_asks_to_log_in_opens_a_session_once_cox_has() {
+    let scenario = json!({ "authMethods": ways_to_log_in(), "turns": [] });
+    let mut agent = Agent::play("login", &scenario);
+    let (_, initialized) = agent.ask("initialize", &json!({ "protocolVersion": 1 }));
+    assert_eq!(initialized["result"]["authMethods"], ways_to_log_in());
+    let new = json!({ "cwd": "/", "mcpServers": [] });
+    let (_, refused) = agent.ask("session/new", &new);
+    assert_eq!(refused["error"]["code"], -32000);
+    // A way carried out in a terminal is not the agent's to carry out.
+    let (_, refused) = agent.ask("authenticate", &json!({ "methodId": "terminal" }));
+    assert!(refused["error"]["message"].is_string());
+
+    let (_, authenticated) = agent.ask("authenticate", &json!({ "methodId": "key" }));
+    assert_eq!(authenticated["result"], json!({}));
+    let (_, opened) = agent.ask("session/new", &new);
+    assert_eq!(opened["result"]["sessionId"], "fake-1");
+}
+
+#[test]
+fn logging_in_in_a_terminal_logs_in_the_agent_of_the_scenario() {
+    let scenario = json!({
+        "authMethods": ways_to_log_in(),
+        "authRequired": "prompt",
+        "turns": [{ "steps": [{ "say": "Hello." }] }],
+    });
+    let mut agent = Agent::session("terminal-login", &scenario, &json!([]));
+    let (_, refused) = agent.turn("hi");
+    assert_eq!(refused["error"]["code"], -32000);
+
+    let path = scratch("terminal-login");
+    let logged_in = Command::new(env!("CARGO_BIN_EXE_cox-fake-agent"))
+        .arg(&path)
+        .arg("--log-in")
+        .output()
+        .unwrap();
+    assert!(logged_in.status.success());
+    let (sent, answer) = agent.turn("hi");
+    let _ = std::fs::remove_file(path.with_extension("json.logged-in"));
+    assert_eq!(answer["result"]["stopReason"], "end_turn");
+    assert_eq!(replied(&sent), "Hello.");
+}
+
 #[test]
 fn a_scenario_it_cannot_read_stops_it() {
     let path = scratch("broken");

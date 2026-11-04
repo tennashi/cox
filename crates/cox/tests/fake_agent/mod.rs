@@ -15,7 +15,7 @@
 //! ends as cancelled. Its sessions have two settings, [`MODEL`] and
 //! [`MODE`], which Cox sets as it asks, and when a prompt mentions
 //! "switch", the agent sets its mode to `plan` on its own. It goes on with a session it opened before as
-//! [`Resumes`] says. It records what Cox asked of it and answered so tests can
+//! [`Resumes`] says, and asks Cox to log in as [`LogsIn`] says. It records what Cox asked of it and answered so tests can
 //! check what Cox did.
 
 use std::path::PathBuf;
@@ -24,7 +24,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, ConfigOptionUpdate, ContentBlock, ContentChunk, Diff,
+    AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AuthenticateRequest,
+    AuthenticateResponse, CancelNotification, ConfigOptionUpdate, ContentBlock, ContentChunk, Diff,
     InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpServer,
     NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry,
     PlanEntryPriority, PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
@@ -52,9 +53,70 @@ pub enum Resumes {
     Refuse,
 }
 
+/// When the agent asks Cox to log in, until it has: never, before it
+/// opens a session, or as it takes a turn, as `claude-agent-acp` does.
+/// It offers to log in with [`KEY`], which works, with [`WRONG_KEY`],
+/// which fails, and in a terminal, [`IN_A_TERMINAL`], whose command has
+/// the agent logged in once the file it names is there.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum LogsIn {
+    #[default]
+    Never,
+    AtSession(PathBuf),
+    AtPrompt(PathBuf),
+}
+
+/// The ids of the ways the agent offers to log in.
+pub const KEY: &str = "key";
+pub const WRONG_KEY: &str = "wrong-key";
+pub const IN_A_TERMINAL: &str = "terminal";
+
+/// What the agent says when logging in with [`WRONG_KEY`] fails.
+pub const WRONG: &str = "the key is wrong";
+
+impl LogsIn {
+    /// The file whose being there has the agent logged in.
+    fn file(&self) -> Option<&PathBuf> {
+        match self {
+            Self::Never => None,
+            Self::AtSession(file) | Self::AtPrompt(file) => Some(file),
+        }
+    }
+
+    /// The ways the agent offers to log in.
+    fn methods(&self) -> Vec<AuthMethod> {
+        let Some(file) = self.file() else {
+            return Vec::new();
+        };
+        vec![
+            AuthMethod::Agent(AuthMethodAgent::new(KEY, "API key").description("Use the key")),
+            AuthMethod::Agent(AuthMethodAgent::new(WRONG_KEY, "Old key")),
+            AuthMethod::Terminal(
+                AuthMethodTerminal::new(IN_A_TERMINAL, "Terminal")
+                    .args(vec![file.display().to_string()]),
+            ),
+        ]
+    }
+
+    /// Whether the agent, logged in with `methods` so far, still asks to
+    /// log in at `session` or not.
+    fn asks(&self, session: bool, methods: &[String]) -> bool {
+        let at = match self {
+            Self::Never => return false,
+            Self::AtSession(_) => session,
+            Self::AtPrompt(_) => !session,
+        };
+        at && !methods.iter().any(|method| method == KEY)
+            && !self.file().is_some_and(|file| file.exists())
+    }
+}
+
 #[derive(Default)]
 pub struct FakeAgent {
     resumes: Resumes,
+    logs_in: LogsIn,
+    /// The ways Cox logged in with, in order.
+    logged_in: Arc<Mutex<Vec<String>>>,
     /// The sessions Cox asked to go on with, in order.
     asked_to_resume: Arc<Mutex<Vec<String>>>,
     sessions_opened: Arc<AtomicUsize>,
@@ -164,11 +226,29 @@ impl FakeAgent {
         }
     }
 
+    /// An agent that asks Cox to log in as `logs_in` says.
+    pub fn logging_in(logs_in: LogsIn) -> Self {
+        Self {
+            logs_in,
+            ..Self::default()
+        }
+    }
+
+    /// The ways Cox logged in with, in order.
+    pub fn logged_in(&self) -> Vec<String> {
+        self.logged_in.lock().unwrap().clone()
+    }
+
     /// Starts serving and returns the end of the connection to give Cox.
     pub fn connect(&self) -> Channel {
         let (cox_end, agent_end) = Channel::duplex();
+        let login = Login {
+            logs_in: self.logs_in.clone(),
+            logged_in: Arc::clone(&self.logged_in),
+        };
         tokio::spawn(serve(
             agent_end,
+            login,
             self.resumes,
             Arc::clone(&self.asked_to_resume),
             Arc::clone(&self.sessions_opened),
@@ -233,6 +313,21 @@ impl FakeAgent {
     }
 }
 
+/// How the agent asks Cox to log in, and the ways Cox logged in with.
+#[derive(Clone)]
+struct Login {
+    logs_in: LogsIn,
+    logged_in: Arc<Mutex<Vec<String>>>,
+}
+
+impl Login {
+    /// Whether the agent asks to log in before it opens a session, at
+    /// `session`, or before it takes a turn.
+    fn asks(&self, session: bool) -> bool {
+        self.logs_in.asks(session, &self.logged_in.lock().unwrap())
+    }
+}
+
 /// What the agent does on its way to the reply, as the prompt asks: it
 /// thinks, plans and runs tools.
 fn work(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()> {
@@ -261,8 +356,13 @@ fn work(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()
     clippy::too_many_arguments,
     reason = "what the agent records, each once"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a handler for each request the agent takes"
+)]
 async fn serve(
     transport: Channel,
+    login: Login,
     resumes: Resumes,
     asked_to_resume: Arc<Mutex<Vec<String>>>,
     sessions_opened: Arc<AtomicUsize>,
@@ -275,7 +375,9 @@ async fn serve(
 ) -> Result<()> {
     let waits = Arc::clone(&cancels);
     let loaded = Arc::clone(&asked_to_resume);
-    let (on_resume, on_new, on_set, on_prompt) = (
+    let (on_initialize, on_authenticate, on_new, on_prompt_login) =
+        (login.clone(), login.clone(), login.clone(), login);
+    let (on_resume, on_new_settings, on_set, on_prompt) = (
         Arc::clone(&settings),
         Arc::clone(&settings),
         Arc::clone(&settings),
@@ -288,8 +390,20 @@ async fn serve(
             async move |request: InitializeRequest, responder, _cx| {
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
-                        .agent_capabilities(capabilities(resumes)),
+                        .agent_capabilities(capabilities(resumes))
+                        .auth_methods(on_initialize.logs_in.methods()),
                 )
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: AuthenticateRequest, responder, _cx| {
+                let method = request.method_id.0.to_string();
+                if method == WRONG_KEY {
+                    return responder.respond_with_error(Error::new(-32603, WRONG));
+                }
+                on_authenticate.logged_in.lock().unwrap().push(method);
+                responder.respond(AuthenticateResponse::new())
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -319,10 +433,13 @@ async fn serve(
         )
         .on_receive_request(
             async move |request: NewSessionRequest, responder, _cx| {
+                if on_new.asks(true) {
+                    return responder.respond_with_error(Error::auth_required());
+                }
                 sessions_opened.fetch_add(1, Ordering::SeqCst);
                 *cwd.lock().unwrap() = Some(request.cwd);
                 *mcp_servers.lock().unwrap() = request.mcp_servers;
-                let options = on_new.lock().unwrap().options();
+                let options = on_new_settings.lock().unwrap().options();
                 responder.respond(NewSessionResponse::new("session-1").config_options(options))
             },
             agent_client_protocol::on_receive_request!(),
@@ -340,6 +457,9 @@ async fn serve(
         )
         .on_receive_request(
             async move |request: PromptRequest, responder, cx: ConnectionTo<Client>| {
+                if on_prompt_login.asks(false) {
+                    return responder.respond_with_error(Error::auth_required());
+                }
                 let blocks = texts_of(&request.prompt);
                 let text = blocks.concat();
                 prompts.lock().unwrap().push(blocks);

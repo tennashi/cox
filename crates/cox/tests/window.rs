@@ -18,7 +18,7 @@ use cox::ui::Panel;
 use cox::ui::input::LineInput;
 use cox_acp::McpServer;
 use cox_core::diff::Line;
-use fake_agent::FakeAgent;
+use fake_agent::{FakeAgent, LogsIn};
 use gpui::{
     AppContext as _, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, Focusable,
     IntoElement, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels,
@@ -71,6 +71,26 @@ fn open_with_stage(
     setup: Option<Setup>,
     stage: bool,
 ) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
+    open_agent(cx, FakeAgent::default(), mcp_servers, opened, setup, stage)
+}
+
+/// Opens the window like [`open`], talking to `agent`.
+fn open_talking_to(
+    cx: &mut TestAppContext,
+    agent: FakeAgent,
+) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
+    open_agent(cx, agent, Vec::new(), Opened::default(), None, false)
+}
+
+/// Opens the window like [`open_with_stage`], talking to `agent`.
+fn open_agent(
+    cx: &mut TestAppContext,
+    agent: FakeAgent,
+    mcp_servers: Vec<McpServer>,
+    opened: Opened,
+    setup: Option<Setup>,
+    stage: bool,
+) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
     // The agent side runs on a thread of its own, so the test waits for it
     // in real time instead of only running GPUI's own tasks.
     cx.executor().allow_parking();
@@ -78,7 +98,7 @@ fn open_with_stage(
         cox::ui::input::bind_keys(cx);
         cox::chat::view::bind_keys(cx);
     });
-    let agent = Arc::new(FakeAgent::default());
+    let agent = Arc::new(agent);
     let fake = Arc::clone(&agent);
     let (view, cx) = cx.add_window_view(|_, cx| {
         let stage = stage.then(|| StageView {
@@ -410,6 +430,161 @@ async fn stops_a_turn_that_asks_permission_with_the_stop_button(cx: &mut TestApp
         tool_call(cx, &view),
         ("Edit x.txt".to_owned(), Some(ToolCallResult::Cancelled))
     );
+}
+
+/// A file that is never there, so that the agent counts as logged in only
+/// once Cox logs in with its key.
+fn no_login_file() -> std::path::PathBuf {
+    std::env::temp_dir().join("cox-no-such-login")
+}
+
+/// What the conversation shows of each time the agent asked to log in:
+/// why the way tried last failed, and the way chosen.
+fn logins(
+    cx: &mut VisualTestContext,
+    view: &Entity<ChatView>,
+) -> Vec<(Option<String>, Option<usize>)> {
+    view.read_with(cx, |view, _| {
+        view.conversation()
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Login { failed, chosen, .. } => Some((failed.clone(), *chosen)),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+#[gpui::test]
+async fn logs_in_as_the_agent_asks_before_it_opens_the_session(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open_talking_to(
+        cx,
+        FakeAgent::logging_in(LogsIn::AtSession(no_login_file())),
+    );
+
+    wait_for(cx, &view, State::Asking).await;
+    view.read_with(cx, |view, _| {
+        let Some(Entry::Login { options, .. }) = view.conversation().entries().last() else {
+            panic!("the agent asks to log in");
+        };
+        let names: Vec<_> = options.iter().map(|option| option.name.as_str()).collect();
+        assert_eq!(names, ["API key", "Old key", "Terminal"]);
+        assert!(options[2].terminal.is_some());
+        assert_eq!(view.conversation().asking_for(), Some("log in"));
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("waiting").is_some());
+    cx.simulate_keystrokes("1");
+    wait_for(cx, &view, State::Idle).await;
+    say(cx, &view, "hello").await;
+
+    assert_eq!(agent.logged_in(), [fake_agent::KEY]);
+    assert_eq!(agent.sessions_opened(), 1);
+    assert_eq!(agent.prompts(), ["hello"]);
+    assert_eq!(logins(cx, &view), [(None, Some(0))]);
+}
+
+#[gpui::test]
+async fn sends_the_line_again_once_the_human_logs_in_as_the_turn_asks(cx: &mut TestAppContext) {
+    let (agent, view, cx) =
+        open_talking_to(cx, FakeAgent::logging_in(LogsIn::AtPrompt(no_login_file())));
+
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Asking).await;
+    let option = cx
+        .debug_bounds("option-2")
+        .expect("the second way is drawn");
+    cx.simulate_click(option.center(), Modifiers::none());
+    // The old key fails, and the agent asks again, telling why.
+    cx.condition(&view, |view, _| {
+        view.conversation().logging_in() && view.conversation().entries().len() > 2
+    })
+    .await;
+    cx.simulate_keystrokes("1");
+    wait_for(cx, &view, State::Idle).await;
+
+    assert_eq!(agent.logged_in(), [fake_agent::KEY]);
+    assert_eq!(agent.prompts(), ["hello"]);
+    let failed = logins(cx, &view)[1].0.clone().expect("the old key failed");
+    assert!(failed.contains(fake_agent::WRONG), "{failed}");
+    assert_eq!(
+        logins(cx, &view),
+        [(None, Some(1)), (Some(failed), Some(0))]
+    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.conversation().entries().last(),
+            Some(&Entry::Reply("echo: hello".to_owned()))
+        );
+    });
+}
+
+#[gpui::test]
+async fn gives_up_logging_in_with_escape(cx: &mut TestAppContext) {
+    let (agent, view, cx) =
+        open_talking_to(cx, FakeAgent::logging_in(LogsIn::AtPrompt(no_login_file())));
+
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Asking).await;
+    cx.simulate_keystrokes("escape");
+    wait_for(cx, &view, State::Idle).await;
+
+    assert_eq!(agent.logged_in(), Vec::<String>::new());
+    assert_eq!(logins(cx, &view), [(None, None)]);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.conversation().entries().last(),
+            Some(&Entry::Note(
+                "The turn failed: the human did not log in".to_owned()
+            ))
+        );
+    });
+}
+
+#[gpui::test]
+async fn giving_up_logging_in_before_the_session_opens_closes_the_agent(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open_talking_to(
+        cx,
+        FakeAgent::logging_in(LogsIn::AtSession(no_login_file())),
+    );
+
+    wait_for(cx, &view, State::Asking).await;
+    cx.simulate_keystrokes("escape");
+    wait_for(cx, &view, State::Closed).await;
+
+    assert_eq!(agent.sessions_opened(), 0);
+    view.read_with(cx, |view, _| {
+        let Some(Entry::Note(note)) = view.conversation().entries().last() else {
+            panic!("the conversation ends with a note");
+        };
+        assert!(note.contains("the human did not log in"), "{note}");
+    });
+}
+
+#[gpui::test]
+async fn a_chat_with_no_terminal_says_it_cannot_log_in_there(cx: &mut TestAppContext) {
+    let (agent, view, cx) =
+        open_talking_to(cx, FakeAgent::logging_in(LogsIn::AtPrompt(no_login_file())));
+
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Asking).await;
+    cx.simulate_keystrokes("3");
+    // Not logged in, the agent asks again.
+    cx.condition(&view, |view, _| {
+        view.conversation().logging_in() && view.conversation().entries().len() > 3
+    })
+    .await;
+
+    assert_eq!(agent.logged_in(), Vec::<String>::new());
+    view.read_with(cx, |view, _| {
+        assert!(view.conversation().entries().contains(&Entry::Note(
+            "Cox cannot run the agent's command here to log in.".to_owned()
+        )));
+    });
 }
 
 /// A setup whose policy answers requests titled as `reject` says with no,

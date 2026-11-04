@@ -15,6 +15,14 @@
 //! unless it says otherwise. A step is an object with one key, which says
 //! what it is (see [`Step`]). `configOptions`, beside `turns`, are the
 //! settings of each session, as ACP says them, such as its model.
+//! `authMethods` are the ways the agent offers to log in, as ACP's
+//! `initialize` says them; with them, the agent asks Cox to log in, at
+//! `authRequired`, `session` (before it opens a session, the default) or
+//! `prompt` (as it takes a turn, as `claude-agent-acp` does), until Cox
+//! logs in with one of the ways the agent carries out itself, or until
+//! the human runs the agent with `--log-in` after the scenario, as a way
+//! of `"type": "terminal"` with `"args": ["--log-in"]` has Cox run in a
+//! terminal.
 
 use std::collections::HashMap;
 
@@ -29,6 +37,24 @@ pub struct Scenario {
     /// which Cox sets with `session/set_config_option`.
     #[serde(default, rename = "configOptions")]
     pub config_options: Vec<Value>,
+    /// The ways the agent offers to log in, as ACP's `authMethods` says
+    /// them.
+    #[serde(default, rename = "authMethods")]
+    pub auth_methods: Vec<Value>,
+    /// When the agent asks to log in, if it offers ways to.
+    #[serde(default, rename = "authRequired")]
+    pub auth_required: AuthRequired,
+}
+
+/// When the agent asks Cox to log in.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthRequired {
+    /// Before it opens a session.
+    #[default]
+    Session,
+    /// As it takes a turn.
+    Prompt,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,10 +1,12 @@
 //! The agent's side of ACP, as a scenario plays it: it answers
 //! `initialize` and `session/new`, with the scenario's settings, sets them
 //! as `session/set_config_option` asks, takes a turn of the scenario for
-//! each `session/prompt`, and ends the turn early when Cox cancels it.
+//! each `session/prompt`, and ends the turn early when Cox cancels it. It
+//! asks Cox to log in as the scenario says, and takes `authenticate`.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead as _, Write};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::mcp::Server;
-use crate::scenario::{Ask, Call, Scenario, Step, fill, put_in};
+use crate::scenario::{Ask, AuthRequired, Call, Scenario, Step, fill, put_in};
 
 /// How long the agent takes between the words it says.
 const WORD: Duration = Duration::from_millis(30);
@@ -25,6 +27,9 @@ const INVALID_PARAMS: i64 = -32602;
 
 /// JSON-RPC's code for a turn the scenario fails.
 const INTERNAL_ERROR: i64 = -32603;
+
+/// ACP's code for a request the agent takes only once Cox has logged in.
+const AUTH_REQUIRED: i64 = -32000;
 
 /// How a turn's steps went.
 enum Went {
@@ -50,13 +55,26 @@ pub struct Agent<W: Write> {
     result: String,
     /// The folder the session works in, as Cox gave it.
     cwd: String,
+    /// The file whose being there says the human logged in in a terminal.
+    login: PathBuf,
+    /// Whether Cox logged in with a way the agent carries out itself.
+    authenticated: bool,
     sessions: u64,
     asked: u64,
     calls: u64,
 }
 
-/// Plays `scenario` on standard input and output until Cox goes.
-pub fn play(scenario: Scenario) {
+/// The file that says the agent of the scenario at `scenario` is logged
+/// in, there once `--log-in` has run.
+pub fn logged_in(scenario: &Path) -> PathBuf {
+    let mut file = scenario.as_os_str().to_owned();
+    file.push(".logged-in");
+    file.into()
+}
+
+/// Plays `scenario` on standard input and output until Cox goes, logged
+/// in once `login` is there.
+pub fn play(scenario: Scenario, login: &Path) {
     let (sent, input) = channel();
     thread::spawn(move || {
         for line in io::stdin().lock().lines() {
@@ -71,11 +89,11 @@ pub fn play(scenario: Scenario) {
             }
         }
     });
-    Agent::new(scenario, io::stdout(), input).run();
+    Agent::new(scenario, io::stdout(), input, login.to_owned()).run();
 }
 
 impl<W: Write> Agent<W> {
-    pub fn new(scenario: Scenario, output: W, input: Receiver<Value>) -> Self {
+    pub fn new(scenario: Scenario, output: W, input: Receiver<Value>, login: PathBuf) -> Self {
         let taken = vec![false; scenario.turns.len()];
         Self {
             scenario,
@@ -87,6 +105,8 @@ impl<W: Write> Agent<W> {
             started: HashMap::new(),
             result: String::new(),
             cwd: String::new(),
+            login,
+            authenticated: false,
             sessions: 0,
             asked: 0,
             calls: 0,
@@ -99,10 +119,19 @@ impl<W: Write> Agent<W> {
             let id = message.get("id").cloned();
             let method = message["method"].as_str().unwrap_or_default();
             match (method, id) {
-                ("initialize", Some(id)) => self.answer(
-                    &id,
-                    &json!({ "protocolVersion": 1, "agentCapabilities": {} }),
-                ),
+                ("initialize", Some(id)) => {
+                    let mut answer = json!({ "protocolVersion": 1, "agentCapabilities": {} });
+                    if !self.scenario.auth_methods.is_empty() {
+                        answer["authMethods"] = Value::from(self.scenario.auth_methods.clone());
+                    }
+                    self.answer(&id, &answer);
+                }
+                ("authenticate", Some(id)) => self.authenticate(&id, &message["params"]),
+                ("session/new" | "session/prompt", Some(id))
+                    if self.asks_to_log_in(method == "session/new") =>
+                {
+                    self.fail(&id, AUTH_REQUIRED, "Authentication required");
+                }
                 ("session/new", Some(id)) => {
                     message["params"]["cwd"]
                         .as_str()
@@ -137,6 +166,35 @@ impl<W: Write> Agent<W> {
                 }
             }
         }
+    }
+
+    /// Whether the agent asks Cox to log in before it opens a session, at
+    /// `session`, or before it takes a turn.
+    fn asks_to_log_in(&self, session: bool) -> bool {
+        let at = match self.scenario.auth_required {
+            AuthRequired::Session => session,
+            AuthRequired::Prompt => !session,
+        };
+        at && !self.scenario.auth_methods.is_empty() && !self.authenticated && !self.login.exists()
+    }
+
+    /// Logs in the way `params` names, if the agent carries it out itself,
+    /// and answers `id`.
+    fn authenticate(&mut self, id: &Value, params: &Value) {
+        let method = &params["methodId"];
+        let carried_out = self.scenario.auth_methods.iter().any(|way| {
+            way["id"] == *method && way["type"].as_str().is_none_or(|kind| kind == "agent")
+        });
+        if !carried_out {
+            self.fail(
+                id,
+                INVALID_PARAMS,
+                &format!("there is no way {method} to log in"),
+            );
+            return;
+        }
+        self.authenticated = true;
+        self.answer(id, &json!({}));
     }
 
     /// Sets the setting `params` names to the value it says, and answers

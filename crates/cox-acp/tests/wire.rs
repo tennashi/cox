@@ -83,6 +83,7 @@ sleep 1"#;
         Vec::new(),
         None,
         |_| {},
+        async |_, _| anyhow::bail!("no login"),
         async |_| Ok(()),
     );
     let _ = tokio::time::timeout(Duration::from_secs(5), connected).await;

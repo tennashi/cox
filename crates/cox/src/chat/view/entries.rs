@@ -21,7 +21,7 @@ use gpui::{AnyElement, Context, SharedString, Stateful, div, prelude::*, px, rgb
 use cox_core::goal::Goal;
 
 use crate::chat::conversation::{
-    self, Answer, Content, Entry, State, Step, StepState, ToolCallResult,
+    self, Answer, Content, Entry, LoginOption, State, Step, StepState, ToolCallResult,
 };
 use crate::chat::view::ChatView;
 use crate::ui::text::Writer;
@@ -209,6 +209,35 @@ impl ChatView {
             .into_any_element()
     }
 
+    /// The card that asks the human to log in, one of the ways of
+    /// `options`, while the agent waits for it, and after, the way `chosen`.
+    fn render_login(
+        &self,
+        index: usize,
+        options: &[LoginOption],
+        failed: Option<&str>,
+        chosen: Option<usize>,
+        writer: &mut Writer,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let asking = self.conversation.state() == State::Asking
+            && chosen.is_none()
+            && index + 1 == self.conversation.entries().len();
+        if asking {
+            let title = conversation::login_title(failed);
+            let names: Vec<String> = options.iter().map(conversation::login_label).collect();
+            return render_asking(index, &title, &[], &names, writer, cx);
+        }
+        let chosen = chosen
+            .and_then(|chosen| options.get(chosen))
+            .map_or("none", |option| option.name.as_str());
+        div()
+            .text_size(px(12.))
+            .text_color(rgb(DIM))
+            .child(writer.plain(&format!("Log in: {chosen}"), "\n\n"))
+            .into_any_element()
+    }
+
     fn render_entry(&self, index: usize, entry: &Entry, cx: &mut Context<Self>) -> AnyElement {
         let mut writer = self.reading.writer(index);
         match entry {
@@ -281,6 +310,11 @@ impl ChatView {
                 .text_color(rgb(DIM))
                 .child(writer.plain(&conversation::switched_note(from, to), "\n\n"))
                 .into_any_element(),
+            Entry::Login {
+                options,
+                failed,
+                chosen,
+            } => self.render_login(index, options, failed.as_deref(), *chosen, &mut writer, cx),
             Entry::Permission {
                 title,
                 content,

@@ -114,6 +114,21 @@ chat keeps its agent, a chat its agent opens talks to the same agent,
 and the settings a new chat starts with, as the human chose them last,
 are of each agent apart.
 
+An agent that has the human log in first says so, with ACP's
+`authRequired`, as it opens its session or as it takes a turn, and the
+chat asks the human on a card in the conversation, with the ways to log
+in the agent offers (ACP's `authMethods`), by their names: a click on
+one, or its number, logs in that way, and the agent opens its session
+then, or the line goes again. A way the agent carries out itself, as
+Codex's API key, or its login to ChatGPT in a browser, Cox asks the
+agent to take (ACP's `authenticate`); a way carried out in a terminal,
+as `claude-agent-acp`'s logins to Claude, runs the agent's command, with
+the way's arguments and environment, in a terminal on the stage, where
+the human answers what it asks, and once it ends, Cox asks the agent
+again, on the same connection. The card says why the way tried last
+failed, when it did. Escape gives up: the turn fails, or, before the
+session opens, the agent closes.
+
 A chat can have a goal, which the chat works until it is met: a
 command, such as `cargo xtask ci`, which has to pass, or words, such as
 "The greeting names the user.", which an agent judges. "Set goal…" in
@@ -639,6 +654,14 @@ with no GPU.
 A scenario's `configOptions`, beside its `turns`, are the settings of
 each session the agent opens, as ACP's `configOptions` says them, which
 it sets as Cox asks; the tour has a mode, a model and an effort.
+Its `authMethods` are the ways to log in it offers, as ACP's
+`initialize` says them: with them, the agent asks Cox to log in, before
+it opens a session, or, with `"authRequired": "prompt"`, as it takes a
+turn, until Cox logs in with a way the agent carries out, or the human
+runs `cox-fake-agent <scenario> --log-in`, as a way of `"type":
+"terminal"` with `"args": ["--log-in"]` has Cox run in a terminal, which
+logs it in for the runs to come, until `<scenario>.logged-in` is taken
+away.
 
 Each line takes the first turn not taken yet whose `when`, if it has one,
 is in what the line says, as a goal's judge is told, and the turn takes

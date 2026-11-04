@@ -294,6 +294,30 @@ fn describe_entry(entry: &Entry) -> String {
         Entry::Thought(text) => format!("thought: {}", text_of(text)),
         Entry::Note(text) => format!("note: {}", text_of(text)),
         Entry::Switched { from, to } => format!("switched: from {from} to {to}"),
+        Entry::Login {
+            options,
+            failed,
+            chosen,
+        } => {
+            let options: Vec<String> = options
+                .iter()
+                .enumerate()
+                .map(|(index, option)| {
+                    let how = if option.terminal.is_some() {
+                        ", in a terminal"
+                    } else {
+                        ""
+                    };
+                    format!("{}. {}{how}", index + 1, option.name)
+                })
+                .collect();
+            let failed = failed
+                .as_ref()
+                .map(|failed| format!("; the last failed: {failed}"))
+                .unwrap_or_default();
+            let chosen = chosen.map_or("none yet".to_owned(), |chosen| (chosen + 1).to_string());
+            format!("login: {}; chosen: {chosen}{failed}", options.join(", "))
+        }
         Entry::Plan(steps) => {
             let steps: Vec<String> = steps
                 .iter()

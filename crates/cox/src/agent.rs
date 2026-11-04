@@ -19,20 +19,23 @@ pub mod mcp;
 pub mod setup;
 pub mod tools;
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use cox_acp::{
-    McpServer, News, PermissionAnswer, PermissionKind, PlanEntry, PlanState, Session, StopReason,
-    ToolCallContent, Transport, Update,
+    Login, LoginMethod, McpServer, News, PermissionAnswer, PermissionKind, PlanEntry, PlanState,
+    Session, StopReason, ToolCallContent, Transport, Update,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tracing::Instrument as _;
 
-use cox_core::entry::{Answer, Content, Entry, Step, StepState, ToolCallResult};
+use cox_core::entry::{
+    Answer, Content, Entry, LoginOption, Step, StepState, TerminalLogin, ToolCallResult,
+};
 use cox_core::settings::{Choice, Setting};
 
 use crate::agent::instructions::Instructions;
@@ -92,6 +95,15 @@ pub enum AgentEvent {
         options: Vec<String>,
         chosen: usize,
     },
+    /// The agent asks the human to log in, one of the ways of `options`,
+    /// before it opens the session or goes on with the turn; the agent
+    /// side waits for a [`Command::LogIn`], or for a [`Command::Cancel`],
+    /// which gives up. `failed` says why the way tried last failed, when
+    /// one did.
+    LoginNeeded {
+        options: Vec<LoginOption>,
+        failed: Option<String>,
+    },
     /// The turn ended.
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
@@ -137,6 +149,8 @@ pub enum Command {
         id: String,
         value: String,
     },
+    /// Tells the agent how the human logged in, as it asked.
+    LogIn(Login),
 }
 
 /// The window's ends of the channels to the agent side.
@@ -309,10 +323,13 @@ async fn run<T: Transport + 'static>(
     mcp_servers: Vec<McpServer>,
     start: Start,
     policy: &Policy,
-    mut commands: UnboundedReceiver<Command>,
+    commands: UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
     let transport = connect()?;
+    // Heard by the human's logging in before the session opens, then by
+    // the session.
+    let commands = tokio::sync::Mutex::new(Commands::new(commands));
     let resume = match &start {
         Start::New { .. } => None,
         Start::Again { session, .. } => session.clone(),
@@ -337,7 +354,12 @@ async fn run<T: Transport + 'static>(
         mcp_servers,
         resume,
         heard,
+        async |methods, failed| {
+            let mut commands = commands.lock().await;
+            logged_in(&methods, failed, &mut commands, events).await
+        },
         async |mut session| {
+            let mut commands = commands.lock().await;
             let (how, mut ahead) = opened(start, session.resumed());
             let _ = events.send(AgentEvent::Opened {
                 id: session.id(),
@@ -368,13 +390,77 @@ async fn run<T: Transport + 'static>(
                         let set = async |id: &str, value: &str| session.set(id, value).await;
                         set_setting(set, &settings, &id, &value, events).await;
                     }
-                    Command::Answer(_) | Command::Cancel => {}
+                    Command::Answer(_) | Command::Cancel | Command::LogIn(_) => {}
                 }
             }
             Ok(())
         },
     )
     .await
+}
+
+/// Asks the human to log in, one of the ways of `methods`, telling why
+/// the way tried last `failed`, if it did, and answers how they logged in.
+///
+/// # Errors
+///
+/// When the human gives up, or the window is gone.
+async fn logged_in(
+    methods: &[LoginMethod],
+    failed: Option<String>,
+    commands: &mut Commands,
+    events: &UnboundedSender<AgentEvent>,
+) -> anyhow::Result<Login> {
+    let options = methods
+        .iter()
+        .map(|method| LoginOption {
+            id: method.id.clone(),
+            name: method.name.clone(),
+            description: method.description.clone(),
+            terminal: method.terminal.as_ref().map(|terminal| TerminalLogin {
+                args: terminal.args.clone(),
+                env: terminal.env.clone(),
+            }),
+        })
+        .collect();
+    let _ = events.send(AgentEvent::LoginNeeded { options, failed });
+    loop {
+        match commands.recv().await {
+            Some(Command::LogIn(how)) => return Ok(how),
+            Some(Command::Cancel) | None => anyhow::bail!("the human did not log in"),
+            // A line sent, or a setting set, before the agent asked waits
+            // for the session, which opens once the human has logged in.
+            Some(command @ (Command::Prompt(_) | Command::Set { .. })) => {
+                commands.held.push_back(command);
+            }
+            Some(Command::Answer(_)) => {}
+        }
+    }
+}
+
+/// What the window tells the agent side, with what came while the agent
+/// waited for the human to log in, which is heard first.
+struct Commands {
+    received: UnboundedReceiver<Command>,
+    held: VecDeque<Command>,
+}
+
+impl Commands {
+    fn new(received: UnboundedReceiver<Command>) -> Self {
+        Self {
+            received,
+            held: VecDeque::new(),
+        }
+    }
+
+    /// The next command, held or new, or `None` once the window is gone.
+    /// Cancelled, it loses none.
+    async fn recv(&mut self) -> Option<Command> {
+        match self.held.pop_front() {
+            Some(command) => Some(command),
+            None => self.received.recv().await,
+        }
+    }
 }
 
 /// How the session opened, for an agent that started as `start`, and
@@ -487,9 +573,49 @@ async fn take_turn(
     prompt: impl IntoIterator<Item = String>,
     policy: &Policy,
     settings: &Mutex<Vec<cox_acp::Setting>>,
-    commands: &mut UnboundedReceiver<Command>,
+    commands: &mut Commands,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
+    let prompt: Vec<String> = prompt.into_iter().collect();
+    let mut failed = None;
+    loop {
+        match take_one_turn(session, prompt.clone(), policy, settings, commands, events).await? {
+            Some(Err(error)) if cox_acp::needs_login(&error) => {
+                // Once the human has logged in, the prompt goes again.
+                let methods = session.login_methods().to_vec();
+                match logged_in(&methods, failed.take(), commands, events).await {
+                    Ok(how) => {
+                        failed = session.log_in(how).await.err().map(|e| format!("{e:#}"));
+                    }
+                    Err(error) => {
+                        let _ = events.send(AgentEvent::TurnFailed(format!("{error:#}")));
+                        return Ok(());
+                    }
+                }
+            }
+            Some(Err(error)) => {
+                let _ = events.send(AgentEvent::TurnFailed(format!("{error:#}")));
+                return Ok(());
+            }
+            Some(Ok(reason)) => {
+                let _ = events.send(AgentEvent::TurnEnded(reason));
+                return Ok(());
+            }
+            None => return Ok(()),
+        }
+    }
+}
+
+/// Sends `prompt` and passes on what the agent sends until the turn ends,
+/// and answers how it ended, or `None` when the window is gone.
+async fn take_one_turn(
+    session: &mut Session,
+    prompt: Vec<String>,
+    policy: &Policy,
+    settings: &Mutex<Vec<cox_acp::Setting>>,
+    commands: &mut Commands,
+    events: &UnboundedSender<AgentEvent>,
+) -> anyhow::Result<Option<anyhow::Result<StopReason>>> {
     let send = |event| {
         let _ = events.send(event);
     };
@@ -514,7 +640,7 @@ async fn take_turn(
                     // cancel at most.
                     Some(_) => {}
                     // The window is gone, and the agent goes with it.
-                    None => return Ok(()),
+                    None => return Ok(None),
                 }
                 continue;
             }
@@ -571,8 +697,9 @@ async fn take_turn(
                             let set = async |id: &str, value: &str| turn.set(id, value).await;
                             set_setting(set, settings, &id, &value, events).await;
                         }
-                        // The window sends no prompt while a turn runs.
-                        Some(Command::Prompt(_)) => {}
+                        // The window sends no prompt while a turn runs, and
+                        // no login while the agent does not ask for one.
+                        Some(Command::Prompt(_) | Command::LogIn(_)) => {}
                         None => break PermissionAnswer::Cancel,
                     }
                 };
@@ -580,11 +707,7 @@ async fn take_turn(
             }
         }
     }
-    match turn.end().await {
-        Ok(reason) => send(AgentEvent::TurnEnded(reason)),
-        Err(error) => send(AgentEvent::TurnFailed(format!("{error:#}"))),
-    }
-    Ok(())
+    Ok(Some(turn.end().await))
 }
 
 /// What a tool call shows, made ready for the window here, on the agent
@@ -628,7 +751,11 @@ pub fn retold(entries: &[Entry], lost: bool) -> Option<String> {
     let said = entries.iter().any(|entry| {
         !matches!(
             entry,
-            Entry::Note(_) | Entry::Thought(_) | Entry::Plan(_) | Entry::Switched { .. }
+            Entry::Note(_)
+                | Entry::Thought(_)
+                | Entry::Plan(_)
+                | Entry::Switched { .. }
+                | Entry::Login { .. }
         )
     });
     if !said {
@@ -676,8 +803,8 @@ pub fn retold(entries: &[Entry], lost: bool) -> Option<String> {
                 "[the human switched the chat from the agent {from} to the agent {to}]"
             )),
             // What the agent thought and planned is its own, and what came
-            // of it is told already.
-            Entry::Thought(_) | Entry::Plan(_) | Entry::Note(_) => None,
+            // of it is told already; how the human logged in is theirs.
+            Entry::Thought(_) | Entry::Plan(_) | Entry::Note(_) | Entry::Login { .. } => None,
         })
         .collect();
     let mut told = told.join("\n\n");
