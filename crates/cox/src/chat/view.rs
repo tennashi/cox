@@ -895,6 +895,23 @@ impl ChatView {
         }
     }
 
+    /// Does `act` on the stage, which opens, when the chat has one.
+    pub fn on_stage(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        act: impl FnOnce(&mut Stage, &mut Window, &mut Context<Stage>),
+    ) {
+        let Some(stage) = &self.stage else {
+            return;
+        };
+        let Ok(entity) = stage.view.clone().downcast::<Stage>() else {
+            return;
+        };
+        stage.panel.update(cx, Panel::open);
+        entity.update(cx, |stage, cx| act(stage, window, cx));
+    }
+
     /// Opens `url`, a link the human clicked, on the stage, which opens.
     pub(super) fn show_link(&self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(stage) = &self.stage {

@@ -77,7 +77,7 @@ use std::path::PathBuf;
 use cox_core::list::List;
 use cox_core::store::Record;
 use cox_core::tabs::{KeptTab, KeptTabs};
-use gpui::{App, Context, Entity, Focusable, Subscription, Task, Window, div, prelude::*};
+use gpui::{App, Context, Entity, Focusable, Subscription, Task, Window, actions, div, prelude::*};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::ToolRequest;
@@ -94,6 +94,18 @@ use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
 use crate::ui::Panel;
 use crate::ui::input::LineInput;
+
+actions!(
+    stage,
+    [
+        /// Opens a blank page, with the keyboard in its address line.
+        NewPage,
+        /// Opens a terminal with the human's shell.
+        NewTerminal,
+        /// Asks for a file, and opens it on a tab.
+        OpenFile,
+    ]
+);
 
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";
@@ -285,7 +297,7 @@ impl Stage {
     }
 
     /// A terminal the human opens, with the keyboard in it.
-    fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let running = match Running::start(Program::Shell, &self.cwd) {
             Ok(running) => running,
             Err(error) => {
@@ -415,7 +427,7 @@ impl Stage {
 
     /// A tab the human opens: blank, with the keyboard in its address line,
     /// where what they type replaces the address.
-    fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_tab(BLANK, true, window, cx);
         if let Some(page) = self.tabs.shown().and_then(|tab| tab.content.page()) {
             let address = page.read(cx).address().clone();

@@ -54,6 +54,7 @@ use crate::chat::trial::{self, Trial};
 use crate::chat::view::{Asked, ChatView, Reopened, SwitchAgent};
 use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
+use crate::stage::{NewPage, NewTerminal, OpenFile, Stage};
 use crate::storage;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
@@ -107,6 +108,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-o", OpenFolder, Some("Workspace")),
         KeyBinding::new("ctrl-tab", NextChat, Some("Workspace")),
         KeyBinding::new("ctrl-shift-tab", PreviousChat, Some("Workspace")),
+        // What the menu of the stage's + opens, on the stage of the chat
+        // shown.
+        KeyBinding::new("secondary-t", NewPage, Some("Workspace")),
+        KeyBinding::new("ctrl-`", NewTerminal, Some("Workspace")),
+        KeyBinding::new("secondary-p", OpenFile, Some("Workspace")),
         KeyBinding::new("escape", CancelRename, Some(RENAMING)),
     ]);
 }
@@ -476,6 +482,18 @@ impl Workspace {
     #[must_use]
     pub fn shown(&self) -> Option<&Chat> {
         self.chats.shown()
+    }
+
+    /// Does `act` on the stage of the chat shown, which opens.
+    fn on_stage(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        act: impl FnOnce(&mut Stage, &mut Window, &mut Context<Stage>),
+    ) {
+        if let Some(view) = self.shown().and_then(|chat| chat.view.clone()) {
+            view.update(cx, |view, cx| view.on_stage(window, cx, act));
+        }
     }
 
     /// The chats in the order of the list, each with how many chats it is
@@ -1932,6 +1950,15 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|workspace, _: &PreviousChat, window, cx| {
                 workspace.step(-1, window, cx);
+            }))
+            .on_action(cx.listener(|workspace, _: &NewPage, window, cx| {
+                workspace.on_stage(window, cx, Stage::new_tab);
+            }))
+            .on_action(cx.listener(|workspace, _: &NewTerminal, window, cx| {
+                workspace.on_stage(window, cx, Stage::new_terminal);
+            }))
+            .on_action(cx.listener(|workspace, _: &OpenFile, window, cx| {
+                workspace.on_stage(window, cx, |_, window, cx| Stage::choose_file(window, cx));
             }))
             .size_full()
             .flex()

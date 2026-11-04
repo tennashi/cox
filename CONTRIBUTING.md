@@ -334,7 +334,9 @@ others; then the other tabs, each with an icon of what it shows: a
 page, a Markdown file, code, a terminal, the flow of a tool call. The +
 at the bar's end opens a menu of what the human opens there: "Web page",
 a new tab, "Terminal" (see below), and "File…", which asks for a file
-and opens it as a link to it does. A page that asks for a window of its
+and opens it as a link to it does. Their keys, Command-T, Control-` and
+Command-P (Control-T and Control-P off macOS), open them from anywhere
+in the window, on the stage of the chat shown, which opens. A page that asks for a window of its
 own, as a link with `target="_blank"` does, gets a tab instead. A link from the
 conversation gets a tab of its own, unless a tab shows it already. A link
 in a page to a file, as `file:///home/me/app/src/main.rs#L12`, opens the
@@ -569,8 +571,8 @@ exit code once it ends. A command gets the tab of the agent's last one
 that ended, or a new tab. When the agent stops waiting for it, as when
 the human stops the turn, the command gets Control-C. Copying and
 pasting in a terminal is Command-C and Command-V on macOS, and
-Control-Shift-C and Control-Shift-V elsewhere, where Control-N and
-Control-O go to the terminal too.
+Control-Shift-C and Control-Shift-V elsewhere, where Control-N,
+Control-O, Control-T and Control-P go to the terminal too.
 
 Cox hands each chat's agent its own tools as an MCP server, which is
 `cox` itself run as `cox --mcp <socket>`: the agent starts it, and it
