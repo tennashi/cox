@@ -61,6 +61,13 @@ base64 = "0.22.1"
 # The stage's terminals, which the human types into and the agent runs
 # commands in: see `src/stage/terminal.rs`.
 alacritty_terminal = "0.26.0"
+# Downloading the programs of the ACP Registry's agents, checking each
+# archive's SHA-256 and unpacking it: see `src/agents/download.rs`.
+sha2 = "0.10.9"
+flate2 = "1.1.10"
+tar = "0.4.46"
+bzip2 = "0.6.1"
+zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
 
 # The system's notifications, and the Dock's badge: see `src/notices/macos.rs`.
 [target.'cfg(target_os = "macos")'.dependencies]

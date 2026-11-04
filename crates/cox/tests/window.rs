@@ -107,7 +107,7 @@ fn open_agent(
         });
         ChatView::new(
             cox::agent::spawn(
-                move || Ok(fake.connect()),
+                move |_| Ok(fake.connect()),
                 std::env::temp_dir(),
                 mcp_servers,
                 cox::agent::Start::New {

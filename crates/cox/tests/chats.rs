@@ -76,6 +76,7 @@ fn fake_choices() -> Choices {
         name: SECOND_AGENT.to_owned(),
         command: vec!["fake-second".to_owned()],
         listed: false,
+        download: None,
     };
     Choices::new(vec![FIRST_AGENT.to_owned()], vec![second], Vec::new())
 }
@@ -132,7 +133,7 @@ impl Opens for FakeOpens {
             instructions,
             setup,
         };
-        let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
+        let mut agent = cox::agent::spawn(move |_| Ok(agent.connect()), cwd, Vec::new(), start);
         agent.tools = Some(fake_terminal());
         let (asks, chat_requests) = tokio::sync::mpsc::unbounded_channel();
         self.asks.borrow_mut().push(asks);
@@ -171,7 +172,7 @@ impl Opens for FakeOpens {
             let agent = Arc::new(FakeAgent::resuming(resumes));
             opened.borrow_mut().push(Arc::clone(&agent));
             let start = Start::again(&cwd, session, entries, setup);
-            let mut agent = cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start);
+            let mut agent = cox::agent::spawn(move |_| Ok(agent.connect()), cwd, Vec::new(), start);
             agent.tools = Some(fake_terminal());
             let (asks, chat_requests) = tokio::sync::mpsc::unbounded_channel();
             asked.borrow_mut().push(asks);
@@ -208,7 +209,7 @@ impl FakeOpens {
         Rc::new(move |cwd, start| {
             let agent = Arc::new(FakeAgent::default());
             agents.borrow_mut().push(Arc::clone(&agent));
-            cox::agent::spawn(move || Ok(agent.connect()), cwd, Vec::new(), start)
+            cox::agent::spawn(move |_| Ok(agent.connect()), cwd, Vec::new(), start)
         })
     }
 }

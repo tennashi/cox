@@ -69,7 +69,11 @@ impl ChatView {
             .map(|known| Choice {
                 id: known.id,
                 name: known.name,
-                description: None,
+                // An agent whose program Cox downloads says so, as it takes
+                // a while the first time.
+                description: known
+                    .download
+                    .map(|download| format!("Downloads {}", download.version)),
                 group: known.listed.then(|| REGISTRY_GROUP.to_owned()),
             })
             .collect();

@@ -104,6 +104,9 @@ pub enum AgentEvent {
         options: Vec<LoginOption>,
         failed: Option<String>,
     },
+    /// Cox tells the human what it does on the way to the agent, as when
+    /// it downloads the agent's program.
+    Note(String),
     /// The turn ended.
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
@@ -255,12 +258,14 @@ impl Drop for AgentThread {
 }
 
 /// Starts the agent side on a thread of its own. `connect` runs on its
-/// runtime and returns the transport to the agent, which works in `cwd`, an
+/// runtime, telling the human what it does on the way, as when it
+/// downloads the agent's program, with the function it is given, and
+/// returns the transport to the agent, which works in `cwd`, an
 /// absolute path, gets the tools of `mcp_servers`, and starts as `start`
 /// says. What the agent side says is said in the span `spawn` is called
 /// in, such as its chat's.
 pub fn spawn<T: Transport + 'static>(
-    connect: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+    connect: impl FnOnce(&dyn Fn(String)) -> anyhow::Result<T> + Send + 'static,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     start: Start,
@@ -318,7 +323,7 @@ pub fn spawn<T: Transport + 'static>(
 }
 
 async fn run<T: Transport + 'static>(
-    connect: impl FnOnce() -> anyhow::Result<T>,
+    connect: impl FnOnce(&dyn Fn(String)) -> anyhow::Result<T>,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     start: Start,
@@ -326,7 +331,9 @@ async fn run<T: Transport + 'static>(
     commands: UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
-    let transport = connect()?;
+    let transport = connect(&|note| {
+        let _ = events.send(AgentEvent::Note(note));
+    })?;
     // Heard by the human's logging in before the session opens, then by
     // the session.
     let commands = tokio::sync::Mutex::new(Commands::new(commands));
@@ -1009,7 +1016,7 @@ mod tests {
         // answers, so only stopping it ends it.
         let script = format!("sleep 60 & echo $! > {}; wait", file.display());
         let agent = spawn(
-            move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            move |_| cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
             std::env::temp_dir(),
             Vec::new(),
             Start::New {
@@ -1046,7 +1053,7 @@ mod tests {
             file.display()
         );
         let agent = spawn(
-            move || cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            move |_| cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
             std::env::temp_dir(),
             Vec::new(),
             Start::New {
