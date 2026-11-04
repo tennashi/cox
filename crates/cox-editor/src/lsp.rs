@@ -30,7 +30,7 @@ mod position;
 pub mod servers;
 mod wire;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Stdio};
@@ -42,8 +42,8 @@ use serde_json::{Value, json};
 use tokio::sync::{oneshot, watch};
 use url::Url;
 
-pub use self::answers::{Call, Callable, Hover, Location, Symbol};
-use self::answers::{callable, calls, hover, locations, symbols};
+pub use self::answers::{Call, Callable, Hover, Location, Symbol, Token};
+use self::answers::{callable, calls, hover, locations, symbols, tokens};
 pub use self::position::{Encoding, Position};
 pub use self::servers::{Server, Servers};
 use self::wire::{Reader, write};
@@ -70,6 +70,7 @@ pub enum Feature {
     References,
     Symbols,
     Calls,
+    Tokens,
 }
 
 impl Feature {
@@ -81,6 +82,17 @@ impl Feature {
             Self::References => "textDocument/references",
             Self::Symbols => "textDocument/documentSymbol",
             Self::Calls => "textDocument/prepareCallHierarchy",
+            Self::Tokens => "textDocument/semanticTokens/full",
+        }
+    }
+
+    /// The method a server registers the feature by.
+    fn registration(self) -> &'static str {
+        match self {
+            Self::Tokens => "textDocument/semanticTokens",
+            Self::Hover | Self::Definition | Self::References | Self::Symbols | Self::Calls => {
+                self.method()
+            }
         }
     }
 
@@ -92,6 +104,7 @@ impl Feature {
             Self::References => "referencesProvider",
             Self::Symbols => "documentSymbolProvider",
             Self::Calls => "callHierarchyProvider",
+            Self::Tokens => "semanticTokensProvider",
         }
     }
 
@@ -103,6 +116,7 @@ impl Feature {
             Self::References => "where a name is used",
             Self::Symbols => "the symbols of a file",
             Self::Calls => "what a function calls",
+            Self::Tokens => "what each name in a file is",
         }
     }
 }
@@ -162,8 +176,9 @@ struct Shared {
     /// The documents open, by their address.
     documents: Mutex<HashMap<Url, Opened>>,
     /// The requests the server registered that it answers since it
-    /// started, by their method.
-    registered: Mutex<HashSet<String>>,
+    /// started, by their method, with the options it registered them
+    /// with.
+    registered: Mutex<HashMap<String, Value>>,
 }
 
 /// What answers a request.
@@ -288,7 +303,7 @@ impl Client {
             next_id: AtomicI64::new(1),
             waiting: Mutex::new(Some(HashMap::new())),
             documents: Mutex::new(HashMap::new()),
-            registered: Mutex::new(HashSet::new()),
+            registered: Mutex::new(HashMap::new()),
         });
         let (status, status_heard) = watch::channel(Status::Ready);
         std::thread::spawn(move || write(input, &to_write));
@@ -325,6 +340,13 @@ impl Client {
                         "references": {},
                         "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
                         "callHierarchy": { "dynamicRegistration": false },
+                        "semanticTokens": {
+                            "dynamicRegistration": false,
+                            "requests": { "full": true },
+                            "tokenTypes": TOKEN_TYPES,
+                            "tokenModifiers": TOKEN_MODIFIERS,
+                            "formats": ["relative"],
+                        },
                     },
                 },
             }),
@@ -355,11 +377,18 @@ impl Client {
     /// or registered since.
     #[must_use]
     pub fn supports(&self, feature: Feature) -> bool {
-        let said = self
-            .capabilities
-            .get(feature.provider())
-            .is_some_and(|provider| !matches!(provider, Value::Null | Value::Bool(false)));
-        said || lock(&self.shared.registered).contains(feature.method())
+        self.options(feature).is_some()
+    }
+
+    /// The options the server said it answers `feature` with, when it
+    /// started or registered it since, if it answers it.
+    fn options(&self, feature: Feature) -> Option<Value> {
+        match self.capabilities.get(feature.provider()) {
+            None | Some(Value::Null | Value::Bool(false)) => lock(&self.shared.registered)
+                .get(feature.registration())
+                .cloned(),
+            Some(said) => Some(said.clone()),
+        }
     }
 
     /// Asks the server `params` of `feature`, if it answers it.
@@ -523,6 +552,71 @@ impl Client {
         }
     }
 }
+
+impl Client {
+    /// The names `document` has, each with what the server says it is,
+    /// as a function or a type, in the order they come (see [`Token`]).
+    ///
+    /// # Errors
+    ///
+    /// When the server fails to answer, or stops, or does not answer
+    /// that.
+    pub fn tokens(
+        &self,
+        document: &OpenFile,
+    ) -> impl Future<Output = Result<Vec<Token>, Error>> + use<> {
+        let legend = self
+            .options(Feature::Tokens)
+            .and_then(|options| options.get("legend").cloned())
+            .unwrap_or_default();
+        let answered = self.ask(
+            Feature::Tokens,
+            &json!({ "textDocument": { "uri": document.uri } }),
+        );
+        async move { Ok(tokens(&answered.await?, &legend)) }
+    }
+}
+
+/// The kinds of names the protocol lists, which the client says it knows.
+const TOKEN_TYPES: &[&str] = &[
+    "namespace",
+    "type",
+    "class",
+    "enum",
+    "interface",
+    "struct",
+    "typeParameter",
+    "parameter",
+    "variable",
+    "property",
+    "enumMember",
+    "event",
+    "function",
+    "method",
+    "macro",
+    "keyword",
+    "modifier",
+    "comment",
+    "string",
+    "number",
+    "regexp",
+    "operator",
+    "decorator",
+];
+
+/// What the protocol lists a name can be besides its kind.
+const TOKEN_MODIFIERS: &[&str] = &[
+    "declaration",
+    "definition",
+    "readonly",
+    "static",
+    "deprecated",
+    "abstract",
+    "async",
+    "modification",
+    "documentation",
+    "defaultLibrary",
+];
 
 impl Drop for Client {
     /// Asks the server to stop, which it does once it has read that, and
@@ -707,6 +801,11 @@ mod tests {
                     ) => {
                         write(answer(hierarchy(method)));
                     }
+                    // `main` declared at 0:3, `run` called at 0:12, and
+                    // `Store::new` at 2:4 and 2:11.
+                    Some("textDocument/semanticTokens/full") => write(answer(json!({
+                        "data": [0, 3, 4, 1, 1, 0, 9, 3, 1, 0, 2, 4, 5, 0, 0, 0, 7, 3, 2, 2],
+                    }))),
                     Some("textDocument/references") => write(json!({
                         "jsonrpc": "2.0",
                         "id": id,
@@ -730,6 +829,13 @@ mod tests {
             "referencesProvider": true,
             "documentSymbolProvider": true,
             "callHierarchyProvider": false,
+            "semanticTokensProvider": {
+                "legend": {
+                    "tokenTypes": ["variable", "function", "method"],
+                    "tokenModifiers": ["declaration", "static"],
+                },
+                "full": true,
+            },
         })
     }
 
@@ -869,6 +975,40 @@ mod tests {
             heard[6]["params"]["textDocument"]["uri"],
             "file:///src/main.rs"
         );
+    }
+
+    #[tokio::test]
+    async fn a_server_tells_what_each_name_is() {
+        let heard = Arc::default();
+        let (output, input, server) = serve(Arc::clone(&heard), "", answering());
+        let client = Client::over(output, input, Path::new("/src"), &Server::default())
+            .await
+            .unwrap();
+        let document = client.open(Path::new("/src/main.rs"), "rust", "").unwrap();
+        let tokens = client.tokens(&document).await.unwrap();
+        let told: Vec<_> = tokens
+            .iter()
+            .map(|token| {
+                (
+                    token.start.line,
+                    token.start.character,
+                    token.kind.as_str(),
+                    token.modifiers.join(" "),
+                )
+            })
+            .collect();
+        assert_eq!(
+            told,
+            [
+                (0, 3, "function", "declaration".to_owned()),
+                (0, 12, "function", String::new()),
+                (2, 4, "variable", String::new()),
+                (2, 11, "method", "static".to_owned()),
+            ]
+        );
+        drop(document);
+        drop(client);
+        server.join().unwrap();
     }
 
     #[tokio::test]

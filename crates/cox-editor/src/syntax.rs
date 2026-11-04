@@ -172,6 +172,44 @@ impl Syntax {
         spans
     }
 
+    /// The names called on `line` of `buffer`, as the bytes of the line
+    /// each is at, in order, as its language's tags query finds them,
+    /// through code within code, as calls within a Rust macro's arguments;
+    /// `None` when no language of the line has a tags query, which says
+    /// nothing either way.
+    #[must_use]
+    pub fn calls(&self, buffer: &Buffer, line: usize) -> Option<Vec<Range<usize>>> {
+        let start = buffer.line_start(line);
+        let range = start..start + buffer.line(line).len();
+        let mut found = None;
+        let mut cursor = QueryCursor::new();
+        for layer in self.layers.iter().filter(|layer| layer.covers(&range)) {
+            let Some(tags) = &layer.language.tags else {
+                continue;
+            };
+            let found: &mut Vec<Range<usize>> = found.get_or_insert_with(Vec::new);
+            cursor.set_byte_range(range.clone());
+            let mut matches = cursor.matches(&tags.query, layer.tree.root_node(), text(buffer));
+            while let Some(found_match) = matches.next() {
+                let captures = found_match.captures();
+                if !captures.iter().any(|capture| capture.index == tags.call) {
+                    continue;
+                }
+                for capture in captures.iter().filter(|capture| capture.index == tags.name) {
+                    let name = capture.node.byte_range();
+                    if range.start <= name.start && name.end <= range.end {
+                        found.push(name.start - start..name.end - start);
+                    }
+                }
+            }
+        }
+        if let Some(found) = &mut found {
+            found.sort_by_key(|name| (name.start, name.end));
+            found.dedup();
+        }
+        found
+    }
+
     /// The lines that open what `line` of `buffer` is within, outermost
     /// first: the first line of each node around the line of a kind its
     /// language's [`Language::scopes`] names, as a function's `fn` line
@@ -396,6 +434,45 @@ mod tests {
         let spans = syntax.highlights(&buffer, 0, 12);
         assert!(spans.iter().all(|(range, _)| range.end <= 12), "{spans:?}");
         assert_eq!(syntax.highlights(&buffer, 1, 12).first(), None);
+    }
+
+    #[test]
+    fn tells_the_names_called_on_a_line() {
+        let calls = |language: &str, text: &str, line: usize| {
+            let buffer = Buffer::new(text);
+            let syntax = Syntax::parse(Language::named(language).unwrap(), &buffer, None).unwrap();
+            let line_text = buffer.line(line).into_owned();
+            syntax.calls(&buffer, line).map(|calls| {
+                calls
+                    .into_iter()
+                    .map(|name| line_text[name].to_owned())
+                    .collect::<Vec<_>>()
+            })
+        };
+        let rust =
+            "fn main() {\n    let x = run::<u8>(Store::new(), s.total());\n    vec![go(1)];\n}\n";
+        assert_eq!(
+            calls("rust", rust, 1),
+            Some(vec!["run".into(), "new".into(), "total".into()])
+        );
+        // Within a macro's arguments too; the definition is no call.
+        assert_eq!(
+            calls("rust", rust, 2),
+            Some(vec!["vec".into(), "go".into()])
+        );
+        assert_eq!(calls("rust", rust, 0), Some(Vec::new()));
+        let python = "def main():\n    print(cart.total())\n";
+        assert_eq!(
+            calls("python", python, 1),
+            Some(vec!["print".into(), "total".into()])
+        );
+        let typescript = "function main() {\n  return store.add(make(1));\n}\n";
+        assert_eq!(
+            calls("typescript", typescript, 1),
+            Some(vec!["add".into(), "make".into()])
+        );
+        // A language with no tags query says nothing.
+        assert_eq!(calls("toml", "a = 1\n", 0), None);
     }
 
     #[test]

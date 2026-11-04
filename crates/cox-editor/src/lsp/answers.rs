@@ -235,6 +235,67 @@ pub(super) fn calls(value: &Value) -> Vec<Call> {
         .collect()
 }
 
+/// A name in a file, as the server tells what each is: where it starts,
+/// as the server counts a line, how long it is, so counted, its kind, as
+/// `function` or `method`, and what else it is, as `declaration`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Token {
+    pub start: Position,
+    pub length: u32,
+    pub kind: String,
+    pub modifiers: Vec<String>,
+}
+
+/// The tokens `value`, the semantic tokens of a file, says, as the
+/// server's `legend` names their kinds and modifiers: five numbers each,
+/// the line and the start counted from the token before, its length, its
+/// kind, and its modifiers as bits.
+pub(super) fn tokens(value: &Value, legend: &Value) -> Vec<Token> {
+    let names = |key: &str| -> Vec<&str> {
+        legend
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|names| names.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
+    };
+    let (kinds, modifiers) = (names("tokenTypes"), names("tokenModifiers"));
+    let data: Vec<u32> = value
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|data| {
+            data.iter()
+                .filter_map(|number| u32::try_from(number.as_u64()?).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut found = Vec::new();
+    let (mut line, mut character) = (0, 0);
+    for &[line_delta, start, length, kind, bits] in data.as_chunks::<5>().0 {
+        if line_delta > 0 {
+            line += line_delta;
+            character = start;
+        } else {
+            character += start;
+        }
+        found.push(Token {
+            start: Position { line, character },
+            length,
+            kind: kinds
+                .get(kind as usize)
+                .copied()
+                .unwrap_or_default()
+                .to_owned(),
+            modifiers: modifiers
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| bits >> index & 1 == 1)
+                .map(|(_, name)| (*name).to_owned())
+                .collect(),
+        });
+    }
+    found
+}
+
 /// The name of the kind of symbol the protocol numbers `kind`.
 fn kind_name(kind: u64) -> String {
     let name = match kind {

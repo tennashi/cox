@@ -373,7 +373,10 @@ as deep as the map goes for it, is named by the function it runs, which
 Cox asks the project's language server for, at the place the step is
 made, its `at`: the function the line is in, and what it calls on that
 line, as the server's call hierarchy has them, or, for a server with
-none, as it says each name called on the line is defined, of which the diagram
+none, as it says each name called on the line is defined, the names
+called being those the grammar's tags mark as calls, for a language
+Cox draws, or else those the server's semantic tokens mark as
+functions, methods or macros, of which the diagram
 names the one in the box the step goes to, or else the last of the
 project's own called on the line; the name opens the function on a tab,
 and the line under the flows names them all. A line that calls nothing,

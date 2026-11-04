@@ -17,7 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime};
 
-use cox_editor::lsp::{Call, Encoding, Error, OpenFile, Position, Symbol};
+use cox_editor::buffer::{Buffer, Point};
+use cox_editor::language::Language;
+use cox_editor::lsp::{Call, Client, Error, OpenFile, Position, Symbol};
+use cox_editor::syntax::Syntax;
 use gpui::{AsyncApp, Context, Entity, Task};
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -314,8 +317,8 @@ async fn learn(at: &At, cwd: &Path, calls: &Calls, cx: &mut AsyncApp) -> Told {
     let line0 = u32::try_from(line.saturating_sub(1)).unwrap_or(0);
     let mut called = called_on(&answered, line0, cwd, &|range| range.start.line == line0);
     if called.is_empty() {
-        let line_text = text.lines().nth(line0 as usize).unwrap_or_default();
-        called = defined_on(&server, &document, line_text, line0, cwd, cx).await;
+        let names = names_called(path, &text, line0, &server, &document, cx).await;
+        called = defined_on(&server, &document, names, cwd, cx).await;
     }
     drop(document);
     if called.is_empty() {
@@ -368,33 +371,94 @@ fn called_on(
         .collect()
 }
 
-/// The names called on `line_text`, line `line0`, from 0, of `document`
-/// on `server`, each as the server says it is defined, as the page names
-/// them, told from `cwd`, with where on the line it is called; those the
-/// server finds no definition of are left out.
+/// A name called on a line: where on the line it is, in bytes, the name,
+/// and where it is as the server counts the line.
+type Called = (usize, String, Position);
+
+/// The names called on line `line0`, from 0, of `text`, the file at
+/// `path`, open as `document` on `server`, in order: as the syntax of the
+/// file's language says, through its tags query (see
+/// [`Syntax::calls`]), or, for a file in a language with none, as the
+/// server says what each name on the line is, the functions and methods
+/// there not being defined there.
+async fn names_called(
+    path: &Path,
+    text: &str,
+    line0: u32,
+    server: &Entity<LanguageServer>,
+    document: &OpenFile,
+    cx: &mut AsyncApp,
+) -> Vec<Called> {
+    let buffer = Buffer::new(text);
+    let line = line0 as usize;
+    let line_text = buffer.line(line).into_owned();
+    let encoding = server
+        .read_with(cx, |server, _| server.client().map(Client::encoding))
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let syntax =
+        Language::of_path(path).and_then(|language| Syntax::parse(language, &buffer, None));
+    if let Some(calls) = syntax.and_then(|syntax| syntax.calls(&buffer, line)) {
+        return calls
+            .into_iter()
+            .map(|name| {
+                let at = encoding.position(&buffer, Point::new(line, name.start));
+                (name.start, line_text[name].to_owned(), at)
+            })
+            .collect();
+    }
+    let asked = server.read_with(cx, |server, _| {
+        server.client().map(|client| client.tokens(document))
+    });
+    let Ok(Some(asked)) = asked else {
+        return Vec::new();
+    };
+    let Ok(tokens) = asked.await else {
+        return Vec::new();
+    };
+    tokens
+        .into_iter()
+        .filter(|token| {
+            token.start.line == line0
+                && matches!(token.kind.as_str(), "function" | "method" | "macro")
+                && !token
+                    .modifiers
+                    .iter()
+                    .any(|modifier| modifier == "declaration" || modifier == "definition")
+        })
+        .filter_map(|token| {
+            let start = encoding.point(&buffer, token.start);
+            let end = encoding.point(
+                &buffer,
+                Position {
+                    character: token.start.character + token.length,
+                    ..token.start
+                },
+            );
+            let name = line_text.get(start.column..end.column)?.to_owned();
+            Some((start.column, name, token.start))
+        })
+        .collect()
+}
+
+/// The names `names` called on a line of `document` on `server`, each as
+/// the server says it is defined, as the page names them, told from
+/// `cwd`, with where on the line it is called; those the server finds no
+/// definition of are left out.
 async fn defined_on(
     server: &Entity<LanguageServer>,
     document: &OpenFile,
-    line_text: &str,
-    line0: u32,
+    names: Vec<Called>,
     cwd: &Path,
     cx: &mut AsyncApp,
 ) -> Vec<Named> {
     let mut called = Vec::new();
-    for (column, called_name) in names_called(line_text) {
+    for (column, called_name, at) in names {
         let asked = server.read_with(cx, |server, _| {
-            server.client().map(|client| {
-                let character = match client.encoding() {
-                    Encoding::Utf8 => column,
-                    Encoding::Utf16 => line_text[..column].encode_utf16().count(),
-                    Encoding::Utf32 => line_text[..column].chars().count(),
-                };
-                let at = Position {
-                    line: line0,
-                    character: u32::try_from(character).unwrap_or(0),
-                };
-                client.definition(document, at)
-            })
+            server
+                .client()
+                .map(|client| client.definition(document, at))
         });
         let Ok(Some(asked)) = asked else {
             break;
@@ -435,48 +499,6 @@ fn function_at(symbols: &[Symbol], line: u32) -> Option<&Symbol> {
         }
     }
     found
-}
-
-/// The names called on `line`, a line of code, with where each starts,
-/// in bytes: a name followed by `(`, with a turbofish between or not,
-/// that is not a keyword.
-fn names_called(line: &str) -> Vec<(usize, String)> {
-    const KEYWORDS: &[&str] = &[
-        "if", "match", "while", "for", "in", "as", "return", "loop", "fn", "let", "else", "move",
-        "unsafe", "where", "impl", "dyn", "ref", "mut", "pub", "use", "mod", "true", "false",
-        "await",
-    ];
-    let bytes = line.as_bytes();
-    let is_name = |byte: u8| byte == b'_' || byte.is_ascii_alphanumeric();
-    let mut names = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if !is_name(bytes[i]) || (i > 0 && is_name(bytes[i - 1])) {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < bytes.len() && is_name(bytes[i]) {
-            i += 1;
-        }
-        let name = &line[start..i];
-        let mut after = i;
-        while after < bytes.len() && bytes[after] == b' ' {
-            after += 1;
-        }
-        if line[after..].starts_with("::<")
-            && let Some(close) = line[after..].find('>')
-        {
-            after += close + 1;
-        }
-        if bytes.get(after) == Some(&b'(')
-            && !bytes[start].is_ascii_digit()
-            && !KEYWORDS.contains(&name)
-        {
-            names.push((start, name.to_owned()));
-        }
-    }
-    names
 }
 
 /// A function as the page names it: its name `at`, as the server counts
@@ -579,29 +601,6 @@ mod tests {
         assert_eq!(json["exists"], false);
         assert_eq!(json["pending"], false);
         assert!(asked.try_recv().is_err());
-    }
-
-    #[test]
-    fn the_names_called_on_a_line_are_found() {
-        let called = |line: &str| names_called(line);
-        assert_eq!(
-            called("    ask(requests, ToolRequest::ShowFile { path, text, lines })?;"),
-            [(4, "ask".to_owned())]
-        );
-        assert_eq!(
-            called("stage.show_file::<Code>(path, &text, lines, window, cx);"),
-            [(6, "show_file".to_owned())]
-        );
-        assert_eq!(
-            called("if let Some(x) = run (a) { return f(x) }"),
-            [
-                (7, "Some".to_owned()),
-                (17, "run".to_owned()),
-                (34, "f".to_owned())
-            ]
-        );
-        assert_eq!(called("let n = 2(3);"), []);
-        assert_eq!(called("x.await;"), []);
     }
 
     #[test]
