@@ -10,17 +10,21 @@ use std::time::Duration;
 
 use cox_editor::changes;
 use gpui::{
-    App, Context, Div, FontWeight, PathPromptOptions, SharedString, Stateful, Task, Window,
-    deferred, div, prelude::*, px, rgb,
+    App, Context, Div, Entity, Focusable, FontWeight, PathPromptOptions, SharedString, Stateful,
+    Subscription, Task, Window, actions, deferred, div, prelude::*, px, rgb,
 };
 
 use super::code::Code;
 use super::plugins::Plugin;
 use super::tab::{Tab, TabContent};
+use super::terminal::Program;
+use super::typed::{Typed, typed};
 use super::{Stage, TAB_WIDTH, TITLE_LENGTH};
 use crate::ui::icons::{Icon, icon};
+use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{
     ACCENT, BORDER, BORDER_STRONG, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED,
+    SURFACE,
 };
 
 /// How tall a view's button is, and a tab, and how round each is.
@@ -47,6 +51,24 @@ const OPEN_FILE_KEY: &str = "Ctrl+P";
 /// How often the bar counts the files that changed, as the tab of what
 /// changed looks again.
 const COUNT_EVERY: Duration = Duration::from_secs(2);
+
+actions!(
+    stage,
+    [
+        /// Closes the menu of the stage's +.
+        CloseMenu,
+    ]
+);
+
+/// The key context of the menu of the stage's +.
+pub(super) const MENU_CONTEXT: &str = "StageMenu";
+
+/// The menu of the stage's +, while it is open: the line at its top,
+/// where the human types a URL, a file or a command.
+pub(super) struct Menu {
+    input: Entity<LineInput>,
+    _typed: Subscription,
+}
 
 /// A view of the project that the bar keeps in sight, apart from the tabs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,17 +162,18 @@ impl Stage {
                     .rounded(px(TAB_RADIUS))
                     .text_color(rgb(FOREGROUND))
                     .cursor_pointer()
-                    .when(self.menu_open, |button| button.bg(rgb(SELECTED)))
+                    .when(self.menu.is_some(), |button| button.bg(rgb(SELECTED)))
                     .hover(|style| style.bg(rgb(HOVER)))
                     .child(icon(Icon::Plus, 15., FOREGROUND))
                     // The menu closes as the mouse goes down outside it,
                     // here too, so the button opens it as it comes up.
-                    .on_click(cx.listener(|stage, _, _, cx| {
-                        stage.menu_open = true;
-                        cx.notify();
-                    })),
+                    .on_click(cx.listener(|stage, _, window, cx| stage.open_menu(window, cx))),
             )
-            .children(self.menu_open.then(|| Self::render_menu(cx)))
+            .children(
+                self.menu
+                    .as_ref()
+                    .map(|menu| Self::render_menu(&menu.input, cx)),
+            )
     }
 
     /// The buttons of the views of the project, side by side in one
@@ -300,9 +323,93 @@ impl Stage {
             })
     }
 
-    /// The menu of what the human opens on the stage: a page, a terminal,
-    /// or a file.
-    fn render_menu(cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// Opens the menu of the stage's +, with the keyboard in the line at
+    /// its top.
+    fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(LineInput::new);
+        let typed = cx.subscribe_in(&input, window, |stage, input, Submitted, window, cx| {
+            let line = input.read(cx).text().to_owned();
+            stage.close_menu(cx);
+            stage.open_typed(&line, window, cx);
+        });
+        window.focus(&input.focus_handle(cx));
+        self.menu = Some(Menu {
+            input,
+            _typed: typed,
+        });
+        cx.notify();
+    }
+
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        self.menu = None;
+        cx.notify();
+    }
+
+    /// Opens what the human typed in the menu: a file, a page, or a
+    /// command in a terminal (see [`typed`]).
+    fn open_typed(&mut self, line: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match typed(line, &self.cwd) {
+            Some(Typed::Page(url)) => {
+                self.open_tab(&url, true, window, cx);
+                self.focus_shown(window, cx);
+            }
+            Some(Typed::File(path)) => {
+                // A file that cannot be read gets a tab all the same,
+                // which says why.
+                if self.open_path(&path, None, window, cx).is_err() {
+                    self.show_file::<Code>(path, "", None, window, cx);
+                    self.focus_shown(window, cx);
+                }
+            }
+            Some(Typed::Command(command)) => {
+                self.start_terminal(Program::Command(command), window, cx);
+            }
+            None => {}
+        }
+    }
+
+    /// The line at the top of the menu, where the human types a URL, a
+    /// file or a command, which says so while it is empty.
+    fn render_menu_line(input: &Entity<LineInput>, cx: &App) -> impl IntoElement + use<> {
+        let empty = input.read(cx).text().is_empty();
+        div().px(px(4.)).pt(px(4.)).pb(px(6.)).child(
+            div()
+                .debug_selector(|| "stage-menu-line".to_owned())
+                .h(px(32.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .rounded(px(VIEW_RADIUS))
+                .bg(rgb(SURFACE))
+                .border_1()
+                .border_color(rgb(ACCENT))
+                .text_size(px(13.))
+                .child(icon(Icon::Search, 13., FAINT))
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .child(input.clone())
+                        .when(empty, |line| {
+                            line.child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .text_color(rgb(FAINT))
+                                    .child("URL, file or command"),
+                            )
+                        }),
+                ),
+        )
+    }
+
+    /// The menu of what the human opens on the stage: the line where they
+    /// type a URL, a file or a command, then a page, a terminal, or a file.
+    fn render_menu(input: &Entity<LineInput>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let line = Self::render_menu_line(input, cx);
         let item = |id: &'static str, label: &'static str, glyph: Icon, key: &'static str| {
             div()
                 .id(id)
@@ -320,18 +427,16 @@ impl Stage {
                 .child(div().flex_1().child(label))
                 .child(div().text_size(px(12.)).text_color(rgb(FAINT)).child(key))
         };
-        let close = |stage: &mut Self, cx: &mut Context<Self>| {
-            stage.menu_open = false;
-            cx.notify();
-        };
+        let close = |stage: &mut Self, cx: &mut Context<Self>| stage.close_menu(cx);
         deferred(
             div()
                 .id("stage-menu-items")
+                .key_context(MENU_CONTEXT)
                 .occlude()
                 .absolute()
                 .top(px(48.))
                 .right(px(10.))
-                .w(px(220.))
+                .w(px(260.))
                 .p(px(6.))
                 .flex()
                 .flex_col()
@@ -342,6 +447,11 @@ impl Stage {
                 .shadow_lg()
                 .text_color(rgb(FOREGROUND))
                 .on_mouse_down_out(cx.listener(move |stage, _, _, cx| close(stage, cx)))
+                .on_action(cx.listener(move |stage, _: &CloseMenu, window, cx| {
+                    close(stage, cx);
+                    stage.focus_shown(window, cx);
+                }))
+                .child(line)
                 .child(
                     item("new-tab", "Web page", Icon::Globe, NEW_PAGE_KEY).on_click(cx.listener(
                         move |stage, _, window, cx| {

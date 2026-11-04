@@ -71,6 +71,7 @@ pub mod servers;
 pub mod tab;
 pub mod terminal;
 pub mod tree;
+mod typed;
 
 use std::path::PathBuf;
 
@@ -107,6 +108,15 @@ actions!(
     ]
 );
 
+/// Binds the keys of the menu of the stage's +: Escape closes it.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([gpui::KeyBinding::new(
+        "escape",
+        bar::CloseMenu,
+        Some(bar::MENU_CONTEXT),
+    )]);
+}
+
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";
 
@@ -137,8 +147,8 @@ pub struct Stage {
     /// The plugins the stage shows as pages, and what they read of the
     /// chat.
     plugins: Plugins,
-    /// Whether the menu that opens a page, a terminal or a file is open.
-    menu_open: bool,
+    /// The menu that opens a page, a terminal or a file, while it is open.
+    menu: Option<bar::Menu>,
     /// How many files changed in the project, as the bar last counted
     /// them while the stage was open; none until then, or out of Git.
     changed: Option<usize>,
@@ -172,7 +182,7 @@ impl Stage {
         Self {
             cef,
             plugins: Plugins::new(cwd.clone(), outlines, calls),
-            menu_open: false,
+            menu: None,
             changed: None,
             _counting: bar::count_changes(cx),
             cwd,
@@ -298,7 +308,13 @@ impl Stage {
 
     /// A terminal the human opens, with the keyboard in it.
     pub fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let running = match Running::start(Program::Shell, &self.cwd) {
+        self.start_terminal(Program::Shell, window, cx);
+    }
+
+    /// A terminal running `program`, which the human started, with the
+    /// keyboard in it.
+    fn start_terminal(&mut self, program: Program, window: &mut Window, cx: &mut Context<Self>) {
+        let running = match Running::start(program, &self.cwd) {
             Ok(running) => running,
             Err(error) => {
                 tracing::error!("cannot start a terminal: {error}");
