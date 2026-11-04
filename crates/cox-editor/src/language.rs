@@ -7,8 +7,6 @@ use std::sync::LazyLock;
 
 use tree_sitter::Query;
 
-use crate::lsp::Server;
-
 /// What a stretch of code is, which says how it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Highlight {
@@ -212,17 +210,6 @@ impl Language {
         self.name
     }
 
-    /// The language's name, as the Language Server Protocol names it.
-    #[must_use]
-    pub fn protocol_name(&self) -> &'static str {
-        match self.name {
-            "bash" => "shellscript",
-            "tsx" => "typescriptreact",
-            "markdown_inline" => "markdown",
-            name => name,
-        }
-    }
-
     /// The kinds of the language's syntax nodes that a line of code is
     /// said to be within, and whose first line says what: a function, an
     /// impl or a module in Rust, a class in Python, a table in TOML, a
@@ -259,15 +246,6 @@ impl Language {
             "yaml" => &["block_mapping_pair"],
             "json" => &["pair"],
             _ => &[],
-        }
-    }
-
-    /// The server that knows the language's code, if the editor knows one.
-    #[must_use]
-    pub fn server(&self) -> Option<&'static Server> {
-        match self.name {
-            "rust" => Some(&RUST_ANALYZER),
-            _ => None,
         }
     }
 
@@ -317,18 +295,6 @@ impl Language {
         Some(language)
     }
 }
-
-/// Rust's server, which builds what it needs of the project, such as its
-/// procedural macros, in a directory of its own, `target/rust-analyzer`,
-/// so that it does not hold up the builds of the project while it does.
-/// It does not check the project with `cargo check`, which only finds
-/// errors, which the editor does not show yet.
-static RUST_ANALYZER: Server = Server {
-    program: "rust-analyzer",
-    args: &[],
-    markers: &["Cargo.toml"],
-    settings: r#"{ "cargo": { "targetDir": true }, "checkOnSave": false }"#,
-};
 
 static RUST: LazyLock<Language> = LazyLock::new(|| {
     Language::new(
@@ -477,21 +443,6 @@ mod tests {
         assert_eq!(of("ci.yml"), Some("yaml"));
         assert_eq!(of("LICENSE"), None);
         assert_eq!(of("notes.txt"), None);
-    }
-
-    #[test]
-    fn knows_rusts_server() {
-        let rust = Language::named("rust").unwrap();
-        assert_eq!(
-            rust.server().map(|server| server.program),
-            Some("rust-analyzer")
-        );
-        assert_eq!(rust.protocol_name(), "rust");
-        assert_eq!(
-            Language::named("bash").unwrap().protocol_name(),
-            "shellscript"
-        );
-        assert_eq!(Language::named("toml").unwrap().server(), None);
     }
 
     #[test]

@@ -19,8 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
-use cox_editor::language::Language;
-use cox_editor::lsp::{Location, OpenFile, Symbol};
+use cox_editor::lsp::{Error, Location, OpenFile, Symbol, languages};
 use gpui::{AsyncApp, Context, Entity, Task};
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -145,7 +144,7 @@ impl Outlines {
             .ok();
         let text = std::fs::read_to_string(&path).ok();
         let lines = text.as_ref().map(|text| text.lines().count());
-        let language = Language::of_path(&path).map(Language::name);
+        let language = languages::id_of(&path);
 
         let mut known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
@@ -273,9 +272,6 @@ pub fn answer(
 /// rest, and how many places use each, once the server has read the
 /// project; `outlines` hears what the server is doing meanwhile.
 async fn learn(path: &Path, cwd: &Path, outlines: &Outlines, cx: &mut AsyncApp) -> Told {
-    let Some(language) = Language::of_path(path) else {
-        return Told::default();
-    };
     let saying = |said: Option<String>| outlines.saying(path, said);
     let (server, name) = match running(path, cwd, &saying, cx).await {
         Ok(Some(server)) => server,
@@ -298,7 +294,7 @@ async fn learn(path: &Path, cwd: &Path, outlines: &Outlines, cx: &mut AsyncApp) 
     };
     let opened = server.read_with(cx, |server, _| {
         let client = server.client()?;
-        client.open(path, language.protocol_name(), &text)
+        client.open(path, server.language_of(path)?, &text)
     });
     let Ok(Some(document)) = opened else {
         return failed(format!("{name} stopped"));
@@ -411,6 +407,7 @@ pub(super) async fn symbols_of(
         match asked.await {
             Ok(symbols) if !symbols.is_empty() || busy.is_none() => return Ok(symbols),
             Ok(_) => {}
+            Err(error @ Error::Unsupported(_)) => return Err(error.to_string()),
             Err(error) if busy.is_some() => tracing::debug!("{name} said: {error}"),
             Err(error) => return Err(error.to_string()),
         }

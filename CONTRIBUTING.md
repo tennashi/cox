@@ -264,11 +264,27 @@ TypeScript and Python, with the code within the code too, as a Markdown
 code block's or a Rust macro's. It parses the file in the background,
 again only where it changed, keeping the colors it had until then.
 
-A tab of Rust code asks `rust-analyzer` what the code means, which has to
-be on `PATH` (`rustup component add rust-analyzer`). Each project gets
-one, started when a tab, or the map, first needs it and shared by the
-tabs of all its chats, until Cox quits; it builds what it needs in `target/rust-analyzer`,
-so that it does not hold up the project's builds. The mouse resting on a
+A tab of code asks the language server of its language what the code
+means, through the Language Server Protocol, for any language a server
+knows, whether Cox draws its colors or not, as Go. Cox knows a server for
+some languages, which has to be on `PATH`: `rust-analyzer` for Rust
+(`rustup component add rust-analyzer`), `pyright-langserver` for Python,
+`typescript-language-server` for TypeScript and JavaScript, `gopls` for
+Go, and `clangd` for C and C++. A project names servers of its own in
+`.cox/servers.json`, ahead of Cox's, as Cox's own
+[`servers.json`](crates/cox-editor/src/lsp/servers.json) names them:
+each by its name, with its `command`, the `languages` it knows, as the
+protocol names them (`rust`, `python`, `typescriptreact`, ...), the
+`markers`, files a folder that is a project of them has, its
+`initializationOptions`, and its `settings`, by section, as the server
+asks for them. A server of Cox's the project names takes what the
+project gives of it in place of Cox's, as `"rust-analyzer": { "settings":
+... }`, and named as `null`, it is not started. Each project gets one
+server of a language, started when a tab, or the map, first needs it and
+shared by the tabs of all its chats, until Cox quits; Cox's
+`rust-analyzer` builds what it needs in `target/rust-analyzer`, so that
+it does not hold up the project's builds. Cox asks a server only what it
+says it answers, and says so of the rest. The mouse resting on a
 name shows what the server says of it, its type and documentation. A
 click on a name with Command held, Control off macOS, goes to where it
 is defined, as "Go to definition" in the menu of the right button does;
@@ -313,7 +329,7 @@ it holds. A click on a box opens the tier inside it, or, for a box that
 holds paths, the box on its own, with its files, each of which a click
 opens as a link to it does, and under each file what the project's
 language server says of it, once it has read the project: the symbols
-the file defines, as `rust-analyzer` lists them for Rust, each opening
+the file defines, as the server lists them, each opening
 the file at its line, how many places use each, and which files use
 them; until the server has answered, the file says what the server is
 doing. The path above the boxes leads back up, and over the boxes a
@@ -356,7 +372,8 @@ what it is in words, and drawn between the boxes it is written between,
 as deep as the map goes for it, is named by the function it runs, which
 Cox asks the project's language server for, at the place the step is
 made, its `at`: the function the line is in, and what it calls on that
-line, as `rust-analyzer`'s call hierarchy has them, of which the diagram
+line, as the server's call hierarchy has them, or, for a server with
+none, as it says each name called on the line is defined, of which the diagram
 names the one in the box the step goes to, or else the last of the
 project's own called on the line; the name opens the function on a tab,
 and the line under the flows names them all. A line that calls nothing,

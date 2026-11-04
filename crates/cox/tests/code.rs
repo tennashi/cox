@@ -320,6 +320,37 @@ fn shares_a_projects_server_between_its_files(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_project_says_which_server_knows_a_language(cx: &mut TestAppContext) {
+    let directory = scratch("languages");
+    let servers = Servers::new(fake_lsp::start(Arc::default()));
+    let name = |path: &str, cx: &mut gpui::App| {
+        servers
+            .of(&directory, &directory.join(path), cx)
+            .map(|server| server.read(cx).name().to_owned())
+    };
+    cx.update(|cx| {
+        // A language Cox draws no colors of has its server all the same.
+        assert_eq!(name("main.go", cx).as_deref(), Some("gopls"));
+        assert_eq!(name("app.py", cx).as_deref(), Some("pyright"));
+    });
+    std::fs::create_dir_all(directory.join(".cox")).unwrap();
+    std::fs::write(
+        directory.join(".cox/servers.json"),
+        r#"{ "servers": {
+            "pylsp": { "command": ["pylsp"], "languages": ["python"] },
+            "gopls": null
+        } }"#,
+    )
+    .unwrap();
+    cx.update(|cx| {
+        assert_eq!(name("main.go", cx), None);
+        assert_eq!(name("app.py", cx).as_deref(), Some("pylsp"));
+        assert_eq!(name("main.rs", cx).as_deref(), Some("rust-analyzer"));
+    });
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[gpui::test]
 fn shows_what_the_server_says_of_the_name_the_mouse_rests_on(cx: &mut TestAppContext) {
     let directory = scratch("hover");
     let servers = Servers::new(fake_lsp::start(Arc::default()));

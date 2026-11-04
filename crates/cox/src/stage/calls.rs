@@ -17,8 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime};
 
-use cox_editor::language::Language;
-use cox_editor::lsp::{Call, Encoding, OpenFile, Position, Symbol};
+use cox_editor::lsp::{Call, Encoding, Error, OpenFile, Position, Symbol};
 use gpui::{AsyncApp, Context, Entity, Task};
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -236,9 +235,6 @@ pub fn answer(
 /// what the server is doing meanwhile.
 async fn learn(at: &At, cwd: &Path, calls: &Calls, cx: &mut AsyncApp) -> Told {
     let (path, line) = at;
-    let Some(language) = Language::of_path(path) else {
-        return Told::default();
-    };
     let saying = |said: Option<String>| calls.saying(at, said);
     let (server, name) = match running(path, cwd, &saying, cx).await {
         Ok(Some(server)) => server,
@@ -261,7 +257,7 @@ async fn learn(at: &At, cwd: &Path, calls: &Calls, cx: &mut AsyncApp) -> Told {
     };
     let opened = server.read_with(cx, |server, _| {
         let client = server.client()?;
-        client.open(path, language.protocol_name(), &text)
+        client.open(path, server.language_of(path)?, &text)
     });
     let Ok(Some(document)) = opened else {
         return failed(format!("{name} stopped"));
@@ -302,9 +298,11 @@ async fn learn(at: &At, cwd: &Path, calls: &Calls, cx: &mut AsyncApp) -> Told {
     let Ok(Some(asked)) = asked else {
         return failed(format!("{name} stopped"));
     };
+    // A server with no call hierarchy is asked what each name called
+    // on the line is, below.
     let answered = match asked.await {
         Ok(Some((_, calls))) => calls,
-        Ok(None) => Vec::new(),
+        Ok(None) | Err(Error::Unsupported(_)) => Vec::new(),
         Err(error) => return failed(error.to_string()),
     };
     // The calls made on the line: those that start on it first; then,

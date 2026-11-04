@@ -29,13 +29,13 @@ pub fn write_project(directory: &Path) {
 
 /// What starts the server, counting in `started` how many it started.
 pub fn start(started: Arc<AtomicUsize>) -> Starter {
-    Rc::new(move |_, root| {
+    Rc::new(move |server, root| {
         started.fetch_add(1, Ordering::Relaxed);
         let (output, writes) = std::io::pipe().unwrap();
         let (reads, input) = std::io::pipe().unwrap();
         let project = root.clone();
         std::thread::spawn(move || serve(&project, reads, writes));
-        Box::pin(async move { Client::over(output, input, &root, Value::Null).await })
+        Box::pin(async move { Client::over(output, input, &root, &server).await })
     })
 }
 
@@ -52,7 +52,12 @@ fn serve(root: &Path, reads: impl Read, mut writes: impl Write) {
     let mut reads = BufReader::new(reads);
     while let Some(message) = read(&mut reads) {
         let result = match message.get("method").and_then(Value::as_str) {
-            Some("initialize") => json!({ "capabilities": { "positionEncoding": "utf-8" } }),
+            Some("initialize") => json!({ "capabilities": {
+                "positionEncoding": "utf-8",
+                "hoverProvider": true,
+                "definitionProvider": true,
+                "referencesProvider": true,
+            } }),
             Some("textDocument/hover") => {
                 json!({ "contents": { "kind": "markdown", "value": HOVER } })
             }

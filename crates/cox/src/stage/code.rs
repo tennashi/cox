@@ -350,16 +350,10 @@ impl Code {
         let Some(client) = server.client() else {
             return;
         };
-        let Some(language) = self.file.language.filter(|language| {
-            language.server().map(|server| server.program) == Some(server.name())
-        }) else {
+        let Some(language) = server.language_of(&self.file.path) else {
             return;
         };
-        self.document = client.open(
-            &self.file.path,
-            language.protocol_name(),
-            &self.file.buffer.text(),
-        );
+        self.document = client.open(&self.file.path, language, &self.file.buffer.text());
     }
 
     /// The server, once it is ready to be asked.

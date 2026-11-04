@@ -1,7 +1,9 @@
 //! The language servers that the tabs showing code ask what the code
 //! means (see [`cox_editor::lsp`]): one for each project and server,
 //! started when a tab first needs it, and shared by the tabs of every chat
-//! in the project, until Cox quits. The app holds them as a global, which
+//! in the project, until Cox quits. Which server knows a file is the
+//! project's to say, over what Cox knows (see
+//! [`cox_editor::lsp::servers`]). The app holds them as a global, which
 //! the stages find them in.
 
 use std::cell::RefCell;
@@ -10,15 +12,13 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
 
-use cox_editor::language::Language;
-use cox_editor::lsp::{Client, Error, Server, Status};
+use cox_editor::lsp::{self, Client, Error, Server, Status, languages};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 /// What starts a server in a project's folder, and answers it once it is
 /// ready.
-pub type Starter = Rc<
-    dyn Fn(&'static Server, PathBuf) -> Pin<Box<dyn Future<Output = Result<Client, Error>> + Send>>,
->;
+pub type Starter =
+    Rc<dyn Fn(Server, PathBuf) -> Pin<Box<dyn Future<Output = Result<Client, Error>> + Send>>>;
 
 /// The language servers of every project.
 #[derive(Clone)]
@@ -27,8 +27,8 @@ pub struct Servers {
     start: Starter,
 }
 
-/// The servers started, by the folder each works in, and its program.
-type Running = HashMap<(PathBuf, &'static str), Entity<LanguageServer>>;
+/// The servers started, by the folder each works in, and their names.
+type Running = HashMap<(PathBuf, String), Entity<LanguageServer>>;
 
 impl Global for Servers {}
 
@@ -36,7 +36,7 @@ impl Default for Servers {
     /// Servers started as programs, found on `PATH`.
     fn default() -> Self {
         Self::new(Rc::new(|server, root| {
-            Box::pin(async move { Client::start(server, &root).await })
+            Box::pin(async move { Client::start(&server, &root).await })
         }))
     }
 }
@@ -53,14 +53,21 @@ impl Servers {
 
     /// The server that knows the code of the file at `path`, an absolute
     /// path, for a chat working in `cwd`: started if it was not, if the
-    /// editor knows a server for the file's language.
+    /// project, or Cox, knows a server for the file's language. Started
+    /// once, it goes on as it was started until Cox quits, whatever the
+    /// project says of it since.
     ///
     /// The server works in `cwd`, the chat's project's folder, when the
     /// file is in it. Otherwise, it works in the outermost folder above the
     /// file that is a project of the file's language, as one with a
     /// `Cargo.toml` is for Rust, or else in the file's own folder.
     pub fn of(&self, cwd: &Path, path: &Path, cx: &mut App) -> Option<Entity<LanguageServer>> {
-        let server = Language::of_path(path)?.server()?;
+        let language = languages::id_of(path)?;
+        let known = lsp::Servers::of_project(cwd).unwrap_or_else(|error| {
+            tracing::warn!("{error}");
+            lsp::Servers::built_in()
+        });
+        let server = known.of(language)?.clone();
         let root = if path.starts_with(cwd) {
             cwd.to_owned()
         } else {
@@ -77,11 +84,11 @@ impl Servers {
                 .unwrap_or(folder)
                 .to_owned()
         };
-        let key = (root, server.program);
+        let key = (root, server.name.clone());
         if let Some(running) = self.running.borrow().get(&key) {
             return Some(running.clone());
         }
-        let started = (self.start)(server, key.0.clone());
+        let started = (self.start)(server.clone(), key.0.clone());
         let running = cx.new(|cx| LanguageServer::new(server, started, cx));
         self.running.borrow_mut().insert(key, running.clone());
         Some(running)
@@ -90,7 +97,7 @@ impl Servers {
 
 /// A project's language server, as the tabs see it.
 pub struct LanguageServer {
-    server: &'static Server,
+    server: Server,
     state: State,
     /// What it says it is doing, once it runs.
     status: Status,
@@ -107,7 +114,7 @@ enum State {
 impl LanguageServer {
     /// `server`, which `started` answers once it is ready.
     fn new(
-        server: &'static Server,
+        server: Server,
         started: Pin<Box<dyn Future<Output = Result<Client, Error>> + Send>>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -152,17 +159,24 @@ impl LanguageServer {
         self.state = match started {
             Ok(client) => State::Running(client),
             Err(error) => {
-                tracing::warn!("{} did not start: {error}", self.server.program);
+                tracing::warn!("{} did not start: {error}", self.server.name);
                 State::Failed(error.to_string())
             }
         };
         cx.notify();
     }
 
-    /// The server's program.
+    /// What the server goes by.
     #[must_use]
-    pub fn name(&self) -> &'static str {
-        self.server.program
+    pub fn name(&self) -> &str {
+        &self.server.name
+    }
+
+    /// The language of the file at `path`, as the protocol names it, when
+    /// the server knows it.
+    #[must_use]
+    pub fn language_of(&self, path: &Path) -> Option<&'static str> {
+        languages::id_of(path).filter(|language| self.server.knows(language))
     }
 
     /// The server, once it is ready to be asked, until it stops.
@@ -178,7 +192,7 @@ impl LanguageServer {
     /// ready.
     #[must_use]
     pub fn said(&self) -> Option<String> {
-        let name = self.server.program;
+        let name = &self.server.name;
         match (&self.state, &self.status) {
             (State::Starting, _) => Some(format!("{name}: starting")),
             (State::Failed(error), _) => Some(format!("{name} did not start: {error}")),
