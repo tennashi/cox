@@ -737,7 +737,9 @@ function seqEl(view, shown, stepNo) {
       const marker = back ? (on ? "backlit" : "back") : on ? "arrlit" : "arr";
       drawn = `<path class="arrow ${back ? "back" : ""}" d="M${xa} ${yc} L${end} ${yc}" marker-end="url(#${marker})"/>${labelEl(st, (xa + xb) / 2, yc - 5, "middle")}`;
     }
-    const title = `<title>${group.steps.map((x) => `${x.n}. ${said(x)}${x.step.at ? ` (${esc(x.step.at)})` : ""}`).join("\n")}</title>`;
+    const title = group.steps.every((x) => x.step.at && x.kind !== "outside")
+      ? ""
+      : `<title>${group.steps.map((x) => `${x.n}. ${said(x)}${x.step.at ? ` (${esc(x.step.at)})` : ""}`).join("\n")}</title>`;
     return `<g class="row ${st.kind} ${on ? "on" : ""}" data-step="${st.n}">${title}<rect class="band" x="4" y="${yc - h / 2 + 1}" width="__W__" height="${h - 2}" rx="6"/>${badge}${drawn}</g>`;
   });
   const H = y + 18, HS = H + 6 * Math.max(0, nF - 1);
@@ -1328,7 +1330,7 @@ function wireDrill(d) {
 
 function wireAll() {
   app.querySelectorAll(".line").forEach(wireLine);
-  app.querySelectorAll(".drill").forEach(wireDrill);
+  app.querySelectorAll(".drill[data-wires]").forEach(wireDrill);
 }
 const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => wireAll());
 function wired() {
@@ -1342,6 +1344,98 @@ function wired() {
   });
 }
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => wireAll());
+
+// --- The code a step is made at, under the mouse.
+
+// The lines around each place the mouse rested on, as the page last read
+// them, by `path:line`.
+const lineData = {};
+let peekEl = null, peekAt = null, peekTimer = null;
+
+/// Takes the peek down.
+function peekHide() {
+  clearTimeout(peekTimer);
+  peekTimer = null;
+  if (peekEl) peekEl.remove();
+  peekEl = null;
+  peekAt = null;
+}
+
+/// Shows, by `row`, a row of the sequence diagram, the code its step is
+/// made at: the step, the file and line, the function the line is in
+/// and what it calls, as the server has said, and the lines around it,
+/// the line itself marked. The lines are read when the mouse comes,
+/// and shown as last read until they come.
+async function peekShow(row, st) {
+  const place = atPlace(st.step.at);
+  if (!place) return;
+  const key = `${place.path}:${place.line}`;
+  peekAt = key;
+  const draw = () => {
+    if (peekAt !== key || !row.isConnected) return peekHide();
+    const got = lineData[key];
+    const c = callOf(st.step);
+    const said = c && c.function ? `in <b>${esc(c.function.name)}</b>${c.calls && c.calls.length ? `, calls ${c.calls.map((x) => `<b>${esc(x.name)}</b>`).join(", ")}` : ""}` : c && c.error ? esc(c.error) : "";
+    const lines = got
+      ? got.lines.length
+        ? got.lines.map((text, i) => `<div class="ln ${got.from + i === place.line ? "at" : ""}"><span class="no">${got.from + i}</span>${esc(text) || " "}</div>`).join("")
+        : `<div class="ln faint">${got.exists ? "the file has no such line" : "the file is gone"}</div>`
+      : '<div class="ln faint">reading…</div>';
+    if (!peekEl) {
+      peekEl = document.createElement("div");
+      peekEl.className = "peek";
+      document.body.appendChild(peekEl);
+    }
+    peekEl.innerHTML = `<div class="head"><span class="n">${st.n}</span> ${esc(nameOf(st.step.from))} → ${esc(nameOf(st.step.to))}: ${esc(st.step.says)}</div><div class="where"><span class="at">${esc(st.step.at)}</span>${said ? ` · ${said}` : ""}</div><pre>${lines}</pre>`;
+    const r = row.getBoundingClientRect();
+    const seq = row.closest(".seq");
+    const s = seq ? seq.getBoundingClientRect() : r;
+    const w = peekEl.offsetWidth, h = peekEl.offsetHeight;
+    let x = Math.max(8, Math.min(Math.max(s.left + 44, r.left), window.innerWidth - w - 8));
+    let y = r.bottom + 6;
+    if (y + h > window.innerHeight - 8) y = Math.max(8, r.top - h - 6);
+    peekEl.style.left = `${Math.round(x)}px`;
+    peekEl.style.top = `${Math.round(y)}px`;
+  };
+  draw();
+  try {
+    const response = await fetch(`cox://api/lines${key}`);
+    if (response.ok) lineData[key] = await response.json();
+  } catch {
+    // Shown as last read.
+  }
+  draw();
+}
+
+/// The step a row of the sequence diagram shows, as the page shows the
+/// flow chosen now.
+function stepOfRow(row) {
+  const { flow: flowId } = where();
+  const flow = flowId ? flows().find((f) => f.id === flowId) : null;
+  const n = Number(row.dataset.step);
+  const step = flow && flow.steps[n - 1];
+  return step ? { n, step } : null;
+}
+
+app.addEventListener("mouseover", (event) => {
+  const row = event.target.closest(".seq .row[data-step]");
+  if (!row) return;
+  if (row.classList.contains("outside")) return;
+  const st = stepOfRow(row);
+  const place = st && atPlace(st.step.at);
+  if (!place) return;
+  const key = `${place.path}:${place.line}`;
+  if (peekAt === key && peekEl) return;
+  peekHide();
+  peekTimer = setTimeout(() => peekShow(row, st), 180);
+});
+app.addEventListener("mouseout", (event) => {
+  const row = event.target.closest(".seq .row[data-step]");
+  if (!row) return;
+  if (event.relatedTarget && row.contains(event.relatedTarget)) return;
+  peekHide();
+});
+document.addEventListener("scroll", peekHide, true);
 
 // --- Going places.
 
