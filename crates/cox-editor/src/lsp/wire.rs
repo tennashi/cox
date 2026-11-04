@@ -122,15 +122,15 @@ impl Reader {
             }
             "client/registerCapability" => {
                 let mut registered = lock(&self.shared.registered);
-                for method in methods(params, "registrations") {
-                    registered.insert(method);
+                for (method, options) in methods(params, "registrations") {
+                    registered.insert(method, options);
                 }
                 Ok(Value::Null)
             }
             "client/unregisterCapability" => {
                 let mut registered = lock(&self.shared.registered);
                 // The protocol spells it so.
-                for method in methods(params, "unregisterations") {
+                for (method, _) in methods(params, "unregisterations") {
                     registered.remove(&method);
                 }
                 Ok(Value::Null)
@@ -189,15 +189,22 @@ impl Reader {
     }
 }
 
-/// The methods of the registrations `params` lists under `key`.
-fn methods(params: Option<&Value>, key: &str) -> Vec<String> {
+/// The methods of the registrations `params` lists under `key`, each
+/// with the options it is registered with, if any.
+fn methods(params: Option<&Value>, key: &str) -> Vec<(String, Value)> {
     params
         .and_then(|params| params.get(key))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|registration| registration.get("method")?.as_str())
-        .map(str::to_owned)
+        .filter_map(|registration| {
+            let method = registration.get("method")?.as_str()?.to_owned();
+            let options = registration
+                .get("registerOptions")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            Some((method, options))
+        })
         .collect()
 }
 
