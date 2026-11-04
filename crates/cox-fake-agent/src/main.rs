@@ -6,6 +6,9 @@
 //! permission and goes on as the human answers, and calls the tools Cox
 //! hands it, such as `open_chat` (see [`scenario`]).
 //!
+//! `cox-fake-agent <scenario> --log-in` logs the agent of the scenario in,
+//! as a way to log in that runs in a terminal does.
+//!
 //! `cox-fake-agent --from-log <run> [--chat <id>]` writes, as a scenario,
 //! what a chat's agent did in a run Cox kept, for the agent to do again
 //! (see [`log`]).
@@ -18,7 +21,7 @@ mod scenario;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-Usage: cox-fake-agent <scenario>
+Usage: cox-fake-agent <scenario> [--log-in]
        cox-fake-agent --from-log <run> [--chat <id>]";
 
 fn main() -> ExitCode {
@@ -29,6 +32,7 @@ fn main() -> ExitCode {
             from_log(run, Some(chat))
         }
         [path] if !path.starts_with("--") => play(path),
+        [path, flag] if !path.starts_with("--") && flag == "--log-in" => log_in(path),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -56,6 +60,21 @@ fn from_log(run: &str, chat: Option<&str>) -> ExitCode {
     }
 }
 
+/// Logs the agent of the scenario at `path` in, for the runs to come.
+fn log_in(path: &str) -> ExitCode {
+    let file = agent::logged_in(path.as_ref());
+    match std::fs::write(&file, "") {
+        Ok(()) => {
+            println!("Logged in to the fake agent.");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("cox-fake-agent: cannot write {}: {error}", file.display());
+            ExitCode::from(1)
+        }
+    }
+}
+
 /// Plays the scenario in the file at `path`.
 fn play(path: &str) -> ExitCode {
     let read = std::fs::read_to_string(path)
@@ -63,7 +82,7 @@ fn play(path: &str) -> ExitCode {
         .and_then(|text| serde_json::from_str(&text).map_err(|error| error.to_string()));
     match read {
         Ok(scenario) => {
-            agent::play(scenario);
+            agent::play(scenario, &agent::logged_in(path.as_ref()));
             ExitCode::SUCCESS
         }
         Err(error) => {

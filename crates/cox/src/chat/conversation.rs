@@ -15,7 +15,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use cox_acp::{PermissionAnswer, StopReason};
-pub use cox_core::entry::{Answer, Content, Entry, Step, StepState, ToolCallResult};
+pub use cox_core::entry::{
+    Answer, Content, Entry, LoginOption, Step, StepState, TerminalLogin, ToolCallResult,
+};
 use cox_core::goal;
 use cox_core::settings::Setting;
 
@@ -129,6 +131,9 @@ pub struct Conversation {
     settings: Vec<Setting>,
     /// Whether the settings changed since that was last taken, to keep.
     settings_changed: bool,
+    /// Whose move it was when the agent asked the human to log in, which it
+    /// is again once they have chosen how.
+    before_login: State,
 }
 
 impl Default for Conversation {
@@ -148,6 +153,7 @@ impl Conversation {
             goal: None,
             settings: Vec::new(),
             settings_changed: false,
+            before_login: State::Idle,
         }
     }
 
@@ -179,6 +185,7 @@ impl Conversation {
             goal: None,
             settings: Vec::new(),
             settings_changed: false,
+            before_login: State::Idle,
         }
     }
 
@@ -538,6 +545,65 @@ impl Conversation {
         }
     }
 
+    /// How many options the human chooses between, by their numbers, while
+    /// the agent waits on them: those of a permission request, or the ways
+    /// to log in.
+    #[must_use]
+    pub fn options_asked(&self) -> usize {
+        match (self.state, self.entries.last()) {
+            (State::Asking, Some(Entry::Permission { options, .. })) => options.len(),
+            (State::Asking, Some(Entry::Login { options, .. })) => options.len(),
+            _ => 0,
+        }
+    }
+
+    /// Whether the agent waits for the human to log in.
+    #[must_use]
+    pub fn logging_in(&self) -> bool {
+        matches!(
+            (self.state, self.entries.last()),
+            (State::Asking, Some(Entry::Login { .. }))
+        )
+    }
+
+    /// Shows that the agent asks the human to log in, one of the ways of
+    /// `options`, and waits for them.
+    fn ask_to_log_in(&mut self, options: Vec<LoginOption>, failed: Option<String>) {
+        self.push(Entry::Login {
+            options,
+            failed,
+            chosen: None,
+        });
+        // Asked as the human stopped the turn: the agent side gives up
+        // without the human.
+        if self.state != State::Stopping {
+            self.before_login = match self.state {
+                State::Busy | State::Asking => State::Busy,
+                _ => State::Idle,
+            };
+            self.state = State::Asking;
+        }
+    }
+
+    /// Chooses the way at `index` of logging in, while the agent waits for
+    /// the human to log in, and returns it.
+    pub fn choose_login(&mut self, index: usize) -> Option<LoginOption> {
+        if self.state != State::Asking {
+            return None;
+        }
+        let Some(Entry::Login {
+            options, chosen, ..
+        }) = self.entries.last_mut()
+        else {
+            return None;
+        };
+        let option = options.get(index)?.clone();
+        *chosen = Some(index);
+        self.changed.insert(self.entries.len() - 1);
+        self.state = self.before_login;
+        Some(option)
+    }
+
     /// Chooses the option at `index` of the permission request the agent
     /// waits on, and returns the answer to send.
     pub fn choose(&mut self, index: usize) -> Option<Command> {
@@ -693,11 +759,13 @@ impl Conversation {
             })
     }
 
-    /// What the agent asks permission for, while it waits on the human.
+    /// What the agent asks permission for, or that it asks the human to log
+    /// in, while it waits on the human.
     #[must_use]
     pub fn asking_for(&self) -> Option<&str> {
         match (self.state, self.entries.last()) {
             (State::Asking, Some(Entry::Permission { title, .. })) => Some(title),
+            (State::Asking, Some(Entry::Login { .. })) => Some("log in"),
             _ => None,
         }
     }
@@ -857,6 +925,7 @@ impl Conversation {
                     && self.goal.is_some();
                 self.state = if check { State::Checking } else { State::Idle };
             }
+            AgentEvent::LoginNeeded { options, failed } => self.ask_to_log_in(options, failed),
             AgentEvent::TurnFailed(error) => {
                 self.push(Entry::Note(format!("The turn failed: {error}")));
                 self.state = State::Idle;
@@ -871,6 +940,32 @@ impl Conversation {
             }
         }
     }
+}
+
+/// What the card that asks the human to log in says, with why the way
+/// tried last `failed`, if it did.
+#[must_use]
+pub fn login_title(failed: Option<&str>) -> String {
+    match failed {
+        Some(failed) => format!("The agent asks you to log in again: {failed}"),
+        None => "The agent asks you to log in.".to_owned(),
+    }
+}
+
+/// What the button of a way to log in says: its name, what it is, and, for
+/// a way carried out in a terminal, that it runs there.
+#[must_use]
+pub fn login_label(option: &LoginOption) -> String {
+    let mut label = option.name.clone();
+    if let Some(description) = option.description.as_deref().map(str::trim)
+        && !description.is_empty()
+    {
+        label = format!("{label}: {description}");
+    }
+    if option.terminal.is_some() {
+        label.push_str(" (in a terminal)");
+    }
+    label
 }
 
 /// The note that says the human switched the chat from the agent named
@@ -939,7 +1034,88 @@ fn ended(reason: StopReason) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+
+    fn asks_to_log_in() -> AgentEvent {
+        AgentEvent::LoginNeeded {
+            options: vec![
+                LoginOption {
+                    id: "key".to_owned(),
+                    name: "API key".to_owned(),
+                    description: Some("Use the key ".to_owned()),
+                    terminal: None,
+                },
+                LoginOption {
+                    id: "terminal".to_owned(),
+                    name: "Claude".to_owned(),
+                    description: None,
+                    terminal: Some(TerminalLogin {
+                        args: vec!["login".to_owned()],
+                        env: BTreeMap::new(),
+                    }),
+                },
+            ],
+            failed: None,
+        }
+    }
+
+    #[test]
+    fn waits_for_the_human_to_log_in_and_goes_back_to_the_turn() {
+        let mut conversation = Conversation::new();
+        conversation.submit("hello");
+        conversation.apply(asks_to_log_in());
+
+        assert_eq!(conversation.state(), State::Asking);
+        assert!(conversation.logging_in());
+        assert_eq!(conversation.options_asked(), 2);
+        assert_eq!(conversation.asking_for(), Some("log in"));
+        assert_eq!(conversation.choose_login(2), None);
+        let chosen = conversation.choose_login(1).expect("there is a second way");
+        assert_eq!(chosen.id, "terminal");
+        assert_eq!(conversation.state(), State::Busy);
+        assert!(!conversation.logging_in());
+        assert_eq!(
+            conversation.entries().last(),
+            Some(&Entry::Login {
+                options: match asks_to_log_in() {
+                    AgentEvent::LoginNeeded { options, .. } => options,
+                    _ => unreachable!(),
+                },
+                failed: None,
+                chosen: Some(1),
+            })
+        );
+    }
+
+    #[test]
+    fn logging_in_before_a_line_is_sent_leaves_the_chat_idle() {
+        let mut conversation = Conversation::new();
+        conversation.apply(asks_to_log_in());
+        assert_eq!(conversation.submit("hello"), None);
+        conversation.choose_login(0);
+
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            conversation.submit("hello"),
+            Some(Command::Prompt("hello".to_owned()))
+        );
+    }
+
+    #[test]
+    fn names_each_way_to_log_in_with_what_it_is_and_where_it_runs() {
+        let AgentEvent::LoginNeeded { options, .. } = asks_to_log_in() else {
+            unreachable!();
+        };
+        assert_eq!(login_label(&options[0]), "API key: Use the key");
+        assert_eq!(login_label(&options[1]), "Claude (in a terminal)");
+        assert_eq!(login_title(None), "The agent asks you to log in.");
+        assert_eq!(
+            login_title(Some("no key")),
+            "The agent asks you to log in again: no key"
+        );
+    }
 
     #[test]
     fn a_closed_conversation_reopens_to_go_on() {

@@ -50,17 +50,20 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{ChatRequest, Ran, ToolRequest};
+use crate::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest};
 use crate::agent::{Agent, AgentThread};
 use crate::agent::{AgentEvent, Command};
 use crate::agents::Agents;
-use crate::chat::conversation::{self, Answer, Conversation, Entry, GOAL_TURNS, Goal, State};
+use crate::chat::conversation::{
+    self, Answer, Conversation, Entry, GOAL_TURNS, Goal, LoginOption, State, TerminalLogin,
+};
 use crate::chat::judge::{Judge, Starts};
 use crate::stage::Stage;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::text::Reading;
 use crate::ui::theme::{DIM, FONT, LINK};
 use crate::ui::{Copy, Panel};
+use cox_acp::Login;
 
 mod entries;
 mod settings;
@@ -933,15 +936,16 @@ impl ChatView {
     /// A key went down: the number of an option of the permission request
     /// the agent waits on chooses it, in place of typing the number.
     fn choose_with_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(options) = self.conversation.asked() else {
+        let count = self.conversation.options_asked();
+        if count == 0 {
             return;
-        };
+        }
         let keystroke = &event.keystroke;
         if keystroke.modifiers.modified() {
             return;
         }
         if let Ok(number @ 1..) = keystroke.key.parse::<usize>()
-            && number <= options.len()
+            && number <= count
         {
             self.choose(number - 1, cx);
             cx.stop_propagation();
@@ -949,11 +953,72 @@ impl ChatView {
     }
 
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(command) = self.conversation.choose(index) {
+        if self.conversation.logging_in() {
+            if let Some(option) = self.conversation.choose_login(index) {
+                self.log_in(option, cx);
+                self.keep();
+                cx.notify();
+            }
+        } else if let Some(command) = self.conversation.choose(index) {
             self.keep();
             self.send(command);
             cx.notify();
         }
+    }
+
+    /// Logs in as `option` says: through the agent, or in a terminal on the
+    /// stage, running the agent's command with what the way adds to it,
+    /// after which the agent is told the human has logged in, however the
+    /// command ended, and asks again if they have not.
+    fn log_in(&mut self, option: LoginOption, cx: &mut Context<Self>) {
+        let Some(terminal) = option.terminal else {
+            self.send(Command::LogIn(Login::Authenticate(option.id)));
+            return;
+        };
+        let command = self
+            .agents
+            .as_ref()
+            .map(|(agents, chosen)| agents.of(Some(chosen)).command);
+        let (Some(command), Some((cwd, tools))) = (command, &self.tools) else {
+            self.follow(|conversation| {
+                conversation.note("Cox cannot run the agent's command here to log in.".to_owned());
+            });
+            self.send(Command::LogIn(Login::Done));
+            return;
+        };
+        let (answer, ran) = oneshot::channel();
+        let request = ToolRequest::RunCommand {
+            command: login_command(&command, &terminal),
+            cwd: cwd.clone(),
+            answer,
+        };
+        if tools.send(request).is_err() {
+            self.send(Command::LogIn(Login::Done));
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let ran = ran
+                .await
+                .unwrap_or_else(|_| Err("its terminal went away".to_owned()));
+            this.update(cx, |view, cx| {
+                let note = match ran {
+                    Ok(Ran {
+                        ended: Ended::Exited(0),
+                        ..
+                    }) => None,
+                    Ok(ran) => Some(format!("The login in the terminal ended {:?}.", ran.ended)),
+                    Err(error) => Some(format!("The login did not run: {error}")),
+                };
+                if let Some(note) = note {
+                    view.follow(|conversation| conversation.note(note));
+                    view.keep();
+                }
+                view.send(Command::LogIn(Login::Done));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -1013,15 +1078,21 @@ impl ChatView {
                 None => "Judging the goal. Escape stops it.".to_owned(),
             }),
             State::Asking => {
-                let count = self.conversation.asked().map_or(0, <[String]>::len);
+                let count = self.conversation.options_asked();
                 let numbers = if count > 1 {
                     format!("1–{count}")
                 } else {
                     "1".to_owned()
                 };
-                Some(format!(
-                    "The agent asks to go on: choose with {numbers}, or stop it with Escape."
-                ))
+                Some(if self.conversation.logging_in() {
+                    format!(
+                        "The agent asks you to log in: choose how with {numbers}, or give up with Escape."
+                    )
+                } else {
+                    format!(
+                        "The agent asks to go on: choose with {numbers}, or stop it with Escape."
+                    )
+                })
             }
             State::Stopping => Some("Stopping…".to_owned()),
             // A closed chat whose agent can start again takes the next
@@ -1318,5 +1389,93 @@ impl Render for ChatView {
                     .child(conversation),
             ),
         }
+    }
+}
+
+/// The shell command that runs the agent's `command`, its program with
+/// what it sets of its environment ahead of it, with what `terminal` adds
+/// to it, for the human to log in: each word quoted, so the shell takes it
+/// as it is, and the environment the way adds set after the command's,
+/// over it.
+fn login_command(command: &[String], terminal: &TerminalLogin) -> String {
+    let assignment = |name: &str, value: &str| format!("{name}={}", quoted(value));
+    let mut words = Vec::new();
+    let mut program = false;
+    for word in command {
+        match word.split_once('=') {
+            Some((name, value)) if !program && is_name(name) => {
+                words.push(assignment(name, value));
+            }
+            _ => {
+                if !program {
+                    program = true;
+                    words.extend(
+                        terminal
+                            .env
+                            .iter()
+                            .map(|(name, value)| assignment(name, value)),
+                    );
+                }
+                words.push(quoted(word));
+            }
+        }
+    }
+    words.extend(terminal.args.iter().map(|arg| quoted(arg)));
+    words.join(" ")
+}
+
+/// Whether `name` is the name of a variable of the environment.
+fn is_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// `word`, quoted for the shell.
+fn quoted(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,".contains(c))
+    {
+        return word.to_owned();
+    }
+    format!("'{}'", word.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn words(words: &[&str]) -> Vec<String> {
+        words.iter().map(|&word| word.to_owned()).collect()
+    }
+
+    #[test]
+    fn a_login_in_a_terminal_runs_the_agents_command_with_the_ways_args() {
+        let terminal = TerminalLogin {
+            args: words(&["--cli", "auth login"]),
+            env: [("MODE".to_owned(), "it's".to_owned())].into(),
+        };
+        let command = words(&[
+            "CLAUDE_CODE_ENABLE_TODO_TOOLS=1",
+            "npx",
+            "-y",
+            "@scope/agent",
+        ]);
+        assert_eq!(
+            login_command(&command, &terminal),
+            "CLAUDE_CODE_ENABLE_TODO_TOOLS=1 MODE='it'\\''s' npx -y @scope/agent --cli 'auth login'"
+        );
+    }
+
+    #[test]
+    fn an_argument_that_looks_like_a_setting_after_the_program_stays_one() {
+        let terminal = TerminalLogin {
+            args: Vec::new(),
+            env: std::collections::BTreeMap::new(),
+        };
+        let command = words(&["agent", "A=b c"]);
+        assert_eq!(login_command(&command, &terminal), "agent 'A=b c'");
     }
 }

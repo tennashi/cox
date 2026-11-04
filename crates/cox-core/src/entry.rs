@@ -65,6 +65,36 @@ pub enum Entry {
     /// The human switched the chat from the agent named `from` to the one
     /// named `to`, which goes on from the conversation so far.
     Switched { from: String, to: String },
+    /// The agent asks the human to log in, one of the ways of `options`.
+    Login {
+        options: Vec<LoginOption>,
+        /// Why the way the human chose last failed, when the agent asks
+        /// again after one did.
+        failed: Option<String>,
+        /// The way chosen, once the human chose one.
+        chosen: Option<usize>,
+    },
+}
+
+/// A way the agent offers the human to log in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoginOption {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// For a way the human carries out in a terminal, running the agent's
+    /// command, what to add to it; `None` for one the agent carries out
+    /// itself.
+    pub terminal: Option<TerminalLogin>,
+}
+
+/// What to add to the agent's command, run in a terminal for the human to
+/// log in.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalLogin {
+    pub args: Vec<String>,
+    /// Over what the command sets of its environment.
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// What the human did with a goal the agent proposed.
