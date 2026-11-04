@@ -277,7 +277,7 @@ impl<W: Write> Agent<W> {
             &json!({
                 "sessionUpdate": "tool_call",
                 "toolCallId": id,
-                "title": call.tool,
+                "title": call.title.as_ref().unwrap_or(&call.tool),
                 "kind": "other",
                 "status": "in_progress",
                 "rawInput": arguments,

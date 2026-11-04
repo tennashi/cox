@@ -97,6 +97,9 @@ pub struct Call {
     pub tool: String,
     #[serde(default)]
     pub arguments: Value,
+    /// What the agent titles the call, the tool's name unless given.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 fn cox() -> String {
