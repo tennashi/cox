@@ -127,6 +127,10 @@ pub struct Stage {
     plugins: Plugins,
     /// Whether the menu that opens a page, a terminal or a file is open.
     menu_open: bool,
+    /// How many files changed in the project, as the bar last counted
+    /// them while the stage was open; none until then, or out of Git.
+    changed: Option<usize>,
+    _counting: Task<()>,
 }
 
 impl Stage {
@@ -157,6 +161,8 @@ impl Stage {
             cef,
             plugins: Plugins::new(cwd.clone(), outlines, calls),
             menu_open: false,
+            changed: None,
+            _counting: bar::count_changes(cx),
             cwd,
             tabs: List::new(),
             pages: None,
