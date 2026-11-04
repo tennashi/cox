@@ -147,6 +147,38 @@ function stepsIn(t, flow, far = false) {
   });
 }
 
+/// Where a step inside box `id` is drawn apart, as deep as the map
+/// goes: the first tier under the box whose boxes the step goes
+/// between, through the boxes it stays inside of on the way, or, for a
+/// box that holds paths, the box on its own, where the step goes
+/// between the functions it runs; null for a box that is neither, as a
+/// function is, and when it is the page open already.
+function drillOf(step, id) {
+  const { tier: hereTier, part: herePart } = where();
+  let current = id;
+  for (let i = 0; i < 12; i++) {
+    const p = parts()[current];
+    if (!p) return null;
+    let found;
+    if (p.tier) {
+      const t = tier(p.tier);
+      const a = upTo(t, step.from, true), b = upTo(t, step.to, true);
+      if (a && b && a === b && a !== current) {
+        current = a;
+        continue;
+      }
+      found = { tier: t.id, part: null };
+    } else if (p.holds && p.holds.length) {
+      const t = tierOf(current);
+      found = { tier: t ? t.id : hereTier, part: current };
+    } else return null;
+    return found.tier === hereTier && found.part === (herePart || null) ? null : found;
+  }
+  return null;
+}
+const drillHash = (d) => `${d.tier}${d.part ? `/${d.part}` : ""}`;
+const drillName = (d) => (d.part ? nameOf(d.part) : (tier(d.tier) || { name: d.tier }).name);
+
 /// Where a step is made, as the page asks the server of it: the file, as
 /// an absolute path, and the line; null when `at` names no line.
 function atPlace(at) {
@@ -369,8 +401,8 @@ function renderTier(tierId) {
     if (cur) {
       const where_ =
         cur.kind === "inside"
-          ? parts()[cur.a] && parts()[cur.a].tier
-            ? `<button class="into" data-into="${esc(cur.a)}">inside ${esc(nameOf(cur.a))} ›</button>`
+          ? drillOf(cur.step, cur.a)
+            ? `<span class="where">inside ${esc(nameOf(cur.a))}</span><button class="into" data-drill="${esc(drillHash(drillOf(cur.step, cur.a)))}">in ${esc(drillName(drillOf(cur.step, cur.a)))} ›</button>`
             : `<span class="where">inside ${esc(nameOf(cur.a))}</span>`
           : cur.kind === "own"
             ? `<span class="where">${cur.a === openerOf(tierId) ? "from" : "into"} ${esc(nameOf(openerOf(tierId)))}, the box this tier is the inside of</span>`
@@ -394,7 +426,7 @@ function renderTier(tierId) {
     ${belowIds.length ? rows[rows.length - 1] : ""}
   </div>`;
   const foot = seq
-    ? `<div class="foot"><span>a column opens the tier inside it, or the code it holds</span><span>·</span><span>a row is a step of the flow; a loop is a step inside a box, which opens it</span><span>·</span><span>← → go from step to step</span></div>`
+    ? `<div class="foot"><span>a column opens the tier inside it, or the code it holds</span><span>·</span><span>a row is a step of the flow; a loop is a step inside a box, and opens where the step is drawn apart</span><span>·</span><span>← → go from step to step</span></div>`
     : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>orange is what changed, as Changes shows it</span></div>`;
   const chain = [...above(tierId), tierId].map((id) => ({ text: tier(id).name, tier: id }));
   app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${body}${foot}`;
@@ -601,11 +633,12 @@ function seqEl(view, shown, stepNo) {
       drawn = `<text class="what" x="${22 + Math.max(9, textW(span, 9.5) / 2 + 5) + 10}" y="${yc + 3.5}">${text}</text>`;
     } else if (st.a === st.b) {
       const x = ends[st.n].xa;
-      const p = partOf(st.a);
       const intoAt = x + LOOP + 8 + loopW[st.a] + 10;
-      const into = p && p.tier ? `<text class="into" data-into="${esc(st.a)}" x="${intoAt}" y="${yc + 4}">inside ${esc(nameOf(st.a))} ›</text>` : "";
-      W = Math.max(W, intoAt + (into ? textW(`inside ${nameOf(st.a)} ›`) : 0) + 16);
-      drawn = `<path class="arrow loop" d="M${x} ${yc - 7} H${x + LOOP} V${yc + 7} H${x + 2}" marker-end="url(#${on ? "arrlit" : "arr"})"/>${labelEl(st, x + LOOP + 8, yc + 4)}${into}`;
+      const deeper = drillOf(st.step, st.a);
+      const into = deeper ? `<text class="into" x="${intoAt}" y="${yc + 4}">in ${esc(drillName(deeper))} ›</text>` : "";
+      W = Math.max(W, intoAt + (deeper ? textW(`in ${drillName(deeper)} ›`) : 0) + 16);
+      const loop = `<path class="arrow loop" d="M${x} ${yc - 7} H${x + LOOP} V${yc + 7} H${x + 2}" marker-end="url(#${on ? "arrlit" : "arr"})"/>${labelEl(st, x + LOOP + 8, yc + 4)}${into}`;
+      drawn = deeper ? `<g class="drill" data-drill="${esc(drillHash(deeper))}"><title>opens ${esc(drillName(deeper))}, where the step is drawn apart</title>${loop}</g>` : loop;
     } else {
       const { xa, xb } = ends[st.n];
       const end = xb > xa ? xb - 1 : xb + 1;
@@ -1194,7 +1227,7 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => wire
 // --- Going places.
 
 app.addEventListener("click", (event) => {
-  const t = event.target.closest("[data-goes],[data-tier],[data-flow],[data-step],[data-into],[data-view],[data-seq]");
+  const t = event.target.closest("[data-goes],[data-tier],[data-flow],[data-step],[data-drill],[data-view],[data-seq]");
   if (!t) return;
   const { tier: here, part, flow, step, onMap } = where();
   const kept = { flow, step, onMap };
@@ -1206,16 +1239,18 @@ app.addEventListener("click", (event) => {
     go(here, part, { flow: t.dataset.flow === flow ? null : t.dataset.flow, onMap });
     return;
   }
+  if (t.dataset.drill) {
+    const [tierId, partId] = t.dataset.drill.split("/");
+    const row = t.closest("[data-step]");
+    go(tierId, partId || null, { flow, step: row ? Number(row.dataset.step) : step, onMap });
+    return;
+  }
   if (t.dataset.step) {
     go(here, part, { flow, step: Number(t.dataset.step) === step ? null : Number(t.dataset.step), onMap });
     return;
   }
   if (t.dataset.view) {
     go(here, null, { flow, step, onMap: t.dataset.view === "map" });
-    return;
-  }
-  if (t.dataset.into) {
-    go(parts()[t.dataset.into].tier, null, kept);
     return;
   }
   if (t.dataset.seq) {

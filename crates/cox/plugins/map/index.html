@@ -431,7 +431,16 @@
       .seq .into {
         font-size: 11px;
         fill: var(--link);
+      }
+      /* A loop opens where its step is drawn apart. */
+      .seq .drill {
         cursor: pointer;
+      }
+      .seq .drill:hover .arrow {
+        stroke: var(--hold);
+      }
+      .seq .drill:hover .what {
+        text-decoration: underline;
       }
       .seq .n rect {
         fill: var(--background);
