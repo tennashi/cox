@@ -1,9 +1,10 @@
 //! Talking to a language server, which knows a project's code as its
 //! compiler does: what a name is, where it is defined, where it is used,
-//! and what a function calls. The editor starts the server of a language it knows one for (see
-//! [`Language::server`](crate::language::Language::server)), in the
+//! and what a function calls. The editor starts the server that knows the
+//! language of a file (see [`languages`] and [`servers`]), in the
 //! project's folder, and talks to it over the Language Server Protocol:
-//! JSON-RPC messages on the server's standard input and output.
+//! JSON-RPC messages on the server's standard input and output. It asks
+//! the server only what the server says it answers (see [`Feature`]).
 //!
 //! The server reads each file the editor shows as the editor holds it: the
 //! editor opens it on the server as an [`OpenFile`], and tells the server of
@@ -15,16 +16,21 @@
 //! for the server holds up nothing else: a request answers a future, which
 //! needs no runtime to wait on.
 //!
+//! - [`languages`] is which language a file is in, as the protocol names
+//!   it.
+//! - [`servers`] is the servers Cox knows, and those a project names.
 //! - [`position`] is a place in a file as the server counts it.
 //! - [`wire`] reads and writes the messages, and acts on the server's own.
 //! - [`answers`] is what the server answers about a name, and the symbols
 //!   of a file, read from its JSON.
 
 mod answers;
+pub mod languages;
 mod position;
+pub mod servers;
 mod wire;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Stdio};
@@ -39,21 +45,8 @@ use url::Url;
 pub use self::answers::{Call, Callable, Hover, Location, Symbol};
 use self::answers::{callable, calls, hover, locations, symbols};
 pub use self::position::{Encoding, Position};
+pub use self::servers::{Server, Servers};
 use self::wire::{Reader, write};
-
-/// A language server, as the editor starts it.
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct Server {
-    /// The program, found on `PATH`.
-    pub program: &'static str,
-    pub args: &'static [&'static str],
-    /// The files a folder that is a project of the language has, such as
-    /// `Cargo.toml` for Rust.
-    pub markers: &'static [&'static str],
-    /// How the server is to work, as JSON: what it is told when it starts,
-    /// and answered when it asks for its settings.
-    pub settings: &'static str,
-}
 
 /// Why the server did not answer.
 #[derive(Debug)]
@@ -64,6 +57,54 @@ pub enum Error {
     Answered { code: i64, message: String },
     /// The server stopped.
     Stopped,
+    /// The server does not answer what it was to be asked.
+    Unsupported(Feature),
+}
+
+/// What a server can be asked, which it says it answers, or not, when it
+/// starts, or later as it registers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feature {
+    Hover,
+    Definition,
+    References,
+    Symbols,
+    Calls,
+}
+
+impl Feature {
+    /// The request the feature starts with.
+    fn method(self) -> &'static str {
+        match self {
+            Self::Hover => "textDocument/hover",
+            Self::Definition => "textDocument/definition",
+            Self::References => "textDocument/references",
+            Self::Symbols => "textDocument/documentSymbol",
+            Self::Calls => "textDocument/prepareCallHierarchy",
+        }
+    }
+
+    /// Where the server's capabilities say it answers the feature.
+    fn provider(self) -> &'static str {
+        match self {
+            Self::Hover => "hoverProvider",
+            Self::Definition => "definitionProvider",
+            Self::References => "referencesProvider",
+            Self::Symbols => "documentSymbolProvider",
+            Self::Calls => "callHierarchyProvider",
+        }
+    }
+
+    /// What the server tells, when it answers the feature.
+    fn tells(self) -> &'static str {
+        match self {
+            Self::Hover => "what a name is",
+            Self::Definition => "where a name is defined",
+            Self::References => "where a name is used",
+            Self::Symbols => "the symbols of a file",
+            Self::Calls => "what a function calls",
+        }
+    }
 }
 
 impl std::fmt::Display for Error {
@@ -72,6 +113,9 @@ impl std::fmt::Display for Error {
             Self::Io(error) => error.fmt(f),
             Self::Answered { message, .. } => f.write_str(message),
             Self::Stopped => f.write_str("the server stopped"),
+            Self::Unsupported(feature) => {
+                write!(f, "the server does not tell {}", feature.tells())
+            }
         }
     }
 }
@@ -100,6 +144,8 @@ pub enum Status {
 pub struct Client {
     shared: Arc<Shared>,
     encoding: Encoding,
+    /// What the server said it answers, when it started.
+    capabilities: Value,
     status: watch::Receiver<Status>,
     /// The server's process, if the client started it.
     child: Option<Child>,
@@ -115,6 +161,9 @@ struct Shared {
     waiting: Mutex<Option<HashMap<i64, Answer>>>,
     /// The documents open, by their address.
     documents: Mutex<HashMap<Url, Opened>>,
+    /// The requests the server registered that it answers since it
+    /// started, by their method.
+    registered: Mutex<HashSet<String>>,
 }
 
 /// What answers a request.
@@ -182,8 +231,14 @@ impl Client {
     /// When the server cannot be started, or stops or fails before it is
     /// ready.
     pub async fn start(server: &Server, root: &Path) -> Result<Self, Error> {
-        let mut child = std::process::Command::new(server.program)
-            .args(server.args)
+        let Some((program, args)) = server.command.split_first() else {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{} has no command", server.name),
+            )));
+        };
+        let mut child = std::process::Command::new(program)
+            .args(args)
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -194,14 +249,13 @@ impl Client {
         else {
             unreachable!("the server's standard streams are piped");
         };
-        let program = server.program;
+        let name = server.name.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(errors).lines().map_while(Result::ok) {
-                tracing::debug!("{program}: {line}");
+                tracing::debug!("{name}: {line}");
             }
         });
-        let settings = serde_json::from_str(server.settings).unwrap_or(Value::Null);
-        match Self::over(output, input, root, settings).await {
+        match Self::over(output, input, root, server).await {
             Ok(mut client) => {
                 client.child = Some(child);
                 Ok(client)
@@ -214,9 +268,10 @@ impl Client {
         }
     }
 
-    /// Talks to a server that writes to `output` and reads from `input`,
+    /// Talks to `server`, which writes to `output` and reads from `input`,
     /// working in `root`, and answers once it is ready to be asked. It is
-    /// told `settings` when it starts, and when it asks for them.
+    /// told the server's options when it starts, and its settings when it
+    /// asks for them.
     ///
     /// # Errors
     ///
@@ -225,7 +280,7 @@ impl Client {
         output: impl Read + Send + 'static,
         input: impl Write + Send + 'static,
         root: &Path,
-        settings: Value,
+        server: &Server,
     ) -> Result<Self, Error> {
         let (outgoing, to_write) = mpsc::channel();
         let shared = Arc::new(Shared {
@@ -233,6 +288,7 @@ impl Client {
             next_id: AtomicI64::new(1),
             waiting: Mutex::new(Some(HashMap::new())),
             documents: Mutex::new(HashMap::new()),
+            registered: Mutex::new(HashSet::new()),
         });
         let (status, status_heard) = watch::channel(Status::Ready);
         std::thread::spawn(move || write(input, &to_write));
@@ -240,7 +296,7 @@ impl Client {
             shared: Arc::clone(&shared),
             status,
             progress: Vec::new(),
-            settings: settings.clone(),
+            server: server.clone(),
             root: root.to_owned(),
         };
         std::thread::spawn(move || reader.read(output));
@@ -257,7 +313,7 @@ impl Client {
                 "rootPath": root,
                 "rootUri": root_uri,
                 "workspaceFolders": root_uri.as_ref().map(|uri| json!([{ "uri": uri, "name": name }])),
-                "initializationOptions": settings,
+                "initializationOptions": server.initialization_options,
                 "capabilities": {
                     "general": { "positionEncodings": ["utf-8", "utf-16"] },
                     "window": { "workDoneProgress": true },
@@ -278,10 +334,12 @@ impl Client {
             .pointer("/capabilities/positionEncoding")
             .and_then(Value::as_str)
             .map_or(Encoding::Utf16, Encoding::named);
+        let capabilities = answer.get("capabilities").cloned().unwrap_or_default();
         shared.notify("initialized", &json!({}));
         Ok(Self {
             shared,
             encoding,
+            capabilities,
             status: status_heard,
             child: None,
         })
@@ -291,6 +349,34 @@ impl Client {
     #[must_use]
     pub fn encoding(&self) -> Encoding {
         self.encoding
+    }
+
+    /// Whether the server answers `feature`: as it said when it started,
+    /// or registered since.
+    #[must_use]
+    pub fn supports(&self, feature: Feature) -> bool {
+        let said = self
+            .capabilities
+            .get(feature.provider())
+            .is_some_and(|provider| !matches!(provider, Value::Null | Value::Bool(false)));
+        said || lock(&self.shared.registered).contains(feature.method())
+    }
+
+    /// Asks the server `params` of `feature`, if it answers it.
+    fn ask(
+        &self,
+        feature: Feature,
+        params: &Value,
+    ) -> impl Future<Output = Result<Value, Error>> + use<> {
+        let answered = self
+            .supports(feature)
+            .then(|| self.shared.request(feature.method(), params));
+        async move {
+            match answered {
+                Some(answered) => answered.await,
+                None => Err(Error::Unsupported(feature)),
+            }
+        }
     }
 
     /// What the server is doing, which changes as it says.
@@ -344,15 +430,14 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// When the server fails to answer, or stops.
+    /// When the server fails to answer, or stops, or does not answer
+    /// that.
     pub fn hover(
         &self,
         document: &OpenFile,
         position: Position,
     ) -> impl Future<Output = Result<Option<Hover>, Error>> + use<> {
-        let answered = self
-            .shared
-            .request("textDocument/hover", &document.at(position));
+        let answered = self.ask(Feature::Hover, &document.at(position));
         async move { Ok(hover(&answered.await?)) }
     }
 
@@ -360,15 +445,14 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// When the server fails to answer, or stops.
+    /// When the server fails to answer, or stops, or does not answer
+    /// that.
     pub fn definition(
         &self,
         document: &OpenFile,
         position: Position,
     ) -> impl Future<Output = Result<Vec<Location>, Error>> + use<> {
-        let answered = self
-            .shared
-            .request("textDocument/definition", &document.at(position));
+        let answered = self.ask(Feature::Definition, &document.at(position));
         async move { Ok(locations(&answered.await?)) }
     }
 
@@ -376,7 +460,8 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// When the server fails to answer, or stops.
+    /// When the server fails to answer, or stops, or does not answer
+    /// that.
     pub fn references(
         &self,
         document: &OpenFile,
@@ -384,7 +469,7 @@ impl Client {
     ) -> impl Future<Output = Result<Vec<Location>, Error>> + use<> {
         let mut params = document.at(position);
         params["context"] = json!({ "includeDeclaration": true });
-        let answered = self.shared.request("textDocument/references", &params);
+        let answered = self.ask(Feature::References, &params);
         async move { Ok(locations(&answered.await?)) }
     }
 
@@ -393,13 +478,14 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// When the server fails to answer, or stops.
+    /// When the server fails to answer, or stops, or does not answer
+    /// that.
     pub fn symbols(
         &self,
         document: &OpenFile,
     ) -> impl Future<Output = Result<Vec<Symbol>, Error>> + use<> {
-        let answered = self.shared.request(
-            "textDocument/documentSymbol",
+        let answered = self.ask(
+            Feature::Symbols,
             &json!({ "textDocument": { "uri": document.uri } }),
         );
         async move { Ok(symbols(&answered.await?)) }
@@ -413,14 +499,15 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// When the server fails to answer, or stops.
+    /// When the server fails to answer, or stops, or does not answer
+    /// that.
     pub fn calls(
         &self,
         document: &OpenFile,
         position: Position,
     ) -> impl Future<Output = Result<Option<(Callable, Vec<Call>)>, Error>> + use<> {
         let shared = Arc::clone(&self.shared);
-        let prepared = shared.request("textDocument/prepareCallHierarchy", &document.at(position));
+        let prepared = self.ask(Feature::Calls, &document.at(position));
         async move {
             let items = prepared.await?;
             let Some(item) = items.as_array().and_then(|items| items.first()) else {
@@ -521,7 +608,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::wire::read_message;
-    use super::{Client, Encoding, Error, Position, Status, lock};
+    use super::{Client, Encoding, Error, Feature, Position, Server, Status, lock};
 
     /// Serves as a language server would, over pipes, keeping what it
     /// hears in `heard`, until it hears `exit`, or `stop`, which it does
@@ -530,6 +617,7 @@ mod tests {
     fn serve(
         heard: Arc<Mutex<Vec<Value>>>,
         stop: &'static str,
+        capabilities: Value,
     ) -> (
         std::io::PipeReader,
         std::io::PipeWriter,
@@ -554,16 +642,24 @@ mod tests {
                     |result: Value| json!({ "jsonrpc": "2.0", "id": id, "result": result });
                 match method {
                     Some("initialize") => {
-                        write(answer(
-                            json!({ "capabilities": { "positionEncoding": "utf-8" } }),
-                        ));
+                        write(answer(json!({ "capabilities": capabilities })));
                     }
                     Some("initialized") => {
                         write(json!({
                             "jsonrpc": "2.0",
                             "id": "settings",
                             "method": "workspace/configuration",
-                            "params": { "items": [{ "section": "fake" }] },
+                            "params": { "items": [{ "section": "fake.on" }, { "section": "else" }] },
+                        }));
+                        // It answers its call hierarchy after all.
+                        write(json!({
+                            "jsonrpc": "2.0",
+                            "id": "register",
+                            "method": "client/registerCapability",
+                            "params": { "registrations": [{
+                                "id": "calls",
+                                "method": "textDocument/prepareCallHierarchy",
+                            }] },
                         }));
                         for value in [
                             json!({ "kind": "begin", "title": "Indexing" }),
@@ -624,6 +720,19 @@ mod tests {
         (output, input, server)
     }
 
+    /// What the fake server says it answers when it starts: all but its
+    /// call hierarchy, which it registers later.
+    fn answering() -> Value {
+        json!({
+            "positionEncoding": "utf-8",
+            "hoverProvider": true,
+            "definitionProvider": { "workDoneProgress": false },
+            "referencesProvider": true,
+            "documentSymbolProvider": true,
+            "callHierarchyProvider": false,
+        })
+    }
+
     /// What the fake server answers of its call hierarchy: `main`, which
     /// calls `run` in another file.
     fn hierarchy(method: &str) -> Value {
@@ -673,11 +782,18 @@ mod tests {
     #[tokio::test]
     async fn asks_a_server_of_the_files_it_opens() {
         let heard = Arc::default();
-        let (output, input, server) = serve(Arc::clone(&heard), "");
-        let client = Client::over(output, input, Path::new("/src"), json!({ "fake": true }))
+        let (output, input, server) = serve(Arc::clone(&heard), "", answering());
+        let fake = Server {
+            initialization_options: json!({ "fake": true }),
+            settings: json!({ "fake": { "on": true } }),
+            ..Server::default()
+        };
+        let client = Client::over(output, input, Path::new("/src"), &fake)
             .await
             .unwrap();
         assert_eq!(client.encoding(), Encoding::Utf8);
+        assert!(client.supports(Feature::Hover));
+        assert!(client.supports(Feature::Definition));
         client
             .status()
             .wait_for(|status| *status == Status::Working("Indexing: 1/2".to_owned()))
@@ -704,6 +820,7 @@ mod tests {
             Err(Error::Answered { code: -32801, .. })
         ));
         let symbols = client.symbols(&document).await.unwrap();
+        assert!(client.supports(Feature::Calls));
         assert_eq!(symbols[0].name, "main");
         assert_eq!(symbols[0].kind, "function");
         assert_eq!(symbols[0].selection.start.character, 3);
@@ -723,6 +840,7 @@ mod tests {
                 "initialize",
                 "initialized",
                 "answer",
+                "answer",
                 "textDocument/didOpen",
                 "textDocument/didChange",
                 "textDocument/hover",
@@ -737,26 +855,51 @@ mod tests {
             ]
         );
         let heard = lock(&heard);
-        // The settings it asked for are those it was told when it started.
+        // It is told its options when it starts, and the settings of each
+        // section it asks for.
         assert_eq!(
             heard[0]["params"]["initializationOptions"],
             json!({ "fake": true })
         );
-        assert_eq!(heard[2]["result"], json!([{ "fake": true }]));
-        assert_eq!(heard[4]["params"]["textDocument"]["version"], 1);
+        assert_eq!(heard[2]["result"], json!([true, null]));
+        assert_eq!(heard[5]["params"]["textDocument"]["version"], 1);
         // The item the server prepared goes back to it as it was.
-        assert_eq!(heard[10]["params"]["item"]["data"], 7);
+        assert_eq!(heard[11]["params"]["item"]["data"], 7);
         assert_eq!(
-            heard[5]["params"]["textDocument"]["uri"],
+            heard[6]["params"]["textDocument"]["uri"],
             "file:///src/main.rs"
         );
     }
 
     #[tokio::test]
+    async fn a_server_is_asked_only_what_it_answers() {
+        let heard = Arc::default();
+        let (output, input, server) =
+            serve(Arc::clone(&heard), "", json!({ "hoverProvider": true }));
+        let client = Client::over(output, input, Path::new("/src"), &Server::default())
+            .await
+            .unwrap();
+        assert_eq!(client.encoding(), Encoding::Utf16);
+        let document = client.open(Path::new("/src/main.rs"), "rust", "").unwrap();
+        let at = Position::default();
+        assert!(client.hover(&document, at).await.unwrap().is_some());
+        let error = client.references(&document, at).await.unwrap_err();
+        assert!(matches!(error, Error::Unsupported(Feature::References)));
+        assert_eq!(
+            error.to_string(),
+            "the server does not tell where a name is used"
+        );
+        drop(document);
+        drop(client);
+        server.join().unwrap();
+        assert!(!methods(&heard).contains(&"textDocument/references".to_owned()));
+    }
+
+    #[tokio::test]
     async fn a_server_that_stopped_answers_nothing() {
         let heard = Arc::default();
-        let (output, input, server) = serve(Arc::clone(&heard), "textDocument/hover");
-        let client = Client::over(output, input, Path::new("/src"), Value::Null)
+        let (output, input, server) = serve(Arc::clone(&heard), "textDocument/hover", answering());
+        let client = Client::over(output, input, Path::new("/src"), &Server::default())
             .await
             .unwrap();
         let document = client.open(Path::new("/src/main.rs"), "rust", "").unwrap();

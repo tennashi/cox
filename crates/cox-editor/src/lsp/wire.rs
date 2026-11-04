@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 use url::Url;
 
-use super::{Error, Shared, Status, lock};
+use super::{Error, Server, Shared, Status, lock};
 
 /// Writes each message of `to_write` to `input`, the server's, until the
 /// client is gone or the server stopped reading.
@@ -36,7 +36,8 @@ pub(super) struct Reader {
     /// The work the server said it began and has not ended, in order, by
     /// its token, with its title, and what the status says of it.
     pub(super) progress: Vec<(Value, String, String)>,
-    pub(super) settings: Value,
+    /// The server, whose settings it answers when it asks for them.
+    pub(super) server: Server,
     pub(super) root: PathBuf,
 }
 
@@ -104,20 +105,39 @@ impl Reader {
     /// The answer to the server's request `method`, with `params`.
     fn answer(&self, method: &str, params: Option<&Value>) -> Result<Value, String> {
         match method {
-            // Each setting asked for is the server's own.
+            // The settings of each section asked for.
             "workspace/configuration" => {
                 let items = params
                     .and_then(|params| params.get("items"))
                     .and_then(Value::as_array)
-                    .map_or(0, Vec::len);
-                Ok(Value::Array(vec![self.settings.clone(); items]))
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                Ok(items
+                    .iter()
+                    .map(|item| {
+                        self.server
+                            .settings_of(item.get("section").and_then(Value::as_str))
+                    })
+                    .collect())
+            }
+            "client/registerCapability" => {
+                let mut registered = lock(&self.shared.registered);
+                for method in methods(params, "registrations") {
+                    registered.insert(method);
+                }
+                Ok(Value::Null)
+            }
+            "client/unregisterCapability" => {
+                let mut registered = lock(&self.shared.registered);
+                // The protocol spells it so.
+                for method in methods(params, "unregisterations") {
+                    registered.remove(&method);
+                }
+                Ok(Value::Null)
             }
             "workspace/workspaceFolders" => Ok(Url::from_directory_path(&self.root)
                 .map_or(Value::Null, |uri| json!([{ "uri": uri, "name": "" }]))),
-            "window/workDoneProgress/create"
-            | "client/registerCapability"
-            | "client/unregisterCapability"
-            | "window/showMessageRequest" => Ok(Value::Null),
+            "window/workDoneProgress/create" | "window/showMessageRequest" => Ok(Value::Null),
             _ => Err(format!("Cox does not answer {method}")),
         }
     }
@@ -167,6 +187,18 @@ impl Reader {
             changed
         });
     }
+}
+
+/// The methods of the registrations `params` lists under `key`.
+fn methods(params: Option<&Value>, key: &str) -> Vec<String> {
+    params
+        .and_then(|params| params.get(key))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|registration| registration.get("method")?.as_str())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// What the status says of work called `title`, as `value` says it goes.

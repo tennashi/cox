@@ -1,0 +1,39 @@
+{
+  "servers": {
+    "clangd": {
+      "command": ["clangd"],
+      "languages": ["c", "cpp", "objective-c", "objective-cpp"],
+      "markers": ["compile_commands.json", "compile_flags.txt", ".clangd"]
+    },
+    "gopls": {
+      "command": ["gopls"],
+      "languages": ["go"],
+      "markers": ["go.work", "go.mod"]
+    },
+    "pyright": {
+      "command": ["pyright-langserver", "--stdio"],
+      "languages": ["python"],
+      "markers": ["pyproject.toml", "pyrightconfig.json", "setup.py", "setup.cfg"]
+    },
+    "rust-analyzer": {
+      "command": ["rust-analyzer"],
+      "languages": ["rust"],
+      "markers": ["Cargo.toml"],
+      "initializationOptions": {
+        "cargo": { "targetDir": true },
+        "checkOnSave": false
+      },
+      "settings": {
+        "rust-analyzer": {
+          "cargo": { "targetDir": true },
+          "checkOnSave": false
+        }
+      }
+    },
+    "typescript-language-server": {
+      "command": ["typescript-language-server", "--stdio"],
+      "languages": ["typescript", "typescriptreact", "javascript", "javascriptreact"],
+      "markers": ["package.json", "tsconfig.json", "jsconfig.json"]
+    }
+  }
+}
