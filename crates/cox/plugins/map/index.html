@@ -360,6 +360,14 @@
         stroke-width: 6px;
         stroke-linejoin: round;
       }
+      /* A frame of a tier above, around the one open. */
+      .seq .box.outer rect {
+        fill: none;
+        stroke-dasharray: 4 4;
+      }
+      .seq .box.outer .name {
+        fill: var(--dim);
+      }
       .seq .box .each {
         font-size: 10.5px;
         fill: var(--dim);

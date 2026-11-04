@@ -495,15 +495,16 @@ function renderTier(tierId) {
   wired();
 }
 
-/// A tier as the sequence diagram draws it: `own`, the box it is the
-/// inside of; `inner`, that box and the tier's own, in the order the
-/// tier draws them; and `near`, those and the frame's, the boxes that
-/// are not of the tiers above.
+/// A tier as the sequence diagram draws it: `levels`, the tiers from
+/// the top down to it, each with `own`, the box it is the inside of,
+/// and `members`, its boxes in the order it draws them; and `near`,
+/// the boxes the tier shows, its own, the frame's and the box it is the
+/// inside of, as against those of the tiers above, which the diagram
+/// draws dim.
 function tierView(t) {
-  const own = openerOf(t.id);
-  const frame = t.frame || {};
-  const inner = [...(own ? [own] : []), ...partsOf(t)];
-  return { own, inner, near: new Set([...(frame.above || frame.left || []), ...inner, ...(frame.below || frame.right || [])]) };
+  const own = openerOf(t.id) || null;
+  const levels = [...above(t.id), t.id].map((tid) => ({ own: openerOf(tid) || null, members: partsOf(tier(tid)) }));
+  return { levels, near: new Set([...shownIn(t), ...(own ? [own] : [])]) };
 }
 
 /// A flow's steps as box `id`, which holds code, shows them, as deep as
@@ -543,18 +544,22 @@ function stepsAt(t, flow, id) {
     const kind = !a || !b ? "outside" : a === b ? "inside" : "line";
     return { n: k + 1, step, a, b, kind };
   });
-  const view = { own: id, inner: [id, ...inner], near: new Set([...shownIn(t), id, ...inner]), extra };
+  const view = { levels: [...tierView(t).levels, { own: id, members: inner }], near: new Set([...shownIn(t), id, ...inner]), extra };
   return { shown, view, places };
 }
 
 /// A flow as a sequence diagram of `view`, a tier's or a box's that
 /// holds code: the boxes its steps go between, as `stepsIn` or
 /// `stepsAt` rolled them up, as columns, each with a lifeline down the
-/// page: the view's own in the box it is the inside of, named over its
-/// top as the map names it, in the view's order; and the others, the
-/// frame's and those of the tiers above, outside it, in the order the
-/// flow reaches them, those it reaches before it comes into the box on
-/// the left of it, and the rest on the right. And the steps as rows
+/// page, in the order of the map: the top tier's boxes as it draws
+/// them, each that opens a tier of the way down replaced by that
+/// tier's boxes in its order, in a frame named with the box, the box
+/// itself first in it, down to the view's own, so that the frames nest
+/// down to the tier open, and a drill down opens a box in place, the
+/// other columns staying where they were; a box of no tier of the way,
+/// as a frame's can be, goes before them all when the flow reaches it
+/// before it comes into the view's own box, and after them otherwise.
+/// And the steps as rows
 /// from the top, an arrow from the box that talks to the one it talks
 /// to, with what the step says over it; a step back, the answer to an
 /// earlier step, dashed. A bar on a lifeline shows the box at work,
@@ -563,40 +568,65 @@ function stepsAt(t, flow, id) {
 /// opens a tier; a step of a box in no tier is a dim row. The step
 /// chosen, `stepNo`, is lit.
 function seqEl(view, shown, stepNo) {
-  const { own, near, extra = {} } = view;
-  const own_ = view.inner;
-  const inner = new Set(own_);
+  const { levels, near, extra = {} } = view;
+  const owns = new Set(levels.map((lv) => lv.own).filter(Boolean));
   const partOf = (id) => parts()[id] || extra[id] || { name: id, says: "" };
   const used = new Set(shown.filter((st) => st.kind !== "outside").flatMap((st) => [st.a, st.b]));
+  // Each level's columns, the next level's in the place of the box that
+  // opens it.
+  const span = levels.map(() => []);
+  const expand = (k) => {
+    const lv = levels[k], next = levels[k + 1];
+    const out = lv.own ? [lv.own] : [];
+    let opened = false;
+    for (const id of lv.members) {
+      if (next && next.own === id) {
+        out.push(...expand(k + 1));
+        opened = true;
+      } else out.push(id);
+    }
+    if (next && !opened) out.push(...expand(k + 1));
+    span[k] = out;
+    return out;
+  };
+  const inOrder = expand(0);
+  const placed = new Set(inOrder);
+  const inner = new Set(span[levels.length - 1]);
   const arrived = shown.findIndex((st) => st.kind !== "outside" && (inner.has(st.a) || inner.has(st.b)));
   const left = [], right = [];
   shown.forEach((st, i) => {
     if (st.kind === "outside") return;
     for (const id of [st.a, st.b]) {
-      if (inner.has(id) || left.includes(id) || right.includes(id)) continue;
+      if (placed.has(id) || left.includes(id) || right.includes(id)) continue;
       (arrived < 0 || i <= arrived ? left : right).push(id);
     }
   });
-  const order = [...left, ...own_, ...right];
+  const order = [...left, ...inOrder, ...right];
   const cols = order.filter((id, i) => used.has(id) && order.indexOf(id) === i);
   if (!cols.length) return '<div class="says faint">None of the steps of this flow go between boxes the map has.</div>';
   const col = Object.fromEntries(cols.map((id, i) => [id, i]));
   const textW = (s, size = 11) => String(s).length * size * 0.56;
   const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
   const HEAD_H = 40, ROW = 30, THIN = 22, LOOP = 22, PAD = 14;
-  // The tier's own columns, the box it is the inside of among them, are
-  // boxed as the map boxes the tier, apart from the frame's.
-  const first = cols.findIndex((id) => inner.has(id));
-  const last = cols.length - 1 - [...cols].reverse().findIndex((id) => inner.has(id));
-  const boxed = Boolean(own) && first >= 0;
-  const TOP = boxed ? 22 : 6;
+  // Each level's columns, the box it is the inside of among them, are
+  // framed as the map boxes the tier, the frames nested from the top
+  // tier's box down to the view's own, each a row of its own over the
+  // heads, apart from the columns of no level.
+  const frames = levels
+    .map((lv, k) => {
+      const at = span[k].filter((id) => col[id] !== undefined).map((id) => col[id]);
+      return lv.own && at.length ? { own: lv.own, first: Math.min(...at), last: Math.max(...at) } : null;
+    })
+    .filter(Boolean);
+  const nF = frames.length;
+  const TOP = 6 + 16 * nF;
   // The columns share the width the page has, up to 150 apart, their
   // heads narrower where the page is narrow, and are a step's label
   // apart at least, shared over the columns a long step crosses.
   const avail = (app.clientWidth || 800) - 32;
-  const pitch = (avail - 56 - 132 - (boxed ? 2 * PAD : 0)) / Math.max(1, cols.length - 1);
+  const pitch = (avail - 56 - 132 - 2 * PAD * nF) / Math.max(1, cols.length - 1);
   const HEAD_W = Math.round(Math.max(96, Math.min(132, pitch - 10)));
-  const LEFT = 40 + HEAD_W / 2;
+  const LEFT = 40 + HEAD_W / 2 + PAD * Math.max(0, frames.filter((f) => f.first === 0).length - 1);
   const base = Math.max(HEAD_W + 10, Math.min(150, Math.floor(pitch)));
   const gaps = cols.slice(1).map(() => base);
   // Drawn between the boxes it is written between, as deep as the map
@@ -618,13 +648,13 @@ function seqEl(view, shown, stepNo) {
     const need = (textW(labelOf(st)) + 28) / (j - i);
     for (let k = i; k < j; k++) gaps[k] = Math.max(gaps[k], need);
   }
-  if (boxed) {
-    if (first > 0) gaps[first - 1] += 2 * PAD;
-    if (last < cols.length - 1) gaps[last] += 2 * PAD;
+  for (const f of frames) {
+    if (f.first > 0) gaps[f.first - 1] += 2 * PAD;
+    if (f.last < cols.length - 1) gaps[f.last] += 2 * PAD;
   }
   const xs = [LEFT];
   for (const g of gaps) xs.push(xs[xs.length - 1] + g);
-  let W = xs[xs.length - 1] + HEAD_W / 2 + 16 + (boxed && last === cols.length - 1 ? PAD : 0);
+  let W = xs[xs.length - 1] + HEAD_W / 2 + 16 + PAD * frames.filter((f) => f.last === cols.length - 1).length;
   let y = TOP + HEAD_H + 24;
   const said = (st) => `${esc(nameOf(st.step.from))} → ${esc(nameOf(st.step.to))}: ${esc(st.step.says)}`;
   const badgeEl = (label, yc) => {
@@ -710,7 +740,7 @@ function seqEl(view, shown, stepNo) {
     const title = `<title>${group.steps.map((x) => `${x.n}. ${said(x)}${x.step.at ? ` (${esc(x.step.at)})` : ""}`).join("\n")}</title>`;
     return `<g class="row ${st.kind} ${on ? "on" : ""}" data-step="${st.n}">${title}<rect class="band" x="4" y="${yc - h / 2 + 1}" width="__W__" height="${h - 2}" rx="6"/>${badge}${drawn}</g>`;
   });
-  const H = y + 18;
+  const H = y + 18, HS = H + 6 * Math.max(0, nF - 1);
   const acts = bars
     .map((bar) => `<rect class="act" x="${xs[col[bar.id]] + (bar.k - 1) * 4 - BAR / 2}" y="${bar.y0 - 4}" width="${BAR}" height="${bar.y1 - bar.y0 + 8}" rx="1"/>`)
     .join("");
@@ -722,31 +752,38 @@ function seqEl(view, shown, stepNo) {
     const { xa, xb } = ends[lit.n];
     focus = lit.a === lit.b ? [xa, xa + LOOP + 8 + textW(labelOf(lit))] : [Math.min(xa, xb), Math.max(xa, xb)];
   }
-  let box = "";
-  if (boxed) {
-    const head = parts()[own] || { name: own };
-    const x0 = xs[first] - HEAD_W / 2 - PAD, x1 = xs[last] + HEAD_W / 2 + PAD;
-    if (!lit || lit.kind === "outside") focus = [x0, x1];
-    const each = head.each ? `<text class="each" x="${x0 + 14 + textW(`${head.name} ↑`, 13) + 10}" y="${TOP - 4}">${esc(head.each)}</text>` : "";
-    box = `<g class="box"><rect x="${x0}" y="${TOP - 8}" width="${x1 - x0}" height="${H - 4 - (TOP - 8)}" rx="12"/><text class="name" data-goes="up" data-id="${esc(own)}" x="${x0 + 14}" y="${TOP - 4}"><title>up to ${esc((tierOf(own) || { name: "the tier above" }).name)} (↑)</title>${esc(head.name)}<tspan class="upmark"> ↑</tspan></text>${each}</g>`;
-  }
+  // The frames, the outermost first, each a little wider and taller
+  // than those inside it, and dim but the innermost; the name of each
+  // goes up to the tier that shows its box.
+  const box = frames
+    .map((f, j) => {
+      const head = parts()[f.own] || { name: f.own };
+      const within = frames.slice(j + 1);
+      const x0 = xs[f.first] - HEAD_W / 2 - PAD * (1 + within.filter((g) => g.first === f.first).length);
+      const x1 = xs[f.last] + HEAD_W / 2 + PAD * (1 + within.filter((g) => g.last === f.last).length);
+      const top = 6 + 16 * (j + 1), bottom = H - 4 + 6 * (nF - 1 - j);
+      if (j === nF - 1 && (!lit || lit.kind === "outside")) focus = [x0, x1];
+      const each = head.each ? `<text class="each" x="${x0 + 14 + textW(`${head.name} ↑`, 13) + 10}" y="${top - 4}">${esc(head.each)}</text>` : "";
+      return `<g class="box ${j < nF - 1 ? "outer" : ""}" data-x0="${Math.round(x0)}" data-x1="${Math.round(x1)}"><rect x="${x0}" y="${top - 8}" width="${x1 - x0}" height="${bottom - (top - 8)}" rx="12"/><text class="name" data-goes="up" data-id="${esc(f.own)}" x="${x0 + 14}" y="${top - 4}"><title>up to ${esc((tierOf(f.own) || { name: "the tier above" }).name)} (↑)</title>${esc(head.name)}<tspan class="upmark"> ↑</tspan></text>${each}</g>`;
+    })
+    .join("");
   const lives = cols.map((id) => `<line class="life" x1="${xs[col[id]]}" y1="${TOP + HEAD_H}" x2="${xs[col[id]]}" y2="${H - 8}"/>`).join("");
   const heads = cols
     .map((id) => {
       const p = partOf(id);
       const goes = p.tier ? "tier" : p.holds && p.holds.length ? "leaf" : p.href ? "fn" : "";
       const far = !near.has(id);
-      const sub = id === own ? "the box itself" : far ? `in ${(tierOf(id) || { name: "?" }).name}` : p.each || "";
+      const sub = owns.has(id) ? "the box itself" : far ? `in ${(tierOf(id) || { name: "?" }).name}` : p.each || "";
       const fit = Math.floor((HEAD_W - 16) / 7);
       const name = `<text class="name" x="${HEAD_W / 2}" y="${sub ? 17 : 24}" text-anchor="middle">${esc(trunc(p.name, fit))}</text>`;
       const each = sub ? `<text class="each" x="${HEAD_W / 2}" y="31" text-anchor="middle">${esc(trunc(sub, fit + 5))}</text>` : "";
-      const g = `<g class="who ${goes ? "goes" : ""} ${id === own ? "own" : ""} ${far ? "far" : ""} ${p.href ? "fn" : ""}" data-seq="${esc(id)}" transform="translate(${xs[col[id]] - HEAD_W / 2} ${TOP})"><title>${esc(p.name)}${p.says ? ` — ${esc(p.says)}` : ""}</title><rect width="${HEAD_W}" height="${HEAD_H}" rx="7"/>${name}${each}</g>`;
+      const g = `<g class="who ${goes ? "goes" : ""} ${owns.has(id) ? "own" : ""} ${far ? "far" : ""} ${p.href ? "fn" : ""}" data-seq="${esc(id)}" transform="translate(${xs[col[id]] - HEAD_W / 2} ${TOP})"><title>${esc(p.name)}${p.says ? ` — ${esc(p.says)}` : ""}</title><rect width="${HEAD_W}" height="${HEAD_H}" rx="7"/>${name}${each}</g>`;
       return p.href ? `<a class="fnlink" href="${esc(p.href)}">${g}</a>` : g;
     })
     .join("");
   const width = Math.round(W);
   const body = rows.map((r) => r.replace("__W__", String(width - 8))).join("");
-  return `<div class="seq" data-focus="${focus.map(Math.round).join(",")}"><svg width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${DEFS}${box}${lives}${acts}${body}${heads}</svg></div>`;
+  return `<div class="seq" data-focus="${focus.map(Math.round).join(",")}"><svg width="${width}" height="${HS}" viewBox="0 0 ${width} ${HS}">${DEFS}${box}${lives}${acts}${body}${heads}</svg></div>`;
 }
 
 // A sequence diagram wider than the page keeps where it was scrolled to
@@ -764,7 +801,28 @@ function seqScrolled() {
   el.scrollLeft = Math.max(0, want);
   seqAt = at;
   seqScroll = el.scrollLeft;
-  el.addEventListener("scroll", () => (seqScroll = el.scrollLeft));
+  stickFrames(el);
+  el.addEventListener("scroll", () => {
+    seqScroll = el.scrollLeft;
+    stickFrames(el);
+  });
+}
+
+/// Keeps the names of the frames in sight as the diagram scrolls: each
+/// at the left edge of what is in view, once its frame's left edge has
+/// gone out of it, until its frame's right edge comes to it; so the
+/// names, one over another, say which boxes the columns in view are in.
+function stickFrames(el) {
+  const left = el.scrollLeft;
+  for (const g of el.querySelectorAll(".box")) {
+    const x0 = Number(g.dataset.x0), x1 = Number(g.dataset.x1);
+    const name = g.querySelector(".name"), each = g.querySelector(".each");
+    const w = name.getComputedTextLength ? name.getComputedTextLength() : 0;
+    const ew = each && each.getComputedTextLength ? each.getComputedTextLength() + 10 : 0;
+    const x = Math.max(x0 + 14, Math.min(left + 14, x1 - 14 - w - ew));
+    name.setAttribute("x", String(Math.round(x)));
+    if (each) each.setAttribute("x", String(Math.round(x + w + 10)));
+  }
 }
 
 function renderLeaf(tierId, id) {
