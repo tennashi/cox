@@ -9,6 +9,7 @@
 //! - The [`Copy`] action and the [`LinkClicked`] event are what the parts
 //!   tell the window alike, and a [`Panel`] is what the conversation and
 //!   the stage of a chat share: whether the stage is open.
+//! - A [`card`] is what the window's parts sit in, on its ground.
 
 pub mod input;
 pub mod markdown;
@@ -17,7 +18,9 @@ pub mod selection;
 pub mod text;
 pub mod theme;
 
-use gpui::{Context, actions};
+use gpui::{Context, Div, Styled, actions, div, px, rgb};
+
+use theme::{BORDER, CARD_RADIUS, SURFACE};
 
 actions!(
     cox,
@@ -53,4 +56,19 @@ impl Panel {
             cx.notify();
         }
     }
+}
+
+/// A card: a part of the window, such as a chat's conversation or its
+/// stage, drawn apart from the ground and from the cards beside it.
+///
+/// Its corners are round, but what it holds is not cut to them, so a
+/// part that fills its card to a corner leaves its ground to the card,
+/// or rounds its own corner by [`theme::CARD_INNER_RADIUS`].
+#[must_use]
+pub fn card() -> Div {
+    div()
+        .bg(rgb(SURFACE))
+        .border_1()
+        .border_color(rgb(BORDER))
+        .rounded(px(CARD_RADIUS))
 }

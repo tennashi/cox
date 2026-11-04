@@ -53,11 +53,12 @@ use crate::chat::view::{Asked, ChatView, Reopened, SwitchAgent};
 use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
 use crate::storage;
+use crate::ui::card;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
     ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, DIM, FAINT, FOREGROUND,
-    GROUND, HOVER, LINK, RAISED, SELECTED, UI_FONT,
+    GAP, GROUND, HOVER, LINK, RAISED, SELECTED, UI_FONT,
 };
 
 actions!(
@@ -1322,8 +1323,6 @@ impl Workspace {
             .flex_shrink_0()
             .flex()
             .flex_col()
-            .border_r_1()
-            .border_color(rgb(BORDER))
             .child(
                 div()
                     .flex()
@@ -1704,7 +1703,7 @@ impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let shown = match self.shown().and_then(Chat::view) {
             Some(view) => view.clone().into_any_element(),
-            None => div()
+            None => card()
                 .size_full()
                 .flex()
                 .items_center()
@@ -1735,7 +1734,8 @@ impl Render for Workspace {
             .font_family(UI_FONT)
             .text_size(px(14.))
             .child(self.render_list(cx))
-            .child(div().flex_1().min_w_0().h_full().child(shown))
+            // The chat's cards, on the ground the list is on.
+            .child(div().flex_1().min_w_0().h_full().p(px(GAP)).child(shown))
             .children(self.render_menu(cx))
     }
 }

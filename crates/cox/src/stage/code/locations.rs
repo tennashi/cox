@@ -18,7 +18,8 @@ use super::Code;
 use super::text::NUMBER;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
-    ACCENT_GROUND, BORDER, BUTTON_HOVER, CODE_FONT, DIM, FOREGROUND, GROUND, HOVER,
+    ACCENT_GROUND, BORDER, BUTTON_HOVER, CARD_INNER_RADIUS, CODE_FONT, DIM, FOREGROUND, GROUND,
+    HOVER,
 };
 
 /// How tall the list is, as a part of the tab's height.
@@ -287,6 +288,8 @@ impl Code {
                 .flex()
                 .flex_col()
                 .bg(rgb(GROUND))
+                // At the foot of the stage's card, round as it is.
+                .rounded_b(px(CARD_INNER_RADIUS))
                 .font_family(CODE_FONT)
                 .text_size(px(12.))
                 .child(heading)

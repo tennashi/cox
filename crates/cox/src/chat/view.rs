@@ -61,10 +61,8 @@ use crate::chat::judge::{Judge, Starts};
 use crate::stage::Stage;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::text::Reading;
-use crate::ui::theme::{
-    BORDER, BUTTON, BUTTON_HOVER, DIM, FOREGROUND, LINK, RAISED, SURFACE, UI_FONT,
-};
-use crate::ui::{Copy, Panel};
+use crate::ui::theme::{BORDER, BUTTON, BUTTON_HOVER, DIM, FOREGROUND, GAP, LINK, RAISED, UI_FONT};
+use crate::ui::{Copy, Panel, card};
 use cox_acp::Login;
 
 mod entries;
@@ -1357,38 +1355,47 @@ impl Render for ChatView {
         let root = div()
             .size_full()
             .flex()
-            .bg(rgb(SURFACE))
+            .gap(px(GAP))
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
             .text_size(px(14.));
         match &self.stage {
+            // The stage on the left, where the eye starts, as the larger
+            // of the two, and the conversation beside it on the right.
             Some(stage) if stage.panel.read(cx).is_open() => root
                 .child(
-                    div()
-                        .w(px(CONVERSATION_WIDTH))
-                        .h_full()
-                        .flex_shrink_0()
-                        .border_r_1()
-                        .border_color(rgb(BORDER))
-                        .child(conversation),
-                )
-                .child(
-                    div()
+                    card()
                         .debug_selector(|| "stage-panel".to_owned())
                         .flex_1()
                         .min_w_0()
                         .h_full()
                         .child(stage.view.clone()),
+                )
+                .child(
+                    card()
+                        .w(px(CONVERSATION_WIDTH))
+                        .h_full()
+                        .flex_shrink_0()
+                        .child(conversation),
                 ),
-            _ => root.justify_center().child(
-                // Narrower than its text unwrapped, as a window can be, the
-                // conversation wraps its text in place of growing past it.
-                div()
+            _ => root.child(
+                card()
                     .flex_1()
                     .min_w_0()
-                    .max_w(px(CONVERSATION_MAX_WIDTH))
                     .h_full()
-                    .child(conversation),
+                    .flex()
+                    .justify_center()
+                    .child(
+                        // Narrower than its text unwrapped, as a window can be,
+                        // the conversation wraps its text in place of growing
+                        // past it.
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .max_w(px(CONVERSATION_MAX_WIDTH))
+                            .h_full()
+                            .child(conversation),
+                    ),
             ),
         }
     }
