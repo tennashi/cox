@@ -20,6 +20,9 @@
 //!   file at `<path>` calls, for a step of a flow made there: the
 //!   function the line is in and the functions it calls, once the server
 //!   has answered (see [`crate::stage::calls`]).
+//! - `cox://api/lines/<path>:<line>`: the lines of the file at `<path>`
+//!   around `<line>`, for a page to show the code a step is made at (see
+//!   [`crate::stage::lines`]).
 //!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Map plugin does for a box's code.
@@ -30,6 +33,7 @@ use std::sync::Arc;
 use cox_browser::scheme::{Resource, Serve, percent_decoded};
 
 use crate::stage::calls::Calls;
+use crate::stage::lines;
 use crate::stage::map;
 use crate::stage::outline::Outlines;
 
@@ -160,12 +164,16 @@ impl Plugins {
                 let path = PathBuf::from(format!("/{}", percent_decoded(rest)));
                 self.outlines.told(&self.root, &path)?
             }
-            "call" if !rest.is_empty() => {
+            "call" | "lines" if !rest.is_empty() => {
                 let spec = percent_decoded(rest);
                 let (path, line) = spec.rsplit_once(':')?;
                 let line: usize = line.parse().ok()?;
                 let path = PathBuf::from(format!("/{path}"));
-                self.calls.told(&self.root, &path, line)?
+                if what == "call" {
+                    self.calls.told(&self.root, &path, line)?
+                } else {
+                    lines::told(&self.root, &path, line)?
+                }
             }
             _ => return None,
         };
@@ -326,6 +334,14 @@ mod tests {
         let url = format!("cox://api/call{}/my%20src/main.rs", root.display());
         assert_eq!(plugins.resource(&url), None);
         assert_eq!(plugins.resource("cox://api/call/etc/hostname:1"), None);
+
+        let url = format!("cox://api/lines{}/my%20src/main.rs:1", root.display());
+        let answer = plugins.resource(&url).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["name"], "my src/main.rs");
+        assert_eq!(json["from"], 1);
+        assert_eq!(json["lines"], serde_json::json!(["fn main() {}"]));
+        assert_eq!(plugins.resource("cox://api/lines/etc/hostname:1"), None);
     }
 
     #[test]

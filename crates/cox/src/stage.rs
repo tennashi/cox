@@ -58,6 +58,7 @@ pub mod code;
 pub mod document;
 pub mod flow;
 pub mod follow;
+pub mod lines;
 mod links;
 pub mod map;
 pub mod outline;
