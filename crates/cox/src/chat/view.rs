@@ -30,6 +30,10 @@
 //! and hands the conversation how it went, which decides whether the
 //! agent goes on (see [`Conversation::checked`] and
 //! [`Conversation::judged`]).
+//!
+//! The bar above the conversation shows what the agent lets the human
+//! choose of its session, such as its model, each as it is set, and a
+//! click on one opens its choices (see [`settings`]).
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -40,8 +44,8 @@ use cox_core::store::Record;
 use cox_core::tabs::KeptTabs;
 use gpui::{
     AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, Subscription, Task,
-    Window, actions, div, prelude::*, px, relative, rgb,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
+    Subscription, Task, Window, actions, div, prelude::*, px, relative, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -58,6 +62,7 @@ use crate::ui::theme::{DIM, FONT, LINK};
 use crate::ui::{Copy, Panel};
 
 mod entries;
+mod settings;
 
 use entries::{Folds, disclosure, progress, render_steps};
 
@@ -174,6 +179,13 @@ pub struct ChatView {
     /// The input the human sets the goal in, while it is open, with the
     /// index of the proposed goal it changes, when it changes one.
     goal_input: Option<(Entity<LineInput>, Option<usize>, Subscription)>,
+    /// The setting whose choices are open, by its place in the
+    /// conversation's settings, while they are.
+    setting_open: Option<usize>,
+    /// Where the press that last closed the list of a setting's choices
+    /// was, so that the press on the setting's button does not open it
+    /// again.
+    setting_closed_at: Option<Point<Pixels>>,
     _submitted: Subscription,
     /// Redraws the chat as its stage opens and closes.
     _panel_changes: Option<Subscription>,
@@ -301,6 +313,8 @@ impl ChatView {
             judge: None,
             cwd: None,
             goal_input: None,
+            setting_open: None,
+            setting_closed_at: None,
             _submitted: submitted,
             _panel_changes: panel_changes,
         }
@@ -346,6 +360,58 @@ impl ChatView {
         self.agent = Some((thread, tasks));
         self.cwd = Some(cwd.clone());
         self.tools = tools.map(|tools| (cwd, tools));
+        // The session is set as the chat was, or a new chat as the human
+        // chose last, once it opens.
+        for (id, value) in self.wanted_settings() {
+            self.send(Command::Set { id, value });
+        }
+    }
+
+    /// What the chat's session is to be set to once its agent starts: each
+    /// setting as the chat had it, or, for a chat that had none, as the
+    /// human chose last of the model.
+    fn wanted_settings(&self) -> Vec<(String, String)> {
+        let settings = self.conversation.settings();
+        if !settings.is_empty() {
+            return settings
+                .iter()
+                .map(|setting| (setting.id.clone(), setting.value.clone()))
+                .collect();
+        }
+        let Some(record) = &self.record else {
+            return Vec::new();
+        };
+        record.choices().unwrap_or_else(|error| {
+            tracing::error!("a new chat starts as its agent says, not as chosen: {error:#}");
+            Vec::new()
+        })
+    }
+
+    /// Sets the setting `id` of the chat's session to `value`, as the human
+    /// chose: through its agent while it runs, or, for a closed chat, for
+    /// its agent to set once it starts again. A choice of the model is
+    /// kept for new chats to start with.
+    fn set(&mut self, id: &str, value: &str, cx: &mut Context<Self>) {
+        self.setting_open = None;
+        let Some(setting) = self.conversation.settings().iter().find(|s| s.id == id) else {
+            return;
+        };
+        if setting.is_of_model()
+            && let Some(record) = &self.record
+            && let Err(error) = record.choose(id, value)
+        {
+            tracing::error!("new chats do not start with this choice: {error:#}");
+        }
+        if self.is_open() {
+            self.send(Command::Set {
+                id: id.to_owned(),
+                value: value.to_owned(),
+            });
+        } else {
+            self.conversation.set(id, value);
+            self.keep();
+        }
+        cx.notify();
     }
 
     /// Starts the chat, opened from the chat named `opened_by`, on `text`
@@ -636,9 +702,13 @@ impl ChatView {
     /// Keeps the entries that changed since this was last called.
     fn keep(&mut self) {
         let changed = self.conversation.take_changed();
+        let settings_changed = self.conversation.take_settings_changed();
         let Some(record) = &self.record else {
             return;
         };
+        if settings_changed && let Err(error) = record.settings(self.conversation.settings()) {
+            tracing::error!("the chat's settings are not kept: {error:#}");
+        }
         for index in changed {
             if let Err(error) = record.entry(index, &self.conversation.entries()[index]) {
                 tracing::error!("the chat is not kept as it goes: {error:#}");
@@ -1086,28 +1156,47 @@ impl ChatView {
         )
     }
 
-    /// The bar above the conversation, with the button that opens and
-    /// closes the stage, when there is one.
+    /// The bar above the conversation, with the settings of the session
+    /// and the button that opens and closes the stage, when there are any.
     fn render_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let stage = self.stage.as_ref()?;
-        let label = if stage.panel.read(cx).is_open() {
-            "Hide stage"
-        } else {
-            "Show stage"
-        };
+        let settings = self.render_settings(cx);
+        if settings.is_empty() && self.stage.is_none() {
+            return None;
+        }
+        let toggle = self.stage.as_ref().map(|stage| {
+            let label = if stage.panel.read(cx).is_open() {
+                "Hide stage"
+            } else {
+                "Show stage"
+            };
+            div()
+                .id("toggle-stage")
+                .debug_selector(|| "toggle-stage".to_owned())
+                .px_2()
+                .rounded_sm()
+                .text_color(rgb(DIM))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                .child(label)
+                .on_click(cx.listener(|view, _, window, cx| view.toggle_stage(window, cx)))
+        });
         Some(
-            div().flex().justify_end().px_3().pt_2().child(
-                div()
-                    .id("toggle-stage")
-                    .debug_selector(|| "toggle-stage".to_owned())
-                    .px_2()
-                    .rounded_sm()
-                    .text_color(rgb(DIM))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
-                    .child(label)
-                    .on_click(cx.listener(|view, _, window, cx| view.toggle_stage(window, cx))),
-            ),
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .pt_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .children(settings),
+                )
+                .children(toggle),
         )
     }
 }

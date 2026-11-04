@@ -12,7 +12,9 @@
 //! mentions "slow", it waits a moment before anything. When the
 //! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
 //! turn. A turn cancelled, or whose permission request Cox answers as cancelled,
-//! ends as cancelled. It goes on with a session it opened before as
+//! ends as cancelled. Its sessions have two settings, [`MODEL`] and
+//! [`MODE`], which Cox sets as it asks, and when a prompt mentions
+//! "switch", the agent sets its mode to `plan` on its own. It goes on with a session it opened before as
 //! [`Resumes`] says. It records what Cox asked of it and answered so tests can
 //! check what Cox did.
 
@@ -22,16 +24,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Diff, InitializeRequest,
-    InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpServer, NewSessionRequest,
-    NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority,
-    PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    AgentCapabilities, CancelNotification, ConfigOptionUpdate, ContentBlock, ContentChunk, Diff,
+    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpServer,
+    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry,
+    PlanEntryPriority, PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
-    SessionId, SessionInfoUpdate, SessionNotification, SessionResumeCapabilities, SessionUpdate,
-    StopReason, TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption, SessionId,
+    SessionInfoUpdate, SessionNotification, SessionResumeCapabilities, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
+    ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields, ToolKind,
 };
-use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result};
+use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Responder, Result};
 use tokio::sync::Notify;
 
 /// How the agent goes on with a session it opened before.
@@ -59,6 +63,87 @@ pub struct FakeAgent {
     prompts: Arc<Mutex<Vec<Vec<String>>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
     cancels: Arc<Cancels>,
+    settings: Arc<Mutex<Settings>>,
+}
+
+/// The settings of the agent's sessions: their values, and each setting
+/// Cox set, in order, with what it set it to.
+#[derive(Debug)]
+struct Settings {
+    model: String,
+    mode: String,
+    set: Vec<(String, String)>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            model: "large".to_owned(),
+            mode: "ask".to_owned(),
+            set: Vec::new(),
+        }
+    }
+}
+
+/// The ids of the agent's settings: the model, `large` or `small`, and the
+/// mode, `ask` or `plan`.
+pub const MODEL: &str = "model";
+pub const MODE: &str = "mode";
+
+impl Settings {
+    /// Sets what `request` asks, and answers all the settings then.
+    fn set(&mut self, request: &SetSessionConfigOptionRequest) -> Result<Vec<SessionConfigOption>> {
+        let value = request
+            .value
+            .as_value_id()
+            .map(|value| value.0.to_string())
+            .unwrap_or_default();
+        match &*request.config_id.0 {
+            MODEL => value.clone_into(&mut self.model),
+            MODE => value.clone_into(&mut self.mode),
+            _ => return Err(Error::new(-32602, "no such setting")),
+        }
+        self.set.push((request.config_id.0.to_string(), value));
+        Ok(self.options())
+    }
+
+    /// The settings as ACP says them.
+    fn options(&self) -> Vec<SessionConfigOption> {
+        let choice = |id: &str, name: &str| SessionConfigSelectOption::new(id.to_owned(), name);
+        vec![
+            SessionConfigOption::select(
+                MODEL,
+                "Model",
+                self.model.clone(),
+                vec![choice("large", "Large"), choice("small", "Small")],
+            )
+            .category(SessionConfigOptionCategory::Model),
+            SessionConfigOption::select(
+                MODE,
+                "Mode",
+                self.mode.clone(),
+                vec![choice("ask", "Ask"), choice("plan", "Plan")],
+            )
+            .category(SessionConfigOptionCategory::Mode),
+        ]
+    }
+}
+
+/// Sets the mode to `plan` on the agent's own, and tells Cox.
+fn switch(
+    cx: &ConnectionTo<Client>,
+    session: &SessionId,
+    settings: &Mutex<Settings>,
+) -> Result<()> {
+    let options = {
+        let mut settings = settings.lock().unwrap();
+        "plan".clone_into(&mut settings.mode);
+        settings.options()
+    };
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options)),
+    ))
 }
 
 /// The cancels Cox has sent.
@@ -92,8 +177,14 @@ impl FakeAgent {
             Arc::clone(&self.prompts),
             Arc::clone(&self.answers),
             Arc::clone(&self.cancels),
+            Arc::clone(&self.settings),
         ));
         cox_end
+    }
+
+    /// Each setting Cox set, in order, with what it set it to.
+    pub fn settings_set(&self) -> Vec<(String, String)> {
+        self.settings.lock().unwrap().set.clone()
     }
 
     /// The sessions Cox asked to go on with, in order.
@@ -180,9 +271,16 @@ async fn serve(
     prompts: Arc<Mutex<Vec<Vec<String>>>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
     cancels: Arc<Cancels>,
+    settings: Arc<Mutex<Settings>>,
 ) -> Result<()> {
     let waits = Arc::clone(&cancels);
     let loaded = Arc::clone(&asked_to_resume);
+    let (on_resume, on_new, on_set, on_prompt) = (
+        Arc::clone(&settings),
+        Arc::clone(&settings),
+        Arc::clone(&settings),
+        Arc::clone(&settings),
+    );
     Agent
         .builder()
         .name("fake-agent")
@@ -204,7 +302,8 @@ async fn serve(
                 if resumes == Resumes::Refuse {
                     return responder.respond_with_error(Error::new(-32002, "no such session"));
                 }
-                responder.respond(ResumeSessionResponse::new())
+                let options = on_resume.lock().unwrap().options();
+                responder.respond(ResumeSessionResponse::new().config_options(options))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -213,7 +312,8 @@ async fn serve(
                 loaded.lock().unwrap().push(request.session_id.to_string());
                 // What the session said before, which Cox shows already.
                 say(&cx, &request.session_id, "said before")?;
-                responder.respond(LoadSessionResponse::new())
+                let options = settings.lock().unwrap().options();
+                responder.respond(LoadSessionResponse::new().config_options(options))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -222,7 +322,19 @@ async fn serve(
                 sessions_opened.fetch_add(1, Ordering::SeqCst);
                 *cwd.lock().unwrap() = Some(request.cwd);
                 *mcp_servers.lock().unwrap() = request.mcp_servers;
-                responder.respond(NewSessionResponse::new("session-1"))
+                let options = on_new.lock().unwrap().options();
+                responder.respond(NewSessionResponse::new("session-1").config_options(options))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: SetSessionConfigOptionRequest, responder, _cx| match on_set
+                .lock()
+                .unwrap()
+                .set(&request)
+            {
+                Ok(options) => responder.respond(SetSessionConfigOptionResponse::new(options)),
+                Err(error) => responder.respond_with_error(error),
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -235,39 +347,14 @@ async fn serve(
                 let answers = Arc::clone(&answers);
                 let cancels = Arc::clone(&waits);
                 let turn = cx.clone();
+                if text.contains("switch") {
+                    switch(&cx, &request.session_id, &on_prompt)?;
+                }
                 // Asking permission waits for Cox's answer, which arrives
                 // through the loop that runs this handler, so wait elsewhere.
-                cx.spawn(async move {
-                    if let Some(verdict) = verdict {
-                        say(&turn, &request.session_id, verdict)?;
-                        return responder.respond(PromptResponse::new(StopReason::EndTurn));
-                    }
-                    if text.contains("fail") {
-                        return responder
-                            .respond_with_error(Error::new(-32603, "the model is unavailable"));
-                    }
-                    if text.contains("slow") {
-                        tokio::time::sleep(SLOW).await;
-                    }
-                    work(&turn, &request.session_id, &text)?;
-                    if text.contains("wait") {
-                        say(&turn, &request.session_id, "waiting")?;
-                        cancels.wake.notified().await;
-                        return responder.respond(PromptResponse::new(StopReason::Cancelled));
-                    }
-                    if text.contains("permission") {
-                        let answer = ask_permission(&turn, &request.session_id).await?;
-                        answers.lock().unwrap().push(answer.clone());
-                        if answer == RequestPermissionOutcome::Cancelled {
-                            return responder.respond(PromptResponse::new(StopReason::Cancelled));
-                        }
-                        finish(&turn, &request.session_id, "call-1")?;
-                    }
-                    for word in format!("echo: {text}").split_inclusive(' ') {
-                        say(&turn, &request.session_id, word)?;
-                    }
-                    responder.respond(PromptResponse::new(StopReason::EndTurn))
-                })
+                cx.spawn(take_turn(
+                    turn, request, responder, text, verdict, answers, cancels,
+                ))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -281,6 +368,48 @@ async fn serve(
         )
         .connect_to(transport)
         .await
+}
+
+/// Takes the turn that answers `request`, whose text is `text`, as the
+/// prompt asks, or says `verdict` when it asks to judge a goal, and
+/// answers it with `responder`.
+async fn take_turn(
+    turn: ConnectionTo<Client>,
+    request: PromptRequest,
+    responder: Responder<PromptResponse>,
+    text: String,
+    verdict: Option<&'static str>,
+    answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
+    cancels: Arc<Cancels>,
+) -> Result<()> {
+    if let Some(verdict) = verdict {
+        say(&turn, &request.session_id, verdict)?;
+        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+    }
+    if text.contains("fail") {
+        return responder.respond_with_error(Error::new(-32603, "the model is unavailable"));
+    }
+    if text.contains("slow") {
+        tokio::time::sleep(SLOW).await;
+    }
+    work(&turn, &request.session_id, &text)?;
+    if text.contains("wait") {
+        say(&turn, &request.session_id, "waiting")?;
+        cancels.wake.notified().await;
+        return responder.respond(PromptResponse::new(StopReason::Cancelled));
+    }
+    if text.contains("permission") {
+        let answer = ask_permission(&turn, &request.session_id).await?;
+        answers.lock().unwrap().push(answer.clone());
+        if answer == RequestPermissionOutcome::Cancelled {
+            return responder.respond(PromptResponse::new(StopReason::Cancelled));
+        }
+        finish(&turn, &request.session_id, "call-1")?;
+    }
+    for word in format!("echo: {text}").split_inclusive(' ') {
+        say(&turn, &request.session_id, word)?;
+    }
+    responder.respond(PromptResponse::new(StopReason::EndTurn))
 }
 
 /// What the agent says it can do: go on with a session as `resumes` says.

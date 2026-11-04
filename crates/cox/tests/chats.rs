@@ -23,6 +23,7 @@ use cox::chat::{Closed, Opens};
 use cox::notices::{AppNotices, Notices};
 use cox::workspace::{Chat, Workspace};
 use cox_core::goal::Goal as KeptGoal;
+use cox_core::settings::{Choice, Setting};
 use cox_core::store::Named;
 use cox_core::store::{Record, Store};
 use fake_agent::{FakeAgent, Resumes, TITLE};
@@ -120,6 +121,7 @@ impl Opens for FakeOpens {
             entries,
             session,
             goal,
+            settings,
             setup,
             record,
             ..
@@ -139,7 +141,9 @@ impl Opens for FakeOpens {
             agent
         });
         let link = Rc::new(|_: &str, _: &mut Window, _: &mut App| {});
-        let conversation = Conversation::closed(entries).with_goal(goal);
+        let conversation = Conversation::closed(entries)
+            .with_goal(goal)
+            .with_settings(settings);
         let starts = self.starts();
         cx.new(|cx| {
             ChatView::closed(
@@ -459,6 +463,11 @@ async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
     say(cx, &workspace, "first").await;
     cx.simulate_keystrokes("secondary-n");
     cx.simulate_input("not sent yet");
+    let view = shown(cx, &workspace);
+    wait_until(cx, &view, |conversation| {
+        !conversation.settings().is_empty()
+    })
+    .await;
 
     let told = describe(cx, None);
     let listed = format!(
@@ -469,7 +478,9 @@ async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
     assert!(told.contains("the keyboard is in the input"), "{told}");
     assert!(
         told.ends_with(
-            "Chat 2 \"Chat 2\":\n  idle\n  Input: \"not sent yet\"\n  Stage: none\n  Conversation, 0 entries:\n"
+            "Chat 2 \"Chat 2\":\n  idle\n  Input: \"not sent yet\"\n  \
+            Setting \"Model\": \"Large\", of Large, Small\n  Setting \"Mode\": \"Ask\", of Ask, Plan\n  \
+            Stage: none\n  Conversation, 0 entries:\n"
         ),
         "{told}"
     );
@@ -477,7 +488,8 @@ async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
     assert!(
         told.ends_with(
             "Chat 1 \"first\":\n  idle\n  Not shown: its input and stage are as they were left.\n  \
-            Input: \"\"\n  Stage: none\n  Conversation, 2 entries:\n    1 human: first\n    2 reply: echo: first\n"
+            Input: \"\"\n  Setting \"Model\": \"Large\", of Large, Small\n  \
+            Setting \"Mode\": \"Ask\", of Ask, Plan\n  Stage: none\n  Conversation, 2 entries:\n    1 human: first\n    2 reply: echo: first\n"
         ),
         "{told}"
     );
@@ -853,6 +865,104 @@ async fn a_new_chat_keeps_its_agents_session(cx: &mut TestAppContext) {
     assert_eq!(
         store.session(chats[0].id).unwrap().as_deref(),
         Some("session-1")
+    );
+}
+
+/// The fake agent's settings, set as `model` and `mode` say.
+fn fake_settings(model: &str, mode: &str) -> Vec<Setting> {
+    let choices = |ids: [(&str, &str); 2]| {
+        ids.map(|(id, name)| Choice {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            description: None,
+            group: None,
+        })
+        .to_vec()
+    };
+    vec![
+        Setting {
+            id: fake_agent::MODEL.to_owned(),
+            name: "Model".to_owned(),
+            description: None,
+            category: Some("model".to_owned()),
+            value: model.to_owned(),
+            choices: choices([("large", "Large"), ("small", "Small")]),
+        },
+        Setting {
+            id: fake_agent::MODE.to_owned(),
+            name: "Mode".to_owned(),
+            description: None,
+            category: Some("mode".to_owned()),
+            value: mode.to_owned(),
+            choices: choices([("ask", "Ask"), ("plan", "Plan")]),
+        },
+    ]
+}
+
+#[gpui::test]
+async fn a_closed_chat_sets_its_session_as_it_was_set(cx: &mut TestAppContext) {
+    let folder = scratch("settings");
+    let (store, kept) = kept_chat(&folder, Some("session-1"));
+    store
+        .keep_settings(kept, &fake_settings("small", "plan"))
+        .unwrap();
+    let (agents, workspace, cx) = open_window_resuming(
+        cx,
+        scratch("settings-home"),
+        Rc::clone(&store),
+        Resumes::Never,
+    );
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.show(FIRST_KEPT, window, cx);
+    });
+
+    // Closed, the chat is set as it was, and the human sets it anew, for
+    // its agent to set once it starts again.
+    click(cx, "setting-0");
+    click(cx, "choice-0");
+    assert_eq!(
+        store.settings(kept).unwrap(),
+        fake_settings("large", "plan")
+    );
+    assert_eq!(
+        store.choices().unwrap(),
+        [(fake_agent::MODEL.to_owned(), "large".to_owned())]
+    );
+
+    say(cx, &workspace, "again").await;
+
+    let agent = Arc::clone(&agents.borrow()[0]);
+    // A new session is set as the chat was: its model is large already.
+    assert_eq!(
+        agent.settings_set(),
+        [(fake_agent::MODE.to_owned(), "plan".to_owned())]
+    );
+    let view = shown(cx, &workspace);
+    let set = view.read_with(cx, |view, _| view.conversation().settings().to_vec());
+    assert_eq!(set, fake_settings("large", "plan"));
+    assert_eq!(store.settings(kept).unwrap(), set);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui::test]
+async fn a_new_chat_starts_on_the_model_chosen_last(cx: &mut TestAppContext) {
+    let store = Rc::new(Store::in_memory().unwrap());
+    store.keep_choice(fake_agent::MODEL, "small").unwrap();
+    store.keep_choice("gone", "anything").unwrap();
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch("chosen"), Rc::clone(&store));
+    click(cx, "new-chat");
+    say(cx, &workspace, "hello").await;
+
+    let agent = Arc::clone(&agents.borrow()[0]);
+    // What the session has no setting for is left out.
+    assert_eq!(
+        agent.settings_set(),
+        [(fake_agent::MODEL.to_owned(), "small".to_owned())]
+    );
+    let chats = store.chats().unwrap();
+    assert_eq!(
+        store.settings(chats[0].id).unwrap(),
+        fake_settings("small", "ask")
     );
 }
 

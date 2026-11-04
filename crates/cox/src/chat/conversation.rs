@@ -17,6 +17,7 @@ use std::path::Path;
 use cox_acp::{PermissionAnswer, StopReason};
 pub use cox_core::entry::{Answer, Content, Entry, Step, StepState, ToolCallResult};
 use cox_core::goal;
+use cox_core::settings::Setting;
 
 use crate::agent::mcp::{Ended, Ran};
 use crate::agent::{AgentEvent, Command, Opened};
@@ -122,6 +123,12 @@ pub struct Conversation {
     title: Option<String>,
     /// What the chat works until, if the human set one.
     goal: Option<Goal>,
+    /// What the agent lets the human choose of its session, such as its
+    /// model, each as it is set, once the agent has said, or as it was
+    /// kept.
+    settings: Vec<Setting>,
+    /// Whether the settings changed since that was last taken, to keep.
+    settings_changed: bool,
 }
 
 impl Default for Conversation {
@@ -139,6 +146,8 @@ impl Conversation {
             changed: BTreeSet::new(),
             title: None,
             goal: None,
+            settings: Vec::new(),
+            settings_changed: false,
         }
     }
 
@@ -168,6 +177,8 @@ impl Conversation {
             changed: BTreeSet::new(),
             title: None,
             goal: None,
+            settings: Vec::new(),
+            settings_changed: false,
         }
     }
 
@@ -177,6 +188,40 @@ impl Conversation {
     pub fn with_goal(mut self, goal: Option<goal::Goal>) -> Self {
         self.goal = goal.map(Goal::new);
         self
+    }
+
+    /// The conversation, of a chat whose session was set as `settings`
+    /// say, as they were kept.
+    #[must_use]
+    pub fn with_settings(mut self, settings: Vec<Setting>) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// What the agent lets the human choose of its session, each as it is
+    /// set.
+    #[must_use]
+    pub fn settings(&self) -> &[Setting] {
+        &self.settings
+    }
+
+    /// Whether the settings changed since this was last called, to keep.
+    pub fn take_settings_changed(&mut self) -> bool {
+        std::mem::take(&mut self.settings_changed)
+    }
+
+    /// Sets the setting `id` to `value` here, as for a closed chat, whose
+    /// agent sets it once it starts again. Answers whether it changed.
+    pub fn set(&mut self, id: &str, value: &str) -> bool {
+        let Some(setting) = self.settings.iter_mut().find(|setting| setting.id == id) else {
+            return false;
+        };
+        if setting.value == value || !setting.offers(value) {
+            return false;
+        }
+        value.clone_into(&mut setting.value);
+        self.settings_changed = true;
+        true
     }
 
     /// Opens the conversation of a chat that has closed again, for the
@@ -698,10 +743,24 @@ impl Conversation {
         });
     }
 
+    /// Takes `settings` as how the session is set now.
+    fn settings_set(&mut self, settings: Vec<Setting>) {
+        if settings != self.settings {
+            self.settings = settings;
+            self.settings_changed = true;
+        }
+    }
+
     /// Shows what the agent side sent.
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Titled(title) => self.title = Some(title),
+            AgentEvent::Settings(settings) => self.settings_set(settings),
+            AgentEvent::SettingFailed { name, error } => {
+                self.push(Entry::Note(format!(
+                    "The agent did not set {name}: {error}"
+                )));
+            }
             AgentEvent::Opened { how, .. } => match how {
                 Opened::New => {}
                 Opened::Resumed => {

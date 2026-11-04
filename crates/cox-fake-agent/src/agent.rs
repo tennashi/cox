@@ -1,6 +1,7 @@
 //! The agent's side of ACP, as a scenario plays it: it answers
-//! `initialize` and `session/new`, takes a turn of the scenario for each
-//! `session/prompt`, and ends the turn early when Cox cancels it.
+//! `initialize` and `session/new`, with the scenario's settings, sets them
+//! as `session/set_config_option` asks, takes a turn of the scenario for
+//! each `session/prompt`, and ends the turn early when Cox cancels it.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead as _, Write};
@@ -18,6 +19,9 @@ const WORD: Duration = Duration::from_millis(30);
 
 /// JSON-RPC's code for a method the agent does not know.
 const METHOD_NOT_FOUND: i64 = -32601;
+
+/// JSON-RPC's code for a setting or value the scenario does not have.
+const INVALID_PARAMS: i64 = -32602;
 
 /// JSON-RPC's code for a turn the scenario fails.
 const INTERNAL_ERROR: i64 = -32603;
@@ -114,8 +118,13 @@ impl<W: Write> Agent<W> {
                         .collect();
                     self.sessions += 1;
                     let session = format!("fake-{}", self.sessions);
-                    self.answer(&id, &json!({ "sessionId": session }));
+                    let mut answer = json!({ "sessionId": session });
+                    if !self.scenario.config_options.is_empty() {
+                        answer["configOptions"] = Value::from(self.scenario.config_options.clone());
+                    }
+                    self.answer(&id, &answer);
                 }
+                ("session/set_config_option", Some(id)) => self.set(&id, &message["params"]),
                 ("session/prompt", Some(id)) => {
                     if !self.prompt(&id, &message["params"]) {
                         return;
@@ -128,6 +137,45 @@ impl<W: Write> Agent<W> {
                 }
             }
         }
+    }
+
+    /// Sets the setting `params` names to the value it says, and answers
+    /// `id` with all the settings, or with an error for a setting or value
+    /// the scenario does not have.
+    fn set(&mut self, id: &Value, params: &Value) {
+        let (setting, value) = (&params["configId"], &params["value"]);
+        let option = self
+            .scenario
+            .config_options
+            .iter_mut()
+            .find(|option| option["id"] == *setting);
+        let Some(option) = option else {
+            self.fail(
+                id,
+                INVALID_PARAMS,
+                &format!("there is no setting {setting}"),
+            );
+            return;
+        };
+        let offered = option["options"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            // Grouped, a choice is in a group's options.
+            .flat_map(|choice| {
+                choice["options"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_else(|| vec![choice.clone()])
+            })
+            .any(|choice| choice["value"] == *value);
+        if !offered {
+            self.fail(id, INVALID_PARAMS, &format!("{setting} cannot be {value}"));
+            return;
+        }
+        option["currentValue"] = value.clone();
+        let options = Value::from(self.scenario.config_options.clone());
+        self.answer(id, &json!({ "configOptions": options }));
     }
 
     /// Takes the turn that answers the prompt `params`, and answers `id`

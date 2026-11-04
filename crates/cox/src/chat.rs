@@ -60,6 +60,8 @@ pub struct Closed {
     pub session: Option<String>,
     /// What it works until, if the human set a goal.
     pub goal: Option<cox_core::goal::Goal>,
+    /// The settings of its session, as they were set.
+    pub settings: Vec<cox_core::settings::Setting>,
     /// How its agent is set up, if the chat that opened it said.
     pub setup: Option<Setup>,
     /// Where it is kept, to go on keeping it once the human sends to it.

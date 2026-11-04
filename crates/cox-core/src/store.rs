@@ -17,10 +17,11 @@ use rusqlite::{Connection, OptionalExtension as _, params};
 
 use crate::entry::Entry;
 use crate::goal::Goal;
+use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 6;
+const VERSION: i64 = 7;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -54,7 +55,10 @@ CREATE TABLE chats (
     -- The words of the chat's goal, which an agent judges met or not,
     -- while the human has set a goal in words. A chat has one goal, so
     -- this and goal_command are not both set.
-    goal_words TEXT
+    goal_words TEXT,
+    -- What its agent lets the human choose of its session, such as the
+    -- model, each as it is set, as JSON, once the agent has said.
+    settings TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -66,6 +70,12 @@ CREATE TABLE entries (
     entry TEXT NOT NULL,
     PRIMARY KEY (chat, number)
 ) WITHOUT ROWID;
+CREATE TABLE choices (
+    -- The id an agent knows a setting of its session by, as `model`.
+    setting TEXT PRIMARY KEY,
+    -- What the human set it to last, which a new chat starts with.
+    value TEXT NOT NULL
+);
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -78,6 +88,8 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN parent INTEGER REFERENCES chats (id);
      ALTER TABLE chats ADD COLUMN setup TEXT;",
     "ALTER TABLE chats ADD COLUMN goal_words TEXT;",
+    "ALTER TABLE chats ADD COLUMN settings TEXT;
+     CREATE TABLE choices (setting TEXT PRIMARY KEY, value TEXT NOT NULL);",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -468,6 +480,66 @@ impl Store {
         )?;
         Ok(())
     }
+
+    /// The settings of `chat`'s session, as they were last set: none until
+    /// its agent said what they are.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read, or holds settings this Cox cannot.
+    pub fn settings(&self, chat: ChatId) -> anyhow::Result<Vec<Setting>> {
+        let settings: Option<String> = self.connection.query_row(
+            "SELECT settings FROM chats WHERE id = ?1",
+            [chat.0],
+            |row| row.get(0),
+        )?;
+        Ok(settings
+            .map(|settings| serde_json::from_str(&settings))
+            .transpose()?
+            .unwrap_or_default())
+    }
+
+    /// Keeps `settings` as those of `chat`'s session.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_settings(&self, chat: ChatId, settings: &[Setting]) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET settings = ?2 WHERE id = ?1",
+            params![chat.0, serde_json::to_string(settings)?],
+        )?;
+        Ok(())
+    }
+
+    /// What the human set each setting to last, by the setting's id, of
+    /// the settings a new chat starts with, in the order they were first
+    /// set.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn choices(&self) -> anyhow::Result<Vec<(String, String)>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT setting, value FROM choices ORDER BY rowid")?;
+        let choices = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(choices.collect::<Result<_, _>>()?)
+    }
+
+    /// Keeps `value` as what the human set the setting `setting` to last.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_choice(&self, setting: &str, value: &str) -> anyhow::Result<()> {
+        self.connection.execute(
+            "INSERT INTO choices (setting, value) VALUES (?1, ?2)
+             ON CONFLICT (setting) DO UPDATE SET value = excluded.value",
+            params![setting, value],
+        )?;
+        Ok(())
+    }
 }
 
 /// Where one chat is kept: what its conversation and stage write to as
@@ -525,6 +597,35 @@ impl Record {
     /// When the database cannot be written.
     pub fn goal(&self, goal: Option<&Goal>) -> anyhow::Result<()> {
         self.store.keep_goal(self.chat, goal)
+    }
+
+    /// Keeps `settings` as those of the chat's session.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn settings(&self, settings: &[Setting]) -> anyhow::Result<()> {
+        self.store.keep_settings(self.chat, settings)
+    }
+
+    /// What the human set each setting to last, of those a new chat starts
+    /// with, as [`Store::choices`] says.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn choices(&self) -> anyhow::Result<Vec<(String, String)>> {
+        self.store.choices()
+    }
+
+    /// Keeps `value` as what the human set the setting `setting` to last,
+    /// for a new chat to start with.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn choose(&self, setting: &str, value: &str) -> anyhow::Result<()> {
+        self.store.keep_choice(setting, value)
     }
 }
 
@@ -760,6 +861,42 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_settings_of_a_chats_session_and_the_last_choices() {
+        use crate::settings::{Choice, Setting};
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        assert_eq!(store.settings(chat).unwrap(), []);
+
+        let settings = [Setting {
+            id: "model".to_owned(),
+            name: "Model".to_owned(),
+            description: None,
+            category: Some("model".to_owned()),
+            value: "small".to_owned(),
+            choices: vec![Choice {
+                id: "small".to_owned(),
+                name: "Small".to_owned(),
+                description: Some("Quick".to_owned()),
+                group: None,
+            }],
+        }];
+        store.keep_settings(chat, &settings).unwrap();
+        assert_eq!(store.settings(chat).unwrap(), settings);
+
+        assert_eq!(store.choices().unwrap(), []);
+        store.keep_choice("model", "large").unwrap();
+        store.keep_choice("effort", "high").unwrap();
+        store.keep_choice("model", "small").unwrap();
+        assert_eq!(
+            store.choices().unwrap(),
+            [
+                ("model".to_owned(), "small".to_owned()),
+                ("effort".to_owned(), "high".to_owned())
+            ]
+        );
+    }
+
+    #[test]
     fn keeps_a_new_setup_and_forgets_the_session() {
         let store = Store::in_memory().unwrap();
         let parent = store.add_chat(None, "Chat 1").unwrap();
@@ -905,6 +1042,9 @@ mod tests {
         let kept = &store.chats().unwrap()[1];
         assert_eq!((kept.id, kept.parent), (child, Some(chats[0].id)));
         assert_eq!(kept.setup.as_deref(), Some("{}"));
+        assert_eq!(store.settings(child).unwrap(), []);
+        store.keep_choice("model", "small").unwrap();
+        assert_eq!(store.choices().unwrap().len(), 1);
         std::fs::remove_dir_all(&directory).unwrap();
     }
 

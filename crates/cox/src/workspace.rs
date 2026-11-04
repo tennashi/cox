@@ -773,6 +773,10 @@ impl Workspace {
             .inspect_err(|error| tracing::error!("the chat's session cannot be read: {error:#}"))
             .ok()
             .flatten();
+        let settings = self.store.settings(kept).unwrap_or_else(|error| {
+            tracing::error!("the chat's settings cannot be read: {error:#}");
+            Vec::new()
+        });
         let closed = Closed {
             cwd: chat
                 .setup
@@ -783,6 +787,7 @@ impl Workspace {
             tabs,
             session,
             goal: chat.goal.clone(),
+            settings,
             setup: chat.setup.clone(),
             record: Some(Record::new(Rc::clone(&self.store), kept)),
         };

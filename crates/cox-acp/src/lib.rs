@@ -5,6 +5,9 @@
 //! opened before, when it can. Each [`Session::send`] starts a
 //! [`Turn`], which hands over what the agent sends as [`Update`]s until the
 //! turn ends, and which [`Turn::cancel`] asks the agent to end early.
+//! The [`Setting`]s the agent lets the human choose of the session, such
+//! as its model, come with the session, and [`Session::set`] or
+//! [`Turn::set`] chooses one.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -12,15 +15,17 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, Content, ContentBlock, ContentChunk, Diff,
-    InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio,
+    AgentCapabilities, CancelNotification, ConfigOptionUpdate, Content, ContentBlock, ContentChunk,
+    Diff, InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio,
     NewSessionRequest, PermissionOptionKind, Plan as AcpPlan, PlanEntry as AcpPlanEntry,
     PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionId, SessionInfoUpdate, SessionNotification, SessionUpdate,
-    StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall,
-    ToolCallContent as AcpToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
-    ToolCallUpdate, ToolKind as AcpToolKind,
+    SelectedPermissionOutcome, SessionConfigId, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectOption,
+    SessionConfigSelectOptions, SessionConfigValueId, SessionId, SessionInfoUpdate,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, StopReason as AcpStopReason,
+    TextContent, ToolCall as AcpToolCall, ToolCallContent as AcpToolCallContent, ToolCallId,
+    ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolKind as AcpToolKind,
 };
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
 use agent_client_protocol::{
@@ -85,8 +90,9 @@ impl From<McpServer> for AcpMcpServer {
 /// `mcp_servers` for the agent to use, and runs `talk` with it. The
 /// connection closes when `talk` returns.
 ///
-/// Each title the agent gives the session, whenever it gives one, goes to
-/// `titled`.
+/// What the agent tells of the session as a whole, whenever it tells it,
+/// between turns too, goes to `heard`: each title it gives the session, and
+/// its settings each time they change.
 ///
 /// With `resume`, the id of a session the agent opened before, the agent
 /// goes on with that session instead, when it can: [`Session::resumed`]
@@ -102,7 +108,7 @@ pub async fn connect<T>(
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     resume: Option<String>,
-    titled: impl Fn(String) + Send + Sync,
+    heard: impl Fn(News) + Send + Sync,
     talk: impl AsyncFnOnce(Session) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     let (updates, received) = unbounded_channel();
@@ -112,15 +118,21 @@ pub async fn connect<T>(
         .name("cox")
         .on_receive_notification(
             async |notification: SessionNotification, _cx| {
-                // A title comes between turns too.
-                if let SessionUpdate::SessionInfoUpdate(SessionInfoUpdate {
-                    title: MaybeUndefined::Value(title),
-                    ..
-                }) = notification.update
-                {
-                    titled(title);
-                } else if let Some(update) = translate(notification.update) {
-                    deliver(&updates, update);
+                // News of the session comes between turns too.
+                match notification.update {
+                    SessionUpdate::SessionInfoUpdate(SessionInfoUpdate {
+                        title: MaybeUndefined::Value(title),
+                        ..
+                    }) => heard(News::Titled(title)),
+                    SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate {
+                        config_options,
+                        ..
+                    }) => heard(News::Settings(settings(config_options))),
+                    update => {
+                        if let Some(update) = translate(update) {
+                            deliver(&updates, update);
+                        }
+                    }
                 }
                 Ok(())
             },
@@ -138,7 +150,11 @@ pub async fn connect<T>(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
-            let (id, resumed) = start(&cx, cwd, mcp_servers, resume).await?;
+            let Started {
+                id,
+                resumed,
+                settings,
+            } = start(&cx, cwd, mcp_servers, resume).await?;
             let mut received = received;
             if resumed {
                 // The agent tells what it heard of the session's past before
@@ -149,6 +165,7 @@ pub async fn connect<T>(
                 cx,
                 id,
                 resumed,
+                settings,
                 received,
                 tool_calls: HashMap::new(),
             };
@@ -159,22 +176,30 @@ pub async fn connect<T>(
     outcome.context("the connection closed before the session started")?
 }
 
+/// A session the agent opened or went on with.
+struct Started {
+    id: SessionId,
+    /// Whether the agent went on with the session asked for.
+    resumed: bool,
+    /// What the agent lets the human choose of the session.
+    settings: Vec<Setting>,
+}
+
 /// Initializes the connection and opens a session working in `cwd`, or
-/// resumes the session `resume` when the agent can, and returns the
-/// session's id, with whether it was resumed.
+/// resumes the session `resume` when the agent can.
 async fn start(
     cx: &ConnectionTo<Agent>,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     resume: Option<String>,
-) -> agent_client_protocol::Result<(SessionId, bool)> {
+) -> agent_client_protocol::Result<Started> {
     let initialized = cx
         .send_request(InitializeRequest::new(ProtocolVersion::V1))
         .block_task()
         .await?;
     let mcp_servers: Vec<AcpMcpServer> = mcp_servers.into_iter().map(Into::into).collect();
     if let Some(id) = resume
-        && resumed(
+        && let Some(options) = resumed(
             cx,
             &initialized.agent_capabilities,
             SessionId::new(id.clone()),
@@ -183,37 +208,121 @@ async fn start(
         )
         .await
     {
-        return Ok((SessionId::new(id), true));
+        return Ok(Started {
+            id: SessionId::new(id),
+            resumed: true,
+            settings: settings(options.unwrap_or_default()),
+        });
     }
     let session = cx
         .send_request(NewSessionRequest::new(cwd).mcp_servers(mcp_servers))
         .block_task()
         .await?;
-    Ok((session.session_id, false))
+    Ok(Started {
+        id: session.session_id,
+        resumed: false,
+        settings: settings(session.config_options.unwrap_or_default()),
+    })
 }
 
 /// Asks the agent to go on with session `id`, working in `cwd` with
-/// `mcp_servers`, and returns whether it does. An agent that can resume a
-/// session without telling its past is asked to, since the past is not
-/// shown again; one that can only load it, telling its past, is asked to
-/// load it. An agent that can do neither, or refuses, does not go on with
-/// it.
+/// `mcp_servers`, and returns, when it does, the settings it says the
+/// session has, if it says. An agent that can resume a session without
+/// telling its past is asked to, since the past is not shown again; one
+/// that can only load it, telling its past, is asked to load it. An agent
+/// that can do neither, or refuses, does not go on with it.
 async fn resumed(
     cx: &ConnectionTo<Agent>,
     capabilities: &AgentCapabilities,
     id: SessionId,
     cwd: &std::path::Path,
     mcp_servers: &[AcpMcpServer],
-) -> bool {
+) -> Option<Option<Vec<SessionConfigOption>>> {
     if capabilities.session_capabilities.resume.is_some() {
         let request = ResumeSessionRequest::new(id, cwd).mcp_servers(mcp_servers.to_vec());
-        cx.send_request(request).block_task().await.is_ok()
+        let response = cx.send_request(request).block_task().await.ok()?;
+        Some(response.config_options)
     } else if capabilities.load_session {
         let request = LoadSessionRequest::new(id, cwd).mcp_servers(mcp_servers.to_vec());
-        cx.send_request(request).block_task().await.is_ok()
+        let response = cx.send_request(request).block_task().await.ok()?;
+        Some(response.config_options)
     } else {
-        false
+        None
     }
+}
+
+/// Asks the agent to set the setting `id` of `session` to `value`, and
+/// returns all the settings, as they are then.
+async fn set(
+    cx: &ConnectionTo<Agent>,
+    session: &SessionId,
+    id: &str,
+    value: &str,
+) -> anyhow::Result<Vec<Setting>> {
+    let request = SetSessionConfigOptionRequest::new(
+        session.clone(),
+        SessionConfigId::new(id),
+        SessionConfigOptionValue::value_id(SessionConfigValueId::new(value)),
+    );
+    let response = cx.send_request(request).block_task().await?;
+    Ok(settings(response.config_options))
+}
+
+/// The name of `category`, as ACP writes it.
+fn category(category: SessionConfigOptionCategory) -> String {
+    match category {
+        SessionConfigOptionCategory::Mode => "mode".to_owned(),
+        SessionConfigOptionCategory::Model => "model".to_owned(),
+        SessionConfigOptionCategory::ModelConfig => "model_config".to_owned(),
+        SessionConfigOptionCategory::ThoughtLevel => "thought_level".to_owned(),
+        SessionConfigOptionCategory::Other(name) => name,
+        // A category newer than this version of Cox knows.
+        _ => String::new(),
+    }
+}
+
+/// The settings of `options` that Cox shows: those that choose one of a
+/// list. A toggle, which an agent offers only to a client that says it
+/// shows one, or a kind newer than this version of Cox knows, is left out.
+fn settings(options: Vec<SessionConfigOption>) -> Vec<Setting> {
+    options
+        .into_iter()
+        .filter_map(|option| {
+            let SessionConfigKind::Select(select) = option.kind else {
+                return None;
+            };
+            let choice = |group: Option<&str>| {
+                let group = group.map(str::to_owned);
+                move |value: SessionConfigSelectOption| Choice {
+                    id: value.value.0.to_string(),
+                    name: value.name,
+                    description: value.description,
+                    group: group.clone(),
+                }
+            };
+            let choices = match select.options {
+                SessionConfigSelectOptions::Ungrouped(values) => {
+                    values.into_iter().map(choice(None)).collect()
+                }
+                SessionConfigSelectOptions::Grouped(groups) => groups
+                    .into_iter()
+                    .flat_map(|group| {
+                        let choice = choice(Some(&group.name));
+                        group.options.into_iter().map(choice)
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            Some(Setting {
+                id: option.id.0.to_string(),
+                name: option.name,
+                description: option.description,
+                category: option.category.map(category),
+                value: select.current_value.0.to_string(),
+                choices,
+            })
+        })
+        .collect()
 }
 
 /// What the connection hands to the turn that is running: an update ready to
@@ -325,11 +434,54 @@ fn translate_content(content: Vec<AcpToolCallContent>) -> Vec<ToolCallContent> {
         .collect()
 }
 
+/// What the agent tells of a session as a whole, between turns too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum News {
+    /// The agent gave the session a title, in place of any it gave before.
+    Titled(String),
+    /// The session's settings changed, as the agent changes them on its
+    /// own: all of them, as they are now.
+    Settings(Vec<Setting>),
+}
+
+/// Something of a session that the agent lets the human choose, such as
+/// the model it uses: ACP's session config option, of the kind that
+/// chooses one of a list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Setting {
+    /// The id the agent knows it by, to set it.
+    pub id: String,
+    /// What the human knows it by, as `Model`.
+    pub name: String,
+    pub description: Option<String>,
+    /// What it is, as ACP names it, for a client that treats some apart,
+    /// such as `model`, `mode` or `thought_level`, if the agent says.
+    pub category: Option<String>,
+    /// The id of the choice it is set to.
+    pub value: String,
+    /// What it can be set to.
+    pub choices: Vec<Choice>,
+}
+
+/// One of the values a [`Setting`] can be set to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    /// The id the agent knows it by.
+    pub id: String,
+    /// What the human knows it by.
+    pub name: String,
+    pub description: Option<String>,
+    /// The name of the group of choices it is listed under, if the agent
+    /// groups them.
+    pub group: Option<String>,
+}
+
 /// A conversation with an agent.
 pub struct Session {
     cx: ConnectionTo<Agent>,
     id: SessionId,
     resumed: bool,
+    settings: Vec<Setting>,
     received: UnboundedReceiver<Received>,
     /// What is known of each tool call of the turn that has not ended yet.
     tool_calls: HashMap<ToolCallId, Known>,
@@ -347,6 +499,26 @@ impl Session {
     #[must_use]
     pub fn resumed(&self) -> bool {
         self.resumed
+    }
+
+    /// What the agent lets the human choose of the session, as it was when
+    /// the session opened.
+    #[must_use]
+    pub fn settings(&self) -> &[Setting] {
+        &self.settings
+    }
+
+    /// Asks the agent to set the setting `id` to `value`, and returns all
+    /// the settings, as they are then: setting one, such as the model, can
+    /// change what others can be.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent refuses, or the connection fails.
+    pub async fn set(&mut self, id: &str, value: &str) -> anyhow::Result<Vec<Setting>> {
+        let settings = set(&self.cx, &self.id, id, value).await?;
+        self.settings.clone_from(&settings);
+        Ok(settings)
     }
 
     /// Sends `texts` to the agent as a prompt, each a block of its own,
@@ -516,6 +688,16 @@ impl Turn<'_> {
         self.cx
             .send_notification(CancelNotification::new(self.session.clone()))?;
         Ok(())
+    }
+
+    /// Asks the agent to set the setting `id` to `value` while the turn
+    /// runs, as [`Session::set`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent refuses, or the connection fails.
+    pub async fn set(&self, id: &str, value: &str) -> anyhow::Result<Vec<Setting>> {
+        set(self.cx, self.session, id, value).await
     }
 
     /// Waits for the turn to end, and returns why it ended. Updates not taken

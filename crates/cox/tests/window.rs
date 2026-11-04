@@ -856,3 +856,75 @@ fn a_chat_with_no_stage_has_no_button_for_it(cx: &mut TestAppContext) {
 
     assert!(cx.debug_bounds("toggle-stage").is_none());
 }
+
+/// Waits until the chat's session has the setting `id` set to `value`.
+async fn wait_for_setting(
+    cx: &mut VisualTestContext,
+    view: &Entity<ChatView>,
+    id: &'static str,
+    value: &'static str,
+) {
+    let (timed_out, timeout) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        let _ = timed_out.send(());
+    });
+    let set = cx.condition(view, move |view, _| {
+        view.conversation()
+            .settings()
+            .iter()
+            .any(|setting| setting.id == id && setting.value == value)
+    });
+    tokio::select! {
+        () = set => {}
+        _ = timeout => panic!("{id} was never set to {value}"),
+    }
+}
+
+#[gpui::test]
+async fn sets_a_setting_of_the_session_with_a_click(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open(cx);
+    wait_for_setting(cx, &view, fake_agent::MODEL, "large").await;
+
+    click(cx, "setting-0");
+    assert!(cx.debug_bounds("setting-choices").is_some());
+    click(cx, "choice-1");
+    wait_for_setting(cx, &view, fake_agent::MODEL, "small").await;
+
+    assert_eq!(
+        agent.settings_set(),
+        [(fake_agent::MODEL.to_owned(), "small".to_owned())]
+    );
+    // The mode stays as it was.
+    wait_for_setting(cx, &view, fake_agent::MODE, "ask").await;
+}
+
+#[gpui::test]
+async fn sets_a_setting_while_a_turn_runs(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open(cx);
+    cx.simulate_input("wait");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Busy).await;
+
+    click(cx, "setting-1");
+    click(cx, "choice-1");
+    wait_for_setting(cx, &view, fake_agent::MODE, "plan").await;
+
+    assert_eq!(
+        agent.settings_set(),
+        [(fake_agent::MODE.to_owned(), "plan".to_owned())]
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.conversation().state()),
+        State::Busy
+    );
+}
+
+#[gpui::test]
+async fn shows_a_setting_the_agent_changes_on_its_own(cx: &mut TestAppContext) {
+    let (agent, view, cx) = open(cx);
+    say(cx, &view, "switch").await;
+
+    wait_for_setting(cx, &view, fake_agent::MODE, "plan").await;
+    assert_eq!(agent.settings_set(), []);
+}
