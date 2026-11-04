@@ -1350,22 +1350,35 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => wire
 // The lines around each place the mouse rested on, as the page last read
 // them, by `path:line`.
 const lineData = {};
-let peekEl = null, peekAt = null, peekTimer = null;
+let peekEl = null, peekAt = null, peekTimer = null, peekGoing = null;
 
 /// Takes the peek down.
 function peekHide() {
   clearTimeout(peekTimer);
   peekTimer = null;
+  peekStay();
   if (peekEl) peekEl.remove();
   peekEl = null;
   peekAt = null;
+}
+/// Takes the peek down in a moment, unless the mouse comes onto it, or
+/// back onto its step, first: so the mouse crosses from the one to the
+/// other, to click a line of the code.
+function peekHideSoon() {
+  clearTimeout(peekGoing);
+  peekGoing = setTimeout(peekHide, 220);
+}
+function peekStay() {
+  clearTimeout(peekGoing);
+  peekGoing = null;
 }
 
 /// Shows, by `row`, a row of the sequence diagram, the code its step is
 /// made at: the step, the file and line, the function the line is in
 /// and what it calls, as the server has said, and the lines around it,
-/// the line itself marked. The lines are read when the mouse comes,
-/// and shown as last read until they come.
+/// the line itself marked, each a link that opens the file there on a
+/// tab. The lines are read when the mouse comes, and shown as last read
+/// until they come.
 async function peekShow(row, st) {
   const place = atPlace(st.step.at);
   if (!place) return;
@@ -1378,15 +1391,20 @@ async function peekShow(row, st) {
     const said = c && c.function ? `in <b>${esc(c.function.name)}</b>${c.calls && c.calls.length ? `, calls ${c.calls.map((x) => `<b>${esc(x.name)}</b>`).join(", ")}` : ""}` : c && c.error ? esc(c.error) : "";
     const lines = got
       ? got.lines.length
-        ? got.lines.map((line, i) => `<div class="ln ${got.from + i === place.line ? "at" : ""}"><span class="no">${got.from + i}</span>${line.map(([text, what]) => (what ? `<span class="hl-${what.replace(/\./g, "-")}">${esc(text)}</span>` : esc(text))).join("") || " "}</div>`).join("")
+        ? got.lines.map((line, i) => `<a class="ln ${got.from + i === place.line ? "at" : ""}" href="${esc(`cox://open${place.path}#L${got.from + i}`)}" title="opens ${esc(got.name)}:${got.from + i} on a tab"><span class="no">${got.from + i}</span>${line.map(([text, what]) => (what ? `<span class="hl-${what.replace(/\./g, "-")}">${esc(text)}</span>` : esc(text))).join("") || " "}</a>`).join("")
         : `<div class="ln faint">${got.exists ? "the file has no such line" : "the file is gone"}</div>`
       : '<div class="ln faint">reading…</div>';
     if (!peekEl) {
       peekEl = document.createElement("div");
       peekEl.className = "peek";
+      peekEl.addEventListener("mouseenter", peekStay);
+      peekEl.addEventListener("mouseleave", peekHideSoon);
+      peekEl.addEventListener("click", (event) => {
+        if (event.target.closest("a")) setTimeout(peekHide, 0);
+      });
       document.body.appendChild(peekEl);
     }
-    peekEl.innerHTML = `<div class="head"><span class="n">${st.n}</span> ${esc(nameOf(st.step.from))} → ${esc(nameOf(st.step.to))}: ${esc(st.step.says)}</div><div class="where"><span class="at">${esc(st.step.at)}</span>${said ? ` · ${said}` : ""}</div><pre>${lines}</pre>`;
+    peekEl.innerHTML = `<div class="head"><span class="n">${st.n}</span> ${esc(nameOf(st.step.from))} → ${esc(nameOf(st.step.to))}: ${esc(st.step.says)}</div><div class="where"><a class="at" href="${esc(`cox://open${place.path}#L${place.line}`)}" title="opens the file there on a tab">${esc(st.step.at)}</a>${said ? ` · ${said}` : ""}</div><pre>${lines}</pre>`;
     const r = row.getBoundingClientRect();
     const seq = row.closest(".seq");
     const s = seq ? seq.getBoundingClientRect() : r;
@@ -1425,15 +1443,16 @@ app.addEventListener("mouseover", (event) => {
   const place = st && atPlace(st.step.at);
   if (!place) return;
   const key = `${place.path}:${place.line}`;
-  if (peekAt === key && peekEl) return;
+  if (peekAt === key && peekEl) return peekStay();
   peekHide();
   peekTimer = setTimeout(() => peekShow(row, st), 180);
 });
 app.addEventListener("mouseout", (event) => {
   const row = event.target.closest(".seq .row[data-step]");
   if (!row) return;
-  if (event.relatedTarget && row.contains(event.relatedTarget)) return;
-  peekHide();
+  if (event.relatedTarget && (row.contains(event.relatedTarget) || (peekEl && peekEl.contains(event.relatedTarget)))) return;
+  if (peekEl) peekHideSoon();
+  else peekHide();
 });
 document.addEventListener("scroll", peekHide, true);
 
