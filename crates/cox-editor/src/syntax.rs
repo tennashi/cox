@@ -211,34 +211,54 @@ impl Syntax {
     }
 
     /// The lines that open what `line` of `buffer` is within, outermost
-    /// first: the first line of each node around the line of a kind its
-    /// language's [`Language::scopes`] names, as a function's `fn` line
-    /// and its impl's, through code within code, before the line itself.
+    /// first, as a function's `fn` line and its impl's, through code
+    /// within code, before the line itself: the first line of each
+    /// definition around it, as its language's tags query finds them
+    /// (`definition.` and its kind, and `reference.implementation`), or,
+    /// for a language with none, of each node around it of a kind its
+    /// [`Language::scopes`] names.
     #[must_use]
     pub fn within(&self, buffer: &Buffer, line: usize) -> Vec<usize> {
         let start = buffer.line_start(line);
-        let text = buffer.line(line);
-        let lead = text.len() - text.trim_start().len();
-        let range = start + lead..start + text.trim_end().len().max(lead);
+        let said = buffer.line(line);
+        let lead = said.len() - said.trim_start().len();
+        let range = start + lead..start + said.trim_end().len().max(lead);
+        let around = |node: Node<'_>| {
+            let row = node.start_position().row;
+            (row < line && node.start_byte() <= range.start && range.end <= node.end_byte())
+                .then_some(row)
+        };
         let mut found = Vec::new();
+        let mut cursor = QueryCursor::new();
         for layer in self.layers.iter().filter(|layer| layer.covers(&range)) {
-            let scopes = layer.language.scopes();
-            if scopes.is_empty() {
-                continue;
-            }
-            let mut node = layer
-                .tree
-                .root_node()
-                .descendant_for_byte_range(range.start, range.end);
             let mut opens = Vec::new();
-            while let Some(at) = node {
-                let row = at.start_position().row;
-                if row < line && scopes.contains(&at.kind()) && opens.last() != Some(&row) {
-                    opens.push(row);
+            if let Some(tags) = &layer.language.tags {
+                cursor.set_byte_range(range.clone());
+                let mut matches = cursor.matches(&tags.query, layer.tree.root_node(), text(buffer));
+                while let Some(found_match) = matches.next() {
+                    opens.extend(
+                        found_match
+                            .captures()
+                            .iter()
+                            .filter(|capture| tags.scopes.contains(&capture.index))
+                            .filter_map(|capture| around(capture.node)),
+                    );
                 }
-                node = at.parent();
+            } else {
+                let scopes = layer.language.scopes();
+                let mut node = layer
+                    .tree
+                    .root_node()
+                    .descendant_for_byte_range(range.start, range.end);
+                while let Some(at) = node {
+                    if scopes.contains(&at.kind()) {
+                        opens.extend(around(at));
+                    }
+                    node = at.parent();
+                }
             }
-            opens.reverse();
+            opens.sort_unstable();
+            opens.dedup();
             found.extend(opens);
         }
         found.dedup();
@@ -493,6 +513,26 @@ mod tests {
         let buffer = Buffer::new(text);
         let syntax = Syntax::parse(Language::named("markdown").unwrap(), &buffer, None).unwrap();
         assert_eq!(syntax.within(&buffer, 6), vec![0, 2, 5]);
+    }
+
+    #[test]
+    fn tells_what_a_line_is_within_by_the_tags() {
+        let within = |language: &str, text: &str, line: usize| {
+            let buffer = Buffer::new(text);
+            let syntax = Syntax::parse(Language::named(language).unwrap(), &buffer, None).unwrap();
+            syntax.within(&buffer, line)
+        };
+        // The impls of a generic type and of a generic trait.
+        let text = "impl<T> S<T> {\n    fn f() {\n        1\n    }\n}\n";
+        assert_eq!(within("rust", text, 2), vec![0, 1]);
+        let text = "impl From<u8> for S {\n    fn from(n: u8) -> Self {\n        S\n    }\n}\n";
+        assert_eq!(within("rust", text, 2), vec![0, 1]);
+        let text = "class Cart:\n    def total(self):\n        return 1\n";
+        assert_eq!(within("python", text, 2), vec![0, 1]);
+        let text =
+            "namespace N {\n  enum E {\n    A,\n  }\n  const f = () => {\n    return 1;\n  };\n}\n";
+        assert_eq!(within("typescript", text, 2), vec![0, 1]);
+        assert_eq!(within("typescript", text, 5), vec![0, 4]);
     }
 
     #[test]

@@ -171,6 +171,11 @@ pub(crate) struct Tags {
     pub(crate) name: u32,
     /// The index of the `reference.call` capture.
     pub(crate) call: u32,
+    /// The indices of the captures of what a line of code is said to be
+    /// within: what defines a name, as a function or a class
+    /// (`definition.` and its kind), and what implements one, as an
+    /// `impl` in Rust (`reference.implementation`).
+    pub(crate) scopes: Vec<u32>,
 }
 
 impl std::fmt::Debug for Language {
@@ -220,9 +225,17 @@ impl Language {
                     .capture_index_for_name(capture)
                     .unwrap_or_else(|| panic!("the {name} tags capture no {capture}"))
             };
+            let scopes = (0..)
+                .zip(query.capture_names())
+                .filter(|(_, capture)| {
+                    capture.starts_with("definition.") || **capture == "reference.implementation"
+                })
+                .map(|(index, _)| index)
+                .collect();
             Tags {
                 name: index("name"),
                 call: index("reference.call"),
+                scopes,
                 query,
             }
         });
@@ -243,35 +256,13 @@ impl Language {
     }
 
     /// The kinds of the language's syntax nodes that a line of code is
-    /// said to be within, and whose first line says what: a function, an
-    /// impl or a module in Rust, a class in Python, a table in TOML, a
-    /// section in Markdown, and so on.
+    /// said to be within, and whose first line says what, for a language
+    /// whose grammar has no tags query to say so (see
+    /// [`crate::syntax::Syntax::within`]): a table in TOML, a section in
+    /// Markdown, and so on.
     #[must_use]
     pub fn scopes(&self) -> &'static [&'static str] {
         match self.name {
-            "rust" => &[
-                "function_item",
-                "impl_item",
-                "trait_item",
-                "mod_item",
-                "struct_item",
-                "enum_item",
-                "union_item",
-                "macro_definition",
-            ],
-            "python" => &["function_definition", "class_definition"],
-            "javascript" | "typescript" | "tsx" => &[
-                "function_declaration",
-                "generator_function_declaration",
-                "method_definition",
-                "class_declaration",
-                "abstract_class_declaration",
-                "interface_declaration",
-                "enum_declaration",
-                "internal_module",
-                "lexical_declaration",
-                "variable_declaration",
-            ],
             "bash" => &["function_definition"],
             "toml" => &["table", "table_array_element"],
             "markdown" => &["section"],
@@ -328,9 +319,11 @@ impl Language {
     }
 }
 
-/// The calls the Rust grammar's tags leave out: of a path, as
-/// `Store::new()`, and with a turbofish, as `parse::<u8>()`.
-const RUST_CALLS: &str = "
+/// What the Rust grammar's tags leave out: calls of a path, as
+/// `Store::new()`, and with a turbofish, as `parse::<u8>()`, and the
+/// `impl`s of a generic type, or of a generic trait, as `impl<T> Store<T>`
+/// or `impl From<u8> for Store`.
+const RUST_TAGS: &str = "
 (call_expression
     function: (scoped_identifier
         name: (identifier) @name)) @reference.call
@@ -342,6 +335,13 @@ const RUST_CALLS: &str = "
             (scoped_identifier name: (identifier) @name)
             (field_expression field: (field_identifier) @name)
         ])) @reference.call
+
+(impl_item
+    type: [
+        (type_identifier) @name
+        (generic_type type: (type_identifier) @name)
+        (scoped_type_identifier name: (type_identifier) @name)
+    ]) @reference.implementation
 ";
 
 static RUST: LazyLock<Language> = LazyLock::new(|| {
@@ -350,7 +350,7 @@ static RUST: LazyLock<Language> = LazyLock::new(|| {
         tree_sitter_rust::LANGUAGE,
         &[tree_sitter_rust::HIGHLIGHTS_QUERY],
         Some(tree_sitter_rust::INJECTIONS_QUERY),
-        &[tree_sitter_rust::TAGS_QUERY, RUST_CALLS],
+        &[tree_sitter_rust::TAGS_QUERY, RUST_TAGS],
     )
 });
 
@@ -436,6 +436,15 @@ static JAVASCRIPT: LazyLock<Language> = LazyLock::new(|| {
     )
 });
 
+/// What TypeScript's tags leave out: a namespace, and an enum.
+const TYPESCRIPT_TAGS: &str = "
+(internal_module
+    name: (_) @name) @definition.module
+
+(enum_declaration
+    name: (identifier) @name) @definition.enum
+";
+
 /// TypeScript's grammar takes JavaScript's highlights and tags, and adds
 /// its own.
 static TYPESCRIPT: LazyLock<Language> = LazyLock::new(|| {
@@ -450,6 +459,7 @@ static TYPESCRIPT: LazyLock<Language> = LazyLock::new(|| {
         &[
             tree_sitter_javascript::TAGS_QUERY,
             tree_sitter_typescript::TAGS_QUERY,
+            TYPESCRIPT_TAGS,
         ],
     )
 });
@@ -467,6 +477,7 @@ static TSX: LazyLock<Language> = LazyLock::new(|| {
         &[
             tree_sitter_javascript::TAGS_QUERY,
             tree_sitter_typescript::TAGS_QUERY,
+            TYPESCRIPT_TAGS,
         ],
     )
 });

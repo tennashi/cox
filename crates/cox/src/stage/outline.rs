@@ -15,11 +15,13 @@
 //! none.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
-use cox_editor::lsp::{Error, Location, OpenFile, Symbol, languages};
+use cox_editor::buffer::Buffer;
+use cox_editor::lsp::{Client, Encoding, Error, Location, OpenFile, Symbol, languages};
 use gpui::{AsyncApp, Context, Entity, Task};
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -97,6 +99,10 @@ pub struct Outlined {
     /// How many places use it, besides where it is defined, or `None`
     /// when that was not asked.
     pub uses: Option<usize>,
+    /// Whether it has no name of its own, as an `impl` in Rust, which the
+    /// server names after the type it is of: the server does not say
+    /// that its name is defined where it is.
+    pub unnamed: bool,
     pub children: Vec<Outlined>,
 }
 
@@ -318,6 +324,13 @@ async fn learn(path: &Path, cwd: &Path, outlines: &Outlines, cx: &mut AsyncApp) 
         return failed(error);
     }
     outlines.saying(path, Some(format!("{name}: finding what uses them")));
+    let unnamed = unnamed(&server, &document, path, &text, &symbols, cx).await;
+    for (place, node) in nodes.iter_mut().enumerate() {
+        node.unnamed = unnamed.contains(&vec![place]);
+        for (within, child) in node.children.iter_mut().enumerate() {
+            child.unnamed = unnamed.contains(&vec![place, within]);
+        }
+    }
     let used_by = uses(&server, &document, path, cwd, &symbols, &mut nodes, cx).await;
     drop(document);
     Told {
@@ -453,11 +466,83 @@ pub(super) async fn settled(
     }
 }
 
+/// Which of the `symbols` of `document`, the file at `path`, which says
+/// `text`, the top ones and those within them, have no name of its own,
+/// by their places among them. A symbol whose name is the text at its
+/// name's place, as most are, has; another, as an `impl` in Rust named
+/// `impl Store` at `Store`, or a method in Go named `(*Store).Add` at
+/// `Add`, has if the server says its name is defined there, up to a
+/// limit, and is taken to have past it, or when the server does not say.
+async fn unnamed(
+    server: &Entity<LanguageServer>,
+    document: &OpenFile,
+    path: &Path,
+    text: &str,
+    symbols: &[Symbol],
+    cx: &mut AsyncApp,
+) -> Vec<Vec<usize>> {
+    let Ok(Some(encoding)) =
+        server.read_with(cx, |server, _| server.client().map(Client::encoding))
+    else {
+        return Vec::new();
+    };
+    let buffer = Buffer::new(text);
+    let places = symbols.iter().enumerate().flat_map(|(index, symbol)| {
+        std::iter::once((vec![index], symbol)).chain(
+            symbol
+                .children
+                .iter()
+                .enumerate()
+                .map(move |(within, child)| (vec![index, within], child)),
+        )
+    });
+    let mut unnamed = Vec::new();
+    let unsure = places
+        .filter(|(_, symbol)| !named_at(symbol, &buffer, encoding))
+        .take(MOST_ASKED);
+    for (place, symbol) in unsure {
+        let definitions = server.read_with(cx, |server, _| {
+            server
+                .client()
+                .map(|client| client.definition(document, symbol.selection.start))
+        });
+        let Ok(Some(definitions)) = definitions else {
+            break;
+        };
+        let Ok(definitions) = definitions.await else {
+            continue;
+        };
+        let at = symbol.selection.start;
+        if !definitions.iter().any(|defined| {
+            defined.path == path && defined.range.start <= at && at <= defined.range.end
+        }) {
+            unnamed.push(place);
+        }
+    }
+    unnamed
+}
+
+/// Whether `symbol`'s name is the text of `buffer` at its name's place,
+/// which the server counts in `encoding`.
+fn named_at(symbol: &Symbol, buffer: &Buffer, encoding: Encoding) -> bool {
+    let Range { start, end } = symbol.selection;
+    if start.line != end.line {
+        return false;
+    }
+    let line = buffer.line(start.line as usize);
+    let (start, end) = (
+        encoding.point(buffer, start).column,
+        encoding.point(buffer, end).column,
+    );
+    line.get(start..end) == Some(symbol.name.as_str())
+}
+
 /// Asks `server` where the `symbols` of `document`, the file at `path`,
 /// are used: the top ones and those within them, as the methods of an
-/// `impl`, up to a limit. Each count goes on its node of `nodes`, and the
-/// files that use them, besides the file itself, are answered, most
-/// first, from `cwd`.
+/// `impl`, up to a limit, but for those `nodes` has as unnamed, which the
+/// server would answer for what they are named after. Each count goes on
+/// its node of `nodes`, and the files that use them, besides the file
+/// itself, are answered, most first, from `cwd`.
 async fn uses(
     server: &Entity<LanguageServer>,
     document: &OpenFile,
@@ -468,21 +553,19 @@ async fn uses(
     cx: &mut AsyncApp,
 ) -> Vec<UsedBy> {
     let mut asked: Vec<(Vec<usize>, &Symbol)> = Vec::new();
-    // An `impl` has no name of its own: asked at its start, the server
-    // answers for the type.
-    let named = |symbol: &Symbol| !(symbol.kind == "object" && symbol.name.starts_with("impl"));
     for (index, symbol) in symbols.iter().enumerate() {
         if asked.len() >= MOST_ASKED {
             break;
         }
-        if named(symbol) {
+        let node = &nodes[index];
+        if !node.unnamed {
             asked.push((vec![index], symbol));
         }
         for (within, child) in symbol.children.iter().enumerate() {
             if asked.len() >= MOST_ASKED {
                 break;
             }
-            if named(child) {
+            if !node.children.get(within).is_some_and(|child| child.unnamed) {
                 asked.push((vec![index, within], child));
             }
         }
@@ -537,6 +620,7 @@ fn outline(symbol: &Symbol, depth: usize) -> Outlined {
         line: symbol.selection.start.line as usize + 1,
         end: symbol.range.end.line as usize + 1,
         uses: None,
+        unnamed: false,
         children: if depth < 2 {
             symbol
                 .children
@@ -551,7 +635,38 @@ fn outline(symbol: &Symbol, depth: usize) -> Outlined {
 
 #[cfg(test)]
 mod tests {
+    use cox_editor::lsp::Position;
+
     use super::*;
+
+    #[test]
+    fn tells_a_symbol_named_at_its_place() {
+        let buffer =
+            Buffer::new("impl Store {\n    fn add(&mut self) {}\n}\nfunc (s *Store) Add() {}\n");
+        let symbol = |name: &str, line: u32, start: u32, end: u32| Symbol {
+            name: name.to_owned(),
+            kind: String::new(),
+            detail: None,
+            range: Position { line, character: 0 }..Position {
+                line,
+                character: end,
+            },
+            selection: Position {
+                line,
+                character: start,
+            }..Position {
+                line,
+                character: end,
+            },
+            children: Vec::new(),
+        };
+        let named = |symbol: &Symbol| named_at(symbol, &buffer, Encoding::Utf16);
+        assert!(named(&symbol("add", 1, 7, 10)));
+        // Named after the type it is of.
+        assert!(!named(&symbol("impl Store", 0, 5, 10)));
+        // Named with its receiver, which the server is asked about.
+        assert!(!named(&symbol("(*Store).Add", 3, 16, 19)));
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let directory =

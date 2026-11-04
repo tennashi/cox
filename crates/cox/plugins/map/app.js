@@ -908,13 +908,14 @@ function absolute(path) {
 }
 
 /// A symbol of the file at `path`, as a line of its outline, with those
-/// within it where they are worth showing: the methods of an `impl` or a
-/// trait, not the fields of a struct, which are counted instead.
+/// within it where they are worth showing: the methods of a class, a
+/// trait, or a symbol with no name of its own, as an `impl` in Rust, not
+/// the fields of a struct, which are counted instead.
 function symEl(path, line, depth) {
   return (s) => {
-    const kind = s.kind === "object" && /^impl\b/.test(s.name) ? "" : s.kind === "type parameter" ? "type" : s.kind;
+    const kind = s.unnamed ? "" : s.kind === "type parameter" ? "type" : s.kind;
     const kids = s.children || [];
-    const opens = ["", "module", "namespace", "class", "interface"].includes(kind);
+    const opens = s.unnamed || ["module", "namespace", "class", "interface"].includes(kind);
     const within = opens && kids.length ? `<div class="within">${kids.map(symEl(path, line, depth + 1)).join("")}</div>` : "";
     const counted = !opens && kids.length ? `<span class="n">${kids.length} ${kind === "enum" ? "variant" : kind === "struct" ? "field" : "item"}${kids.length === 1 ? "" : "s"}</span>` : "";
     const uses = s.uses === null || s.uses === undefined ? "" : `<span class="uses ${s.uses ? "" : "zero"}">${s.uses} use${s.uses === 1 ? "" : "s"}</span>`;
