@@ -98,6 +98,11 @@ impl<T> List<T> {
         }
     }
 
+    /// Shows none of the items.
+    pub fn hide(&mut self) {
+        self.shown = None;
+    }
+
     /// The index of the item `step` places along from the one shown,
     /// going round, if one is shown.
     #[must_use]

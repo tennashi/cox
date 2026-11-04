@@ -106,7 +106,8 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
     }
 }
 
-/// The list of chats, as the window shows it, under their projects.
+/// The chats, in the order of the tabs, under their projects, and which
+/// project the rail has chosen.
 fn list(told: &mut String, workspace: &Workspace, cx: &App) {
     told.push_str("The chats, as listed:\n");
     let mut project = None;
@@ -114,7 +115,17 @@ fn list(told: &mut String, workspace: &Workspace, cx: &App) {
         if project != Some(chat.project()) {
             project = Some(chat.project());
             let named = &workspace.projects()[chat.project()];
-            let _ = writeln!(told, "  {} ({})", named.name(), named.folder().display());
+            let chosen = if workspace.chosen() == chat.project() {
+                ", chosen"
+            } else {
+                ""
+            };
+            let _ = writeln!(
+                told,
+                "  {} ({}){chosen}",
+                named.name(),
+                named.folder().display()
+            );
         }
         let indent = "  ".repeat(2 + usize::from(depth));
         let _ = writeln!(told, "{indent}{}", row(chat, workspace, cx));
