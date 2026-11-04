@@ -23,12 +23,11 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::ui::markdown::{self, Block, Kind};
 use crate::ui::selection::{Piece, Selection, Spot, TextId};
-use crate::ui::theme::{DIM, LINK};
+use crate::ui::theme::{
+    BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, LINK, RAISED, SELECTION,
+};
 
-const SELECTED: u32 = 0x26_4f78;
 const CODE: u32 = 0xe0_b080;
-const CODE_BACKGROUND: u32 = 0x2a_2a2a;
-const LINE: u32 = 0x40_4040;
 
 /// How far each list a block is in moves it right.
 const INDENT: f32 = 20.;
@@ -494,15 +493,15 @@ impl<'a> Writer<'a> {
                 )
                 .child(div().flex_1().min_w_0().child(self.text(text, "\n"))),
             Kind::Code(text) => self.code(text).ml(indent(block.depth)),
-            Kind::Rule => div().ml(indent(block.depth)).h(px(1.)).bg(rgb(LINE)),
+            Kind::Rule => div().ml(indent(block.depth)).h(px(1.)).bg(rgb(BORDER)),
             Kind::Table(rows) => self.table(rows).ml(indent(block.depth)),
         };
         if block.quoted {
             shown
                 .border_l_2()
-                .border_color(rgb(0x60_6060))
+                .border_color(rgb(BORDER_STRONG))
                 .pl_2()
-                .text_color(rgb(0xb0_b0b0))
+                .text_color(rgb(DIM))
                 .into_any_element()
         } else {
             shown.into_any_element()
@@ -517,7 +516,8 @@ impl<'a> Writer<'a> {
             .relative()
             .p_2()
             .rounded_sm()
-            .bg(rgb(CODE_BACKGROUND))
+            .bg(rgb(RAISED))
+            .font_family(CODE_FONT)
             .text_size(px(13.))
             .child(self.text(text, "\n\n"))
             .child(
@@ -530,9 +530,9 @@ impl<'a> Writer<'a> {
                     .rounded_sm()
                     .text_size(px(11.))
                     .text_color(rgb(DIM))
-                    .bg(rgb(0x33_3333))
+                    .bg(rgb(BUTTON))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0x44_4444)))
+                    .hover(|style| style.bg(rgb(BUTTON_HOVER)))
                     .child("Copy")
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
@@ -559,13 +559,15 @@ impl<'a> Writer<'a> {
                             .flex_1()
                             .min_w_0()
                             .px_1()
-                            .when(column > 0, |cell| cell.border_l_1().border_color(rgb(LINE)))
+                            .when(column > 0, |cell| {
+                                cell.border_l_1().border_color(rgb(BORDER))
+                            })
                             .child(self.text(cell, joined))
                     })
                     .collect();
                 div()
                     .flex()
-                    .when(index > 0, |row| row.border_t_1().border_color(rgb(LINE)))
+                    .when(index > 0, |row| row.border_t_1().border_color(rgb(BORDER)))
                     .when(index == 0, |row| row.font_weight(FontWeight::BOLD))
                     .children(cells)
             })
@@ -574,7 +576,7 @@ impl<'a> Writer<'a> {
             .flex()
             .flex_col()
             .border_1()
-            .border_color(rgb(LINE))
+            .border_color(rgb(BORDER))
             .children(rows)
     }
 }
@@ -624,7 +626,7 @@ fn highlights(
             }
             if style.code {
                 highlight.color = Some(color(CODE));
-                highlight.background_color = Some(color(CODE_BACKGROUND));
+                highlight.background_color = Some(color(RAISED));
             }
             if style.link.is_some() {
                 highlight.color = Some(color(LINK));
@@ -635,7 +637,7 @@ fn highlights(
                 });
             }
             if selected.is_some_and(|selected| selected.contains(&range.start)) {
-                highlight.background_color = Some(color(SELECTED));
+                highlight.background_color = Some(color(SELECTION));
             }
             (highlight != HighlightStyle::default()).then_some((range, highlight))
         })

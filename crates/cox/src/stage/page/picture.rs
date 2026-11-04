@@ -17,6 +17,7 @@ use gpui::{
 use super::Page;
 use super::keys::modifiers;
 use super::pointer::paint_agent;
+use crate::ui::theme::RAISED;
 use cox_browser::{Frame, MouseButton};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
@@ -145,7 +146,7 @@ impl Picture {
                 page.look.clone(),
             )
         });
-        window.paint_quad(fill(bounds, rgb(0x33_3333)));
+        window.paint_quad(fill(bounds, rgb(RAISED)));
         if let Some(image) = image {
             let at = image_bounds(&image, bounds, window.scale_factor());
             window

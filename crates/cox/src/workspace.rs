@@ -55,7 +55,10 @@ use crate::notices::AppNotices;
 use crate::storage;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
-use crate::ui::theme::{ASKING, DIM, FONT, LINK};
+use crate::ui::theme::{
+    ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, DIM, FAINT, FOREGROUND,
+    GROUND, HOVER, LINK, RAISED, SELECTED, UI_FONT,
+};
 
 actions!(
     cox,
@@ -1320,7 +1323,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .border_r_1()
-            .border_color(rgb(0x40_4040))
+            .border_color(rgb(BORDER))
             .child(
                 div()
                     .flex()
@@ -1328,7 +1331,7 @@ impl Workspace {
                     .gap_1()
                     .p_2()
                     .border_b_1()
-                    .border_color(rgb(0x40_4040))
+                    .border_color(rgb(BORDER))
                     .child(Self::button(
                         "new-chat",
                         "+ New chat",
@@ -1369,7 +1372,7 @@ impl Workspace {
             .px_2()
             .rounded_sm()
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(0x30_3030)))
+            .hover(|style| style.bg(rgb(BUTTON)))
             .child(label)
             .on_click(cx.listener(move |workspace, _, window, cx| action(workspace, window, cx)))
     }
@@ -1395,14 +1398,14 @@ impl Workspace {
                     .child(
                         div()
                             .truncate()
-                            .text_color(rgb(0xa0_a0a0))
+                            .text_color(rgb(DIM))
                             .child(project.name.clone()),
                     )
                     .child(
                         div()
                             .truncate()
                             .text_xs()
-                            .text_color(rgb(0x80_8080))
+                            .text_color(rgb(FAINT))
                             .child(shortened(&project.folder)),
                     ),
             )
@@ -1413,8 +1416,8 @@ impl Workspace {
                     .px_1()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x40_4040)).text_color(rgb(0xe0_e0e0)))
+                    .text_color(rgb(FAINT))
+                    .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(FOREGROUND)))
                     .child("+")
                     .on_click(cx.listener(move |workspace, _, window, cx| {
                         workspace.open(Some(folder.clone()), window, cx);
@@ -1439,7 +1442,7 @@ impl Workspace {
         let (mark, color) = match state {
             Some(State::Busy | State::Stopping | State::Checking) => ("…", rgb(DIM)),
             Some(State::Asking) => ("?", rgb(ASKING)),
-            Some(State::Closed) => ("closed", rgb(0x80_8080)),
+            Some(State::Closed) => ("closed", rgb(FAINT)),
             _ if chat.unread => ("●", rgb(LINK)),
             Some(State::Idle) | None => ("", rgb(DIM)),
         };
@@ -1467,7 +1470,7 @@ impl Workspace {
                 .min_w_0()
                 .truncate()
                 // A closed chat is there to read.
-                .when(!chat.open, |name| name.text_color(rgb(0x80_8080)))
+                .when(!chat.open, |name| name.text_color(rgb(FAINT)))
                 .child(chat.name.clone()),
         };
         // A chat an agent opened sits in under the chat that opened it.
@@ -1519,9 +1522,9 @@ impl Workspace {
             })
             .child(div().flex_shrink_0().text_color(color).child(mark));
         if self.chats.shown_index() == Some(index) {
-            row = row.bg(rgb(0x2a_2a2a));
+            row = row.bg(rgb(SELECTED));
         } else {
-            row = row.hover(|style| style.bg(rgb(0x26_2626)));
+            row = row.hover(|style| style.bg(rgb(HOVER)));
         }
         row
     }
@@ -1566,8 +1569,8 @@ impl Workspace {
                     .pr_2()
                     .py_1()
                     .cursor_pointer()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x26_2626)))
+                    .text_color(rgb(FAINT))
+                    .hover(|style| style.bg(rgb(HOVER)))
                     .child(div().flex_1().min_w_0().truncate().child(chat.name.clone()))
                     .child(
                         div()
@@ -1600,16 +1603,16 @@ impl Workspace {
                 .py_0p5()
                 .rounded_sm()
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(0x04_395e)))
+                .hover(|style| style.bg(rgb(ACCENT_GROUND)))
                 .child(label)
         };
         let menu = div()
             .occlude()
             .min_w(px(160.))
             .p_1()
-            .bg(rgb(0x25_2526))
+            .bg(rgb(RAISED))
             .border_1()
-            .border_color(rgb(0x45_4545))
+            .border_color(rgb(BORDER_STRONG))
             .rounded_md()
             .shadow_md()
             .on_mouse_down_out(cx.listener(|workspace, _, _, cx| {
@@ -1706,7 +1709,7 @@ impl Render for Workspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(rgb(0x80_8080))
+                .text_color(rgb(FAINT))
                 .child("Open a chat from the list on the left.")
                 .into_any_element(),
         };
@@ -1727,9 +1730,9 @@ impl Render for Workspace {
             }))
             .size_full()
             .flex()
-            .bg(rgb(0x1e_1e1e))
-            .text_color(rgb(0xe0_e0e0))
-            .font_family(FONT)
+            .bg(rgb(GROUND))
+            .text_color(rgb(FOREGROUND))
+            .font_family(UI_FONT)
             .text_size(px(14.))
             .child(self.render_list(cx))
             .child(div().flex_1().min_w_0().h_full().child(shown))

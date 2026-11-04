@@ -14,7 +14,7 @@ use gpui::{
 
 use super::file::Spans;
 use super::{Code, Laid, PADDING, Place, Row};
-use crate::ui::theme::{FONT, FOREGROUND, LINK, SELECTION};
+use crate::ui::theme::{ACCENT_GROUND, CODE_FONT, DISABLED, FOREGROUND, LINK, SELECTION};
 
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.4;
@@ -23,9 +23,7 @@ const LINE_HEIGHT: f32 = 1.4;
 /// height.
 const REVEAL_AT: f32 = 1. / 3.;
 
-pub(super) const NUMBER: u32 = 0x6e_6e6e;
-const NUMBER_MARKED: u32 = 0xd0_d0d0;
-const MARKED: u32 = 0x33_3322;
+pub(super) const NUMBER: u32 = DISABLED;
 /// The name the server says something of.
 const HOVERED: u32 = 0x2c_3a4a;
 /// How code that is nothing in particular is drawn.
@@ -179,7 +177,7 @@ impl Text {
                     .push(Bounds::new(point(left + from, y), size(width, line_height)));
             }
             let number = (line + 1).to_string();
-            let color = if is_marked { NUMBER_MARKED } else { NUMBER };
+            let color = if is_marked { FOREGROUND } else { NUMBER };
             let number = shape(
                 &number,
                 &[run(number.len(), (color, PLAIN.1, PLAIN.2))],
@@ -209,7 +207,7 @@ impl Text {
 /// The font the code is drawn in, its size, how wide a character of it
 /// is, and how tall a line is.
 fn metrics(window: &Window) -> (Font, Pixels, Pixels, Pixels) {
-    let font = font(FONT);
+    let font = font(CODE_FONT);
     let font_size = px(FONT_SIZE);
     let text_system = window.text_system();
     let cell_width = text_system
@@ -350,7 +348,7 @@ impl Element for Text {
         });
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             for at in &painted.marked {
-                window.paint_quad(fill(*at, rgb(MARKED)));
+                window.paint_quad(fill(*at, rgb(ACCENT_GROUND)));
             }
             for (origin, number) in &painted.numbers {
                 number.paint(*origin, line_height, window, cx).ok();

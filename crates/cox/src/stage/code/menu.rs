@@ -4,11 +4,10 @@
 use gpui::{Context, IntoElement, anchored, deferred, div, prelude::*, px, rgb};
 
 use super::Code;
-use crate::ui::theme::{DIM, FOREGROUND};
+use crate::ui::theme::{ACCENT_GROUND, BORDER_STRONG, DIM, FOREGROUND, RAISED};
 
-pub(super) const MENU: u32 = 0x25_2526;
-pub(super) const MENU_BORDER: u32 = 0x45_4545;
-const MENU_HOVER: u32 = 0x04_395e;
+pub(super) const MENU: u32 = RAISED;
+pub(super) const MENU_BORDER: u32 = BORDER_STRONG;
 
 impl Code {
     /// The menu of the right button, if it is open.
@@ -30,7 +29,7 @@ impl Code {
                 .py_0p5()
                 .rounded_sm()
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(MENU_HOVER)))
+                .hover(|style| style.bg(rgb(ACCENT_GROUND)))
                 .child(label)
                 .child(div().text_color(rgb(DIM)).child(key))
         };

@@ -25,19 +25,12 @@ use crate::chat::conversation::{
 };
 use crate::chat::view::ChatView;
 use crate::ui::text::Writer;
-use crate::ui::theme::{ASKING, DIM, FAILED, FOREGROUND, LINK};
+use crate::ui::theme::{
+    ACCENT, ASKING, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAILED, FOREGROUND, LINK, RAISED,
+};
 
 /// How tall what a tool call shows grows before it scrolls on its own.
 const CONTENT_HEIGHT: f32 = 320.;
-
-/// The colors of a change's lines.
-const REMOVED: u32 = 0xf0_8080;
-const ADDED: u32 = 0x80_d080;
-
-/// The ground of what the human sent, and of a button.
-const HUMAN_BACKGROUND: u32 = 0x2c_2f36;
-const BUTTON: u32 = 0x30_3030;
-const HOVER: u32 = 0x40_4040;
 
 /// How far the work of a fold, and the steps of a plan, are moved right,
 /// under their line.
@@ -164,17 +157,19 @@ impl ChatView {
         if let Some(steps) = plan {
             told.push((format!("plan {}", progress(steps)), DIM));
         }
-        let told = told.into_iter().enumerate().map(|(i, (text, color))| {
-            div()
-                .text_color(rgb(color))
-                .child(if i == 0 { text } else { format!("· {text}") })
+        // The dots between the counts are parts of their own, so that the
+        // gap on each side of a dot is the same in a font of any widths.
+        let told = told.into_iter().enumerate().flat_map(|(i, (text, color))| {
+            let dot = (i > 0).then(|| div().child("·"));
+            dot.into_iter()
+                .chain([div().text_color(rgb(color)).child(text)])
         });
         let start = work.start;
         let summary = div()
             .id(("work", start))
             .debug_selector(move || format!("work-{start}"))
             .flex()
-            .gap_2()
+            .gap_1p5()
             .text_color(rgb(DIM))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(BUTTON)))
@@ -245,7 +240,7 @@ impl ChatView {
                 .px_3()
                 .py_2()
                 .rounded_md()
-                .bg(rgb(HUMAN_BACKGROUND))
+                .bg(rgb(RAISED))
                 .child(writer.plain(text, "\n\n"))
                 .into_any_element(),
             // Sent in the human's place, so drawn in theirs, but as Cox's
@@ -255,7 +250,7 @@ impl ChatView {
                 .px_3()
                 .py_2()
                 .rounded_md()
-                .bg(rgb(HUMAN_BACKGROUND))
+                .bg(rgb(RAISED))
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
                 .child(writer.plain(text, "\n\n"))
@@ -272,7 +267,7 @@ impl ChatView {
             } => {
                 let (mark, color) = match result {
                     None => ("●", LINK),
-                    Some(ToolCallResult::Completed) => ("✓", ADDED),
+                    Some(ToolCallResult::Completed) => ("✓", ACCENT),
                     Some(ToolCallResult::Failed) => ("✗", FAILED),
                     Some(ToolCallResult::Cancelled) => ("–", DIM),
                 };
@@ -480,7 +475,7 @@ fn render_proposal(
             .rounded_sm()
             .bg(rgb(BUTTON))
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(HOVER)))
+            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
             .child(label)
     };
     let buttons = [
@@ -542,7 +537,7 @@ fn render_asking(
             .rounded_sm()
             .bg(rgb(BUTTON))
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(HOVER)))
+            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
             .child(div().text_color(rgb(DIM)).child(format!("{}", i + 1)))
             .child(SharedString::from(name.clone()))
             .on_click(cx.listener(move |view, _, _, cx| view.choose(i, cx)))
@@ -601,7 +596,7 @@ fn flow_button(index: usize, id: &str, cx: &mut Context<ChatView>) -> impl IntoE
         .text_xs()
         .text_color(rgb(DIM))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(LINK)))
+        .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(LINK)))
         .child("flow")
         .on_click(cx.listener(move |view, _, window, cx| {
             // Not a click on the line, which opens what the call shows.
@@ -650,7 +645,7 @@ pub(super) fn progress(steps: &[Step]) -> String {
 pub(super) fn render_steps(steps: &[Step]) -> gpui::Div {
     div().flex().flex_col().children(steps.iter().map(|step| {
         let (mark, color, text) = match step.state {
-            StepState::Completed => ("✓", ADDED, DIM),
+            StepState::Completed => ("✓", ACCENT, DIM),
             StepState::InProgress => ("●", LINK, FOREGROUND),
             StepState::Pending => ("○", DIM, FOREGROUND),
         };
@@ -702,6 +697,7 @@ fn render_content(
             Content::Diff { path, lines } => div()
                 .flex()
                 .flex_col()
+                .font_family(CODE_FONT)
                 .child(div().text_color(rgb(DIM)).child(writer.plain(path, "\n")))
                 .children(lines.iter().map(|line| render_line(line, writer))),
         })
@@ -716,7 +712,7 @@ fn render_content(
         .gap_1()
         .pl_2()
         .border_l_1()
-        .border_color(rgb(0x40_4040))
+        .border_color(rgb(BORDER))
         .text_size(px(12.))
         .children(shown);
     Some(content.into_any_element())
@@ -727,8 +723,8 @@ fn render_content(
 fn render_line(line: &Line, writer: &mut Writer) -> gpui::Div {
     let (color, mark, text) = match line {
         Line::Same(text) => (DIM, "", text.clone()),
-        Line::Removed(text) => (REMOVED, "-", text.clone()),
-        Line::Added(text) => (ADDED, "+", text.clone()),
+        Line::Removed(text) => (FAILED, "-", text.clone()),
+        Line::Added(text) => (ACCENT, "+", text.clone()),
         Line::Skipped(1) => (DIM, "", "⋯ 1 line".to_owned()),
         Line::Skipped(count) => (DIM, "", format!("⋯ {count} lines")),
     };

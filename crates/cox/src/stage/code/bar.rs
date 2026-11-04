@@ -4,7 +4,7 @@ use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
 
 use super::Code;
 use crate::ui::paths::shortened;
-use crate::ui::theme::{DIM, FAILED, FOREGROUND};
+use crate::ui::theme::{BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FOREGROUND};
 
 impl Code {
     /// The bar above the code: back and forward, the file's path, the
@@ -34,9 +34,9 @@ impl Code {
                         button
                             .cursor_pointer()
                             .text_color(rgb(FOREGROUND))
-                            .hover(|style| style.bg(rgb(0x40_4040)))
+                            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
                     } else {
-                        button.text_color(rgb(0x55_5555))
+                        button.text_color(rgb(DISABLED))
                     }
                 })
                 .child(label)
@@ -48,7 +48,7 @@ impl Code {
             .px_3()
             .py_1()
             .border_b_1()
-            .border_color(rgb(0x40_4040))
+            .border_color(rgb(BORDER))
             .text_color(rgb(DIM))
             .when(
                 self.history.has_back() || self.history.has_forward(),

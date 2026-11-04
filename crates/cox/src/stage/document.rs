@@ -22,7 +22,7 @@ use crate::stage::tab::{Shows, ShowsFile, TabContent};
 use crate::ui::markdown::{self, Block};
 use crate::ui::paths::shortened;
 use crate::ui::text::Reading;
-use crate::ui::theme::DIM;
+use crate::ui::theme::{BORDER, DIM, FAILED};
 use crate::ui::{Copy, LinkClicked};
 
 const KEY_CONTEXT: &str = "Document";
@@ -218,7 +218,7 @@ impl Render for Document {
             .px_3()
             .py_1()
             .border_b_1()
-            .border_color(rgb(0x40_4040))
+            .border_color(rgb(BORDER))
             .text_color(rgb(DIM))
             .child(
                 div()
@@ -231,7 +231,7 @@ impl Render for Document {
             .children(self.unread.as_ref().map(|error| {
                 div()
                     .flex_shrink_0()
-                    .text_color(rgb(0xf0_8080))
+                    .text_color(rgb(FAILED))
                     .child(format!("cannot read: {error}"))
             }));
         div()

@@ -26,10 +26,11 @@ use gpui::{
     GlobalElementId, InspectorElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, TextAlign,
     TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill, point,
-    prelude::*, px, relative, rgb, rgba, size,
+    prelude::*, px, relative, rgb, size,
 };
 
 use self::draft::{Draft, one_line, unix_line_breaks};
+use crate::ui::theme::{FOREGROUND, SELECTION};
 
 actions!(
     line_input,
@@ -688,7 +689,7 @@ impl Layout {
                     origin + point(left, top),
                     origin + point(right, top + self.line_height),
                 ),
-                rgba(0x4080_ff60),
+                rgb(SELECTION),
             ));
             if last {
                 return boxes;
@@ -832,7 +833,7 @@ impl Element for LineElement {
         let selection = layout.selection(&selected, origin, bounds.size.width);
         let cursor = fill(
             Bounds::new(origin + at, size(CURSOR_WIDTH, layout.line_height)),
-            rgb(0xe0_e0e0),
+            rgb(FOREGROUND),
         );
         Prepainted {
             layout: Some(layout),

@@ -60,15 +60,13 @@ use crate::stage::tab::Shows;
 use crate::ui::Copy;
 use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
-use crate::ui::theme::{BACKGROUND, DIM, FAILED};
+use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, SURFACE};
 
 const KEY_CONTEXT: &str = "Terminal";
 
 /// How often a command the agent runs looks whether the agent still waits
 /// for it.
 const WATCH_EVERY: Duration = Duration::from_millis(250);
-
-const SUCCEEDED: u32 = 0x80_d080;
 
 /// Binds the keys of the tab: copying and pasting with the secondary key,
 /// which is Command on macOS. Elsewhere it is Control, which the program
@@ -411,7 +409,7 @@ impl Terminal {
             Program::Command(command) => {
                 let state = match self.ended {
                     None => ("running".to_owned(), DIM),
-                    Some(Ended::Exited(0)) => (Ended::Exited(0).to_string(), SUCCEEDED),
+                    Some(Ended::Exited(0)) => (Ended::Exited(0).to_string(), ACCENT),
                     Some(ended) => (ended.to_string(), FAILED),
                 };
                 (
@@ -430,7 +428,7 @@ impl Terminal {
             .px_3()
             .py_1()
             .border_b_1()
-            .border_color(rgb(0x40_4040))
+            .border_color(rgb(BORDER))
             .text_color(rgb(DIM))
             .child(
                 div()
@@ -616,7 +614,7 @@ impl Render for Terminal {
                     .debug_selector(|| "terminal".to_owned())
                     .flex_1()
                     .min_h_0()
-                    .bg(rgb(BACKGROUND))
+                    .bg(rgb(SURFACE))
                     .track_focus(&self.focus_handle)
                     .key_context(KEY_CONTEXT)
                     .on_key_down(cx.listener(Self::key_down))
