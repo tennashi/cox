@@ -22,7 +22,10 @@ const AROUND: usize = 4;
 /// cannot be read or a line it does not have. Each line is its stretches
 /// in order, each the text and what the syntax says it is, by the name
 /// of its [`Highlight`], or null for nothing in particular, as for all
-/// of a file in no language tree-sitter parses.
+/// of a file in no language tree-sitter parses. Before them, `within`
+/// is the lines that open what the line is within, outermost first, as
+/// its function's `fn` line and its impl's (see [`Syntax::within`]),
+/// those above the lines told, each with its number and its stretches.
 #[must_use]
 pub fn told(root: &Path, path: &Path, line: usize) -> Option<serde_json::Value> {
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
@@ -49,17 +52,28 @@ pub fn told(root: &Path, path: &Path, line: usize) -> Option<serde_json::Value> 
     });
     let from = line.saturating_sub(AROUND).max(1);
     let to = line.saturating_add(AROUND).min(count);
-    let lines: Vec<serde_json::Value> = match &buffer {
-        Some(buffer) if line >= 1 && from <= to => (from..=to)
-            .map(|n| {
-                let text = buffer.line(n - 1);
-                let spans = syntax
-                    .as_ref()
-                    .map(|syntax| syntax.highlights(buffer, n - 1, usize::MAX))
-                    .unwrap_or_default();
-                serde_json::json!(stretches(&text, &spans))
-            })
+    let told_line = |buffer: &Buffer, n: usize| {
+        let text = buffer.line(n - 1);
+        let spans = syntax
+            .as_ref()
+            .map(|syntax| syntax.highlights(buffer, n - 1, usize::MAX))
+            .unwrap_or_default();
+        serde_json::json!(stretches(&text, &spans))
+    };
+    let within: Vec<serde_json::Value> = match (&buffer, &syntax) {
+        (Some(buffer), Some(syntax)) if line >= 1 && from <= to => syntax
+            .within(buffer, line - 1)
+            .into_iter()
+            .map(|row| row + 1)
+            .filter(|n| *n < from)
+            .map(|n| serde_json::json!({ "line": n, "text": told_line(buffer, n) }))
             .collect(),
+        _ => Vec::new(),
+    };
+    let lines: Vec<serde_json::Value> = match &buffer {
+        Some(buffer) if line >= 1 && from <= to => {
+            (from..=to).map(|n| told_line(buffer, n)).collect()
+        }
         _ => Vec::new(),
     };
     Some(serde_json::json!({
@@ -68,6 +82,7 @@ pub fn told(root: &Path, path: &Path, line: usize) -> Option<serde_json::Value> 
         "line": line,
         "exists": text.is_some(),
         "from": from,
+        "within": within,
         "lines": lines,
     }))
 }
@@ -158,11 +173,36 @@ mod tests {
     }
 
     #[test]
+    fn the_lines_that_open_what_one_is_within_are_told() {
+        let root = scratch("within");
+        let body = (1..=20)
+            .map(|n| format!("        let x{n} = {n};\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        let text = format!("impl S {{\n    fn f(&self) {{\n{body}    }}\n}}\n");
+        std::fs::write(root.join("a.rs"), text).unwrap();
+        let json = told(&root, &root.join("a.rs"), 12).unwrap();
+        assert_eq!(json["from"], 8);
+        let within = json["within"].as_array().unwrap();
+        assert_eq!(within.len(), 2);
+        assert_eq!(within[0]["line"], 1);
+        assert_eq!(text_of(&within[0]["text"]), "impl S {");
+        assert_eq!(within[1]["line"], 2);
+        assert_eq!(text_of(&within[1]["text"]), "    fn f(&self) {");
+        assert_eq!(within[1]["text"][1], serde_json::json!(["fn", "keyword"]));
+        // A line that opens a scope within the lines told is not repeated.
+        let json = told(&root, &root.join("a.rs"), 4).unwrap();
+        assert_eq!(json["from"], 1);
+        assert_eq!(json["within"], serde_json::json!([]));
+    }
+
+    #[test]
     fn a_file_in_no_language_is_told_plain() {
         let root = scratch("plain");
         std::fs::write(root.join("notes.txt"), "one\ntwo\n").unwrap();
         let json = told(&root, &root.join("notes.txt"), 2).unwrap();
         assert_eq!(json["from"], 1);
+        assert_eq!(json["within"], serde_json::json!([]));
         assert_eq!(
             json["lines"],
             serde_json::json!([[["one", null]], [["two", null]]])

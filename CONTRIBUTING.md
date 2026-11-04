@@ -374,9 +374,11 @@ runs. So a flow is drilled down to the functions that make it, and a
 step whose place the server has not told stays on the box itself.
 The mouse resting on a step shows the code it is made at: the line
 its `at` names and a few around it, colored as a code tab draws them,
-with the function the line is in and what it calls, as the server
-says, so that the name the step bears is read beside the line it comes
-from; a click on a line of it opens the file there on a tab.
+under the lines that open what the line is within, as its function's
+`fn` line and its impl's, dimmer, as the syntax has them, with the
+function the line is in and what it calls, as the server says, so that
+the name the step bears is read beside the line it comes from; a click
+on a line of it opens the file there on a tab.
 "on the map" draws the flow on the tier
 instead, its steps numbered on the lines between the boxes, with the
 step chosen lit and the other lines dimmed. Either way the ← and →
@@ -426,9 +428,10 @@ many places use each, and which files use them;
 `cox://api/call/<path>:<line>` is what the server says a line of the
 file calls, for a step of a flow made there; and
 `cox://api/lines/<path>:<line>` is the lines of the file around that
-line, each as its stretches with what the syntax says each is, for a
-page to show the code a step is made at, colored as the code tabs
-color it. It
+line, each as its stretches with what the syntax says each is, and
+before them the lines that open what the line is within, as its
+function's and its impl's, for a page to show the code a step is made
+at, colored as the code tabs color it. It
 opens a file on a tab
 by going to `cox://open/<path>#L<line>`, which the stage takes as it
 takes a link to a file (a page that is not itself a file may not link
