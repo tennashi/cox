@@ -68,6 +68,11 @@ pub const ACCENT_GROUND: u32 = 0x15_2c2a;
 pub const LINK: u32 = 0xa6_ebe1;
 /// What waits for the human to answer.
 pub const ASKING: u32 = 0xe5_b46d;
+/// The ground of what asks the human, its edge, and its buttons but the
+/// first, which the human most likely answers and which is `ASKING`.
+pub const ASKING_GROUND: u32 = 0x1e_1b15;
+pub const ASKING_EDGE: u32 = 0x4a_3d25;
+pub const ASKING_BUTTON: u32 = 0x2e_2920;
 /// What went wrong.
 pub const FAILED: u32 = 0xec_8580;
 /// The ground of lines a change adds, and of those it removes.

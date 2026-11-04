@@ -151,8 +151,10 @@ the menu of the right button opens an input above the chat's own for
 the goal (Enter sets it, Escape leaves it as it was, and emptied, it
 clears the goal), where `$ ` and a command is the command, and any
 other text is a goal in words; "Clear goal" clears it; the tab marks a
-chat with a goal (◎), and a line above the input names the goal while
-the chat waits. When a turn ends as the agent ends it, a command runs
+chat with a goal (◎), and a bar at the top of the conversation names
+the goal, with, while the agent works toward it, a mark for each of the
+turns a line gets: those whose check failed, the one it takes, and the
+rest. When a turn ends as the agent ends it, a command runs
 in a terminal on the stage, as the agent's `run_command` tool would.
 While it fails, Cox sends the agent what it printed, as the next turn,
 shown in the conversation in the human's place but dimmer, and the
@@ -268,9 +270,14 @@ end, or for the chat to come to wait for the human, and hear how it
 stands then: what its agent last said, or what it asks the human. A
 chat that is not at work answers at once.
 
-The conversation shows each tool call the agent makes on a line of its
-own, marked as running, done or failed; a click on the line opens what
-the call showed, which shows from the start for a call that failed.
+The conversation runs down a line on its left, which names who speaks
+where they start, with a dot: the human (YOU), Cox in their place
+(COX), or the agent, by the name the human knows it by; and marks in
+amber the card of what the agent asks the human, whose first option,
+filled, stands out. The conversation shows each tool call the agent
+makes on a line of its own, marked as running, done or failed; a click
+on the line opens what the call showed, which shows from the start for
+a call that failed.
 "flow" at the end of the line opens, on the stage, how the call went
 through Cox, read from what Cox kept of the run (see
 [What Cox keeps of each run](#what-cox-keeps-of-each-run)): the

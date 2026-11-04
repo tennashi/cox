@@ -39,7 +39,7 @@ use cox_core::goal::Goal;
 use cox_core::list::List;
 use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
 use gpui::{
-    AnyView, App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
+    App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
     MouseButton, MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString, Stateful,
     Subscription, Window, actions, anchored, deferred, div, prelude::*, px, rgb,
 };
@@ -55,13 +55,13 @@ use crate::chat::view::{Asked, ChatView, Reopened, SwitchAgent};
 use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
 use crate::storage;
-use crate::ui::card;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAINT, FOREGROUND, GAP,
     GROUND, HOVER, LINK, RAISED, SELECTED, SURFACE, UI_FONT,
 };
+use crate::ui::{card, tip};
 
 actions!(
     cox,
@@ -1956,30 +1956,5 @@ impl Render for Workspace {
                     .child(div().flex_1().min_h_0().child(shown)),
             )
             .children(self.render_menu(cx))
-    }
-}
-
-/// What the mouse resting on a button says of it.
-struct Tip(SharedString);
-
-/// Builds the tip that says `text`, for an element's `tooltip`.
-fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView {
-    let text = text.into();
-    move |_, cx| cx.new(|_| Tip(text.clone())).into()
-}
-
-impl Render for Tip {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER_STRONG))
-            .rounded(px(8.))
-            .text_color(rgb(FOREGROUND))
-            .font_family(UI_FONT)
-            .text_size(px(12.))
-            .child(self.0.clone())
     }
 }

@@ -59,10 +59,14 @@ use crate::chat::conversation::{
 };
 use crate::chat::judge::{Judge, Starts};
 use crate::stage::Stage;
+use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::text::Reading;
-use crate::ui::theme::{BORDER, BUTTON, BUTTON_HOVER, DIM, FOREGROUND, GAP, LINK, RAISED, UI_FONT};
-use crate::ui::{Copy, Panel, card};
+use crate::ui::theme::{
+    ACCENT, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND, GAP, LINK, RAISED,
+    UI_FONT,
+};
+use crate::ui::{Copy, Panel, card, tip};
 use cox_acp::Login;
 
 mod entries;
@@ -125,6 +129,10 @@ impl Asked {
         self.0.borrow_mut().take()
     }
 }
+
+/// The bar of a turn toward the goal whose check failed: the color of
+/// what failed, dimmed, so that the turn the agent takes stands out.
+const FAILED_TURN: u32 = 0x8c_4a48;
 
 /// How wide the conversation is when the stage sits beside it.
 const CONVERSATION_WIDTH: f32 = 420.;
@@ -350,6 +358,21 @@ impl ChatView {
         self.agents
             .as_ref()
             .map_or("", |(_, chosen)| chosen.as_str())
+    }
+
+    /// What the human knows the agent the chat talks to by: its name,
+    /// among those it can choose, or "Agent" when it cannot choose.
+    fn agent_name(&self) -> String {
+        self.agents
+            .as_ref()
+            .and_then(|(agents, chosen)| {
+                agents
+                    .all()
+                    .into_iter()
+                    .find(|known| &known.id == chosen)
+                    .map(|known| known.name)
+            })
+            .unwrap_or_else(|| "Agent".to_owned())
     }
 
     /// Asks the window to switch the chat to the agent kept as `id`, when
@@ -1065,7 +1088,8 @@ impl ChatView {
     pub fn waiting(&self) -> Option<String> {
         let goal = self.conversation.goal();
         match self.conversation.state() {
-            State::Idle => goal.map(|goal| format!("Goal: {}", goal.line())),
+            // The goal shows above the conversation.
+            State::Idle => None,
             State::Busy => Some(match goal {
                 Some(goal) => format!(
                     "The agent works toward the goal, turn {} of {GOAL_TURNS}. Escape stops it.",
@@ -1170,6 +1194,7 @@ impl ChatView {
         let waiting = self.waiting();
         let goal_input = self.render_goal_input(cx);
         let plan = self.render_plan(cx);
+        let goal = self.render_goal();
         let input = self.input.clone();
         div()
             .key_context(KEY_CONTEXT)
@@ -1179,6 +1204,7 @@ impl ChatView {
             .size_full()
             .flex()
             .flex_col()
+            .children(goal)
             .child(
                 div()
                     .relative()
@@ -1197,10 +1223,10 @@ impl ChatView {
                                 MouseButton::Left,
                                 cx.listener(|view, _, _, _| view.reading.stop()),
                             )
-                            .p_3()
+                            .pt(px(16.))
+                            .px(px(14.))
                             .flex()
                             .flex_col()
-                            .gap_2()
                             .children(entries),
                     )
                     // Drawn after the conversation, over it.
@@ -1209,8 +1235,8 @@ impl ChatView {
             .children(waiting.filter(|_| goal_input.is_none()).map(|waiting| {
                 div()
                     .debug_selector(|| "waiting".to_owned())
-                    .px_3()
-                    .py_1()
+                    .px(px(18.))
+                    .pt_1()
                     .text_size(px(12.))
                     .text_color(rgb(DIM))
                     .child(waiting)
@@ -1220,9 +1246,17 @@ impl ChatView {
                 div()
                     .debug_selector(|| "input".to_owned())
                     .flex()
-                    .p_3()
-                    .border_t_1()
+                    .items_center()
+                    .m(px(12.))
+                    .min_h(px(48.))
+                    .pl(px(16.))
+                    .pr(px(8.))
+                    .py(px(8.))
+                    .rounded(px(16.))
+                    .bg(rgb(RAISED))
+                    .border_1()
                     .border_color(rgb(BORDER))
+                    .text_size(px(15.))
                     // A click brings the keyboard back from the stage, and
                     // keeps it from the window, which takes it otherwise.
                     // What was selected in the conversation is let go, so
@@ -1238,23 +1272,83 @@ impl ChatView {
                         }),
                     )
                     .child(div().flex_1().min_w_0().child(self.input.clone()))
-                    .when(running, |bar| {
-                        bar.child(
-                            div()
-                                .id("stop")
-                                .debug_selector(|| "stop".to_owned())
-                                .flex_shrink_0()
-                                .ml_2()
-                                .px_2()
-                                .rounded_sm()
-                                .bg(rgb(BUTTON))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-                                .child("Stop")
-                                .on_click(cx.listener(|view, _, _, cx| view.stop(cx))),
-                        )
-                    }),
+                    .when(running, |bar| bar.child(Self::render_stop(cx))),
             )
+    }
+}
+
+impl ChatView {
+    /// The button that stops the turn, beside the input while it runs.
+    fn render_stop(cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .id("stop")
+            .debug_selector(|| "stop".to_owned())
+            .flex_shrink_0()
+            .ml_2()
+            .size(px(32.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(10.))
+            .bg(rgb(BUTTON))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
+            .tooltip(tip("Stop (Escape)"))
+            // A square, as a player's stop is.
+            .child(div().size(px(10.)).rounded(px(2.)).bg(rgb(FOREGROUND)))
+            .on_click(cx.listener(|view, _, _, cx| view.stop(cx)))
+    }
+
+    /// The goal, above the conversation, while the chat has one: what it
+    /// is, and, while the agent works toward it, a bar for each turn its
+    /// line gets, those whose check failed, the one it takes, and the
+    /// rest.
+    fn render_goal(&self) -> Option<impl IntoElement + use<>> {
+        let goal = self.conversation.goal()?;
+        let turns = goal.turns();
+        let what = match goal.command() {
+            Some(command) => div()
+                .font_family(CODE_FONT)
+                .text_size(px(12.5))
+                .child(command.to_owned()),
+            None => div()
+                .text_size(px(13.))
+                .child(goal.words().unwrap_or_default().to_owned()),
+        };
+        let bars = (1..=GOAL_TURNS).map(move |turn| {
+            let color = match turn.cmp(&turns) {
+                std::cmp::Ordering::Less => FAILED_TURN,
+                std::cmp::Ordering::Equal => ACCENT,
+                std::cmp::Ordering::Greater => BORDER,
+            };
+            div().w(px(5.)).h(px(12.)).rounded(px(2.)).bg(rgb(color))
+        });
+        Some(
+            div()
+                .debug_selector(|| "goal".to_owned())
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .mx(px(12.))
+                .mt(px(12.))
+                .px(px(12.))
+                .py(px(8.))
+                .rounded(px(12.))
+                .bg(rgb(RAISED))
+                .child(icon(Icon::Target, 14., ACCENT))
+                .child(div().flex_1().min_w_0().truncate().child(what))
+                .when(turns > 0, |bar| {
+                    bar.child(div().flex_shrink_0().flex().gap(px(3.)).children(bars))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(12.))
+                                .text_color(rgb(FAINT))
+                                .child(format!("{turns} / {GOAL_TURNS}")),
+                        )
+                }),
+        )
     }
 }
 
