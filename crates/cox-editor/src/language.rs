@@ -94,6 +94,44 @@ pub(crate) enum Capture {
     Ignored,
 }
 
+impl Highlight {
+    /// The highlight's name, as the queries capture it, such as
+    /// `constant.builtin`, for what draws code outside Cox's own text, as
+    /// a page of the stage does.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Attribute => "attribute",
+            Self::Comment => "comment",
+            Self::Constant => "constant",
+            Self::ConstantBuiltin => "constant.builtin",
+            Self::Constructor => "constructor",
+            Self::Escape => "escape",
+            Self::Function => "function",
+            Self::Keyword => "keyword",
+            Self::Label => "label",
+            Self::Number => "number",
+            Self::Operator => "operator",
+            Self::Property => "property",
+            Self::Punctuation => "punctuation",
+            Self::PunctuationSpecial => "punctuation.special",
+            Self::String => "string",
+            Self::StringSpecial => "string.special",
+            Self::Tag => "tag",
+            Self::Type => "type",
+            Self::TypeBuiltin => "type.builtin",
+            Self::Variable => "variable",
+            Self::VariableBuiltin => "variable.builtin",
+            Self::Heading => "heading",
+            Self::Literal => "literal",
+            Self::Emphasis => "emphasis",
+            Self::Strong => "strong",
+            Self::Link => "link",
+            Self::Uri => "uri",
+        }
+    }
+}
+
 impl Capture {
     fn named(name: &str) -> Self {
         if name == "none" {

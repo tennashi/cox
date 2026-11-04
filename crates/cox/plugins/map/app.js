@@ -1378,7 +1378,7 @@ async function peekShow(row, st) {
     const said = c && c.function ? `in <b>${esc(c.function.name)}</b>${c.calls && c.calls.length ? `, calls ${c.calls.map((x) => `<b>${esc(x.name)}</b>`).join(", ")}` : ""}` : c && c.error ? esc(c.error) : "";
     const lines = got
       ? got.lines.length
-        ? got.lines.map((text, i) => `<div class="ln ${got.from + i === place.line ? "at" : ""}"><span class="no">${got.from + i}</span>${esc(text) || " "}</div>`).join("")
+        ? got.lines.map((line, i) => `<div class="ln ${got.from + i === place.line ? "at" : ""}"><span class="no">${got.from + i}</span>${line.map(([text, what]) => (what ? `<span class="hl-${what.replace(/\./g, "-")}">${esc(text)}</span>` : esc(text))).join("") || " "}</div>`).join("")
         : `<div class="ln faint">${got.exists ? "the file has no such line" : "the file is gone"}</div>`
       : '<div class="ln faint">reading…</div>';
     if (!peekEl) {
