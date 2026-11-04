@@ -28,6 +28,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use self::picture::Picture;
 use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
+use crate::ui::theme::{BORDER, BUTTON, DISABLED, SELECTED};
 use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
 use cox_browser::{Browser, Caret, Event, Navigation, TargetId};
@@ -211,7 +212,7 @@ impl Page {
             .px_2()
             .py_1()
             .border_b_1()
-            .border_color(rgb(0x40_4040))
+            .border_color(rgb(BORDER))
             .child(Self::button("back", "◀", can_go_back, Browser::go_back, cx))
             .child(Self::button(
                 "forward",
@@ -231,7 +232,7 @@ impl Page {
                     .flex_1()
                     .px_2()
                     .rounded_sm()
-                    .bg(rgb(0x2a_2a2a))
+                    .bg(rgb(SELECTED))
                     // A click brings the keyboard to the address line.
                     .on_mouse_down(
                         gpui::MouseButton::Left,
@@ -259,11 +260,11 @@ impl Page {
             .rounded_sm()
             .child(label);
         if !enabled {
-            return button.text_color(rgb(0x60_6060));
+            return button.text_color(rgb(DISABLED));
         }
         button
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(0x30_3030)))
+            .hover(|style| style.bg(rgb(BUTTON)))
             .on_click(cx.listener(move |stage, _, _, _| action(&stage.browser)))
     }
 }

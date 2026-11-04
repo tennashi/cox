@@ -28,7 +28,7 @@ use gpui::{
 
 use crate::logs::flow::{self, Lane, Step};
 use crate::stage::tab::Shows;
-use crate::ui::theme::{BACKGROUND, DIM, FAILED, FOREGROUND, LINK};
+use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FOREGROUND, HOVER, LINK, SURFACE};
 
 /// What a link to the flow of a tool call starts with, followed by the
 /// call's id.
@@ -46,11 +46,6 @@ const ARROW_HEIGHT: f32 = 20.;
 /// How big the dot of a step is, and the line of an arrow.
 const DOT: f32 = 8.;
 const LINE: f32 = 2.;
-
-const BORDER: u32 = 0x40_4040;
-const HOVER: u32 = 0x2a_2d2e;
-/// The color of a step in a file that changed.
-const CHANGED: u32 = 0x8f_d19e;
 
 /// The human chose a step, to open where in Cox's code it is taken: the
 /// file, an absolute path, at this line.
@@ -223,7 +218,7 @@ impl Flow {
             .as_ref()
             .map(|source| format!("{}:{}", file_name(&source.file), source.line));
         let color = match (source.is_some(), changed) {
-            (true, true) => CHANGED,
+            (true, true) => ACCENT,
             (true, false) => LINK,
             (false, _) => DIM,
         };
@@ -331,7 +326,7 @@ fn render_arrow(from: Lane, to: Lane, changed: bool) -> AnyElement {
                 .w(px(DOT))
                 .h(px(DOT))
                 .rounded_full()
-                .bg(rgb(if changed { CHANGED } else { LINK })),
+                .bg(rgb(if changed { ACCENT } else { LINK })),
         )
         .into_any_element()
 }
@@ -461,7 +456,7 @@ impl Render for Flow {
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
-            .bg(rgb(BACKGROUND))
+            .bg(rgb(SURFACE))
             .text_color(rgb(FOREGROUND))
             .child(self.render_heading())
             .child(Self::render_lanes())

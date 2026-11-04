@@ -94,6 +94,7 @@ use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
 use crate::ui::Panel;
 use crate::ui::input::LineInput;
+use crate::ui::theme::{BORDER, BUTTON, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, SELECTED};
 
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";
@@ -440,8 +441,8 @@ impl Stage {
                     .debug_selector(move || format!("close-tab-{number}"))
                     .px_1()
                     .rounded_sm()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x40_4040)).text_color(rgb(0xe0_e0e0)))
+                    .text_color(rgb(FAINT))
+                    .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(FOREGROUND)))
                     .child("×")
                     .on_click(cx.listener(move |stage, _, window, cx| {
                         cx.stop_propagation();
@@ -450,10 +451,9 @@ impl Stage {
             );
         }
         if self.tabs.shown_index() == Some(index) {
-            tab.bg(rgb(0x2a_2a2a))
+            tab.bg(rgb(SELECTED))
         } else {
-            tab.text_color(rgb(0xa0_a0a0))
-                .hover(|style| style.bg(rgb(0x26_2626)))
+            tab.text_color(rgb(DIM)).hover(|style| style.bg(rgb(HOVER)))
         }
     }
 
@@ -471,7 +471,7 @@ impl Stage {
             .px_2()
             .pt_1()
             .border_b_1()
-            .border_color(rgb(0x40_4040))
+            .border_color(rgb(BORDER))
             .children(tabs)
             .child(
                 div()
@@ -481,8 +481,8 @@ impl Stage {
                     .px_2()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .text_color(rgb(FAINT))
+                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
                     .child("+")
                     .on_click(cx.listener(|stage, _, window, cx| stage.new_tab(window, cx))),
             )
@@ -494,8 +494,8 @@ impl Stage {
                     .px_2()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .text_color(rgb(FAINT))
+                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
                     .child(">_")
                     .on_click(cx.listener(|stage, _, window, cx| stage.new_terminal(window, cx))),
             )
@@ -507,8 +507,8 @@ impl Stage {
                     .px_2()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .text_color(rgb(FAINT))
+                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
                     .child("Files")
                     .on_click(cx.listener(|stage, _, window, cx| stage.show_tree(window, cx))),
             )
@@ -520,8 +520,8 @@ impl Stage {
                     .px_2()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .text_color(rgb(FAINT))
+                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
                     .child("Changes")
                     .on_click(cx.listener(|stage, _, window, cx| {
                         let cwd = stage.cwd.clone();
@@ -546,8 +546,8 @@ impl Stage {
                     .px_2()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_color(rgb(0x80_8080))
-                    .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                    .text_color(rgb(FAINT))
+                    .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
                     .child(plugin.title)
                     .on_click(cx.listener(move |stage, _, window, cx| {
                         stage.show_plugin(&name, "", window, cx);

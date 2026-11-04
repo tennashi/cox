@@ -17,7 +17,7 @@ use cox_core::settings::{Choice, Setting};
 use super::ChatView;
 use crate::agents::REGISTRY_GROUP;
 use crate::chat::conversation::State;
-use crate::ui::theme::DIM;
+use crate::ui::theme::{ACCENT_GROUND, BORDER_STRONG, BUTTON, DIM, RAISED};
 
 /// How wide the list of a setting's choices is.
 const CHOICES_WIDTH: f32 = 260.;
@@ -116,11 +116,9 @@ impl ChatView {
             .px_2()
             .rounded_sm()
             .text_size(px(12.))
-            .when(open, |button| button.bg(rgb(0x30_3030)))
+            .when(open, |button| button.bg(rgb(BUTTON)))
             .when(enabled, |button| {
-                button
-                    .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0x30_3030)))
+                button.cursor_pointer().hover(|style| style.bg(rgb(BUTTON)))
             })
             .when(!enabled, |button| button.opacity(0.5))
             .child(div().text_color(rgb(DIM)).child(setting.name.clone()))
@@ -162,9 +160,9 @@ impl ChatView {
             .max_h(px(CHOICES_HEIGHT))
             .overflow_y_scroll()
             .p_1()
-            .bg(rgb(0x25_2526))
+            .bg(rgb(RAISED))
             .border_1()
-            .border_color(rgb(0x45_4545))
+            .border_color(rgb(BORDER_STRONG))
             .rounded_md()
             .shadow_md()
             .text_size(px(12.))
@@ -198,7 +196,7 @@ impl ChatView {
                         .py_0p5()
                         .rounded_sm()
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(0x04_395e)))
+                        .hover(|style| style.bg(rgb(ACCENT_GROUND)))
                         .child(
                             div()
                                 .w(px(10.))

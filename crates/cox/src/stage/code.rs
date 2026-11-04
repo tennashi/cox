@@ -59,7 +59,7 @@ use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::servers::{LanguageServer, Servers};
 use crate::stage::tab::{self, Shows, ShowsFile};
 use crate::ui::paths::shortened;
-use crate::ui::theme::BACKGROUND;
+use crate::ui::theme::SURFACE;
 use crate::ui::{Copy, LinkClicked};
 
 actions!(
@@ -821,7 +821,7 @@ impl Render for Code {
                     .debug_selector(|| "code".to_owned())
                     .flex_1()
                     .min_h_0()
-                    .bg(rgb(BACKGROUND))
+                    .bg(rgb(SURFACE))
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
                     .on_mouse_down(MouseButton::Right, cx.listener(Self::right_mouse_down))
                     .on_mouse_down(

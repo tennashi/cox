@@ -11,6 +11,7 @@ use gpui::{
 };
 
 use super::Page;
+use crate::ui::theme::{ACCENT, GROUND};
 use cox_browser::pointer::{Look, Rect, Spot};
 
 impl Page {
@@ -48,7 +49,7 @@ impl Page {
             .px_1p5()
             .rounded_sm()
             .bg(agent_color())
-            .text_color(white())
+            .text_color(rgb(GROUND))
             .text_xs()
             .whitespace_nowrap()
             .child(if look.typing {
@@ -61,7 +62,7 @@ impl Page {
 
 /// The color of everything the stage draws for the agent.
 fn agent_color() -> Hsla {
-    rgb(0x4f_6bff).into()
+    rgb(ACCENT).into()
 }
 
 /// The agent's pointer at `look`, over the stage at `bounds`: the ring of

@@ -7,7 +7,7 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use gpui::{Hsla, rgb};
 
-use crate::ui::theme::BACKGROUND;
+use crate::ui::theme::SURFACE;
 
 /// Brighter than the window's, as a terminal's text is.
 pub(super) const FOREGROUND: u32 = 0xe0_e0e0;
@@ -49,7 +49,7 @@ pub(super) fn color_at(index: usize, colors: &Colors) -> Rgb {
             }
         }
         _ => match index {
-            i if i == NamedColor::Background as usize => named(BACKGROUND),
+            i if i == NamedColor::Background as usize => named(SURFACE),
             i if i == NamedColor::Cursor as usize => named(CURSOR),
             i if (NamedColor::DimBlack as usize..=NamedColor::DimWhite as usize).contains(&i) => {
                 dim(color_at(i - NamedColor::DimBlack as usize, colors))
@@ -116,9 +116,9 @@ mod tests {
         assert_eq!(
             color_at(NamedColor::Background as usize, &colors),
             Rgb {
-                r: 0x1e,
-                g: 0x1e,
-                b: 0x1e
+                r: 0x15,
+                g: 0x15,
+                b: 0x17
             }
         );
     }

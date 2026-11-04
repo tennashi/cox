@@ -61,7 +61,9 @@ use crate::chat::judge::{Judge, Starts};
 use crate::stage::Stage;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::text::Reading;
-use crate::ui::theme::{DIM, FONT, LINK};
+use crate::ui::theme::{
+    BORDER, BUTTON, BUTTON_HOVER, DIM, FOREGROUND, LINK, RAISED, SURFACE, UI_FONT,
+};
 use crate::ui::{Copy, Panel};
 use cox_acp::Login;
 
@@ -1125,8 +1127,8 @@ impl ChatView {
                 .gap_1()
                 .rounded_md()
                 .border_1()
-                .border_color(rgb(0x40_4040))
-                .bg(rgb(0x25_2526))
+                .border_color(rgb(BORDER))
+                .bg(rgb(RAISED))
                 .shadow_md()
                 .text_size(px(12.))
                 // The conversation under the card hears none of the mouse.
@@ -1222,7 +1224,7 @@ impl ChatView {
                     .flex()
                     .p_3()
                     .border_t_1()
-                    .border_color(rgb(0x40_4040))
+                    .border_color(rgb(BORDER))
                     // A click brings the keyboard back from the stage, and
                     // keeps it from the window, which takes it otherwise.
                     // What was selected in the conversation is let go, so
@@ -1247,9 +1249,9 @@ impl ChatView {
                                 .ml_2()
                                 .px_2()
                                 .rounded_sm()
-                                .bg(rgb(0x30_3030))
+                                .bg(rgb(BUTTON))
                                 .cursor_pointer()
-                                .hover(|style| style.bg(rgb(0x40_4040)))
+                                .hover(|style| style.bg(rgb(BUTTON_HOVER)))
                                 .child("Stop")
                                 .on_click(cx.listener(|view, _, _, cx| view.stop(cx))),
                         )
@@ -1318,7 +1320,7 @@ impl ChatView {
                 .rounded_sm()
                 .text_color(rgb(DIM))
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(0x30_3030)).text_color(rgb(0xe0_e0e0)))
+                .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
                 .child(label)
                 .on_click(cx.listener(|view, _, window, cx| view.toggle_stage(window, cx)))
         });
@@ -1355,9 +1357,9 @@ impl Render for ChatView {
         let root = div()
             .size_full()
             .flex()
-            .bg(rgb(0x1e_1e1e))
-            .text_color(rgb(0xe0_e0e0))
-            .font_family(FONT)
+            .bg(rgb(SURFACE))
+            .text_color(rgb(FOREGROUND))
+            .font_family(UI_FONT)
             .text_size(px(14.));
         match &self.stage {
             Some(stage) if stage.panel.read(cx).is_open() => root
@@ -1367,7 +1369,7 @@ impl Render for ChatView {
                         .h_full()
                         .flex_shrink_0()
                         .border_r_1()
-                        .border_color(rgb(0x40_4040))
+                        .border_color(rgb(BORDER))
                         .child(conversation),
                 )
                 .child(

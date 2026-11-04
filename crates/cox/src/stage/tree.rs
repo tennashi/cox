@@ -20,16 +20,13 @@ use gpui::{
 
 use crate::stage::tab::Shows;
 use crate::ui::paths::shortened;
-use crate::ui::theme::{BACKGROUND, DIM, FAILED, FOREGROUND};
+use crate::ui::theme::{ACCENT_GROUND, BORDER, DIM, FAILED, FOREGROUND, HOVER, SURFACE};
 
 /// How often the tab looks at the folders open in it.
 const LOOK_EVERY: Duration = Duration::from_secs(1);
 
 /// How far in a folder's files and folders are from it.
 const INDENT: f32 = 16.;
-
-const HOVER: u32 = 0x2a_2d2e;
-const CHOSEN: u32 = 0x04_395e;
 
 /// The human chose the file at this path, to open it.
 pub struct Chosen(pub PathBuf);
@@ -188,7 +185,7 @@ impl Tree {
                 }
             }));
         if self.chosen.as_ref() == Some(&entry.path) {
-            row.bg(rgb(CHOSEN)).into_any_element()
+            row.bg(rgb(ACCENT_GROUND)).into_any_element()
         } else {
             row.hover(|style| style.bg(rgb(HOVER))).into_any_element()
         }
@@ -283,7 +280,7 @@ impl Render for Tree {
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
-            .bg(rgb(BACKGROUND))
+            .bg(rgb(SURFACE))
             .text_color(rgb(FOREGROUND))
             .child(
                 div()
@@ -291,7 +288,7 @@ impl Render for Tree {
                     .px_3()
                     .py_1()
                     .border_b_1()
-                    .border_color(rgb(0x40_4040))
+                    .border_color(rgb(BORDER))
                     .text_color(rgb(DIM))
                     .truncate()
                     .child(shortened(&self.root)),

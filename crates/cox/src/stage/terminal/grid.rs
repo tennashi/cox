@@ -19,7 +19,7 @@ use gpui::{
 use super::Terminal;
 use super::colors::{CURSOR, FOREGROUND, dim, hsla, resolve};
 use super::pty::Size;
-use crate::ui::theme::{BACKGROUND, FONT, SELECTION};
+use crate::ui::theme::{CODE_FONT, SELECTION, SURFACE};
 
 pub(super) const FONT_SIZE: f32 = 13.;
 pub(super) const LINE_HEIGHT: f32 = 1.3;
@@ -102,7 +102,7 @@ struct Metrics {
 
 impl Metrics {
     fn of(window: &Window) -> Self {
-        let font = font(FONT);
+        let font = font(CODE_FONT);
         let font_size = px(FONT_SIZE);
         let text_system = window.text_system();
         let width = text_system
@@ -133,7 +133,7 @@ impl Metrics {
             underline: true,
             strikethrough: false,
         };
-        self.shape(text, look, Some(rgb(BACKGROUND).into()), window)
+        self.shape(text, look, Some(rgb(SURFACE).into()), window)
     }
 
     /// `text` as it looks with `look`, shaped to paint.
@@ -208,7 +208,7 @@ fn look_of(cell: &alacritty_terminal::term::cell::Cell, colors: &Colors) -> (Opt
         underline: flags.intersects(Flags::ALL_UNDERLINES),
         strikethrough: flags.contains(Flags::STRIKEOUT),
     };
-    let background = (background != Hsla::from(rgb(BACKGROUND))).then_some(background);
+    let background = (background != Hsla::from(rgb(SURFACE))).then_some(background);
     (background, look)
 }
 
@@ -266,7 +266,7 @@ impl Grid {
             let under_cursor = cursor_line == Some(line) && cursor.point.column.0 == column;
             if under_cursor && block_cursor {
                 background = Some(rgb(CURSOR).into());
-                look.color = rgb(BACKGROUND).into();
+                look.color = rgb(SURFACE).into();
             }
             if let Some(background) = background {
                 let width = if wide { cell.width * 2. } else { cell.width };

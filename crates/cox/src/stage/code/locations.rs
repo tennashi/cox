@@ -17,13 +17,13 @@ use gpui::{
 use super::Code;
 use super::text::NUMBER;
 use crate::ui::paths::shortened;
-use crate::ui::theme::{DIM, FONT, FOREGROUND};
+use crate::ui::theme::{
+    ACCENT_GROUND, BORDER, BUTTON_HOVER, CODE_FONT, DIM, FOREGROUND, GROUND, HOVER,
+};
 
 /// How tall the list is, as a part of the tab's height.
 const HEIGHT: f32 = 0.35;
 
-const CHOSEN: u32 = 0x04_395e;
-const ROW_HOVER: u32 = 0x2a_2d2e;
 /// The stretch of a line that is the place.
 const FOUND: u32 = 0xe0_b080;
 
@@ -222,7 +222,7 @@ impl Code {
             .py_1()
             .border_t_1()
             .border_b_1()
-            .border_color(rgb(0x40_4040))
+            .border_color(rgb(BORDER))
             .text_color(rgb(DIM))
             .child(
                 div()
@@ -239,7 +239,7 @@ impl Code {
                     .px_1()
                     .rounded_sm()
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0x40_4040)).text_color(rgb(FOREGROUND)))
+                    .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(FOREGROUND)))
                     .child("×")
                     .on_click(cx.listener(|code, _, _, cx| {
                         code.locations = None;
@@ -286,8 +286,8 @@ impl Code {
                 .h(relative(HEIGHT))
                 .flex()
                 .flex_col()
-                .bg(rgb(0x1a_1a1a))
-                .font_family(FONT)
+                .bg(rgb(GROUND))
+                .font_family(CODE_FONT)
                 .text_size(px(12.))
                 .child(heading)
                 .child(list),
@@ -343,9 +343,9 @@ fn place_row(row: usize, found: &Found, chosen: bool) -> gpui::Stateful<gpui::Di
         .text_color(rgb(FOREGROUND))
         .map(|row| {
             if chosen {
-                row.bg(rgb(CHOSEN))
+                row.bg(rgb(ACCENT_GROUND))
             } else {
-                row.hover(|style| style.bg(rgb(ROW_HOVER)))
+                row.hover(|style| style.bg(rgb(HOVER)))
             }
         })
         .child(div().flex_shrink_0().text_color(rgb(NUMBER)).child(number))

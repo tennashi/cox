@@ -22,18 +22,15 @@ use gpui::{
 
 use crate::stage::tab::Shows;
 use crate::ui::paths::shortened;
-use crate::ui::theme::{BACKGROUND, DIM, FAILED, FONT, FOREGROUND};
+use crate::ui::theme::{
+    ACCENT, ADDED_GROUND, BORDER, CODE_FONT, DIM, FAILED, FOREGROUND, HOVER, RAISED,
+    REMOVED_GROUND, SURFACE,
+};
 
 /// How often the tab looks at what changed.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
 
-const ADDED: u32 = 0x23_3d2b;
-const REMOVED: u32 = 0x4a_2626;
-const ADDED_TEXT: u32 = 0x8f_d19e;
-const REMOVED_TEXT: u32 = 0xf0_8080;
 const STRETCH: u32 = 0x25_2b36;
-const FILE: u32 = 0x2a_2a2a;
-const HOVER: u32 = 0x2a_2d2e;
 
 /// How wide a line's numbers are, in characters.
 const NUMBER: usize = 5;
@@ -161,7 +158,7 @@ impl Changes {
             .px_3()
             .py_1()
             .border_b_1()
-            .border_color(rgb(0x40_4040))
+            .border_color(rgb(BORDER))
             .child(
                 div()
                     .flex_shrink_0()
@@ -262,8 +259,8 @@ fn file_row(row: usize, file: &File) -> gpui::Stateful<gpui::Div> {
         format!("+{} −{}", file.added, file.removed)
     };
     let letter_color = match how {
-        How::Added => ADDED_TEXT,
-        How::Removed => REMOVED_TEXT,
+        How::Added => ACCENT,
+        How::Removed => FAILED,
         How::Changed | How::Moved => DIM,
     };
     div()
@@ -273,7 +270,7 @@ fn file_row(row: usize, file: &File) -> gpui::Stateful<gpui::Div> {
         .flex()
         .gap_2()
         .px_3()
-        .bg(rgb(FILE))
+        .bg(rgb(RAISED))
         .whitespace_nowrap()
         .overflow_hidden()
         .child(
@@ -296,8 +293,8 @@ fn line_row(row: usize, line: &Line) -> gpui::Stateful<gpui::Div> {
     let (sign, ground, color) = match line.kind {
         Kind::Stretch => ("", Some(STRETCH), DIM),
         Kind::Same => (" ", None, FOREGROUND),
-        Kind::Added => ("+", Some(ADDED), FOREGROUND),
-        Kind::Removed => ("-", Some(REMOVED), FOREGROUND),
+        Kind::Added => ("+", Some(ADDED_GROUND), FOREGROUND),
+        Kind::Removed => ("-", Some(REMOVED_GROUND), FOREGROUND),
     };
     let text = format!("{sign}{}", line.text.replace('\t', "    "));
     let element = div()
@@ -354,9 +351,9 @@ impl Render for Changes {
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
-            .bg(rgb(BACKGROUND))
+            .bg(rgb(SURFACE))
             .text_color(rgb(FOREGROUND))
-            .font_family(FONT)
+            .font_family(CODE_FONT)
             .text_size(px(13.))
             .child(self.render_heading())
             .child(list)
