@@ -23,7 +23,9 @@
 //! - `cox://api/lines/<path>:<line>`: the lines of the file at `<path>`
 //!   around `<line>`, each as its stretches with what the syntax says
 //!   each is, for a page to show the code a step is made at, colored as
-//!   the code tabs color it (see [`crate::stage::lines`]).
+//!   the code tabs color it, and before them the lines that open what
+//!   the line is within, as its function's `fn` line and its impl's
+//!   (see [`crate::stage::lines`]).
 //!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Map plugin does for a box's code.

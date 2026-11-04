@@ -492,6 +492,16 @@
         text-align: right;
         user-select: none;
       }
+      .peek .ln.within {
+        opacity: 0.72;
+        background: color-mix(in srgb, var(--foreground) 4%, transparent);
+      }
+      .peek .ln.within:hover {
+        opacity: 1;
+      }
+      .peek .ln.within:has(+ .ln:not(.within)) {
+        border-bottom: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent);
+      }
       .peek .ln.at {
         background: color-mix(in srgb, var(--hold) 14%, transparent);
       }

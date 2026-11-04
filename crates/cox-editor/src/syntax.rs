@@ -171,6 +171,41 @@ impl Syntax {
         }
         spans
     }
+
+    /// The lines that open what `line` of `buffer` is within, outermost
+    /// first: the first line of each node around the line of a kind its
+    /// language's [`Language::scopes`] names, as a function's `fn` line
+    /// and its impl's, through code within code, before the line itself.
+    #[must_use]
+    pub fn within(&self, buffer: &Buffer, line: usize) -> Vec<usize> {
+        let start = buffer.line_start(line);
+        let text = buffer.line(line);
+        let lead = text.len() - text.trim_start().len();
+        let range = start + lead..start + text.trim_end().len().max(lead);
+        let mut found = Vec::new();
+        for layer in self.layers.iter().filter(|layer| layer.covers(&range)) {
+            let scopes = layer.language.scopes();
+            if scopes.is_empty() {
+                continue;
+            }
+            let mut node = layer
+                .tree
+                .root_node()
+                .descendant_for_byte_range(range.start, range.end);
+            let mut opens = Vec::new();
+            while let Some(at) = node {
+                let row = at.start_position().row;
+                if row < line && scopes.contains(&at.kind()) && opens.last() != Some(&row) {
+                    opens.push(row);
+                }
+                node = at.parent();
+            }
+            opens.reverse();
+            found.extend(opens);
+        }
+        found.dedup();
+        found
+    }
 }
 
 /// Parses `buffer` in `language`, only in `ranges` if any, with what did
@@ -361,6 +396,26 @@ mod tests {
         let spans = syntax.highlights(&buffer, 0, 12);
         assert!(spans.iter().all(|(range, _)| range.end <= 12), "{spans:?}");
         assert_eq!(syntax.highlights(&buffer, 1, 12).first(), None);
+    }
+
+    #[test]
+    fn tells_what_a_line_is_within() {
+        let text = "mod m {\n    impl S {\n        fn f(&self) {\n            let x = 1;\n            x\n        }\n    }\n}\nfn g() {}\n";
+        let buffer = Buffer::new(text);
+        let syntax = Syntax::parse(Language::named("rust").unwrap(), &buffer, None).unwrap();
+        assert_eq!(syntax.within(&buffer, 4), vec![0, 1, 2]);
+        // The line that opens a scope is not within it.
+        assert_eq!(syntax.within(&buffer, 2), vec![0, 1]);
+        assert_eq!(syntax.within(&buffer, 8), Vec::<usize>::new());
+        // An empty line between functions is within the module.
+        let buffer = Buffer::new("mod m {\n    fn a() {}\n\n    fn b() {}\n}\n");
+        let syntax = Syntax::parse(Language::named("rust").unwrap(), &buffer, None).unwrap();
+        assert_eq!(syntax.within(&buffer, 2), vec![0]);
+        // Through code within code: Rust in a Markdown section's code block.
+        let text = "# Top\n\n## Sub\n\n```rust\nfn x() {\n    1\n}\n```\n";
+        let buffer = Buffer::new(text);
+        let syntax = Syntax::parse(Language::named("markdown").unwrap(), &buffer, None).unwrap();
+        assert_eq!(syntax.within(&buffer, 6), vec![0, 2, 5]);
     }
 
     #[test]

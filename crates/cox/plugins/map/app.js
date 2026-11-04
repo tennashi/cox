@@ -1376,9 +1376,10 @@ function peekStay() {
 /// Shows, by `row`, a row of the sequence diagram, the code its step is
 /// made at: the step, the file and line, the function the line is in
 /// and what it calls, as the server has said, and the lines around it,
-/// the line itself marked, each a link that opens the file there on a
-/// tab. The lines are read when the mouse comes, and shown as last read
-/// until they come.
+/// the line itself marked, under the lines that open what it is within,
+/// as its function's and its impl's, dimmer, each a link that opens the
+/// file there on a tab. The lines are read when the mouse comes, and
+/// shown as last read until they come.
 async function peekShow(row, st) {
   const place = atPlace(st.step.at);
   if (!place) return;
@@ -1389,9 +1390,11 @@ async function peekShow(row, st) {
     const got = lineData[key];
     const c = callOf(st.step);
     const said = c && c.function ? `in <b>${esc(c.function.name)}</b>${c.calls && c.calls.length ? `, calls ${c.calls.map((x) => `<b>${esc(x.name)}</b>`).join(", ")}` : ""}` : c && c.error ? esc(c.error) : "";
+    // A line of the code as a link that opens the file there on a tab.
+    const lineEl = (n, line, kind) => `<a class="ln ${kind}" href="${esc(`cox://open${place.path}#L${n}`)}" title="opens ${esc(got.name)}:${n} on a tab"><span class="no">${n}</span>${line.map(([text, what]) => (what ? `<span class="hl-${what.replace(/\./g, "-")}">${esc(text)}</span>` : esc(text))).join("") || " "}</a>`;
     const lines = got
       ? got.lines.length
-        ? got.lines.map((line, i) => `<a class="ln ${got.from + i === place.line ? "at" : ""}" href="${esc(`cox://open${place.path}#L${got.from + i}`)}" title="opens ${esc(got.name)}:${got.from + i} on a tab"><span class="no">${got.from + i}</span>${line.map(([text, what]) => (what ? `<span class="hl-${what.replace(/\./g, "-")}">${esc(text)}</span>` : esc(text))).join("") || " "}</a>`).join("")
+        ? (got.within || []).map((w) => lineEl(w.line, w.text, "within")).join("") + got.lines.map((line, i) => lineEl(got.from + i, line, got.from + i === place.line ? "at" : "")).join("")
         : `<div class="ln faint">${got.exists ? "the file has no such line" : "the file is gone"}</div>`
       : '<div class="ln faint">reading…</div>';
     if (!peekEl) {

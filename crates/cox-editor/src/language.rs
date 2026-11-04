@@ -223,6 +223,45 @@ impl Language {
         }
     }
 
+    /// The kinds of the language's syntax nodes that a line of code is
+    /// said to be within, and whose first line says what: a function, an
+    /// impl or a module in Rust, a class in Python, a table in TOML, a
+    /// section in Markdown, and so on.
+    #[must_use]
+    pub fn scopes(&self) -> &'static [&'static str] {
+        match self.name {
+            "rust" => &[
+                "function_item",
+                "impl_item",
+                "trait_item",
+                "mod_item",
+                "struct_item",
+                "enum_item",
+                "union_item",
+                "macro_definition",
+            ],
+            "python" => &["function_definition", "class_definition"],
+            "javascript" | "typescript" | "tsx" => &[
+                "function_declaration",
+                "generator_function_declaration",
+                "method_definition",
+                "class_declaration",
+                "abstract_class_declaration",
+                "interface_declaration",
+                "enum_declaration",
+                "internal_module",
+                "lexical_declaration",
+                "variable_declaration",
+            ],
+            "bash" => &["function_definition"],
+            "toml" => &["table", "table_array_element"],
+            "markdown" => &["section"],
+            "yaml" => &["block_mapping_pair"],
+            "json" => &["pair"],
+            _ => &[],
+        }
+    }
+
     /// The server that knows the language's code, if the editor knows one.
     #[must_use]
     pub fn server(&self) -> Option<&'static Server> {
