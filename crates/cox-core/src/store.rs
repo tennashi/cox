@@ -21,7 +21,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 7;
+const VERSION: i64 = 8;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -58,7 +58,10 @@ CREATE TABLE chats (
     goal_words TEXT,
     -- What its agent lets the human choose of its session, such as the
     -- model, each as it is set, as JSON, once the agent has said.
-    settings TEXT
+    settings TEXT,
+    -- The id of the agent the chat talks to, once the human chose one;
+    -- NULL for the agent a chat starts with.
+    agent TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -71,10 +74,14 @@ CREATE TABLE entries (
     PRIMARY KEY (chat, number)
 ) WITHOUT ROWID;
 CREATE TABLE choices (
-    -- The id an agent knows a setting of its session by, as `model`.
-    setting TEXT PRIMARY KEY,
-    -- What the human set it to last, which a new chat starts with.
-    value TEXT NOT NULL
+    -- The id of the agent whose session has the setting.
+    agent TEXT NOT NULL,
+    -- The id the agent knows a setting of its session by, as `model`.
+    setting TEXT NOT NULL,
+    -- What the human set it to last, which a new chat of the agent
+    -- starts with.
+    value TEXT NOT NULL,
+    PRIMARY KEY (agent, setting)
 );
 ";
 
@@ -90,6 +97,16 @@ const UPGRADES: &[&str] = &[
     "ALTER TABLE chats ADD COLUMN goal_words TEXT;",
     "ALTER TABLE chats ADD COLUMN settings TEXT;
      CREATE TABLE choices (setting TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    // The choices of version 7 were of no agent in particular, and are
+    // left behind.
+    "ALTER TABLE chats ADD COLUMN agent TEXT;
+     DROP TABLE choices;
+     CREATE TABLE choices (
+         agent TEXT NOT NULL,
+         setting TEXT NOT NULL,
+         value TEXT NOT NULL,
+         PRIMARY KEY (agent, setting)
+     );",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -309,7 +326,7 @@ impl Store {
 
     /// Keeps a new chat named `name` in `project`, or in no project, which
     /// the agent of `parent` opened, with its agent set up as `setup`
-    /// says, if it said.
+    /// says, if it said. The chat talks to the agent `parent` talks to.
     ///
     /// # Errors
     ///
@@ -322,7 +339,8 @@ impl Store {
         setup: Option<&str>,
     ) -> anyhow::Result<ChatId> {
         self.connection.execute(
-            "INSERT INTO chats (project, name, created, parent, setup) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO chats (project, name, created, parent, setup, agent)
+             VALUES (?1, ?2, ?3, ?4, ?5, (SELECT agent FROM chats WHERE id = ?4))",
             params![
                 project.map(|project| project.0),
                 name,
@@ -481,6 +499,34 @@ impl Store {
         Ok(())
     }
 
+    /// The id of the agent `chat` talks to, once the human chose one.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn agent(&self, chat: ChatId) -> anyhow::Result<Option<String>> {
+        Ok(self
+            .connection
+            .query_row("SELECT agent FROM chats WHERE id = ?1", [chat.0], |row| {
+                row.get(0)
+            })?)
+    }
+
+    /// Keeps `agent` as the id of the agent `chat` talks to from now on,
+    /// and forgets the session and the settings of the agent it had,
+    /// which the new one has none of.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_agent(&self, chat: ChatId, agent: &str) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET agent = ?2, session = NULL, settings = NULL WHERE id = ?1",
+            params![chat.0, agent],
+        )?;
+        Ok(())
+    }
+
     /// The settings of `chat`'s session, as they were last set: none until
     /// its agent said what they are.
     ///
@@ -512,31 +558,32 @@ impl Store {
         Ok(())
     }
 
-    /// What the human set each setting to last, by the setting's id, of
-    /// the settings a new chat starts with, in the order they were first
-    /// set.
+    /// What the human set each setting of `agent`'s sessions to last, by
+    /// the setting's id, of the settings a new chat starts with, in the
+    /// order they were first set.
     ///
     /// # Errors
     ///
     /// When the database cannot be read.
-    pub fn choices(&self) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn choices(&self, agent: &str) -> anyhow::Result<Vec<(String, String)>> {
         let mut statement = self
             .connection
-            .prepare("SELECT setting, value FROM choices ORDER BY rowid")?;
-        let choices = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            .prepare("SELECT setting, value FROM choices WHERE agent = ?1 ORDER BY rowid")?;
+        let choices = statement.query_map([agent], |row| Ok((row.get(0)?, row.get(1)?)))?;
         Ok(choices.collect::<Result<_, _>>()?)
     }
 
-    /// Keeps `value` as what the human set the setting `setting` to last.
+    /// Keeps `value` as what the human set the setting `setting` of
+    /// `agent`'s sessions to last.
     ///
     /// # Errors
     ///
     /// When the database cannot be written.
-    pub fn keep_choice(&self, setting: &str, value: &str) -> anyhow::Result<()> {
+    pub fn keep_choice(&self, agent: &str, setting: &str, value: &str) -> anyhow::Result<()> {
         self.connection.execute(
-            "INSERT INTO choices (setting, value) VALUES (?1, ?2)
-             ON CONFLICT (setting) DO UPDATE SET value = excluded.value",
-            params![setting, value],
+            "INSERT INTO choices (agent, setting, value) VALUES (?1, ?2, ?3)
+             ON CONFLICT (agent, setting) DO UPDATE SET value = excluded.value",
+            params![agent, setting, value],
         )?;
         Ok(())
     }
@@ -608,24 +655,43 @@ impl Record {
         self.store.keep_settings(self.chat, settings)
     }
 
-    /// What the human set each setting to last, of those a new chat starts
-    /// with, as [`Store::choices`] says.
+    /// What the human set each setting of `agent`'s sessions to last, of
+    /// those a new chat starts with, as [`Store::choices`] says.
     ///
     /// # Errors
     ///
     /// When the database cannot be read.
-    pub fn choices(&self) -> anyhow::Result<Vec<(String, String)>> {
-        self.store.choices()
+    pub fn choices(&self, agent: &str) -> anyhow::Result<Vec<(String, String)>> {
+        self.store.choices(agent)
     }
 
-    /// Keeps `value` as what the human set the setting `setting` to last,
-    /// for a new chat to start with.
+    /// Keeps `value` as what the human set the setting `setting` of
+    /// `agent`'s sessions to last, for a new chat to start with.
     ///
     /// # Errors
     ///
     /// When the database cannot be written.
-    pub fn choose(&self, setting: &str, value: &str) -> anyhow::Result<()> {
-        self.store.keep_choice(setting, value)
+    pub fn choose(&self, agent: &str, setting: &str, value: &str) -> anyhow::Result<()> {
+        self.store.keep_choice(agent, setting, value)
+    }
+
+    /// The id of the agent the chat talks to, once the human chose one.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read.
+    pub fn agent(&self) -> anyhow::Result<Option<String>> {
+        self.store.agent(self.chat)
+    }
+
+    /// Keeps `agent` as the id of the agent the chat talks to from now on,
+    /// forgetting the session and settings of the one it had.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_agent(&self, agent: &str) -> anyhow::Result<()> {
+        self.store.keep_agent(self.chat, agent)
     }
 }
 
@@ -883,17 +949,48 @@ mod tests {
         store.keep_settings(chat, &settings).unwrap();
         assert_eq!(store.settings(chat).unwrap(), settings);
 
-        assert_eq!(store.choices().unwrap(), []);
-        store.keep_choice("model", "large").unwrap();
-        store.keep_choice("effort", "high").unwrap();
-        store.keep_choice("model", "small").unwrap();
+        assert_eq!(store.choices("claude").unwrap(), []);
+        store.keep_choice("claude", "model", "large").unwrap();
+        store.keep_choice("claude", "effort", "high").unwrap();
+        store.keep_choice("codex", "model", "fast").unwrap();
+        store.keep_choice("claude", "model", "small").unwrap();
         assert_eq!(
-            store.choices().unwrap(),
+            store.choices("claude").unwrap(),
             [
                 ("model".to_owned(), "small".to_owned()),
                 ("effort".to_owned(), "high".to_owned())
             ]
         );
+        assert_eq!(
+            store.choices("codex").unwrap(),
+            [("model".to_owned(), "fast".to_owned())]
+        );
+    }
+
+    #[test]
+    fn keeps_the_agent_of_a_chat_and_forgets_what_the_one_before_had() {
+        use crate::settings::Setting;
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        assert_eq!(store.agent(chat).unwrap(), None);
+        store.keep_session(chat, "session-1").unwrap();
+        let setting = Setting {
+            id: "model".to_owned(),
+            name: "Model".to_owned(),
+            description: None,
+            category: None,
+            value: "small".to_owned(),
+            choices: Vec::new(),
+        };
+        store.keep_settings(chat, &[setting]).unwrap();
+
+        store.keep_agent(chat, "codex").unwrap();
+        assert_eq!(store.agent(chat).unwrap().as_deref(), Some("codex"));
+        assert_eq!(store.session(chat).unwrap(), None);
+        assert_eq!(store.settings(chat).unwrap(), []);
+        // A chat its agent opens talks to the same agent.
+        let child = store.add_chat_under(chat, None, "Chat 2", None).unwrap();
+        assert_eq!(store.agent(child).unwrap().as_deref(), Some("codex"));
     }
 
     #[test]
@@ -1043,8 +1140,9 @@ mod tests {
         assert_eq!((kept.id, kept.parent), (child, Some(chats[0].id)));
         assert_eq!(kept.setup.as_deref(), Some("{}"));
         assert_eq!(store.settings(child).unwrap(), []);
-        store.keep_choice("model", "small").unwrap();
-        assert_eq!(store.choices().unwrap().len(), 1);
+        assert_eq!(store.agent(child).unwrap(), None);
+        store.keep_choice("claude", "model", "small").unwrap();
+        assert_eq!(store.choices("claude").unwrap().len(), 1);
         std::fs::remove_dir_all(&directory).unwrap();
     }
 

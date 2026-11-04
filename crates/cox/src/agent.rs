@@ -395,13 +395,18 @@ fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
             earlier,
         } => {
             let lost = session.is_some();
+            // A chat where nothing was said yet, as one that switched to
+            // another agent before the human sent a line, starts anew.
+            let Some(earlier) = retold(&earlier, lost) else {
+                return (Opened::New, told(instructions, setup.as_ref()));
+            };
             let how = Opened::Retold {
                 lost,
                 instructions: instructions.as_ref().map(|i| i.path.clone()),
                 context: setup.as_ref().and_then(|setup| setup.context.clone()),
             };
             let mut ahead = told(instructions, setup.as_ref());
-            ahead.push(retold(&earlier, lost));
+            ahead.push(earlier);
             (how, ahead)
         }
     }
@@ -612,9 +617,23 @@ const RETOLD_LENGTH: usize = 100_000;
 /// far, `entries`, when the agent does not go on with a session of the
 /// chat's own, which is `lost` if the agent could not go on with it: what
 /// the human said, and Cox in their place, what the agent replied, and the
-/// tool calls it made, by their titles. Cox's notes are left out.
+/// tool calls it made, by their titles, and where the human switched the
+/// chat from one agent to another. Cox's notes are left out. A chat where
+/// nothing was said has nothing to tell.
 #[must_use]
-pub fn retold(entries: &[Entry], lost: bool) -> String {
+pub fn retold(entries: &[Entry], lost: bool) -> Option<String> {
+    let switched = entries
+        .iter()
+        .any(|entry| matches!(entry, Entry::Switched { .. }));
+    let said = entries.iter().any(|entry| {
+        !matches!(
+            entry,
+            Entry::Note(_) | Entry::Thought(_) | Entry::Plan(_) | Entry::Switched { .. }
+        )
+    });
+    if !said {
+        return None;
+    }
     let told: Vec<String> = entries
         .iter()
         .filter_map(|entry| match entry {
@@ -653,6 +672,9 @@ pub fn retold(entries: &[Entry], lost: bool) -> String {
                 };
                 Some(format!("[you proposed the goal: {goal}; {answer}]"))
             }
+            Entry::Switched { from, to } => Some(format!(
+                "[the human switched the chat from the agent {from} to the agent {to}]"
+            )),
             // What the agent thought and planned is its own, and what came
             // of it is told already.
             Entry::Thought(_) | Entry::Plan(_) | Entry::Note(_) => None,
@@ -664,12 +686,18 @@ pub fn retold(entries: &[Entry], lost: bool) -> String {
         let kept: String = told.chars().skip(length - RETOLD_LENGTH).collect();
         told = format!("[… the start is left out]\n{kept}");
     }
-    let from = if lost {
+    let from = if switched {
+        "This chat goes on from an earlier session, of yours or of another agent: where the \
+         human switched the chat from one agent to another, it says so, and [you] stands for \
+         the agent the chat had then."
+    } else if lost {
         "This chat goes on from an earlier session of yours, which could not be resumed."
     } else {
         "This chat goes on from an earlier session of yours."
     };
-    format!("{from} This is the conversation so far, as Cox kept it; go on from its end.\n\n{told}")
+    Some(format!(
+        "{from} This is the conversation so far, as Cox kept it; go on from its end.\n\n{told}"
+    ))
 }
 
 fn shown(content: Vec<ToolCallContent>) -> Vec<Content> {
@@ -751,7 +779,7 @@ mod tests {
             },
             Entry::Note("Stopped.".to_owned()),
         ];
-        let told = retold(&entries, true);
+        let told = retold(&entries, true).unwrap();
         assert!(
             told.starts_with("This chat goes on from an earlier session of yours, which could not")
         );
@@ -775,10 +803,54 @@ mod tests {
         let told = retold(
             &[Entry::Human("first".to_owned()), Entry::Reply(long.clone())],
             false,
-        );
+        )
+        .unwrap();
         assert!(told.starts_with("This chat goes on from an earlier session of yours. This"));
         assert!(told.ends_with(&format!("[… the start is left out]\n{long}")));
         assert!(!told.contains("first"));
+    }
+
+    #[test]
+    fn a_chat_switched_to_another_agent_tells_it_so() {
+        let entries = [
+            Entry::Human("greet".to_owned()),
+            Entry::Reply("Hello".to_owned()),
+            Entry::Switched {
+                from: "Claude Agent".to_owned(),
+                to: "Codex".to_owned(),
+            },
+        ];
+        let told = retold(&entries, false).unwrap();
+        assert!(
+            told.starts_with("This chat goes on from an earlier session, of yours or of another"),
+            "{told}"
+        );
+        assert!(
+            told.ends_with(
+                "[you]\nHello\n\n\
+                 [the human switched the chat from the agent Claude Agent to the agent Codex]"
+            ),
+            "{told}"
+        );
+    }
+
+    #[test]
+    fn a_chat_where_nothing_was_said_starts_anew() {
+        let entries = [
+            Entry::Note("Instructions: COX.md".to_owned()),
+            Entry::Switched {
+                from: "Claude Agent".to_owned(),
+                to: "Codex".to_owned(),
+            },
+        ];
+        assert_eq!(retold(&entries, false), None);
+        let start = Start::Again {
+            session: None,
+            instructions: None,
+            setup: None,
+            earlier: entries.to_vec(),
+        };
+        assert_eq!(opened(start, false), (Opened::New, Vec::new()));
     }
 
     /// Whether process `pid` is still running: there, and not a zombie.

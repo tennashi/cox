@@ -49,7 +49,7 @@ use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
 use crate::agent::setup::{Policy, Setup};
 use crate::chat::conversation::{self, Entry, State};
 use crate::chat::trial::{self, Trial};
-use crate::chat::view::{Asked, ChatView, Reopened};
+use crate::chat::view::{Asked, ChatView, Reopened, SwitchAgent};
 use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
 use crate::storage;
@@ -580,7 +580,63 @@ impl Workspace {
                 }
             },
         );
-        vec![changed, asked]
+        let switch = cx.subscribe_in(
+            view,
+            window,
+            |workspace, view, SwitchAgent(id), window, cx| {
+                workspace.switch_agent(view, id, window, cx);
+            },
+        );
+        vec![changed, asked, switch]
+    }
+
+    /// Switches the chat of `view` to the agent kept as `id`, unless a turn
+    /// runs: closes it, its agent stopped, keeps the agent as the chat's,
+    /// and starts the agent at once, which goes on from the conversation
+    /// so far, told it as a session that cannot be resumed is.
+    fn switch_agent(
+        &mut self,
+        view: &Entity<ChatView>,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self
+            .chats
+            .iter()
+            .position(|chat| chat.view.as_ref() == Some(view))
+        else {
+            return;
+        };
+        let chat = &mut self.chats[index];
+        let Some(kept) = chat.kept.filter(|_| !working(chat.state)) else {
+            return;
+        };
+        if let Err(error) = self.store.keep_agent(kept, id) {
+            tracing::error!("the chat goes on with the agent it had: {error:#}");
+            return;
+        }
+        let Some(view) = chat.view.take() else {
+            return;
+        };
+        let name = view.update(cx, |view, cx| {
+            let name = view
+                .agents()
+                .map_or_else(|| id.to_owned(), |agents| agents.of(Some(id)).name);
+            view.switch_agent(&name, cx);
+            name
+        });
+        tracing::info!(agent = %name, "the chat switches to another agent");
+        chat.open = false;
+        chat.state = State::Closed;
+        if self.chats.shown_index() == Some(index) {
+            self.show(index, window, cx);
+        } else {
+            self.read(index, window, cx);
+        }
+        if let Some(view) = self.chats[index].view.clone() {
+            view.update(cx, |view, cx| view.start_again(window, cx));
+        }
     }
 
     /// Answers `request`, which the agent of the chat of `view` asks of the

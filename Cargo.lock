@@ -1499,6 +1499,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
+ "ureq",
 ]
 
 [[package]]

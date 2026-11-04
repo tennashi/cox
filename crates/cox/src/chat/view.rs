@@ -53,6 +53,7 @@ use tokio::sync::oneshot;
 use crate::agent::mcp::{ChatRequest, Ran, ToolRequest};
 use crate::agent::{Agent, AgentThread};
 use crate::agent::{AgentEvent, Command};
+use crate::agents::Agents;
 use crate::chat::conversation::{self, Answer, Conversation, Entry, GOAL_TURNS, Goal, State};
 use crate::chat::judge::{Judge, Starts};
 use crate::stage::Stage;
@@ -107,6 +108,9 @@ pub type Again = Box<dyn FnOnce(&[Entry], &mut Window, &mut App) -> Agent>;
 
 /// A closed chat's agent started again.
 pub struct Reopened;
+
+/// The human chose another agent for the chat: the one kept by this id.
+pub struct SwitchAgent(pub String);
 
 /// What the agent's tools asked of the window, such as opening another
 /// chat, for the window to take, once, and carry out.
@@ -181,11 +185,14 @@ pub struct ChatView {
     goal_input: Option<(Entity<LineInput>, Option<usize>, Subscription)>,
     /// The setting whose choices are open, by its place in the
     /// conversation's settings, while they are.
-    setting_open: Option<usize>,
+    setting_open: Option<settings::Menu>,
     /// Where the press that last closed the list of a setting's choices
     /// was, so that the press on the setting's button does not open it
     /// again.
     setting_closed_at: Option<Point<Pixels>>,
+    /// The agents the chat can talk to, and the id of the one it talks
+    /// to, when it can choose.
+    agents: Option<(Agents, String)>,
     _submitted: Subscription,
     /// Redraws the chat as its stage opens and closes.
     _panel_changes: Option<Subscription>,
@@ -196,13 +203,15 @@ impl ChatView {
     /// one and it is open, keeping the conversation in `record` when there
     /// is one. Links the human clicks go to `open_link`.
     /// `starts` starts the judge of a goal in words, when the chat can
-    /// have one.
+    /// have one. The chat talks to the agent of `agents` kept by the id
+    /// given, and lets the human choose another of them, when given.
     pub fn new(
         agent: Agent,
         stage: Option<StageView>,
         open_link: OpenLink,
         record: Option<Record>,
         starts: Option<Starts>,
+        agents: Option<(Agents, String)>,
         cx: &mut Context<Self>,
     ) -> Self {
         // The human sees which instructions the agent gets, and the context
@@ -229,6 +238,7 @@ impl ChatView {
         let mut view = Self {
             record,
             starts,
+            agents,
             ..Self::with(conversation, stage, open_link, None, cx)
         };
         view.attach(agent, cx);
@@ -241,7 +251,8 @@ impl ChatView {
     /// there is one and it is open. When the human sends to it, `again`
     /// starts its agent again, if it can, and the chat goes on, kept in
     /// `record` when there is one. `starts` starts the judge of a goal in
-    /// words, when the chat can have one.
+    /// words, when the chat can have one. `agents` is as
+    /// [`ChatView::new`] takes it.
     #[expect(clippy::too_many_arguments, reason = "what a closed chat is made of")]
     pub fn closed(
         conversation: Conversation,
@@ -250,6 +261,7 @@ impl ChatView {
         record: Option<Record>,
         again: Option<Again>,
         starts: Option<Starts>,
+        agents: Option<(Agents, String)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -257,6 +269,7 @@ impl ChatView {
             record,
             again,
             starts,
+            agents,
             ..Self::with(conversation, stage, open_link, Some(window), cx)
         };
         view.scroll.scroll_to_bottom();
@@ -315,9 +328,52 @@ impl ChatView {
             goal_input: None,
             setting_open: None,
             setting_closed_at: None,
+            agents: None,
             _submitted: submitted,
             _panel_changes: panel_changes,
         }
+    }
+
+    /// The agents the chat can talk to, when it can choose.
+    #[must_use]
+    pub fn agents(&self) -> Option<&Agents> {
+        self.agents.as_ref().map(|(agents, _)| agents)
+    }
+
+    /// The id of the agent the chat talks to, or none when it cannot
+    /// choose one.
+    #[must_use]
+    pub fn agent_id(&self) -> &str {
+        self.agents
+            .as_ref()
+            .map_or("", |(_, chosen)| chosen.as_str())
+    }
+
+    /// Asks the window to switch the chat to the agent kept as `id`, when
+    /// it is another and no turn runs, which the window does by closing
+    /// the chat and starting it again (see [`ChatView::switch_agent`]).
+    fn choose_agent(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.setting_open = None;
+        let idle = matches!(self.conversation.state(), State::Idle | State::Closed);
+        if idle && id != self.agent_id() {
+            cx.emit(SwitchAgent(id.to_owned()));
+        }
+        cx.notify();
+    }
+
+    /// Closes the chat, its agent stopped, as it switches to the agent
+    /// named `to`, which goes on from the conversation once the chat
+    /// starts again.
+    pub fn switch_agent(&mut self, to: &str, cx: &mut Context<Self>) {
+        let from = self
+            .agents
+            .as_ref()
+            .map(|(agents, chosen)| agents.of(Some(chosen)).name)
+            .unwrap_or_default();
+        self.stop_agent();
+        self.follow(|conversation| conversation.switch(&from, to));
+        self.keep();
+        cx.notify();
     }
 
     /// Talks to `agent` from now on: sends it what the human asks, shows
@@ -381,7 +437,7 @@ impl ChatView {
         let Some(record) = &self.record else {
             return Vec::new();
         };
-        record.choices().unwrap_or_else(|error| {
+        record.choices(self.agent_id()).unwrap_or_else(|error| {
             tracing::error!("a new chat starts as its agent says, not as chosen: {error:#}");
             Vec::new()
         })
@@ -398,7 +454,7 @@ impl ChatView {
         };
         if setting.is_of_model()
             && let Some(record) = &self.record
-            && let Err(error) = record.choose(id, value)
+            && let Err(error) = record.choose(self.agent_id(), id, value)
         {
             tracing::error!("new chats do not start with this choice: {error:#}");
         }
@@ -444,6 +500,18 @@ impl ChatView {
     /// and sends it `text` in the human's place, as when the chat moves
     /// into a trial and goes on there.
     pub fn go_on(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_again(window, cx);
+        if let Some(command) = self.follow(|conversation| conversation.told(text)) {
+            self.send(command);
+        }
+        self.keep();
+        cx.notify();
+    }
+
+    /// Starts the agent of the chat again, if it is closed and can be,
+    /// for the human's next line, as when the chat switches to another
+    /// agent.
+    pub fn start_again(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.conversation.state() == State::Closed
             && let Some(again) = self.again.take()
         {
@@ -451,12 +519,8 @@ impl ChatView {
             self.attach(agent, cx);
             self.conversation.reopen();
             cx.emit(Reopened);
+            cx.notify();
         }
-        if let Some(command) = self.follow(|conversation| conversation.told(text)) {
-            self.send(command);
-        }
-        self.keep();
-        cx.notify();
     }
 
     /// Shows what the agent side told, and keeps it. A turn that ends
@@ -680,6 +744,15 @@ impl ChatView {
     /// ends: its agent stops, and the chat cannot start it again; what
     /// goes on with it is a view of it read again.
     pub fn close(&mut self, note: String, cx: &mut Context<Self>) {
+        self.stop_agent();
+        self.follow(|conversation| conversation.close(note));
+        self.keep();
+        cx.notify();
+    }
+
+    /// Stops the agent, and what works with it, with no way to start it
+    /// again from this view.
+    fn stop_agent(&mut self) {
         self.agent = None;
         self.tools = None;
         self.check = None;
@@ -687,9 +760,6 @@ impl ChatView {
         self.cwd = None;
         self.again = None;
         self.goal_input = None;
-        self.follow(|conversation| conversation.close(note));
-        self.keep();
-        cx.notify();
     }
 
     /// Whether the chat's agent runs: it was opened in this run, or the
@@ -914,6 +984,7 @@ impl ChatView {
 
 impl gpui::EventEmitter<Reopened> for ChatView {}
 impl gpui::EventEmitter<Asked> for ChatView {}
+impl gpui::EventEmitter<SwitchAgent> for ChatView {}
 
 impl Focusable for ChatView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {

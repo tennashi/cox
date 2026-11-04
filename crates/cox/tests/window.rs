@@ -99,6 +99,7 @@ fn open_with_stage(
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
             None,
             None,
+            None,
             cx,
         )
     });

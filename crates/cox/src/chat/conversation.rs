@@ -264,6 +264,18 @@ impl Conversation {
         self.state = State::Closed;
     }
 
+    /// Closes the conversation as the human switches it from the agent
+    /// named `from` to the one named `to`, which goes on from it. The
+    /// settings were of the session of the agent before.
+    pub fn switch(&mut self, from: &str, to: &str) {
+        self.push(Entry::Switched {
+            from: from.to_owned(),
+            to: to.to_owned(),
+        });
+        self.state = State::Closed;
+        self.settings.clear();
+    }
+
     /// Takes what the human entered, and returns the prompt to send the
     /// agent, when it waits for one.
     pub fn submit(&mut self, input: &str) -> Option<Command> {
@@ -859,6 +871,13 @@ impl Conversation {
             }
         }
     }
+}
+
+/// The note that says the human switched the chat from the agent named
+/// `from` to the one named `to`.
+#[must_use]
+pub fn switched_note(from: &str, to: &str) -> String {
+    format!("Agent: {to}, in place of {from}. It goes on from the conversation so far.")
 }
 
 /// The note that tells the human which instructions the agent gets,

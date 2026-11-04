@@ -276,6 +276,11 @@ impl ChatView {
                 .text_color(rgb(DIM))
                 .child(writer.plain(text, "\n\n"))
                 .into_any_element(),
+            Entry::Switched { from, to } => div()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child(writer.plain(&conversation::switched_note(from, to), "\n\n"))
+                .into_any_element(),
             Entry::Permission {
                 title,
                 content,

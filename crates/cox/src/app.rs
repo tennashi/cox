@@ -29,6 +29,7 @@ use gpui::{
     prelude::*, px, size,
 };
 
+use crate::agents::Agents;
 use crate::chat::launcher::Launcher;
 use crate::stage::servers::Servers;
 use crate::workspace::Workspace;
@@ -71,7 +72,7 @@ pub struct Settings {
     /// Where Cox keeps what lasts across its runs, if not where it keeps
     /// it from the place it runs from (see [`crate::storage`]).
     pub data: Option<PathBuf>,
-    /// The agent each chat starts, and its arguments.
+    /// The agent each chat starts with, and its arguments.
     pub command: Vec<String>,
 }
 
@@ -143,8 +144,10 @@ pub fn run(settings: Settings) -> ExitCode {
     let store = Rc::new(open_store());
 
     let home = home_for_chats(settings.home);
+    let agents = Agents::read(settings.command);
+    agents.fetch();
     let launcher = Launcher {
-        command: settings.command,
+        agents,
         stage: settings.stage,
         path: std::env::var_os("PATH").unwrap_or_default(),
         exe: std::env::current_exe()

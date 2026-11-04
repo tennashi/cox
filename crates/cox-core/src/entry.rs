@@ -62,6 +62,9 @@ pub enum Entry {
     /// A note from Cox: the instructions the agent gets, how a turn ended,
     /// an error, or the connection closing.
     Note(String),
+    /// The human switched the chat from the agent named `from` to the one
+    /// named `to`, which goes on from the conversation so far.
+    Switched { from: String, to: String },
 }
 
 /// What the human did with a goal the agent proposed.

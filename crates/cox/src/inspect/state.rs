@@ -205,6 +205,16 @@ fn tell(told: &mut String, chat: &Chat, workspace: &Workspace, cx: &App) {
             goal.turns()
         );
     }
+    if let Some(agents) = view.agents() {
+        let known = agents.of(Some(view.agent_id()));
+        let _ = writeln!(
+            told,
+            "  Agent {:?} ({}), of {} agents",
+            known.name,
+            known.id,
+            agents.all().len()
+        );
+    }
     for setting in conversation.settings() {
         let chosen = setting
             .chosen()
@@ -283,6 +293,7 @@ fn describe_entry(entry: &Entry) -> String {
         Entry::Reply(text) => format!("reply: {}", text_of(text)),
         Entry::Thought(text) => format!("thought: {}", text_of(text)),
         Entry::Note(text) => format!("note: {}", text_of(text)),
+        Entry::Switched { from, to } => format!("switched: from {from} to {to}"),
         Entry::Plan(steps) => {
             let steps: Vec<String> = steps
                 .iter()
