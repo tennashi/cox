@@ -328,15 +328,20 @@ too, the orders in which the boxes talk, each a list of steps from one
 box to another, written between the boxes that hold the code: "flows"
 above the boxes lists them, and a flow chosen is drawn as a sequence
 diagram of the tier that is open: the boxes its steps go between, rolled
-up to the tier's, as columns, each with a lifeline, the tier's own in
-the box the tier is the inside of, in the order the tier draws them,
-and the others outside it, in the order the flow reaches them, those it
-reaches before it comes into the box on its left and the rest on its
-right: the frame's, and, since every box of the map is in a tier that
+up to the tier's, as columns, each with a lifeline, in the order of
+the map: the top tier's boxes as it draws them, each box that opens a
+tier on the way down to the tier open replaced by that tier's boxes,
+in its order, in a frame named with the box, so that the frames nest
+down to the tier open, whose frame is drawn full and the others
+dashed, and a drill down opens a box in place, the other columns
+staying where they were; since every box of the map is in a tier that
 some box of the tiers above opens, the boxes of those tiers that hold
-the rest of the flow, as a flow that comes into the stage through the
-chat shows the chat as a column, named with the tier it is in, so that
-the whole flow is read from any tier; and the steps as rows from the top, an arrow from the
+the rest of the flow are columns too, as a flow that comes into the
+stage through the chat shows the chat as a column, named with the tier
+it is in, so that the whole flow is read from any tier, and the
+frame's boxes among them; the name of each frame goes up to the tier
+that shows its box, and stays in sight as the diagram scrolls; and the
+steps as rows from the top, an arrow from the
 box that talks to the one it talks to, with what the step says; a step
 back, the answer to an earlier step, which the file marks `back`, is
 dashed, and a bar on a box's lifeline shows it at work, from a step
