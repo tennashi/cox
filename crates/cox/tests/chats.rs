@@ -380,7 +380,7 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
     std::fs::create_dir_all(&folder).unwrap();
     let (agents, workspace, cx) = open_window(cx, home.clone());
 
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     for line in ["one", "two"] {
         workspace.update_in(cx, |workspace, window, cx| {
@@ -388,9 +388,10 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
         });
         say(cx, &workspace, line).await;
     }
-    // The heading of the project opens a chat in it, and so does no
-    // project's.
+    // The + after the tabs opens a chat in the project chosen on the
+    // rail, and so does no project's, chosen.
     click(cx, "new-chat-in-2");
+    click(cx, "project-1");
     click(cx, "new-chat-in-1");
 
     let cwds: Vec<_> = agents.borrow().iter().map(|agent| agent.cwd()).collect();
@@ -417,6 +418,41 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
         workspace.shown().map(|chat| chat.name().to_owned())
     });
     assert_eq!(shown.as_deref(), Some("Chat 2"));
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui::test]
+async fn the_rail_chooses_the_project_whose_chats_the_tabs_show(cx: &mut TestAppContext) {
+    let home = scratch("rail-home");
+    let folder = scratch("rail-folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    let (_agents, workspace, cx) = open_window(cx, home.clone());
+    let shown_name = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| {
+            workspace.shown().map(|chat| chat.name().to_owned())
+        })
+    };
+
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "here").await;
+    cx.simulate_keystrokes("secondary-n");
+    click(cx, "chat-1");
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(folder.clone()), window, cx);
+    });
+    say(cx, &workspace, "there").await;
+
+    // A project chosen shows the chat of it shown last.
+    click(cx, "project-1");
+    assert_eq!(shown_name(cx).as_deref(), Some("here"));
+    click(cx, "project-2");
+    assert_eq!(shown_name(cx).as_deref(), Some("there"));
+
+    // A project with no chat left shows none.
+    workspace.update_in(cx, |workspace, window, cx| workspace.archive(2, window, cx));
+    click(cx, "project-2");
+    assert_eq!(shown_name(cx), None);
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&folder);
 }
@@ -450,7 +486,7 @@ async fn the_agent_gets_the_projects_instructions_with_the_first_line(cx: &mut T
     });
     say(cx, &workspace, "hello").await;
     say(cx, &workspace, "again").await;
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
 
     let instructions = Instructions::read(&folder).unwrap();
@@ -466,6 +502,7 @@ async fn the_agent_gets_the_projects_instructions_with_the_first_line(cx: &mut T
         agents.borrow()[1].prompt_blocks(),
         [vec!["hello".to_owned()]]
     );
+    click(cx, "project-2");
     click(cx, "chat-2");
     let view = shown(cx, &workspace);
     let first = view.read_with(cx, |view, _| view.conversation().entries()[0].clone());
@@ -542,7 +579,7 @@ async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
 
     let told = describe(cx, None);
     let listed = format!(
-        "The chats, as listed:\n  No project ({})\n    chat 1 \"first\": idle\n    chat 2 \"Chat 2\": idle, shown\n",
+        "The chats, as listed:\n  No project ({}), chosen\n    chat 1 \"first\": idle\n    chat 2 \"Chat 2\": idle, shown\n",
         home.display()
     );
     assert!(told.contains(&listed), "{told}");
@@ -643,9 +680,11 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     .await;
     click(cx, "option-1");
     wait_for_turn(cx, &view).await;
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     let first = shown_entries(cx, &workspace);
+    // The chat is in the project, whose tabs the rail shows.
+    click(cx, "project-2");
     click(cx, "chat-2");
     let second = shown_entries(cx, &workspace);
 
@@ -699,7 +738,7 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
 #[gpui::test]
 async fn stopping_with_the_button_leaves_the_keyboard_in_the_input(cx: &mut TestAppContext) {
     let (agents, workspace, cx) = open_window(cx, scratch("stop"));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
 
     cx.simulate_input("wait");
@@ -931,7 +970,7 @@ async fn a_chat_kept_with_no_session_is_told_the_conversation_so_far(cx: &mut Te
 async fn a_new_chat_keeps_its_agents_session(cx: &mut TestAppContext) {
     let store = Rc::new(Store::in_memory().unwrap());
     let (_, workspace, cx) = open_window_keeping(cx, scratch("session"), Rc::clone(&store));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
 
     let chats = store.chats().unwrap();
@@ -1028,7 +1067,7 @@ async fn a_new_chat_starts_on_the_model_chosen_last(cx: &mut TestAppContext) {
         .keep_choice(SECOND_AGENT, fake_agent::MODE, "plan")
         .unwrap();
     let (agents, workspace, cx) = open_window_keeping(cx, scratch("chosen"), Rc::clone(&store));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
 
     let agent = Arc::clone(&agents.borrow()[0]);
@@ -1053,7 +1092,7 @@ async fn a_chat_switches_to_another_agent_which_goes_on_from_the_conversation(
         .keep_choice(SECOND_AGENT, fake_agent::MODE, "plan")
         .unwrap();
     let (agents, workspace, cx) = open_window_keeping(cx, scratch("switch"), Rc::clone(&store));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     let kept = store.chats().unwrap()[0].id;
     store.keep_session(kept, "session-1").unwrap();
@@ -1102,7 +1141,7 @@ async fn a_chat_switches_to_another_agent_which_goes_on_from_the_conversation(
 async fn a_chat_switched_before_anything_was_said_starts_anew(cx: &mut TestAppContext) {
     let store = Rc::new(Store::in_memory().unwrap());
     let (agents, workspace, cx) = open_window_keeping(cx, scratch("switch-new"), Rc::clone(&store));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
     cx.condition(&view, |view, _| !view.conversation().settings().is_empty())
         .await;
@@ -1169,7 +1208,7 @@ fn right_click(cx: &mut VisualTestContext, selector: &'static str) {
 async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppContext) {
     let store = Rc::new(Store::in_memory().unwrap());
     let (_, workspace, cx) = open_window_keeping(cx, scratch("named"), Rc::clone(&store));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "a title, please").await;
     assert_eq!(names(cx, &workspace), listed(&[("No project", &[TITLE])]));
     assert_eq!(
@@ -1198,11 +1237,11 @@ async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppC
 #[gpui::test]
 async fn a_turn_that_ends_unseen_marks_its_chat_until_it_is_shown(cx: &mut TestAppContext) {
     let (_, workspace, cx) = open_window(cx, scratch("unread"));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     let first = shown(cx, &workspace);
     cx.simulate_input("slowly");
     cx.simulate_keystrokes("enter");
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     wait_for_turn(cx, &first).await;
     let unread = |cx: &mut VisualTestContext| {
         workspace.read_with(cx, |workspace, _| {
@@ -1224,9 +1263,9 @@ async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut Test
     let kept = scratch("archived-kept").join("chats.sqlite");
     let store = Rc::new(Store::open(&kept).unwrap());
     let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), Rc::clone(&store));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "first").await;
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "second").await;
 
     right_click(cx, "chat-2");
@@ -1334,11 +1373,11 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
 
     // The first chat comes to wait for the human while the second is
     // shown.
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     let first = shown(cx, &workspace);
     cx.simulate_input("slow permission");
     cx.simulate_keystrokes("enter");
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     wait_until(cx, &first, |conversation| {
         conversation.state() == State::Asking
     })
@@ -1417,7 +1456,7 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
     std::fs::create_dir_all(&home).unwrap();
     let store = Rc::new(Store::in_memory().unwrap());
     let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), Rc::clone(&store));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
     let command = passing_the_second_time(&home);
     view.update(cx, |view, cx| {
@@ -1466,7 +1505,7 @@ async fn a_goal_in_words_is_judged_by_an_agent_until_it_is_met(cx: &mut TestAppC
     std::fs::create_dir_all(&home).unwrap();
     let store = Rc::new(Store::in_memory().unwrap());
     let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), Rc::clone(&store));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     right_click(cx, "chat-1");
     click(cx, "set-goal");
     cx.simulate_input("The greeting names the user.");
@@ -1543,6 +1582,7 @@ async fn a_chats_goal_lasts_past_cox_starting_again(cx: &mut TestAppContext) {
         [Some(KeptGoal::Command("true".to_owned()))]
     );
 
+    click(cx, "project-2");
     click(cx, "chat-1");
     let view = shown(cx, &workspace);
     assert_eq!(
@@ -1571,7 +1611,7 @@ async fn a_chats_goal_lasts_past_cox_starting_again(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn escape_stops_the_check_of_the_goal(cx: &mut TestAppContext) {
     let (_, workspace, cx) = open_window(cx, scratch("goal-stop"));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
     view.update(cx, |view, cx| {
         view.set_goal(Some(KeptGoal::Command("sleep 3".to_owned())), cx);
@@ -1599,7 +1639,7 @@ async fn escape_stops_the_check_of_the_goal(cx: &mut TestAppContext) {
 async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     let store = Rc::new(Store::in_memory().unwrap());
     let (agents, workspace, cx) = open_window_keeping(cx, scratch("goal-menu"), Rc::clone(&store));
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     assert!(cx.debug_bounds("goal-1").is_none());
 
     right_click(cx, "chat-1");
@@ -1662,9 +1702,9 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     let store = Rc::new(Store::open(&kept).unwrap());
     let (agents, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "second").await;
     let (parent, _) = keys(cx, &workspace, 0);
 
@@ -1829,7 +1869,7 @@ async fn a_trial_works_in_a_folder_apart_from_the_project(cx: &mut TestAppContex
     let store = Rc::new(Store::open(&kept).unwrap());
     let (agents, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
 
     let folder = open_trial(cx, &workspace, &asks, Trial::Project, 2).await;
@@ -1877,7 +1917,7 @@ async fn a_chat_becomes_a_trial_and_goes_on_there(cx: &mut TestAppContext) {
     let store = Rc::new(Store::open(&kept).unwrap());
     let (agents, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     let start = |cx: &mut VisualTestContext| {
         let (answer, made) = tokio::sync::oneshot::channel();
@@ -1952,7 +1992,7 @@ async fn an_ended_trial_goes_on_in_the_project(cx: &mut TestAppContext) {
     let store = Rc::new(Store::open(&kept).unwrap());
     let (agents, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     let folder = open_trial(cx, &workspace, &asks, Trial::Project, 2).await;
     // The trial's agent opens a chat, which works in the trial's folder.
@@ -2020,7 +2060,7 @@ async fn a_trial_ends_kept_as_a_branch_or_discarded(cx: &mut TestAppContext) {
     let store = Rc::new(Store::open(&kept).unwrap());
     let (_agents, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     let folder = open_trial(cx, &workspace, &asks, Trial::Project, 2).await;
     let empty = open_trial(cx, &workspace, &asks, Trial::Empty, 3).await;
@@ -2132,7 +2172,7 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     let home = scratch("wait-home");
     let store = Rc::new(Store::in_memory().unwrap());
     let (_, asks, workspace, cx) = open_window_asking(cx, home.clone(), store, Resumes::Resume);
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     let ask = |request| asks.borrow()[0].send(request).unwrap();
     let view_of = |cx: &mut VisualTestContext, index| {
@@ -2220,7 +2260,7 @@ async fn logs_in_in_a_terminal_and_sends_the_line_again(cx: &mut TestAppContext)
     let file = home.join("logged in");
     let (agents, workspace, cx) = open_window_logging_in(cx, home, LogsIn::AtPrompt(file.clone()));
 
-    click(cx, "new-chat");
+    cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
     cx.simulate_input("hello");
     cx.simulate_keystrokes("enter");

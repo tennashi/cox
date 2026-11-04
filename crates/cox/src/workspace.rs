@@ -1,5 +1,6 @@
-//! The window: the chats, listed down its left side under the projects
-//! they are in, and the one shown beside the list. A project is a folder
+//! The window: the projects on a rail down its left side, the chats of
+//! the project chosen in tabs along its top, and the one shown under
+//! them. A project is a folder
 //! the human opened: each chat in it works there, and its agent gets the
 //! instructions in the folder's `COX.md`. Chats in no project work in
 //! Cox's home, with the instructions there.
@@ -11,13 +12,14 @@
 //!
 //! A chat is named by a number at first, then after the first line the
 //! human sends in it, then by the title its agent gives it, until the
-//! human names it. Its row in the list tells whether its agent is at
-//! work, waits for the human, or finished a turn the human has not seen
-//! yet, and whether it has a goal. The menu of the right button on a row
+//! human names it. Its tab tells whether its agent is at work, waits for
+//! the human, or finished a turn the human has not seen yet, and whether
+//! it has a goal, and the project's button on the rail counts its chats
+//! that wait for the human. The menu of the right button on a tab
 //! renames the chat, as a double click does, sets or clears its goal,
 //! ends a trial (see [`crate::chat::trial`]), or archives it: an archived
-//! chat leaves the list for "Archived" at its foot, whose click brings it
-//! back.
+//! chat leaves the list for "Archived" at the end of the tabs, from where
+//! a click brings it back.
 //!
 //! A chat that comes to wait for the human, or whose turn ends, while the
 //! human is not looking at it, tells them so (see [`crate::notices`]),
@@ -37,9 +39,9 @@ use cox_core::goal::Goal;
 use cox_core::list::List;
 use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
 use gpui::{
-    App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, MouseButton,
-    MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString, Stateful, Subscription, Window,
-    actions, anchored, deferred, div, prelude::*, px, rgb,
+    AnyView, App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
+    MouseButton, MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString, Stateful,
+    Subscription, Window, actions, anchored, deferred, div, prelude::*, px, rgb,
 };
 
 use crate::agent::instructions::Instructions;
@@ -57,8 +59,8 @@ use crate::ui::card;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
-    ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, DIM, FAINT, FOREGROUND,
-    GAP, GROUND, HOVER, LINK, RAISED, SELECTED, UI_FONT,
+    ACCENT, ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAINT, FOREGROUND, GAP,
+    GROUND, HOVER, LINK, RAISED, SELECTED, SURFACE, UI_FONT,
 };
 
 actions!(
@@ -75,8 +77,18 @@ actions!(
     ]
 );
 
-/// How wide the list of chats is.
-const LIST_WIDTH: f32 = 220.;
+/// How wide the rail of projects is, and how large and how round each
+/// project's square on it is.
+const RAIL_WIDTH: f32 = 76.;
+const PROJECT_SIZE: f32 = 42.;
+const PROJECT_RADIUS: f32 = 13.;
+
+/// How tall the row of tabs is, and how tall, how wide at most and how
+/// round each tab is.
+const TABS_HEIGHT: f32 = 40.;
+const TAB_HEIGHT: f32 = 34.;
+const TAB_WIDTH: f32 = 240.;
+const TAB_RADIUS: f32 = 11.;
 
 /// What the project of chats with no folder is called.
 const NO_PROJECT: &str = "No project";
@@ -109,6 +121,9 @@ pub struct Project {
     folder: PathBuf,
     /// How many chats have been opened in it, to name the next.
     opened: usize,
+    /// The key of the chat of it shown last, which choosing the project
+    /// shows again.
+    last: Option<u64>,
 }
 
 impl Project {
@@ -118,6 +133,7 @@ impl Project {
             name: name.into(),
             folder,
             opened: 0,
+            last: None,
         }
     }
 
@@ -288,8 +304,11 @@ pub struct Workspace {
     /// The chats the human archived, out of the list, in the order they
     /// were archived.
     archived: Vec<Chat>,
-    /// Whether the archived chats show at the foot of the list.
+    /// Whether the menu of the archived chats is open.
     archived_open: bool,
+    /// The project chosen on the rail, whose chats the tabs show: the
+    /// project of the chat shown, or one with none shown.
+    chosen: usize,
     /// The key of the last chat opened.
     last_key: u64,
     /// How many chats the app's icon counts.
@@ -321,6 +340,7 @@ impl Workspace {
             chats: List::new(),
             archived: Vec::new(),
             archived_open: false,
+            chosen: 0,
             last_key: 0,
             badged: 0,
             menu: None,
@@ -444,6 +464,12 @@ impl Workspace {
         self.chats
             .iter()
             .filter(move |chat| chat.project == project)
+    }
+
+    /// The index of the project chosen on the rail.
+    #[must_use]
+    pub fn chosen(&self) -> usize {
+        self.chosen
     }
 
     /// The chat shown, if any is.
@@ -802,7 +828,10 @@ impl Workspace {
         if !self.chats.show(index) {
             return;
         }
-        self.chats[index].unread = false;
+        let chat = &mut self.chats[index];
+        chat.unread = false;
+        self.chosen = chat.project;
+        self.projects[chat.project].last = Some(chat.key);
         self.badge(cx);
         self.read(index, window, cx);
         window.focus(&self.focus_handle(cx));
@@ -1307,128 +1336,252 @@ impl Workspace {
         }
     }
 
-    fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut rows = Vec::new();
-        for (index, project) in self.projects.iter().enumerate() {
-            rows.push(Self::render_project(index, project, cx));
-            let chats = self.chats.iter().enumerate();
-            for (chat, open) in chats.filter(|(_, chat)| chat.project == index) {
-                rows.push(self.render_chat(chat, open, cx));
-            }
+    /// Chooses the project at `index` on the rail, showing the chat of it
+    /// shown last, or its first, or no chat when it has none.
+    pub fn choose(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project) = self.projects.get(index) else {
+            return;
+        };
+        let mut chats = self
+            .chats
+            .iter()
+            .enumerate()
+            .filter(|(_, chat)| chat.project == index);
+        let last = project.last;
+        let first = chats.clone().next().map(|(chat, _)| chat);
+        let shown = chats
+            .find(|(_, chat)| Some(chat.key) == last)
+            .map(|(chat, _)| chat)
+            .or(first);
+        if let Some(chat) = shown {
+            self.show(chat, window, cx);
+        } else {
+            self.chosen = index;
+            self.chats.hide();
+            window.focus(&self.focus_handle);
+            cx.notify();
         }
-        rows.extend(self.render_archived(cx));
+    }
+
+    /// The rail down the window's left side: a button for each project,
+    /// which chooses it, marked when it is the one chosen and counting its
+    /// chats that wait for the human, and at its foot the button that
+    /// opens a folder.
+    fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let projects = self
+            .projects
+            .iter()
+            .enumerate()
+            .map(|(index, project)| self.render_project(index, project, cx));
         div()
-            .w(px(LIST_WIDTH))
+            .id("projects")
+            .w(px(RAIL_WIDTH))
             .h_full()
             .flex_shrink_0()
             .flex()
             .flex_col()
+            .items_center()
+            .gap(px(14.))
+            .py(px(16.))
+            .overflow_y_scroll()
+            .children(projects)
+            .child(div().flex_1())
             .child(
                 div()
+                    .id("open-folder")
+                    .debug_selector(|| "open-folder".to_owned())
+                    .flex_shrink_0()
+                    .size(px(PROJECT_SIZE))
                     .flex()
-                    .flex_col()
-                    .gap_1()
-                    .p_2()
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .child(Self::button(
-                        "new-chat",
-                        "+ New chat",
-                        cx,
-                        |workspace, window, cx| {
-                            workspace.open(None, window, cx);
-                        },
-                    ))
-                    .child(Self::button(
-                        "open-folder",
-                        "+ Open folder…",
-                        cx,
-                        |workspace, window, cx| {
-                            workspace.choose_folder(window, cx);
-                        },
-                    )),
-            )
-            .child(
-                div()
-                    .id("chats")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .children(rows),
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(PROJECT_RADIUS))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(rgb(BORDER_STRONG))
+                    .text_color(rgb(FAINT))
+                    .text_size(px(18.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
+                    .tooltip(tip("Open folder…"))
+                    .child("+")
+                    .on_click(cx.listener(|workspace, _, window, cx| {
+                        workspace.choose_folder(window, cx);
+                    })),
             )
     }
 
-    fn button(
-        name: &'static str,
-        label: &'static str,
+    /// The button of the project at `index` on the rail: the first letter
+    /// of its name in a square, and its name under it, with its folder
+    /// where the mouse rests.
+    fn render_project(
+        &self,
+        index: usize,
+        project: &Project,
         cx: &mut Context<Self>,
-        action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> Stateful<Div> {
-        div()
-            .id(name)
-            .debug_selector(|| name.to_owned())
-            .px_2()
-            .rounded_sm()
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(BUTTON)))
-            .child(label)
-            .on_click(cx.listener(move |workspace, _, window, cx| action(workspace, window, cx)))
-    }
-
-    /// The heading of the project at `index`, with a button that opens a
-    /// chat in it.
-    fn render_project(index: usize, project: &Project, cx: &mut Context<Self>) -> Stateful<Div> {
-        let folder = project.folder.clone();
+        let chosen = self.chosen == index;
+        let chats = self.chats.iter().filter(|chat| chat.project == index);
+        let asking = chats
+            .clone()
+            .filter(|chat| chat.state == State::Asking)
+            .count();
+        let waiting = chats
+            .filter(|chat| chat.unread || chat.state == State::Asking)
+            .count();
+        let letter: String = match project.id {
+            None => "~".to_owned(),
+            Some(_) => project
+                .name
+                .chars()
+                .take(1)
+                .flat_map(char::to_uppercase)
+                .collect(),
+        };
+        let (ground, edge, ink, label) = if chosen {
+            (ACCENT_GROUND, ACCENT, ACCENT, LINK)
+        } else {
+            (SURFACE, BORDER, FAINT, FAINT)
+        };
+        let folder = shortened(&project.folder);
         div()
             .id(("project", index))
+            .debug_selector(move || format!("project-{}", index + 1))
+            .relative()
+            .flex_shrink_0()
+            .w(px(RAIL_WIDTH))
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(5.))
+            .cursor_pointer()
+            .tooltip(tip(folder))
+            .on_click(cx.listener(move |workspace, _, window, cx| {
+                workspace.choose(index, window, cx);
+            }))
+            .when(chosen, |button| {
+                button.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(px(10.))
+                        .w(px(3.))
+                        .h(px(22.))
+                        .rounded_r(px(2.))
+                        .bg(rgb(ACCENT)),
+                )
+            })
+            .child(
+                div()
+                    .relative()
+                    .size(px(PROJECT_SIZE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(PROJECT_RADIUS))
+                    .bg(rgb(ground))
+                    .border_1()
+                    .border_color(rgb(edge))
+                    .text_color(rgb(ink))
+                    .text_size(px(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .when(!chosen, |square| square.hover(|style| style.bg(rgb(HOVER))))
+                    .child(letter)
+                    .when(waiting > 0, |square| {
+                        square.child(
+                            div()
+                                .debug_selector(move || format!("project-{}-waiting", index + 1))
+                                .absolute()
+                                .top(px(-5.))
+                                .right(px(-5.))
+                                .min_w(px(17.))
+                                .h(px(17.))
+                                .px(px(4.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(9.))
+                                .border_2()
+                                .border_color(rgb(GROUND))
+                                .bg(rgb(if asking > 0 { ASKING } else { ACCENT }))
+                                .text_color(rgb(GROUND))
+                                .text_size(px(10.))
+                                .font_weight(FontWeight::BOLD)
+                                .child(waiting.to_string()),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .max_w(px(RAIL_WIDTH - 8.))
+                    .truncate()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(label))
+                    .child(project.name.clone()),
+            )
+    }
+
+    /// The tabs of the chats of the project chosen, along the top of the
+    /// window, with the button that opens another chat in it, and
+    /// "Archived" at their end, if the human archived a chat.
+    fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let chosen = self.chosen;
+        let folder = self.projects[chosen].folder.clone();
+        let tabs = self
+            .chats
+            .iter()
+            .enumerate()
+            .filter(|(_, chat)| chat.project == chosen)
+            .map(|(index, chat)| self.render_tab(index, chat, cx))
+            .collect::<Vec<_>>();
+        div()
+            .relative()
+            .h(px(TABS_HEIGHT))
+            .flex_shrink_0()
             .flex()
             .items_center()
             .gap_1()
-            .px_2()
-            .pt_3()
-            .pb_1()
             .child(
                 div()
-                    .flex_1()
+                    .id("chats")
                     .min_w_0()
                     .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_color(rgb(DIM))
-                            .child(project.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_xs()
-                            .text_color(rgb(FAINT))
-                            .child(shortened(&project.folder)),
-                    ),
+                    .items_center()
+                    .gap_1()
+                    .overflow_x_scroll()
+                    .children(tabs),
             )
             .child(
                 div()
-                    .id(("new-chat-in", index))
-                    .debug_selector(move || format!("new-chat-in-{}", index + 1))
-                    .px_1()
-                    .rounded_sm()
-                    .cursor_pointer()
+                    .id("new-chat-in")
+                    .debug_selector(move || format!("new-chat-in-{}", chosen + 1))
+                    .flex_shrink_0()
+                    .size(px(TAB_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(TAB_RADIUS))
                     .text_color(rgb(FAINT))
-                    .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(FOREGROUND)))
+                    .text_size(px(16.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
+                    .tooltip(tip("New chat here"))
                     .child("+")
                     .on_click(cx.listener(move |workspace, _, window, cx| {
                         workspace.open(Some(folder.clone()), window, cx);
                     })),
             )
+            .child(div().flex_1())
+            .children(self.render_archived(cx))
     }
 
-    /// The row of the chat at `index` in the list, which numbers its
-    /// chats from 1: its name, or the input that renames it, and a mark of
-    /// how it stands.
-    fn render_chat(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// The tab of the chat at `index` in the list, which numbers its chats
+    /// from 1: a dot of how it stands, its name, or the input that renames
+    /// it, and whether it is a trial and has a goal.
+    fn render_tab(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Stateful<Div> {
         let number = index + 1;
+        let shown = self.chats.shown_index() == Some(index);
         let trial = chat
             .setup
             .as_ref()
@@ -1438,52 +1591,49 @@ impl Workspace {
             .as_ref()
             .filter(|_| chat.open)
             .map(|view| view.read(cx).conversation().state());
-        let (mark, color) = match state {
-            Some(State::Busy | State::Stopping | State::Checking) => ("…", rgb(DIM)),
-            Some(State::Asking) => ("?", rgb(ASKING)),
-            Some(State::Closed) => ("closed", rgb(FAINT)),
-            _ if chat.unread => ("●", rgb(LINK)),
-            Some(State::Idle) | None => ("", rgb(DIM)),
+        // Filled, the dot asks the human to look; a ring, it says only
+        // whether the agent is at work. A closed chat has none.
+        let dot = match state {
+            Some(State::Asking) => Some((ASKING, true, "asking")),
+            _ if chat.unread => Some((ACCENT, true, "unread")),
+            Some(State::Busy | State::Stopping | State::Checking) => {
+                Some((ACCENT, false, "working"))
+            }
+            Some(State::Idle) => Some((DISABLED, false, "idle")),
+            Some(State::Closed) | None => None,
         };
-        let name = match &self.renaming {
-            Some((renaming, input, _)) if *renaming == index => div()
-                .key_context(RENAMING)
-                .debug_selector(|| "renaming".to_owned())
-                .flex_1()
-                .min_w_0()
-                .px_1()
-                .border_1()
-                .border_color(rgb(LINK))
-                .rounded_sm()
-                // A click in the input stays there, not showing the chat.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_action(cx.listener(|workspace, _: &CancelRename, window, cx| {
-                    workspace.end_renaming(false, window, cx);
-                }))
-                .on_mouse_down_out(cx.listener(|workspace, _, window, cx| {
-                    workspace.end_renaming(true, window, cx);
-                }))
-                .child(input.clone()),
-            _ => div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                // A closed chat is there to read.
-                .when(!chat.open, |name| name.text_color(rgb(FAINT)))
-                .child(chat.name.clone()),
+        let name = self.render_tab_name(index, chat, cx);
+        // A chat an agent opened comes after the chat that opened it.
+        let opened = chat.parent.is_some() && self.depth(chat) > 0;
+        let small = |text: &'static str, selector: String| {
+            div()
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .debug_selector(move || selector.clone())
+                .child(text)
         };
-        // A chat an agent opened sits in under the chat that opened it.
-        let depth = self.depth(chat);
-        let mut row = div()
+        div()
             .id(("chat", number))
             .debug_selector(move || format!("chat-{number}"))
+            .flex_shrink_0()
+            .max_w(px(TAB_WIDTH))
+            .h(px(TAB_HEIGHT))
+            .px(px(12.))
             .flex()
             .items_center()
-            .gap_1()
-            .pl(px(16. + 12. * f32::from(depth)))
-            .pr_2()
-            .py_1()
+            .gap(px(8.))
+            .rounded(px(TAB_RADIUS))
+            .text_size(px(13.))
+            .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
+            .map(|tab| {
+                if shown {
+                    tab.bg(rgb(SELECTED)).text_color(rgb(FOREGROUND))
+                } else {
+                    tab.text_color(rgb(DIM)).hover(|style| style.bg(rgb(HOVER)))
+                }
+            })
             .on_click(
                 cx.listener(move |workspace, event: &ClickEvent, window, cx| {
                     if event.click_count() == 2 {
@@ -1500,89 +1650,141 @@ impl Workspace {
                     cx.notify();
                 }),
             )
+            .when(opened, |tab| {
+                tab.child(small("↳", format!("opened-{number}")))
+            })
+            .children(dot.map(|(color, filled, mark)| {
+                let circle = div()
+                    .debug_selector(move || format!("chat-{number}-{mark}"))
+                    .flex_shrink_0()
+                    .size(px(8.))
+                    .rounded_full();
+                if filled {
+                    circle.bg(rgb(color))
+                } else {
+                    circle.border_1().border_color(rgb(color))
+                }
+            }))
             .child(name)
-            .when(trial, |row| {
-                row.child(
-                    div()
-                        .flex_shrink_0()
-                        .text_color(rgb(DIM))
-                        .debug_selector(move || format!("trial-{number}"))
-                        .child("trial"),
-                )
+            .when(trial, |tab| {
+                tab.child(small("trial", format!("trial-{number}")))
             })
-            .when(chat.goal.is_some(), |row| {
-                row.child(
-                    div()
-                        .flex_shrink_0()
-                        .text_color(rgb(DIM))
-                        .debug_selector(move || format!("goal-{number}"))
-                        .child("◎"),
-                )
+            .when(chat.goal.is_some(), |tab| {
+                tab.child(small("◎", format!("goal-{number}")))
             })
-            .child(div().flex_shrink_0().text_color(color).child(mark));
-        if self.chats.shown_index() == Some(index) {
-            row = row.bg(rgb(SELECTED));
-        } else {
-            row = row.hover(|style| style.bg(rgb(HOVER)));
-        }
-        row
     }
 }
 
 impl Workspace {
-    /// "Archived" at the foot of the list, if the human archived a chat,
-    /// with the archived chats under it while it is open: each with its
-    /// project's name, brought back to the list by a click.
-    fn render_archived(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+    /// The name of the chat at `index` on its tab, or the input that
+    /// renames it.
+    fn render_tab_name(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Div {
+        match &self.renaming {
+            Some((renaming, input, _)) if *renaming == index => div()
+                .key_context(RENAMING)
+                .debug_selector(|| "renaming".to_owned())
+                .w(px(180.))
+                .px_1()
+                .border_1()
+                .border_color(rgb(LINK))
+                .rounded_sm()
+                // A click in the input stays there, not showing the chat.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_action(cx.listener(|workspace, _: &CancelRename, window, cx| {
+                    workspace.end_renaming(false, window, cx);
+                }))
+                .on_mouse_down_out(cx.listener(|workspace, _, window, cx| {
+                    workspace.end_renaming(true, window, cx);
+                }))
+                .child(input.clone()),
+            _ => div()
+                .min_w_0()
+                .truncate()
+                // A closed chat is there to read.
+                .when(!chat.open, |name| name.text_color(rgb(FAINT)))
+                .child(chat.name.clone()),
+        }
+    }
+
+    /// "Archived" at the end of the tabs, if the human archived a chat,
+    /// and under it, while it is open, the archived chats: each with its
+    /// project's name, brought back by a click.
+    fn render_archived(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         if self.archived.is_empty() {
-            return Vec::new();
+            return None;
         }
         let open = self.archived_open;
-        let mut rows = vec![
-            div()
-                .id("archived")
-                .debug_selector(|| "archived".to_owned())
-                .flex()
-                .gap_1()
-                .px_2()
-                .pt_3()
-                .pb_1()
-                .cursor_pointer()
-                .text_color(rgb(DIM))
-                .child(if open { "▾" } else { "▸" })
-                .child(format!("Archived ({})", self.archived.len()))
-                .on_click(cx.listener(|workspace, _, _, cx| {
-                    workspace.archived_open = !workspace.archived_open;
-                    cx.notify();
-                })),
-        ];
-        if open {
-            rows.extend(self.archived.iter().enumerate().map(|(index, chat)| {
+        let button = div()
+            .id("archived")
+            .debug_selector(|| "archived".to_owned())
+            .flex_shrink_0()
+            .h(px(TAB_HEIGHT))
+            .px(px(12.))
+            .flex()
+            .items_center()
+            .gap_1()
+            .rounded(px(TAB_RADIUS))
+            .text_size(px(13.))
+            .text_color(rgb(FAINT))
+            .cursor_pointer()
+            .when(open, |button| button.bg(rgb(SELECTED)))
+            .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
+            .child(format!("Archived ({})", self.archived.len()))
+            .child(if open { "▴" } else { "▾" })
+            .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.archived_open = !workspace.archived_open;
+                cx.notify();
+            }));
+        let menu = open.then(|| {
+            let rows = self.archived.iter().enumerate().map(|(index, chat)| {
                 let number = index + 1;
                 div()
                     .id(("archived-chat", number))
                     .debug_selector(move || format!("archived-{number}"))
                     .flex()
                     .gap_2()
-                    .pl_4()
-                    .pr_2()
+                    .px_2()
                     .py_1()
+                    .rounded(px(8.))
                     .cursor_pointer()
-                    .text_color(rgb(FAINT))
-                    .hover(|style| style.bg(rgb(HOVER)))
+                    .text_color(rgb(DIM))
+                    .hover(|style| style.bg(rgb(ACCENT_GROUND)).text_color(rgb(FOREGROUND)))
                     .child(div().flex_1().min_w_0().truncate().child(chat.name.clone()))
                     .child(
                         div()
                             .flex_shrink_0()
                             .text_xs()
+                            .text_color(rgb(FAINT))
                             .child(self.projects[chat.project].name.clone()),
                     )
                     .on_click(cx.listener(move |workspace, _, window, cx| {
+                        workspace.archived_open = false;
                         workspace.unarchive(index, window, cx);
                     }))
-            }));
-        }
-        rows
+            });
+            deferred(
+                div()
+                    .id("archived-chats")
+                    .occlude()
+                    .absolute()
+                    .top(px(TABS_HEIGHT))
+                    .right_0()
+                    .w(px(280.))
+                    .max_h(px(360.))
+                    .overflow_y_scroll()
+                    .p(px(6.))
+                    .flex()
+                    .flex_col()
+                    .bg(rgb(RAISED))
+                    .border_1()
+                    .border_color(rgb(BORDER_STRONG))
+                    .rounded(px(14.))
+                    .shadow_lg()
+                    .children(rows),
+            )
+            .with_priority(2)
+        });
+        Some(div().flex_shrink_0().child(button).children(menu))
     }
 
     /// The menu of the right button on a chat, if it is open.
@@ -1709,7 +1911,11 @@ impl Render for Workspace {
                 .items_center()
                 .justify_center()
                 .text_color(rgb(FAINT))
-                .child("Open a chat from the list on the left.")
+                .child(if self.chats(self.chosen).next().is_some() {
+                    "Choose a chat above, or open another with +."
+                } else {
+                    "No chat here yet: + above opens one."
+                })
                 .into_any_element(),
         };
         div()
@@ -1733,9 +1939,47 @@ impl Render for Workspace {
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
             .text_size(px(14.))
-            .child(self.render_list(cx))
-            // The chat's cards, on the ground the list is on.
-            .child(div().flex_1().min_w_0().h_full().p(px(GAP)).child(shown))
+            .child(self.render_rail(cx))
+            // The tabs, and the chat's cards under them, on the ground the
+            // rail is on.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(GAP))
+                    .py(px(GAP))
+                    .pr(px(GAP))
+                    .child(self.render_tabs(cx))
+                    .child(div().flex_1().min_h_0().child(shown)),
+            )
             .children(self.render_menu(cx))
+    }
+}
+
+/// What the mouse resting on a button says of it.
+struct Tip(SharedString);
+
+/// Builds the tip that says `text`, for an element's `tooltip`.
+fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView {
+    let text = text.into();
+    move |_, cx| cx.new(|_| Tip(text.clone())).into()
+}
+
+impl Render for Tip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(BORDER_STRONG))
+            .rounded(px(8.))
+            .text_color(rgb(FOREGROUND))
+            .font_family(UI_FONT)
+            .text_size(px(12.))
+            .child(self.0.clone())
     }
 }
