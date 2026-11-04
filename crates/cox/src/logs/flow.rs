@@ -163,6 +163,9 @@ fn runs(logs: &Path) -> Result<Vec<PathBuf>, String> {
 struct Called {
     steps: Vec<Gathered>,
     title: Option<String>,
+    /// What the agent said it calls the tool with, ACP's `rawInput`, as
+    /// it last said it.
+    input: Option<Value>,
     /// The id of the chat, when the lines were said in one.
     chat: Option<String>,
     started: Timestamp,
@@ -213,6 +216,7 @@ fn of_run(lines: impl Iterator<Item = String>, run: PathBuf, call: &str) -> Opti
 fn over_acp(kept: &[Kept], call: &str) -> Option<Called> {
     let mut steps = Vec::new();
     let mut title = None;
+    let mut input = None;
     let mut chat = None;
     let (mut started, mut ended) = (None, None);
     // The ids of the agent's permission requests for the call, which Cox
@@ -223,7 +227,7 @@ fn over_acp(kept: &[Kept], call: &str) -> Option<Called> {
             continue;
         };
         let step = match line.from.as_deref() {
-            Some("agent") => acp_step(&message, call, &mut title, &mut permissions),
+            Some("agent") => acp_step(&message, call, &mut title, &mut input, &mut permissions),
             Some("cox") => permission_answered(&message, &permissions),
             _ => None,
         };
@@ -243,6 +247,7 @@ fn over_acp(kept: &[Kept], call: &str) -> Option<Called> {
     Some(Called {
         steps,
         title,
+        input,
         chat: chat.flatten(),
         started: started?,
         ended,
@@ -251,8 +256,8 @@ fn over_acp(kept: &[Kept], call: &str) -> Option<Called> {
 
 /// Gathers the steps of `called` over the socket from the lines `kept` in
 /// its chat, into `gathered`: the `tools/call` within the call's time
-/// whose tool the agent named, or any when it named none, and the
-/// server's answer. Answers when the tool was first called, if it was,
+/// whose arguments are what the agent said it calls the tool with, or any
+/// when it did not say, and the server's answer. Answers when the tool was first called, if it was,
 /// and when it was last answered.
 fn over_socket(
     kept: &[Kept],
@@ -273,7 +278,7 @@ fn over_socket(
             line.at >= called.started && called.ended.is_none_or(|ended| line.at <= ended);
         match line.from.as_deref() {
             Some("agent") if in_time => {
-                if let Some((id, said)) = tool_called(&message, called.title.as_deref()) {
+                if let Some((id, said)) = tool_called(&message, called.input.as_ref()) {
                     calls.push(id);
                     first_called.get_or_insert(line.at);
                     gathered.push(Gathered {
@@ -384,11 +389,14 @@ fn parse(line: &str) -> Option<Kept> {
 /// The step `message`, which the agent sent over ACP, is of the call
 /// `call`, if it is about it: what it says of the call, or a permission
 /// request for it, whose id goes to `permissions`. The call's title, when
-/// the agent gives it, goes to `title`.
+/// the agent gives it, goes to `title`, and what it calls the tool with,
+/// its `rawInput`, to `input`, which the agent may say again once the
+/// input is whole.
 fn acp_step(
     message: &Value,
     call: &str,
     title: &mut Option<String>,
+    input: &mut Option<Value>,
     permissions: &mut Vec<Value>,
 ) -> Option<(Lane, Lane, String)> {
     let params = &message["params"];
@@ -396,6 +404,9 @@ fn acp_step(
     if update["toolCallId"] == call {
         if let Some(given) = update["title"].as_str() {
             title.get_or_insert_with(|| given.to_owned());
+        }
+        if !update["rawInput"].is_null() {
+            *input = Some(update["rawInput"].clone());
         }
         let status = update["status"].as_str();
         let said = match (update["sessionUpdate"].as_str(), status) {
@@ -451,17 +462,24 @@ fn named(title: Option<&str>) -> String {
 }
 
 /// The id and the step of `message`, if it calls a tool over the socket
-/// that `title`, what the agent called the call, names: any tool when
-/// there is no title.
-fn tool_called(message: &Value, title: Option<&str>) -> Option<(Value, String)> {
+/// with `input`, what the agent said it calls the tool with: any tool,
+/// with anything, when it did not say. No arguments are taken as an
+/// empty object, as MCP takes them.
+fn tool_called(message: &Value, input: Option<&Value>) -> Option<(Value, String)> {
     if message["method"] != "tools/call" {
         return None;
     }
     let name = message["params"]["name"].as_str()?;
-    if title.is_some_and(|title| !title.contains(name)) {
+    let arguments = &message["params"]["arguments"];
+    let none = Value::Object(serde_json::Map::new());
+    let given = if arguments.is_null() {
+        &none
+    } else {
+        arguments
+    };
+    if input.is_some_and(|input| input != given) {
         return None;
     }
-    let arguments = &message["params"]["arguments"];
     let said = if arguments.is_null() {
         format!("`cox --mcp` passes on `tools/call` {name}")
     } else {
@@ -558,7 +576,17 @@ mod tests {
                 "agent",
                 &update(
                     "call-1",
-                    json!({ "sessionUpdate": "tool_call", "title": "show_map", "status": "pending" }),
+                    json!({ "sessionUpdate": "tool_call", "title": "Show the map",
+                        "status": "pending", "rawInput": {} }),
+                ),
+            ),
+            // The input, once it is whole.
+            acp(
+                1.0005,
+                "agent",
+                &update(
+                    "call-1",
+                    json!({ "sessionUpdate": "tool_call_update", "rawInput": { "at": ["cox"] } }),
                 ),
             ),
             // Another call, at the same time, which is not this one's.
@@ -622,7 +650,7 @@ mod tests {
     fn follows_a_call_from_the_agent_to_the_stage_and_back() {
         let flow = of_run(a_run().into_iter(), PathBuf::from("run.jsonl"), "call-1").unwrap();
 
-        assert_eq!(flow.title.as_deref(), Some("show_map"));
+        assert_eq!(flow.title.as_deref(), Some("Show the map"));
         let steps: Vec<(u128, Lane, Lane, &str)> = flow
             .steps
             .iter()
@@ -642,8 +670,9 @@ mod tests {
                     0,
                     Lane::Agent,
                     Lane::Acp,
-                    "the agent says it calls `show_map`, pending"
+                    "the agent says it calls `Show the map`, pending"
                 ),
+                (0, Lane::Agent, Lane::Acp, "the agent says more of the call"),
                 (
                     2,
                     Lane::Agent,
@@ -677,11 +706,56 @@ mod tests {
             ]
         );
         assert_eq!(
-            flow.steps[2].source,
+            flow.steps[3].source,
             Some(Source {
                 file: PathBuf::from("crates/cox/src/agent/mcp/calls.rs"),
                 line: 42
             })
+        );
+    }
+
+    #[test]
+    fn a_call_that_says_no_input_takes_the_tool_calls_in_its_time() {
+        let lines = vec![
+            acp(
+                1.0,
+                "agent",
+                &update(
+                    "call-3",
+                    json!({ "sessionUpdate": "tool_call", "title": "Show the file" }),
+                ),
+            ),
+            wire(
+                1.001,
+                "agent",
+                &json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                    "params": { "name": "show_file" } }),
+            ),
+            acp(
+                1.002,
+                "agent",
+                &update(
+                    "call-3",
+                    json!({ "sessionUpdate": "tool_call_update", "status": "completed" }),
+                ),
+            ),
+            // After the call, so not its.
+            wire(
+                1.003,
+                "agent",
+                &json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                    "params": { "name": "show_map" } }),
+            ),
+        ];
+        let flow = of_run(lines.into_iter(), PathBuf::from("run.jsonl"), "call-3").unwrap();
+        let said: Vec<&str> = flow.steps.iter().map(|step| step.said.as_str()).collect();
+        assert_eq!(
+            said,
+            [
+                "the agent says it calls `Show the file`",
+                "`cox --mcp` passes on `tools/call` show_file",
+                "the agent says the call is completed",
+            ]
         );
     }
 
@@ -746,7 +820,7 @@ mod tests {
 
         let flow = read(&directory, "call-1").unwrap();
         assert_eq!(flow.run, directory.join("20261101T100000Z-1.jsonl"));
-        assert_eq!(flow.steps.len(), 6);
+        assert_eq!(flow.steps.len(), 7);
         assert!(read(&directory, "call-9").is_err());
         fs::remove_dir_all(directory).unwrap();
     }

@@ -48,7 +48,8 @@ what it says ahead of the first line sent in the chat, and the chat says
 so at its top. The list switches between chats (Control-Tab and
 Control-Shift-Tab do too). A chat is named by a number at first, then
 after the first line sent in it, then by the title its agent gives its
-session, as `claude-agent-acp` does, until the human renames it: a
+session, if it gives one (ACP's `session_info_update`, as
+`claude-agent-acp` sends), until the human renames it: a
 double click on its row, or "Rename" in the menu of the right button.
 The row marks a chat whose agent is at work (…), one that waits for the
 human (?), and one that finished a turn the human has not seen yet (●).
@@ -215,7 +216,10 @@ is Cox itself. A step in a file that changed, as "Changes" shows it, is
 marked. For a call of one of Cox's own tools, the agent says over
 ACP that it calls the tool, `cox --mcp` passes its `tools/call` on to the
 tool server, the tool asks the stage, the stage carries it out, the
-server answers, and the agent says the call is done; for another tool,
+server answers, and the agent says the call is done, the flow telling
+the call's `tools/call` from others by its arguments, which the agent
+says over ACP as the call's `rawInput`, or, when it does not say them,
+by when it came; for another tool,
 such as the agent's own `Read`, the flow shows only what the agent says
 of it, and its permission request and Cox's answer when it asks one.
 What the agent thinks on its way, when it sends it, shows on a line of
@@ -230,11 +234,14 @@ a click opens it. When the agent asks permission, a click on an option,
 or its number, answers. A line above the input tells what the chat waits
 for, while it is not the next line to send.
 
-`claude-agent-acp` sends the plan Claude Code keeps with its task tools,
-which recent models get only when the agent runs with
-`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`. It sends what Claude thinks only with
-`CLAUDE_CODE_THINKING_DISPLAY=summarized`, since recent models leave it
-out unless asked. So, for both:
+The plan and the thoughts are ACP's `plan` and `agent_thought_chunk`
+updates, which Cox shows from any agent that sends them. How an agent
+is to be run to send them is the agent's: `claude-agent-acp` sends, as
+the plan, the tasks Claude Code keeps with its task tools, which recent
+models get only when the agent runs with
+`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, and sends what Claude thinks only
+with `CLAUDE_CODE_THINKING_DISPLAY=summarized`, since recent models
+leave it out unless asked. So, to run Cox with Claude Code, for both:
 
 ```sh
 CLAUDE_CODE_ENABLE_TODO_TOOLS=1 CLAUDE_CODE_THINKING_DISPLAY=summarized \
@@ -600,7 +607,8 @@ its steps one after another: `say`, `think`, `tool` and `tool_update`
 is), `ask` (ACP's `session/request_permission`, with `then`, the steps
 for each option chosen, by its `optionId`, or `cancelled`), `call` (a
 tool of an MCP server Cox hands the agent, `cox` unless `server` says
-another, with `arguments`), `sleep` (milliseconds), `stderr`, and
+another, with `arguments`, titled `title`, the tool's name unless
+given), `sleep` (milliseconds), `stderr`, and
 `fail`. In a step, `{cwd}` stands for the folder the session works in,
 as Cox gave it, `{result}` for what the last call answered,
 and a value that is just `"{result:number after as chat }"` for the
