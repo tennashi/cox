@@ -17,7 +17,7 @@ use gpui::{
 use super::Page;
 use super::keys::modifiers;
 use super::pointer::paint_agent;
-use crate::ui::theme::RAISED;
+use crate::ui::theme::{CARD_INNER_RADIUS, RAISED};
 use cox_browser::{Frame, MouseButton};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
@@ -146,12 +146,17 @@ impl Picture {
                 page.look.clone(),
             )
         });
-        window.paint_quad(fill(bounds, rgb(RAISED)));
+        // The page fills the stage's card to its foot, so its corners
+        // there are round as the card's are.
+        let corners = Corners {
+            bottom_left: px(CARD_INNER_RADIUS),
+            bottom_right: px(CARD_INNER_RADIUS),
+            ..Corners::default()
+        };
+        window.paint_quad(fill(bounds, rgb(RAISED)).corner_radii(corners));
         if let Some(image) = image {
             let at = image_bounds(&image, bounds, window.scale_factor());
-            window
-                .paint_image(at, Corners::default(), image, 0, false)
-                .ok();
+            window.paint_image(at, corners, image, 0, false).ok();
         }
         if let Some((image, popup)) = popup {
             window

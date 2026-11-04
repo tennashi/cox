@@ -24,9 +24,16 @@ pub const CODE_FONT: &str = "Menlo";
 #[cfg(not(target_os = "macos"))]
 pub const CODE_FONT: &str = "DejaVu Sans Mono";
 
-/// The window's back, which the list of chats is on.
+/// How far apart the window's cards sit, and from its edges.
+pub const GAP: f32 = 10.;
+/// How round a card's corners are: the stage's, and the conversation's.
+pub const CARD_RADIUS: f32 = 18.;
+/// How round the corners of what fills a card are, inside its border.
+pub const CARD_INNER_RADIUS: f32 = CARD_RADIUS - 1.;
+
+/// The window's back, which the list of chats and the cards are on.
 pub const GROUND: u32 = 0x0e_0e0f;
-/// The ground of a chat's conversation and of its stage.
+/// The ground of a card: a chat's conversation and its stage.
 pub const SURFACE: u32 = 0x15_1517;
 /// What sits a step above the surface: a menu, a code block, the human's
 /// lines.

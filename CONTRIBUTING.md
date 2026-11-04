@@ -308,11 +308,11 @@ CLAUDE_CODE_ENABLE_TODO_TOOLS=1 CLAUDE_CODE_THINKING_DISPLAY=summarized \
   cox npx -y @agentclientprotocol/claude-agent-acp
 ```
 
-A chat's stage holds pages in tabs, and opens beside the conversation
-only when it is used: "Show stage" above the conversation opens it, and
-it opens on its own when a link opens on it, or when the agent works on
-a page there (navigates it, clicks or types in it, or opens a tab),
-showing that page's tab. Closed, it keeps its tabs. The + beside the
+A chat's stage holds pages in tabs, and opens on the left of the
+conversation only when it is used: "Show stage" above the conversation
+opens it, and it opens on its own when a link opens on it, or when the
+agent works on a page there (navigates it, clicks or types in it, or
+opens a tab), showing that page's tab. Closed, it keeps its tabs. The + beside the
 tabs opens another, and a page that asks for a window of its own, as a
 link with `target="_blank"` does, gets a tab instead. A link from the
 conversation gets a tab of its own, unless a tab shows it already. A link

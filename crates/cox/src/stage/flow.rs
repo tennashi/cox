@@ -28,7 +28,7 @@ use gpui::{
 
 use crate::logs::flow::{self, Lane, Step};
 use crate::stage::tab::Shows;
-use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FOREGROUND, HOVER, LINK, SURFACE};
+use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FOREGROUND, HOVER, LINK};
 
 /// What a link to the flow of a tool call starts with, followed by the
 /// call's id.
@@ -456,7 +456,6 @@ impl Render for Flow {
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
-            .bg(rgb(SURFACE))
             .text_color(rgb(FOREGROUND))
             .child(self.render_heading())
             .child(Self::render_lanes())

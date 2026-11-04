@@ -60,7 +60,7 @@ use crate::stage::tab::Shows;
 use crate::ui::Copy;
 use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, SURFACE};
+use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED};
 
 const KEY_CONTEXT: &str = "Terminal";
 
@@ -614,7 +614,6 @@ impl Render for Terminal {
                     .debug_selector(|| "terminal".to_owned())
                     .flex_1()
                     .min_h_0()
-                    .bg(rgb(SURFACE))
                     .track_focus(&self.focus_handle)
                     .key_context(KEY_CONTEXT)
                     .on_key_down(cx.listener(Self::key_down))

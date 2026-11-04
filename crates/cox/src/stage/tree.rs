@@ -20,7 +20,7 @@ use gpui::{
 
 use crate::stage::tab::Shows;
 use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT_GROUND, BORDER, DIM, FAILED, FOREGROUND, HOVER, SURFACE};
+use crate::ui::theme::{ACCENT_GROUND, BORDER, DIM, FAILED, FOREGROUND, HOVER};
 
 /// How often the tab looks at the folders open in it.
 const LOOK_EVERY: Duration = Duration::from_secs(1);
@@ -280,7 +280,6 @@ impl Render for Tree {
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
-            .bg(rgb(SURFACE))
             .text_color(rgb(FOREGROUND))
             .child(
                 div()

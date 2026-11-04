@@ -23,8 +23,7 @@ use gpui::{
 use crate::stage::tab::Shows;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
-    ACCENT, ADDED_GROUND, BORDER, CODE_FONT, DIM, FAILED, FOREGROUND, HOVER, RAISED,
-    REMOVED_GROUND, SURFACE,
+    ACCENT, ADDED_GROUND, BORDER, CODE_FONT, DIM, FAILED, FOREGROUND, HOVER, RAISED, REMOVED_GROUND,
 };
 
 /// How often the tab looks at what changed.
@@ -351,7 +350,6 @@ impl Render for Changes {
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
-            .bg(rgb(SURFACE))
             .text_color(rgb(FOREGROUND))
             .font_family(CODE_FONT)
             .text_size(px(13.))
