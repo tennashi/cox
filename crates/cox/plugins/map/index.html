@@ -4,22 +4,29 @@
     <meta charset="utf-8" />
     <title>Map</title>
     <style>
+      /* The colors of the window (see `ui::theme`): the page sits on the
+         stage's card, as Cox's own tabs do, and the accent marks what
+         changed, as it does there. */
       :root {
         color-scheme: dark;
-        --foreground: #d4d4d4;
-        --background: #1e1e1e;
-        --card: #252628;
-        --card-hover: #2c2e31;
-        --focus: #212121;
-        --dim: #9a9a9a;
-        --faint: #6e6e6e;
-        --link: #7fb4ff;
-        --border: #3a3b3e;
-        --line: #8a8a8a;
-        --changed: #e5a85a;
-        --stale: #e07070;
-        --note: #c9a7ff;
-        --hold: #6cb8ff;
+        --foreground: #e4e4e6;
+        --background: #151517;
+        --card: #17171a;
+        --card-hover: #1f1f23;
+        --focus: #1a1a1d;
+        --dim: #a5a5ab;
+        --faint: #8e8e95;
+        --link: #a6ebe1;
+        --border: #2c2c31;
+        --line: #6a6a72;
+        --hover: #222226;
+        --changed: #6fd3c5;
+        --changed-ground: #13211f;
+        --changed-edge: #5cbfb1;
+        --on-accent: #08201c;
+        --stale: #ec8580;
+        --note: #a5a5ab;
+        --hold: #6fd3c5;
         --sans: -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
         --mono: Menlo, "DejaVu Sans Mono", monospace;
       }
@@ -57,7 +64,7 @@
       }
       .crumbs button:hover,
       .crumbs button:focus-visible {
-        background: #404040;
+        background: var(--hover);
       }
       .crumbs .here {
         color: var(--foreground);
@@ -203,7 +210,7 @@
         stroke: var(--hold);
       }
       svg.labels g.badge.lit text {
-        fill: #101010;
+        fill: var(--on-accent);
       }
       .flows {
         display: flex;
@@ -272,7 +279,7 @@
       .step.on {
         background: var(--hold);
         border-color: var(--hold);
-        color: #101010;
+        color: var(--on-accent);
       }
       .stepsays {
         display: flex;
@@ -650,7 +657,7 @@
         stroke: var(--hold);
       }
       .seq .row.on .n text {
-        fill: #101010;
+        fill: var(--on-accent);
       }
       .side {
         min-width: 0;
@@ -777,8 +784,8 @@
         flex: 1 1 150px;
         min-width: 140px;
         max-width: 210px;
-        padding: 9px 11px;
-        border-radius: 8px;
+        padding: 12px 14px;
+        border-radius: 14px;
         background: var(--card);
         border: 1px solid var(--border);
         color: inherit;
@@ -799,12 +806,16 @@
         margin-bottom: 4px;
       }
       .part.lit {
-        border-color: var(--changed);
-        box-shadow: inset 0 0 0 1px rgba(229, 168, 90, 0.25);
+        background: var(--changed-ground);
+        border-color: var(--changed-edge);
+        box-shadow:
+          inset 0 0 0 0.5px var(--changed-edge),
+          0 0 0 5px rgba(111, 211, 197, 0.07);
       }
       .part.lit.many {
         box-shadow:
-          inset 0 0 0 1px rgba(229, 168, 90, 0.25),
+          inset 0 0 0 0.5px var(--changed-edge),
+          0 0 0 5px rgba(111, 211, 197, 0.07),
           4px 4px 0 -1px var(--focus),
           4px 4px 0 0 var(--border);
       }
@@ -815,8 +826,8 @@
         font-size: 12px;
       }
       .part .pname {
-        font-size: 14px;
-        font-weight: 500;
+        font-size: 15px;
+        font-weight: 600;
         line-height: 1.3;
       }
       .part .each {
@@ -864,6 +875,7 @@
       }
       .part .note b {
         font-weight: 500;
+        color: var(--foreground);
       }
       .part .holds {
         display: flex;
@@ -874,7 +886,7 @@
       .part .holds .chip {
         font-family: var(--mono);
         font-size: 10px;
-        color: var(--hold);
+        color: var(--dim);
         border: 1px solid var(--border);
         border-radius: 4px;
         padding: 0 5px;
@@ -882,7 +894,7 @@
       }
       .part .holds .chip.hot {
         color: var(--changed);
-        border-color: rgba(229, 168, 90, 0.5);
+        border-color: rgba(111, 211, 197, 0.5);
       }
       .part .holds .chip.missing {
         color: var(--stale);
@@ -976,7 +988,7 @@
         background: var(--card-hover);
       }
       .sym.here > a {
-        background: rgba(229, 168, 90, 0.12);
+        background: rgba(111, 211, 197, 0.12);
       }
       /* A function the flow chosen runs. */
       .sym.flow > a .name,

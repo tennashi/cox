@@ -488,7 +488,7 @@ function renderTier(tierId) {
   </div>`;
   const foot = seq
     ? `<div class="foot"><span>a column opens the tier inside it, or the code it holds</span><span>·</span><span>a row is a step of the flow; a loop is a step inside a box, and opens where the step is drawn apart</span><span>·</span><span>← → go from step to step, ↑ up a tier, Backspace back</span></div>`
-    : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>orange is what changed, as Changes shows it</span><span>·</span><span>↑ goes up a tier, Backspace back</span></div>`;
+    : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>teal is what changed, as Changes shows it</span><span>·</span><span>↑ goes up a tier, Backspace back</span></div>`;
   const chain = [...above(tierId), tierId].map((id) => ({ text: tier(id).name, tier: id }));
   app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${waysEl()}${body}${foot}`;
   if (seq) seqScrolled();
