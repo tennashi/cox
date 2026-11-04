@@ -926,6 +926,7 @@ impl Conversation {
                 self.state = if check { State::Checking } else { State::Idle };
             }
             AgentEvent::LoginNeeded { options, failed } => self.ask_to_log_in(options, failed),
+            AgentEvent::Note(note) => self.push(Entry::Note(note)),
             AgentEvent::TurnFailed(error) => {
                 self.push(Entry::Note(format!("The turn failed: {error}")));
                 self.state = State::Idle;

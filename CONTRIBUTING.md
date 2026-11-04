@@ -100,9 +100,17 @@ in `agents.json`, beside the chats' database (see
 program setting its environment, as on the command line, then, under
 "ACP Registry", the agents of the
 [ACP Registry](https://agentclientprotocol.com/get-started/registry)
-that `npx` or `uvx` runs; those to be downloaded are not offered yet.
-Cox fetches the registry as it starts, and keeps it, as
-`registry.json` beside `agents.json`, for a run that cannot fetch it.
+that `npx` or `uvx` runs, or whose program Cox downloads: one the
+registry lists for the platform Cox runs on, with the SHA-256 of its
+archive, since an archive Cox cannot check is not offered. Such an
+agent's program is downloaded the first time a chat starts it, which
+the chat notes, checked by its SHA-256, and unpacked in
+`agents/<id>/<version>` beside `agents.json`, from where every chat
+starts it after; an archive of another SHA-256 is refused, and the
+agent does not start. Cox fetches the registry as it starts, and keeps
+it, as `registry.json` beside `agents.json`, for a run that cannot
+fetch it; `COX_REGISTRY` names another registry to fetch, as a mirror
+of one's own.
 An agent of the registry that runs the package one of the human's runs
 is left out, and the human's is named as the registry names it. Chosen,
 the agent starts at once, in a session of its own, in place of the

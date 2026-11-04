@@ -8,18 +8,24 @@
 //!    `command`, as the command line gives one.
 //! 3. The agents of the [ACP Registry](https://agentclientprotocol.com),
 //!    which Cox fetches as it starts, and keeps for the runs that cannot,
-//!    of those it runs through `npx` or `uvx`: an agent whose program is
-//!    to be downloaded is left out.
+//!    of those it runs through `npx` or `uvx`, or whose program it
+//!    downloads, for the platform it runs on, when the registry gives the
+//!    archive's SHA-256 to check it by (see [`download`]). `COX_REGISTRY`
+//!    names another registry, as a mirror of one's own.
 //!
 //! An agent of the registry that runs the package one of the human's
 //! agents runs is left out, the human's being the one they set up, and
 //! the human's takes its name from the registry.
 
-use std::collections::BTreeMap;
+pub mod download;
+
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
+
+pub use download::Download;
 
 /// Where the registry is.
 const REGISTRY: &str = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
@@ -42,6 +48,10 @@ pub struct Known {
     pub command: Vec<String>,
     /// Whether it is of the registry, not one of the human's.
     pub listed: bool,
+    /// Where its program is downloaded from, for an agent of the registry
+    /// whose program Cox downloads: `command` then runs the program as the
+    /// archive has it, from where Cox unpacks it.
+    pub download: Option<Download>,
 }
 
 impl Known {
@@ -70,6 +80,7 @@ impl Known {
             name,
             command,
             listed: false,
+            download: None,
         }
     }
 }
@@ -219,6 +230,7 @@ fn read_own(path: &Path) -> anyhow::Result<Vec<Known>> {
             name: own.name,
             command: own.command,
             listed: false,
+            download: None,
         })
         .collect())
 }
@@ -228,9 +240,11 @@ fn registry_path() -> Option<PathBuf> {
     crate::storage::path("registry.json")
 }
 
-/// The registry, as its JSON.
+/// The registry, as its JSON: the ACP Registry, or the one
+/// `COX_REGISTRY` names.
 fn fetch() -> anyhow::Result<String> {
-    Ok(ureq::get(REGISTRY).call()?.body_mut().read_to_string()?)
+    let registry = std::env::var("COX_REGISTRY").unwrap_or_else(|_| REGISTRY.to_owned());
+    Ok(ureq::get(&registry).call()?.body_mut().read_to_string()?)
 }
 
 /// The registry, as it lists its agents.
@@ -243,14 +257,33 @@ struct Registry {
 struct Listed {
     id: String,
     name: String,
+    #[serde(default)]
+    version: String,
     distribution: Distribution,
 }
 
-/// How an agent of the registry runs: of these, through `npx` or `uvx`.
+/// How an agent of the registry runs: of these, through `npx` or `uvx`,
+/// or as a program downloaded for the platform, by its name, such as
+/// `linux-x86_64`.
 #[derive(Deserialize)]
 struct Distribution {
     npx: Option<Run>,
     uvx: Option<Run>,
+    binary: Option<HashMap<String, Binary>>,
+}
+
+/// A program to download for a platform: the archive that has it, the
+/// archive's SHA-256, and the program, as the archive has it, with the
+/// arguments and the environment it runs with.
+#[derive(Deserialize)]
+struct Binary {
+    archive: String,
+    sha256: Option<String>,
+    cmd: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
 }
 
 /// The package a runner runs, with the arguments and the environment it
@@ -264,39 +297,84 @@ struct Run {
     env: BTreeMap<String, String>,
 }
 
-/// The agents of the registry whose JSON is `text` that Cox can run, each
-/// kept as `registry:` and its id.
+/// The agents of the registry whose JSON is `text` that Cox can run on
+/// this platform, each kept as `registry:` and its id.
 fn registry(text: &str) -> anyhow::Result<Vec<Known>> {
+    registry_for(text, &download::platform())
+}
+
+/// The agents of the registry whose JSON is `text` that Cox can run on
+/// `platform`: through a runner when it can, or else downloading the
+/// program for `platform`, when the registry gives the SHA-256 of its
+/// archive, to check it by.
+fn registry_for(text: &str, platform: &str) -> anyhow::Result<Vec<Known>> {
     let registry: Registry = serde_json::from_str(text)?;
     Ok(registry
         .agents
         .into_iter()
         .filter_map(|listed| {
-            let (runner, package) = match listed.distribution {
+            let id = format!("registry:{}", listed.id);
+            let (command, download) = match listed.distribution {
                 Distribution {
                     npx: Some(package), ..
-                } => (["npx", "-y"].as_slice(), package),
+                } => (run(&["npx", "-y"], package), None),
                 Distribution {
                     uvx: Some(package), ..
-                } => (["uvx"].as_slice(), package),
+                } => (run(&["uvx"], package), None),
+                Distribution {
+                    binary: Some(mut binaries),
+                    ..
+                } => {
+                    let binary = binaries.remove(platform)?;
+                    let download = Download {
+                        version: listed.version,
+                        archive: binary.archive,
+                        sha256: binary.sha256?,
+                    };
+                    let command = assignments(&binary.env)
+                        .chain([binary.cmd])
+                        .chain(binary.args)
+                        .collect();
+                    (command, Some(download))
+                }
                 _ => return None,
             };
-            let command = package
-                .env
-                .iter()
-                .map(|(name, value)| format!("{name}={value}"))
-                .chain(runner.iter().map(|&arg| arg.to_owned()))
-                .chain([package.package])
-                .chain(package.args)
-                .collect();
             Some(Known {
-                id: format!("registry:{}", listed.id),
+                id,
                 name: listed.name,
                 command,
                 listed: true,
+                download,
             })
         })
         .collect())
+}
+
+/// The command that runs `package` with `runner`.
+fn run(runner: &[&str], package: Run) -> Vec<String> {
+    assignments(&package.env)
+        .chain(runner.iter().map(|&arg| arg.to_owned()))
+        .chain([package.package])
+        .chain(package.args)
+        .collect()
+}
+
+/// `env`, as the `NAME=value` ahead of a program.
+fn assignments(env: &BTreeMap<String, String>) -> impl Iterator<Item = String> + '_ {
+    env.iter().map(|(name, value)| format!("{name}={value}"))
+}
+
+/// `command`, the command of an agent whose program Cox downloaded and
+/// unpacked in `folder`, with the program as the archive has it, such as
+/// `./amp-acp`, found there.
+#[must_use]
+pub fn located(command: &[String], folder: &Path) -> Vec<String> {
+    let mut command = command.to_vec();
+    if let Some(program) = command.iter_mut().find(|arg| !is_assignment(arg)) {
+        let relative = program.trim_start_matches("./");
+        *program = folder.join(relative).to_string_lossy().into_owned();
+    }
+    command
 }
 
 /// The package `known` runs, without its version, when a runner runs
@@ -425,6 +503,7 @@ mod tests {
             name: "Mine".to_owned(),
             command: args("my-agent --acp"),
             listed: false,
+            download: None,
         }];
         let agents = Agents::new(
             args("CLAUDE_CODE_ENABLE_TODO_TOOLS=1 npx -y @agentclientprotocol/claude-agent-acp"),
@@ -464,6 +543,43 @@ mod tests {
         );
         assert_eq!(agents.of(Some("registry:gemini")).name, "Gemini CLI");
         assert_eq!(agents.of(Some("gone")).id, "claude-agent-acp");
+    }
+
+    #[test]
+    fn the_registry_lists_a_program_to_download_for_the_platform_with_its_sha256() {
+        let text = r#"{"agents": [
+            {"id": "amp-acp", "name": "Amp", "version": "1.0.0",
+             "distribution": {"binary": {
+                "linux-x86_64": {"archive": "https://example.com/amp.tar.gz", "sha256": "ab12",
+                                 "cmd": "./amp", "args": ["acp"], "env": {"AMP_MODE": "acp"}},
+                "darwin-aarch64": {"archive": "https://example.com/amp.zip", "cmd": "./amp"}}}}
+        ]}"#;
+        let listed = registry_for(text, "linux-x86_64").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "registry:amp-acp");
+        assert_eq!(listed[0].command, args("AMP_MODE=acp ./amp acp"));
+        assert_eq!(
+            listed[0].download,
+            Some(Download {
+                version: "1.0.0".to_owned(),
+                archive: "https://example.com/amp.tar.gz".to_owned(),
+                sha256: "ab12".to_owned(),
+            })
+        );
+        // With no SHA-256 to check it by, or none for the platform, the
+        // program is not downloaded.
+        assert_eq!(
+            registry_for(text, "darwin-aarch64").unwrap(),
+            Vec::<Known>::new()
+        );
+        assert_eq!(
+            registry_for(text, "windows-x86_64").unwrap(),
+            Vec::<Known>::new()
+        );
+        assert_eq!(
+            located(&listed[0].command, Path::new("/agents/amp/1.0.0")),
+            args("AMP_MODE=acp /agents/amp/1.0.0/amp acp")
+        );
     }
 
     #[test]

@@ -39,7 +39,7 @@ use crate::agent::instructions::Instructions;
 use crate::agent::mcp::ToolServer;
 use crate::agent::setup::{Setup, StageUse};
 use crate::agent::{Agent, Start};
-use crate::agents::Agents;
+use crate::agents::{Agents, Known, download};
 use crate::chat::conversation::Conversation;
 use crate::chat::judge::Starts;
 use crate::chat::view::{Again, ChatView, OpenLink, StageView};
@@ -317,8 +317,28 @@ impl Launcher {
     fn spawn(&self, cwd: PathBuf, tools: Vec<McpServer>, start: Start, agent: &str) -> Agent {
         let known = self.agents.of(Some(agent));
         tracing::info!(agent = %known.id, "starts the agent");
-        let command = known.command;
-        crate::agent::spawn(move || cox_acp::launch(command), cwd, tools, start)
+        let Known {
+            id,
+            name,
+            command,
+            download,
+            ..
+        } = known;
+        let connect = move |told: &dyn Fn(String)| {
+            // The program of an agent of the registry that Cox downloads
+            // is downloaded the first time it starts.
+            let command = match download {
+                Some(download) => {
+                    let installed = download::installed(&id, &download, &|note| {
+                        told(format!("{name}: {note}"));
+                    })?;
+                    crate::agents::located(&command, &installed)
+                }
+                None => command,
+            };
+            cox_acp::launch(command)
+        };
+        crate::agent::spawn(connect, cwd, tools, start)
     }
 }
 
