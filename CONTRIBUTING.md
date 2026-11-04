@@ -376,7 +376,7 @@ The mouse resting on a step shows the code it is made at: the line
 its `at` names and a few around it, colored as a code tab draws them,
 with the function the line is in and what it calls, as the server
 says, so that the name the step bears is read beside the line it comes
-from.
+from; a click on a line of it opens the file there on a tab.
 "on the map" draws the flow on the tier
 instead, its steps numbered on the lines between the boxes, with the
 step chosen lit and the other lines dimmed. Either way the ← and →

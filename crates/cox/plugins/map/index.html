@@ -425,7 +425,6 @@
       .peek {
         position: fixed;
         z-index: 20;
-        pointer-events: none;
         max-width: min(620px, calc(100vw - 16px));
         padding: 7px 10px 8px;
         border: 1px solid var(--border);
@@ -457,6 +456,10 @@
         font-family: var(--mono);
         font-weight: 500;
         color: var(--foreground);
+        text-decoration: none;
+      }
+      .peek .where a.at:hover {
+        text-decoration: underline;
       }
       .peek pre {
         margin: 6px -10px -8px;
@@ -468,8 +471,18 @@
         overflow: hidden;
       }
       .peek .ln {
+        display: block;
         padding: 0 10px;
         white-space: pre;
+        color: inherit;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .peek .ln:hover {
+        background: color-mix(in srgb, var(--foreground) 9%, transparent);
+      }
+      .peek .ln:hover .no {
+        color: var(--link);
       }
       .peek .ln .no {
         display: inline-block;
