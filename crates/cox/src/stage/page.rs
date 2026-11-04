@@ -413,7 +413,7 @@ impl EntityInputHandler for Page {
 
 /// What the human typed in the address line, as a URL to load: a scheme is
 /// taken as given, anything else is a host on the web. Blank is nothing.
-fn address_to_url(typed: &str) -> Option<String> {
+pub(super) fn address_to_url(typed: &str) -> Option<String> {
     let typed = typed.trim();
     if typed.is_empty() {
         return None;

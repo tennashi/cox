@@ -332,9 +332,13 @@ by side: "Files", "Changes" and the plugins' pages, such as "Map" (see
 below), each a tab that the bar shows by its button, not among the
 others; then the other tabs, each with an icon of what it shows: a
 page, a Markdown file, code, a terminal, the flow of a tool call. The +
-at the bar's end opens a menu of what the human opens there: "Web page",
-a new tab, "Terminal" (see below), and "File…", which asks for a file
-and opens it as a link to it does. Their keys, Command-T, Control-` and
+at the bar's end opens a menu of what the human opens there: a line at
+its top, where Enter opens what they typed, a file of that path, from
+the chat's folder, if there is one or the line starts as a path does,
+or else a page, when the line has a scheme, or a dot or a port and no
+space, or else a command, which runs in a terminal; then "Web page", a
+new tab, "Terminal" (see below), and "File…", which asks for a file
+and opens it as a link to it does. Escape closes the menu. Their keys, Command-T, Control-` and
 Command-P (Control-T and Control-P off macOS), open them from anywhere
 in the window, on the stage of the chat shown, which opens. A page that asks for a window of its
 own, as a link with `target="_blank"` does, gets a tab instead. A link from the
