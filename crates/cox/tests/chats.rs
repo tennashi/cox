@@ -1410,6 +1410,7 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
         policy: cox::agent::setup::Policy {
             allow: Vec::new(),
             reject: vec!["Edit *".to_owned()],
+            within: None,
         },
         ..Setup::default()
     };
@@ -1590,7 +1591,8 @@ async fn a_trial_works_in_a_folder_apart_from_the_project(cx: &mut TestAppContex
     });
     assert_eq!(setup.folder.as_ref(), Some(&folder));
     assert_eq!(setup.trial, Some(Trial::Project));
-    assert!(setup.policy.allow.contains(&"Edit *".to_owned()));
+    assert!(setup.policy.allow.contains(&"edit:*".to_owned()));
+    assert_eq!(setup.policy.within.as_ref(), Some(&folder));
 
     // A trial from nothing works in an empty repository of its own.
     let empty = open_trial(cx, &workspace, &asks, Trial::Empty, 3).await;
@@ -1661,7 +1663,8 @@ async fn a_chat_becomes_a_trial_and_goes_on_there(cx: &mut TestAppContext) {
     });
     assert_eq!(setup.trial, Some(Trial::Project));
     assert_eq!(setup.folder.as_ref(), Some(&folder));
-    assert!(setup.policy.allow.contains(&"Edit *".to_owned()));
+    assert!(setup.policy.allow.contains(&"edit:*".to_owned()));
+    assert_eq!(setup.policy.within.as_ref(), Some(&folder));
 
     // A trial is not made a trial again.
     let again = start(cx).await.unwrap();

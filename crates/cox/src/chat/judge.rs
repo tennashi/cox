@@ -55,33 +55,31 @@ const PROTOCOL: &str = "End every reply with one line of its own: `PASS` when th
 /// decides the goal.
 const COMMAND: &str = "COMMAND:";
 
-/// The titles of the permission requests the judge's agent may go on
-/// with, as `claude-agent-acp` titles them: reading, searching, and
-/// running what reads or tests.
+/// The permission requests the judge's agent may go on with: reading and
+/// searching, by ACP's kinds of tool, and running what reads or tests,
+/// commands whose titles, as agents title them, are the command.
 pub(crate) const ALLOWED: &[&str] = &[
-    "Read *",
-    "Glob *",
-    "Grep *",
-    "LS *",
-    "ls*",
-    "cat *",
-    "head *",
-    "tail *",
-    "find *",
-    "rg *",
-    "grep *",
-    "git status*",
-    "git diff*",
-    "git log*",
-    "git show*",
-    "cargo check*",
-    "cargo test*",
-    "cargo clippy*",
-    "cargo xtask ci*",
-    "npm test*",
-    "pytest*",
-    "make test*",
-    "go test*",
+    "read:*",
+    "search:*",
+    "execute:ls*",
+    "execute:cat *",
+    "execute:head *",
+    "execute:tail *",
+    "execute:find *",
+    "execute:rg *",
+    "execute:grep *",
+    "execute:git status*",
+    "execute:git diff*",
+    "execute:git log*",
+    "execute:git show*",
+    "execute:cargo check*",
+    "execute:cargo test*",
+    "execute:cargo clippy*",
+    "execute:cargo xtask ci*",
+    "execute:npm test*",
+    "execute:pytest*",
+    "execute:make test*",
+    "execute:go test*",
 ];
 
 /// How a judge's reply judges the goal.
@@ -179,6 +177,7 @@ pub fn setup(goal: &str, stance: &str) -> Setup {
         policy: Policy {
             allow: ALLOWED.iter().map(|&title| title.to_owned()).collect(),
             reject: Vec::new(),
+            within: None,
         },
         folder: None,
         trial: None,
@@ -290,7 +289,10 @@ impl Judge {
 
 #[cfg(test)]
 mod tests {
+    use cox_acp::ToolKind;
+
     use super::*;
+    use crate::agent::setup::{Asked, Decision};
 
     #[test]
     fn the_verdict_is_the_replys_last_line() {
@@ -355,16 +357,26 @@ mod tests {
         assert!(context.ends_with("The goal:\n\nThe greeting names the user.\n"));
         assert_eq!(setup.tools, Some(Vec::new()));
         assert_eq!(setup.stage, StageUse::Look);
+        let decide = |title, kind| {
+            setup.policy.decide(Asked {
+                title,
+                kind: Some(kind),
+                locations: &[],
+            })
+        };
         assert_eq!(
-            setup.policy.decide("Read src/main.rs"),
-            Some(crate::agent::setup::Decision::Allow)
+            decide("Read src/main.rs", ToolKind::Read),
+            Some(Decision::Allow)
         );
+        assert_eq!(decide("Find *.rs", ToolKind::Search), Some(Decision::Allow));
         assert_eq!(
-            setup.policy.decide("cargo test --workspace"),
-            Some(crate::agent::setup::Decision::Allow)
+            decide("cargo test --workspace", ToolKind::Execute),
+            Some(Decision::Allow)
         );
-        assert_eq!(setup.policy.decide("Edit src/main.rs"), None);
-        assert_eq!(setup.policy.decide("cargo publish"), None);
+        assert_eq!(decide("Edit src/main.rs", ToolKind::Edit), None);
+        assert_eq!(decide("cargo publish", ToolKind::Execute), None);
+        // A command's title that is not a command's call.
+        assert_eq!(decide("cargo test", ToolKind::Other), None);
     }
 
     #[test]

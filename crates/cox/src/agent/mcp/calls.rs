@@ -368,14 +368,20 @@ fn open_chat_tool() -> Value {
                 "allow": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Patterns of the titles of permission requests to allow \
-                        once in the human's place, such as \"Read *\" or \"cargo *\".",
+                    "description": "Patterns of the permission requests to allow once in \
+                        the human's place: of their titles, as the agent titles its calls, \
+                        where * stands for any run of characters, or, after the name of one \
+                        of ACP's kinds of tool (read, edit, delete, move, search, execute, \
+                        think, fetch, switch_mode, other) and a colon, of the titles of the \
+                        calls of that kind, such as \"read:*\", \"search:*\" or \
+                        \"execute:cargo test*\".",
                 },
                 "reject": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Patterns of the titles of permission requests to reject \
-                        once in the human's place, such as \"Edit *\".",
+                    "description": "Patterns of the permission requests to reject once in \
+                        the human's place, written as for allow, such as \"edit:*\" or \
+                        \"execute:git push*\"; a request both match is rejected.",
                 },
                 "goal": {
                     "type": "string",
@@ -783,6 +789,7 @@ async fn open_chat(
         policy: Policy {
             allow: strings("allow")?.unwrap_or_default(),
             reject: strings("reject")?.unwrap_or_default(),
+            within: None,
         },
         folder: None,
         trial: None,
@@ -1424,6 +1431,7 @@ mod tests {
                 policy: Policy {
                     allow: ["Read *", "cargo *"].map(str::to_owned).to_vec(),
                     reject: ["Edit *"].map(str::to_owned).to_vec(),
+                    within: None,
                 },
                 folder: None,
                 trial: None,

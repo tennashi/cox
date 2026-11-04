@@ -5,14 +5,22 @@
 //! chat the human opens has no setup: its agent gets every tool, and the
 //! human answers every request.
 //!
-//! The policy answers the agent's permission requests by their titles: a
-//! request whose title matches a pattern in `allow` is allowed once, one
+//! The policy answers the agent's permission requests by what they ask
+//! for: a request that matches a pattern in `allow` is allowed once, one
 //! that matches a pattern in `reject` is rejected once, and the human is
-//! asked about the rest. A `*` in a pattern matches any run of
-//! characters; the rest matches as written. The title is the agent's, as
-//! it shows in the conversation.
+//! asked about the rest. A pattern matches the request's title, the
+//! agent's, as it shows in the conversation, where a `*` matches any run
+//! of characters and the rest matches as written. A pattern that starts
+//! with the name of one of ACP's kinds of tool and a `:`, as `edit:*` or
+//! `execute:cargo test*`, matches only a request of that kind, whose
+//! title matches the rest, so that a policy can say what a call does
+//! however the agent titles it. A policy can also keep the calls that
+//! change files to a folder: one it allows is allowed only when every
+//! file the agent says it works on is in the folder.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
+
+use cox_acp::ToolKind;
 
 use serde::{Deserialize, Serialize};
 
@@ -53,15 +61,45 @@ pub enum StageUse {
     Look,
 }
 
-/// What answers permission requests in the human's place, by their
-/// titles.
+/// What answers permission requests in the human's place, by what they
+/// ask for.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Policy {
-    /// Patterns of the titles to allow.
+    /// Patterns of the requests to allow.
     pub allow: Vec<String>,
-    /// Patterns of the titles to reject. A title both match is rejected.
+    /// Patterns of the requests to reject. A request both match is
+    /// rejected.
     pub reject: Vec<String>,
+    /// The folder that the calls changing files, which `allow` allows, are
+    /// kept to, if any: such a call that works on a file elsewhere, or
+    /// does not say which files it works on, is asked of the human.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub within: Option<PathBuf>,
+}
+
+/// A permission request, as a policy reads it: what the agent said of the
+/// call it asks to make.
+#[derive(Clone, Copy, Debug)]
+pub struct Asked<'a> {
+    /// The call's title, empty when the agent gave none.
+    pub title: &'a str,
+    /// What kind of tool the call is, if the agent said.
+    pub kind: Option<ToolKind>,
+    /// The files the call works on, as the agent said.
+    pub locations: &'a [PathBuf],
+}
+
+impl<'a> Asked<'a> {
+    /// A request that says only its title.
+    #[must_use]
+    pub fn titled(title: &'a str) -> Self {
+        Self {
+            title,
+            kind: None,
+            locations: &[],
+        }
+    }
 }
 
 /// What a policy says of a permission request.
@@ -102,18 +140,53 @@ impl Setup {
 }
 
 impl Policy {
-    /// What the policy says of a permission request titled `title`, or
-    /// `None` when it says nothing, and the human is to be asked.
+    /// What the policy says of the permission request `asked`, or `None`
+    /// when it says nothing, and the human is to be asked.
     #[must_use]
-    pub fn decide(&self, title: &str) -> Option<Decision> {
-        if self.reject.iter().any(|pattern| matches(pattern, title)) {
+    pub fn decide(&self, asked: Asked<'_>) -> Option<Decision> {
+        if self.reject.iter().any(|pattern| answers(pattern, asked)) {
             Some(Decision::Reject)
-        } else if self.allow.iter().any(|pattern| matches(pattern, title)) {
+        } else if self.allow.iter().any(|pattern| answers(pattern, asked)) && self.keeps(asked) {
             Some(Decision::Allow)
         } else {
             None
         }
     }
+
+    /// Whether `asked` keeps to the policy's folder: it changes no files,
+    /// as far as the agent said, or every file it says it works on is in
+    /// the folder, or the policy keeps calls to none.
+    fn keeps(&self, asked: Asked<'_>) -> bool {
+        let Some(folder) = &self.within else {
+            return true;
+        };
+        if !asked.kind.is_some_and(ToolKind::changes_files) {
+            return true;
+        }
+        !asked.locations.is_empty() && asked.locations.iter().all(|path| inside(path, folder))
+    }
+}
+
+/// Whether `pattern` matches `asked`: its title, and its kind when the
+/// pattern names one.
+fn answers(pattern: &str, asked: Asked<'_>) -> bool {
+    let kinded = pattern
+        .split_once(':')
+        .and_then(|(name, rest)| Some((ToolKind::named(name)?, rest)));
+    match kinded {
+        Some((kind, rest)) => asked.kind == Some(kind) && matches(rest, asked.title),
+        None => matches(pattern, asked.title),
+    }
+}
+
+/// Whether `path` is in `folder`, as written: an absolute path under it
+/// that does not climb out of it with `..`.
+fn inside(path: &Path, folder: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|component| component == Component::ParentDir)
+        && path.starts_with(folder)
 }
 
 /// Whether `text` is what `pattern` says, where `*` stands for any run
@@ -151,8 +224,9 @@ mod tests {
             tools: Some(["show_markdown", "show_file"].map(str::to_owned).to_vec()),
             stage: StageUse::Look,
             policy: Policy {
-                allow: ["Read *", "grep *"].map(str::to_owned).to_vec(),
+                allow: ["read:*", "grep *"].map(str::to_owned).to_vec(),
                 reject: ["Edit *", "Write *"].map(str::to_owned).to_vec(),
+                within: Some("/trials/greet-1".into()),
             },
             folder: Some("/trials/greet-1".into()),
             trial: Some(Trial::Project),
@@ -170,6 +244,15 @@ mod tests {
                 .policy
                 .reject,
             ["Edit *"]
+        );
+        // A policy kept before it could keep calls to a folder keeps them
+        // to none.
+        assert_eq!(
+            Setup::from_json(r#"{"policy":{"allow":["Edit *"]}}"#)
+                .unwrap()
+                .policy
+                .within,
+            None
         );
         assert!(Setup::from_json("not json").is_err());
     }
@@ -198,23 +281,114 @@ mod tests {
                 .map(str::to_owned)
                 .to_vec(),
             reject: ["Edit *", "cargo publish*"].map(str::to_owned).to_vec(),
+            within: None,
         };
-        assert_eq!(policy.decide("Read src/main.rs"), Some(Decision::Allow));
-        assert_eq!(policy.decide("cargo xtask ci"), Some(Decision::Allow));
-        assert_eq!(policy.decide("git push"), Some(Decision::Allow));
-        assert_eq!(policy.decide("git push origin main"), Some(Decision::Allow));
-        assert_eq!(policy.decide("Write lib.rs"), Some(Decision::Allow));
-        assert_eq!(policy.decide("ls"), Some(Decision::Allow));
-        assert_eq!(policy.decide("Edit src/main.rs"), Some(Decision::Reject));
+        let decide = |title| policy.decide(Asked::titled(title));
+        assert_eq!(decide("Read src/main.rs"), Some(Decision::Allow));
+        assert_eq!(decide("cargo xtask ci"), Some(Decision::Allow));
+        assert_eq!(decide("git push"), Some(Decision::Allow));
+        assert_eq!(decide("git push origin main"), Some(Decision::Allow));
+        assert_eq!(decide("Write lib.rs"), Some(Decision::Allow));
+        assert_eq!(decide("ls"), Some(Decision::Allow));
+        assert_eq!(decide("Edit src/main.rs"), Some(Decision::Reject));
         // Rejected before allowed.
+        assert_eq!(decide("cargo publish --dry-run"), Some(Decision::Reject));
+        assert_eq!(decide("ls -l"), None);
+        assert_eq!(decide("Write x.txt"), None);
+        assert_eq!(decide("Readme"), None);
+        assert_eq!(Policy::default().decide(Asked::titled("anything")), None);
+    }
+
+    #[test]
+    fn a_pattern_that_names_a_kind_matches_only_that_kind() {
+        let policy = Policy {
+            allow: ["read:*", "execute:cargo test*", "edit:*.md"]
+                .map(str::to_owned)
+                .to_vec(),
+            reject: vec!["delete:*".to_owned()],
+            within: None,
+        };
+        let decide = |title, kind| {
+            policy.decide(Asked {
+                title,
+                kind,
+                locations: &[],
+            })
+        };
+        // Whatever the agent titles it.
         assert_eq!(
-            policy.decide("cargo publish --dry-run"),
+            decide("View notes", Some(ToolKind::Read)),
+            Some(Decision::Allow)
+        );
+        assert_eq!(decide("", Some(ToolKind::Read)), Some(Decision::Allow));
+        assert_eq!(
+            decide("cargo test --workspace", Some(ToolKind::Execute)),
+            Some(Decision::Allow)
+        );
+        assert_eq!(decide("cargo test", Some(ToolKind::Other)), None);
+        assert_eq!(decide("cargo test", None), None);
+        assert_eq!(decide("cargo build", Some(ToolKind::Execute)), None);
+        assert_eq!(
+            decide("Edit notes.md", Some(ToolKind::Edit)),
+            Some(Decision::Allow)
+        );
+        assert_eq!(decide("Edit main.rs", Some(ToolKind::Edit)), None);
+        assert_eq!(
+            decide("Remove notes.md", Some(ToolKind::Delete)),
             Some(Decision::Reject)
         );
-        assert_eq!(policy.decide("ls -l"), None);
-        assert_eq!(policy.decide("Write x.txt"), None);
-        assert_eq!(policy.decide("Readme"), None);
-        assert_eq!(Policy::default().decide("anything"), None);
+        // A name before a `:` that is no kind is part of the title.
+        let titled = Policy {
+            allow: vec!["Note: *".to_owned()],
+            ..Policy::default()
+        };
+        assert_eq!(
+            titled.decide(Asked::titled("Note: hi")),
+            Some(Decision::Allow)
+        );
+    }
+
+    #[test]
+    fn a_policy_keeps_the_calls_that_change_files_to_its_folder() {
+        let policy = Policy {
+            allow: ["edit:*", "move:*", "read:*"].map(str::to_owned).to_vec(),
+            reject: Vec::new(),
+            within: Some("/trials/scratch-1".into()),
+        };
+        let decide = |kind, locations: &[&str]| {
+            let locations: Vec<PathBuf> = locations.iter().map(PathBuf::from).collect();
+            policy.decide(Asked {
+                title: "Change it",
+                kind: Some(kind),
+                locations: &locations,
+            })
+        };
+        assert_eq!(
+            decide(ToolKind::Edit, &["/trials/scratch-1/notes.md"]),
+            Some(Decision::Allow)
+        );
+        assert_eq!(
+            decide(
+                ToolKind::Move,
+                &["/trials/scratch-1/a.md", "/trials/scratch-1/b/a.md"]
+            ),
+            Some(Decision::Allow)
+        );
+        // Elsewhere, partly elsewhere, or nowhere it says.
+        assert_eq!(decide(ToolKind::Edit, &["/home/me/notes.md"]), None);
+        assert_eq!(
+            decide(ToolKind::Move, &["/trials/scratch-1/a.md", "/home/me/a.md"]),
+            None
+        );
+        assert_eq!(decide(ToolKind::Edit, &[]), None);
+        assert_eq!(decide(ToolKind::Edit, &["/trials/scratch-1/../x.md"]), None);
+        assert_eq!(decide(ToolKind::Edit, &["/trials/scratch-10/x.md"]), None);
+        assert_eq!(decide(ToolKind::Edit, &["notes.md"]), None);
+        // A call that changes no files goes anywhere.
+        assert_eq!(
+            decide(ToolKind::Read, &["/home/me/notes.md"]),
+            Some(Decision::Allow)
+        );
     }
 
     #[test]

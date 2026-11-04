@@ -114,9 +114,10 @@ command's output, and when it passes the chat notes so and waits for
 the human; a reply with no verdict counts as a fail. The judge is told
 to read the project and run what reads or tests it, but to change
 nothing, and gets none of Cox's tools, nor the stage's; of its
-permission requests, Cox allows those that read, search, or run the
-usual tests (`Read *`, `Grep *`, `git diff*`, `cargo test*`, and so
-on), and cancels the rest, since no human answers for it. The judge
+permission requests, Cox allows those that read or search, by the kind
+of tool ACP says the call is, and those that run the usual tests
+(`execute:git diff*`, `execute:cargo test*`, and so on), and cancels
+the rest, since no human answers for it. The judge
 keeps one session while the goal lasts, so it remembers what it looked
 at, until the goal changes or Cox quits. A `COX.goal.md` in the
 project's folder replaces what the judge is told it is, for a project
@@ -138,16 +139,22 @@ the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `run_command`,
 `open_chat`, `wait_chat`, `propose_goal`, `start_trial`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
-`allow` and `reject`, patterns of the titles of the permission requests
-Cox answers in the human's place, as `Edit *` or `cargo test*`, where
-`*` stands for any run of characters, a title both match being rejected,
-and the rest asked of the human as usual, with the conversation saying
-which Cox answered; and `goal`, what the chat works until it is met,
+`allow` and `reject`, patterns of the permission requests Cox answers
+in the human's place, a request both match being rejected, and the
+rest asked of the human as usual, with the conversation saying which
+Cox answered; and `goal`, what the chat works until it is met,
 as "Set goal…" takes it: `$ ` and a command, or words; and `trial`,
 which makes the chat a trial, from the project (`project`) or from
-nothing (`empty`). The titles are
-the agent's, as the conversation shows them: `claude-agent-acp` titles a request after the
-tool and what it works on, as `Edit src/main.rs` or `cargo xtask ci`. A
+nothing (`empty`). A pattern matches the title of the call the request
+is for, where `*` stands for any run of characters: the agent's title,
+as the conversation shows it, as `Edit src/main.rs`. Since each agent
+titles its calls its own way, a pattern can start with one of the kinds
+of tool ACP sorts the calls into, whatever the agent names its tools,
+and a `:`: `read`, `edit`, `delete`, `move`, `search`, `execute`,
+`think`, `fetch`, `switch_mode` or `other`. It then matches the calls
+of that kind whose titles match the rest, as `edit:*` for every edit,
+or `execute:cargo test*` for a command whose title, as agents title
+commands, is the command. A
 chat the human opens is set up with none of this: its agent gets every
 tool, and the human answers every request. Which chat opened a chat, and
 how its agent is set up, last across runs with the rest of the chat.
@@ -161,8 +168,11 @@ what it tries, and the row marks the chat as a trial. `trial` in
 ways side by side, one trial each. A trial's agent works in a
 folder Cox makes for it in `trials`, beside the chats' database (see
 [The stage](#the-stage)), and changes and tests the files there
-without asking the human, the policy allowing edits and what the judge
-of a goal may run. A trial from the project works in a Git worktree of
+without asking the human, the policy allowing the calls that edit,
+delete or move files (`edit:*`, `delete:*`, `move:*`) when every file
+the agent says the call works on is in the trial's folder, and what
+the judge of a goal may run; a call that changes files elsewhere, or
+does not say which, is asked of the human. A trial from the project works in a Git worktree of
 the project's last commit, so the project has to be in a Git
 repository; a trial from nothing works in an empty folder, `scratch-`
 and a number, made a Git repository of its own, for a project of any
@@ -591,7 +601,8 @@ is), `ask` (ACP's `session/request_permission`, with `then`, the steps
 for each option chosen, by its `optionId`, or `cancelled`), `call` (a
 tool of an MCP server Cox hands the agent, `cox` unless `server` says
 another, with `arguments`), `sleep` (milliseconds), `stderr`, and
-`fail`. In a step, `{result}` stands for what the last call answered,
+`fail`. In a step, `{cwd}` stands for the folder the session works in,
+as Cox gave it, `{result}` for what the last call answered,
 and a value that is just `"{result:number after as chat }"` for the
 number after `as chat ` in it, as `open_chat` answers, to give
 `wait_chat`. The turn ends with its `stop`, `end_turn` unless it says

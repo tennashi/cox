@@ -28,8 +28,8 @@ use agent_client_protocol::schema::v1::{
     PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
     RequestPermissionRequest, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
     SessionId, SessionInfoUpdate, SessionNotification, SessionResumeCapabilities, SessionUpdate,
-    StopReason, TextContent, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields,
+    StopReason, TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Result};
 use tokio::sync::Notify;
@@ -372,8 +372,10 @@ pub const NEW_TEXT: &str = "one\n2\nthree\n";
 /// What `ls` prints.
 pub const LS_OUTPUT: &str = "x.txt\ny.txt";
 
-/// Announces a tool call to edit `x.txt`, showing the change, and asks
-/// permission to make it, offering to allow or reject it once.
+/// Announces a tool call to edit `x.txt`, of ACP's kind `edit`, showing
+/// the change, and asks permission to make it, offering to allow or
+/// reject it once. The request leaves the kind and the file out, as
+/// `claude-agent-acp`'s do: they were told with the call.
 async fn ask_permission(
     cx: &ConnectionTo<Client>,
     session: &SessionId,
@@ -385,7 +387,12 @@ async fn ask_permission(
     };
     cx.send_notification(SessionNotification::new(
         session.clone(),
-        SessionUpdate::ToolCall(ToolCall::new("call-1", "Edit x.txt").content(change())),
+        SessionUpdate::ToolCall(
+            ToolCall::new("call-1", "Edit x.txt")
+                .kind(ToolKind::Edit)
+                .locations(vec![ToolCallLocation::new("/work/x.txt")])
+                .content(change()),
+        ),
     ))?;
     let request = RequestPermissionRequest::new(
         session.clone(),
