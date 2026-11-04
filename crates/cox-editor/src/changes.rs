@@ -145,21 +145,7 @@ impl Diff {
 /// When `folder` is not in a Git repository, or Git cannot tell what
 /// changed, with what Git said.
 pub fn read(folder: &Path) -> Result<Diff, String> {
-    let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
-    let empty = git(&top, &["hash-object", "-t", "tree", "/dev/null"])?;
-    let empty = empty.trim();
-    let (since, from) = if let Some(start) = commit(&top, START) {
-        let since = if start == empty {
-            Since::Nothing
-        } else {
-            Since::Start(short(&start))
-        };
-        (since, start)
-    } else if let Some(head) = commit(&top, "HEAD") {
-        (Since::Head(short(&head)), head)
-    } else {
-        (Since::Nothing, empty.to_owned())
-    };
+    let (top, since, from) = since(folder)?;
     let patch = git(
         &top,
         &[
@@ -186,6 +172,55 @@ pub fn read(folder: &Path) -> Result<Diff, String> {
     );
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(Diff { top, since, files })
+}
+
+/// How many files changed in the repository `folder` is in, as [`read`]
+/// counts them, without reading what changed in each.
+///
+/// # Errors
+///
+/// When `folder` is not in a Git repository, or Git cannot tell what
+/// changed, with what Git said.
+pub fn count(folder: &Path) -> Result<usize, String> {
+    let (top, _, from) = since(folder)?;
+    let names = git(
+        &top,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--find-renames",
+            "--name-only",
+            "-z",
+            &from,
+            "--",
+        ],
+    )?;
+    let untracked = git(&top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    Ok([names, untracked]
+        .iter()
+        .map(|listed| listed.split('\0').filter(|path| !path.is_empty()).count())
+        .sum())
+}
+
+/// The top of the worktree `folder` is in, what its files changed since,
+/// and the commit or tree that is, for Git to tell what changed from it.
+fn since(folder: &Path) -> Result<(PathBuf, Since, String), String> {
+    let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
+    let empty = git(&top, &["hash-object", "-t", "tree", "/dev/null"])?;
+    let empty = empty.trim();
+    let (since, from) = if let Some(start) = commit(&top, START) {
+        let since = if start == empty {
+            Since::Nothing
+        } else {
+            Since::Start(short(&start))
+        };
+        (since, start)
+    } else if let Some(head) = commit(&top, "HEAD") {
+        (Since::Head(short(&head)), head)
+    } else {
+        (Since::Nothing, empty.to_owned())
+    };
+    Ok((top, since, from))
 }
 
 /// Marks where a trial starts in the worktree at `folder`: at its last
@@ -492,6 +527,7 @@ mod tests {
         let diff = read(&folder).unwrap();
         let paths: Vec<_> = diff.files.iter().map(|file| file.path.clone()).collect();
         assert_eq!(paths, [PathBuf::from(".gitignore"), PathBuf::from("b.txt")]);
+        assert_eq!(count(&folder), Ok(2));
         let file = &diff.files[1];
         assert_eq!(file.how, How::Added);
         assert_eq!(file.added, 2);
@@ -528,6 +564,7 @@ mod tests {
             ]
         );
         assert_eq!(diff.counts(), (0, 1));
+        assert_eq!(count(&folder), Ok(2));
     }
 
     #[test]
@@ -557,6 +594,7 @@ mod tests {
         let paths: Vec<_> = diff.files.iter().map(|file| file.path.clone()).collect();
         assert_eq!(paths, [PathBuf::from("a.txt"), PathBuf::from("b.txt")]);
         assert!(diff.files.iter().all(|file| file.how == How::Added));
+        assert_eq!(count(&folder), Ok(2));
     }
 
     #[test]

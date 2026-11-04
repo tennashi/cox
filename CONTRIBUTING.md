@@ -403,7 +403,9 @@ as Git tells it, file by file and line by line, with the files Git does
 not track yet but does not ignore: in a trial, all it changed since it
 started, what it committed too, and elsewhere what changed since the
 last commit. A click on a file, or on a line, opens the file there, as
-a link to it does. The tab follows the files as they change. The agent
+a link to it does. The tab follows the files as they change, and while
+the stage is open, its button counts the files that changed, whether
+the tab is open or not. The agent
 opens it with Cox's `show_changes` tool, to show the human what it
 made, and hears which files changed; given another folder, such as that
 of a trial it opened, the tab shows what changed there. A trial marks

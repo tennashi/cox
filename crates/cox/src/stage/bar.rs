@@ -2,12 +2,16 @@
 //! in sight, the project's files, what changed in them, and the pages of
 //! the plugins, such as the map; then the tabs of the rest, each with an
 //! icon of what it shows; and, at its end, the menu that opens another.
+//! The button of what changed counts the files that did, while the stage
+//! is open.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
+use cox_editor::changes;
 use gpui::{
-    App, Context, Div, PathPromptOptions, SharedString, Stateful, Window, deferred, div,
-    prelude::*, px, rgb,
+    App, Context, Div, FontWeight, PathPromptOptions, SharedString, Stateful, Task, Window,
+    deferred, div, prelude::*, px, rgb,
 };
 
 use super::code::Code;
@@ -16,7 +20,7 @@ use super::tab::{Tab, TabContent};
 use super::{Stage, TAB_WIDTH, TITLE_LENGTH};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::theme::{
-    BORDER, BORDER_STRONG, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED,
+    ACCENT, BORDER, BORDER_STRONG, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED,
 };
 
 /// How tall a view's button is, and a tab, and how round each is.
@@ -24,6 +28,10 @@ const VIEW_HEIGHT: f32 = 28.;
 const TAB_HEIGHT: f32 = 32.;
 const VIEW_RADIUS: f32 = 9.;
 const TAB_RADIUS: f32 = 10.;
+
+/// How often the bar counts the files that changed, as the tab of what
+/// changed looks again.
+const COUNT_EVERY: Duration = Duration::from_secs(2);
 
 /// A view of the project that the bar keeps in sight, apart from the tabs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +88,12 @@ impl Stage {
             .pb(px(8.))
             .pl(px(12.))
             .pr(px(10.))
-            .child(Self::render_views(shown.as_ref(), plugins, cx))
+            .child(Self::render_views(
+                shown.as_ref(),
+                plugins,
+                self.changed,
+                cx,
+            ))
             .child(
                 div()
                     .flex_shrink_0()
@@ -130,6 +143,7 @@ impl Stage {
     fn render_views(
         shown: Option<&View>,
         plugins: Vec<Plugin>,
+        changed: Option<usize>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let button = |id: SharedString, view: View, label: SharedString, glyph: Icon| {
@@ -193,6 +207,14 @@ impl Stage {
                     "Changes".into(),
                     Icon::Changes,
                 )
+                .children(changed.filter(|&count| count > 0).map(|count| {
+                    div()
+                        .debug_selector(|| "changed-count".to_owned())
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(ACCENT))
+                        .child(count.to_string())
+                }))
                 .on_click(cx.listener(|stage, _, window, cx| {
                     let cwd = stage.cwd.clone();
                     stage.show_changes(cwd, window, cx);
@@ -359,4 +381,34 @@ impl Stage {
         })
         .detach();
     }
+}
+
+/// Counts the files that changed in the project of `cx`'s stage, now and
+/// then, while the stage is open, for its button to show.
+pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        loop {
+            let Ok(open) = this.read_with(cx, |stage, cx| {
+                stage.panel.read(cx).is_open().then(|| stage.cwd.clone())
+            }) else {
+                break;
+            };
+            if let Some(cwd) = open {
+                let changed = cx
+                    .background_executor()
+                    .spawn(async move { changes::count(&cwd).ok() })
+                    .await;
+                let counted = this.update(cx, |stage, cx| {
+                    if stage.changed != changed {
+                        stage.changed = changed;
+                        cx.notify();
+                    }
+                });
+                if counted.is_err() {
+                    break;
+                }
+            }
+            cx.background_executor().timer(COUNT_EVERY).await;
+        }
+    })
 }
