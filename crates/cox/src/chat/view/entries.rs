@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use cox_core::diff::Line;
-use gpui::{AnyElement, Context, SharedString, Stateful, div, prelude::*, px, rgb};
+use gpui::{AnyElement, Context, FontWeight, SharedString, Stateful, div, prelude::*, px, rgb};
 
 use cox_core::goal::Goal;
 
@@ -26,7 +26,8 @@ use crate::chat::conversation::{
 use crate::chat::view::ChatView;
 use crate::ui::text::Writer;
 use crate::ui::theme::{
-    ACCENT, ASKING, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAILED, FOREGROUND, LINK, RAISED,
+    ACCENT, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER, BUTTON, BUTTON_HOVER,
+    CODE_FONT, DIM, FAILED, FAINT, FOREGROUND, GROUND, LINK, SURFACE,
 };
 
 /// How tall what a tool call shows grows before it scrolls on its own.
@@ -42,6 +43,112 @@ const INDENT: f32 = 16.;
 pub(super) enum Shown {
     Entry(usize),
     Work(Range<usize>),
+}
+
+/// Who says an entry, as the timeline of the conversation names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Speaker {
+    Human,
+    /// Cox, in the human's place.
+    Cox,
+    Agent,
+}
+
+impl Speaker {
+    /// Who says `entry`: none for Cox's notes, which go with whoever
+    /// spoke last.
+    fn of(entry: &Entry) -> Option<Self> {
+        match entry {
+            Entry::Human(_) => Some(Self::Human),
+            Entry::Cox(_) => Some(Self::Cox),
+            Entry::Note(_) | Entry::Switched { .. } => None,
+            _ => Some(Self::Agent),
+        }
+    }
+}
+
+/// What the timeline marks beside an entry: a speaker, by name, where
+/// they start, in their color, or what asks the human.
+enum Mark {
+    Named(SharedString, u32),
+    Asking,
+}
+
+/// The name of the agent, along the conversation: the agent the chat
+/// talked to first, until it switched to another.
+struct AgentNames {
+    now: String,
+}
+
+impl AgentNames {
+    /// The names along `entries`, of which the agent the chat talks to now
+    /// is `current`.
+    fn new(entries: &[Entry], current: String) -> Self {
+        let first = entries.iter().find_map(|entry| match entry {
+            Entry::Switched { from, .. } => Some(from.clone()),
+            _ => None,
+        });
+        Self {
+            now: first.unwrap_or(current),
+        }
+    }
+
+    fn switch(&mut self, to: &str) {
+        to.clone_into(&mut self.now);
+    }
+
+    fn now(&self) -> &str {
+        &self.now
+    }
+}
+
+/// How far right of the timeline's line what is on it starts, and where
+/// the line runs.
+const TIMELINE_INDENT: f32 = 28.;
+const LINE_LEFT: f32 = 9.;
+
+/// `element` on the timeline down the conversation's left: the line,
+/// from the first dot down, and the dot and name of `mark`, if it has one.
+fn on_timeline(first: bool, mark: Option<Mark>, element: AnyElement) -> AnyElement {
+    let (dot, name) = match mark {
+        Some(Mark::Named(name, color)) => (Some(color), Some((name, color))),
+        Some(Mark::Asking) => (Some(ASKING), None),
+        None => (None, None),
+    };
+    div()
+        .relative()
+        .pl(px(TIMELINE_INDENT))
+        .pb(px(10.))
+        .when(name.is_some() && !first, |row| row.pt(px(8.)))
+        .child(
+            div()
+                .absolute()
+                .left(px(LINE_LEFT))
+                .top(px(if first { 10. } else { 0. }))
+                .bottom_0()
+                .w(px(2.))
+                .bg(rgb(BORDER)),
+        )
+        .children(dot.map(|color| {
+            div()
+                .absolute()
+                .left(px(LINE_LEFT - 5.))
+                .top(px(if name.is_some() && !first { 12. } else { 4. }))
+                .size(px(12.))
+                .rounded_full()
+                .bg(rgb(color))
+                .border_3()
+                .border_color(rgb(SURFACE))
+        }))
+        .children(name.map(|(name, _)| {
+            div()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(FAINT))
+                .child(name)
+        }))
+        .child(element)
+        .into_any_element()
 }
 
 /// Whether `entry` is work the agent does on its way to a reply.
@@ -105,12 +212,44 @@ impl ChatView {
     /// The conversation's entries, folded as the human left them.
     pub(super) fn render_entries(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let entries = self.conversation.entries();
+        let mut agents = AgentNames::new(entries, self.agent_name());
+        let mut speaking = None;
         let mut rendered = Vec::new();
-        for shown in shown(entries) {
-            rendered.push(match shown {
-                Shown::Entry(index) => self.render_entry(index, &entries[index], cx),
+        for (place, shown) in shown(entries).into_iter().enumerate() {
+            let first = match &shown {
+                Shown::Entry(index) => *index,
+                Shown::Work(work) => work.start,
+            };
+            let entry = &entries[first];
+            if let Entry::Switched { to, .. } = entry {
+                agents.switch(to);
+            }
+            let element = match shown {
+                Shown::Entry(index) => self.render_entry(index, entry, cx),
                 Shown::Work(work) => self.render_work(work, cx),
-            });
+            };
+            let speaker = Speaker::of(entry);
+            // A speaker is named where they start, and what asks the
+            // human is marked wherever it is.
+            let asking = matches!(entry, Entry::Permission { chosen: None, .. })
+                && self.conversation.state() == State::Asking
+                && first + 1 == entries.len();
+            let starts = speaker.is_some() && speaker != speaking;
+            if speaker.is_some() {
+                speaking = speaker;
+            }
+            let mark = if asking {
+                Some(Mark::Asking)
+            } else if starts {
+                speaker.map(|speaker| match speaker {
+                    Speaker::Human => Mark::Named("YOU".into(), FOREGROUND),
+                    Speaker::Cox => Mark::Named("COX".into(), FAINT),
+                    Speaker::Agent => Mark::Named(agents.now().to_uppercase().into(), ACCENT),
+                })
+            } else {
+                None
+            };
+            rendered.push(on_timeline(place == 0, mark, element));
         }
         rendered
     }
@@ -237,20 +376,13 @@ impl ChatView {
         let mut writer = self.reading.writer(index);
         match entry {
             Entry::Human(text) => div()
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .bg(rgb(RAISED))
+                .text_size(px(15.))
                 .child(writer.plain(text, "\n\n"))
                 .into_any_element(),
             // Sent in the human's place, so drawn in theirs, but as Cox's
             // notes are.
             Entry::Cox(text) => div()
                 .debug_selector(|| format!("cox-{index}"))
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .bg(rgb(RAISED))
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
                 .child(writer.plain(text, "\n\n"))
@@ -527,32 +659,74 @@ fn render_asking(
     writer: &mut Writer,
     cx: &mut Context<ChatView>,
 ) -> AnyElement {
+    // The first option, which the human most likely answers, stands out.
     let options = options.iter().enumerate().map(|(i, name)| {
+        let first = i == 0;
         div()
             .id(("option", i))
             .debug_selector(|| format!("option-{}", i + 1))
-            .flex()
-            .gap_2()
+            .flex_1()
+            .min_w_0()
+            .h(px(34.))
             .px_2()
-            .rounded_sm()
-            .bg(rgb(BUTTON))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(10.))
+            .text_size(px(13.))
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-            .child(div().text_color(rgb(DIM)).child(format!("{}", i + 1)))
-            .child(SharedString::from(name.clone()))
+            .map(|button| {
+                if first {
+                    button
+                        .bg(rgb(ASKING))
+                        .text_color(rgb(GROUND))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .hover(|style| style.opacity(0.9))
+                } else {
+                    button
+                        .bg(rgb(ASKING_BUTTON))
+                        .text_color(rgb(FOREGROUND))
+                        .hover(|style| style.bg(rgb(ASKING_EDGE)))
+                }
+            })
+            .child(
+                div()
+                    .truncate()
+                    .child(SharedString::from(format!("{} · {name}", i + 1))),
+            )
             .on_click(cx.listener(move |view, _, _, cx| view.choose(i, cx)))
     });
     div()
         .flex()
         .flex_col()
-        .gap_2()
-        .p_2()
-        .rounded_sm()
+        .gap(px(12.))
+        .p(px(14.))
+        .rounded(px(14.))
+        .bg(rgb(ASKING_GROUND))
         .border_1()
-        .border_color(rgb(ASKING))
-        .child(line_of(index, None, ("?", ASKING), title, writer))
+        .border_color(rgb(ASKING_EDGE))
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .child(div().flex_1().min_w_0().child(line_of(
+                    index,
+                    None,
+                    ("?", ASKING),
+                    title,
+                    writer,
+                )))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(12.))
+                        .text_color(rgb(ASKING))
+                        .child("waiting for you"),
+                ),
+        )
         .children(render_content(index, content, writer))
-        .child(div().flex().flex_wrap().gap_2().children(options))
+        .child(div().flex().gap(px(6.)).children(options))
         .into_any_element()
 }
 

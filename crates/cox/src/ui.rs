@@ -20,9 +20,12 @@ pub mod selection;
 pub mod text;
 pub mod theme;
 
-use gpui::{Context, Div, Styled, actions, div, px, rgb};
+use gpui::{
+    AnyView, App, AppContext, Context, Div, IntoElement, ParentElement, Render, SharedString,
+    Styled, Window, actions, div, px, rgb,
+};
 
-use theme::{BORDER, CARD_RADIUS, SURFACE};
+use theme::{BORDER, BORDER_STRONG, CARD_RADIUS, FOREGROUND, RAISED, SURFACE, UI_FONT};
 
 actions!(
     cox,
@@ -73,4 +76,30 @@ pub fn card() -> Div {
         .border_1()
         .border_color(rgb(BORDER))
         .rounded(px(CARD_RADIUS))
+}
+
+/// What the mouse resting on a button says of it.
+struct Tip(SharedString);
+
+/// Builds the tip that says `text`, for an element's `tooltip`: what
+/// the mouse resting on it says of it.
+pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView {
+    let text = text.into();
+    move |_, cx| cx.new(|_| Tip(text.clone())).into()
+}
+
+impl Render for Tip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(BORDER_STRONG))
+            .rounded(px(8.))
+            .text_color(rgb(FOREGROUND))
+            .font_family(UI_FONT)
+            .text_size(px(12.))
+            .child(self.0.clone())
+    }
 }
