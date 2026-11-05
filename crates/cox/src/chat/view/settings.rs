@@ -1,14 +1,17 @@
-//! The agent of a chat and the settings of its session in the bar above
-//! its conversation: each a button that names the setting and what it is
-//! set to, as the agent names them, and opens a list of what it can be
-//! set to, under the groups the agent puts them in, with the one it is
-//! set to marked. A click on one sets it; a click anywhere else, its
-//! button too, closes the list. The agent comes first, listing the
-//! agents the chat can talk to, those of the ACP Registry under its name,
-//! and is chosen only while no turn runs.
+//! The agent of a chat and the settings of its session, on one pill at
+//! the right of the bar above its conversation: the agent's name, then
+//! what each setting is set to, as the agent names them. A click on the
+//! pill opens a list of the agent and the settings, each a row that names
+//! it and what it is set to; a click on a row shows, in the list's place,
+//! what it can be set to, under the groups the agent puts them in, with
+//! the one it is set to marked, and a line back to the rows. A click on
+//! one sets it; a click anywhere else, the pill too, closes the list. The
+//! agent comes first, listing the agents the chat can talk to, those of
+//! the ACP Registry under its name, and is chosen only while no turn
+//! runs.
 
 use gpui::{
-    AnchoredPositionMode, AnyElement, Context, ElementId, Focusable as _, MouseButton,
+    AnchoredPositionMode, AnyElement, Context, ElementId, Focusable as _, FontWeight, MouseButton,
     MouseDownEvent, anchored, deferred, div, point, prelude::*, px, rgb,
 };
 
@@ -17,7 +20,7 @@ use cox_core::settings::{Choice, Setting};
 use super::ChatView;
 use crate::agents::REGISTRY_GROUP;
 use crate::chat::conversation::State;
-use crate::ui::theme::{ACCENT_GROUND, BORDER_STRONG, BUTTON, DIM, RAISED};
+use crate::ui::theme::{ACCENT_GROUND, BORDER_STRONG, BUTTON, DIM, FOREGROUND, RAISED};
 
 /// How wide the list of a setting's choices is.
 const CHOICES_WIDTH: f32 = 260.;
@@ -25,13 +28,15 @@ const CHOICES_WIDTH: f32 = 260.;
 /// How tall the list of a setting's choices grows before it scrolls.
 const CHOICES_HEIGHT: f32 = 360.;
 
-/// How tall a setting's button is, which its list opens under.
-const BUTTON_HEIGHT: f32 = 20.;
+/// How tall the pill is, which the list opens under.
+const PILL_HEIGHT: f32 = 28.;
 
-/// A button of the bar, whose list of choices opens under it.
+/// What the list under the pill shows, while it is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Menu {
-    /// The agent the chat talks to.
+    /// The rows of the agent and the settings.
+    Rows,
+    /// What the agent the chat talks to can be.
     Agent,
     /// A setting of the session, by its place in the conversation's
     /// settings.
@@ -39,24 +44,100 @@ pub(super) enum Menu {
 }
 
 impl ChatView {
-    /// A button for the agent, when the chat can choose one, and for each
-    /// setting of the session, with the list of its choices under the one
-    /// that is open.
-    pub(super) fn render_settings(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// The pill of the agent and the settings of the session, with the
+    /// list under it while it is open, when there is anything to show.
+    pub(super) fn render_settings(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let agent = self.agent_setting();
+        let settings = self.conversation.settings();
+        if agent.is_none() && settings.is_empty() {
+            return None;
+        }
         let idle = matches!(self.conversation.state(), State::Idle | State::Closed);
-        self.agent_setting()
-            .map(|agent| self.render_setting(Menu::Agent, &agent, idle, cx))
-            .into_iter()
-            .chain(
-                self.conversation
-                    .settings()
+        let open = self.setting_open;
+        let summary = settings
+            .iter()
+            .map(|setting| chosen_name(setting).to_owned())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let pill = div()
+            .id("settings")
+            .debug_selector(|| "settings".to_owned())
+            .h(px(PILL_HEIGHT))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .px(px(14.))
+            .rounded_full()
+            .border_1()
+            .border_color(rgb(BUTTON))
+            .bg(rgb(RAISED))
+            .text_size(px(12.))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(BUTTON)))
+            .when(open.is_some(), |pill| pill.bg(rgb(BUTTON)))
+            .children(agent.is_some().then(|| {
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(FOREGROUND))
+                    .child(self.agent_name())
+            }))
+            .when(!summary.is_empty(), |pill| {
+                pill.child(div().text_color(rgb(DIM)).child(summary))
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                    // The press that closed the list, on the pill, leaves
+                    // it closed.
+                    let closed = view.setting_closed_at.take() == Some(event.position);
+                    view.setting_open =
+                        (!closed && view.setting_open.is_none()).then_some(Menu::Rows);
+                    // The keyboard stays in the input, as the window would
+                    // take it otherwise.
+                    window.focus(&view.input.focus_handle(cx));
+                    window.prevent_default();
+                    cx.notify();
+                }),
+            );
+        let list = open.map(|menu| match menu {
+            Menu::Rows => {
+                let mut rows: Vec<AnyElement> = agent
                     .iter()
-                    .enumerate()
-                    .map(|(index, setting)| {
-                        self.render_setting(Menu::Setting(index), setting, true, cx)
-                    }),
-            )
-            .collect()
+                    .map(|agent| Self::render_row(Menu::Agent, agent, idle, cx))
+                    .collect();
+                for (index, setting) in settings.iter().enumerate() {
+                    rows.push(Self::render_row(Menu::Setting(index), setting, true, cx));
+                }
+                Self::render_list(rows, cx)
+            }
+            Menu::Agent => match &agent {
+                Some(agent) => Self::render_choices(menu, agent, cx),
+                None => Self::render_list(Vec::new(), cx),
+            },
+            Menu::Setting(index) => match settings.get(index) {
+                Some(setting) => Self::render_choices(menu, setting, cx),
+                None => Self::render_list(Vec::new(), cx),
+            },
+        });
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .child(pill)
+                .children(list.map(|list| {
+                    // Under the pill, kept in the window, which takes it
+                    // left of the pill at the window's right edge.
+                    deferred(
+                        anchored()
+                            .position_mode(AnchoredPositionMode::Local)
+                            .position(point(px(0.), px(PILL_HEIGHT + 4.)))
+                            .snap_to_window()
+                            .child(list),
+                    )
+                    .with_priority(2)
+                }))
+                .into_any_element(),
+        )
     }
 
     /// The agent the chat talks to, as a setting whose choices are the
@@ -87,75 +168,65 @@ impl ChatView {
         })
     }
 
-    /// The button of `setting`, which `menu` says which it is, with the
-    /// list of its choices under it while it is open. A button not
-    /// `enabled` opens nothing.
-    fn render_setting(
-        &self,
+    /// The row of `setting`, which `menu` says which it is, naming it and
+    /// what it is set to, which shows its choices. A row not `enabled`
+    /// shows nothing.
+    fn render_row(
         menu: Menu,
         setting: &Setting,
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let open = self.setting_open == Some(menu);
-        let chosen = setting
-            .chosen()
-            .map_or(setting.value.as_str(), |choice| choice.name.as_str());
         let (id, selector) = match menu {
-            Menu::Agent => (ElementId::Name("agent".into()), "agent".to_owned()),
             Menu::Setting(index) => (
                 ElementId::NamedInteger("setting".into(), index as u64),
                 format!("setting-{index}"),
             ),
+            Menu::Agent | Menu::Rows => (ElementId::Name("agent".into()), "agent".to_owned()),
         };
-        let button = div()
+        div()
             .id(id)
             .debug_selector(move || selector.clone())
-            .h(px(24.))
             .flex()
             .items_center()
-            .gap_1()
-            .px(px(10.))
-            .rounded_full()
-            .bg(rgb(RAISED))
-            .text_size(px(12.))
-            .when(open, |button| button.bg(rgb(BUTTON)))
-            .when(enabled, |button| {
-                button.cursor_pointer().hover(|style| style.bg(rgb(BUTTON)))
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .when(enabled, |row| {
+                row.cursor_pointer()
+                    .hover(|style| style.bg(rgb(ACCENT_GROUND)))
             })
-            .when(!enabled, |button| button.opacity(0.5))
+            .when(!enabled, |row| row.opacity(0.5))
             .child(div().text_color(rgb(DIM)).child(setting.name.clone()))
-            .child(chosen.to_owned())
-            .child(div().text_color(rgb(DIM)).child("▾"))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_right()
+                    .child(chosen_name(setting).to_owned()),
+            )
+            .child(div().text_color(rgb(DIM)).child("›"))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                    // The press that closed the list, on its own button,
-                    // leaves it closed.
-                    let closed = view.setting_closed_at.take() == Some(event.position);
-                    view.setting_open =
-                        (enabled && !closed && view.setting_open != Some(menu)).then_some(menu);
-                    // The keyboard stays in the input, as the window would
-                    // take it otherwise.
+                cx.listener(move |view, _, window, cx| {
+                    if enabled {
+                        view.setting_open = Some(menu);
+                    }
                     window.focus(&view.input.focus_handle(cx));
                     window.prevent_default();
+                    cx.stop_propagation();
                     cx.notify();
                 }),
-            );
-        div()
-            .flex()
-            .flex_col()
-            .child(button)
-            .when(open, |column| {
-                column.child(Self::render_choices(menu, setting, cx))
-            })
+            )
             .into_any_element()
     }
 
-    /// The list of what `setting` can be set to, drawn over the
-    /// conversation, under its button.
-    fn render_choices(menu: Menu, setting: &Setting, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut list = div()
+    /// The list under the pill, holding `rows`, which a click anywhere
+    /// else closes.
+    fn render_list(rows: Vec<AnyElement>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        div()
             .id("setting-choices")
             .debug_selector(|| "setting-choices".to_owned())
             .occlude()
@@ -173,7 +244,41 @@ impl ChatView {
                 view.setting_open = None;
                 view.setting_closed_at = Some(event.position);
                 cx.notify();
-            }));
+            }))
+            .children(rows)
+    }
+
+    /// The list of what `setting` can be set to, after a line back to
+    /// the rows.
+    fn render_choices(
+        menu: Menu,
+        setting: &Setting,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let back = div()
+            .id("settings-back")
+            .debug_selector(|| "settings-back".to_owned())
+            .flex()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .text_color(rgb(DIM))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(ACCENT_GROUND)))
+            .child("‹")
+            .child(setting.name.clone())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _, window, cx| {
+                    view.setting_open = Some(Menu::Rows);
+                    window.focus(&view.input.focus_handle(cx));
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            );
+        let mut list = Self::render_list(vec![back.into_any_element()], cx);
         let mut group = None;
         for (index, choice) in setting.choices.iter().enumerate() {
             if choice.group.is_some() && choice.group != group {
@@ -221,20 +326,19 @@ impl ChatView {
                             match menu {
                                 Menu::Agent => view.choose_agent(&value, cx),
                                 Menu::Setting(_) => view.set(&id, &value, cx),
+                                Menu::Rows => {}
                             }
                             window.focus(&view.input.focus_handle(cx));
                         })),
                 );
         }
-        // Under the button, which is a line of text high.
-        let under = point(px(0.), px(BUTTON_HEIGHT));
-        deferred(
-            anchored()
-                .position_mode(AnchoredPositionMode::Local)
-                .position(under)
-                .snap_to_window()
-                .child(list),
-        )
-        .with_priority(2)
+        list
     }
+}
+
+/// The name of what `setting` is set to.
+fn chosen_name(setting: &Setting) -> &str {
+    setting
+        .chosen()
+        .map_or(setting.value.as_str(), |choice| choice.name.as_str())
 }

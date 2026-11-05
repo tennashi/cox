@@ -32,9 +32,10 @@
 //! agent goes on (see [`Conversation::checked`] and
 //! [`Conversation::judged`]).
 //!
-//! The bar above the conversation shows what the agent lets the human
-//! choose of its session, such as its model, each as it is set, and a
-//! click on one opens its choices (see [`settings`]).
+//! A pill at the right of the bar above the conversation shows the agent
+//! and what it lets the human choose of its session, such as its model,
+//! each as it is set, and a click on it opens a list of them, from which
+//! each opens its choices (see [`settings`]).
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -1506,11 +1507,12 @@ impl ChatView {
         )
     }
 
-    /// The bar above the conversation, with the settings of the session
-    /// and the button that opens and closes the stage, when there are any.
+    /// The bar above the conversation, with the button that opens and
+    /// closes the stage and the pill of the settings of the session, at
+    /// its right, when there are any.
     fn render_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let settings = self.render_settings(cx);
-        if settings.is_empty() && self.stage.is_none() {
+        if settings.is_none() && self.stage.is_none() {
             return None;
         }
         let toggle = self.stage.as_ref().map(|stage| {
@@ -1537,16 +1539,9 @@ impl ChatView {
                 .gap_2()
                 .px_3()
                 .pt_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .children(settings),
-                )
-                .children(toggle),
+                .child(div().flex_1())
+                .children(toggle)
+                .children(settings),
         )
     }
 }

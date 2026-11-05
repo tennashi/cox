@@ -1102,6 +1102,7 @@ async fn a_closed_chat_sets_its_session_as_it_was_set(cx: &mut TestAppContext) {
 
     // Closed, the chat is set as it was, and the human sets it anew, for
     // its agent to set once it starts again.
+    click(cx, "settings");
     click(cx, "setting-0");
     click(cx, "choice-0");
     assert_eq!(
@@ -1169,6 +1170,7 @@ async fn a_chat_switches_to_another_agent_which_goes_on_from_the_conversation(
     let kept = store.chats().unwrap()[0].id;
     store.keep_session(kept, "session-1").unwrap();
 
+    click(cx, "settings");
     click(cx, "agent");
     click(cx, "choice-1");
     let view = shown(cx, &workspace);
@@ -1218,6 +1220,7 @@ async fn a_chat_switched_before_anything_was_said_starts_anew(cx: &mut TestAppCo
     cx.condition(&view, |view, _| !view.conversation().settings().is_empty())
         .await;
 
+    click(cx, "settings");
     click(cx, "agent");
     click(cx, "choice-1");
     say(cx, &workspace, "hello").await;
