@@ -21,12 +21,13 @@ pub enum Icon {
     Plug,
     Plus,
     Search,
+    Stage,
     Target,
     Terminal,
 }
 
 impl Icon {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 15] = [
         Self::Changes,
         Self::Close,
         Self::Code,
@@ -39,6 +40,7 @@ impl Icon {
         Self::Plug,
         Self::Plus,
         Self::Search,
+        Self::Stage,
         Self::Target,
         Self::Terminal,
     ];
@@ -58,6 +60,7 @@ impl Icon {
             Self::Plug => "icons/plug.svg",
             Self::Plus => "icons/plus.svg",
             Self::Search => "icons/search.svg",
+            Self::Stage => "icons/stage.svg",
             Self::Target => "icons/target.svg",
             Self::Terminal => "icons/terminal.svg",
         }
@@ -78,6 +81,7 @@ impl Icon {
             Self::Plug => include_bytes!("../../assets/icons/plug.svg"),
             Self::Plus => include_bytes!("../../assets/icons/plus.svg"),
             Self::Search => include_bytes!("../../assets/icons/search.svg"),
+            Self::Stage => include_bytes!("../../assets/icons/stage.svg"),
             Self::Target => include_bytes!("../../assets/icons/target.svg"),
             Self::Terminal => include_bytes!("../../assets/icons/terminal.svg"),
         }

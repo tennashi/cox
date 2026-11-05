@@ -76,6 +76,8 @@ actions!(
         PreviousChat,
         /// Leaves the chat's name as it was.
         CancelRename,
+        /// Opens the stage of the chat shown, or closes it.
+        ToggleStage,
     ]
 );
 
@@ -114,6 +116,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-t", NewPage, Some("Workspace")),
         KeyBinding::new("ctrl-`", NewTerminal, Some("Workspace")),
         KeyBinding::new("secondary-p", OpenFile, Some("Workspace")),
+        KeyBinding::new("secondary-\\", ToggleStage, Some("Workspace")),
         KeyBinding::new("escape", CancelRename, Some(RENAMING)),
     ]);
 }
@@ -1588,11 +1591,17 @@ impl Workspace {
             )
             .child(div().flex_1())
             .children(self.render_archived(cx))
-            // The agent and the settings of the chat shown, at the right.
+            // The agent and the settings of the chat shown, at the right,
+            // and the button that opens its stage.
             .children(
                 self.shown()
                     .and_then(Chat::view)
                     .and_then(|view| view.update(cx, |view, cx| view.render_settings(cx))),
+            )
+            .children(
+                self.shown()
+                    .and_then(Chat::view)
+                    .and_then(|view| view.update(cx, |view, cx| view.render_stage_toggle(cx))),
             )
     }
 
@@ -1958,6 +1967,11 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|workspace, _: &NewTerminal, window, cx| {
                 workspace.on_stage(window, cx, Stage::new_terminal);
+            }))
+            .on_action(cx.listener(|workspace, _: &ToggleStage, window, cx| {
+                if let Some(view) = workspace.shown().and_then(|chat| chat.view.clone()) {
+                    view.update(cx, |view, cx| view.toggle_stage(window, cx));
+                }
             }))
             .on_action(cx.listener(|workspace, _: &OpenFile, window, cx| {
                 workspace.on_stage(window, cx, |_, window, cx| Stage::choose_file(window, cx));

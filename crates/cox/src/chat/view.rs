@@ -45,9 +45,9 @@ use cox_core::goal;
 use cox_core::store::Record;
 use cox_core::tabs::KeptTabs;
 use gpui::{
-    AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
-    Subscription, Task, Window, actions, div, prelude::*, px, relative, rgb,
+    AnyElement, AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollHandle, Subscription, Task, Window, actions, div, prelude::*, px, relative, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -66,7 +66,7 @@ use crate::ui::input::{self, LineInput, Submitted};
 use crate::ui::text::Reading;
 use crate::ui::theme::{
     ACCENT, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND, GAP, LINK, RAISED,
-    UI_FONT,
+    SURFACE, UI_FONT,
 };
 use crate::ui::{Copy, Panel, card, tip};
 use cox_acp::Login;
@@ -95,6 +95,10 @@ const GOAL: &str = "Goal";
 /// How long the name of the chat that opened a chat grows, in
 /// characters, in the note that says so.
 const OPENED_BY_LENGTH: usize = 40;
+
+/// How wide and tall the button that opens and closes the stage is: as
+/// tall as the pill of the settings.
+const TOGGLE_SIZE: f32 = 32.;
 
 /// Binds the keys of the conversation. Escape is the stage's while the
 /// stage has the keyboard, and the input method's while it composes.
@@ -831,7 +835,7 @@ impl ChatView {
 
     /// Opens the stage, or closes it and brings the keyboard back to the
     /// input.
-    fn toggle_stage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_stage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(stage) = &self.stage else {
             return;
         };
@@ -1520,47 +1524,46 @@ impl ChatView {
         )
     }
 
-    /// The bar above the conversation, with the button that opens and
-    /// closes the stage at its right, when the chat has a stage.
-    fn render_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let toggle = self.stage.as_ref().map(|stage| {
-            let label = if stage.panel.read(cx).is_open() {
-                "Hide stage"
-            } else {
-                "Show stage"
-            };
+    /// The button that opens and closes the stage, round as the pill of
+    /// the settings beside it, when the chat has a stage.
+    pub fn render_stage_toggle(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let stage = self.stage.as_ref()?;
+        let open = stage.panel.read(cx).is_open();
+        let key = if cfg!(target_os = "macos") {
+            "⌘\\"
+        } else {
+            "Ctrl+\\"
+        };
+        let label = if open { "Hide stage" } else { "Show stage" };
+        Some(
             div()
                 .id("toggle-stage")
                 .debug_selector(|| "toggle-stage".to_owned())
-                .px_2()
-                .rounded_sm()
-                .text_color(rgb(DIM))
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(BUTTON)).text_color(rgb(FOREGROUND)))
-                .child(label)
-                .on_click(cx.listener(|view, _, window, cx| view.toggle_stage(window, cx)))
-        });
-        toggle.map(|toggle| {
-            div()
+                .flex_shrink_0()
+                .size(px(TOGGLE_SIZE))
                 .flex()
                 .items_center()
-                .gap_2()
-                .px_3()
-                .pt_2()
-                .child(div().flex_1())
-                .child(toggle)
-        })
+                .justify_center()
+                .rounded_full()
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(if open { BUTTON } else { SURFACE }))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(BUTTON)))
+                .tooltip(tip(format!("{label} ({key})")))
+                .child(icon(Icon::Stage, 16., if open { FOREGROUND } else { DIM }))
+                .on_click(cx.listener(|view, _, window, cx| view.toggle_stage(window, cx)))
+                .into_any_element(),
+        )
     }
 }
 
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let bar = self.render_bar(cx);
         let conversation = div()
             .size_full()
             .flex()
             .flex_col()
-            .children(bar)
             .child(div().flex_1().min_h_0().child(self.render_conversation(cx)));
         let root = div()
             .size_full()

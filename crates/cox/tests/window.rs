@@ -79,11 +79,20 @@ impl Host {
 impl Render for Host {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let settings = self.chat.update(cx, |chat, cx| chat.render_settings(cx));
+        let toggle = self
+            .chat
+            .update(cx, |chat, cx| chat.render_stage_toggle(cx));
         div()
             .size_full()
             .flex()
             .flex_col()
-            .child(div().flex().justify_end().children(settings))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .children(settings)
+                    .children(toggle),
+            )
             .child(div().flex_1().min_h_0().child(self.chat.clone()))
     }
 }
