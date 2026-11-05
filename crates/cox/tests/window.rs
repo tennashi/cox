@@ -301,9 +301,7 @@ fn keeps_pasted_line_breaks(cx: &mut TestAppContext) {
 /// The address line holds one line.
 #[gpui::test]
 fn an_input_of_one_line_pastes_line_breaks_as_spaces(cx: &mut TestAppContext) {
-    cx.update(cox::ui::input::bind_keys);
-    let (input, cx) = cx.add_window_view(|_, cx| LineInput::new(cx));
-    cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
+    let (input, cx) = one_line_input(cx);
 
     cx.write_to_clipboard(ClipboardItem::new_string("one\ntwo\r\nthree".to_owned()));
     cx.simulate_keystrokes("secondary-v");
@@ -312,6 +310,77 @@ fn an_input_of_one_line_pastes_line_breaks_as_spaces(cx: &mut TestAppContext) {
         input.read_with(cx, |input, _| input.text().to_owned()),
         "one two three"
     );
+}
+
+/// An input of one line, focused, on its own in a window.
+fn one_line_input(cx: &mut TestAppContext) -> (Entity<LineInput>, &mut VisualTestContext) {
+    cx.update(cox::ui::input::bind_keys);
+    let (input, cx) = cx.add_window_view(|_, cx| LineInput::new(cx));
+    cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
+    (input, cx)
+}
+
+/// Clicks at `position` as the `count`th click of a run of quick ones.
+fn click_times(cx: &mut VisualTestContext, position: gpui::Point<Pixels>, count: usize) {
+    for click_count in 1..=count {
+        cx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::none(),
+            click_count,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::none(),
+            click_count,
+        });
+    }
+}
+
+/// A double click selects the word under the mouse, and a triple click
+/// the line.
+#[gpui::test]
+fn a_double_click_selects_a_word_and_a_triple_click_the_line(cx: &mut TestAppContext) {
+    let (input, cx) = one_line_input(cx);
+    let text = |cx: &mut VisualTestContext| input.read_with(cx, |input, _| input.text().to_owned());
+    cx.simulate_input("hello world");
+    // Over the "h".
+    let first = point(px(2.), px(4.));
+
+    click_times(cx, first, 2);
+    cx.simulate_keystrokes("secondary-x");
+    assert_eq!(text(cx), " world");
+    assert_eq!(clipboard(cx), Some("hello".to_owned()));
+
+    click_times(cx, first, 3);
+    cx.simulate_keystrokes("secondary-x");
+    assert_eq!(text(cx), "");
+    assert_eq!(clipboard(cx), Some(" world".to_owned()));
+}
+
+/// The keys of the platform move and delete by words, and go to the start
+/// of the text.
+#[gpui::test]
+fn moves_and_deletes_by_words(cx: &mut TestAppContext) {
+    let (word, top) = if cfg!(target_os = "macos") {
+        ("alt", "cmd-up")
+    } else {
+        ("ctrl", "ctrl-home")
+    };
+    let (input, cx) = one_line_input(cx);
+    cx.simulate_input("one two three");
+
+    cx.simulate_keystrokes(&format!("{word}-left {word}-backspace"));
+    cx.simulate_keystrokes(&format!("{word}-shift-right secondary-x {top}"));
+    cx.simulate_input("X");
+
+    assert_eq!(
+        input.read_with(cx, |input, _| input.text().to_owned()),
+        "Xone "
+    );
+    assert_eq!(clipboard(cx), Some("three".to_owned()));
 }
 
 #[gpui::test]

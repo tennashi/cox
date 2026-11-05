@@ -318,6 +318,19 @@ or its number, answers. The input, while it is empty, tells what the
 chat waits for, while it is not the next line to send, or else that it
 waits for a reply.
 
+The inputs, the chat's and the others, such as the address of a page,
+edit as a text field of the platform does: the cursor over them is an
+I-beam; a double click selects the word under the mouse, or the run of
+spaces or punctuation, and a triple click the line, a drag from either
+going on by words or lines; Option-Left and Option-Right go a word back
+and on, Command-Left and Command-Right to the start and the end of the
+row, Command-Up and Command-Down to those of the text, Option-Backspace
+and Option-Delete take out a word, and Command-Backspace the row up to
+the cursor, with Shift selecting as they go, and Control-A, Control-E
+and Control-K as in Emacs; off macOS, Control does what Option does,
+and Control-Home and Control-End go to the start and the end of the
+text.
+
 An agent can run commands of its own, as `claude-agent-acp` runs Claude
 Code's `/compact` and `/review`, when a line starts with `/` and the
 command's name, with what follows the name as the command's input, and
