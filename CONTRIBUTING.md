@@ -373,7 +373,13 @@ wiki" in the menu of the right button asks, in the human's place, as
 the workflow's `wiki/save.md` says, or else Cox's own
 ([`workflow/wiki/save.md`](crates/cox/src/workflow/wiki/save.md)): to
 keep the decisions and why, what failed and why, and what a tool needs,
-not how the code works, and no secrets.
+not how the code works, and no secrets. What holds only of one project,
+as of its own people, customers or plans, the agent keeps in it, with
+`wiki_write`'s `keep_in_project`: the page's properties, the front
+matter Obsidian keeps between `---` lines at its top, then say
+`only: <project>`, by the project's name, and only that project's chats
+find the page, read it, see it in the index, or write it. The human
+can write the line themselves too.
 
 "Wiki" on the stage's bar, a plugin (see below), at `cox://wiki/`,
 shows the wiki to the human: its pages, with their titles, their first
@@ -389,7 +395,8 @@ so that what an agent wrote runs nothing on the stage. Cox marks, with
 no agent, the pages with links to no page, those no page links to, the
 index aside, those with no title, and those that say nowhere where they
 were used, as those the human wrote; chips over the pages narrow them
-to those of a mark. The page reads the wiki again every two seconds.
+to those of a mark. A page kept in one project says which, as the
+human sees every page. The page reads the wiki again every two seconds.
 
 The conversation runs down a line on its left, which names who speaks
 where they start, with a dot: the human (YOU), Cox in their place

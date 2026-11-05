@@ -1,7 +1,8 @@
 //! The wiki as the stage's Wiki plugin reads it, at `cox://api/wiki` and
 //! `cox://api/wiki/<page>` (see [`crate::stage::plugins`]): each page
 //! with its title, what it is about, the pages it links to and those that
-//! link to it, where it was used, and what Cox finds wrong with it, which
+//! link to it, where it was used, the project it is kept in, if it is
+//! kept in one, and what Cox finds wrong with it, which
 //! it marks without an agent: links to no page, pages no page links to,
 //! pages with no title, and pages that say nowhere where they were used,
 //! as those the human wrote themselves.
@@ -19,7 +20,7 @@ use std::path::Path;
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, html};
 use serde_json::{Value, json};
 
-use super::{INDEX, about, file, pages, split, title};
+use super::{INDEX, about, file, front, only, pages, split, title};
 
 /// What Cox finds wrong with a page.
 const BROKEN: &str = "broken";
@@ -48,6 +49,8 @@ struct Told {
     broken: BTreeSet<String>,
     /// Where it was used, each as its day and the rest of its line.
     used: Vec<(String, String)>,
+    /// The project it is kept in, if it is kept in one.
+    only: Option<String>,
 }
 
 /// The wiki at `root`: its folder, and its pages, but the index, by name.
@@ -99,7 +102,7 @@ fn read_all(root: &Path) -> BTreeMap<String, Told> {
 
 /// The page `name`, which says `text`, among the pages `all`.
 fn read(name: &str, text: &str, all: &[&str]) -> Told {
-    let (body, noted) = split(text);
+    let (body, noted) = split(front(text).1);
     let mut links = BTreeSet::new();
     let mut broken = BTreeSet::new();
     for event in Parser::new_ext(body, options()) {
@@ -135,6 +138,7 @@ fn read(name: &str, text: &str, all: &[&str]) -> Told {
         links,
         broken,
         used,
+        only: only(text),
     }
 }
 
@@ -228,6 +232,7 @@ fn page_json(name: &str, page: &Told, linked_from: &BTreeMap<&str, Vec<&str>>) -
             .iter()
             .map(|(day, what)| json!({ "day": day, "what": what }))
             .collect::<Vec<_>>(),
+        "only": page.only,
         "marks": marks,
     })
 }
@@ -296,7 +301,11 @@ mod tests {
         .unwrap();
         fs::write(root.join("rust/errors.md"), "No title.\n").unwrap();
         fs::write(root.join("index.md"), "- [[gpui]]\n- [[lonely]]\n").unwrap();
-        fs::write(root.join("lonely.md"), "# Lonely\n").unwrap();
+        fs::write(
+            root.join("lonely.md"),
+            "---\nonly: acme\n---\n\n# Lonely\n\nOf acme alone.\n",
+        )
+        .unwrap();
 
         let told = told(&root);
         let pages = told["pages"].as_array().unwrap();
@@ -316,6 +325,10 @@ mod tests {
         );
         // The index links to no page as far as the marks go.
         assert_eq!(of("lonely")["marks"], json!([ORPHAN, UNUSED]));
+        assert_eq!(of("lonely")["title"], "Lonely");
+        assert_eq!(of("lonely")["about"], "Of acme alone.");
+        assert_eq!(of("lonely")["only"], "acme");
+        assert_eq!(of("gpui")["only"], Value::Null);
         assert_eq!(of("rust/errors")["title"], "rust/errors");
         assert_eq!(of("rust/errors")["marks"], json!([UNTITLED, UNUSED]));
         assert_eq!(of("rust/errors")["linked_from"], json!(["gpui"]));
@@ -327,7 +340,7 @@ mod tests {
         let root = scratch("html");
         fs::write(
             root.join("gpui.md"),
-            "# GPUI\n\n[[errors|Errors]], [Taffy](taffy.md), [web](https://x.dev) \
+            "---\ntags: [ui]\n---\n# GPUI\n\n[[errors|Errors]], [Taffy](taffy.md), [web](https://x.dev) \
              <script>alert(1)</script>\n\n## Used in\n\n- 2026-11-05 in cox\n",
         )
         .unwrap();
@@ -342,6 +355,7 @@ mod tests {
         assert!(html.contains("<a href=\"https://x.dev\">web</a>"), "{html}");
         assert!(html.contains("&lt;script&gt;"), "{html}");
         assert!(!html.contains("Used in"), "{html}");
+        assert!(html.starts_with("<h1>GPUI</h1>"), "{html}");
         assert_eq!(page["file"], root.join("gpui.md").display().to_string());
         assert_eq!(super::page(&root, "nothing"), None);
         let _ = fs::remove_dir_all(&root);
