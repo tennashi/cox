@@ -17,11 +17,15 @@
 //! Once the human has what they wanted of it, the trial ends: a trial of
 //! the project's is kept as a branch of the project's repository, with
 //! what it changed, or a trial from nothing is opened as a project of its
-//! own; or the trial is discarded, its folder with it. The chat goes on,
-//! in the project.
+//! own; or the trial is discarded, its folder with it, its agent first
+//! summing it up in the conversation, and what it changed kept apart,
+//! but for the files too big to keep. The chat goes on, in the project.
 
+use std::ffi::OsStr;
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
@@ -187,17 +191,360 @@ pub fn keep(folder: &Path, title: &str) -> Result<String, String> {
     Ok(branch)
 }
 
-/// Discards the trial that starts from `trial` and works in `folder`,
-/// taking its folder away.
+/// What Cox calls the folder, in the folder of trials, that keeps what
+/// the discarded trials from nothing changed.
+pub const DISCARDED: &str = "discarded";
+
+/// Where the trials discarded from the project are kept in its
+/// repository, each under the name of its folder: refs, which Git keeps
+/// what they name for, that are not branches, so that the project's
+/// branches stay the human's.
+const DISCARDED_REFS: &str = "refs/cox/discarded";
+
+/// The most a file the trial changed can hold to be kept, in bytes.
+const FILE_KEPT: u64 = 256 * 1024;
+
+/// The most the files kept of a trial can hold together, in bytes.
+const ALL_KEPT: u64 = 1024 * 1024;
+
+/// A file a trial made that is too big to keep once it is discarded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeftOut {
+    /// Where it is, from the top of the trial's worktree.
+    pub path: String,
+    /// How many bytes it holds.
+    pub size: u64,
+    /// What Git names what it holds, as `git hash-object` does.
+    pub hash: String,
+}
+
+/// What of a trial is kept once it is discarded.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Sorted {
+    /// The files it changed that are kept, or that it took away, from the
+    /// top of its worktree.
+    kept: Vec<String>,
+    /// The files too big to keep, by their paths.
+    left_out: Vec<LeftOut>,
+}
+
+/// Sorts what the trial that works in `folder` changed since it started
+/// into what is kept once it is discarded, the files of up to
+/// [`FILE_KEPT`] bytes, as many as fit in [`ALL_KEPT`] together, the
+/// smaller first, and what is left out, the rest.
+fn sort(folder: &Path) -> Result<Sorted, String> {
+    let top = top(folder)?;
+    let changed = git(
+        &top,
+        &["diff", "--name-only", "-z", "--no-renames", changes::START],
+    )?;
+    let made = git(&top, &["ls-files", "-z", "--others", "--exclude-standard"])?;
+    let mut paths: Vec<&str> = changed
+        .split('\0')
+        .chain(made.split('\0'))
+        .filter(|path| !path.is_empty())
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    // A file taken away holds nothing.
+    let mut sized: Vec<(u64, &str)> = paths
+        .into_iter()
+        .map(|path| {
+            let size = std::fs::symlink_metadata(top.join(path)).map_or(0, |file| file.len());
+            (size, path)
+        })
+        .collect();
+    sized.sort_unstable();
+    let mut sorted = Sorted::default();
+    let mut all = 0;
+    for (size, path) in sized {
+        if size <= FILE_KEPT && all + size <= ALL_KEPT {
+            all += size;
+            sorted.kept.push(path.to_owned());
+        } else {
+            let hash = git(&top, &["hash-object", "--", path])?.trim().to_owned();
+            sorted.left_out.push(LeftOut {
+                path: path.to_owned(),
+                size,
+                hash,
+            });
+        }
+    }
+    sorted.kept.sort_unstable();
+    sorted
+        .left_out
+        .sort_unstable_by(|one, other| one.path.cmp(&other.path));
+    Ok(sorted)
+}
+
+/// The files the trial that works in `folder` made that are too big to
+/// keep once it is discarded.
 ///
 /// # Errors
 ///
-/// When the folder cannot be taken away, with why.
-pub fn discard(trial: Trial, folder: &Path) -> Result<(), String> {
+/// When Git cannot tell what the trial changed, with what Git said.
+pub fn left_out(folder: &Path) -> Result<Vec<LeftOut>, String> {
+    sort(folder).map(|sorted| sorted.left_out)
+}
+
+/// What the agent of a trial the human discards is told, to sum the
+/// trial up in the conversation before its folder goes, so that it can
+/// be done again from the conversation alone; the files `left_out`, too
+/// big to keep, it is asked how to make again.
+#[must_use]
+pub fn summing_up(left_out: &[LeftOut]) -> String {
+    let mut line = "The human discards this trial: its folder goes once this turn ends. \
+                    Cox keeps what it changed as a commit, but the conversation is what \
+                    is read later, so sum the trial up in your reply, for it to be done \
+                    again from the conversation alone: what it tried, and why; how; the \
+                    commands it ran, and what they showed; what it found, or why it is \
+                    dropped; and the changes that matter, as code. Change no files now."
+        .to_owned();
+    if !left_out.is_empty() {
+        line.push_str(
+            "\n\nThese files it made are too big for Cox to keep, so say how to make each \
+             of them again:",
+        );
+        for file in left_out {
+            let _ = write!(line, "\n- {} ({})", file.path, size(file.size));
+        }
+    }
+    line
+}
+
+/// Where what a discarded trial changed is kept.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// A ref of the project's repository, for a trial of the project's.
+    Ref(String),
+    /// A bundle of Git's, for a trial from nothing, whose repository goes
+    /// with its folder.
+    Bundle(PathBuf),
+}
+
+/// What is kept of a discarded trial.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Discarded {
+    /// Where what it changed is kept, if it changed anything to keep.
+    pub kept: Option<Kept>,
+    /// The files it made that were too big to keep.
+    pub left_out: Vec<LeftOut>,
+}
+
+impl Discarded {
+    /// What the trial's chat notes of it.
+    #[must_use]
+    pub fn note(&self) -> String {
+        let mut note = "The trial is discarded, and its folder is gone.".to_owned();
+        match &self.kept {
+            Some(Kept::Ref(name)) => {
+                let _ = write!(
+                    note,
+                    " What it changed is kept as {name} of the project's repository, which \
+                     `git show {name}` shows."
+                );
+            }
+            Some(Kept::Bundle(bundle)) => {
+                let _ = write!(
+                    note,
+                    " What it changed is kept in {}, which `git clone` makes again.",
+                    bundle.display()
+                );
+            }
+            None => {}
+        }
+        if !self.left_out.is_empty() {
+            let files: Vec<_> = self
+                .left_out
+                .iter()
+                .map(|file| format!("{} ({}, {})", file.path, size(file.size), file.hash))
+                .collect();
+            let _ = write!(note, " Left out as too big to keep: {}.", files.join(", "));
+        }
+        note
+    }
+}
+
+/// Discards the trial that starts from `trial`, named `title`, that works
+/// in `folder`, taking its folder away. What it changed since it started
+/// is kept first, as one commit from where it started, but for the files
+/// too big to keep: as a ref of the project's repository for a trial of
+/// the project's, and as a bundle in `bundles` for a trial from nothing.
+///
+/// # Errors
+///
+/// When Git cannot keep what it changed, or the folder cannot be taken
+/// away, with why.
+pub fn discard(
+    trial: Trial,
+    folder: &Path,
+    title: &str,
+    bundles: &Path,
+) -> Result<Discarded, String> {
+    let top = top(folder)?;
+    let sorted = sort(folder)?;
+    let commit = commit_kept(&top, &sorted.kept, title)?;
+    let kept = match (commit, trial) {
+        (None, _) => None,
+        (Some(commit), Trial::Project) => {
+            let name = free_ref(&top)?;
+            git(&top, &["update-ref", &name, &commit])?;
+            Some(Kept::Ref(name))
+        }
+        (Some(commit), Trial::Empty) => {
+            // The repository goes with the folder, so what the bundle
+            // holds can be its own: the branch `trial`, checked out, for
+            // a clone of it to check it out too.
+            git(&top, &["update-ref", "refs/heads/trial", &commit])?;
+            git(&top, &["symbolic-ref", "HEAD", "refs/heads/trial"])?;
+            let bundle = free_bundle(bundles, &folder_name(&top))?;
+            let path = bundle.to_string_lossy();
+            git(
+                &top,
+                &[
+                    "bundle",
+                    "create",
+                    "--quiet",
+                    &path,
+                    "HEAD",
+                    "refs/heads/trial",
+                ],
+            )
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&bundle);
+            })?;
+            Some(Kept::Bundle(bundle))
+        }
+    };
     match trial {
-        Trial::Project => remove_worktree(&top(folder)?),
-        Trial::Empty => std::fs::remove_dir_all(folder)
-            .map_err(|error| format!("cannot remove {}: {error}", folder.display())),
+        Trial::Project => remove_worktree(&top)?,
+        Trial::Empty => std::fs::remove_dir_all(&top)
+            .map_err(|error| format!("cannot remove {}: {error}", top.display()))?,
+    }
+    Ok(Discarded {
+        kept,
+        left_out: sorted.left_out,
+    })
+}
+
+/// Commits the files `kept` of the trial whose worktree is at `top`, as
+/// they are now, onto where it started, as `title` says, leaving the rest
+/// as they were then, and answers the commit, unless that changes
+/// nothing. The commit is made apart from the worktree's own index and
+/// commits, so that it holds none of what the trial left out, even of
+/// what the trial committed itself.
+fn commit_kept(top: &Path, kept: &[String], title: &str) -> Result<Option<String>, String> {
+    if kept.is_empty() {
+        return Ok(None);
+    }
+    let index = git(
+        top,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "cox-discarded-index",
+        ],
+    )?;
+    let index = PathBuf::from(index.trim());
+    let committed = (|| {
+        let with_index = [("GIT_INDEX_FILE", index.as_os_str())];
+        let start = format!("{}^{{tree}}", changes::START);
+        let from = git(top, &["rev-parse", &start])?.trim().to_owned();
+        git_with(top, &["read-tree", &from], &with_index, None)?;
+        let paths = kept.join("\0");
+        git_with(
+            top,
+            &["update-index", "--add", "--remove", "-z", "--stdin"],
+            &with_index,
+            Some(paths.as_bytes()),
+        )?;
+        let tree = git_with(top, &["write-tree"], &with_index, None)?
+            .trim()
+            .to_owned();
+        if tree == from {
+            return Ok(None);
+        }
+        let message = format!("Discarded trial: {title}");
+        let mut args = vec!["commit-tree", &tree, "-m", &message];
+        let parent = format!("{}^{{commit}}", changes::START);
+        let parent = git(top, &["rev-parse", "--verify", "--quiet", &parent])
+            .map(|parent| parent.trim().to_owned())
+            .ok();
+        if let Some(parent) = &parent {
+            args.extend(["-p", parent]);
+        }
+        git_with(top, &args, &identity(top), None).map(|commit| Some(commit.trim().to_owned()))
+    })();
+    let _ = std::fs::remove_file(&index);
+    committed
+}
+
+/// Who Cox commits what a discarded trial changed as: whoever Git says
+/// commits in the repository at `top`, or else, when Git knows no one, as
+/// on a machine where no `user.name` is set, Cox itself, since the commit
+/// is Cox's to keep and not the human's to share.
+fn identity(top: &Path) -> Vec<(&'static str, &'static OsStr)> {
+    let known = ["GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"]
+        .iter()
+        .all(|ident| git(top, &["var", ident]).is_ok());
+    if known {
+        return Vec::new();
+    }
+    let name = OsStr::new("Cox");
+    let email = OsStr::new("cox@localhost");
+    vec![
+        ("GIT_AUTHOR_NAME", name),
+        ("GIT_AUTHOR_EMAIL", email),
+        ("GIT_COMMITTER_NAME", name),
+        ("GIT_COMMITTER_EMAIL", email),
+    ]
+}
+
+/// The name of the folder of the worktree at `top`, as its trial goes by.
+fn folder_name(top: &Path) -> String {
+    top.file_name().map_or_else(
+        || "trial".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// The first ref under [`DISCARDED_REFS`], named after the folder of the
+/// worktree at `top`, that its repository does not have yet.
+fn free_ref(top: &Path) -> Result<String, String> {
+    let name = folder_name(top);
+    (1..=u32::MAX)
+        .map(|number| match number {
+            1 => format!("{DISCARDED_REFS}/{name}"),
+            _ => format!("{DISCARDED_REFS}/{name}-{number}"),
+        })
+        .find(|kept| git(top, &["rev-parse", "--verify", "--quiet", kept]).is_err())
+        .ok_or_else(|| "there is no name left for the ref".to_owned())
+}
+
+/// The first bundle in `bundles` named `name` that is not there yet,
+/// making `bundles` if it is not there.
+fn free_bundle(bundles: &Path, name: &str) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(bundles)
+        .map_err(|error| format!("cannot make {}: {error}", bundles.display()))?;
+    (1..=u32::MAX)
+        .map(|number| match number {
+            1 => bundles.join(format!("{name}.bundle")),
+            _ => bundles.join(format!("{name}-{number}.bundle")),
+        })
+        .find(|bundle| !bundle.exists())
+        .ok_or_else(|| format!("{} is full", bundles.display()))
+}
+
+/// How big `bytes` is, as people read it.
+fn size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    #[expect(clippy::cast_precision_loss, reason = "a size shown to one decimal")]
+    match bytes {
+        0..KB => format!("{bytes} bytes"),
+        KB..MB => format!("{} KB", bytes / KB),
+        _ => format!("{:.1} MB", bytes as f64 / MB as f64),
     }
 }
 
@@ -245,11 +592,39 @@ fn free(trials: &Path, name: &str) -> Result<PathBuf, String> {
 /// Runs Git in `folder` with `args`, and answers what it printed, or
 /// what it said went wrong.
 fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    git_with(folder, args, &[], None)
+}
+
+/// Runs Git in `folder` with `args`, with `env` added to its environment
+/// and `input` on its standard input, if given, and answers what it
+/// printed, or what it said went wrong.
+fn git_with(
+    folder: &Path,
+    args: &[&str],
+    env: &[(&str, &OsStr)],
+    input: Option<&[u8]>,
+) -> Result<String, String> {
+    let mut child = Command::new("git")
         .arg("-C")
         .arg(folder)
         .args(args)
-        .output()
+        .envs(env.iter().copied())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("cannot run git: {error}"))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        stdin
+            .write_all(input)
+            .map_err(|error| format!("cannot write to git: {error}"))?;
+    }
+    let output = child
+        .wait_with_output()
         .map_err(|error| format!("cannot run git: {error}"))?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -406,24 +781,114 @@ mod tests {
     }
 
     #[test]
-    fn a_trial_is_discarded_with_its_folder() {
+    fn a_trial_is_discarded_keeping_what_it_changed() {
         let root = scratch("discard");
         let project = root.join("greet");
         repository(&project);
+        let bundles = root.join("trials/discarded");
         let trials = root.join("trials");
         let trial = make(Trial::Project, &project, &trials).unwrap();
         std::fs::write(trial.join("main.rs"), "fn main() { trial() }\n").unwrap();
-        discard(Trial::Project, &trial).unwrap();
+        std::fs::write(trial.join("new.rs"), "fn trial() {}\n").unwrap();
+        // A file too big to keep, which the trial's agent committed too.
+        let big = vec![b'x'; 300 * 1024];
+        std::fs::write(trial.join("big.bin"), &big).unwrap();
+        git(&trial, &["add", "--all"]).unwrap();
+        git(&trial, &["commit", "-q", "-m", "the agent's own"]).unwrap();
+        let big_hash = git(&trial, &["hash-object", "big.bin"]).unwrap();
+        // Files that fit alone, but not all together.
+        for name in ["a", "b", "c", "d", "e"] {
+            std::fs::write(trial.join(format!("{name}.txt")), vec![b'y'; 250 * 1024]).unwrap();
+        }
+        // What Git ignores is not the trial's to keep.
+        std::fs::write(trial.join(".gitignore"), "target/\n").unwrap();
+        std::fs::create_dir_all(trial.join("target")).unwrap();
+        std::fs::write(trial.join("target/out"), "built\n").unwrap();
+
+        let left_out = left_out(&trial).unwrap();
+        let paths: Vec<_> = left_out.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(paths, ["big.bin", "e.txt"]);
+        assert_eq!(left_out[0].size, 300 * 1024);
+        assert_eq!(left_out[0].hash, big_hash.trim());
+        let line = summing_up(&left_out);
+        assert!(line.contains("- big.bin (300 KB)"), "{line}");
+
+        let discarded = discard(Trial::Project, &trial, "Try a greeting", &bundles).unwrap();
         assert!(!trial.exists());
+        let name = "refs/cox/discarded/greet-1";
+        assert_eq!(discarded.kept, Some(Kept::Ref(name.to_owned())));
+        assert_eq!(discarded.left_out, left_out);
+        let note = discarded.note();
+        assert!(note.contains(&format!("`git show {name}`")), "{note}");
+        assert!(note.contains("big.bin (300 KB, "), "{note}");
+        let shown = |what: &str| git(&project, &["show", what]);
+        assert_eq!(
+            shown(&format!("{name}:main.rs")).unwrap(),
+            "fn main() { trial() }\n"
+        );
+        assert_eq!(shown(&format!("{name}:new.rs")).unwrap(), "fn trial() {}\n");
+        assert!(shown(&format!("{name}:d.txt")).is_ok());
+        assert!(shown(&format!("{name}:e.txt")).is_err());
+        assert!(shown(&format!("{name}:big.bin")).is_err());
+        assert!(shown(&format!("{name}:target/out")).is_err());
+        // One commit on the project's, which holds nothing it left out.
+        assert_eq!(
+            git(&project, &["rev-parse", &format!("{name}^")]).unwrap(),
+            git(&project, &["rev-parse", "HEAD"]).unwrap()
+        );
+        assert_eq!(
+            git(&project, &["log", "-1", "--format=%s", name])
+                .unwrap()
+                .trim(),
+            "Discarded trial: Try a greeting"
+        );
+        let objects = git(&project, &["rev-list", "--objects", name]).unwrap();
+        assert!(!objects.contains(big_hash.trim()), "{objects}");
+        // No branch, and no worktree, is left.
+        assert_eq!(git(&project, &["branch", "--list", "trial/*"]).unwrap(), "");
         let worktrees = git(&project, &["worktree", "list"]).unwrap();
         assert_eq!(worktrees.lines().count(), 1, "{worktrees}");
-        assert_eq!(git(&project, &["branch", "--list", "trial/*"]).unwrap(), "");
 
+        // A trial that took a file away keeps that it did, under a name of
+        // its own when the first is taken.
+        let again = make(Trial::Project, &project, &trials).unwrap();
+        std::fs::remove_file(again.join("main.rs")).unwrap();
+        let discarded = discard(Trial::Project, &again, "Again", &bundles).unwrap();
+        let name = "refs/cox/discarded/greet-1-2";
+        assert_eq!(discarded.kept, Some(Kept::Ref(name.to_owned())));
+        assert!(shown(&format!("{name}:main.rs")).is_err());
+
+        // A trial that changed nothing keeps nothing.
+        let unchanged = make(Trial::Project, &project, &trials).unwrap();
+        let discarded = discard(Trial::Project, &unchanged, "Nothing", &bundles).unwrap();
+        assert_eq!(discarded.kept, None);
+        assert_eq!(
+            discarded.note(),
+            "The trial is discarded, and its folder is gone."
+        );
+
+        // A trial from nothing is kept as a bundle, which makes it again.
         let empty = make(Trial::Empty, &project, &trials).unwrap();
         std::fs::write(empty.join("main.rs"), "fn main() {}\n").unwrap();
-        discard(Trial::Empty, &empty).unwrap();
+        let discarded = discard(Trial::Empty, &empty, "From nothing", &bundles).unwrap();
         assert!(!empty.exists());
+        let bundle = bundles.join("scratch-1.bundle");
+        assert_eq!(discarded.kept, Some(Kept::Bundle(bundle.clone())));
+        let again = root.join("again");
+        let path = bundle.to_string_lossy();
+        git(&root, &["clone", "-q", &path, &again.to_string_lossy()]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(again.join("main.rs")).unwrap(),
+            "fn main() {}\n"
+        );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_size_reads_as_people_read_it() {
+        assert_eq!(size(12), "12 bytes");
+        assert_eq!(size(300 * 1024), "300 KB");
+        assert_eq!(size(3 * 1024 * 1024 + 512 * 1024), "3.5 MB");
     }
 
     #[test]

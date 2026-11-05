@@ -1953,6 +1953,46 @@ fn repository(name: &str) -> PathBuf {
     home
 }
 
+/// Checks that the bundle the note `note` of a discarded trial names makes
+/// the trial again, with `file` holding `text`, and takes it away.
+fn assert_made_again(note: &str, file: &str, text: &str) {
+    let bundle = note
+        .split_once("kept in ")
+        .and_then(|(_, rest)| rest.split_once(", which"))
+        .map_or_else(|| panic!("{note}"), |(bundle, _)| PathBuf::from(bundle));
+    let again = scratch("trial-made-again");
+    let cloned = std::process::Command::new("git")
+        .arg("clone")
+        .arg("-q")
+        .arg(&bundle)
+        .arg(&again)
+        .status()
+        .unwrap();
+    assert!(cloned.success());
+    assert_eq!(std::fs::read_to_string(again.join(file)).unwrap(), text);
+    let _ = std::fs::remove_file(&bundle);
+    let _ = std::fs::remove_dir_all(&again);
+}
+
+/// Waits until `made`, made in a trial the human discards, is gone with
+/// the trial's folder, once the trial's agent has summed the trial up.
+async fn wait_for_discarded(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    made: &std::path::Path,
+) {
+    let (timed_out, timeout) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        let _ = timed_out.send(());
+    });
+    let made = made.to_owned();
+    tokio::select! {
+        () = cx.condition(workspace, move |_, _| !made.exists()) => {}
+        _ = timeout => panic!("the trial was never discarded"),
+    }
+}
+
 /// Opens a trial that starts from `trial` from the first chat, as the
 /// chat's agent would, waits for the list to hold `count` chats, and
 /// answers the folder the trial works in.
@@ -2140,10 +2180,34 @@ async fn an_ended_trial_goes_on_in_the_project(cx: &mut TestAppContext) {
         chat.view().cloned().unwrap()
     });
 
+    // Discarded while its turn goes on, the trial waits for the turn to
+    // end, and for its agent to sum it up.
+    let trial = workspace.update_in(cx, |workspace, window, cx| {
+        workspace.show(1, window, cx);
+        workspace.shown().unwrap().view().cloned().unwrap()
+    });
+    cx.simulate_input("slow");
+    cx.simulate_keystrokes("enter");
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.discard_trial(1, window, cx);
     });
-    assert!(!folder.exists());
+    let last = trial.read_with(cx, |view, _| {
+        assert_eq!(view.conversation().state(), State::Busy);
+        view.conversation().entries().last().cloned()
+    });
+    assert!(
+        matches!(&last, Some(Entry::Note(note)) if note.contains("once this turn ends")),
+        "{last:?}"
+    );
+    assert!(folder.exists());
+    wait_for_discarded(cx, &workspace, &folder).await;
+    let prompts = agents.borrow()[1].prompts();
+    assert!(
+        prompts
+            .last()
+            .is_some_and(|prompt| prompt.starts_with("The human discards this trial")),
+        "{prompts:?}"
+    );
     // Both close, and are set up to work in the project, asking the human.
     let setups = workspace.read_with(cx, |workspace, _| {
         workspace
@@ -2238,14 +2302,32 @@ async fn a_trial_ends_kept_as_a_branch_or_discarded(cx: &mut TestAppContext) {
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.discard_trial(2, window, cx);
     });
-    assert!(!made.exists());
+    wait_for_discarded(cx, &workspace, &made).await;
     let (open, state, last) = ended(cx, 2);
     assert!(!open);
     assert_eq!(state, State::Closed);
+    // Its agent summed it up first, asked in the human's place.
+    let entries = workspace.read_with(cx, |workspace, cx| {
+        let chat = workspace.chats(0).nth(2).unwrap();
+        chat.view()
+            .unwrap()
+            .read(cx)
+            .conversation()
+            .entries()
+            .to_vec()
+    });
     assert!(
-        matches!(&last, Some(Entry::Note(note)) if note.contains("discarded")),
-        "{last:?}"
+        entries.iter().any(|entry| matches!(
+            entry,
+            Entry::Cox(line) if line.starts_with("The human discards this trial")
+        )),
+        "{entries:?}"
     );
+    // What it made is kept in a bundle, which makes it again.
+    let Some(Entry::Note(note)) = &last else {
+        panic!("{last:?}");
+    };
+    assert_made_again(note, "made.txt", "made in the trial\n");
 
     // Another opens as a project of its own, which the human goes on
     // with, so it is no longer discarded.
