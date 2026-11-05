@@ -58,6 +58,9 @@ pub struct Page {
     /// Checks now and then that the browser answered the last resize.
     _ticks: Task<()>,
     _submitted: Subscription,
+    /// Tell the browser when the page gets the keyboard and loses it, so
+    /// that the page shows its caret and focus rings just while it has it.
+    _focus: [Subscription; 2],
 }
 
 /// What the page asks the stage to open.
@@ -80,9 +83,16 @@ impl Page {
     pub fn new(
         browser: Browser,
         mut events: UnboundedReceiver<Event>,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let focus_handle = cx.focus_handle();
+        let focused = browser.clone();
+        let blurred = browser.clone();
+        let focus = [
+            cx.on_focus(&focus_handle, window, move |_, _, _| focused.focus()),
+            cx.on_blur(&focus_handle, window, move |_, _, _| blurred.blur()),
+        ];
         let task = cx.spawn(async move |this, cx| {
             // Painted, created or closed: the tab looks different either way.
             while let Some(event) = events.recv().await {
@@ -118,7 +128,7 @@ impl Page {
             });
         Self {
             browser,
-            focus_handle: cx.focus_handle(),
+            focus_handle,
             image: None,
             popup: None,
             composing: None,
@@ -131,6 +141,7 @@ impl Page {
             _events: task,
             _ticks: ticks,
             _submitted: submitted,
+            _focus: focus,
         }
     }
 
