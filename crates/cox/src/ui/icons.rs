@@ -15,6 +15,7 @@ pub enum Icon {
     Document,
     Files,
     Flow,
+    Folder,
     Globe,
     Map,
     Plug,
@@ -25,13 +26,14 @@ pub enum Icon {
 }
 
 impl Icon {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 14] = [
         Self::Changes,
         Self::Close,
         Self::Code,
         Self::Document,
         Self::Files,
         Self::Flow,
+        Self::Folder,
         Self::Globe,
         Self::Map,
         Self::Plug,
@@ -50,6 +52,7 @@ impl Icon {
             Self::Document => "icons/document.svg",
             Self::Files => "icons/files.svg",
             Self::Flow => "icons/flow.svg",
+            Self::Folder => "icons/folder.svg",
             Self::Globe => "icons/globe.svg",
             Self::Map => "icons/map.svg",
             Self::Plug => "icons/plug.svg",
@@ -69,6 +72,7 @@ impl Icon {
             Self::Document => include_bytes!("../../assets/icons/document.svg"),
             Self::Files => include_bytes!("../../assets/icons/files.svg"),
             Self::Flow => include_bytes!("../../assets/icons/flow.svg"),
+            Self::Folder => include_bytes!("../../assets/icons/folder.svg"),
             Self::Globe => include_bytes!("../../assets/icons/globe.svg"),
             Self::Map => include_bytes!("../../assets/icons/map.svg"),
             Self::Plug => include_bytes!("../../assets/icons/plug.svg"),
