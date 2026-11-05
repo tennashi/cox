@@ -150,14 +150,16 @@ pub enum ChatRequest {
         trial: Option<Trial>,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
     },
-    /// Make the chat a trial that starts from `trial`, to try out `what`:
-    /// once its turn ends, its agent starts again in the trial's folder,
-    /// with the conversation so far; answer the folder, or why the chat
-    /// cannot be a trial.
+    /// Open a trial beside the chat, under it in the list, that starts
+    /// from `trial`, to try out `what`, its agent set up as the chat's
+    /// and told what the chat talked through so far; show it if `show`
+    /// says to, as for the human who asked for it; answer how it goes by,
+    /// or why it cannot open.
     StartTrial {
         trial: Trial,
         what: String,
-        answer: oneshot::Sender<Result<PathBuf, String>>,
+        show: bool,
+        answer: oneshot::Sender<Result<OpenedChat, String>>,
     },
     /// Wait for the chat that goes by `chat` to end its turn, or to come
     /// to wait for the human, and answer how it stands then; or at once,

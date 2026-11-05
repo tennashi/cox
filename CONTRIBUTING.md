@@ -66,8 +66,8 @@ only say what they do. After it, when the folder has a `COX.md`, the agent
 gets what it says. The chat says at its top which files it got. What Cox
 tells the agent in the human's place at the turns of a trial is the
 workflow's too, in `trial/` there, or else Cox's own
-([`workflow/trial`](crates/cox/src/workflow/trial)): `start.md` as the
-chat becomes a trial, in `{folder}`, which is `{from}`, to try `{what}`;
+([`workflow/trial`](crates/cox/src/workflow/trial)): `start.md`, the
+first line of a trial opened beside a chat, in `{folder}`, which is `{from}`, to try `{what}`;
 `opened.md`, what the agent that opened a trial with `open_chat` hears of
 it; and `discard.md`, what the trial's agent is asked before the trial
 is discarded, with `{left_out}`, the files too big to keep. The tabs switch between chats (Control-Tab and
@@ -253,21 +253,25 @@ chat the human opens is set up with none of this: its agent gets every
 tool, and the human answers every request. Which chat opened a chat, and
 how its agent is set up, last across runs with the rest of the chat.
 A trial tries the work out apart from the project, before the human and
-the agent agree what it is to be. A chat's agent makes its own chat a
-trial with Cox's `start_trial` tool, saying what the trial starts from,
-`project` or `empty`, and what it tries: once its turn ends, its agent
-starts again in the trial's folder, with the conversation so far, told
-what it tries, and the tab marks the chat as a trial. `trial` in
-`open_chat` opens a chat that is a trial instead, for trying several
-ways side by side, one trial each. The human starts one too: "New
-trial", after the + after the tabs, opens a chat in the project chosen,
-and "Start trial…" in the menu of the right button makes the chat a
-trial, with the conversation so far; either opens an input above the
-chat's own, where the human writes what the trial is to try, as what to
-find out, and a click on "from the project" or "from nothing" beside it
-chooses what it starts from (from the project at first, when the
-project is in a Git repository). Enter starts the trial, as
-`start_trial` does, and Escape leaves the chat as it was. A trial's agent works in a
+the agent agree what it is to be. A trial is a chat of its own,
+beside the chat it is opened from, so that what it tries, and its
+stage, stay apart from the work the chat goes on with in the project. A
+chat's agent opens one with Cox's `start_trial` tool, saying what the
+trial starts from, `project` or `empty`, and what it tries: the trial
+opens under the chat, marked ↳ as a chat an agent opens is, named after
+what it tries, its agent set up as the chat's, and told what the chat
+talked through so far, as an agent that could not resume is told the
+conversation, and then what it tries; the chat notes it, and its agent
+hears the number the trial goes by, for `wait_chat`. `trial` in
+`open_chat` opens a trial too, on a line of the agent's own, for trying
+several ways side by side, one trial each. The human opens one with
+"Start trial…" in the menu of the right button, which opens an input
+above the chat's own, where the human writes what the trial is to try,
+as what to find out, and a click on "from the project" or "from
+nothing" beside it chooses what it starts from (from the project at
+first, when the project is in a Git repository). Enter opens the trial,
+as `start_trial` does, and shows it, and Escape leaves the chat as it
+was. A trial opens no trial beside it. A trial's agent works in a
 folder Cox makes for it in `trials`, beside the chats' database (see
 [The stage](#the-stage)), and changes and tests the files there
 without asking the human, the policy allowing the calls the workflow's
@@ -308,7 +312,10 @@ its path, its size and the hash Git names it by. A trial ended stops
 its agent, and those of the chats it opened, which worked in its
 folder, and each chat goes on in the project: a line sent starts its
 agent again there, with the conversation so far, asking the human as
-any chat does, since what it was allowed was for the trial.
+any chat does, since what it was allowed was for the trial. The chat
+the trial was opened beside notes how the trial ended, and goes on with
+it, as the ending says (see below); a trial opened beside no chat, as
+one of an earlier Cox, goes on itself.
 
 `trial.json` names, as `allow`, the patterns of the calls a trial's
 agent makes unasked, as `open_chat`'s `allow` takes them, and, as
@@ -319,10 +326,11 @@ text of the workflow, from its folder, which the trial's agent is asked
 first, as `trial/discard.md`, with `{left_out}`; `keep`, as `"ref"`, to
 keep what the trial changed as discarding does; `folder`, `"open"` to
 open a trial from nothing as a project, in place of its folder going;
-and, for the chat that goes on in the project, `goal`, as "Set goal…"
-takes it, and `then`, a text of the workflow, which its agent is told
-at once, in the human's place, with `{kept}`, the ref or the bundle
-what the trial changed is kept in. So a human who spikes first and
+and, for the chat the trial was opened beside, which goes on in the
+project, `goal`, as "Set goal…" takes it, and `then`, a text of the
+workflow, which its agent is told at once, in the human's place, with
+`{kept}`, the ref or the bundle what the trial changed is kept in, and
+`{summary}`, what the trial's agent said last, as its summing up. So a human who spikes first and
 rewrites after can end a trial with "Rewrite in project":
 
 ```json

@@ -26,8 +26,8 @@ pub struct Text {
     own: &'static str,
 }
 
-/// What a chat's agent is told as its chat becomes a trial: in
-/// `{folder}`, which is `{from}`, to try `{what}`.
+/// The first line of a trial opened beside a chat, which its agent is
+/// told: that it works in `{folder}`, which is `{from}`, to try `{what}`.
 pub const TRIAL_START: Text = Text {
     name: "trial/start.md",
     own: include_str!("workflow/trial/start.md"),
@@ -114,8 +114,9 @@ pub struct Ending {
     /// Whether the trial's folder is opened as a project, in place of
     /// going, for a trial from nothing.
     pub open: bool,
-    /// The text the chat's agent is told once the chat goes on in the
-    /// project, with `{kept}`, where what the trial changed is kept.
+    /// The text the agent of the chat the trial was opened beside is told
+    /// once the trial ends, with `{kept}`, where what the trial changed is
+    /// kept, and `{summary}`, what the trial's agent said last.
     pub then: Option<String>,
     /// The goal the chat works toward once it goes on in the project, as
     /// "Set goal…" takes it.

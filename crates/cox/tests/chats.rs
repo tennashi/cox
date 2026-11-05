@@ -2091,23 +2091,21 @@ async fn a_trial_works_in_a_folder_apart_from_the_project(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-async fn a_chat_becomes_a_trial_and_goes_on_there(cx: &mut TestAppContext) {
-    let home = repository("trial-in-place-home");
-    let kept = scratch("trial-in-place-kept").join("chats.sqlite");
+async fn a_chat_opens_a_trial_beside_it(cx: &mut TestAppContext) {
+    let home = repository("trial-beside-home");
+    let kept = scratch("trial-beside-kept").join("chats.sqlite");
     let store = Rc::new(Store::open(&kept).unwrap());
     let (agents, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
-    let start = |cx: &mut VisualTestContext| {
+    let start = |cx: &mut VisualTestContext, from: usize| {
         let (answer, made) = tokio::sync::oneshot::channel();
-        // The chat's agent, the last to start.
-        asks.borrow()
-            .last()
-            .unwrap()
+        asks.borrow()[from]
             .send(ChatRequest::StartTrial {
                 trial: Trial::Project,
                 what: "A warmer greeting.".to_owned(),
+                show: false,
                 answer,
             })
             .unwrap();
@@ -2115,44 +2113,56 @@ async fn a_chat_becomes_a_trial_and_goes_on_there(cx: &mut TestAppContext) {
         made
     };
 
-    // Its turn has ended, so it moves into the trial at once: its agent
-    // starts again there, on what it tries.
-    let folder = start(cx).await.unwrap().unwrap();
+    // The trial opens as a chat of its own, under the chat, whose agent
+    // works in the trial's folder, told what the chat talked through and
+    // what it tries.
+    let opened = start(cx, 0).await.unwrap().unwrap();
+    let folder = opened.folder.clone().expect("a trial's folder");
     let trials = cox::storage::path(cox::chat::trial::FOLDER).unwrap();
     assert!(folder.starts_with(&trials), "{}", folder.display());
-    let view = shown(cx, &workspace);
-    wait_for_turn(cx, &view).await;
+    assert_eq!(opened.name, "A warmer greeting.");
+    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 2)
+        .await;
+    let (trial, parent, setup, shown_view) = workspace.read_with(cx, |workspace, _| {
+        let trial = workspace.chats(0).nth(1).unwrap();
+        (
+            trial.view().cloned().unwrap(),
+            workspace.chats(0).next().unwrap().setup().cloned(),
+            trial.setup().cloned().unwrap(),
+            workspace.shown().and_then(Chat::view).cloned(),
+        )
+    });
+    wait_for_turn(cx, &trial).await;
     assert_eq!(agents.borrow().len(), 2);
     assert_eq!(agents.borrow()[1].cwd(), Some(folder.clone()));
-    let entries = entries(cx, &view);
+    let told = agents.borrow()[1].prompts().concat();
     assert!(
-        entries
-            .iter()
-            .any(|entry| matches!(entry, Entry::Note(note) if note.starts_with("Trial: works in"))),
-        "{entries:?}"
+        told.contains("This trial was opened beside a chat"),
+        "{told}"
     );
-    assert!(
-        entries.iter().any(|entry| matches!(entry, Entry::Cox(line)
-            if line.starts_with("You work in a trial now") && line.ends_with("A warmer greeting."))),
-        "{entries:?}"
-    );
-    // It moved on purpose, so it has no session it could not resume.
-    assert!(
-        !entries
-            .iter()
-            .any(|entry| matches!(entry, Entry::Note(note) if note.contains("could not resume"))),
-        "{entries:?}"
-    );
-    let setup = workspace.read_with(cx, |workspace, _| {
-        workspace.chats(0).next().unwrap().setup().cloned().unwrap()
-    });
+    assert!(told.contains("[human]\nhello"), "{told}");
+    assert!(told.contains("You work in a trial now"), "{told}");
     assert_eq!(setup.trial, Some(Trial::Project));
     assert_eq!(setup.folder.as_ref(), Some(&folder));
     assert!(setup.policy.allow.contains(&"edit:*".to_owned()));
     assert_eq!(setup.policy.within.as_ref(), Some(&folder));
+    // The chat stays in the project, shown, and notes the trial.
+    assert!(parent.is_none_or(|setup| setup.trial.is_none() && setup.folder.is_none()));
+    assert_eq!(agents.borrow()[0].cwd(), Some(home.clone()));
+    let first = shown_view.unwrap();
+    let entries = entries(cx, &first);
+    assert!(
+        entries.iter().any(|entry| matches!(entry, Entry::Note(note)
+            if note.starts_with(&format!("Trial: chat {} opens beside this chat", opened.number)))),
+        "{entries:?}"
+    );
+    assert_eq!(
+        names(cx, &workspace),
+        listed(&[("No project", &["hello", "A warmer greeting."])])
+    );
 
-    // A trial is not made a trial again.
-    let again = start(cx).await.unwrap();
+    // A trial does not open a trial beside it.
+    let again = start(cx, 1).await.unwrap();
     assert!(
         again
             .as_ref()
@@ -2191,24 +2201,24 @@ async fn the_human_starts_a_trial_of_what_they_would_have_tried(cx: &mut TestApp
     view.read_with(cx, |view, _| assert!(view.trial_input().is_none()));
     assert_eq!(agents.borrow().len(), 1);
 
-    // "New trial" opens a chat with the input, where the human says what
-    // to try, and Enter makes the chat a trial of it.
-    click(cx, "new-trial-in-1");
-    cx.run_until_parked();
-    let view = shown(cx, &workspace);
-    assert!(view.read_with(cx, |view, _| view.trial_input().is_some()));
+    // Where the human says what to try, Enter opens a trial of it beside
+    // the chat, and shows it.
+    right_click(cx, "chat-1");
+    click(cx, "start-trial");
     cx.simulate_input("Whether the greeting can name the user.");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
-    let view = shown(cx, &workspace);
-    wait_for_turn(cx, &view).await;
+    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 2)
+        .await;
+    let trial = shown(cx, &workspace);
+    assert_ne!(trial, view);
+    wait_for_turn(cx, &trial).await;
     let setup = workspace.read_with(cx, |workspace, _| {
         workspace.chats(0).nth(1).unwrap().setup().cloned().unwrap()
     });
     assert_eq!(setup.trial, Some(Trial::Project));
     let folder = setup.folder.unwrap();
     assert_eq!(agents.borrow().last().unwrap().cwd(), Some(folder.clone()));
-    // It is named after what it tries.
     assert_eq!(
         names(cx, &workspace),
         listed(&[(
@@ -2216,7 +2226,7 @@ async fn the_human_starts_a_trial_of_what_they_would_have_tried(cx: &mut TestApp
             &["hello", "Whether the greeting can name the user."]
         )])
     );
-    let entries = entries(cx, &view);
+    let entries = entries(cx, &trial);
     assert!(
         entries.iter().any(|entry| matches!(entry, Entry::Cox(line)
             if line.starts_with("You work in a trial now")
@@ -2224,11 +2234,11 @@ async fn the_human_starts_a_trial_of_what_they_would_have_tried(cx: &mut TestApp
         "{entries:?}"
     );
 
-    // A trial is not made a trial again.
+    // A trial does not open a trial beside it.
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.edit_trial(1, window, cx);
     });
-    view.read_with(cx, |view, _| assert!(view.trial_input().is_none()));
+    trial.read_with(cx, |view, _| assert!(view.trial_input().is_none()));
 
     let _ = std::fs::remove_dir_all(&folder);
     let _ = std::fs::remove_dir_all(&home);
@@ -2314,8 +2324,13 @@ async fn an_ended_trial_goes_on_in_the_project(cx: &mut TestAppContext) {
         "{last:?}"
     );
 
-    // A line sent to the trial's chat starts its agent again, in the
-    // project.
+    // The chat the trial was opened beside is shown; a line sent to the
+    // trial's chat starts its agent again, in the project.
+    let first = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).next().unwrap().view().cloned().unwrap()
+    });
+    assert_eq!(shown(cx, &workspace), first);
+    workspace.update_in(cx, |workspace, window, cx| workspace.show(1, window, cx));
     say(cx, &workspace, "go on").await;
     assert_eq!(agents.borrow().last().unwrap().cwd(), Some(home.clone()));
     let open = workspace.read_with(cx, |workspace, _| {
@@ -2348,13 +2363,26 @@ async fn a_trial_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
     let folder = open_trial(cx, &workspace, &asks, Trial::Project, 2).await;
 
     // An ending of the human's own keeps what the trial of the project
-    // changed apart, and the chat goes on in the project, toward the
-    // ending's goal, its agent told what the human says then, with where
-    // what the trial changed is kept.
+    // changed apart, and the chat the trial was opened beside goes on
+    // toward the ending's goal, its agent told what the human says then,
+    // with where what the trial changed is kept, and what the trial's
+    // agent said last.
+    let trial = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().view().cloned().unwrap()
+    });
+    wait_for_turn(cx, &trial).await;
+    let summary = entries(cx, &trial)
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            Entry::Reply(text) => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap();
     let then = format!("trial/rewrite-{}.md", std::process::id());
     let then_file = cox::settings::workflow().unwrap().join(&then);
     std::fs::create_dir_all(then_file.parent().unwrap()).unwrap();
-    std::fs::write(&then_file, "Rewrite what {kept} shows, commit by commit.\n").unwrap();
+    std::fs::write(&then_file, "Rewrite what {kept} shows, from: {summary}\n").unwrap();
     std::fs::write(folder.join("main.rs"), "fn main() { trial() }\n").unwrap();
     let rewrite = workflow::Ending {
         name: "Rewrite in project".to_owned(),
@@ -2374,7 +2402,7 @@ async fn a_trial_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
         "refs/cox/discarded/{}",
         folder.file_name().unwrap().to_string_lossy()
     );
-    let shown = std::process::Command::new("git")
+    let in_git = std::process::Command::new("git")
         .arg("-C")
         .arg(&home)
         .arg("show")
@@ -2382,7 +2410,7 @@ async fn a_trial_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
         .output()
         .unwrap();
     assert_eq!(
-        String::from_utf8_lossy(&shown.stdout),
+        String::from_utf8_lossy(&in_git.stdout),
         "fn main() { trial() }\n"
     );
     assert_eq!(
@@ -2390,20 +2418,31 @@ async fn a_trial_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
         "fn main() {}\n"
     );
     assert_eq!(
-        goals(cx, &workspace, 0)[1],
-        Some(KeptGoal::Command("true".to_owned()))
+        goals(cx, &workspace, 0),
+        [Some(KeptGoal::Command("true".to_owned())), None]
     );
-    let told = format!("Rewrite what {name} shows, commit by commit.");
+    // It is shown, for the human to go on there.
+    let first = shown(cx, &workspace);
+    let parent_view = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).next().unwrap().view().cloned().unwrap()
+    });
+    assert_eq!(first, parent_view);
+    let entries = entries(cx, &first);
+    assert!(
+        entries.iter().any(|entry| matches!(entry, Entry::Note(note)
+            if note.contains("ended: The trial is discarded"))),
+        "{entries:?}"
+    );
+    let told = format!("Rewrite what {name} shows, from: {summary}");
     let rewriting = Rc::clone(&agents);
     let home_again = home.clone();
     cx.condition(&workspace, move |_, _| {
-        rewriting.borrow().last().is_some_and(|agent| {
-            agent.cwd().as_ref() == Some(&home_again)
-                && agent
-                    .prompts()
-                    .last()
-                    .is_some_and(|prompt| prompt.contains(&told))
-        })
+        let agent = &rewriting.borrow()[0];
+        agent.cwd().as_ref() == Some(&home_again)
+            && agent
+                .prompts()
+                .last()
+                .is_some_and(|prompt| prompt.contains(&told))
     })
     .await;
     let endings = workspace.read_with(cx, |workspace, _| workspace.endings(1));

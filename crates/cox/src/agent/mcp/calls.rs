@@ -240,19 +240,19 @@ fn show_map_tool() -> Value {
     })
 }
 
-/// The tool that makes the chat a trial, as the agent learns of it.
+/// The tool that opens a trial beside the chat, as the agent learns of it.
 fn start_trial_tool() -> Value {
     json!(
     {
         "name": START_TRIAL,
-        "description": "Makes this chat a trial, which works apart from the project: Cox \
-            makes a folder of its own for it, and once this turn ends, starts you again \
-            there, with the conversation so far, to go on with what you try. There you \
-            change and test files without asking the human. `from` is \"project\", a Git \
-            worktree of the project's last commit, to try a change to the project, or \
-            \"empty\", an empty Git repository, to try something from nothing. Call it, \
-            then end your turn. The human ends the trial, keeping it or not, and the chat \
-            goes on in the project.",
+        "description": "Opens a trial beside this chat: a chat of its own, under this one, \
+            which works apart from the project, in a folder Cox makes for it, and changes \
+            and tests files there without asking the human. Its agent is set up as you are, \
+            and told what this chat talked through so far, and what it tries. This chat \
+            stays in the project. `from` is \"project\", a Git worktree of the project's \
+            last commit, to try a change to the project, or \"empty\", an empty Git \
+            repository, to try something from nothing. The human ends the trial, and this \
+            chat hears how it ended.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -264,8 +264,8 @@ fn start_trial_tool() -> Value {
                 },
                 "what": {
                     "type": "string",
-                    "description": "What you try, in a sentence: you are told it again \
-                        once you start in the trial.",
+                    "description": "What the trial tries, in a sentence: its agent is \
+                        told it, and the trial is named after it.",
                 },
             },
             "required": ["from", "what"],
@@ -889,8 +889,8 @@ async fn propose_goal(
     Ok(told)
 }
 
-/// Asks the window to make the chat a trial, as `arguments` say, and
-/// tells the agent where it goes on.
+/// Asks the window to open a trial beside the chat, as `arguments` say,
+/// and tells the agent how it goes by.
 async fn start_trial(
     arguments: &Value,
     chats: &UnboundedSender<ChatRequest>,
@@ -912,18 +912,29 @@ async fn start_trial(
         .send(ChatRequest::StartTrial {
             trial,
             what,
+            show: false,
             answer,
         })
         .map_err(|_| "the chat has closed".to_owned())?;
-    let folder = made
+    let opened = made
         .await
         .map_err(|_| "the chat closed before the trial was made".to_owned())??;
-    Ok(format!(
-        "The trial is ready in {}, {}. End your turn now: Cox then starts you again there, \
-         with the conversation so far, to go on with what you try.",
-        folder.display(),
-        trial.what()
-    ))
+    let mut told = format!(
+        "The trial {} is open beside this chat as chat {}, trying it. Wait for its turn to \
+         end with wait_chat, giving {}.",
+        opened.name, opened.number, opened.number
+    );
+    if let Some(folder) = &opened.folder {
+        let _ = write!(
+            told,
+            " {}",
+            crate::workflow::TRIAL_OPENED.say(&[
+                ("folder", &folder.display().to_string()),
+                ("from", trial.what()),
+            ])
+        );
+    }
+    Ok(told)
 }
 
 /// What the agent is told of a command that ran: its output, or the end
@@ -1077,12 +1088,18 @@ mod tests {
             let Some(ChatRequest::StartTrial {
                 trial,
                 what,
+                show,
                 answer,
             }) = asked.recv().await
             else {
                 panic!("the window was not asked");
             };
-            let _ = answer.send(Ok("/trials/greet-1".into()));
+            assert!(!show);
+            let _ = answer.send(Ok(OpenedChat {
+                number: 3,
+                name: "A warmer greeting.".to_owned(),
+                folder: Some("/trials/greet-1".into()),
+            }));
             (trial, what)
         });
         let params = json!({ "name": START_TRIAL, "arguments": {
@@ -1095,7 +1112,13 @@ mod tests {
         assert_eq!(answered["isError"], false);
         let told = answered["content"][0]["text"].as_str().unwrap();
         assert!(
-            told.starts_with("The trial is ready in /trials/greet-1, a worktree"),
+            told.starts_with(
+                "The trial A warmer greeting. is open beside this chat as chat 3, trying it."
+            ),
+            "{told}"
+        );
+        assert!(
+            told.contains("working in /trials/greet-1, a worktree"),
             "{told}"
         );
         assert_eq!(
