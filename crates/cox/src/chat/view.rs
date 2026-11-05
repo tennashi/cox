@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use cox_core::goal;
-use cox_core::store::Record;
+use cox_core::store::{ChatId, Record};
 use cox_core::tabs::KeptTabs;
 use gpui::{
     AnyElement, AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding,
@@ -265,7 +265,8 @@ impl ChatView {
                     .filter_map(|setup| setup.context.as_deref())
                     .map(conversation::context_note),
             );
-        let conversation = Conversation::noting_each(notes);
+        let conversation = Conversation::noting_each(notes)
+            .with_keeping(crate::agent::setup::keeps_in_wiki(agent.setup.as_ref()));
         let mut view = Self {
             record,
             starts,
@@ -811,6 +812,29 @@ impl ChatView {
             self.keep();
             cx.notify();
         }
+    }
+
+    /// The human chose, on the card at `index`, whether to keep what a
+    /// chat learned in the wiki: kept, the window asks the chat's agent
+    /// to, as "Save to wiki" does.
+    fn answer_keep(&mut self, index: usize, keep: bool, cx: &mut Context<Self>) {
+        let Some(chat) = self.conversation.answer_keep(index, keep) else {
+            return;
+        };
+        self.keep();
+        cx.notify();
+        if keep {
+            cx.emit(Asked(RefCell::new(Some(ChatRequest::SaveToWiki { chat }))));
+        }
+    }
+
+    /// Asks the human, on a card, whether to keep what the chat kept as
+    /// `chat`, or this one, learned in the wiki, at the milestone `why`
+    /// says.
+    pub fn ask_to_keep(&mut self, why: String, chat: Option<ChatId>, cx: &mut Context<Self>) {
+        self.follow(|conversation| conversation.ask_to_keep(why, chat));
+        self.keep();
+        cx.notify();
     }
 
     /// Opens the input that sets the goal on the goal proposed at `index`,

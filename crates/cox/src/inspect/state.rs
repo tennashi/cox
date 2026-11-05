@@ -5,6 +5,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use cox_core::store::ChatId;
 use cox_core::tabs::KeptTab;
 use gpui::{App, Focusable as _, Window};
 
@@ -423,6 +424,21 @@ fn describe_entry(entry: &Entry) -> String {
                 None => format!("proposal {goal:?}, {answer}"),
             }
         }
+        Entry::Keep { why, chat, kept } => describe_keep(why, *chat, *kept),
+    }
+}
+
+/// Cox's card asking whether to keep in the wiki what a chat learned, at
+/// the milestone `why` says, of the chat kept as `chat`, or this one.
+fn describe_keep(why: &str, chat: Option<ChatId>, kept: Option<bool>) -> String {
+    let kept = match kept {
+        None => "open",
+        Some(true) => "kept",
+        Some(false) => "not now",
+    };
+    match chat {
+        Some(chat) => format!("keep in the wiki, chat {chat}'s, {kept}: {}", text_of(why)),
+        None => format!("keep in the wiki, {kept}: {}", text_of(why)),
     }
 }
 

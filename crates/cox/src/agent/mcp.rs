@@ -38,6 +38,7 @@ use std::thread;
 
 use anyhow::Context as _;
 use cox_core::goal::Goal;
+use cox_core::store::ChatId;
 use cox_core::tabs::Lines;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
@@ -173,6 +174,10 @@ pub enum ChatRequest {
     Whereabouts {
         answer: oneshot::Sender<Whereabouts>,
     },
+    /// Ask the agent of the chat, or of the chat kept as `chat`, such as
+    /// a trial that ended beside it, to keep what it learned in the wiki,
+    /// as the human chose on the card that asked them: no tool asks it.
+    SaveToWiki { chat: Option<ChatId> },
 }
 
 /// Where a chat is, as a page of the wiki its agent writes notes it.

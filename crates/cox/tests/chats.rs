@@ -1625,14 +1625,45 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
         Entry::Note(format!("Goal: until `{command}` passes."))
     );
     assert_eq!(
-        entries.last(),
-        Some(&Entry::Note(format!("Goal met: `{command}` passed.")))
+        entries[entries.len() - 2],
+        Entry::Note(format!("Goal met: `{command}` passed."))
     );
-    assert_eq!(entries[entries.len() - 3], Entry::Cox(prompts[1].clone()));
+    assert_eq!(entries[entries.len() - 4], Entry::Cox(prompts[1].clone()));
     // The goal, and the way to it, are kept.
     let kept = store.chats().unwrap();
     assert_eq!(kept[0].goal, Some(KeptGoal::Command(command.clone())));
     assert_eq!(store.entries(kept[0].id).unwrap(), entries);
+
+    // Met, the goal is a milestone at which the human is asked whether
+    // to keep what the chat learned in the wiki; "Save to wiki" asks the
+    // agent, in the human's place, as the menu's does.
+    let asked = entries.len() - 1;
+    assert_eq!(
+        entries[asked],
+        Entry::Keep {
+            why: "The goal is met.".to_owned(),
+            chat: None,
+            kept: None,
+        }
+    );
+    cx.run_until_parked();
+    click(
+        cx,
+        Box::leak(format!("keep-in-wiki-{asked}").into_boxed_str()),
+    );
+    wait_for_turn(cx, &view).await;
+    let save = workflow::WIKI_SAVE.say(&[]);
+    assert_eq!(agents.borrow()[0].prompts().last(), Some(&save));
+    let entries = shown_entries(cx, &workspace);
+    assert_eq!(
+        entries[asked],
+        Entry::Keep {
+            why: "The goal is met.".to_owned(),
+            chat: None,
+            kept: Some(true),
+        }
+    );
+    assert!(entries.contains(&Entry::Cox(save)));
 
     view.update(cx, |view, cx| view.set_goal(None, cx));
     assert_eq!(goals(cx, &workspace, 0), [None]);
@@ -1698,7 +1729,7 @@ async fn a_goal_in_words_is_judged_by_an_agent_until_it_is_met(cx: &mut TestAppC
     );
     assert!(entries.contains(&Entry::Cox(prompts[1].clone())));
     assert_eq!(
-        entries.last(),
+        entries.iter().rev().nth(1),
         Some(&Entry::Note("Goal met, as judged.".to_owned()))
     );
     assert_eq!(
@@ -1743,7 +1774,7 @@ async fn a_chats_goal_lasts_past_cox_starting_again(cx: &mut TestAppContext) {
     say(cx, &workspace, "hello").await;
     assert_eq!(agents.borrow()[0].prompts().len(), 1);
     assert_eq!(
-        shown_entries(cx, &workspace).last(),
+        shown_entries(cx, &workspace).iter().rev().nth(1),
         Some(&Entry::Note("Goal met: `true` passed.".to_owned()))
     );
 }
@@ -1802,7 +1833,7 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     say(cx, &workspace, "hello").await;
     assert_eq!(agents.borrow()[0].prompts(), ["hello"]);
     assert_eq!(
-        shown_entries(cx, &workspace).last(),
+        shown_entries(cx, &workspace).iter().rev().nth(1),
         Some(&Entry::Note("Goal met: `true` passed.".to_owned()))
     );
 
@@ -2518,6 +2549,31 @@ async fn a_trial_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
         panic!("{last:?}");
     };
     assert_made_again(note, "made.txt", "made in the trial\n");
+
+    // Where the human goes on, the chat it was opened beside, they are
+    // asked whether to keep what the trial found in the wiki, which its
+    // own agent, which found it, is then asked to, in the project.
+    let (beside, trial_kept, trial) = workspace.read_with(cx, |workspace, _| {
+        let trial = workspace.chats(0).nth(2).unwrap();
+        (
+            workspace.shown().and_then(Chat::view).cloned().unwrap(),
+            trial.kept(),
+            trial.view().cloned().unwrap(),
+        )
+    });
+    let asked = self::entries(cx, &beside);
+    let at = asked.len() - 1;
+    assert!(
+        matches!(&asked[at], Entry::Keep { why, chat, kept: None }
+            if why.starts_with("The trial \"") && why.ends_with("\" ended.") && chat == &trial_kept),
+        "{asked:?}"
+    );
+    assert!(trial_kept.is_some());
+    cx.run_until_parked();
+    click(cx, Box::leak(format!("keep-in-wiki-{at}").into_boxed_str()));
+    wait_for_turn(cx, &trial).await;
+    let save = workflow::WIKI_SAVE.say(&[]);
+    assert!(self::entries(cx, &trial).contains(&Entry::Cox(save)));
 
     // Another opens as a project of its own, which the human goes on
     // with, so it is no longer discarded.

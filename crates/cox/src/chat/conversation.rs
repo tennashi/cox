@@ -20,6 +20,7 @@ pub use cox_core::entry::{
 };
 use cox_core::goal;
 use cox_core::settings::Setting;
+use cox_core::store::ChatId;
 
 use crate::agent::mcp::{Ended, Ran};
 use crate::agent::{AgentEvent, Command, Opened};
@@ -104,6 +105,10 @@ impl Goal {
     }
 }
 
+/// The milestone of a chat whose goal is met, as the card that asks
+/// whether to keep what it learned says it.
+const GOAL_MET: &str = "The goal is met.";
+
 /// How `goal` reads, after "Goal:".
 #[must_use]
 pub fn line(goal: &goal::Goal) -> String {
@@ -137,6 +142,9 @@ pub struct Conversation {
     /// Whose move it was when the agent asked the human to log in, which it
     /// is again once they have chosen how.
     before_login: State,
+    /// Whether the chat's agent can keep what it learned in the wiki, so
+    /// that the chat asks the human whether to at its milestones.
+    keeps: bool,
 }
 
 impl Default for Conversation {
@@ -158,6 +166,7 @@ impl Conversation {
             settings_changed: false,
             commands: Vec::new(),
             before_login: State::Idle,
+            keeps: true,
         }
     }
 
@@ -191,6 +200,7 @@ impl Conversation {
             settings_changed: false,
             commands: Vec::new(),
             before_login: State::Idle,
+            keeps: true,
         }
     }
 
@@ -208,6 +218,58 @@ impl Conversation {
     pub fn with_settings(mut self, settings: Vec<Setting>) -> Self {
         self.settings = settings;
         self
+    }
+
+    /// The conversation, of a chat whose agent can keep what it learned
+    /// in the wiki, as `keeps` says, or not, when it has not the tool.
+    #[must_use]
+    pub fn with_keeping(mut self, keeps: bool) -> Self {
+        self.keeps = keeps;
+        self
+    }
+
+    /// Asks the human, on a card, whether to keep what a chat learned in
+    /// the wiki, at the milestone `why` says: this chat's, or, given
+    /// `chat`, another's, as a trial that ended beside it.
+    pub fn ask_to_keep(&mut self, why: String, chat: Option<ChatId>) {
+        self.push(Entry::Keep {
+            why,
+            chat,
+            kept: None,
+        });
+    }
+
+    /// Asks the human whether to keep what the chat learned, at the
+    /// milestone `why` says, when its agent can: once for a line of the
+    /// human's, so that the turn that keeps it, which meets the goal
+    /// again, does not ask again.
+    fn ask_to_keep_here(&mut self, why: &str) {
+        let asked = self
+            .entries
+            .iter()
+            .rev()
+            .take_while(|entry| !matches!(entry, Entry::Human(_)))
+            .any(|entry| matches!(entry, Entry::Keep { .. }));
+        if self.keeps && !asked {
+            self.ask_to_keep(why.to_owned(), None);
+        }
+    }
+
+    /// Takes whether the human chose to keep what a chat learned, as
+    /// asked at `index`, and answers which chat is to keep it, `None`
+    /// for this one, unless they answered already.
+    pub fn answer_keep(&mut self, index: usize, keep: bool) -> Option<Option<ChatId>> {
+        let Some(Entry::Keep {
+            chat,
+            kept: kept @ None,
+            ..
+        }) = self.entries.get_mut(index)
+        else {
+            return None;
+        };
+        *kept = Some(keep);
+        self.changed.insert(index);
+        Some(*chat)
     }
 
     /// What the agent lets the human choose of its session, each as it is
@@ -419,6 +481,7 @@ impl Conversation {
         let not_met = match ran.ended {
             Ended::Exited(0) => {
                 self.push(Entry::Note(format!("Goal met: `{command}` passed.")));
+                self.ask_to_keep_here(GOAL_MET);
                 return None;
             }
             Ended::Closed => {
@@ -459,10 +522,12 @@ impl Conversation {
         let why = match Verdict::of(&said) {
             Verdict::Met(said) if said.is_empty() => {
                 self.push(Entry::Note("Goal met, as judged.".to_owned()));
+                self.ask_to_keep_here(GOAL_MET);
                 return None;
             }
             Verdict::Met(said) => {
                 self.push(Entry::Note(format!("Goal met, as judged: {said}")));
+                self.ask_to_keep_here(GOAL_MET);
                 return None;
             }
             Verdict::NotMet(why) => why,
@@ -1581,6 +1646,40 @@ mod tests {
     }
 
     #[test]
+    fn the_human_is_asked_to_keep_in_the_wiki_once_for_a_line_of_theirs() {
+        let mut conversation = toward_make(true);
+        conversation.checked(ran(0, "ok"));
+        let asked = conversation.entries().len() - 1;
+        assert_eq!(conversation.answer_keep(asked, true), Some(None));
+        // The turn that keeps it meets the goal again, which asks nothing.
+        conversation.told("Keep it.");
+        take_turn(&mut conversation, true);
+        conversation.checked(ran(0, "ok"));
+        assert_eq!(
+            conversation.entries().last(),
+            Some(&Entry::Note("Goal met: `make` passed.".to_owned()))
+        );
+        // The human's next line does.
+        conversation.submit("more");
+        take_turn(&mut conversation, true);
+        conversation.checked(ran(0, "ok"));
+        assert!(matches!(
+            conversation.entries().last(),
+            Some(Entry::Keep { kept: None, .. })
+        ));
+    }
+
+    #[test]
+    fn a_chat_whose_agent_cannot_keep_in_the_wiki_is_not_asked_to() {
+        let mut conversation = toward_make(true).with_keeping(false);
+        assert_eq!(conversation.checked(ran(0, "ok")), None);
+        assert_eq!(
+            conversation.entries().last(),
+            Some(&Entry::Note("Goal met: `make` passed.".to_owned()))
+        );
+    }
+
+    #[test]
     fn works_toward_its_goal_until_the_command_passes() {
         let mut conversation = toward_make(true);
         assert_eq!(conversation.state(), State::Checking);
@@ -1604,9 +1703,29 @@ mod tests {
         take_turn(&mut conversation, true);
         assert_eq!(conversation.checked(ran(0, "ok")), None);
         assert_eq!(conversation.state(), State::Idle);
+        // The human is asked whether to keep what the chat learned.
+        let entries = conversation.entries();
         assert_eq!(
-            conversation.entries().last(),
-            Some(&Entry::Note("Goal met: `make` passed.".to_owned()))
+            entries[entries.len() - 2..],
+            [
+                Entry::Note("Goal met: `make` passed.".to_owned()),
+                Entry::Keep {
+                    why: GOAL_MET.to_owned(),
+                    chat: None,
+                    kept: None,
+                },
+            ]
+        );
+        let asked = entries.len() - 1;
+        assert_eq!(conversation.answer_keep(asked, false), Some(None));
+        assert_eq!(conversation.answer_keep(asked, true), None);
+        assert_eq!(
+            conversation.entries()[asked],
+            Entry::Keep {
+                why: GOAL_MET.to_owned(),
+                chat: None,
+                kept: Some(false),
+            }
         );
         // The goal stays, for the human's next line.
         assert_eq!(conversation.goal().and_then(Goal::command), Some("make"));
@@ -1813,10 +1932,12 @@ mod tests {
             None
         );
         assert_eq!(conversation.state(), State::Idle);
+        let entries = conversation.entries();
         assert_eq!(
-            conversation.entries().last(),
-            Some(&Entry::Note("Goal met, as judged.".to_owned()))
+            entries[entries.len() - 2],
+            Entry::Note("Goal met, as judged.".to_owned())
         );
+        assert!(matches!(entries.last(), Some(Entry::Keep { .. })));
         // The goal stays, for the human's next line.
         assert_eq!(
             conversation.goal().and_then(Goal::words),

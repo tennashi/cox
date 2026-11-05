@@ -116,8 +116,10 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProjectId(i64);
 
-/// A chat kept.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// A chat kept, which an entry of another chat's conversation can name,
+/// as the number it is kept by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct ChatId(i64);
 
 /// The number the chat is kept by, as the logs say which chat a line is of.

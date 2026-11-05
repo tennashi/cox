@@ -63,7 +63,7 @@ impl Speaker {
     fn of(entry: &Entry) -> Option<Self> {
         match entry {
             Entry::Human(_) => Some(Self::Human),
-            Entry::Cox(_) => Some(Self::Cox),
+            Entry::Cox(_) | Entry::Keep { .. } => Some(Self::Cox),
             Entry::Note(_) | Entry::Switched { .. } => None,
             _ => Some(Self::Agent),
         }
@@ -518,6 +518,7 @@ impl ChatView {
             Entry::Proposal { goal, why, answer } => {
                 render_proposal(index, goal, why.as_deref(), *answer, &mut writer, cx)
             }
+            Entry::Keep { why, kept, .. } => render_keep(index, why, *kept, &mut writer, cx),
             Entry::Note(text) => div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
@@ -742,6 +743,68 @@ fn render_proposal(
                 .text_color(rgb(DIM))
                 .child(writer.markdown(why))
         }))
+        .child(div().flex().flex_wrap().gap_2().children(buttons))
+        .into_any_element()
+}
+
+/// Cox's card asking the human whether to keep what a chat learned in
+/// the wiki, at the milestone `why` says, with "Save to wiki" and "Not
+/// now", or, once they chose, a line saying which.
+fn render_keep(
+    index: usize,
+    why: &str,
+    kept: Option<bool>,
+    writer: &mut Writer,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let title = format!("{why} Keep it in the wiki?");
+    if let Some(kept) = kept {
+        let answer = if kept { "asked to save" } else { "not now" };
+        return line_of(index, None, ("✎", LINK), &title, writer)
+            .debug_selector(move || format!("keep-{index}"))
+            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
+            .into_any_element();
+    }
+    let button = |name: &'static str, label: &'static str| {
+        div()
+            .id(SharedString::from(format!("{name}-{index}")))
+            .debug_selector(move || format!("{name}-{index}"))
+            .px_2()
+            .rounded_sm()
+            .bg(rgb(BUTTON))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
+            .child(label)
+    };
+    let buttons = [
+        button("keep-in-wiki", "Save to wiki").on_click(cx.listener(move |view, _, _, cx| {
+            view.answer_keep(index, true, cx);
+        })),
+        button("keep-not-now", "Not now").on_click(cx.listener(move |view, _, _, cx| {
+            view.answer_keep(index, false, cx);
+        })),
+    ];
+    div()
+        .debug_selector(move || format!("keep-{index}"))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_2()
+        .rounded_sm()
+        .border_1()
+        .border_color(rgb(LINK))
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .text_color(rgb(DIM))
+                .child(div().flex_shrink_0().text_color(rgb(LINK)).child("✎"))
+                .child(writer.plain(why, "\n")),
+        )
+        .child(writer.plain(
+            "Keep what was learned in the wiki, for the agents of every project to find again?",
+            "\n\n",
+        ))
         .child(div().flex().flex_wrap().gap_2().children(buttons))
         .into_any_element()
 }
