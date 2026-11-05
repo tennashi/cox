@@ -320,7 +320,8 @@ waits for a reply.
 
 The inputs, the chat's and the others, such as the address of a page,
 edit as a text field of the platform does: the cursor over them is an
-I-beam; a double click selects the word under the mouse, or the run of
+I-beam, as it is over the conversation's text, a tab of code and a
+terminal; a double click selects the word under the mouse, or the run of
 spaces or punctuation, and a triple click the line, a drag from either
 going on by words or lines; Option-Left and Option-Right go a word back
 and on, Command-Left and Command-Right to the start and the end of the

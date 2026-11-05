@@ -87,9 +87,9 @@ pub(super) struct Painted {
     /// Where the text shows, which it is cut to.
     text_bounds: Bounds<Pixels>,
     line_height: Pixels,
-    /// Where the mouse points with the pointing hand, over a name a click
-    /// goes to the definition of.
-    pointing: Option<Hitbox>,
+    /// Where the mouse is over the text: an I-beam, or the pointing hand
+    /// while a click goes to the definition of the name under it.
+    over_text: Option<Hitbox>,
 }
 
 impl Text {
@@ -320,9 +320,7 @@ impl Element for Text {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let mut painted = self.lay_out(bounds, window, cx);
-        if painted.link.is_some() {
-            painted.pointing = Some(window.insert_hitbox(bounds, HitboxBehavior::Normal));
-        }
+        painted.over_text = Some(window.insert_hitbox(painted.text_bounds, HitboxBehavior::Normal));
         painted
     }
 
@@ -337,8 +335,13 @@ impl Element for Text {
         cx: &mut App,
     ) {
         let line_height = painted.line_height;
-        if let Some(hitbox) = &painted.pointing {
-            window.set_cursor_style(CursorStyle::PointingHand, hitbox);
+        if let Some(hitbox) = &painted.over_text {
+            let style = if painted.link.is_some() {
+                CursorStyle::PointingHand
+            } else {
+                CursorStyle::IBeam
+            };
+            window.set_cursor_style(style, hitbox);
         }
         // The key that makes a click go to a definition underlines the name
         // under the mouse as it goes down, and stops as it comes up.
