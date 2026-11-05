@@ -8,9 +8,10 @@
 //! where the human has something to read: the change a request asks to
 //! make, the output of a call that failed, or what the agent is thinking
 //! as it thinks it. The work the agent did between its replies, its tool
-//! calls, thoughts and plan one after another, folds into one line, under
-//! which only the calls still running and the thought still arriving show,
-//! until the human opens it.
+//! calls, thoughts and plan one after another, folds under a line that
+//! counts its steps, the tool calls, each of which shows as a chip of how
+//! it went, which opens its line with a click, with the last thought
+//! under them, until the human opens the whole of it.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -26,8 +27,9 @@ use crate::chat::conversation::{
 use crate::chat::view::ChatView;
 use crate::ui::text::Writer;
 use crate::ui::theme::{
-    ACCENT, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER, BUTTON, BUTTON_HOVER,
-    CODE_FONT, DIM, FAILED, FAINT, FOREGROUND, GROUND, LINK, SURFACE,
+    ACCENT, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER, BORDER_STRONG, BUTTON,
+    BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND, FAILED_MARK, FAINT, FOREGROUND,
+    GROUND, LINK, RAISED, SURFACE,
 };
 
 /// How tall what a tool call shows grows before it scrolls on its own.
@@ -68,9 +70,11 @@ impl Speaker {
 }
 
 /// What the timeline marks beside an entry: a speaker, by name, where
-/// they start, in their color, or what asks the human.
+/// they start, in their color, or, where the entry names them itself, by
+/// the dot alone, or what asks the human.
 enum Mark {
     Named(SharedString, u32),
+    Starts(u32),
     Asking,
 }
 
@@ -110,8 +114,10 @@ const LINE_LEFT: f32 = 9.;
 /// `element` on the timeline down the conversation's left: the line,
 /// from the first dot down, and the dot and name of `mark`, if it has one.
 fn on_timeline(first: bool, mark: Option<Mark>, element: AnyElement) -> AnyElement {
+    let starts = matches!(mark, Some(Mark::Named(..) | Mark::Starts(_)));
     let (dot, name) = match mark {
-        Some(Mark::Named(name, color)) => (Some(color), Some((name, color))),
+        Some(Mark::Named(name, color)) => (Some(color), Some(name)),
+        Some(Mark::Starts(color)) => (Some(color), None),
         Some(Mark::Asking) => (Some(ASKING), None),
         None => (None, None),
     };
@@ -119,7 +125,7 @@ fn on_timeline(first: bool, mark: Option<Mark>, element: AnyElement) -> AnyEleme
         .relative()
         .pl(px(TIMELINE_INDENT))
         .pb(px(10.))
-        .when(name.is_some() && !first, |row| row.pt(px(8.)))
+        .when(starts && !first, |row| row.pt(px(8.)))
         .child(
             div()
                 .absolute()
@@ -133,22 +139,24 @@ fn on_timeline(first: bool, mark: Option<Mark>, element: AnyElement) -> AnyEleme
             div()
                 .absolute()
                 .left(px(LINE_LEFT - 5.))
-                .top(px(if name.is_some() && !first { 12. } else { 4. }))
+                .top(px(if starts && !first { 12. } else { 4. }))
                 .size(px(12.))
                 .rounded_full()
                 .bg(rgb(color))
                 .border_3()
                 .border_color(rgb(SURFACE))
         }))
-        .children(name.map(|(name, _)| {
-            div()
-                .text_size(px(11.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(FAINT))
-                .child(name)
-        }))
+        .children(name.map(|name| label().child(name)))
         .child(element)
         .into_any_element()
+}
+
+/// The text of a speaker's name, and of what goes with it.
+fn label() -> gpui::Div {
+    div()
+        .text_size(px(11.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(FAINT))
 }
 
 /// Whether `entry` is work the agent does on its way to a reply.
@@ -160,7 +168,8 @@ fn is_work(entry: &Entry) -> bool {
 }
 
 /// What the conversation shows of `entries`, in order: two entries of
-/// work or more in a row fold into one place.
+/// work or more in a row fold into one place, and so does a tool call
+/// alone, to show as a step.
 pub(super) fn shown(entries: &[Entry]) -> Vec<Shown> {
     let mut shown = Vec::new();
     let mut index = 0;
@@ -169,7 +178,7 @@ pub(super) fn shown(entries: &[Entry]) -> Vec<Shown> {
             .iter()
             .take_while(|entry| is_work(entry))
             .count();
-        if work > 1 {
+        if work > 1 || matches!(entries[index], Entry::ToolCall { .. }) {
             shown.push(Shown::Work(index..index + work));
             index += work;
         } else {
@@ -181,12 +190,14 @@ pub(super) fn shown(entries: &[Entry]) -> Vec<Shown> {
 }
 
 /// A part of the conversation that the human opens and closes: what the
-/// entry at an index shows under its line, or the work folded from the
-/// entry at an index on.
+/// entry at an index shows under its line, the work folded from the
+/// entry at an index on, or the line of the tool call at an index under
+/// the steps of its fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Fold {
     Content(usize),
     Work(usize),
+    Step(usize),
 }
 
 /// The parts the human opened or closed, which show otherwise as they do
@@ -224,10 +235,6 @@ impl ChatView {
             if let Entry::Switched { to, .. } = entry {
                 agents.switch(to);
             }
-            let element = match shown {
-                Shown::Entry(index) => self.render_entry(index, entry, cx),
-                Shown::Work(work) => self.render_work(work, cx),
-            };
             let speaker = Speaker::of(entry);
             // A speaker is named where they start, and what asks the
             // human is marked wherever it is.
@@ -238,7 +245,7 @@ impl ChatView {
             if speaker.is_some() {
                 speaking = speaker;
             }
-            let mark = if asking {
+            let mut mark = if asking {
                 Some(Mark::Asking)
             } else if starts {
                 speaker.map(|speaker| match speaker {
@@ -248,6 +255,24 @@ impl ChatView {
                 })
             } else {
                 None
+            };
+            let element = match shown {
+                Shown::Entry(index) => self.render_entry(index, entry, cx),
+                Shown::Work(work) => {
+                    // The work names who did it on its own line, ahead of
+                    // its steps.
+                    let name = match mark.take() {
+                        Some(Mark::Named(name, color)) => {
+                            mark = Some(Mark::Starts(color));
+                            Some(name)
+                        }
+                        other => {
+                            mark = other;
+                            None
+                        }
+                    };
+                    self.render_work(work, name, cx)
+                }
             };
             rendered.push(on_timeline(place == 0, mark, element));
         }
@@ -261,85 +286,150 @@ impl ChatView {
             && index + 1 == self.conversation.entries().len()
     }
 
-    /// The work the agent did one after another, under a line that tells
-    /// how many tool calls it made and how many of them failed, how often
-    /// it thought, and how far its plan has gone. Closed, only the calls
-    /// still running and the thought still arriving show.
-    fn render_work(&self, work: Range<usize>, cx: &mut Context<Self>) -> AnyElement {
+    /// The work the agent did one after another, under a line that names
+    /// who did it, `name`, where they start with it, and counts its steps,
+    /// the tool calls, and tells how far its plan has gone. Closed, it
+    /// shows each call as a chip of how it went, which opens the call's
+    /// line under the chips, and the last thought, which shows as it
+    /// arrives; open, it shows each entry on its line.
+    fn render_work(
+        &self,
+        work: Range<usize>,
+        name: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let entries = self.conversation.entries();
         let fold = Fold::Work(work.start);
         let open = self.folds.is_open(fold, false);
-        let (mut calls, mut failed, mut thoughts, mut plan) = (0, 0, 0, None);
-        for entry in &entries[work.clone()] {
-            match entry {
-                Entry::ToolCall { result, .. } => {
-                    calls += 1;
-                    if *result == Some(ToolCallResult::Failed) {
-                        failed += 1;
-                    }
-                }
-                Entry::Thought(_) => thoughts += 1,
-                Entry::Plan(steps) => plan = Some(steps),
-                _ => {}
-            }
-        }
-        let mut told = Vec::new();
-        if calls > 0 {
-            told.push((counted(calls, "tool call"), DIM));
-        }
-        if failed > 0 {
-            told.push((format!("{failed} failed"), FAILED));
-        }
-        if thoughts > 0 {
-            told.push((counted(thoughts, "thought"), DIM));
+        let calls: Vec<usize> = work
+            .clone()
+            .filter(|&index| matches!(entries[index], Entry::ToolCall { .. }))
+            .collect();
+        let thoughts = work
+            .clone()
+            .filter(|&index| matches!(entries[index], Entry::Thought(_)))
+            .count();
+        let plan = entries[work.clone()]
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::Plan(steps) => Some(steps),
+                _ => None,
+            });
+        let mut told: Vec<String> = name.into_iter().map(String::from).collect();
+        if !calls.is_empty() {
+            told.push(counted(calls.len(), "step").to_uppercase());
+        } else if thoughts > 0 {
+            told.push(counted(thoughts, "thought").to_uppercase());
         }
         if let Some(steps) = plan {
-            told.push((format!("plan {}", progress(steps)), DIM));
+            told.push(format!("PLAN {}", progress(steps)));
         }
-        // The dots between the counts are parts of their own, so that the
-        // gap on each side of a dot is the same in a font of any widths.
-        let told = told.into_iter().enumerate().flat_map(|(i, (text, color))| {
-            let dot = (i > 0).then(|| div().child("·"));
-            dot.into_iter()
-                .chain([div().text_color(rgb(color)).child(text)])
-        });
         let start = work.start;
-        let summary = div()
+        let header = label()
             .id(("work", start))
             .debug_selector(move || format!("work-{start}"))
             .flex()
             .gap_1p5()
-            .text_color(rgb(DIM))
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(BUTTON)))
-            .child(disclosure(Some(open)))
-            .children(told)
+            .hover(|style| style.text_color(rgb(FOREGROUND)))
+            .child(told.join(" · "))
+            .child(disclosure(Some(open)).text_color(rgb(FAINT)))
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.folds.flip(fold);
                 cx.notify();
             }));
-        let shown: Vec<_> = work
-            .filter(|&index| {
-                open || matches!(entries[index], Entry::ToolCall { result: None, .. })
-                    || (matches!(entries[index], Entry::Thought(_)) && self.is_arriving(index))
-            })
-            .map(|index| self.render_entry(index, &entries[index], cx))
-            .collect();
+        let body = if open {
+            work.map(|index| self.render_entry(index, &entries[index], cx))
+                .collect()
+        } else {
+            let mut body = Vec::new();
+            if !calls.is_empty() {
+                let chips = calls.iter().map(|&index| self.render_step(index, cx));
+                body.push(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(6.))
+                        .children(chips)
+                        .into_any_element(),
+                );
+            }
+            body.extend(
+                calls
+                    .iter()
+                    .filter(|&&index| self.folds.is_open(Fold::Step(index), false))
+                    .map(|&index| self.render_entry(index, &entries[index], cx)),
+            );
+            let last_thought = work
+                .rev()
+                .find(|&index| matches!(entries[index], Entry::Thought(_)));
+            body.extend(last_thought.map(|index| self.render_entry(index, &entries[index], cx)));
+            body
+        };
         div()
             .flex()
             .flex_col()
-            .gap_1()
-            .child(summary)
-            .when(!shown.is_empty(), |work| {
-                work.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .pl(px(INDENT))
-                        .children(shown),
-                )
-            })
+            .gap(px(6.))
+            .child(header)
+            .children(body)
+            .into_any_element()
+    }
+
+    /// The tool call at `index` as a step of its fold: a chip with a mark
+    /// of how it goes, a ring while it runs and then a dot, and its title,
+    /// short, which opens or closes the call's
+    /// line under the chips.
+    fn render_step(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Entry::ToolCall { title, result, .. } = &self.conversation.entries()[index] else {
+            return div().into_any_element();
+        };
+        let (dot, ground, text) = match result {
+            None => (LINK, RAISED, DIM),
+            Some(ToolCallResult::Completed) => (ACCENT, RAISED, DIM),
+            Some(ToolCallResult::Failed) => (FAILED_MARK, FAILED_GROUND, FAILED),
+            Some(ToolCallResult::Cancelled) => (DISABLED, RAISED, FAINT),
+        };
+        let fold = Fold::Step(index);
+        let open = self.folds.is_open(fold, false);
+        div()
+            .id(("step", index))
+            .debug_selector(move || format!("step-{index}"))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .h(px(26.))
+            .px(px(10.))
+            .max_w(px(320.))
+            .rounded_full()
+            .bg(rgb(ground))
+            .border_1()
+            .border_color(rgb(if open { BORDER_STRONG } else { ground }))
+            .text_color(rgb(text))
+            .text_size(px(12.))
+            .font_family(CODE_FONT)
+            .cursor_pointer()
+            .hover(|style| style.border_color(rgb(BORDER_STRONG)))
+            .child(
+                // A ring while the call runs, filled once it has gone.
+                div()
+                    .flex_shrink_0()
+                    .size(px(7.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(rgb(dot))
+                    .when(result.is_some(), |mark| mark.bg(rgb(dot))),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(short(title))),
+            )
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.folds.flip(fold);
+                cx.notify();
+            }))
             .into_any_element()
     }
 
@@ -797,6 +887,23 @@ fn folding(
         }))
 }
 
+/// The title of a tool call, short, as its chip shows it: as text, not
+/// Markdown, and each path by its last part, as `Read src/main.rs` is
+/// `Read main.rs`.
+fn short(title: &str) -> String {
+    title
+        .split_whitespace()
+        .map(|word| {
+            let word = word.trim_matches('`');
+            match word.rsplit_once('/') {
+                Some((_, last)) if !last.is_empty() => last,
+                _ => word,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// `count` of what `one` names, as "1 thought" or "3 thoughts".
 fn counted(count: usize, one: &str) -> String {
     if count == 1 {
@@ -940,7 +1047,7 @@ mod tests {
             shown(&entries),
             [
                 Shown::Entry(0),
-                Shown::Entry(1),
+                Shown::Work(1..2),
                 Shown::Entry(2),
                 Shown::Work(3..6),
                 Shown::Entry(6),
@@ -971,6 +1078,14 @@ mod tests {
                 Shown::Entry(6),
             ]
         );
+    }
+
+    #[test]
+    fn a_step_names_each_path_by_its_last_part() {
+        assert_eq!(short("Read src/main.rs"), "Read main.rs");
+        assert_eq!(short("`cargo test`"), "cargo test");
+        assert_eq!(short("Edit `/home/me/app/src/a.rs`"), "Edit a.rs");
+        assert_eq!(short("grep greeting src/"), "grep greeting src/");
     }
 
     #[test]
