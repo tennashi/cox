@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use cox_acp::{
     Login, LoginMethod, McpServer, News, PermissionAnswer, PermissionKind, PlanEntry, PlanState,
-    Session, StopReason, ToolCallContent, Transport, Update,
+    Session, SlashCommand, StopReason, ToolCallContent, Transport, Update,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -49,6 +49,9 @@ pub enum AgentEvent {
     Opened { id: String, how: Opened },
     /// The agent gave the session a title, in place of any it gave before.
     Titled(String),
+    /// The commands the agent runs when a line starts with `/` and one of
+    /// their names, in place of those it told before.
+    Commands(Vec<SlashCommand>),
     /// What the agent lets the human choose of the session, such as its
     /// model, each as it is set now: when the session opens, and each time
     /// a setting changes, as the human or the agent changes it.
@@ -344,11 +347,21 @@ async fn run<T: Transport + 'static>(
     // The settings as they stand, which the agent changes as it tells, in
     // between turns too.
     let settings = Arc::new(Mutex::new(Vec::new()));
+    // The names of the agent's commands, as it last told them.
+    let commands_known = Arc::new(Mutex::new(Vec::new()));
     let told = events.clone();
     let known = Arc::clone(&settings);
+    let names = Arc::clone(&commands_known);
     let heard = move |news| match news {
         News::Titled(title) => {
             let _ = told.send(AgentEvent::Titled(title));
+        }
+        News::Commands(commands) => {
+            *names.lock().expect("no one panics holding it") = commands
+                .iter()
+                .map(|command| command.name.clone())
+                .collect();
+            let _ = told.send(AgentEvent::Commands(commands));
         }
         News::Settings(changed) => {
             let _ = told.send(AgentEvent::Settings(shown_settings(&changed)));
@@ -381,8 +394,20 @@ async fn run<T: Transport + 'static>(
                 // answer, and a cancel with no turn running nothing to stop.
                 match command {
                     Command::Prompt(text) => {
-                        // What goes ahead of the first prompt goes once.
-                        let prompt = std::mem::take(&mut ahead).into_iter().chain([text]);
+                        // What goes ahead of the first prompt goes once,
+                        // and not ahead of a command, which the agent
+                        // knows by the prompt's first block: it waits for
+                        // the next line.
+                        let command = runs_command(
+                            &text,
+                            &commands_known.lock().expect("no one panics holding it"),
+                        );
+                        let ahead = if command {
+                            Vec::new()
+                        } else {
+                            std::mem::take(&mut ahead)
+                        };
+                        let prompt = ahead.into_iter().chain([text]);
                         take_turn(
                             &mut session,
                             prompt,
@@ -503,6 +528,14 @@ fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
             (how, ahead)
         }
     }
+}
+
+/// Whether `line` runs one of the agent's commands, named `commands`: it
+/// starts with `/` and one of their names, then a space or its end.
+fn runs_command(line: &str, commands: &[String]) -> bool {
+    line.strip_prefix('/')
+        .and_then(|rest| rest.split_whitespace().next())
+        .is_some_and(|name| commands.iter().any(|command| command == name))
 }
 
 /// What a new session is told first: `instructions`, then the context of
@@ -877,6 +910,17 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    #[test]
+    fn a_line_runs_a_command_the_agent_named() {
+        let commands = ["compact".to_owned(), "review".to_owned()];
+        assert!(runs_command("/compact", &commands));
+        assert!(runs_command("/review the last commit", &commands));
+        assert!(!runs_command("/compacting", &commands));
+        assert!(!runs_command("/usr/bin is gone", &commands));
+        assert!(!runs_command(" /compact", &commands));
+        assert!(!runs_command("compact", &commands));
+    }
 
     #[test]
     fn a_new_session_is_told_the_conversation_so_far() {

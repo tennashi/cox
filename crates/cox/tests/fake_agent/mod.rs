@@ -25,16 +25,16 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AuthenticateRequest,
-    AuthenticateResponse, CancelNotification, ConfigOptionUpdate, ContentBlock, ContentChunk, Diff,
-    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpServer,
-    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry,
-    PlanEntryPriority, PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities,
-    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption, SessionId,
-    SessionInfoUpdate, SessionNotification, SessionResumeCapabilities, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
-    ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, ToolKind,
+    AuthenticateResponse, AvailableCommand, AvailableCommandsUpdate, CancelNotification,
+    ConfigOptionUpdate, ContentBlock, ContentChunk, Diff, InitializeRequest, InitializeResponse,
+    LoadSessionRequest, LoadSessionResponse, McpServer, NewSessionRequest, NewSessionResponse,
+    PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus,
+    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigSelectOption, SessionId, SessionInfoUpdate,
+    SessionNotification, SessionResumeCapabilities, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallContent,
+    ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Responder, Result};
 use tokio::sync::Notify;
@@ -150,6 +150,8 @@ impl Default for Settings {
 /// The ids of the agent's settings: the model, `large` or `small`, and the
 /// mode, `ask` or `plan`.
 pub const MODEL: &str = "model";
+/// The name of the one command the agent runs.
+pub const COMMAND: &str = "compact";
 pub const MODE: &str = "mode";
 
 impl Settings {
@@ -432,13 +434,21 @@ async fn serve(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: NewSessionRequest, responder, _cx| {
+            async move |request: NewSessionRequest, responder, cx: ConnectionTo<Client>| {
                 if on_new.asks(true) {
                     return responder.respond_with_error(Error::auth_required());
                 }
                 sessions_opened.fetch_add(1, Ordering::SeqCst);
                 *cwd.lock().unwrap() = Some(request.cwd);
                 *mcp_servers.lock().unwrap() = request.mcp_servers;
+                // The agent's commands, told ahead of the session's
+                // answer, so that Cox knows them before any line is sent.
+                cx.send_notification(SessionNotification::new(
+                    SessionId::new("session-1"),
+                    SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(vec![
+                        AvailableCommand::new(COMMAND, "Sum up the conversation so far"),
+                    ])),
+                ))?;
                 let options = on_new_settings.lock().unwrap().options();
                 responder.respond(NewSessionResponse::new("session-1").config_options(options))
             },

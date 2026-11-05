@@ -18,18 +18,19 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AuthCapabilities, AuthMethod, AuthenticateRequest, CancelNotification,
-    ClientCapabilities, ConfigOptionUpdate, Content, ContentBlock, ContentChunk, Diff,
-    InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio,
-    NewSessionRequest, PermissionOptionKind, Plan as AcpPlan, PlanEntry as AcpPlanEntry,
-    PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionConfigId, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectOption,
-    SessionConfigSelectOptions, SessionConfigValueId, SessionId, SessionInfoUpdate,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, StopReason as AcpStopReason,
-    TextContent, ToolCall as AcpToolCall, ToolCallContent as AcpToolCallContent, ToolCallId,
-    ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolKind as AcpToolKind,
+    AgentCapabilities, AuthCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand,
+    AvailableCommandInput, AvailableCommandsUpdate, CancelNotification, ClientCapabilities,
+    ConfigOptionUpdate, Content, ContentBlock, ContentChunk, Diff, InitializeRequest,
+    LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio, NewSessionRequest,
+    PermissionOptionKind, Plan as AcpPlan, PlanEntry as AcpPlanEntry, PlanEntryStatus,
+    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigOptionValue,
+    SessionConfigSelectOption, SessionConfigSelectOptions, SessionConfigValueId, SessionId,
+    SessionInfoUpdate, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall,
+    ToolCallContent as AcpToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
+    ToolCallUpdate, ToolKind as AcpToolKind,
 };
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
 use agent_client_protocol::{
@@ -138,6 +139,15 @@ pub async fn connect<T>(
                         config_options,
                         ..
                     }) => heard(News::Settings(settings(config_options))),
+                    SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate {
+                        available_commands,
+                        ..
+                    }) => heard(News::Commands(
+                        available_commands
+                            .into_iter()
+                            .map(SlashCommand::from)
+                            .collect(),
+                    )),
                     update => {
                         if let Some(update) = translate(update) {
                             deliver(&updates, update);
@@ -557,6 +567,43 @@ pub enum News {
     /// The session's settings changed, as the agent changes them on its
     /// own: all of them, as they are now.
     Settings(Vec<Setting>),
+    /// The commands the agent runs when a prompt starts with `/` and one
+    /// of their names, all of them, in place of those it told before.
+    Commands(Vec<SlashCommand>),
+}
+
+/// A command the agent runs when the human's line starts with `/` and its
+/// name, as `/compact`, with what follows the name as its input: ACP's
+/// available command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlashCommand {
+    /// Its name, without the `/`.
+    pub name: String,
+    /// What it does, for the human.
+    pub description: String,
+    /// What to write after the name, for a command that takes input, as
+    /// the agent hints it.
+    pub hint: Option<String>,
+}
+
+impl From<AvailableCommand> for SlashCommand {
+    fn from(command: AvailableCommand) -> Self {
+        let hint = command.input.and_then(|input| match input {
+            AvailableCommandInput::Unstructured(input) => Some(input.hint),
+            // A kind of input Cox does not know yet hints nothing.
+            _ => None,
+        });
+        Self {
+            // Some agents name their commands with the `/`.
+            name: command
+                .name
+                .strip_prefix('/')
+                .unwrap_or(&command.name)
+                .to_owned(),
+            description: command.description,
+            hint,
+        }
+    }
 }
 
 /// Something of a session that the agent lets the human choose, such as

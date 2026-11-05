@@ -516,6 +516,44 @@ async fn the_agent_gets_the_projects_instructions_with_the_first_line(cx: &mut T
 }
 
 #[gpui::test]
+async fn a_command_goes_first_and_the_instructions_with_the_next_line(cx: &mut TestAppContext) {
+    let home = scratch("command-home");
+    let folder = scratch("command");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(folder.clone()), window, cx);
+    });
+    let command = format!("/{}", fake_agent::COMMAND);
+    say(cx, &workspace, &command).await;
+    say(cx, &workspace, "hello").await;
+
+    // The chat knows the agent's commands, for the list over its input.
+    let view = shown(cx, &workspace);
+    let commands = view.read_with(cx, |view, _| {
+        view.conversation()
+            .commands()
+            .iter()
+            .map(|command| command.name.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(commands, [fake_agent::COMMAND]);
+    // The agent knows a command by the prompt's first block.
+    let instructions = Instructions::read(&folder).unwrap();
+    assert_eq!(
+        agents.borrow()[0].prompt_blocks(),
+        [
+            vec![command],
+            vec![instructions.prompt(), "hello".to_owned()]
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui::test]
 async fn switching_keeps_each_chats_conversation_and_draft(cx: &mut TestAppContext) {
     let (agents, workspace, cx) = open_window(cx, scratch("switching"));
 

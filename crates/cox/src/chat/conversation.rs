@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use cox_acp::{PermissionAnswer, StopReason};
+use cox_acp::{PermissionAnswer, SlashCommand, StopReason};
 pub use cox_core::entry::{
     Answer, Content, Entry, LoginOption, Step, StepState, TerminalLogin, ToolCallResult,
 };
@@ -131,6 +131,9 @@ pub struct Conversation {
     settings: Vec<Setting>,
     /// Whether the settings changed since that was last taken, to keep.
     settings_changed: bool,
+    /// The commands the agent runs when a line starts with `/` and one of
+    /// their names, as it last told them while it runs.
+    commands: Vec<SlashCommand>,
     /// Whose move it was when the agent asked the human to log in, which it
     /// is again once they have chosen how.
     before_login: State,
@@ -153,6 +156,7 @@ impl Conversation {
             goal: None,
             settings: Vec::new(),
             settings_changed: false,
+            commands: Vec::new(),
             before_login: State::Idle,
         }
     }
@@ -185,6 +189,7 @@ impl Conversation {
             goal: None,
             settings: Vec::new(),
             settings_changed: false,
+            commands: Vec::new(),
             before_login: State::Idle,
         }
     }
@@ -210,6 +215,13 @@ impl Conversation {
     #[must_use]
     pub fn settings(&self) -> &[Setting] {
         &self.settings
+    }
+
+    /// The commands the agent runs when a line starts with `/` and one of
+    /// their names, as it told them, while it runs.
+    #[must_use]
+    pub fn commands(&self) -> &[SlashCommand] {
+        &self.commands
     }
 
     /// Whether the settings changed since this was last called, to keep.
@@ -835,6 +847,7 @@ impl Conversation {
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Titled(title) => self.title = Some(title),
+            AgentEvent::Commands(commands) => self.commands = commands,
             AgentEvent::Settings(settings) => self.settings_set(settings),
             AgentEvent::SettingFailed { name, error } => {
                 self.push(Entry::Note(format!(
@@ -931,15 +944,20 @@ impl Conversation {
                 self.push(Entry::Note(format!("The turn failed: {error}")));
                 self.state = State::Idle;
             }
-            AgentEvent::Closed(error) => {
-                let note = match error {
-                    Some(error) => format!("The agent closed: {error}"),
-                    None => "The agent closed.".to_owned(),
-                };
-                self.push(Entry::Note(note));
-                self.state = State::Closed;
-            }
+            AgentEvent::Closed(error) => self.agent_closed(error),
         }
+    }
+
+    /// The agent closed, for `error` if it failed.
+    fn agent_closed(&mut self, error: Option<String>) {
+        let note = match error {
+            Some(error) => format!("The agent closed: {error}"),
+            None => "The agent closed.".to_owned(),
+        };
+        self.push(Entry::Note(note));
+        self.state = State::Closed;
+        // A closed agent runs no command.
+        self.commands.clear();
     }
 }
 
