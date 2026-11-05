@@ -219,7 +219,7 @@ fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServ
 }
 
 #[test]
-fn a_page_one_project_keeps_in_the_wiki_is_found_from_another() {
+fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     let data = scratch("wiki-data");
     cox::storage::keep_in(&data);
     let one = scratch("wiki-one");
@@ -268,6 +268,37 @@ fn a_page_one_project_keeps_in_the_wiki_is_found_from_another() {
         index.contains("- [[gpui/scroll|Scrolling in GPUI]]: A flex child"),
         "{index}"
     );
+
+    // A page the writer keeps in its project is not the reader's.
+    writer.call(
+        6,
+        "wiki_write",
+        &json!({
+            "page": "customers",
+            "text": "# Customers\n\nAcme scrolls a lot.\n",
+            "keep_in_project": true,
+        }),
+    );
+    let written = writer.hear();
+    let written = written["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        written.ends_with(" It is kept in one, for its chats alone."),
+        "{written}"
+    );
+    reader.call(7, "wiki_search", &json!({ "query": "scrolls" }));
+    let found = reader.hear();
+    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(found.starts_with("No page of the wiki"), "{found}");
+    reader.call(8, "wiki_read", &json!({ "page": "customers" }));
+    assert_eq!(reader.hear()["result"]["isError"], true);
+    reader.call(9, "wiki_read", &json!({}));
+    let index = reader.hear();
+    let index = index["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(!index.contains("customers"), "{index}");
+    writer.call(10, "wiki_search", &json!({ "query": "scrolls" }));
+    let found = writer.hear();
+    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(found.contains("customers: Customers"), "{found}");
     drop((writer, reader));
     for folder in [data, one, other] {
         std::fs::remove_dir_all(folder).unwrap();

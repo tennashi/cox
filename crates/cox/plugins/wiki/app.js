@@ -5,7 +5,8 @@
 // at its top narrows to those whose names, titles or first lines have
 // every word typed, and the chips to those Cox marks: with links to no
 // page, linked from no page, with no title, or saying nowhere where they
-// were used. A page's name as the hash, as `#rust/errors`, opens it,
+// were used. A page kept in one project, for its chats alone, says
+// which. A page's name as the hash, as `#rust/errors`, opens it,
 // read from `cox://api/wiki/<name>`: its text, its links opening the
 // pages they name, the pages that link to it, and where it was used.
 
@@ -35,6 +36,7 @@ const esc = (s) =>
 
 const shown = () => decodeURIComponent(location.hash.replace(/^#/, ""));
 const href = (name) => `#${name.split("/").map(encodeURIComponent).join("/")}`;
+const only = (p) => (p.only ? `<span class="only" title="Only the chats of ${esc(p.only)} find this page">only in ${esc(p.only)}</span>` : "");
 const marks = (p) => p.marks.map((m) => `<span class="mark ${m}" title="${esc(MARKS[m]?.[1] ?? m)}">${esc(MARKS[m]?.[0] ?? m)}</span>`).join("");
 
 async function read(url) {
@@ -113,7 +115,7 @@ function drawEntries() {
   }
   const words = typed.toLowerCase().split(/\s+/).filter(Boolean);
   const fits = wiki.pages.filter((p) => {
-    const text = `${p.name} ${p.title} ${p.about ?? ""}`.toLowerCase();
+    const text = `${p.name} ${p.title} ${p.about ?? ""} ${p.only ?? ""}`.toLowerCase();
     return words.every((w) => text.includes(w)) && (!marked || p.marks.includes(marked));
   });
   list.innerHTML = fits.length
@@ -121,7 +123,7 @@ function drawEntries() {
         .map((p) => {
           const last = p.used.at(-1);
           return (
-            `<a class="entry" href="${href(p.name)}"><div><span class="title">${esc(p.title)}</span><span class="name">${esc(p.name)}</span>${marks(p)}</div>` +
+            `<a class="entry" href="${href(p.name)}"><div><span class="title">${esc(p.title)}</span><span class="name">${esc(p.name)}</span>${only(p)}${marks(p)}</div>` +
             (p.about ? `<div class="about">${esc(p.about)}</div>` : "") +
             (last ? `<div class="last">used ${esc(last.day)} ${esc(last.what)}${p.used.length > 1 ? ` · ${p.used.length} uses` : ""}</div>` : "") +
             `</a>`
@@ -141,7 +143,7 @@ function drawPage() {
   const link = (n) => `<a href="${href(n)}">${esc(titled(n))}</a>`;
   const warned = page.marks.map((m) => `<li>${esc(MARKS[m]?.[1] ?? m)}${m === "broken" ? `: ${page.broken.map((b) => `<code>${esc(b)}</code>`).join(", ")}` : ""}</li>`).join("");
   app.innerHTML =
-    `<div class="crumbs"><a href="#">Wiki</a> › <span>${esc(page.name)}</span>${marks(page)}<a class="where" href="cox://open${esc(page.file)}" title="opens the file on a tab">${esc(page.file)}</a></div>` +
+    `<div class="crumbs"><a href="#">Wiki</a> › <span>${esc(page.name)}</span>${only(page)}${marks(page)}<a class="where" href="cox://open${esc(page.file)}" title="opens the file on a tab">${esc(page.file)}</a></div>` +
     `<div class="page">${page.html}</div>` +
     `<div class="aside"><h2>Used in</h2>${page.used.length ? `<ul>${page.used.map((u) => `<li><span class="day">${esc(u.day)}</span>${esc(u.what)}</li>`).join("")}</ul>` : '<div class="none">Nowhere it says.</div>'}</div>` +
     `<div class="aside"><h2>Linked from</h2>${page.linked_from.length ? `<ul>${page.linked_from.map((n) => `<li>${link(n)}</li>`).join("")}</ul>` : '<div class="none">No page.</div>'}</div>` +

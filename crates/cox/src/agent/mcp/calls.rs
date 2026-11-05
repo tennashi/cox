@@ -201,7 +201,8 @@ fn wiki_tools() -> [Value; 3] {
                 made, what a library needs, or what failed and why. Answers the pages \
                 that have every word of the query, whatever the case, those that have \
                 them most first, each by its name and title with the first lines that \
-                have them. Read a page with wiki_read.",
+                have them, but the pages another project keeps to itself. Read a page \
+                with wiki_read.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -217,8 +218,9 @@ fn wiki_tools() -> [Value; 3] {
             "name": WIKI_READ,
             "description": "Reads a page of the human's wiki, whole, with its links to \
                 other pages as [[name]] and, under \"Used in\", where it was used: the \
-                day, the project, the chat, the commit and the code. Without a page, \
-                reads the index, which lists the pages.",
+                day, the project, the chat, the commit and the code; a page this \
+                project keeps to itself says so in its properties, as `only: <project>`. \
+                Without a page, reads the index, which lists the pages.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -237,7 +239,10 @@ fn wiki_tools() -> [Value; 3] {
                 holds. A page is of one topic, starting with its `# ` title and a line on \
                 what it is about, and links to others as [[name]]. Cox adds, under \
                 \"Used in\", where this chat used it: the day, the project, the chat, the \
-                commit its folder is at, and the paths you give. Answers the page's file.",
+                commit its folder is at, and the paths you give. What holds only of this \
+                project, as of its own people, customers or plans, keep in it with \
+                keep_in_project, so that only its chats find the page. Answers the page's \
+                file.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -255,6 +260,12 @@ fn wiki_tools() -> [Value; 3] {
                         "items": { "type": "string" },
                         "description": "The paths of the code the page is of, from the \
                             working directory, as `src/view.rs`.",
+                    },
+                    "keep_in_project": {
+                        "type": "boolean",
+                        "description": "true keeps the page in this project, for its chats \
+                            alone; false lets it out to every project; as it was unless \
+                            given.",
                     },
                 },
                 "required": ["page", "text"],
@@ -500,8 +511,8 @@ pub(super) async fn call(
         WAIT_CHAT => wait_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         START_TRIAL => start_trial(arguments, chats).await,
-        WIKI_SEARCH => wiki_search(arguments),
-        WIKI_READ => wiki_read(arguments),
+        WIKI_SEARCH => wiki_search(arguments, chats).await,
+        WIKI_READ => wiki_read(arguments, chats).await,
         WIKI_WRITE => wiki_write(arguments, cwd, chats).await,
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
@@ -1026,14 +1037,27 @@ fn wiki_root() -> Result<std::path::PathBuf, String> {
     crate::settings::wiki().ok_or_else(|| "Cox cannot tell where the wiki is".to_owned())
 }
 
+/// Where the chat is, as its workspace tells it.
+async fn whereabouts(chats: &UnboundedSender<ChatRequest>) -> Result<Whereabouts, String> {
+    let (answer, heard) = oneshot::channel();
+    chats
+        .send(ChatRequest::Whereabouts { answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    heard.await.map_err(|_| "the chat has closed".to_owned())
+}
+
 /// Searches the wiki for what `arguments` ask, and tells what it found.
-fn wiki_search(arguments: &Value) -> Result<String, String> {
+async fn wiki_search(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
     let query = arguments
         .get("query")
         .and_then(Value::as_str)
         .filter(|query| !query.trim().is_empty())
         .ok_or("no query: give the words to look for as `query`")?;
-    let found = wiki::search(&wiki_root()?, query);
+    let project = whereabouts(chats).await?.project;
+    let found = wiki::search(&wiki_root()?, query, &project);
     if found.is_empty() {
         return Ok(format!("No page of the wiki has every word of `{query}`."));
     }
@@ -1048,14 +1072,18 @@ fn wiki_search(arguments: &Value) -> Result<String, String> {
 }
 
 /// Reads the page of the wiki `arguments` name, or its index.
-fn wiki_read(arguments: &Value) -> Result<String, String> {
+async fn wiki_read(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
     let page = match arguments.get("page") {
         None | Some(Value::Null) => wiki::INDEX,
         Some(Value::String(page)) => page,
         Some(_) => return Err("`page` is not a string".to_owned()),
     };
     let root = wiki_root()?;
-    match wiki::read(&root, page) {
+    let project = whereabouts(chats).await?.project;
+    match wiki::read(&root, page, &project) {
         Ok(text) => Ok(text),
         Err(_) if page == wiki::INDEX => {
             let pages = wiki::pages(&root);
@@ -1099,17 +1127,16 @@ async fn wiki_write(
             .collect::<Result<_, _>>()?,
         Some(_) => return Err("`paths` is not an array of strings".to_owned()),
     };
-    let (answer, heard) = oneshot::channel();
-    chats
-        .send(ChatRequest::Whereabouts { answer })
-        .map_err(|_| "the chat has closed".to_owned())?;
+    let keep = match arguments.get("keep_in_project") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(keep)) => Some(*keep),
+        Some(_) => return Err("`keep_in_project` is not true or false".to_owned()),
+    };
     let Whereabouts {
         project,
         chat,
         kept,
-    } = heard
-        .await
-        .map_err(|_| "the chat closed before the page was written".to_owned())?;
+    } = whereabouts(chats).await?;
     let used = wiki::Used {
         day: wiki::today(),
         project,
@@ -1118,9 +1145,15 @@ async fn wiki_write(
         commit: wiki::commit_of(cwd),
         paths,
     };
-    let file = wiki::write(&wiki_root()?, page, text, &used)?;
+    let root = wiki_root()?;
+    let file = wiki::write(&root, page, text, &used, keep)?;
+    let kept_in = fs::read_to_string(&file)
+        .ok()
+        .and_then(|page| wiki::only(&page))
+        .map(|project| format!(" It is kept in {project}, for its chats alone."))
+        .unwrap_or_default();
     Ok(format!(
-        "{} is written, used {}.",
+        "{} is written, used {}.{kept_in}",
         file.display(),
         used.line().trim_start_matches("- ")
     ))

@@ -13,4 +13,5 @@ The human keeps a wiki, of what the agents of all their projects
 learned. Before you work out something that another project may have
 met, search it with wiki_search, and read what it finds with wiki_read;
 say which pages you used. Write to it with wiki_write only when the
-human asks you to keep something there.
+human asks you to keep something there, keeping in the project, with
+keep_in_project, what holds only of it.
