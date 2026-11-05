@@ -248,6 +248,26 @@
         color: var(--dim);
         margin: 0 0 4px;
       }
+      /* Which language a page is read in, and how far it is translated. */
+      .languages {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .languages .chip {
+        flex: none;
+        white-space: nowrap;
+      }
+      .translating {
+        flex: 1 1 0;
+        min-width: 0;
+        font-size: 11.5px;
+        color: var(--faint);
+        align-self: center;
+      }
+      .translating.failed {
+        color: var(--warn);
+      }
     </style>
   </head>
   <body>

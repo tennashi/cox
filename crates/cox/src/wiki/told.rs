@@ -20,6 +20,7 @@ use std::path::Path;
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, html};
 use serde_json::{Value, json};
 
+use super::translate::Translated;
 use super::{INDEX, about, file, front, only, pages, split, title};
 
 /// What Cox finds wrong with a page.
@@ -29,7 +30,7 @@ const UNTITLED: &str = "untitled";
 const UNUSED: &str = "unused";
 
 /// The Markdown a page is read as.
-fn options() -> Options {
+pub(super) fn options() -> Options {
     Options::ENABLE_WIKILINKS
         | Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
@@ -74,6 +75,20 @@ pub fn told(root: &Path) -> Value {
 /// HTML shown as text; or `None` when there is no such page.
 #[must_use]
 pub fn page(root: &Path, name: &str) -> Option<Value> {
+    page_in(root, name, |_| None)
+}
+
+/// The page `name` of the wiki at `root`, as [`page`] tells it, and, as
+/// `translated` translates its text, as `translation`: the language,
+/// the translated text as HTML, as the page's own is, how many of its
+/// blocks are translated, of how many, and why translating failed last,
+/// if it did.
+#[must_use]
+pub fn page_in(
+    root: &Path,
+    name: &str,
+    translated: impl FnOnce(&str) -> Option<Translated>,
+) -> Option<Value> {
     let all = read_all(root);
     let page = all.get(name)?;
     let linked_from = linked_from(&all);
@@ -81,6 +96,15 @@ pub fn page(root: &Path, name: &str) -> Option<Value> {
     let mut told = page_json(name, page, &linked_from);
     told["html"] = Value::String(html_of(name, &page.body, &names));
     told["file"] = Value::String(file(root, name).ok()?.display().to_string());
+    told["translation"] = translated(&page.body).map_or(Value::Null, |translated| {
+        json!({
+            "language": translated.language,
+            "html": html_of(name, &translated.markdown, &names),
+            "done": translated.done,
+            "of": translated.of,
+            "error": translated.error,
+        })
+    });
     Some(told)
 }
 
@@ -336,6 +360,36 @@ mod tests {
     }
 
     #[test]
+    fn a_page_is_read_in_the_humans_language_with_its_links_as_they_were() {
+        let root = scratch("translated");
+        fs::write(root.join("gpui.md"), "# GPUI\n\nSee [[errors]].\n").unwrap();
+        fs::write(root.join("rust/errors.md"), "# Errors\n").unwrap();
+        let page = page_in(&root, "gpui", |body| {
+            assert_eq!(body, "# GPUI\n\nSee [[errors]].");
+            Some(Translated {
+                language: "Japanese".to_owned(),
+                markdown: "# GPUI\n\n[[errors]] を見る。".to_owned(),
+                done: 1,
+                of: 2,
+                error: None,
+            })
+        })
+        .unwrap();
+        let translation = &page["translation"];
+        assert_eq!(translation["language"], "Japanese");
+        assert_eq!(
+            translation["html"],
+            "<h1>GPUI</h1>\n<p><a href=\"#rust/errors\">errors</a> を見る。</p>\n"
+        );
+        assert_eq!(
+            (translation["done"].clone(), translation["of"].clone()),
+            (json!(1), json!(2))
+        );
+        assert_eq!(translation["error"], Value::Null);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn a_page_is_html_whose_links_open_pages_and_whose_own_html_is_text() {
         let root = scratch("html");
         fs::write(
@@ -357,6 +411,7 @@ mod tests {
         assert!(!html.contains("Used in"), "{html}");
         assert!(html.starts_with("<h1>GPUI</h1>"), "{html}");
         assert_eq!(page["file"], root.join("gpui.md").display().to_string());
+        assert_eq!(page["translation"], Value::Null);
         assert_eq!(super::page(&root, "nothing"), None);
         let _ = fs::remove_dir_all(&root);
     }

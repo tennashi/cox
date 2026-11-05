@@ -9,6 +9,9 @@
 // which. A page's name as the hash, as `#rust/errors`, opens it,
 // read from `cox://api/wiki/<name>`: its text, its links opening the
 // pages they name, the pages that link to it, and where it was used.
+// When the human reads the wiki in a language of their own, the page is
+// shown in it, as far as Cox has translated it, the rest as it is
+// written, with chips over it to read it as it is written instead.
 
 const API = "cox://api/wiki";
 const EVERY = 2000;
@@ -30,6 +33,9 @@ let pageText = null;
 // left them, across what the page reads again.
 let typed = "";
 let marked = null;
+// Whether the human reads the pages as they are written, in place of
+// their language, from page to page.
+let written = false;
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -142,12 +148,21 @@ function drawPage() {
   const titled = (n) => wiki?.pages.find((p) => p.name === n)?.title ?? n;
   const link = (n) => `<a href="${href(n)}">${esc(titled(n))}</a>`;
   const warned = page.marks.map((m) => `<li>${esc(MARKS[m]?.[1] ?? m)}${m === "broken" ? `: ${page.broken.map((b) => `<code>${esc(b)}</code>`).join(", ")}` : ""}</li>`).join("");
+  const translation = page.translation;
+  const translated = translation && !written;
   app.innerHTML =
     `<div class="crumbs"><a href="#">Wiki</a> › <span>${esc(page.name)}</span>${only(page)}${marks(page)}<a class="where" href="cox://open${esc(page.file)}" title="opens the file on a tab">${esc(page.file)}</a></div>` +
-    `<div class="page">${page.html}</div>` +
+    (translation ? languages(translation) : "") +
+    `<div class="page">${translated ? translation.html : page.html}</div>` +
     `<div class="aside"><h2>Used in</h2>${page.used.length ? `<ul>${page.used.map((u) => `<li><span class="day">${esc(u.day)}</span>${esc(u.what)}</li>`).join("")}</ul>` : '<div class="none">Nowhere it says.</div>'}</div>` +
     `<div class="aside"><h2>Linked from</h2>${page.linked_from.length ? `<ul>${page.linked_from.map((n) => `<li>${link(n)}</li>`).join("")}</ul>` : '<div class="none">No page.</div>'}</div>` +
     (warned ? `<div class="aside"><h2>Cox marks</h2><ul>${warned}</ul></div>` : "");
+  for (const chip of app.querySelectorAll("[data-written]")) {
+    chip.addEventListener("click", () => {
+      written = chip.dataset.written === "yes";
+      drawPage();
+    });
+  }
   const there = new Set(wiki?.pages.map((p) => p.name) ?? []);
   for (const a of app.querySelectorAll(".page a[href]")) {
     const to = a.getAttribute("href");
@@ -158,6 +173,22 @@ function drawPage() {
       a.target = "_blank";
     }
   }
+}
+
+/// The chips that choose the language a page is read in, `translation`'s
+/// or as it is written, and how far it is translated.
+function languages(translation) {
+  const state = translation.error
+    ? `<span class="translating failed" title="${esc(translation.error)}">Cannot translate: ${esc(translation.error)}</span>`
+    : translation.done < translation.of
+      ? `<span class="translating">Translating, ${translation.done} of ${translation.of} blocks</span>`
+      : "";
+  return (
+    `<div class="languages">` +
+    `<span class="chip ${written ? "" : "on"}" data-written="no">${esc(translation.language)}</span>` +
+    `<span class="chip ${written ? "on" : ""}" data-written="yes" title="The page as it is written">As written</span>` +
+    `${state}</div>`
+  );
 }
 
 window.addEventListener("hashchange", () => {

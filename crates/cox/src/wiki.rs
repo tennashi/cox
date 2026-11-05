@@ -19,8 +19,14 @@
 //! between `---` lines at the page's top, say `only: <project>`, and
 //! only the chats of that project find it, read it, or write it. The
 //! human sees every page, in the plugin as in the folder.
+//!
+//! The agents write the pages in English, whatever language their chat
+//! speaks, so that a page is found by the same words from every chat;
+//! the human reads them in a language of their own, as Cox translates
+//! them (see [`translate`]).
 
 pub mod told;
+pub mod translate;
 
 use std::fmt::Write as _;
 use std::fs;

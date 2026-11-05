@@ -318,31 +318,38 @@ impl Launcher {
     /// Starts the agent kept as `agent` working in `cwd` with `tools`, as
     /// `start` says.
     fn spawn(&self, cwd: PathBuf, tools: Vec<McpServer>, start: Start, agent: &str) -> Agent {
-        let known = self.agents.of(Some(agent));
-        tracing::info!(agent = %known.id, "starts the agent");
-        let Known {
-            id,
-            name,
-            command,
-            download,
-            ..
-        } = known;
-        let connect = move |told: &dyn Fn(String)| {
-            // The program of an agent of the registry that Cox downloads
-            // is downloaded the first time it starts.
-            let command = match download {
-                Some(download) => {
-                    let installed = download::installed(&id, &download, &|note| {
-                        told(format!("{name}: {note}"));
-                    })?;
-                    crate::agents::located(&command, &installed)
-                }
-                None => command,
-            };
-            cox_acp::launch(command)
-        };
-        crate::agent::spawn(connect, cwd, tools, start)
+        spawn(self.agents.of(Some(agent)), cwd, tools, start)
     }
+}
+
+/// Starts `known`, working in `cwd`, an absolute path, with the tools of
+/// `tools`, as `start` says: a chat's agent, or one with no chat, such as
+/// the judge of a goal, or the agent that translates the wiki (see
+/// [`crate::wiki::translate`]).
+pub(crate) fn spawn(known: Known, cwd: PathBuf, tools: Vec<McpServer>, start: Start) -> Agent {
+    tracing::info!(agent = %known.id, "starts the agent");
+    let Known {
+        id,
+        name,
+        command,
+        download,
+        ..
+    } = known;
+    let connect = move |told: &dyn Fn(String)| {
+        // The program of an agent of the registry that Cox downloads
+        // is downloaded the first time it starts.
+        let command = match download {
+            Some(download) => {
+                let installed = download::installed(&id, &download, &|note| {
+                    told(format!("{name}: {note}"));
+                })?;
+                crate::agents::located(&command, &installed)
+            }
+            None => command,
+        };
+        cox_acp::launch(command)
+    };
+    crate::agent::spawn(connect, cwd, tools, start)
 }
 
 /// `stage`, as its chat's conversation shows it: open when `panel` is.

@@ -408,6 +408,38 @@ were used, as those the human wrote; chips over the pages narrow them
 to those of a mark. A page kept in one project says which, as the
 human sees every page. The page reads the wiki again every two seconds.
 
+The agents write the wiki in English, whatever language their chats
+speak, as Cox's tools and `wiki/save.md` tell them, so that a page is
+found by the same words from every chat; the human reads it in a
+language of their own, as `settings.json` names it, as
+`{"wiki_translation": {"language": "Japanese"}}`. "Wiki" then shows a
+page in that language, as far as it is translated, the rest as it is
+written, with how far it has gone, and a chip "As written" over it to
+read it as the agent wrote it. It is translated a block at a time, its
+paragraphs, headings, lists, quotes and tables, as it is opened, and
+not its code or the HTML it holds; each block's translation is kept,
+by what it says and the language, in `wiki-translations` beside the
+chats' database, so that a page that changed is translated again only
+where it changed, and the wiki's folder holds only what was written.
+What translates is the human's to choose: `command`, a command that
+reads the text on its standard input and writes its translation on its
+standard output, with `{language}` in its arguments standing for the
+language, as a model run on the machine, such as PLaMo 3 Translate
+through [plamo-translate-cli](https://github.com/pfnet/plamo-translate-cli),
+which `plamo-translate server` keeps loaded between blocks:
+
+```json
+{"wiki_translation": {"language": "Japanese",
+  "command": ["plamo-translate", "--from", "English", "--to", "{language}"]}}
+```
+
+or else `agent`, an agent Cox knows, by its name, as `"Codex"`, or,
+unless given, the agent a new chat talks to, which Cox asks over ACP,
+as it does the judge of a goal: not a chat, with no tools, its
+permission requests refused. A translation that fails says why over
+the page, and is not tried again until `settings.json` says another
+way.
+
 The conversation runs down a line on its left, which names who speaks
 where they start, with a dot: the human (YOU), Cox in their place
 (COX), or the agent, by the name the human knows it by; and marks in
