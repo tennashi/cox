@@ -50,6 +50,7 @@ use gpui::{
 };
 
 use crate::agent::instructions::Instructions;
+use crate::workflow;
 use tokio::sync::oneshot;
 
 use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
@@ -1139,13 +1140,11 @@ impl Workspace {
             chat.name_as(&name, Named::FirstLine, &self.store);
         }
         chat.setup = Some(setup);
-        chat.moving = Some(format!(
-            "You work in a trial now, in {}, {}, apart from the project: there you change \
-             and test files without asking the human. Once you have tried it, show the human \
-             what you made with show_changes. Go on with what you try: {what}",
-            folder.display(),
-            started.what()
-        ));
+        chat.moving = Some(workflow::TRIAL_START.say(&[
+            ("folder", &folder.display().to_string()),
+            ("from", started.what()),
+            ("what", what),
+        ]));
         if !working(chat.state) {
             self.move_into_trial(index, window, cx);
         }

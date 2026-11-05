@@ -812,10 +812,11 @@ async fn open_chat(
     if let (Some(trial), Some(folder)) = (trial, &opened.folder) {
         let _ = write!(
             told,
-            " It is a trial, working in {}, {}, apart from the project: read what it made \
-             there, and show the human with show_changes, giving that folder.",
-            folder.display(),
-            trial.what()
+            " {}",
+            crate::workflow::TRIAL_OPENED.say(&[
+                ("folder", &folder.display().to_string()),
+                ("from", trial.what()),
+            ])
         );
     }
     Ok(told)

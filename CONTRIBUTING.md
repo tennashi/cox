@@ -63,7 +63,14 @@ beside it, or, when there is none, Cox's own
 ([`cox.md`](crates/cox/src/agent/instructions/cox.md)), which says when
 to use Cox's tools, as when to try work out in a trial, since the tools
 only say what they do. After it, when the folder has a `COX.md`, the agent
-gets what it says. The chat says at its top which files it got. The tabs switch between chats (Control-Tab and
+gets what it says. The chat says at its top which files it got. What Cox
+tells the agent in the human's place at the turns of a trial is the
+workflow's too, in `trial/` there, or else Cox's own
+([`workflow/trial`](crates/cox/src/workflow/trial)): `start.md` as the
+chat becomes a trial, in `{folder}`, which is `{from}`, to try `{what}`;
+`opened.md`, what the agent that opened a trial with `open_chat` hears of
+it; and `discard.md`, what the trial's agent is asked before the trial
+is discarded, with `{left_out}`, the files too big to keep. The tabs switch between chats (Control-Tab and
 Control-Shift-Tab go along every project's). A chat is named by a number at first, then
 after the first line sent in it, then by the title its agent gives its
 session, if it gives one (ACP's `session_info_update`, as
