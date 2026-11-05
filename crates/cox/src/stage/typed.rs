@@ -1,6 +1,6 @@
 //! What the human types at the top of the menu of the stage's +, a URL, a
 //! file or a command, and which of them it is: a file that is there, then
-//! an address of the web, then a command for a terminal.
+//! an address of the web, then a path, then a command for a terminal.
 
 use std::path::{Path, PathBuf};
 
@@ -19,8 +19,10 @@ pub(super) enum Typed {
 
 /// What `line` opens, for a chat working in `cwd`, which a relative path
 /// is from: a file, when there is one there or the line starts as a path
-/// does, or else an address, when it has a scheme, or a dot or a port and
-/// no space, or else a command. Blank is nothing.
+/// does, or else an address, when it has no space and what comes before
+/// its first `/` has a scheme, or a dot or a port, as a host has, or else
+/// a file again, when it has no space and a `/`, as `src/main.rs`, or
+/// else a command. Blank is nothing.
 pub(super) fn typed(line: &str, cwd: &Path) -> Option<Typed> {
     let line = line.trim();
     if line.is_empty() {
@@ -38,10 +40,18 @@ pub(super) fn typed(line: &str, cwd: &Path) -> Option<Typed> {
     if a_path || path.is_file() {
         return Some(Typed::File(path));
     }
-    let address =
-        !line.contains(char::is_whitespace) && (line.contains(['.', ':']) || line == "localhost");
+    if line.contains(char::is_whitespace) {
+        return Some(Typed::Command(line.to_owned()));
+    }
+    // What would be the host, as `example.com` of `example.com/a`, or the
+    // scheme, as `https:` of `https://example.com`.
+    let host = line.split('/').next().unwrap_or(line);
+    let address = !host.starts_with('.') && (host.contains(['.', ':']) || host == "localhost");
     if address {
         return address_to_url(line).map(Typed::Page);
+    }
+    if line.contains('/') {
+        return Some(Typed::File(path));
     }
     Some(Typed::Command(line.to_owned()))
 }
@@ -86,15 +96,30 @@ mod tests {
             typed("about:blank", &folder),
             Some(Typed::Page("about:blank".to_owned()))
         );
-        // A path that is not there is taken as an address, as it has a
-        // dot, unless it starts as a path does.
+        assert_eq!(
+            typed("example.com/a/b.html", &folder),
+            Some(Typed::Page("https://example.com/a/b.html".to_owned()))
+        );
+        assert_eq!(
+            typed("https://example.com/a", &folder),
+            Some(Typed::Page("https://example.com/a".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_path_that_is_not_there_opens_as_a_file() {
+        let folder = folder();
         assert_eq!(
             typed("./src/gone.rs", &folder),
             Some(Typed::File(folder.join("./src/gone.rs")))
         );
         assert_eq!(
             typed("src/gone.rs", &folder),
-            Some(Typed::Page("https://src/gone.rs".to_owned()))
+            Some(Typed::File(folder.join("src/gone.rs")))
+        );
+        assert_eq!(
+            typed(".cox/map.json", &folder),
+            Some(Typed::File(folder.join(".cox/map.json")))
         );
     }
 

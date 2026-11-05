@@ -5,13 +5,15 @@
 //! The button of what changed counts the files that did, while the stage
 //! is open.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use cox_editor::changes;
 use gpui::{
-    App, Context, Div, Entity, Focusable, FontWeight, PathPromptOptions, SharedString, Stateful,
-    Subscription, Task, Window, actions, deferred, div, prelude::*, px, rgb,
+    App, Context, Div, Entity, Focusable, FontWeight, PathPromptOptions, ScrollHandle,
+    SharedString, Stateful, Subscription, Task, Window, actions, deferred, div, prelude::*, px,
+    rgb,
 };
 
 use super::code::Code;
@@ -26,6 +28,29 @@ use crate::ui::theme::{
     ACCENT, BORDER, BORDER_STRONG, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED,
     SURFACE,
 };
+
+/// Where the tabs scroll along the bar, when there are more than it has
+/// room for, which keeps the tab shown in sight as another is shown.
+#[derive(Default)]
+pub(super) struct Strip {
+    scroll: ScrollHandle,
+    /// The tab the strip last scrolled to, so that it scrolls once each
+    /// time another is shown, and the human can scroll it after.
+    shown: Cell<Option<usize>>,
+}
+
+impl Strip {
+    /// Scrolls to the tab shown, `shown`, at `place` among the tabs the
+    /// strip has, unless it scrolled to it already.
+    fn follow(&self, shown: Option<usize>, place: Option<usize>) {
+        if self.shown.replace(shown) == shown {
+            return;
+        }
+        if let Some(place) = place {
+            self.scroll.scroll_to_item(place);
+        }
+    }
+}
 
 /// How tall a view's button is, and a tab, and how round each is.
 const VIEW_HEIGHT: f32 = 28.;
@@ -111,6 +136,11 @@ impl Stage {
             .filter(|(_, tab)| self.view_of(tab, &plugins, cx).is_none())
             .map(|(index, _)| index)
             .collect();
+        let shown_index = self.tabs.shown_index();
+        self.strip.follow(
+            shown_index,
+            rest.iter().position(|&index| Some(index) == shown_index),
+        );
         let tabs: Vec<_> = rest
             .into_iter()
             .map(|index| self.render_tab(index, &self.tabs[index], cx))
@@ -147,6 +177,7 @@ impl Stage {
                     .items_center()
                     .gap_1()
                     .overflow_x_scroll()
+                    .track_scroll(&self.strip.scroll)
                     .children(tabs),
             )
             .child(div().flex_1())
