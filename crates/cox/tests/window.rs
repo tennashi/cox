@@ -995,6 +995,9 @@ fn stage_is_open(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> bool {
 #[gpui::test]
 fn opens_and_closes_the_stage_with_its_button(cx: &mut TestAppContext) {
     let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Opened::default(), None, true);
+    // The bar settles once the agent's session opens, its settings
+    // taking their place beside the button.
+    cx.run_until_parked();
 
     assert!(!stage_is_open(cx, &view));
     assert!(cx.debug_bounds("stage-panel").is_none());
@@ -1116,10 +1119,13 @@ async fn shows_a_setting_the_agent_changes_on_its_own(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_files_chip_starts_a_path_at_the_cursor(cx: &mut TestAppContext) {
+async fn the_files_chip_starts_a_path_at_the_cursor(cx: &mut TestAppContext) {
     let (_agent, view, cx) = open(cx);
 
-    // The chips are drawn once the agent has started.
+    // The chips settle once the agent has told its commands, whose chip
+    // comes ahead of the files'.
+    cx.condition(&view, |view, _| !view.conversation().commands().is_empty())
+        .await;
     cx.run_until_parked();
     click(cx, "start-file");
     assert_eq!(input_text(cx, &view), "@");

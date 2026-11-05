@@ -1292,8 +1292,12 @@ impl ChatView {
             )
             .children(goal_input)
             .child(
+                // A column, which stretches the input across it, whatever
+                // its placeholder's width.
                 div()
                     .relative()
+                    .flex()
+                    .flex_col()
                     .child(self.render_input_box(running, cx))
                     .children(self.render_completions(cx)),
             )
@@ -1337,7 +1341,13 @@ impl ChatView {
                     }
                 }),
             )
-            .child(div().pt(px(4.)).min_w_0().child(self.input.clone()))
+            .child(
+                div()
+                    .pt(px(4.))
+                    .w_full()
+                    .min_w_0()
+                    .child(self.input.clone()),
+            )
             .when(commands || files || running, |bar| {
                 bar.child(
                     div()
