@@ -245,17 +245,14 @@ fn start_trial_tool() -> Value {
     json!(
     {
         "name": START_TRIAL,
-        "description": "Makes this chat a trial, to try uncertain work out apart from the \
-            project before you and the human agree what it is to be: Cox makes a folder of \
-            its own for it, and once this turn ends, starts you again there, with the \
-            conversation so far, to go on with what you try. There you change and test \
-            files without asking the human. `from` is \"project\", a Git worktree of the \
-            project's last commit, to try a change to the project, or \"empty\", an empty \
-            Git repository, to try something from nothing. Call it, then end your turn. \
-            Once you have tried it, show the human what it made with show_changes, and \
-            propose a goal from it with propose_goal; the human ends the trial, keeping it or not, and the chat \
-            goes on in the project. To try several ways side by side, open a trial of its \
-            own for each with open_chat instead.",
+        "description": "Makes this chat a trial, which works apart from the project: Cox \
+            makes a folder of its own for it, and once this turn ends, starts you again \
+            there, with the conversation so far, to go on with what you try. There you \
+            change and test files without asking the human. `from` is \"project\", a Git \
+            worktree of the project's last commit, to try a change to the project, or \
+            \"empty\", an empty Git repository, to try something from nothing. Call it, \
+            then end your turn. The human ends the trial, keeping it or not, and the chat \
+            goes on in the project.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -337,11 +334,7 @@ fn open_chat_tool() -> Value {
             project, and changes and tests its files there without asking the human: \
             \"project\", a Git worktree of the project's last commit, to try a change to \
             the project, or \"empty\", an empty Git repository, to try something from \
-            nothing. Open trials when the work is uncertain and you would try several \
-            ways side by side, one trial each, before you and the human agree what it is \
-            to be: read what each made, show the human with show_changes, giving its \
-            folder, and propose a goal from it with propose_goal; to try one way, make this chat the trial with start_trial \
-            instead. Answers the number the chat goes by, to wait for it with wait_chat.",
+            nothing. Answers the number the chat goes by, to wait for it with wait_chat.",
         "inputSchema": {
             "type": "object",
             "properties": {

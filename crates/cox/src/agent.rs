@@ -136,7 +136,7 @@ pub enum Opened {
     /// trial, where its agent works in another folder.
     Retold {
         lost: bool,
-        instructions: Option<PathBuf>,
+        instructions: Vec<PathBuf>,
         context: Option<String>,
     },
 }
@@ -164,9 +164,9 @@ pub enum Command {
 pub struct Agent {
     pub commands: UnboundedSender<Command>,
     pub events: UnboundedReceiver<AgentEvent>,
-    /// Where the instructions the agent gets with the first prompt come
-    /// from, if it gets any.
-    pub instructions: Option<PathBuf>,
+    /// The files the instructions the agent gets with the first prompt
+    /// come from.
+    pub instructions: Vec<PathBuf>,
     /// How the agent is set up, when the chat that opened its chat said.
     pub setup: Option<Setup>,
     /// The directory the agent works in.
@@ -220,7 +220,7 @@ impl Start {
     ) -> Self {
         Self::Again {
             session,
-            instructions: Instructions::read(cwd),
+            instructions: Some(Instructions::read(cwd)),
             setup,
             earlier: earlier.to_vec(),
         }
@@ -275,8 +275,11 @@ pub fn spawn<T: Transport + 'static>(
     start: Start,
 ) -> Agent {
     let source = match &start {
-        Start::New { instructions, .. } => instructions.as_ref().map(|i| i.path.clone()),
-        Start::Again { .. } => None,
+        Start::New { instructions, .. } => instructions
+            .as_ref()
+            .map(Instructions::paths)
+            .unwrap_or_default(),
+        Start::Again { .. } => Vec::new(),
     };
     let setup = start.setup().cloned();
     let policy = setup
@@ -529,7 +532,10 @@ fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
             };
             let how = Opened::Retold {
                 lost,
-                instructions: instructions.as_ref().map(|i| i.path.clone()),
+                instructions: instructions
+                    .as_ref()
+                    .map(Instructions::paths)
+                    .unwrap_or_default(),
                 context: setup.as_ref().and_then(|setup| setup.context.clone()),
             };
             let mut ahead = told(instructions, setup.as_ref());
@@ -551,8 +557,9 @@ fn runs_command(line: &str, commands: &[String]) -> bool {
 /// `setup`, each when there is one.
 fn told(instructions: Option<Instructions>, setup: Option<&Setup>) -> Vec<String> {
     instructions
-        .map(|i| i.prompt())
+        .map(|i| i.prompts())
         .into_iter()
+        .flatten()
         .chain(setup.and_then(Setup::prompt))
         .collect()
 }

@@ -38,6 +38,7 @@ use agent_client_protocol::schema::v1::{
     ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Responder, Result};
+use cox::agent::instructions;
 use tokio::sync::Notify;
 
 /// How the agent goes on with a session it opened before.
@@ -123,10 +124,19 @@ pub struct FakeAgent {
     sessions_opened: Arc<AtomicUsize>,
     cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
-    prompts: Arc<Mutex<Vec<Vec<String>>>>,
+    prompts: Arc<Mutex<Prompts>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
     cancels: Arc<Cancels>,
     settings: Arc<Mutex<Settings>>,
+}
+
+/// What Cox sent the agent: the text blocks of each prompt, without how
+/// Cox tells a new session to work with its tools, which nearly every
+/// test leaves be and which is kept apart.
+#[derive(Debug, Default)]
+struct Prompts {
+    sent: Vec<Vec<String>>,
+    cox: Vec<String>,
 }
 
 /// The settings of the agent's sessions: their values, and each setting
@@ -295,6 +305,7 @@ impl FakeAgent {
         self.prompts
             .lock()
             .unwrap()
+            .sent
             .iter()
             .map(|blocks| blocks.concat())
             .collect()
@@ -302,7 +313,13 @@ impl FakeAgent {
 
     /// The text blocks of each prompt Cox has sent, in order.
     pub fn prompt_blocks(&self) -> Vec<Vec<String>> {
-        self.prompts.lock().unwrap().clone()
+        self.prompts.lock().unwrap().sent.clone()
+    }
+
+    /// How Cox told each new session to work with its tools, which
+    /// [`Self::prompts`] leaves out, in order.
+    pub fn told_by_cox(&self) -> Vec<String> {
+        self.prompts.lock().unwrap().cox.clone()
     }
 
     /// Cox's answer to each permission request, in order.
@@ -371,7 +388,7 @@ async fn serve(
     sessions_opened: Arc<AtomicUsize>,
     cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
-    prompts: Arc<Mutex<Vec<Vec<String>>>>,
+    prompts: Arc<Mutex<Prompts>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
     cancels: Arc<Cancels>,
     settings: Arc<Mutex<Settings>>,
@@ -471,10 +488,16 @@ async fn serve(
                 if on_prompt_login.asks(false) {
                     return responder.respond_with_error(Error::auth_required());
                 }
-                let blocks = texts_of(&request.prompt);
+                let (cox, blocks): (Vec<_>, Vec<_>) = texts_of(&request.prompt)
+                    .into_iter()
+                    .partition(|block| block.starts_with(instructions::COX_START));
                 let text = blocks.concat();
-                prompts.lock().unwrap().push(blocks);
-                let verdict = judge(&prompts.lock().unwrap());
+                let verdict = {
+                    let mut prompts = prompts.lock().unwrap();
+                    prompts.cox.extend(cox);
+                    prompts.sent.push(blocks);
+                    judge(&prompts.sent)
+                };
                 let answers = Arc::clone(&answers);
                 let cancels = Arc::clone(&waits);
                 let turn = cx.clone();
