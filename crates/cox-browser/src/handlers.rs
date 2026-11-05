@@ -304,6 +304,25 @@ wrap_display_handler! {
             }
         }
 
+        /// The page asks for another cursor where the mouse is. The stage
+        /// shows it, as the browser has no window to show it in: so the
+        /// change is taken here, and CEF told so.
+        fn on_cursor_change(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _cursor: std::os::raw::c_ulong,
+            kind: cef::CursorType,
+            _custom: Option<&cef::CursorInfo>,
+        ) -> c_int {
+            let cursor = Cursor::from(kind);
+            let changed = std::mem::replace(&mut lock(&self.shared).cursor, cursor) != cursor;
+            if changed {
+                tracing::debug!(?cursor, "the page asks for a cursor");
+                let _ = self.events.send(Event::Cursor);
+            }
+            1
+        }
+
         /// The page's title changed, which its tab shows.
         fn on_title_change(
             &self,
