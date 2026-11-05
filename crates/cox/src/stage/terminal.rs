@@ -86,6 +86,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-o", gpui::NoAction, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-t", gpui::NoAction, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-p", gpui::NoAction, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-\\", gpui::NoAction, Some(KEY_CONTEXT)),
     ]);
 }
 

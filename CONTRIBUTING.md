@@ -379,9 +379,11 @@ CLAUDE_CODE_ENABLE_TODO_TOOLS=1 CLAUDE_CODE_THINKING_DISPLAY=summarized \
 ```
 
 A chat's stage holds pages in tabs, and opens on the left of the
-conversation only when it is used: "Show stage" above the conversation
-opens it, and it opens on its own when a link opens on it, or when the
-agent works on a page there (navigates it, clicks or types in it, or
+conversation only when it is used: the round button at the right end
+of the tabs, after the pill, marked with a window split in two, opens
+and closes it (Command-\\, Control-\\ off macOS), and it opens on
+its own when a link opens on it, or when the agent works on a page
+there (navigates it, clicks or types in it, or
 opens a tab), showing that page's tab. Closed, it keeps its tabs. The
 bar along its top keeps the views of the project in sight first, side
 by side: "Files", "Changes" and the plugins' pages, such as "Map" (see
@@ -639,7 +641,7 @@ that ended, or a new tab. When the agent stops waiting for it, as when
 the human stops the turn, the command gets Control-C. Copying and
 pasting in a terminal is Command-C and Command-V on macOS, and
 Control-Shift-C and Control-Shift-V elsewhere, where Control-N,
-Control-O, Control-T and Control-P go to the terminal too.
+Control-O, Control-T, Control-P and Control-\\ go to the terminal too.
 
 Cox hands each chat's agent its own tools as an MCP server, which is
 `cox` itself run as `cox --mcp <socket>`: the agent starts it, and it
