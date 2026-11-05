@@ -761,8 +761,8 @@ impl ChatView {
     }
 
     /// Closes the input that starts a trial, and, when `start` says to and
-    /// it says what to try, asks the window to make the chat a trial of
-    /// it, noting why when it cannot be one.
+    /// it says what to try, asks the window to open a trial of it beside
+    /// the chat, and show it, noting why when it cannot open.
     fn end_editing_trial(&mut self, start: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some((input, trial, _)) = self.trial_input.take() else {
             return;
@@ -777,6 +777,7 @@ impl ChatView {
         cx.emit(Asked(RefCell::new(Some(ChatRequest::StartTrial {
             trial,
             what,
+            show: true,
             answer,
         }))));
         cx.spawn(async move |this, cx| {

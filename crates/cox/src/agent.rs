@@ -792,15 +792,12 @@ fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usiz
 /// characters: past it, the start is left out.
 const RETOLD_LENGTH: usize = 100_000;
 
-/// What a new session of a chat's agent is told of the conversation so
-/// far, `entries`, when the agent does not go on with a session of the
-/// chat's own, which is `lost` if the agent could not go on with it: what
+/// The conversation so far, `entries`, as an agent is told it: what
 /// the human said, and Cox in their place, what the agent replied, and the
 /// tool calls it made, by their titles, and where the human switched the
-/// chat from one agent to another. Cox's notes are left out. A chat where
-/// nothing was said has nothing to tell.
-#[must_use]
-pub fn retold(entries: &[Entry], lost: bool) -> Option<String> {
+/// chat from one agent to another, which the answer says it holds. Cox's
+/// notes are left out. A chat where nothing was said has nothing to tell.
+fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
     let switched = entries
         .iter()
         .any(|entry| matches!(entry, Entry::Switched { .. }));
@@ -869,6 +866,29 @@ pub fn retold(entries: &[Entry], lost: bool) -> Option<String> {
         let kept: String = told.chars().skip(length - RETOLD_LENGTH).collect();
         told = format!("[… the start is left out]\n{kept}");
     }
+    Some((told, switched))
+}
+
+/// What the agent of a trial opened beside a chat is told of what the
+/// chat talked through so far, `entries`, ahead of what it tries; or
+/// nothing, when nothing was said in the chat.
+#[must_use]
+pub fn talked_through(entries: &[Entry]) -> Option<String> {
+    let (told, _) = told_so_far(entries)?;
+    Some(format!(
+        "This trial was opened beside a chat, which goes on in the project. This is what \
+         that chat talked through so far, as Cox kept it, where [you] stands for that chat's \
+         agent:\n\n{told}"
+    ))
+}
+
+/// What a new session of a chat's agent is told of the conversation so
+/// far, `entries`, when the agent does not go on with a session of the
+/// chat's own, which is `lost` if the agent could not go on with it; see
+/// [`told_so_far`].
+#[must_use]
+pub fn retold(entries: &[Entry], lost: bool) -> Option<String> {
+    let (told, switched) = told_so_far(entries)?;
     let from = if switched {
         "This chat goes on from an earlier session, of yours or of another agent: where the \
          human switched the chat from one agent to another, it says so, and [you] stands for \

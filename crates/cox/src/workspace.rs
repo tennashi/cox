@@ -49,13 +49,13 @@ use gpui::{
     Subscription, Window, actions, anchored, deferred, div, prelude::*, px, rgb,
 };
 
-use crate::agent::instructions::Instructions;
+use crate::agent::{self, instructions::Instructions};
 use crate::workflow;
 use tokio::sync::oneshot;
 
 use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
 use crate::agent::setup::{Policy, Setup};
-use crate::chat::conversation::{self, Entry, State};
+use crate::chat::conversation::{Entry, State};
 use crate::chat::trial::{self, Trial};
 use crate::chat::view::{Asked, ChatView, Reopened, SwitchAgent};
 use crate::chat::{Closed, Opens};
@@ -199,9 +199,6 @@ pub struct Chat {
     /// How its agent is set up, when the chat that opened it said, or
     /// once it became a trial.
     setup: Option<Setup>,
-    /// What its agent is told to go on with once it moves into the trial
-    /// the chat became, which it does when its turn ends.
-    moving: Option<String>,
     /// The way a trial the human ends ends, and how far it is on its way
     /// there, while its agent sums it up first.
     ending: Option<(Ends, workflow::Ending)>,
@@ -240,7 +237,6 @@ impl Chat {
             goal,
             parent,
             setup,
-            moving: None,
             ending: None,
             view: None,
             _changes: Vec::new(),
@@ -633,7 +629,6 @@ impl Workspace {
             goal: None,
             parent: from.map(|(parent, _)| parent),
             setup,
-            moving: None,
             ending: None,
             view: Some(view),
             _changes: changes,
@@ -719,8 +714,8 @@ impl Workspace {
     }
 
     /// Answers `request`, which the agent of the chat of `view` asks of the
-    /// window: makes the chat a trial, shows a goal it proposes, opens a
-    /// chat under it, as the agent says, or waits for one.
+    /// window: opens a trial beside the chat, shows a goal it proposes,
+    /// opens a chat under it, as the agent says, or waits for one.
     fn asked(
         &mut self,
         view: &Entity<ChatView>,
@@ -732,10 +727,15 @@ impl Workspace {
             ChatRequest::StartTrial {
                 trial,
                 what,
+                show,
                 answer,
             } => {
-                let started = self.start_trial(view, trial, &what, window, cx);
-                answer.send(started).ok();
+                let opened = self.start_trial(view, trial, &what, window, cx);
+                if show && let Ok(opened) = &opened {
+                    let key = opened.number;
+                    self.reveal(key, window, cx);
+                }
+                answer.send(opened).ok();
                 cx.notify();
             }
             ChatRequest::ProposeGoal { goal, why, answer } => {
@@ -747,70 +747,14 @@ impl Workspace {
             }
             ChatRequest::OpenChat {
                 text,
-                mut setup,
+                setup,
                 goal,
                 trial,
                 answer,
             } => {
-                let parent = self
-                    .chats
-                    .iter()
-                    .chain(&self.archived)
-                    .find(|chat| chat.view.as_ref() == Some(view))
-                    .map(|chat| {
-                        let folder = chat.setup.as_ref().and_then(|setup| setup.folder.clone());
-                        (
-                            chat.project,
-                            chat.key,
-                            chat.kept,
-                            chat.name.to_string(),
-                            folder,
-                        )
-                    });
-                let Some((project, key, kept, opened_by, folder)) = parent else {
-                    answer.send(Err("the chat is gone".to_owned())).ok();
-                    return;
-                };
-                // A trial works in a folder of its own; any other chat
-                // works where the chat that opened it does.
-                setup.folder = if let Some(trial) = trial {
-                    let made = storage::path(trial::FOLDER)
-                        .ok_or_else(|| "Cox cannot tell where to keep trials".to_owned())
-                        .and_then(|trials| {
-                            trial::make(
-                                trial,
-                                folder.as_ref().unwrap_or(&self.projects[project].folder),
-                                &trials,
-                            )
-                        });
-                    match made {
-                        Ok(made) => {
-                            setup.policy =
-                                trial::allow(setup.policy, &made, &workflow::trial().allow);
-                            setup.trial = Some(trial);
-                            Some(made)
-                        }
-                        Err(error) => {
-                            answer.send(Err(error)).ok();
-                            return;
-                        }
-                    }
-                } else {
-                    folder
-                };
-                let index = self.open_in(project, Some((key, kept)), Some(setup), window, cx);
-                let chat = &self.chats[index];
-                let opened = OpenedChat {
-                    number: chat.key,
-                    name: chat.name.to_string(),
-                    folder: trial
-                        .and(chat.setup.as_ref())
-                        .and_then(|setup| setup.folder.clone()),
-                };
-                if let Some(child) = &chat.view {
-                    child.update(cx, |child, cx| child.tell(&opened_by, &text, goal, cx));
-                }
-                answer.send(Ok(opened)).ok();
+                let setup = Setup { trial, ..setup };
+                let opened = self.open_chat(view, &text, setup, goal, window, cx);
+                answer.send(opened).ok();
                 cx.notify();
             }
             ChatRequest::WaitChat { chat, answer } => self.wait_chat(chat, answer, cx),
@@ -1003,7 +947,6 @@ impl Workspace {
             goal: chat.goal.take(),
             parent: chat.parent,
             setup: chat.setup.take(),
-            moving: chat.moving.take(),
             ending: chat.ending.take(),
             view: Some(view),
             _changes: {
@@ -1064,7 +1007,6 @@ impl Workspace {
             notices.0.notify(chat.key, &chat.name, &body);
         }
         let waited = (!at_work(state)).then(|| (chat.key, stands(chat, cx)));
-        let moves = chat.moving.is_some() && !working(state);
         let ends = chat
             .ending
             .as_ref()
@@ -1079,10 +1021,6 @@ impl Workspace {
             .chats
             .iter()
             .position(|chat| chat.view.as_ref() == Some(view));
-        // A chat that became a trial moves into it once its turn ends.
-        if moves && let Some(index) = index {
-            self.move_into_trial(index, window, cx);
-        }
         // A trial the human ends is summed up once its turn ends, and
         // ends once that is done.
         match (ends, index) {
@@ -1094,10 +1032,82 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Makes the chat of `view` a trial that starts from `trial`, to try
-    /// out `what`, and answers its folder, or why it cannot be one. It
-    /// moves into the trial at once, unless its turn goes on, until it
-    /// ends.
+    /// Opens a chat under the chat of `view`, in its project, set up as
+    /// `setup` says, which works until `goal` is met if given, and gets
+    /// `text` as its first line, and answers how it goes by. A trial, as
+    /// the setup's `trial` makes it, works in a folder of its own; any
+    /// other chat works where the chat that opened it does.
+    fn open_chat(
+        &mut self,
+        view: &Entity<ChatView>,
+        text: &str,
+        mut setup: Setup,
+        goal: Option<Goal>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<OpenedChat, String> {
+        let (project, folder) = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .find(|chat| chat.view.as_ref() == Some(view))
+            .map(|chat| {
+                let folder = chat.setup.as_ref().and_then(|setup| setup.folder.clone());
+                (chat.project, folder)
+            })
+            .ok_or("the chat is gone")?;
+        setup.folder = match setup.trial {
+            Some(trial) => {
+                let from = folder.unwrap_or_else(|| self.projects[project].folder.clone());
+                let made = make_trial(trial, &from)?;
+                setup.policy = trial::allow(setup.policy, &made, &workflow::trial().allow);
+                Some(made)
+            }
+            None => folder,
+        };
+        self.open_under(view, text, setup, goal, window, cx)
+    }
+
+    /// Opens a chat under the chat of `view`, set up as `setup` says, on
+    /// `text`, toward `goal`, and answers how it goes by.
+    fn open_under(
+        &mut self,
+        view: &Entity<ChatView>,
+        text: &str,
+        setup: Setup,
+        goal: Option<Goal>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<OpenedChat, String> {
+        let (project, key, kept, opened_by) = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .find(|chat| chat.view.as_ref() == Some(view))
+            .map(|chat| (chat.project, chat.key, chat.kept, chat.name.to_string()))
+            .ok_or("the chat is gone")?;
+        let trial = setup.trial;
+        let index = self.open_in(project, Some((key, kept)), Some(setup), window, cx);
+        let chat = &self.chats[index];
+        let opened = OpenedChat {
+            number: chat.key,
+            name: chat.name.to_string(),
+            folder: trial
+                .and(chat.setup.as_ref())
+                .and_then(|setup| setup.folder.clone()),
+        };
+        if let Some(child) = &chat.view {
+            child.update(cx, |child, cx| child.tell(&opened_by, text, goal, cx));
+        }
+        Ok(opened)
+    }
+
+    /// Opens a trial beside the chat of `view`, under it in the list, that
+    /// starts from `started`, to try out `what`, and answers how it goes
+    /// by, or why it cannot open. The trial's agent is set up as the
+    /// chat's is, and told what the chat talked through so far, and what
+    /// it tries; the chat goes on in the project, apart from it, and hears
+    /// how it ends (see [`Self::finish_trial`]).
     fn start_trial(
         &mut self,
         view: &Entity<ChatView>,
@@ -1105,7 +1115,7 @@ impl Workspace {
         what: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<OpenedChat, String> {
         let index = self
             .chats
             .iter()
@@ -1123,67 +1133,42 @@ impl Workspace {
             .folder
             .clone()
             .unwrap_or_else(|| self.projects[chat.project].folder.clone());
-        let trials = storage::path(trial::FOLDER).ok_or("Cox cannot tell where to keep trials")?;
-        let folder = trial::make(started, &from, &trials)?;
+        let talked = agent::talked_through(view.read(cx).conversation().entries());
+        let folder = make_trial(started, &from)?;
+        let context = [setup.context.clone(), talked]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let setup = Setup {
+            context: (!context.is_empty()).then_some(context),
             folder: Some(folder.clone()),
             trial: Some(started),
             policy: trial::allow(setup.policy, &folder, &workflow::trial().allow),
             ..setup
         };
-        let chat = &mut self.chats[index];
-        if let Some(kept) = chat.kept
-            && let Err(error) = self.store.keep_setup(kept, Some(&setup.to_json()))
-        {
-            tracing::error!("the chat's setup is not kept: {error:#}");
-        }
-        // A chat nothing was said in yet, as one the human opens as a
-        // trial, is named after what it tries, not after the line Cox
-        // sends it on that.
-        if chat.named == Named::Numbered {
-            let name: String = what.chars().take(NAME_LENGTH).collect();
-            chat.name_as(&name, Named::FirstLine, &self.store);
-        }
-        chat.setup = Some(setup);
-        chat.moving = Some(workflow::TRIAL_START.say(&[
+        let line = workflow::TRIAL_START.say(&[
             ("folder", &folder.display().to_string()),
             ("from", started.what()),
             ("what", what),
-        ]));
-        if !working(chat.state) {
-            self.move_into_trial(index, window, cx);
+        ]);
+        let opened = self.open_under(view, &line, setup, None, window, cx)?;
+        // Named after what it tries, not after the line Cox sends it.
+        let name: String = what.chars().take(NAME_LENGTH).collect();
+        if let Some(chat) = self.chats.iter_mut().find(|chat| chat.key == opened.number) {
+            chat.name_as(&name, Named::FirstLine, &self.store);
         }
-        Ok(folder)
-    }
-
-    /// Moves the chat at `index`, which became a trial, into it: closes
-    /// it, its agent stopped, and starts its agent again in the trial's
-    /// folder, with the conversation so far, on what it goes on with.
-    fn move_into_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let chat = &mut self.chats[index];
-        let Some(line) = chat.moving.take() else {
-            return;
-        };
-        let folder = chat
-            .setup
-            .as_ref()
-            .and_then(|setup| setup.folder.clone())
-            .unwrap_or_default();
-        if let Some(view) = chat.view.take() {
-            view.update(cx, |view, cx| {
-                view.close(conversation::trial_note(&folder), cx);
-            });
-        }
-        chat.open = false;
-        chat.state = State::Closed;
-        if self.chats.shown_index() == Some(index) {
-            self.show(index, window, cx);
-        } else {
-            self.read(index, window, cx);
-        }
-        if let Some(view) = self.chats[index].view.clone() {
-            view.update(cx, |view, cx| view.go_on(&line, window, cx));
-        }
+        view.update(cx, |view, cx| {
+            view.note(
+                format!(
+                    "Trial: chat {} opens beside this chat, in {}, to try: {what}",
+                    opened.number,
+                    folder.display()
+                ),
+                cx,
+            );
+        });
+        Ok(OpenedChat { name, ..opened })
     }
 
     /// Counts on the app's icon the chats that wait for the human, or that
@@ -1275,24 +1260,13 @@ impl Workspace {
         }
     }
 
-    /// Opens a chat in the project of `folder`, and the input that makes
-    /// it a trial, for the human to say what it is to try.
-    pub fn new_trial(&mut self, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.open(Some(folder), window, cx);
-        if let Some(index) = self.chats.shown_index() {
-            self.edit_trial(index, window, cx);
-        }
-    }
-
-    /// Whether the human can make the chat at `index` a trial: it is not
-    /// one already, and is not on its way into one.
+    /// Whether the human can open a trial beside the chat at `index`: it
+    /// is not a trial itself.
     fn starts_trial(&self, index: usize) -> bool {
         self.chats.get(index).is_some_and(|chat| {
-            chat.moving.is_none()
-                && chat
-                    .setup
-                    .as_ref()
-                    .is_none_or(|setup| setup.trial.is_none())
+            chat.setup
+                .as_ref()
+                .is_none_or(|setup| setup.trial.is_none())
         })
     }
 
@@ -1456,6 +1430,22 @@ impl Workspace {
             return;
         }
         let title = self.chats[index].name.to_string();
+        // What the trial's agent said last, as its summing up.
+        let summary = self.chats[index]
+            .view
+            .as_ref()
+            .and_then(|view| {
+                view.read(cx)
+                    .conversation()
+                    .entries()
+                    .iter()
+                    .rev()
+                    .find_map(|entry| match entry {
+                        Entry::Reply(text) => Some(text.clone()),
+                        _ => None,
+                    })
+            })
+            .unwrap_or_default();
         let discarded = storage::path(trial::FOLDER)
             .map(|trials| trials.join(trial::DISCARDED))
             .ok_or_else(|| "Cox cannot tell where to keep discarded trials".to_owned())
@@ -1466,6 +1456,9 @@ impl Workspace {
             .and_then(|discarded| discarded.kept.as_ref())
             .map(ToString::to_string)
             .unwrap_or_default();
+        let note = discarded.as_ref().map(trial::Discarded::note).ok();
+        let trial_key = self.chats[index].key;
+        let parent = self.chats[index].parent;
         let ended = self.end_trial(
             index,
             &folder,
@@ -1473,14 +1466,34 @@ impl Workspace {
             window,
             cx,
         );
-        let Some(view) = self.chats[index].view.clone().filter(|_| ended) else {
+        if !ended {
+            return;
+        }
+        // The chat the trial was opened beside goes on with it, in the
+        // project; a trial opened beside none goes on itself.
+        let goes_on = parent
+            .and_then(|parent| self.chats.iter().position(|chat| chat.key == parent))
+            .unwrap_or(index);
+        if goes_on != index {
+            // The human goes on there.
+            self.show(goes_on, window, cx);
+            if let (Some(view), Some(note)) = (self.chats[goes_on].view.clone(), note) {
+                view.update(cx, |view, cx| {
+                    view.note(
+                        format!("The trial \"{title}\" (chat {trial_key}) ended: {note}"),
+                        cx,
+                    );
+                });
+            }
+        }
+        let Some(view) = self.chats[goes_on].view.clone() else {
             return;
         };
         if let Some(goal) = &ending.goal {
             view.update(cx, |view, cx| view.set_goal(Goal::parse(goal), cx));
         }
         if let Some(text) = &ending.then {
-            match workflow::say(text, &[("kept", &kept)]) {
+            match workflow::say(text, &[("kept", &kept), ("summary", &summary)]) {
                 Some(line) => view.update(cx, |view, cx| view.go_on(&line, window, cx)),
                 None => view.update(cx, |view, cx| {
                     view.note(
@@ -1910,28 +1923,6 @@ impl Workspace {
                         })
                     }),
             )
-            .child(
-                div()
-                    .id("new-trial-in")
-                    .debug_selector(move || format!("new-trial-in-{}", chosen + 1))
-                    .flex_shrink_0()
-                    .h(px(TAB_HEIGHT))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .rounded(px(TAB_RADIUS))
-                    .text_color(rgb(FAINT))
-                    .text_size(px(12.))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
-                    .tooltip(tip(
-                        "A chat that tries something out, apart from the project",
-                    ))
-                    .child("New trial")
-                    .on_click(cx.listener(move |workspace, _, window, cx| {
-                        workspace.new_trial(folder.clone(), window, cx);
-                    })),
-            )
             .child(div().flex_1())
             .children(self.render_archived(cx))
             // The agent and the settings of the chat shown, at the right,
@@ -2245,6 +2236,13 @@ enum Ends {
     Waiting,
     /// Its agent sums it up; it ends once that turn ends.
     Summing,
+}
+
+/// Makes the folder of a trial that starts from `trial`, of the folder
+/// `from`, and answers it.
+fn make_trial(trial: Trial, from: &Path) -> Result<PathBuf, String> {
+    let trials = storage::path(trial::FOLDER).ok_or("Cox cannot tell where to keep trials")?;
+    trial::make(trial, from, &trials)
 }
 
 /// Whether an agent that stands as `state` is at work.
