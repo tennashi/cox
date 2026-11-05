@@ -30,7 +30,7 @@ use gpui::{
 };
 
 use self::draft::{Draft, one_line, unix_line_breaks};
-use crate::ui::theme::{FOREGROUND, SELECTION};
+use crate::ui::theme::{FAINT, FOREGROUND, SELECTION};
 
 actions!(
     line_input,
@@ -107,6 +107,8 @@ pub struct LineInput {
     /// How far the text is moved left and up, so that the cursor stays in
     /// view when the text does not fit.
     scroll: Point<Pixels>,
+    /// What the input shows, fainter, while it is empty.
+    placeholder: SharedString,
 }
 
 /// How many rows an input that wraps grows to before it scrolls.
@@ -123,6 +125,7 @@ impl LineInput {
             last_layout: None,
             last_bounds: None,
             scroll: Point::default(),
+            placeholder: SharedString::default(),
         }
     }
 
@@ -169,6 +172,25 @@ impl LineInput {
             draft.select_to(range.end);
             draft.commit(None, text);
         });
+    }
+
+    /// What the input shows, fainter, while it is empty.
+    #[must_use]
+    pub fn placeholder(&self) -> &str {
+        &self.placeholder
+    }
+
+    /// Shows `placeholder`, fainter, while the input is empty.
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            cx.notify();
+        }
     }
 
     /// Changes the text, or the selection, and draws it again.
@@ -742,6 +764,8 @@ struct Prepainted {
     origin: Point<Pixels>,
     selection: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
+    /// The placeholder, shaped, while the input is empty.
+    placeholder: Option<Layout>,
 }
 
 impl IntoElement for LineElement {
@@ -817,6 +841,20 @@ impl Element for LineElement {
         let selected = input.draft.selected().clone();
         let cursor = input.draft.cursor();
         let scroll = input.scroll;
+        let placeholder =
+            (input.draft.text().is_empty() && !input.placeholder.is_empty()).then(|| {
+                let placeholder = input.placeholder.clone();
+                let run = TextRun {
+                    len: placeholder.len(),
+                    font: window.text_style().font(),
+                    color: rgb(FAINT).into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                // On one row: what does not fit is cut off.
+                shape(placeholder, &[run], text_size(window), None, window)
+            });
         let layout = shape(
             text,
             &runs,
@@ -856,6 +894,7 @@ impl Element for LineElement {
             origin,
             selection,
             cursor: Some(cursor),
+            placeholder,
         }
     }
 
@@ -882,6 +921,9 @@ impl Element for LineElement {
                 window.paint_quad(selection);
             }
             layout.paint(prepainted.origin, window, cx);
+            if let Some(placeholder) = prepainted.placeholder.take() {
+                placeholder.paint(prepainted.origin, window, cx);
+            }
             if focus_handle.is_focused(window)
                 && let Some(cursor) = prepainted.cursor.take()
             {

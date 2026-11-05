@@ -201,7 +201,7 @@ fn tell(told: &mut String, chat: &Chat, workspace: &Workspace, cx: &App) {
         told.push_str("  Not shown: its input and stage are as they were left.\n");
     }
     if let Some(waiting) = view.waiting() {
-        let _ = writeln!(told, "  Above the input: {waiting}");
+        let _ = writeln!(told, "  Waiting: {waiting}");
     }
     let _ = writeln!(told, "  Input: {:?}", view.input().read(cx).text());
     if let Some(input) = view.goal_input() {
