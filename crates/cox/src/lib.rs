@@ -19,6 +19,8 @@
 //!   the human's, and the ACP Registry's.
 //! - [`settings`] is what the human sets of Cox itself, on its settings
 //!   screen: the folder chats in no project work in.
+//! - [`wiki`] is the human's wiki, where the agents keep what they
+//!   learned, for those of every project to find again.
 //! - [`workflow`] is what Cox tells a chat's agent in the human's place
 //!   at the turns of a trial, which the human's workflow can say instead.
 //! - [`notices`] tells the human of chats that need them while they look
@@ -49,5 +51,6 @@ pub mod settings;
 pub mod stage;
 pub mod storage;
 pub mod ui;
+pub mod wiki;
 pub mod workflow;
 pub mod workspace;

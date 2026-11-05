@@ -168,6 +168,22 @@ pub enum ChatRequest {
         chat: u64,
         answer: oneshot::Sender<Result<Waited, String>>,
     },
+    /// Answer where the chat is, for a page of the wiki its agent writes
+    /// to say where it was used.
+    Whereabouts {
+        answer: oneshot::Sender<Whereabouts>,
+    },
+}
+
+/// Where a chat is, as a page of the wiki its agent writes notes it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Whereabouts {
+    /// The chat's project, by its name.
+    pub project: String,
+    /// The chat, by its name.
+    pub chat: String,
+    /// The number the chat is kept by, if it is kept.
+    pub kept: Option<String>,
 }
 
 /// How a chat stands, as the agent that waited for it is told.
@@ -621,7 +637,7 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 9);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 12);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);

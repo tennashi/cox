@@ -15,10 +15,11 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use crate::agent::mcp::{
-    ASKS, Answered, ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest, answered,
+    ASKS, Answered, ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest, Whereabouts, answered,
 };
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::chat::trial::Trial;
+use crate::wiki;
 
 const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
@@ -29,6 +30,9 @@ const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const START_TRIAL: &str = "start_trial";
+const WIKI_SEARCH: &str = "wiki_search";
+const WIKI_READ: &str = "wiki_read";
+const WIKI_WRITE: &str = "wiki_write";
 
 /// How the map's file is written, as the agent is told it when it is to
 /// write one: the form the Map tab draws, not what to put in it, which is
@@ -87,7 +91,7 @@ pub(super) fn tools(only: Option<&[String]>) -> Value {
 
 /// Every tool, as the agent learns of it.
 fn all_tools() -> Value {
-    json!([
+    let mut tools = json!([
     {
         "name": SHOW_MARKDOWN,
         "description": "Shows the human a Markdown file, drawn as Markdown, on a tab of the \
@@ -179,7 +183,84 @@ fn all_tools() -> Value {
     },
     propose_goal_tool(),
     start_trial_tool(),
-    ])
+    ]);
+    if let Some(all) = tools.as_array_mut() {
+        all.extend(wiki_tools());
+    }
+    tools
+}
+
+/// The tools that read and write the human's wiki, as the agent learns
+/// of them.
+fn wiki_tools() -> [Value; 3] {
+    [
+        json!({
+            "name": WIKI_SEARCH,
+            "description": "Searches the human's wiki: Markdown pages by topic, of what \
+                the agents of all the human's projects learned, such as why a choice was \
+                made, what a library needs, or what failed and why. Answers the pages \
+                that have every word of the query, whatever the case, those that have \
+                them most first, each by its name and title with the first lines that \
+                have them. Read a page with wiki_read.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The words to look for, as `gpui scroll`.",
+                    },
+                },
+                "required": ["query"],
+            },
+        }),
+        json!({
+            "name": WIKI_READ,
+            "description": "Reads a page of the human's wiki, whole, with its links to \
+                other pages as [[name]] and, under \"Used in\", where it was used: the \
+                day, the project, the chat, the commit and the code. Without a page, \
+                reads the index, which lists the pages.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "page": {
+                        "type": "string",
+                        "description": "The page's name, as wiki_search gives it, as \
+                            `gpui-layout` or `rust/errors`; the index unless given.",
+                    },
+                },
+            },
+        }),
+        json!({
+            "name": WIKI_WRITE,
+            "description": "Writes a page of the human's wiki, whole, in place of what it \
+                said: read it first with wiki_read when it is there, and keep what still \
+                holds. A page is of one topic, starting with its `# ` title and a line on \
+                what it is about, and links to others as [[name]]. Cox adds, under \
+                \"Used in\", where this chat used it: the day, the project, the chat, the \
+                commit its folder is at, and the paths you give. Answers the page's file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "page": {
+                        "type": "string",
+                        "description": "The page's name: words and `/`, as `gpui-layout` \
+                            or `rust/errors`.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "The whole page, as Markdown, from its `# ` title.",
+                    },
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "The paths of the code the page is of, from the \
+                            working directory, as `src/view.rs`.",
+                    },
+                },
+                "required": ["page", "text"],
+            },
+        }),
+    ]
 }
 
 /// The tool that shows what changed, as the agent learns of it.
@@ -419,6 +500,9 @@ pub(super) async fn call(
         WAIT_CHAT => wait_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         START_TRIAL => start_trial(arguments, chats).await,
+        WIKI_SEARCH => wiki_search(arguments),
+        WIKI_READ => wiki_read(arguments),
+        WIKI_WRITE => wiki_write(arguments, cwd, chats).await,
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
     Ok(match done {
@@ -935,6 +1019,111 @@ async fn start_trial(
         );
     }
     Ok(told)
+}
+
+/// The folder of the human's wiki.
+fn wiki_root() -> Result<std::path::PathBuf, String> {
+    crate::settings::wiki().ok_or_else(|| "Cox cannot tell where the wiki is".to_owned())
+}
+
+/// Searches the wiki for what `arguments` ask, and tells what it found.
+fn wiki_search(arguments: &Value) -> Result<String, String> {
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .filter(|query| !query.trim().is_empty())
+        .ok_or("no query: give the words to look for as `query`")?;
+    let found = wiki::search(&wiki_root()?, query);
+    if found.is_empty() {
+        return Ok(format!("No page of the wiki has every word of `{query}`."));
+    }
+    let mut told = format!("The pages of the wiki that have every word of `{query}`:");
+    for page in found {
+        let _ = write!(told, "\n\n{}: {}", page.name, page.title);
+        for line in page.lines {
+            let _ = write!(told, "\n  {line}");
+        }
+    }
+    Ok(told)
+}
+
+/// Reads the page of the wiki `arguments` name, or its index.
+fn wiki_read(arguments: &Value) -> Result<String, String> {
+    let page = match arguments.get("page") {
+        None | Some(Value::Null) => wiki::INDEX,
+        Some(Value::String(page)) => page,
+        Some(_) => return Err("`page` is not a string".to_owned()),
+    };
+    let root = wiki_root()?;
+    match wiki::read(&root, page) {
+        Ok(text) => Ok(text),
+        Err(_) if page == wiki::INDEX => {
+            let pages = wiki::pages(&root);
+            if pages.is_empty() {
+                Ok("The wiki has no pages yet.".to_owned())
+            } else {
+                Ok(format!(
+                    "The wiki has no index; its pages: {}",
+                    pages.join(", ")
+                ))
+            }
+        }
+        Err(error) => Err(format!("{error}: find its name with wiki_search")),
+    }
+}
+
+/// Writes the page of the wiki `arguments` give, noting where the chat,
+/// in `cwd`, used it.
+async fn wiki_write(
+    arguments: &Value,
+    cwd: &Path,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let page = arguments
+        .get("page")
+        .and_then(Value::as_str)
+        .ok_or("no page: give the page's name as `page`")?;
+    let text = arguments
+        .get("text")
+        .and_then(Value::as_str)
+        .ok_or("no text: give the whole page as `text`")?;
+    let paths = match arguments.get("paths") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(paths)) => paths
+            .iter()
+            .map(|path| {
+                path.as_str()
+                    .map(str::to_owned)
+                    .ok_or("`paths` holds something that is not a string")
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => return Err("`paths` is not an array of strings".to_owned()),
+    };
+    let (answer, heard) = oneshot::channel();
+    chats
+        .send(ChatRequest::Whereabouts { answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let Whereabouts {
+        project,
+        chat,
+        kept,
+    } = heard
+        .await
+        .map_err(|_| "the chat closed before the page was written".to_owned())?;
+    let used = wiki::Used {
+        day: wiki::today(),
+        project,
+        chat,
+        kept,
+        commit: wiki::commit_of(cwd),
+        paths,
+    };
+    let file = wiki::write(&wiki_root()?, page, text, &used)?;
+    Ok(format!(
+        "{} is written, used {}.",
+        file.display(),
+        used.line().trim_start_matches("- ")
+    ))
 }
 
 /// What the agent is told of a command that ran: its output, or the end

@@ -2681,3 +2681,37 @@ async fn logs_in_in_a_terminal_and_sends_the_line_again(cx: &mut TestAppContext)
         );
     });
 }
+
+#[gpui::test]
+async fn the_human_asks_a_chat_to_keep_what_it_learned_in_the_wiki(cx: &mut TestAppContext) {
+    let home = scratch("wiki-home");
+    let kept = scratch("wiki-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, asks, workspace, cx) =
+        open_window_asking(cx, home, Rc::clone(&store), Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+
+    // A page the agent writes says where it was used: the chat's
+    // project, and the chat, by its name and the number it is kept by.
+    let (answer, heard) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::Whereabouts { answer })
+        .unwrap();
+    cx.run_until_parked();
+    let whereabouts = heard.await.unwrap();
+    assert_eq!(whereabouts.project, "No project");
+    assert_eq!(whereabouts.chat, "hello");
+    assert!(whereabouts.kept.is_some());
+
+    // "Save to wiki" asks the agent, in the human's place, to keep what
+    // the chat learned there.
+    right_click(cx, "chat-1");
+    click(cx, "save-to-wiki");
+    let view = shown(cx, &workspace);
+    wait_for_turn(cx, &view).await;
+    let asked = workflow::WIKI_SAVE.say(&[]);
+    assert_eq!(agents.borrow()[0].prompts().last(), Some(&asked));
+    assert!(asked.contains("wiki_write"), "{asked}");
+    assert!(entries(cx, &view).contains(&Entry::Cox(asked)));
+}
