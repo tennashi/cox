@@ -160,7 +160,7 @@ pub struct ChatView {
     /// The line the human is typing.
     input: Entity<LineInput>,
     /// The list over the input of the agent's commands the line can go on
-    /// to run.
+    /// to run, and of the project's files it can point to.
     completion: complete::Completion,
     /// Where the agent and the human work together, beside the
     /// conversation.

@@ -7,6 +7,7 @@
 //! - [`line`] is a line of it as it is shown.
 //! - [`history`] is where a tab has been, to go back and forward.
 //! - [`files`] lists what is in a project's folders.
+//! - [`fuzzy`] finds a path by a few of its letters.
 //! - [`changes`] is what changed in them, as Git tells it.
 //! - [`map`] is the project's map, in tiers, as an agent wrote it, with
 //!   what changed laid over it.
@@ -19,6 +20,7 @@
 pub mod buffer;
 pub mod changes;
 pub mod files;
+pub mod fuzzy;
 pub mod history;
 pub mod language;
 pub mod line;

@@ -12,6 +12,8 @@ workspace = true
 agent-client-protocol = { workspace = true, features = ["process"] }
 anyhow.workspace = true
 tokio = { workspace = true, features = ["macros", "sync"] }
+# The files a prompt points to, by their `file:` URIs.
+url = "2.5.8"
 # What Cox and the agent say to each other, for the logs: see `launch`.
 tracing.workspace = true
 

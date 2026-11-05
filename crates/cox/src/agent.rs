@@ -26,8 +26,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use cox_acp::{
-    Login, LoginMethod, McpServer, News, PermissionAnswer, PermissionKind, PlanEntry, PlanState,
-    Session, SlashCommand, StopReason, ToolCallContent, Transport, Update,
+    Block, Login, LoginMethod, McpServer, News, PermissionAnswer, PermissionKind, PlanEntry,
+    PlanState, Session, SlashCommand, StopReason, ToolCallContent, Transport, Update,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -40,6 +40,7 @@ use cox_core::settings::{Choice, Setting};
 
 use crate::agent::instructions::Instructions;
 use crate::agent::setup::{Asked, Decision, Policy, Setup};
+use crate::chat::mention;
 use crate::process::close_on_exec;
 
 /// What the agent side tells the window.
@@ -349,6 +350,8 @@ async fn run<T: Transport + 'static>(
     let settings = Arc::new(Mutex::new(Vec::new()));
     // The names of the agent's commands, as it last told them.
     let commands_known = Arc::new(Mutex::new(Vec::new()));
+    // Where the files a line points to are, from.
+    let folder = cwd.clone();
     let told = events.clone();
     let known = Arc::clone(&settings);
     let names = Arc::clone(&commands_known);
@@ -407,7 +410,13 @@ async fn run<T: Transport + 'static>(
                         } else {
                             std::mem::take(&mut ahead)
                         };
-                        let prompt = ahead.into_iter().chain([text]);
+                        // The files the line points to go after it.
+                        let files = mention::files(&text, &folder);
+                        let prompt = ahead
+                            .into_iter()
+                            .chain([text])
+                            .map(Block::Text)
+                            .chain(files.into_iter().map(Block::File));
                         take_turn(
                             &mut session,
                             prompt,
@@ -610,13 +619,13 @@ async fn set_setting(
 
 async fn take_turn(
     session: &mut Session,
-    prompt: impl IntoIterator<Item = String>,
+    prompt: impl IntoIterator<Item = Block>,
     policy: &Policy,
     settings: &Mutex<Vec<cox_acp::Setting>>,
     commands: &mut Commands,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
-    let prompt: Vec<String> = prompt.into_iter().collect();
+    let prompt: Vec<Block> = prompt.into_iter().collect();
     let mut failed = None;
     loop {
         match take_one_turn(session, prompt.clone(), policy, settings, commands, events).await? {
@@ -650,7 +659,7 @@ async fn take_turn(
 /// and answers how it ended, or `None` when the window is gone.
 async fn take_one_turn(
     session: &mut Session,
-    prompt: Vec<String>,
+    prompt: Vec<Block>,
     policy: &Policy,
     settings: &Mutex<Vec<cox_acp::Setting>>,
     commands: &mut Commands,

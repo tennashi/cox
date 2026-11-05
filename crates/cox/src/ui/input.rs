@@ -155,6 +155,22 @@ impl LineInput {
         self.edit(cx, |draft| draft.set_text(text));
     }
 
+    /// Where the cursor is, as a byte offset of the text.
+    #[must_use]
+    pub fn cursor(&self) -> usize {
+        self.draft.cursor()
+    }
+
+    /// Puts `text` in place of `range` of the text, a range of byte
+    /// offsets, with the cursor after it.
+    pub fn replace(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
+        self.edit(cx, |draft| {
+            draft.move_to(range.start);
+            draft.select_to(range.end);
+            draft.commit(None, text);
+        });
+    }
+
     /// Changes the text, or the selection, and draws it again.
     fn edit(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Draft)) {
         change(&mut self.draft);

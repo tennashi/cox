@@ -45,6 +45,40 @@ pub fn list(folder: &Path) -> std::io::Result<Vec<Listed>> {
     Ok(entries)
 }
 
+/// The files under `folder`, at any depth, by their paths from it, with
+/// `/` between folders, as the human writes them: at most `limit` of
+/// them, the shallower first, so that a project too large to list whole
+/// still has its files near the top. What Git ignores is left out, as
+/// [`list`] leaves it out.
+#[must_use]
+pub fn all(folder: &Path, limit: usize) -> Vec<String> {
+    let walk = ignore::WalkBuilder::new(folder)
+        .hidden(false)
+        .require_git(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        // Breadth first, near enough: each folder's files before the
+        // folders in it.
+        .sort_by_file_name(Ord::cmp)
+        .build();
+    let mut files: Vec<(usize, String)> = walk
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .filter_map(|entry| {
+            let path = entry.path().strip_prefix(folder).ok()?;
+            let written = path
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            Some((entry.depth(), written))
+        })
+        .take(limit.saturating_mul(4))
+        .collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    files.truncate(limit);
+    files.into_iter().map(|(_, path)| path).collect()
+}
+
 /// Folders before files, then by name, whatever its case, then by case.
 fn order(a: &Listed, b: &Listed) -> Ordering {
     b.is_folder
@@ -112,6 +146,29 @@ mod tests {
         let listed = list(&root.join("crate")).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(names(&listed), ["src"]);
+    }
+
+    #[test]
+    fn all_lists_the_files_at_every_depth_the_shallower_first() {
+        let root = folder(
+            "all",
+            &[
+                ".gitignore",
+                "src/main.rs",
+                "src/ui/input.rs",
+                "target/x",
+                "README.md",
+            ],
+        );
+        std::fs::write(root.join(".gitignore"), "/target\n").unwrap();
+        let all_of_them = all(&root, 100);
+        let two = all(&root, 2);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            all_of_them,
+            [".gitignore", "README.md", "src/main.rs", "src/ui/input.rs"]
+        );
+        assert_eq!(two, [".gitignore", "README.md"]);
     }
 
     #[test]

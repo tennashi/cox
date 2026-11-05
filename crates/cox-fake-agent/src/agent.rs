@@ -2,7 +2,9 @@
 //! `initialize` and `session/new`, with the scenario's settings, sets them
 //! as `session/set_config_option` asks, takes a turn of the scenario for
 //! each `session/prompt`, and ends the turn early when Cox cancels it. It
-//! asks Cox to log in as the scenario says, and takes `authenticate`.
+//! asks Cox to log in as the scenario says, and takes `authenticate`. It
+//! reads the files a prompt points to as `claude-agent-acp` does: see
+//! [`read`].
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead as _, Write};
@@ -120,7 +122,11 @@ impl<W: Write> Agent<W> {
             let method = message["method"].as_str().unwrap_or_default();
             match (method, id) {
                 ("initialize", Some(id)) => {
-                    let mut answer = json!({ "protocolVersion": 1, "agentCapabilities": {} });
+                    // It reads the files a prompt points to, given whole.
+                    let mut answer = json!({
+                        "protocolVersion": 1,
+                        "agentCapabilities": { "promptCapabilities": { "embeddedContext": true } },
+                    });
                     if !self.scenario.auth_methods.is_empty() {
                         answer["authMethods"] = Value::from(self.scenario.auth_methods.clone());
                     }
@@ -256,7 +262,7 @@ impl<W: Write> Agent<W> {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|block| block["text"].as_str())
+            .filter_map(read)
             .collect::<Vec<_>>()
             .join("\n");
         let turn = (0..self.scenario.turns.len())
@@ -501,4 +507,28 @@ fn tool(kind: &str, fields: &Map<String, Value>, cwd: &str, result: &str) -> Val
         update.insert(key.to_owned(), fill(value, cwd, result));
     }
     Value::Object(update)
+}
+
+/// What the agent reads of a block of a prompt, as `claude-agent-acp`
+/// reads it: its text, or a file it points to as a Markdown link, after
+/// which the file's text, when the block has it, as `<context>`.
+fn read(block: &Value) -> Option<String> {
+    let link = |uri: &str| {
+        let name = uri.rsplit('/').next().unwrap_or(uri);
+        format!("[@{name}]({uri})")
+    };
+    match block["type"].as_str()? {
+        "text" => block["text"].as_str().map(str::to_owned),
+        "resource_link" => block["uri"].as_str().map(link),
+        "resource" => {
+            let resource = &block["resource"];
+            let uri = resource["uri"].as_str()?;
+            let text = resource["text"].as_str().unwrap_or_default();
+            Some(format!(
+                "{}\n<context ref=\"{uri}\">\n{text}\n</context>",
+                link(uri)
+            ))
+        }
+        _ => None,
+    }
 }
