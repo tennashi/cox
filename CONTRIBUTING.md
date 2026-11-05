@@ -335,8 +335,10 @@ page, a Markdown file, code, a terminal, the flow of a tool call. The +
 at the bar's end opens a menu of what the human opens there: a line at
 its top, where Enter opens what they typed, a file of that path, from
 the chat's folder, if there is one or the line starts as a path does,
-or else a page, when the line has a scheme, or a dot or a port and no
-space, or else a command, which runs in a terminal; then "Web page", a
+or else a page, when the line has no space and what comes before its
+first `/` has a scheme, or a dot or a port, as a host has, or else that
+file again, when the line has no space and a `/`, as `src/new.rs`, or
+else a command, which runs in a terminal; then "Web page", a
 new tab, "Terminal" (see below), and "File…", which asks for a file
 and opens it as a link to it does. Escape closes the menu. Their keys, Command-T, Control-` and
 Command-P (Control-T and Control-P off macOS), open them from anywhere
