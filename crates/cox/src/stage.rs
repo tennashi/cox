@@ -153,6 +153,8 @@ pub struct Stage {
     /// them while the stage was open; none until then, or out of Git.
     changed: Option<usize>,
     _counting: Task<()>,
+    /// Where the tabs scroll along the bar.
+    strip: bar::Strip,
 }
 
 impl Stage {
@@ -185,6 +187,7 @@ impl Stage {
             menu: None,
             changed: None,
             _counting: bar::count_changes(cx),
+            strip: bar::Strip::default(),
             cwd,
             tabs: List::new(),
             pages: None,
