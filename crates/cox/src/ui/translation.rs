@@ -1,7 +1,7 @@
 //! What the human selected, read in their language: [`Translate`] in any
 //! part of the window with text selected, or "Translate" in the menu the
 //! right button opens on it (see [`offer`]), shows a card by the mouse with the text's
-//! translation once it arrives (see [`crate::translate`]), which the human
+//! translation as it arrives (see [`crate::translate`]), which the human
 //! copies, and closes with Escape, the ×, or a click beside it.
 
 use gpui::{
@@ -11,7 +11,7 @@ use gpui::{
     prelude::FluentBuilder as _, px, rgb,
 };
 
-use crate::translate::Way;
+use crate::translate::{Arriving, Way};
 use crate::ui::theme::{
     ACCENT_GROUND, BORDER_STRONG, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED,
 };
@@ -113,6 +113,8 @@ pub struct TranslationCard {
     offered: bool,
     /// Which way it is translated, if it is.
     way: Option<Way>,
+    /// As much of it as has arrived, while it arrives.
+    so_far: Option<String>,
     /// What it came to, once it did.
     translated: Option<Result<String, String>>,
     /// Where the mouse was, which the card hangs from.
@@ -135,6 +137,7 @@ impl TranslationCard {
             text: text.trim().to_owned(),
             offered: true,
             way: None,
+            so_far: None,
             translated: None,
             at,
             focus: cx.focus_handle(),
@@ -146,20 +149,28 @@ impl TranslationCard {
     /// Asks for the translation, which the card shows once it arrives.
     fn translate(&mut self, cx: &mut Context<Self>) {
         self.offered = false;
-        let Some((way, answer)) = crate::translate::text(&self.text) else {
+        let Some((way, mut answer)) = crate::translate::text(&self.text) else {
             self.translated = Some(Err(NO_LANGUAGE.to_owned()));
             cx.notify();
             return;
         };
         self.way = Some(way);
         self.waits = Some(cx.spawn(async move |card, cx| {
-            let translated = answer
-                .await
-                .unwrap_or_else(|_| Err("the translator stopped".to_owned()));
-            let _ = card.update(cx, |card, cx| {
-                card.translated = Some(translated);
-                cx.notify();
-            });
+            loop {
+                let arriving = answer.recv().await;
+                let done = !matches!(arriving, Some(Arriving::SoFar(_)));
+                let updated = card.update(cx, |card, cx| {
+                    match arriving {
+                        Some(Arriving::SoFar(so_far)) => card.so_far = Some(so_far),
+                        Some(Arriving::Done(translated)) => card.translated = Some(translated),
+                        None => card.translated = Some(Err("the translator stopped".to_owned())),
+                    }
+                    cx.notify();
+                });
+                if done || updated.is_err() {
+                    return;
+                }
+            }
         }));
         cx.notify();
     }
@@ -175,10 +186,11 @@ impl TranslationCard {
             .as_ref()
             .map(|way| format!("{} to {}", way.from, way.to))
             .unwrap_or_default();
-        let at = match &self.translated {
-            None => "translating".to_owned(),
-            Some(Ok(text)) => format!("{text:?}"),
-            Some(Err(error)) => format!("failed: {error}"),
+        let at = match (&self.translated, &self.so_far) {
+            (None, None) => "translating".to_owned(),
+            (None, Some(so_far)) => format!("translating, so far {so_far:?}"),
+            (Some(Ok(text)), _) => format!("{text:?}"),
+            (Some(Err(error)), _) => format!("failed: {error}"),
         };
         format!("{:?}, {way}: {at}", self.text)
     }
@@ -216,7 +228,13 @@ impl Render for TranslationCard {
             })
             .child(button("translation-close", "×").on_click(|_, window, cx| close(window, cx)));
         let body = match &self.translated {
-            None => div().text_color(rgb(DIM)).child("Translating…"),
+            None => match &self.so_far {
+                None => div().text_color(rgb(DIM)).child("Translating…"),
+                // What has arrived, and a mark that more is to come.
+                Some(so_far) => div()
+                    .text_color(rgb(FOREGROUND))
+                    .child(format!("{so_far} …")),
+            },
             Some(Ok(text)) => div().text_color(rgb(FOREGROUND)).child(text.clone()),
             Some(Err(error)) => div().text_color(rgb(FAILED)).child(error.clone()),
         };

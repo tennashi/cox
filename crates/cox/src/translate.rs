@@ -20,8 +20,10 @@
 //! the HTML it holds, and its rules stay as they are, so that a model
 //! made to translate, and not to keep Markdown, has only prose to
 //! translate (see [`page`]); what the human selects goes whole, ahead of
-//! the pages' blocks (see [`text`]). Each translation is kept, by what it
-//! says and its way, in `translations` where Cox keeps what lasts, so
+//! the pages' blocks, its translation told as far as it has arrived, as
+//! the command or the agent writes it (see [`text`]). Each translation is
+//! kept, by what it says, its way and what translated it, in
+//! `translations` where Cox keeps what lasts, so
 //! that a page that changed is translated again only where it changed,
 //! and the wiki's own folder holds only what the agents and the human
 //! wrote.
@@ -29,7 +31,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
@@ -39,7 +41,7 @@ use std::thread;
 use cox_acp::{PermissionAnswer, StopReason};
 use pulldown_cmark::{Event, Parser, Tag};
 use sha2::{Digest, Sha256};
-use tokio::sync::oneshot;
+use tokio::sync::mpsc;
 
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{Agent, AgentEvent, Command, Start};
@@ -115,9 +117,19 @@ pub struct Translated {
     pub error: Option<String>,
 }
 
-/// What a translation of text the human selected comes to: the
-/// translation, or why there is none.
-pub type Answer = oneshot::Receiver<Result<String, String>>;
+/// What arrives of a translation of text the human selected: as much of
+/// it as the translator has written, as it writes it, and then what it
+/// comes to, the translation or why there is none.
+pub type Answer = mpsc::UnboundedReceiver<Arriving>;
+
+/// What arrives of a translation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Arriving {
+    /// The translation as far as it has been written.
+    SoFar(String),
+    /// The translation whole, or why there is none: the last to arrive.
+    Done(Result<String, String>),
+}
 
 /// Starts the translator, which works on a thread of its own, its agent,
 /// when it needs one, being one of `agents`.
@@ -178,7 +190,7 @@ struct Job {
     way: Way,
     translation: Translation,
     file: PathBuf,
-    answer: Option<oneshot::Sender<Result<String, String>>>,
+    answer: Option<mpsc::UnboundedSender<Arriving>>,
 }
 
 /// What the translator is at.
@@ -266,10 +278,10 @@ impl Translator {
     /// Translates `text` the way `way` says, as `translation` says, ahead
     /// of the pages' blocks, or answers what was kept of it.
     fn text(&self, text: &str, way: Way, translation: Translation) -> Answer {
-        let (answer, answered) = oneshot::channel();
+        let (answer, answered) = mpsc::unbounded_channel();
         let file = self.folder.join(key(&way, &translation, text));
         if let Ok(translated) = fs::read_to_string(&file) {
-            let _ = answer.send(Ok(translated));
+            let _ = answer.send(Arriving::Done(Ok(translated)));
             return answered;
         }
         self.shared.state().jobs.push_front(Job {
@@ -314,9 +326,21 @@ impl Worker {
                         .expect("no one panics holding it");
                 }
             };
+            // Only a selection, which a card shows, is told as it arrives.
+            let told = job.answer.clone();
+            let so_far = |so_far: &str| {
+                if let Some(told) = &told {
+                    let _ = told.send(Arriving::SoFar(so_far.to_owned()));
+                }
+            };
             let translated = match &job.translation.command {
-                Some(command) => run(command, &job.way, &job.text),
-                None => self.ask(job.translation.agent.as_deref(), &job.way, &job.text),
+                Some(command) => run(command, &job.way, &job.text, so_far),
+                None => self.ask(
+                    job.translation.agent.as_deref(),
+                    &job.way,
+                    &job.text,
+                    so_far,
+                ),
             }
             .and_then(|translated| {
                 keep(&job.file, &translated)
@@ -327,7 +351,7 @@ impl Worker {
                 tracing::error!("cannot translate: {error}");
             }
             if let Some(answer) = job.answer {
-                let _ = answer.send(translated);
+                let _ = answer.send(Arriving::Done(translated));
                 continue;
             }
             let mut state = self.shared.state();
@@ -351,9 +375,16 @@ impl Worker {
     }
 
     /// What the agent named `named` says `text` is, the way `way` says,
-    /// starting it first if it is not running.
-    fn ask(&mut self, named: Option<&str>, way: &Way, text: &str) -> Result<String, String> {
-        let asked = self.asked(named, way, text);
+    /// starting it first if it is not running, telling `so_far` what it
+    /// has said as it says it.
+    fn ask(
+        &mut self,
+        named: Option<&str>,
+        way: &Way,
+        text: &str,
+        so_far: impl FnMut(&str),
+    ) -> Result<String, String> {
+        let asked = self.asked(named, way, text, so_far);
         if asked.is_err() {
             // A turn that failed may leave the agent in a state of its own;
             // the next text starts another.
@@ -362,7 +393,13 @@ impl Worker {
         asked
     }
 
-    fn asked(&mut self, named: Option<&str>, way: &Way, text: &str) -> Result<String, String> {
+    fn asked(
+        &mut self,
+        named: Option<&str>,
+        way: &Way,
+        text: &str,
+        mut so_far: impl FnMut(&str),
+    ) -> Result<String, String> {
         if self
             .agent
             .as_ref()
@@ -401,7 +438,10 @@ impl Worker {
                 return Err("the agent closed".to_owned());
             };
             match event {
-                AgentEvent::ReplyText(text) => reply.push_str(&text),
+                AgentEvent::ReplyText(text) => {
+                    reply.push_str(&text);
+                    so_far(reply.trim());
+                }
                 AgentEvent::PermissionRequest { .. } => {
                     let _ = agent
                         .commands
@@ -480,8 +520,13 @@ fn unfenced(reply: &str, text: &str) -> String {
 
 /// What `command` writes for `text`, given on its standard input, with
 /// `{from}` and `{to}` in its arguments standing for the languages of
-/// `way`.
-fn run(command: &[String], way: &Way, text: &str) -> Result<String, String> {
+/// `way`, telling `so_far` what it has written as it writes it.
+fn run(
+    command: &[String],
+    way: &Way,
+    text: &str,
+    mut so_far: impl FnMut(&str),
+) -> Result<String, String> {
     let words: Vec<String> = command
         .iter()
         .map(|word| word.replace("{from}", &way.from).replace("{to}", &way.to))
@@ -499,16 +544,45 @@ fn run(command: &[String], way: &Way, text: &str) -> Result<String, String> {
     // Written apart from the reading, so that a command that writes as it
     // reads does not wait on Cox while Cox waits on it.
     let writes = thread::spawn(move || stdin.write_all(input.as_bytes()));
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("{program} cannot be read: {error}"))?;
-    let _ = writes.join();
-    if !output.status.success() {
-        let said = String::from_utf8_lossy(&output.stderr);
-        let said = said.trim().lines().last().unwrap_or_default();
-        return Err(format!("{program} failed ({}): {said}", output.status));
+    // Read apart from what it writes, so that neither fills while the
+    // other is read.
+    let mut stderr = child.stderr.take().ok_or("the command says nothing")?;
+    let complains = thread::spawn(move || {
+        let mut said = Vec::new();
+        let _ = stderr.read_to_end(&mut said);
+        said
+    });
+    let mut stdout = child.stdout.take().ok_or("the command writes nothing")?;
+    let mut written = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        let read = stdout
+            .read(&mut chunk)
+            .map_err(|error| format!("{program} cannot be read: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        written.extend_from_slice(&chunk[..read]);
+        // Up to the last whole character, as a chunk may end inside one.
+        let whole = match std::str::from_utf8(&written) {
+            Ok(whole) => whole,
+            Err(error) => std::str::from_utf8(&written[..error.valid_up_to()]).unwrap_or_default(),
+        };
+        if !whole.trim().is_empty() {
+            so_far(whole.trim());
+        }
     }
-    let translated = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let status = child
+        .wait()
+        .map_err(|error| format!("{program} cannot be waited for: {error}"))?;
+    let _ = writes.join();
+    let said = complains.join().unwrap_or_default();
+    if !status.success() {
+        let said = String::from_utf8_lossy(&said);
+        let said = said.trim().lines().last().unwrap_or_default();
+        return Err(format!("{program} failed ({status}): {said}"));
+    }
+    let translated = String::from_utf8_lossy(&written).trim().to_owned();
     if translated.is_empty() {
         return Err(format!("{program} wrote nothing"));
     }
@@ -841,14 +915,57 @@ mod tests {
         let way = Way::of(text, &marked.language);
         let answer = translator.text(text, way.clone(), marked.clone());
         assert_eq!(
-            answer.blocking_recv().unwrap(),
+            done(answer),
             Ok("Japanese>English 縮める。\n\n二つ目。".to_owned())
         );
         // Kept, it is answered at once.
         let mut again = translator.text(text, way, marked);
         assert_eq!(
             again.try_recv(),
-            Ok(Ok("Japanese>English 縮める。\n\n二つ目。".to_owned()))
+            Ok(Arriving::Done(Ok(
+                "Japanese>English 縮める。\n\n二つ目。".to_owned()
+            )))
+        );
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    /// What `answer` comes to once it is done.
+    fn done(mut answer: Answer) -> Result<String, String> {
+        loop {
+            match answer.blocking_recv() {
+                Some(Arriving::Done(translated)) => return translated,
+                Some(Arriving::SoFar(_)) => {}
+                None => panic!("the translator stopped"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_selection_is_told_as_far_as_it_has_arrived() {
+        let folder = scratch("arriving");
+        let translator = Translator::start(folder.clone(), None);
+        let slow = Translation {
+            language: "Japanese".to_owned(),
+            command: Some(vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "cat >/dev/null; printf '縮'; sleep 0.3; printf 'める'".to_owned(),
+            ]),
+            agent: None,
+        };
+        let way = Way::into("Japanese");
+        let mut answer = translator.text("Shrink.", way, slow);
+        assert_eq!(
+            answer.blocking_recv(),
+            Some(Arriving::SoFar("縮".to_owned()))
+        );
+        assert_eq!(
+            answer.blocking_recv(),
+            Some(Arriving::SoFar("縮める".to_owned()))
+        );
+        assert_eq!(
+            answer.blocking_recv(),
+            Some(Arriving::Done(Ok("縮める".to_owned())))
         );
         let _ = fs::remove_dir_all(&folder);
     }
