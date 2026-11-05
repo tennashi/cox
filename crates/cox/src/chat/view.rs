@@ -1327,6 +1327,9 @@ impl ChatView {
             .border_1()
             .border_color(rgb(BORDER))
             .text_size(px(15.))
+            // The box is where text goes in, past the input's own row too,
+            // but for the chips and the Stop button, which point.
+            .cursor_text()
             // A click brings the keyboard back from the stage, and
             // keeps it from the window, which takes it otherwise.
             // What was selected in the conversation is let go, so
