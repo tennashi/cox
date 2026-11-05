@@ -66,6 +66,13 @@ struct FakeOpens {
 }
 
 /// The agent a chat starts with, and the other it can switch to.
+/// How long a test waits for what it waits for before it fails, saying
+/// it never came. It only catches what hangs: a debug build lays out a
+/// long conversation slowly, as one that a discarded trial sums up and
+/// that is told again to an agent that starts anew, which can take
+/// seconds on a slow machine, as CI's.
+const GIVEN_UP: Duration = Duration::from_secs(30);
+
 const FIRST_AGENT: &str = "fake-first";
 const SECOND_AGENT: &str = "Fake second";
 
@@ -363,7 +370,7 @@ async fn say(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, text: &s
 async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(GIVEN_UP);
         let _ = timed_out.send(());
     });
     tokio::select! {
@@ -1477,7 +1484,7 @@ async fn wait_until(
 ) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(GIVEN_UP);
         let _ = timed_out.send(());
     });
     tokio::select! {
@@ -1989,7 +1996,7 @@ async fn wait_for_discarded(
 ) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(GIVEN_UP);
         let _ = timed_out.send(());
     });
     let made = made.to_owned();
@@ -2151,6 +2158,76 @@ async fn a_chat_becomes_a_trial_and_goes_on_there(cx: &mut TestAppContext) {
             .is_err_and(|error| error.contains("a trial already")),
         "{again:?}"
     );
+
+    let _ = std::fs::remove_dir_all(&folder);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+}
+
+#[gpui::test]
+async fn the_human_starts_a_trial_of_what_they_would_have_tried(cx: &mut TestAppContext) {
+    let home = repository("trial-human-home");
+    let kept = scratch("trial-human-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, _asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+
+    // "Start trial…" opens the input on the chat; Escape closes it, and
+    // the chat stays as it was.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.edit_trial(0, window, cx);
+    });
+    let view = shown(cx, &workspace);
+    let from = view.read_with(cx, |view, _| view.trial_input().map(|(_, from)| from));
+    // The project is a Git repository, so the trial starts from it.
+    assert_eq!(from, Some(Trial::Project));
+    click(cx, "trial-from");
+    let from = view.read_with(cx, |view, _| view.trial_input().map(|(_, from)| from));
+    assert_eq!(from, Some(Trial::Empty));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |view, _| assert!(view.trial_input().is_none()));
+    assert_eq!(agents.borrow().len(), 1);
+
+    // "New trial" opens a chat with the input, where the human says what
+    // to try, and Enter makes the chat a trial of it.
+    click(cx, "new-trial-in-1");
+    cx.run_until_parked();
+    let view = shown(cx, &workspace);
+    assert!(view.read_with(cx, |view, _| view.trial_input().is_some()));
+    cx.simulate_input("Whether the greeting can name the user.");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let view = shown(cx, &workspace);
+    wait_for_turn(cx, &view).await;
+    let setup = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().setup().cloned().unwrap()
+    });
+    assert_eq!(setup.trial, Some(Trial::Project));
+    let folder = setup.folder.unwrap();
+    assert_eq!(agents.borrow().last().unwrap().cwd(), Some(folder.clone()));
+    // It is named after what it tries.
+    assert_eq!(
+        names(cx, &workspace),
+        listed(&[(
+            "No project",
+            &["hello", "Whether the greeting can name the user."]
+        )])
+    );
+    let entries = entries(cx, &view);
+    assert!(
+        entries.iter().any(|entry| matches!(entry, Entry::Cox(line)
+            if line.starts_with("You work in a trial now")
+                && line.ends_with("Whether the greeting can name the user."))),
+        "{entries:?}"
+    );
+
+    // A trial is not made a trial again.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.edit_trial(1, window, cx);
+    });
+    view.read_with(cx, |view, _| assert!(view.trial_input().is_none()));
 
     let _ = std::fs::remove_dir_all(&folder);
     let _ = std::fs::remove_dir_all(&home);

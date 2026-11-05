@@ -252,7 +252,15 @@ trial with Cox's `start_trial` tool, saying what the trial starts from,
 starts again in the trial's folder, with the conversation so far, told
 what it tries, and the tab marks the chat as a trial. `trial` in
 `open_chat` opens a chat that is a trial instead, for trying several
-ways side by side, one trial each. A trial's agent works in a
+ways side by side, one trial each. The human starts one too: "New
+trial", after the + after the tabs, opens a chat in the project chosen,
+and "Start trial…" in the menu of the right button makes the chat a
+trial, with the conversation so far; either opens an input above the
+chat's own, where the human writes what the trial is to try, as what to
+find out, and a click on "from the project" or "from nothing" beside it
+chooses what it starts from (from the project at first, when the
+project is in a Git repository). Enter starts the trial, as
+`start_trial` does, and Escape leaves the chat as it was. A trial's agent works in a
 folder Cox makes for it in `trials`, beside the chats' database (see
 [The stage](#the-stage)), and changes and tests the files there
 without asking the human, the policy allowing the calls that edit,

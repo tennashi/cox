@@ -48,6 +48,15 @@ pub enum Trial {
 }
 
 impl Trial {
+    /// The name of the trial, as the agent names it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Empty => "empty",
+        }
+    }
+
     /// The trial `name` says, as the agent names it: `project` or
     /// `empty`.
     #[must_use]
@@ -545,6 +554,18 @@ fn size(bytes: u64) -> String {
         0..KB => format!("{bytes} bytes"),
         KB..MB => format!("{} KB", bytes / KB),
         _ => format!("{:.1} MB", bytes as f64 / MB as f64),
+    }
+}
+
+/// What a trial the human starts for a chat working in `folder` starts
+/// from at first: the project, when `folder` is in a Git repository,
+/// which a trial of the project's needs, or else nothing.
+#[must_use]
+pub fn from_at_first(folder: &Path) -> Trial {
+    if top(folder).is_ok() {
+        Trial::Project
+    } else {
+        Trial::Empty
     }
 }
 

@@ -1131,6 +1131,13 @@ impl Workspace {
         {
             tracing::error!("the chat's setup is not kept: {error:#}");
         }
+        // A chat nothing was said in yet, as one the human opens as a
+        // trial, is named after what it tries, not after the line Cox
+        // sends it on that.
+        if chat.named == Named::Numbered {
+            let name: String = what.chars().take(NAME_LENGTH).collect();
+            chat.name_as(&name, Named::FirstLine, &self.store);
+        }
         chat.setup = Some(setup);
         chat.moving = Some(format!(
             "You work in a trial now, in {}, {}, apart from the project: there you change \
@@ -1245,6 +1252,44 @@ impl Workspace {
         if let Some(view) = self.chats.get(index).and_then(Chat::view) {
             view.update(cx, |view, cx| view.edit_goal(window, cx));
         }
+    }
+
+    /// Shows the chat at `index`, and opens the input that makes it a
+    /// trial, of what the human says it is to try.
+    pub fn edit_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        if !self.starts_trial(index) {
+            return;
+        }
+        self.show(index, window, cx);
+        let Some(chat) = self.chats.get(index) else {
+            return;
+        };
+        let from = trial::from_at_first(&self.projects[chat.project].folder);
+        if let Some(view) = chat.view() {
+            view.update(cx, |view, cx| view.edit_trial(from, window, cx));
+        }
+    }
+
+    /// Opens a chat in the project of `folder`, and the input that makes
+    /// it a trial, for the human to say what it is to try.
+    pub fn new_trial(&mut self, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open(Some(folder), window, cx);
+        if let Some(index) = self.chats.shown_index() {
+            self.edit_trial(index, window, cx);
+        }
+    }
+
+    /// Whether the human can make the chat at `index` a trial: it is not
+    /// one already, and is not on its way into one.
+    fn starts_trial(&self, index: usize) -> bool {
+        self.chats.get(index).is_some_and(|chat| {
+            chat.moving.is_none()
+                && chat
+                    .setup
+                    .as_ref()
+                    .is_none_or(|setup| setup.trial.is_none())
+        })
     }
 
     /// Shows the chat at `index`, and clears its goal.
@@ -1789,8 +1834,33 @@ impl Workspace {
                     .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
                     .tooltip(tip("New chat here"))
                     .child("+")
+                    .on_click({
+                        let folder = folder.clone();
+                        cx.listener(move |workspace, _, window, cx| {
+                            workspace.open(Some(folder.clone()), window, cx);
+                        })
+                    }),
+            )
+            .child(
+                div()
+                    .id("new-trial-in")
+                    .debug_selector(move || format!("new-trial-in-{}", chosen + 1))
+                    .flex_shrink_0()
+                    .h(px(TAB_HEIGHT))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .rounded(px(TAB_RADIUS))
+                    .text_color(rgb(FAINT))
+                    .text_size(px(12.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
+                    .tooltip(tip(
+                        "A chat that tries something out, apart from the project",
+                    ))
+                    .child("New trial")
                     .on_click(cx.listener(move |workspace, _, window, cx| {
-                        workspace.open(Some(folder.clone()), window, cx);
+                        workspace.new_trial(folder.clone(), window, cx);
                     })),
             )
             .child(div().flex_1())
@@ -2035,6 +2105,7 @@ impl Workspace {
             .is_some_and(|chat| chat.goal.is_some());
         let trial = self.trial_of(index).map(|(trial, _)| trial);
         let discards = self.discards(index);
+        let starts_trial = self.starts_trial(index);
         let item = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -2070,6 +2141,11 @@ impl Workspace {
             .when(has_goal, |menu| {
                 menu.child(item("clear-goal", "Clear goal").on_click(cx.listener(
                     move |workspace, _, window, cx| workspace.clear_goal(index, window, cx),
+                )))
+            })
+            .when(starts_trial, |menu| {
+                menu.child(item("start-trial", "Start trial…").on_click(cx.listener(
+                    move |workspace, _, window, cx| workspace.edit_trial(index, window, cx),
                 )))
             })
             .when(trial == Some(Trial::Project), |menu| {

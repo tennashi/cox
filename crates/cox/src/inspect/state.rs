@@ -118,6 +118,11 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
         .is_some_and(|input| focused == input.focus_handle(cx))
     {
         "the goal's input".to_owned()
+    } else if shown
+        .trial_input()
+        .is_some_and(|(input, _)| focused == input.focus_handle(cx))
+    {
+        "the trial's input".to_owned()
     } else {
         "the stage, or a chat's name being changed".to_owned()
     }
@@ -223,6 +228,14 @@ fn tell(told: &mut String, chat: &Chat, workspace: &Workspace, cx: &App) {
     let _ = writeln!(told, "  Input: {:?}", view.input().read(cx).text());
     if let Some(input) = view.goal_input() {
         let _ = writeln!(told, "  Goal input, open: {:?}", input.read(cx).text());
+    }
+    if let Some((input, trial)) = view.trial_input() {
+        let _ = writeln!(
+            told,
+            "  Trial input, open, from {}: {:?}",
+            trial.name(),
+            input.read(cx).text()
+        );
     }
     let conversation = view.conversation();
     if let Some(goal) = conversation.goal() {
