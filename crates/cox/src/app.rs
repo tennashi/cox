@@ -153,6 +153,7 @@ pub fn run(settings: Settings) -> ExitCode {
     );
     let agents = Agents::read(settings.command);
     agents.fetch();
+    crate::wiki::translate::start(agents.clone());
     let launcher = Launcher {
         agents,
         stage: settings.stage,

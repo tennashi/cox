@@ -7,8 +7,9 @@
 //! the run, and without either, the home is `~/Cox`. The file also says
 //! where the human keeps how they work with Cox, whatever the project, as
 //! `{"workflow": "~/dotfiles/cox"}` (see [`workflow`]), and where their
-//! wiki is, as `{"wiki": "~/notes/cox"}` (see [`wiki`]), which the human
-//! writes in it themselves.
+//! wiki is, as `{"wiki": "~/notes/cox"}` (see [`wiki`]), and what language
+//! they read it in, as `{"wiki_translation": {"language": "Japanese"}}`
+//! (see [`wiki_translation`]), which the human writes in it themselves.
 
 pub mod view;
 
@@ -39,6 +40,70 @@ pub struct Saved {
     pub workflow: Option<PathBuf>,
     /// The folder of the human's wiki, if they named one.
     pub wiki: Option<PathBuf>,
+    /// How the human reads their wiki in a language of their own, if
+    /// they named one.
+    pub translation: Option<Translation>,
+}
+
+/// How the human reads their wiki, which the agents write in English, in
+/// a language of their own, as `settings.json` says it: `{"language":
+/// "Japanese", "command": ["plamo-translate", "--to", "{language}"]}`, or
+/// `{"language": "Japanese", "agent": "Codex"}` (see
+/// [`crate::wiki::translate`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Translation {
+    /// The language, as the human names it, which the agent translating
+    /// is told, and the command gets for `{language}`.
+    pub language: String,
+    /// The command that translates, reading the text on its standard
+    /// input and writing the translation on its standard output, with
+    /// `{language}` in its arguments standing for the language; or
+    /// `None` for an agent.
+    pub command: Option<Vec<String>>,
+    /// The agent that translates, when no command does, by the name the
+    /// human knows it by among the agents Cox knows; or `None` for the
+    /// one a new chat talks to.
+    pub agent: Option<String>,
+}
+
+impl Translation {
+    /// The translation `value`, as `settings.json` holds it.
+    ///
+    /// # Errors
+    ///
+    /// What is wrong with `value`, for the human to read.
+    fn of(value: &Value) -> Result<Self, &'static str> {
+        let language = value
+            .get("language")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|language| !language.is_empty())
+            .ok_or("it names no \"language\"")?;
+        let command = match value.get("command") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(words)) => {
+                let words: Option<Vec<String>> = words
+                    .iter()
+                    .map(|word| word.as_str().map(str::to_owned))
+                    .collect();
+                match words {
+                    Some(words) if !words.is_empty() => Some(words),
+                    _ => return Err("its \"command\" is not a list of words"),
+                }
+            }
+            Some(_) => return Err("its \"command\" is not a list of words"),
+        };
+        let agent = match value.get("agent") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(agent)) if !agent.trim().is_empty() => Some(agent.trim().to_owned()),
+            Some(_) => return Err("its \"agent\" is not the name of an agent"),
+        };
+        Ok(Self {
+            language: language.to_owned(),
+            command,
+            agent,
+        })
+    }
 }
 
 impl Saved {
@@ -87,10 +152,17 @@ impl Saved {
         };
         let workflow = folder("workflow");
         let wiki = folder("wiki");
+        let translation = match value.get("wiki_translation") {
+            None | Some(Value::Null) => None,
+            Some(translation) => Translation::of(translation)
+                .inspect_err(|why| tracing::error!("\"wiki_translation\" cannot be read: {why}"))
+                .ok(),
+        };
         Ok(Self {
             home,
             workflow,
             wiki,
+            translation,
         })
     }
 }
@@ -112,6 +184,13 @@ pub fn workflow() -> Option<PathBuf> {
 #[must_use]
 pub fn wiki() -> Option<PathBuf> {
     Saved::read().wiki.or_else(|| crate::storage::path(WIKI))
+}
+
+/// How the human reads their wiki in a language of their own, if
+/// `settings.json` says (see [`Translation`]).
+#[must_use]
+pub fn wiki_translation() -> Option<Translation> {
+    Saved::read().translation
 }
 
 /// Keeps `home` as where chats in no project work, in this Cox's
@@ -183,7 +262,7 @@ pub fn folder_of(text: &str, user: Option<&Path>) -> Result<PathBuf, &'static st
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Saved, folder_of, keep_home_in};
+    use super::{Saved, Translation, folder_of, keep_home_in};
 
     #[test]
     fn the_home_is_read_and_kept_beside_what_else_the_file_holds() {
@@ -236,6 +315,47 @@ mod tests {
         assert_eq!(saved.wiki, Some(PathBuf::from("/srv/notes")));
         assert_eq!(saved.workflow, Some(PathBuf::from("/srv/cox")));
         assert_eq!(Saved::parse(br#"{"wiki": "notes"}"#).unwrap().wiki, None);
+    }
+
+    #[test]
+    fn the_wiki_is_read_in_a_language_by_a_command_or_an_agent() {
+        let saved = Saved::parse(
+            br#"{"wiki_translation": {"language": "Japanese",
+                "command": ["plamo-translate", "--to", "{language}"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            saved.translation,
+            Some(Translation {
+                language: "Japanese".to_owned(),
+                command: Some(vec![
+                    "plamo-translate".to_owned(),
+                    "--to".to_owned(),
+                    "{language}".to_owned()
+                ]),
+                agent: None,
+            })
+        );
+        let saved = Saved::parse(br#"{"wiki_translation": {"language": "Japanese"}}"#).unwrap();
+        assert_eq!(saved.translation.clone().unwrap().command, None);
+        assert_eq!(saved.translation.unwrap().agent, None);
+        let saved =
+            Saved::parse(br#"{"wiki_translation": {"language": "Japanese", "agent": "Codex"}}"#)
+                .unwrap();
+        assert_eq!(saved.translation.unwrap().agent.as_deref(), Some("Codex"));
+        // What is wrong with it is said, and the rest of the file counts.
+        for wrong in [
+            br#"{"home": "/work", "wiki_translation": {}}"#.as_slice(),
+            br#"{"home": "/work", "wiki_translation": {"language": " "}}"#,
+            br#"{"home": "/work", "wiki_translation": {"language": "ja", "command": []}}"#,
+            br#"{"home": "/work", "wiki_translation": {"language": "ja", "command": "tr"}}"#,
+            br#"{"home": "/work", "wiki_translation": "Japanese"}"#,
+            br#"{"home": "/work", "wiki_translation": {"language": "ja", "agent": 1}}"#,
+        ] {
+            let saved = Saved::parse(wrong).unwrap();
+            assert_eq!(saved.translation, None);
+            assert_eq!(saved.home, Some(PathBuf::from("/work")));
+        }
     }
 
     #[test]

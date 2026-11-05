@@ -237,7 +237,9 @@ fn wiki_tools() -> [Value; 3] {
             "description": "Writes a page of the human's wiki, whole, in place of what it \
                 said: read it first with wiki_read when it is there, and keep what still \
                 holds. A page is of one topic, starting with its `# ` title and a line on \
-                what it is about, and links to others as [[name]]. Cox adds, under \
+                what it is about, and links to others as [[name]]. Write it in English, \
+                whatever language the chat speaks, so that every chat finds it by the same \
+                words; the human reads it in their own language, as Cox translates it. Cox adds, under \
                 \"Used in\", where this chat used it: the day, the project, the chat, the \
                 commit its folder is at, and the paths you give. What holds only of this \
                 project, as of its own people, customers or plans, keep in it with \
