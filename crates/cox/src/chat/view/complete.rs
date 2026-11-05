@@ -1,36 +1,59 @@
 //! The list over the chat's input of what the line can go on to be: the
 //! agent's commands, while the line is `/` and the start of one of their
-//! names, as `/rev`. Up and Down choose one, Tab puts it in the line, as
-//! Enter does unless the line names it whole already, when Enter sends
-//! it, and Escape closes the list until the line changes.
+//! names, as `/rev`, and the project's files, while the word at the
+//! cursor is `@` and the start of a path, as `@src/ma` or `@chv` (see
+//! [`mention`]). Up and Down choose one, Tab puts it in the line, as
+//! Enter does unless the line has it whole already, when Enter sends
+//! the line, and Escape closes the list until the line changes.
+
+use std::ops::Range;
+use std::path::Path;
 
 use cox_acp::SlashCommand;
+use cox_editor::{changes, files, fuzzy};
 use gpui::{
-    AnyElement, App, Context, Entity, Focusable, FontWeight, ScrollHandle, Subscription, Window,
-    deferred, div, prelude::*, px, rgb,
+    AnyElement, App, Context, Entity, Focusable, FontWeight, ScrollHandle, Subscription, Task,
+    Window, deferred, div, prelude::*, px, rgb,
 };
 
 use super::ChatView;
+use crate::chat::mention;
 use crate::ui::input::LineInput;
 use crate::ui::theme::{BORDER_STRONG, CODE_FONT, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 
-/// How many commands the list shows before it scrolls.
+/// How many rows the list shows before it scrolls.
 const ROWS: f32 = 8.;
 const ROW_HEIGHT: f32 = 34.;
 
-/// What the list over the input knows of the line: which command is
-/// chosen, and whether the human closed the list for it.
+/// The most files of the project the list looks among.
+const MOST_FILES: usize = 50_000;
+
+/// The most files the list shows.
+const MOST_FOUND: usize = 50;
+
+/// What the list over the input knows of the line: which row is chosen,
+/// whether the human closed the list for it, and the project's files.
 pub(super) struct Completion {
-    /// The line as it was last seen, to tell when it changes.
-    seen: String,
-    /// The place in the list of the command chosen, on the line `line`:
-    /// on another line, the first is.
+    /// The line, and where its cursor was, as last seen, to tell when
+    /// they change.
+    seen: (String, usize),
+    /// The place in the list of the row chosen, on the line `line`: on
+    /// another line, the first is.
     chosen: usize,
     line: String,
     /// The line the human closed the list on, with Escape, which keeps it
     /// closed until the line changes.
     dismissed: Option<String>,
     scroll: ScrollHandle,
+    /// The files of the project, by their paths from its folder, those
+    /// that changed first, as listed when the human last started a path
+    /// after `@`.
+    files: Vec<String>,
+    /// Lists them, while it does.
+    listing: Option<Task<()>>,
+    /// The files that fit the path being written, the best first, and
+    /// what of it they fit, while one is.
+    found: Option<(String, Vec<String>)>,
     _changes: Subscription,
 }
 
@@ -38,24 +61,129 @@ impl Completion {
     /// Follows `input`, the chat's input, for the list over it.
     pub(super) fn new(input: &Entity<LineInput>, cx: &mut Context<ChatView>) -> Self {
         let changes = cx.observe(input, |view, input, cx| {
+            let input = input.read(cx);
+            let (line, cursor) = (input.text(), input.cursor());
             let completion = &mut view.completion;
-            let line = input.read(cx).text();
-            if completion.seen != line {
-                line.clone_into(&mut completion.seen);
+            if completion.seen.0 == line && completion.seen.1 == cursor {
+                return;
+            }
+            if completion.seen.0 != line {
                 completion.scroll.scroll_to_item(0);
                 if completion.dismissed.as_deref() != Some(line) {
                     completion.dismissed = None;
                 }
-                cx.notify();
             }
+            completion.seen = (line.to_owned(), cursor);
+            match mention::typing(line, cursor) {
+                Some(typing) => {
+                    let query = typing.query.to_owned();
+                    // A path just started: the files are listed again, as
+                    // they are now.
+                    if completion.found.is_none()
+                        && let Some(folder) = view.cwd.clone()
+                    {
+                        view.completion.listing = Some(list_files(folder, cx));
+                    }
+                    view.completion.find(query);
+                }
+                None => completion.found = None,
+            }
+            cx.notify();
         });
         Self {
-            seen: String::new(),
+            seen: (String::new(), 0),
             chosen: 0,
             line: String::new(),
             dismissed: None,
             scroll: ScrollHandle::new(),
+            files: Vec::new(),
+            listing: None,
+            found: None,
             _changes: changes,
+        }
+    }
+
+    /// Finds the files that fit `query`, unless they were found for it.
+    fn find(&mut self, query: String) {
+        if self
+            .found
+            .as_ref()
+            .is_some_and(|(found_for, _)| *found_for == query)
+        {
+            return;
+        }
+        let found = fuzzy::find(&query, &self.files, MOST_FOUND)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        self.found = Some((query, found));
+    }
+}
+
+/// Lists the files of the project in `folder`, those that changed first,
+/// in the background, for the paths after `@`, and finds again those that
+/// fit the path being written once it has.
+fn list_files(folder: std::path::PathBuf, cx: &mut Context<ChatView>) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        let listed = cx
+            .background_executor()
+            .spawn(async move { changed_first(&folder) })
+            .await;
+        let _ = this.update(cx, |view, cx| {
+            let completion = &mut view.completion;
+            completion.files = listed;
+            completion.listing = None;
+            if let Some((query, _)) = completion.found.take() {
+                completion.find(query);
+            }
+            cx.notify();
+        });
+    })
+}
+
+/// The files of the project in `folder`, those that changed, as the
+/// stage's "Changes" shows them, first.
+fn changed_first(folder: &Path) -> Vec<String> {
+    let all = files::all(folder, MOST_FILES);
+    let mut changed: Vec<String> = changes::read(folder)
+        .map(|diff| {
+            diff.files
+                .iter()
+                .map(|file| diff.top.join(&file.path))
+                .filter(|path| path.is_file())
+                .filter_map(|path| {
+                    let path = path.strip_prefix(folder).ok()?;
+                    Some(path.to_string_lossy().replace('\\', "/"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    changed.retain(|path| all.contains(path));
+    let rest: Vec<String> = all
+        .into_iter()
+        .filter(|path| !changed.contains(path))
+        .collect();
+    changed.extend(rest);
+    changed
+}
+
+/// What the list shows.
+enum Fits<'v> {
+    /// The agent's commands the line can go on to run.
+    Commands(Vec<&'v SlashCommand>),
+    /// The files whose path the line can go on to have, in place of
+    /// `range` of the line.
+    Files {
+        range: Range<usize>,
+        paths: &'v [String],
+    },
+}
+
+impl Fits<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Fits::Commands(commands) => commands.len(),
+            Fits::Files { paths, .. } => paths.len(),
         }
     }
 }
@@ -97,13 +225,22 @@ pub(super) fn matching<'c>(
 }
 
 impl ChatView {
-    /// The commands the list over the input shows, while it is open.
-    fn completions(&self, cx: &App) -> Option<Vec<&SlashCommand>> {
-        let line = self.input.read(cx).text();
+    /// What the list over the input shows, while it is open.
+    fn completions(&self, cx: &App) -> Option<Fits<'_>> {
+        let input = self.input.read(cx);
+        let line = input.text();
         if self.completion.dismissed.as_deref() == Some(line) {
             return None;
         }
-        matching(self.conversation.commands(), line)
+        if let Some(commands) = matching(self.conversation.commands(), line) {
+            return Some(Fits::Commands(commands));
+        }
+        let typing = mention::typing(line, input.cursor())?;
+        let (_, paths) = self.completion.found.as_ref()?;
+        (!paths.is_empty()).then_some(Fits::Files {
+            range: typing.range,
+            paths,
+        })
     }
 
     /// The place of the command chosen in the list of `count` for the line
@@ -149,10 +286,9 @@ impl ChatView {
         true
     }
 
-    /// Tab, or Enter when `sending` is false: puts the command chosen in
-    /// the line. Enter, with `sending`, sends a line that names the
-    /// command chosen whole already instead. Answers whether the list took
-    /// the key.
+    /// Tab, or Enter when `sending` is false: puts the row chosen in the
+    /// line. Enter, with `sending`, sends a line that has it whole already
+    /// instead. Answers whether the list took the key.
     pub(super) fn complete_take(
         &mut self,
         sending: bool,
@@ -162,17 +298,36 @@ impl ChatView {
         if !self.typing(window, cx) {
             return false;
         }
-        let Some(name) = self
-            .completions(cx)
-            .map(|fits| fits[self.chosen(fits.len(), cx)].name.clone())
-        else {
+        let Some(fits) = self.completions(cx) else {
             return false;
         };
-        if sending && self.input.read(cx).text() == format!("/{name}") {
-            return false;
+        let chosen = self.chosen(fits.len(), cx);
+        let line = self.input.read(cx).text();
+        match fits {
+            Fits::Commands(commands) => {
+                let name = commands[chosen].name.clone();
+                if sending && line == format!("/{name}") {
+                    return false;
+                }
+                self.take_command(&name, cx);
+            }
+            Fits::Files { range, paths } => {
+                let written = mention::written(&paths[chosen]);
+                if sending && line[range.clone()] == written {
+                    return false;
+                }
+                self.take_file(range, &written, cx);
+            }
         }
-        self.take_command(&name, cx);
         true
+    }
+
+    /// Puts `written`, the way to point to a file, in place of `range` of
+    /// the line, with a space after it.
+    fn take_file(&mut self, range: Range<usize>, written: &str, cx: &mut Context<Self>) {
+        let written = format!("{written} ");
+        self.input
+            .update(cx, |input, cx| input.replace(range, &written, cx));
     }
 
     /// Puts the command `name` in the line, ready for its input.
@@ -203,63 +358,19 @@ impl ChatView {
         cx.notify();
     }
 
-    /// The list over the input, while it is open: each command by its
-    /// name, with what it does, and what to write after it, the one chosen
-    /// marked.
+    /// The list over the input, while it is open, the row chosen marked.
     pub(super) fn render_completions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let fits = self.completions(cx)?;
         let chosen = self.chosen(fits.len(), cx);
-        let rows: Vec<_> =
-            fits.into_iter()
-                .enumerate()
-                .map(|(place, command)| {
-                    let name = command.name.clone();
-                    div()
-                        .id(("command", place))
-                        .debug_selector(move || format!("command-{place}"))
-                        .flex_shrink_0()
-                        .h(px(ROW_HEIGHT))
-                        .px(px(10.))
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .rounded(px(9.))
-                        .text_size(px(13.))
-                        .cursor_pointer()
-                        .when(place == chosen, |row| row.bg(rgb(SELECTED)))
-                        .hover(|style| style.bg(rgb(SELECTED)))
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .font_family(CODE_FONT)
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(FOREGROUND))
-                                .child(format!("/{}", command.name)),
-                        )
-                        .children(
-                            command.hint.clone().map(|hint| {
-                                div().flex_shrink_0().text_color(rgb(FAINT)).child(hint)
-                            }),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(rgb(DIM))
-                                .child(command.description.clone()),
-                        )
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            view.take_command(&name, cx);
-                            window.focus(&view.input.focus_handle(cx));
-                        }))
-                })
-                .collect();
+        let rows = match fits {
+            Fits::Commands(commands) => Self::render_commands(commands, chosen, cx),
+            Fits::Files { range, paths } => render_files(&range, paths, chosen, cx),
+        };
         Some(
             deferred(
                 div()
-                    .id("commands")
-                    .debug_selector(|| "commands".to_owned())
+                    .id("completions")
+                    .debug_selector(|| "completions".to_owned())
                     .occlude()
                     .absolute()
                     .bottom_full()
@@ -273,7 +384,7 @@ impl ChatView {
                     .shadow_lg()
                     .child(
                         div()
-                            .id("commands-rows")
+                            .id("completions-rows")
                             .max_h(px(ROW_HEIGHT * ROWS))
                             .overflow_y_scroll()
                             .track_scroll(&self.completion.scroll)
@@ -286,6 +397,117 @@ impl ChatView {
             .into_any_element(),
         )
     }
+
+    /// Each command by its name, with what it does, and what to write
+    /// after it.
+    fn render_commands(
+        commands: Vec<&SlashCommand>,
+        chosen: usize,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        commands
+            .into_iter()
+            .enumerate()
+            .map(|(place, command)| {
+                let name = command.name.clone();
+                div()
+                    .id(("command", place))
+                    .debug_selector(move || format!("command-{place}"))
+                    .flex_shrink_0()
+                    .h(px(ROW_HEIGHT))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .rounded(px(9.))
+                    .text_size(px(13.))
+                    .cursor_pointer()
+                    .when(place == chosen, |row| row.bg(rgb(SELECTED)))
+                    .hover(|style| style.bg(rgb(SELECTED)))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_family(CODE_FONT)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(FOREGROUND))
+                            .child(format!("/{}", command.name)),
+                    )
+                    .children(
+                        command
+                            .hint
+                            .clone()
+                            .map(|hint| div().flex_shrink_0().text_color(rgb(FAINT)).child(hint)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(rgb(DIM))
+                            .child(command.description.clone()),
+                    )
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.take_command(&name, cx);
+                        window.focus(&view.input.focus_handle(cx));
+                    }))
+                    .into_any_element()
+            })
+            .collect()
+    }
+}
+
+/// Each file by its name, with the folder it is in.
+fn render_files(
+    range: &Range<usize>,
+    paths: &[String],
+    chosen: usize,
+    cx: &mut Context<ChatView>,
+) -> Vec<AnyElement> {
+    paths
+        .iter()
+        .enumerate()
+        .map(|(place, path)| {
+            let (folder, name) = path.rsplit_once('/').unwrap_or(("", path));
+            let written = mention::written(path);
+            let range = range.clone();
+            div()
+                .id(("file", place))
+                .debug_selector(move || format!("file-{place}"))
+                .flex_shrink_0()
+                .h(px(ROW_HEIGHT))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .rounded(px(9.))
+                .text_size(px(13.))
+                .cursor_pointer()
+                .when(place == chosen, |row| row.bg(rgb(SELECTED)))
+                .hover(|style| style.bg(rgb(SELECTED)))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(CODE_FONT)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(FOREGROUND))
+                        .child(name.to_owned()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(CODE_FONT)
+                        .text_color(rgb(DIM))
+                        .child(folder.to_owned()),
+                )
+                .on_click(cx.listener(move |view, _, window, cx| {
+                    view.take_file(range.clone(), &written, cx);
+                    window.focus(&view.input.focus_handle(cx));
+                }))
+                .into_any_element()
+        })
+        .collect()
 }
 
 #[cfg(test)]

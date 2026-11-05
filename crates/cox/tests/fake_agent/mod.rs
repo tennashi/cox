@@ -26,13 +26,14 @@ use std::time::Duration;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AuthenticateRequest,
     AuthenticateResponse, AvailableCommand, AvailableCommandsUpdate, CancelNotification,
-    ConfigOptionUpdate, ContentBlock, ContentChunk, Diff, InitializeRequest, InitializeResponse,
-    LoadSessionRequest, LoadSessionResponse, McpServer, NewSessionRequest, NewSessionResponse,
-    PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus,
-    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities, SessionConfigOption,
-    SessionConfigOptionCategory, SessionConfigSelectOption, SessionId, SessionInfoUpdate,
-    SessionNotification, SessionResumeCapabilities, SessionUpdate, SetSessionConfigOptionRequest,
+    ConfigOptionUpdate, ContentBlock, ContentChunk, Diff, EmbeddedResourceResource,
+    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, McpServer,
+    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry,
+    PlanEntryPriority, PlanEntryStatus, PromptCapabilities, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, ResumeSessionRequest,
+    ResumeSessionResponse, SessionCapabilities, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigSelectOption, SessionId, SessionInfoUpdate, SessionNotification,
+    SessionResumeCapabilities, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallContent,
     ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
@@ -544,21 +545,32 @@ async fn take_turn(
 
 /// What the agent says it can do: go on with a session as `resumes` says.
 fn capabilities(resumes: Resumes) -> AgentCapabilities {
-    match resumes {
+    // It takes the files a prompt points to whole.
+    let prompts = PromptCapabilities::new().embedded_context(true);
+    let capabilities = match resumes {
         Resumes::Never => AgentCapabilities::new(),
         Resumes::Load => AgentCapabilities::new().load_session(true),
         Resumes::Resume | Resumes::Refuse => AgentCapabilities::new().session_capabilities(
             SessionCapabilities::new().resume(SessionResumeCapabilities::new()),
         ),
-    }
+    };
+    capabilities.prompt_capabilities(prompts)
 }
 
-/// The text blocks of a prompt.
+/// The blocks of a prompt, as text: a file given whole as `file <uri>:`
+/// and its text, and a link to one as `link <uri>`.
 fn texts_of(prompt: &[ContentBlock]) -> Vec<String> {
     prompt
         .iter()
         .filter_map(|block| match block {
             ContentBlock::Text(text) => Some(text.text.clone()),
+            ContentBlock::Resource(resource) => match &resource.resource {
+                EmbeddedResourceResource::TextResourceContents(file) => {
+                    Some(format!("file {}: {}", file.uri, file.text))
+                }
+                _ => None,
+            },
+            ContentBlock::ResourceLink(link) => Some(format!("link {}", link.uri)),
             _ => None,
         })
         .collect()

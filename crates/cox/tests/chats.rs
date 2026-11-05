@@ -554,6 +554,40 @@ async fn a_command_goes_first_and_the_instructions_with_the_next_line(cx: &mut T
 }
 
 #[gpui::test]
+async fn the_files_a_line_points_to_go_with_it(cx: &mut TestAppContext) {
+    let home = scratch("mention-home");
+    let folder = scratch("mention");
+    std::fs::create_dir_all(folder.join("docs")).unwrap();
+    std::fs::write(folder.join("docs/notes.md"), "# Notes\n").unwrap();
+    std::fs::write(folder.join("a logo.png"), [0x89, b'P', b'N', b'G', 0xff]).unwrap();
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(folder.clone()), window, cx);
+    });
+    let line = "read @docs/notes.md, @\"a logo.png\" and @gone.rs";
+    say(cx, &workspace, line).await;
+
+    // The line goes as written, then each file that is there: a text
+    // file whole, as the agent takes it, and another as a link.
+    let notes = folder.join("docs/notes.md");
+    let logo = folder.join("a logo.png");
+    assert_eq!(
+        agents.borrow()[0].prompt_blocks(),
+        [vec![
+            line.to_owned(),
+            format!("file file://{}: # Notes\n", notes.display()),
+            format!(
+                "link file://{}",
+                logo.display().to_string().replace(' ', "%20")
+            ),
+        ]]
+    );
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui::test]
 async fn switching_keeps_each_chats_conversation_and_draft(cx: &mut TestAppContext) {
     let (agents, workspace, cx) = open_window(cx, scratch("switching"));
 

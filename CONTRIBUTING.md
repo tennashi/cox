@@ -323,6 +323,22 @@ prompt's first block, which is how the agent knows it: what goes ahead
 of the first line, as the project's `COX.md`, waits for the next line
 instead.
 
+A line points the agent to files of the project with `@` and the file's
+path from the chat's folder, at the start of a word, as
+`@src/main.rs`, or `@"docs/a file.md"` for a path with a space. While
+the word at the cursor is `@` and the start of a path, the list over the
+input shows the project's files that fit, without what Git ignores: the
+letters typed have to come in the path in their order, as `@chv` finds
+`crates/cox/src/chat/view.rs`, and the paths where they start words,
+follow each other, or fall in the file's own name come first; with
+nothing typed yet, the files that changed, as "Changes" shows them, come
+first. The keys are the commands' keys. The line goes to the agent as
+it is written, and after it each file it points to that is there: the
+file's text, when the agent takes files whole (ACP's
+`embeddedContext`), as `claude-agent-acp` does, and the file is text of
+256 KB or less, or else a link to the file (ACP's `resource_link`), for
+the agent to read.
+
 The plan and the thoughts are ACP's `plan` and `agent_thought_chunk`
 updates, which Cox shows from any agent that sends them. How an agent
 is to be run to send them is the agent's: `claude-agent-acp` sends, as
@@ -710,7 +726,10 @@ each session the agent opens, as ACP's `configOptions` says them, which
 it sets as Cox asks; the tour has a mode, a model and an effort.
 Its `commands` are the commands the agent runs, as ACP's
 `availableCommands` says them, which it tells Cox of as each session
-opens; the tour has three, and answers `/compact`.
+opens; the tour has three, and answers `/compact`. The agent takes
+files whole, and reads the files a line points to as
+`claude-agent-acp` does, a link to each and its text, which a turn's
+`when` can match: the tour answers a line that points to a file.
 Its `authMethods` are the ways to log in it offers, as ACP's
 `initialize` says them: with them, the agent asks Cox to log in, before
 it opens a session, or, with `"authRequired": "prompt"`, as it takes a

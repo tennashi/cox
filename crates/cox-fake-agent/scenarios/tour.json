@@ -36,6 +36,10 @@
       "steps": [{ "say": "Summed up the conversation so far." }]
     },
     {
+      "when": "<context ref=",
+      "steps": [{ "say": "I read the file you pointed me to, which came with the line." }]
+    },
+    {
       "steps": [
         { "think": "Look at what the program prints before changing anything." },
         { "tool": { "id": "read-1", "title": "Read src/main.rs", "kind": "read", "locations": [{ "path": "{cwd}/src/main.rs" }], "status": "completed" } },

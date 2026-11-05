@@ -14,21 +14,22 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand,
     AvailableCommandInput, AvailableCommandsUpdate, CancelNotification, ClientCapabilities,
-    ConfigOptionUpdate, Content, ContentBlock, ContentChunk, Diff, InitializeRequest,
-    LoadSessionRequest, McpServer as AcpMcpServer, McpServerStdio, NewSessionRequest,
-    PermissionOptionKind, Plan as AcpPlan, PlanEntry as AcpPlanEntry, PlanEntryStatus,
-    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigOptionValue,
+    ConfigOptionUpdate, Content, ContentBlock, ContentChunk, Diff, EmbeddedResource,
+    EmbeddedResourceResource, InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer,
+    McpServerStdio, NewSessionRequest, PermissionOptionKind, Plan as AcpPlan,
+    PlanEntry as AcpPlanEntry, PlanEntryStatus, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, ResourceLink,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigOptionValue,
     SessionConfigSelectOption, SessionConfigSelectOptions, SessionConfigValueId, SessionId,
     SessionInfoUpdate, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    StopReason as AcpStopReason, TextContent, ToolCall as AcpToolCall,
+    StopReason as AcpStopReason, TextContent, TextResourceContents, ToolCall as AcpToolCall,
     ToolCallContent as AcpToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
     ToolCallUpdate, ToolKind as AcpToolKind,
 };
@@ -182,6 +183,7 @@ pub async fn connect<T>(
                 resumed,
                 settings,
                 login_methods,
+                embeds,
             } = started;
             let mut received = received;
             if resumed {
@@ -195,6 +197,7 @@ pub async fn connect<T>(
                 resumed,
                 settings,
                 login_methods,
+                embeds,
                 received,
                 tool_calls: HashMap::new(),
             };
@@ -214,6 +217,9 @@ struct Started {
     settings: Vec<Setting>,
     /// The ways the agent offers to log in.
     login_methods: Vec<LoginMethod>,
+    /// Whether the agent takes a file's text in the prompt, rather than
+    /// a link to it (ACP's `embeddedContext`).
+    embeds: bool,
 }
 
 /// Initializes the connection, saying Cox runs the agent's command in a
@@ -238,6 +244,10 @@ async fn start(
         .iter()
         .map(LoginMethod::from)
         .collect();
+    let embeds = initialized
+        .agent_capabilities
+        .prompt_capabilities
+        .embedded_context;
     let mcp_servers: Vec<AcpMcpServer> = mcp_servers.into_iter().map(Into::into).collect();
     if let Some(id) = resume
         && let Some(options) = resumed(
@@ -254,6 +264,7 @@ async fn start(
             resumed: true,
             settings: settings(options.unwrap_or_default()),
             login_methods,
+            embeds,
         });
     }
     let mut failed = None;
@@ -276,6 +287,7 @@ async fn start(
         resumed: false,
         settings: settings(session.config_options.unwrap_or_default()),
         login_methods,
+        embeds,
     })
 }
 
@@ -645,6 +657,8 @@ pub struct Session {
     resumed: bool,
     settings: Vec<Setting>,
     login_methods: Vec<LoginMethod>,
+    /// Whether the agent takes a file's text in the prompt.
+    embeds: bool,
     received: UnboundedReceiver<Received>,
     /// What is known of each tool call of the turn that has not ended yet.
     tool_calls: HashMap<ToolCallId, Known>,
@@ -701,14 +715,16 @@ impl Session {
         Ok(settings)
     }
 
-    /// Sends `texts` to the agent as a prompt, each a block of its own,
-    /// starting a turn.
-    pub fn send(&mut self, texts: impl IntoIterator<Item = String>) -> Turn<'_> {
+    /// Sends `blocks` to the agent as a prompt, starting a turn.
+    pub fn send(&mut self, blocks: impl IntoIterator<Item = Block>) -> Turn<'_> {
         let prompt = PromptRequest::new(
             self.id.clone(),
-            texts
+            blocks
                 .into_iter()
-                .map(|text| ContentBlock::Text(TextContent::new(text)))
+                .map(|block| match block {
+                    Block::Text(text) => ContentBlock::Text(TextContent::new(text)),
+                    Block::File(path) => file_block(&path, self.embeds),
+                })
                 .collect(),
         );
         self.tool_calls.clear();
@@ -721,6 +737,52 @@ impl Session {
             answer: None,
         }
     }
+}
+
+/// A block of a prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Block {
+    Text(String),
+    /// A file the human points the agent to, by its absolute path.
+    File(PathBuf),
+}
+
+impl From<String> for Block {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
+}
+
+/// The largest file whose text goes in the prompt: a larger one goes as
+/// a link, for the agent to read as much of it as it wants.
+const LARGEST_EMBEDDED: u64 = 256 * 1024;
+
+/// The file at `path` as a block of a prompt: its text, when the agent
+/// `embeds` files and it is text, and not too large, or else a link to
+/// it.
+fn file_block(path: &Path, embeds: bool) -> ContentBlock {
+    let uri = file_uri(path);
+    let text = embeds
+        .then(|| std::fs::metadata(path).ok())
+        .flatten()
+        .filter(|metadata| metadata.len() <= LARGEST_EMBEDDED)
+        .and_then(|_| std::fs::read(path).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+    if let Some(text) = text {
+        return ContentBlock::Resource(EmbeddedResource::new(
+            EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(text, uri)),
+        ));
+    }
+    let name = path
+        .file_name()
+        .map_or_else(|| uri.clone(), |name| name.to_string_lossy().into_owned());
+    ContentBlock::ResourceLink(ResourceLink::new(name, uri))
+}
+
+/// The `file:` URI of the absolute path `path`.
+fn file_uri(path: &Path) -> String {
+    url::Url::from_file_path(path)
+        .map_or_else(|()| format!("file://{}", path.display()), String::from)
 }
 
 /// One prompt and everything the agent does in answer to it.
