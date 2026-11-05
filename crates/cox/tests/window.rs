@@ -330,6 +330,13 @@ fn clipboard(cx: &mut VisualTestContext) -> Option<String> {
     cx.read_from_clipboard().and_then(|item| item.text())
 }
 
+/// What the chat's input shows while it is empty.
+fn placeholder(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> String {
+    view.read_with(cx, |view, cx| {
+        view.input().read(cx).placeholder().to_owned()
+    })
+}
+
 fn input_text(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> String {
     view.read_with(cx, |view, cx| view.input().read(cx).text().to_owned())
 }
@@ -397,7 +404,8 @@ async fn answers_a_permission_request_with_the_number_of_an_option(cx: &mut Test
     cx.simulate_keystrokes("enter");
     wait_for(cx, &view, State::Asking).await;
     cx.run_until_parked();
-    assert!(cx.debug_bounds("waiting").is_some());
+    // The input says how to answer.
+    assert!(placeholder(cx, &view).contains("choose with 1"));
     // No option has the number.
     cx.simulate_keystrokes("9");
     cx.simulate_keystrokes("1");
@@ -474,7 +482,7 @@ async fn logs_in_as_the_agent_asks_before_it_opens_the_session(cx: &mut TestAppC
         assert_eq!(view.conversation().asking_for(), Some("log in"));
     });
     cx.run_until_parked();
-    assert!(cx.debug_bounds("waiting").is_some());
+    assert!(placeholder(cx, &view).contains("log in"));
     cx.simulate_keystrokes("1");
     wait_for(cx, &view, State::Idle).await;
     say(cx, &view, "hello").await;
@@ -1103,4 +1111,19 @@ async fn shows_a_setting_the_agent_changes_on_its_own(cx: &mut TestAppContext) {
 
     wait_for_setting(cx, &view, fake_agent::MODE, "plan").await;
     assert_eq!(agent.settings_set(), []);
+}
+
+#[gpui::test]
+fn the_files_chip_starts_a_path_at_the_cursor(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    // The chips are drawn once the agent has started.
+    cx.run_until_parked();
+    click(cx, "start-file");
+    assert_eq!(input_text(cx, &view), "@");
+    cx.simulate_input("src ");
+    // After a word, the path starts a word of its own.
+    cx.simulate_input("and");
+    click(cx, "start-file");
+    assert_eq!(input_text(cx, &view), "@src and @");
 }

@@ -479,9 +479,9 @@ fn tools() -> Value {
         {
             "name": STATE,
             "description": "How Cox stands, in words: where it keeps what lasts and this run's \
-                log, the window, the chats as the list shows them, and one chat in full: the \
-                line above its input, its input, its stage's tabs, and its conversation, entry \
-                by entry.",
+                log, the window, the chats as the list shows them, and one chat in full: what \
+                it waits for, as its input shows while empty, its input, its stage's tabs, and \
+                its conversation, entry by entry.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

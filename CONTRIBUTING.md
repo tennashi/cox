@@ -305,8 +305,9 @@ folds it to that line. The tool calls, thoughts and
 plan of the agent one after another fold into one line, under which
 only the calls still running and the thought still arriving show, until
 a click opens it. When the agent asks permission, a click on an option,
-or its number, answers. A line above the input tells what the chat waits
-for, while it is not the next line to send.
+or its number, answers. The input, while it is empty, tells what the
+chat waits for, while it is not the next line to send, or else that it
+waits for a reply.
 
 An agent can run commands of its own, as `claude-agent-acp` runs Claude
 Code's `/compact` and `/review`, when a line starts with `/` and the
@@ -332,7 +333,8 @@ letters typed have to come in the path in their order, as `@chv` finds
 `crates/cox/src/chat/view.rs`, and the paths where they start words,
 follow each other, or fall in the file's own name come first; with
 nothing typed yet, the files that changed, as "Changes" shows them, come
-first. The keys are the commands' keys. The line goes to the agent as
+first. The keys are the commands' keys, and the chip "@ files" under
+the input starts a path at the cursor with `@`. The line goes to the agent as
 it is written, and after it each file it points to that is there: the
 file's text, when the agent takes files whole (ACP's
 `embeddedContext`), as `claude-agent-acp` does, and the file is text of
@@ -791,8 +793,8 @@ are:
   [What Cox keeps of each run](#what-cox-keeps-of-each-run)), the
   stages' DevTools port, the window and where the keyboard is, the chats
   in the order of the tabs, project by project, by the numbers they go
-  by to the agents' tools, and one chat in full, the chat shown or chat `<chat>`: the line above
-  its input, its input, its stage's tabs, and its conversation, entry by
+  by to the agents' tools, and one chat in full, the chat shown or chat `<chat>`: what it
+  waits for, as its input shows while empty, its input, its stage's tabs, and its conversation, entry by
   entry.
 - `screenshot [<file>]`: the window as a PNG, written to `<file>`,
   `cox-screenshot.png` unless given: through ImageMagick's `import` on

@@ -19,10 +19,11 @@
 //! permission request, the number of an option chooses it. The plan the
 //! agent works to stays in sight on a card at the top right of the
 //! conversation, after its turn too, until the human sends the next line,
-//! and a click on its line folds it to that line. A line above the input
-//! tells what the chat waits for, when it is not the human's next line,
-//! and the goal the chat works toward, while it has one; the human sets
-//! the goal in an input that opens in its place (see [`ChatView::edit_goal`]).
+//! and a click on its line folds it to that line. The input, while it is
+//! empty, tells what the chat waits for, when it is not the human's next
+//! line, and the goal the chat works toward, while it has one; the human
+//! sets the goal in an input that opens above it (see
+//! [`ChatView::edit_goal`]).
 //!
 //! When a turn ends and the chat has a goal, the view runs the goal's
 //! command in a terminal on the stage, as the agent's own tool would, or
@@ -1105,8 +1106,8 @@ impl Focusable for ChatView {
 
 impl ChatView {
     /// What the chat waits for, when it is not the human's next line, or
-    /// the goal it works toward, while it has one: the line above the
-    /// input.
+    /// the goal it works toward, while it has one: what the input shows
+    /// while it is empty.
     #[must_use]
     pub fn waiting(&self) -> Option<String> {
         let goal = self.conversation.goal();
@@ -1214,7 +1215,10 @@ impl ChatView {
         // The frame lays the text out again.
         self.reading.clear();
         let entries = self.render_entries(cx);
-        let waiting = self.waiting();
+        // What the chat waits for shows in the input, while it is empty.
+        let placeholder = self.waiting().unwrap_or_else(|| "Reply".to_owned());
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
         let goal_input = self.render_goal_input(cx);
         let plan = self.render_plan(cx);
         let goal = self.render_goal();
@@ -1285,15 +1289,6 @@ impl ChatView {
                     // Drawn after the conversation, over it.
                     .children(plan),
             )
-            .children(waiting.filter(|_| goal_input.is_none()).map(|waiting| {
-                div()
-                    .debug_selector(|| "waiting".to_owned())
-                    .px(px(18.))
-                    .pt_1()
-                    .text_size(px(12.))
-                    .text_color(rgb(DIM))
-                    .child(waiting)
-            }))
             .children(goal_input)
             .child(
                 div()
@@ -1306,11 +1301,12 @@ impl ChatView {
 
 impl ChatView {
     /// The box the human types the line in: the input, and under it the
-    /// chips that start a command, and the button that stops the turn
-    /// while it runs.
+    /// chips that start a command or a file's path, and the button that
+    /// stops the turn while it runs.
     fn render_input_box(&self, running: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let input = self.input.clone();
         let commands = !self.conversation.commands().is_empty();
+        let files = self.cwd.is_some();
         div()
             .debug_selector(|| "input".to_owned())
             .flex()
@@ -1341,24 +1337,45 @@ impl ChatView {
                 }),
             )
             .child(div().pt(px(4.)).min_w_0().child(self.input.clone()))
-            .when(commands || running, |bar| {
+            .when(commands || files || running, |bar| {
                 bar.child(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(6.))
-                        .when(commands, |row| row.child(Self::render_chip(cx)))
+                        .when(commands, |row| {
+                            row.child(Self::render_chip(
+                                "start-command",
+                                "/ commands",
+                                Self::start_command,
+                                cx,
+                            ))
+                        })
+                        .when(files, |row| {
+                            row.child(Self::render_chip(
+                                "start-file",
+                                "@ files",
+                                Self::start_file,
+                                cx,
+                            ))
+                        })
                         .child(div().flex_1())
                         .when(running, |row| row.child(Self::render_stop(cx))),
                 )
             })
     }
 
-    /// The chip under the input that starts a command, as `/` does.
-    fn render_chip(cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// A chip under the input, named `id`, that `start`s what its
+    /// `label` says, as the key it names does.
+    fn render_chip(
+        id: &'static str,
+        label: &'static str,
+        start: fn(&mut Self, &mut Window, &mut Context<Self>),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         div()
-            .id("start-command")
-            .debug_selector(|| "start-command".to_owned())
+            .id(id)
+            .debug_selector(move || id.to_owned())
             .h(px(24.))
             .px(px(9.))
             .flex()
@@ -1369,8 +1386,8 @@ impl ChatView {
             .text_color(rgb(FAINT))
             .cursor_pointer()
             .hover(|style| style.text_color(rgb(FOREGROUND)))
-            .child("/ commands")
-            .on_click(cx.listener(|view, _, window, cx| view.start_command(window, cx)))
+            .child(label)
+            .on_click(cx.listener(move |view, _, window, cx| start(view, window, cx)))
     }
 }
 

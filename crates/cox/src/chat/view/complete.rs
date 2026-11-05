@@ -358,6 +358,26 @@ impl ChatView {
         cx.notify();
     }
 
+    /// The "@ files" chip under the input: starts a path at the cursor
+    /// with `@`, which opens the list of the project's files, while the
+    /// chat has a folder.
+    pub(super) fn start_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = self.input.read(cx);
+        let cursor = input.cursor();
+        let before = &input.text()[..cursor];
+        // A path is pointed to at the start of a word.
+        let at = if before.is_empty() || before.ends_with(char::is_whitespace) {
+            "@"
+        } else {
+            " @"
+        };
+        self.input
+            .update(cx, |input, cx| input.replace(cursor..cursor, at, cx));
+        self.completion.dismissed = None;
+        window.focus(&self.input.focus_handle(cx));
+        cx.notify();
+    }
+
     /// The list over the input, while it is open, the row chosen marked.
     pub(super) fn render_completions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let fits = self.completions(cx)?;
