@@ -282,6 +282,14 @@ wrap_load_handler! {
     }
 }
 
+/// What CEF hands `on_cursor_change` as the platform's own cursor: an
+/// `NSCursor` on macOS, which the cef crate names no type for, and an X
+/// cursor elsewhere. The stage draws its cursor itself, so it goes unread.
+#[cfg(target_os = "macos")]
+type CursorHandle = *mut u8;
+#[cfg(not(target_os = "macos"))]
+type CursorHandle = cef::CursorHandle;
+
 wrap_display_handler! {
     struct StageDisplayHandler {
         shared: SharedRef,
@@ -310,7 +318,7 @@ wrap_display_handler! {
         fn on_cursor_change(
             &self,
             _browser: Option<&mut cef::Browser>,
-            _cursor: std::os::raw::c_ulong,
+            _cursor: CursorHandle,
             kind: cef::CursorType,
             _custom: Option<&cef::CursorInfo>,
         ) -> c_int {

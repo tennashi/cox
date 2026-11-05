@@ -1101,8 +1101,11 @@ mod tests {
         // SAFETY: `open` is a valid descriptor; the copy is closed below.
         let inherited = unsafe { libc::dup(std::os::fd::AsRawFd::as_raw_fd(&open)) };
         assert!(inherited > 2);
+        // Looked for before the output is redirected: `dash` keeps a copy
+        // of the descriptor a redirect replaces at 10 or above, where the
+        // one looked for is too once other tests hold many open.
         let script = format!(
-            "if [ -e /dev/fd/{inherited} ]; then echo has; else echo not; fi > {}",
+            "seen=not; [ -e /dev/fd/{inherited} ] && seen=has; echo $seen > {}",
             file.display()
         );
         let agent = spawn(
