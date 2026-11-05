@@ -809,6 +809,7 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
                 | Entry::Plan(_)
                 | Entry::Switched { .. }
                 | Entry::Login { .. }
+                | Entry::Keep { .. }
         )
     });
     if !said {
@@ -856,8 +857,14 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
                 "[the human switched the chat from the agent {from} to the agent {to}]"
             )),
             // What the agent thought and planned is its own, and what came
-            // of it is told already; how the human logged in is theirs.
-            Entry::Thought(_) | Entry::Plan(_) | Entry::Note(_) | Entry::Login { .. } => None,
+            // of it is told already; how the human logged in is theirs,
+            // and so is whether to keep what the chat learned, which the
+            // agent is asked in a line of its own when they choose to.
+            Entry::Thought(_)
+            | Entry::Plan(_)
+            | Entry::Note(_)
+            | Entry::Login { .. }
+            | Entry::Keep { .. } => None,
         })
         .collect();
     let mut told = told.join("\n\n");

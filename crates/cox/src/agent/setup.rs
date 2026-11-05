@@ -49,6 +49,13 @@ pub struct Setup {
     pub trial: Option<Trial>,
 }
 
+/// Whether the agent of a chat set up as `setup`, or not set up, gets
+/// the tool that writes the wiki, to keep what the chat learned there.
+#[must_use]
+pub fn keeps_in_wiki(setup: Option<&Setup>) -> bool {
+    setup.is_none_or(|setup| setup.gives("wiki_write"))
+}
+
 /// What an agent does with the stage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -123,6 +130,14 @@ impl Setup {
     #[must_use]
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_owned())
+    }
+
+    /// Whether the agent gets the tool of Cox's own named `tool`.
+    #[must_use]
+    pub fn gives(&self, tool: &str) -> bool {
+        self.tools
+            .as_ref()
+            .is_none_or(|tools| tools.iter().any(|given| given == tool))
     }
 
     /// What the agent gets of its context ahead of the first line, after

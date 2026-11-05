@@ -54,7 +54,7 @@ use crate::workflow;
 use tokio::sync::oneshot;
 
 use crate::agent::mcp::{ChatRequest, OpenedChat, Waited, Whereabouts};
-use crate::agent::setup::{Policy, Setup};
+use crate::agent::setup::{Policy, Setup, keeps_in_wiki};
 use crate::chat::conversation::{Entry, State};
 use crate::chat::trial::{self, Trial};
 use crate::chat::view::{Asked, ChatView, Reopened, SwitchAgent};
@@ -296,6 +296,12 @@ impl Chat {
     #[must_use]
     pub fn goal(&self) -> Option<&Goal> {
         self.goal.as_ref()
+    }
+
+    /// The number it is kept by, if it is kept.
+    #[must_use]
+    pub fn kept(&self) -> Option<ChatId> {
+        self.kept
     }
 
     /// The key of the chat whose agent opened it, if an agent did.
@@ -758,6 +764,30 @@ impl Workspace {
                 cx.notify();
             }
             ChatRequest::WaitChat { chat, answer } => self.wait_chat(chat, answer, cx),
+            ChatRequest::SaveToWiki { chat } => {
+                let index = match chat {
+                    Some(kept) => self.chats.iter().position(|chat| chat.kept == Some(kept)),
+                    None => self
+                        .chats
+                        .iter()
+                        .position(|chat| chat.view.as_ref() == Some(view)),
+                };
+                let why = match index {
+                    None => Some("the chat that learned it is not among the tabs"),
+                    Some(index) if !self.saves_to_wiki(index) => {
+                        Some("its agent is at work, or has no wiki_write: ask once it waits")
+                    }
+                    Some(index) => {
+                        self.save_to_wiki(index, window, cx);
+                        None
+                    }
+                };
+                if let Some(why) = why {
+                    view.update(cx, |view, cx| {
+                        view.note(format!("Nothing is kept in the wiki: {why}."), cx);
+                    });
+                }
+            }
             ChatRequest::Whereabouts { answer } => {
                 let whereabouts = self
                     .chats
@@ -1293,14 +1323,9 @@ impl Workspace {
     /// Whether the human can ask the agent of the chat at `index` to keep
     /// what it learned in the wiki: it is not at work, and has the tool.
     fn saves_to_wiki(&self, index: usize) -> bool {
-        self.chats.get(index).is_some_and(|chat| {
-            !working(chat.state)
-                && chat
-                    .setup
-                    .as_ref()
-                    .and_then(|setup| setup.tools.as_ref())
-                    .is_none_or(|tools| tools.iter().any(|tool| tool == "wiki_write"))
-        })
+        self.chats
+            .get(index)
+            .is_some_and(|chat| !working(chat.state) && keeps_in_wiki(chat.setup.as_ref()))
     }
 
     /// Whether the human can open a trial beside the chat at `index`: it
@@ -1501,6 +1526,8 @@ impl Workspace {
             .unwrap_or_default();
         let note = discarded.as_ref().map(trial::Discarded::note).ok();
         let trial_key = self.chats[index].key;
+        let trial_kept = self.chats[index].kept;
+        let trial_keeps = keeps_in_wiki(self.chats[index].setup.as_ref());
         let parent = self.chats[index].parent;
         let ended = self.end_trial(
             index,
@@ -1532,6 +1559,15 @@ impl Workspace {
         let Some(view) = self.chats[goes_on].view.clone() else {
             return;
         };
+        // What the trial found, and why it ended, is the trial's agent's to
+        // keep, as the human chooses where they go on.
+        let keeps = (goes_on != index).then_some(trial_kept);
+        if trial_keeps && keeps.is_none_or(|kept| kept.is_some()) {
+            let why = format!("The trial \"{title}\" ended.");
+            view.update(cx, |view, cx| {
+                view.ask_to_keep(why, keeps.flatten(), cx);
+            });
+        }
         if let Some(goal) = &ending.goal {
             view.update(cx, |view, cx| view.set_goal(Goal::parse(goal), cx));
         }

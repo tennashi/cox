@@ -381,6 +381,16 @@ matter Obsidian keeps between `---` lines at its top, then say
 find the page, read it, see it in the index, or write it. The human
 can write the line themselves too.
 
+So that the human need not remember to, Cox asks at a chat's
+milestones, when its goal is met and when a trial ends, on a card in
+the conversation of the chat they go on in, whether to keep what was
+learned in the wiki: "Save to wiki" asks the agent as the menu's does,
+for a trial the trial's own agent, which found it, and goes on in the
+project, and "Not now" lets it be. A goal is asked of once for a line
+of the human's, so that the turn that keeps it, which meets the goal
+again, does not ask again; and a chat whose agent has no `wiki_write`
+is not asked.
+
 "Wiki" on the stage's bar, a plugin (see below), at `cox://wiki/`,
 shows the wiki to the human: its pages, with their titles, their first
 lines and where they were used last, which a line at the top narrows to
