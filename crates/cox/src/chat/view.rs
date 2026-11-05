@@ -1601,11 +1601,15 @@ impl Render for ChatView {
                     .child(
                         // Narrower than its text unwrapped, as a window can be,
                         // the conversation wraps its text in place of growing
-                        // past it.
+                        // past it. Its width is a basis it shrinks from, not a
+                        // maximum: taffy sizes a node with a maximum by its
+                        // content unwrapped first, and where the card is just
+                        // as wide as the maximum, it takes the height of that
+                        // sizing from its cache, so the text did not wrap.
                         div()
-                            .flex_1()
+                            .flex_basis(px(CONVERSATION_MAX_WIDTH))
+                            .flex_shrink()
                             .min_w_0()
-                            .max_w(px(CONVERSATION_MAX_WIDTH))
                             .h_full()
                             .child(conversation),
                     ),
