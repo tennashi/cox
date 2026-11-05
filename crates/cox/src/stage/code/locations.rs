@@ -16,6 +16,7 @@ use gpui::{
 
 use super::Code;
 use super::text::NUMBER;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
     ACCENT_GROUND, BORDER, BUTTON_HOVER, CARD_INNER_RADIUS, CODE_FONT, DIM, FOREGROUND, GROUND,
@@ -230,8 +231,8 @@ impl Code {
                     .debug_selector(|| "code-locations-title".to_owned())
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .child(locations.title.clone()),
+                    .overflow_hidden()
+                    .child(ellipsis(locations.title.clone())),
             )
             .child(
                 div()
@@ -312,7 +313,12 @@ fn file_row(path: &Path) -> gpui::AnyElement {
         .whitespace_nowrap()
         .overflow_hidden()
         .child(div().text_color(rgb(FOREGROUND)).child(name))
-        .child(div().text_color(rgb(DIM)).truncate().child(folder))
+        .child(
+            div()
+                .text_color(rgb(DIM))
+                .overflow_hidden()
+                .child(ellipsis(folder)),
+        )
         .into_any_element()
 }
 

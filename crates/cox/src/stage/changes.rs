@@ -21,6 +21,7 @@ use gpui::{
 };
 
 use crate::stage::tab::Shows;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
     ACCENT, ADDED_GROUND, BORDER, CODE_FONT, DIM, FAILED, FOREGROUND, HOVER, RAISED, REMOVED_GROUND,
@@ -167,9 +168,9 @@ impl Changes {
             .child(
                 div()
                     .min_w_0()
-                    .truncate()
+                    .overflow_hidden()
                     .text_color(rgb(DIM))
-                    .child(shortened(&top)),
+                    .child(ellipsis(shortened(&top))),
             )
     }
 }
@@ -278,7 +279,7 @@ fn file_row(row: usize, file: &File) -> gpui::Stateful<gpui::Div> {
                 .text_color(rgb(letter_color))
                 .child(how.letter().to_string()),
         )
-        .child(div().min_w_0().truncate().child(path))
+        .child(div().min_w_0().overflow_hidden().child(ellipsis(path)))
         .child(div().flex_shrink_0().text_color(rgb(DIM)).child(counts))
 }
 

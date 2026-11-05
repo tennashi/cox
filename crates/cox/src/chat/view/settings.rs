@@ -21,6 +21,7 @@ use cox_core::settings::{Choice, Setting};
 use super::ChatView;
 use crate::agents::REGISTRY_GROUP;
 use crate::chat::conversation::State;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BORDER_STRONG, BUTTON, DIM, FOREGROUND, RAISED, SURFACE,
 };
@@ -220,9 +221,9 @@ impl ChatView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
+                    .overflow_hidden()
                     .text_right()
-                    .child(chosen_name(setting).to_owned()),
+                    .child(ellipsis(chosen_name(setting).to_owned())),
             )
             .child(div().text_color(rgb(DIM)).child("›"))
             .on_mouse_down(

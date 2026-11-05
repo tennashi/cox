@@ -19,6 +19,7 @@ use gpui::{
 };
 
 use crate::stage::tab::Shows;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT_GROUND, BORDER, DIM, FAILED, FOREGROUND, HOVER};
 
@@ -176,7 +177,12 @@ impl Tree {
             .pr_2()
             .cursor_pointer()
             .child(div().flex_shrink_0().text_color(rgb(DIM)).child(marker))
-            .child(div().min_w_0().truncate().child(entry.name.clone()))
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(ellipsis(entry.name.clone())),
+            )
             .on_click(cx.listener(move |tree, _, _, cx| {
                 if is_folder {
                     tree.toggle(&path, cx);
@@ -289,8 +295,8 @@ impl Render for Tree {
                     .border_b_1()
                     .border_color(rgb(BORDER))
                     .text_color(rgb(DIM))
-                    .truncate()
-                    .child(shortened(&self.root)),
+                    .overflow_hidden()
+                    .child(ellipsis(shortened(&self.root))),
             )
             .child(
                 div()

@@ -18,6 +18,7 @@ use gpui::{
 
 use super::ChatView;
 use crate::chat::mention;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::LineInput;
 use crate::ui::theme::{BORDER_STRONG, CODE_FONT, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 
@@ -462,9 +463,9 @@ impl ChatView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
+                            .overflow_hidden()
                             .text_color(rgb(DIM))
-                            .child(command.description.clone()),
+                            .child(ellipsis(command.description.clone())),
                     )
                     .on_click(cx.listener(move |view, _, window, cx| {
                         view.take_command(&name, cx);
@@ -516,10 +517,10 @@ fn render_files(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
+                        .overflow_hidden()
                         .font_family(CODE_FONT)
                         .text_color(rgb(DIM))
-                        .child(folder.to_owned()),
+                        .child(ellipsis(folder.to_owned())),
                 )
                 .on_click(cx.listener(move |view, _, window, cx| {
                     view.take_file(range.clone(), &written, cx);

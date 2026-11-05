@@ -19,6 +19,7 @@ use gpui::{
 
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::tab::{Shows, ShowsFile, TabContent};
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::markdown::{self, Block};
 use crate::ui::paths::shortened;
 use crate::ui::text::Reading;
@@ -225,8 +226,8 @@ impl Render for Document {
                     .debug_selector(|| "document-path".to_owned())
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .child(shortened(&self.path)),
+                    .overflow_hidden()
+                    .child(ellipsis(shortened(&self.path))),
             )
             .children(self.unread.as_ref().map(|error| {
                 div()

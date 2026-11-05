@@ -25,6 +25,7 @@ use crate::chat::conversation::{
     self, Answer, Content, Entry, LoginOption, State, Step, StepState, ToolCallResult,
 };
 use crate::chat::view::ChatView;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::text::Writer;
 use crate::ui::theme::{
     ACCENT, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER, BORDER_STRONG, BUTTON,
@@ -423,8 +424,8 @@ impl ChatView {
             .child(
                 div()
                     .min_w_0()
-                    .truncate()
-                    .child(SharedString::from(short(title))),
+                    .overflow_hidden()
+                    .child(ellipsis(SharedString::from(short(title)))),
             )
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.folds.flip(fold);
@@ -610,11 +611,17 @@ impl ChatView {
             .id(("line", index))
             .debug_selector(move || format!("line-{index}"))
             .flex()
-            .child(div().flex_1().min_w_0().truncate().child(if open {
-                "Thinking".to_owned()
-            } else {
-                text.lines().next().unwrap_or_default().to_owned()
-            }));
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(ellipsis(if open {
+                        "Thinking".to_owned()
+                    } else {
+                        text.lines().next().unwrap_or_default().to_owned()
+                    })),
+            );
         div()
             .flex()
             .flex_col()
@@ -781,8 +788,8 @@ fn render_asking(
             })
             .child(
                 div()
-                    .truncate()
-                    .child(SharedString::from(format!("{} · {name}", i + 1))),
+                    .overflow_hidden()
+                    .child(ellipsis(SharedString::from(format!("{} · {name}", i + 1)))),
             )
             .on_click(cx.listener(move |view, _, _, cx| view.choose(i, cx)))
     });
@@ -889,14 +896,19 @@ fn folding(
 
 /// The title of a tool call, short, as its chip shows it: as text, not
 /// Markdown, and each path by its last part, as `Read src/main.rs` is
-/// `Read main.rs`.
+/// `Read main.rs`. A word with more than a path in it, as a command's
+/// `PATH="$HOME/.cargo/bin:$PATH"`, stays whole, since its last part
+/// alone would read as something else.
 fn short(title: &str) -> String {
     title
         .split_whitespace()
         .map(|word| {
             let word = word.trim_matches('`');
+            let path = word
+                .chars()
+                .all(|c| c.is_alphanumeric() || "/._-~@+".contains(c));
             match word.rsplit_once('/') {
-                Some((_, last)) if !last.is_empty() => last,
+                Some((_, last)) if path && !last.is_empty() => last,
                 _ => word,
             }
         })
@@ -1086,6 +1098,10 @@ mod tests {
         assert_eq!(short("`cargo test`"), "cargo test");
         assert_eq!(short("Edit `/home/me/app/src/a.rs`"), "Edit a.rs");
         assert_eq!(short("grep greeting src/"), "grep greeting src/");
+        assert_eq!(
+            short(r#"PATH="$HOME/.cargo/bin:$PATH" cargo test -p cox"#),
+            r#"PATH="$HOME/.cargo/bin:$PATH" cargo test -p cox"#
+        );
     }
 
     #[test]
