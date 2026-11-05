@@ -1,6 +1,7 @@
-//! The agent of a chat and the settings of its session, on one pill at
-//! the right of the bar above its conversation: the agent's name, then
-//! what each setting is set to, as the agent names them. A click on the
+//! The agent of a chat and the settings of its session, on one pill,
+//! which the window shows at the right of the tabs for the chat shown: a
+//! dot in the accent, the agent's name, then what each setting is set
+//! to, as the agent names them. A click on the
 //! pill opens a list of the agent and the settings, each a row that names
 //! it and what it is set to; a click on a row shows, in the list's place,
 //! what it can be set to, under the groups the agent puts them in, with
@@ -20,7 +21,9 @@ use cox_core::settings::{Choice, Setting};
 use super::ChatView;
 use crate::agents::REGISTRY_GROUP;
 use crate::chat::conversation::State;
-use crate::ui::theme::{ACCENT_GROUND, BORDER_STRONG, BUTTON, DIM, FOREGROUND, RAISED};
+use crate::ui::theme::{
+    ACCENT, ACCENT_GROUND, BORDER, BORDER_STRONG, BUTTON, DIM, FOREGROUND, RAISED, SURFACE,
+};
 
 /// How wide the list of a setting's choices is.
 const CHOICES_WIDTH: f32 = 260.;
@@ -29,7 +32,7 @@ const CHOICES_WIDTH: f32 = 260.;
 const CHOICES_HEIGHT: f32 = 360.;
 
 /// How tall the pill is, which the list opens under.
-const PILL_HEIGHT: f32 = 28.;
+const PILL_HEIGHT: f32 = 32.;
 
 /// What the list under the pill shows, while it is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,7 +49,7 @@ pub(super) enum Menu {
 impl ChatView {
     /// The pill of the agent and the settings of the session, with the
     /// list under it while it is open, when there is anything to show.
-    pub(super) fn render_settings(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub fn render_settings(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let agent = self.agent_setting();
         let settings = self.conversation.settings();
         if agent.is_none() && settings.is_empty() {
@@ -65,16 +68,29 @@ impl ChatView {
             .h(px(PILL_HEIGHT))
             .flex()
             .items_center()
+            .flex_shrink_0()
             .gap(px(8.))
-            .px(px(14.))
+            .px(px(12.))
             .rounded_full()
             .border_1()
-            .border_color(rgb(BUTTON))
-            .bg(rgb(RAISED))
-            .text_size(px(12.))
+            .border_color(rgb(BORDER))
+            .bg(rgb(SURFACE))
+            .text_size(px(13.))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(BUTTON)))
             .when(open.is_some(), |pill| pill.bg(rgb(BUTTON)))
+            .child(
+                // A dot in the accent, in a ring of its ground.
+                div()
+                    .flex_shrink_0()
+                    .size(px(11.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(rgb(ACCENT_GROUND))
+                    .child(div().size(px(7.)).rounded_full().bg(rgb(ACCENT))),
+            )
             .children(agent.is_some().then(|| {
                 div()
                     .font_weight(FontWeight::SEMIBOLD)

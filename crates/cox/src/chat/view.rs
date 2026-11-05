@@ -1518,13 +1518,8 @@ impl ChatView {
     }
 
     /// The bar above the conversation, with the button that opens and
-    /// closes the stage and the pill of the settings of the session, at
-    /// its right, when there are any.
+    /// closes the stage at its right, when the chat has a stage.
     fn render_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let settings = self.render_settings(cx);
-        if settings.is_none() && self.stage.is_none() {
-            return None;
-        }
         let toggle = self.stage.as_ref().map(|stage| {
             let label = if stage.panel.read(cx).is_open() {
                 "Hide stage"
@@ -1542,7 +1537,7 @@ impl ChatView {
                 .child(label)
                 .on_click(cx.listener(|view, _, window, cx| view.toggle_stage(window, cx)))
         });
-        Some(
+        toggle.map(|toggle| {
             div()
                 .flex()
                 .items_center()
@@ -1550,9 +1545,8 @@ impl ChatView {
                 .px_3()
                 .pt_2()
                 .child(div().flex_1())
-                .children(toggle)
-                .children(settings),
-        )
+                .child(toggle)
+        })
     }
 }
 

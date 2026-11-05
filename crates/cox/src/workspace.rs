@@ -1541,8 +1541,9 @@ impl Workspace {
     }
 
     /// The tabs of the chats of the project chosen, along the top of the
-    /// window, with the button that opens another chat in it, and
-    /// "Archived" at their end, if the human archived a chat.
+    /// window, with the button that opens another chat in it, "Archived"
+    /// at their end, if the human archived a chat, and at the right the
+    /// pill of the agent and the settings of the chat shown.
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let chosen = self.chosen;
         let folder = self.projects[chosen].folder.clone();
@@ -1592,6 +1593,12 @@ impl Workspace {
             )
             .child(div().flex_1())
             .children(self.render_archived(cx))
+            // The agent and the settings of the chat shown, at the right.
+            .children(
+                self.shown()
+                    .and_then(Chat::view)
+                    .and_then(|view| view.update(cx, |view, cx| view.render_settings(cx))),
+            )
     }
 
     /// The tab of the chat at `index` in the list, which numbers its chats

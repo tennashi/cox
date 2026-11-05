@@ -62,6 +62,32 @@ impl Render for FakeStage {
     }
 }
 
+/// A stand-in for the window around a chat: the pill of its agent and
+/// settings, which the window shows by the tabs, over the chat.
+struct Host {
+    chat: Entity<ChatView>,
+}
+
+impl Host {
+    fn new(cx: &mut Context<Self>, chat: impl FnOnce(&mut Context<ChatView>) -> ChatView) -> Self {
+        let chat = cx.new(chat);
+        cx.observe(&chat, |_, _, cx| cx.notify()).detach();
+        Self { chat }
+    }
+}
+
+impl Render for Host {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let settings = self.chat.update(cx, |chat, cx| chat.render_settings(cx));
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(div().flex().justify_end().children(settings))
+            .child(div().flex_1().min_h_0().child(self.chat.clone()))
+    }
+}
+
 /// Opens the window like [`open_with`], with a stand-in for the stage
 /// beside the conversation if `stage` is true, closed.
 fn open_with_stage(
@@ -100,29 +126,32 @@ fn open_agent(
     });
     let agent = Arc::new(agent);
     let fake = Arc::clone(&agent);
-    let (view, cx) = cx.add_window_view(|_, cx| {
+    let (host, cx) = cx.add_window_view(|_, cx| {
         let stage = stage.then(|| StageView {
             view: cx.new(|_| FakeStage).into(),
             panel: cx.new(|_| Panel::default()),
         });
-        ChatView::new(
-            cox::agent::spawn(
-                move |_| Ok(fake.connect()),
-                std::env::temp_dir(),
-                mcp_servers,
-                cox::agent::Start::New {
-                    instructions: None,
-                    setup,
-                },
-            ),
-            stage,
-            Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
-            None,
-            None,
-            None,
-            cx,
-        )
+        Host::new(cx, |cx| {
+            ChatView::new(
+                cox::agent::spawn(
+                    move |_| Ok(fake.connect()),
+                    std::env::temp_dir(),
+                    mcp_servers,
+                    cox::agent::Start::New {
+                        instructions: None,
+                        setup,
+                    },
+                ),
+                stage,
+                Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
+                None,
+                None,
+                None,
+                cx,
+            )
+        })
     });
+    let view = host.read_with(cx, |host, _| host.chat.clone());
     cx.update(|window, cx| window.focus(&view.focus_handle(cx)));
     (agent, view, cx)
 }
