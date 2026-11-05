@@ -20,8 +20,8 @@ use std::path::Path;
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, html};
 use serde_json::{Value, json};
 
-use super::translate::Translated;
 use super::{INDEX, about, file, front, only, pages, split, title};
+use crate::translate::Translated;
 
 /// What Cox finds wrong with a page.
 const BROKEN: &str = "broken";
@@ -30,7 +30,7 @@ const UNTITLED: &str = "untitled";
 const UNUSED: &str = "unused";
 
 /// The Markdown a page is read as.
-pub(super) fn options() -> Options {
+pub(crate) fn options() -> Options {
     Options::ENABLE_WIKILINKS
         | Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH

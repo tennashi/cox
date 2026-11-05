@@ -166,6 +166,7 @@ impl Picture {
     /// both.
     fn paint_page(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         let (image, popup, look) = self.page.update(cx, |page, _| {
+            page.origin = bounds.origin;
             (
                 page.prepare_frame(bounds, window),
                 page.prepare_popup(bounds, window),

@@ -11,6 +11,7 @@
 //!   tell the window alike, and a [`Panel`] is what the conversation and
 //!   the stage of a chat share: whether the stage is open.
 //! - A [`card`] is what the window's parts sit in, on its ground.
+//! - [`translation`] shows what the human selected in their language.
 
 pub mod ellipsis;
 pub mod icons;
@@ -20,6 +21,7 @@ pub mod paths;
 pub mod selection;
 pub mod text;
 pub mod theme;
+pub mod translation;
 
 use gpui::{
     AnyView, App, AppContext, Context, Div, IntoElement, ParentElement, Render, SharedString,

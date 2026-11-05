@@ -8,8 +8,9 @@
 //! where the human keeps how they work with Cox, whatever the project, as
 //! `{"workflow": "~/dotfiles/cox"}` (see [`workflow`]), and where their
 //! wiki is, as `{"wiki": "~/notes/cox"}` (see [`wiki`]), and what language
-//! they read it in, as `{"wiki_translation": {"language": "Japanese"}}`
-//! (see [`wiki_translation`]), which the human writes in it themselves.
+//! they read it, and what they select, in, as `{"translation":
+//! {"language": "Japanese"}}` (see [`translation`]), which the human
+//! writes in it themselves.
 
 pub mod view;
 
@@ -40,25 +41,26 @@ pub struct Saved {
     pub workflow: Option<PathBuf>,
     /// The folder of the human's wiki, if they named one.
     pub wiki: Option<PathBuf>,
-    /// How the human reads their wiki in a language of their own, if
-    /// they named one.
+    /// How the human reads the wiki, and what they select, in a language
+    /// of their own, if they named one.
     pub translation: Option<Translation>,
 }
 
-/// How the human reads their wiki, which the agents write in English, in
-/// a language of their own, as `settings.json` says it: `{"language":
-/// "Japanese", "command": ["plamo-translate", "--to", "{language}"]}`, or
-/// `{"language": "Japanese", "agent": "Codex"}` (see
-/// [`crate::wiki::translate`]).
+/// How the human reads the wiki, which the agents write in English, and
+/// what they select, in a language of their own, as `settings.json` says
+/// it: `{"language": "Japanese", "command": ["plamo-translate", "--from",
+/// "{from}", "--to", "{to}"]}`, or `{"language": "Japanese", "agent":
+/// "Codex"}` (see [`crate::translate`]).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Translation {
-    /// The language, as the human names it, which the agent translating
-    /// is told, and the command gets for `{language}`.
+    /// The language, as the human names it, which English goes into, and
+    /// the rest into English, as the agent translating is told it, and
+    /// the command gets it for `{from}` or `{to}`.
     pub language: String,
     /// The command that translates, reading the text on its standard
     /// input and writing the translation on its standard output, with
-    /// `{language}` in its arguments standing for the language; or
-    /// `None` for an agent.
+    /// `{from}` and `{to}` in its arguments standing for the languages;
+    /// or `None` for an agent.
     pub command: Option<Vec<String>>,
     /// The agent that translates, when no command does, by the name the
     /// human knows it by among the agents Cox knows; or `None` for the
@@ -152,10 +154,10 @@ impl Saved {
         };
         let workflow = folder("workflow");
         let wiki = folder("wiki");
-        let translation = match value.get("wiki_translation") {
+        let translation = match value.get("translation") {
             None | Some(Value::Null) => None,
             Some(translation) => Translation::of(translation)
-                .inspect_err(|why| tracing::error!("\"wiki_translation\" cannot be read: {why}"))
+                .inspect_err(|why| tracing::error!("\"translation\" cannot be read: {why}"))
                 .ok(),
         };
         Ok(Self {
@@ -186,10 +188,10 @@ pub fn wiki() -> Option<PathBuf> {
     Saved::read().wiki.or_else(|| crate::storage::path(WIKI))
 }
 
-/// How the human reads their wiki in a language of their own, if
-/// `settings.json` says (see [`Translation`]).
+/// How the human reads the wiki, and what they select, in a language of
+/// their own, if `settings.json` says (see [`Translation`]).
 #[must_use]
-pub fn wiki_translation() -> Option<Translation> {
+pub fn translation() -> Option<Translation> {
     Saved::read().translation
 }
 
@@ -320,8 +322,8 @@ mod tests {
     #[test]
     fn the_wiki_is_read_in_a_language_by_a_command_or_an_agent() {
         let saved = Saved::parse(
-            br#"{"wiki_translation": {"language": "Japanese",
-                "command": ["plamo-translate", "--to", "{language}"]}}"#,
+            br#"{"translation": {"language": "Japanese",
+                "command": ["plamo-translate", "--to", "{to}"]}}"#,
         )
         .unwrap();
         assert_eq!(
@@ -331,26 +333,25 @@ mod tests {
                 command: Some(vec![
                     "plamo-translate".to_owned(),
                     "--to".to_owned(),
-                    "{language}".to_owned()
+                    "{to}".to_owned()
                 ]),
                 agent: None,
             })
         );
-        let saved = Saved::parse(br#"{"wiki_translation": {"language": "Japanese"}}"#).unwrap();
+        let saved = Saved::parse(br#"{"translation": {"language": "Japanese"}}"#).unwrap();
         assert_eq!(saved.translation.clone().unwrap().command, None);
         assert_eq!(saved.translation.unwrap().agent, None);
-        let saved =
-            Saved::parse(br#"{"wiki_translation": {"language": "Japanese", "agent": "Codex"}}"#)
-                .unwrap();
+        let saved = Saved::parse(br#"{"translation": {"language": "Japanese", "agent": "Codex"}}"#)
+            .unwrap();
         assert_eq!(saved.translation.unwrap().agent.as_deref(), Some("Codex"));
         // What is wrong with it is said, and the rest of the file counts.
         for wrong in [
-            br#"{"home": "/work", "wiki_translation": {}}"#.as_slice(),
-            br#"{"home": "/work", "wiki_translation": {"language": " "}}"#,
-            br#"{"home": "/work", "wiki_translation": {"language": "ja", "command": []}}"#,
-            br#"{"home": "/work", "wiki_translation": {"language": "ja", "command": "tr"}}"#,
-            br#"{"home": "/work", "wiki_translation": "Japanese"}"#,
-            br#"{"home": "/work", "wiki_translation": {"language": "ja", "agent": 1}}"#,
+            br#"{"home": "/work", "translation": {}}"#.as_slice(),
+            br#"{"home": "/work", "translation": {"language": " "}}"#,
+            br#"{"home": "/work", "translation": {"language": "ja", "command": []}}"#,
+            br#"{"home": "/work", "translation": {"language": "ja", "command": "tr"}}"#,
+            br#"{"home": "/work", "translation": "Japanese"}"#,
+            br#"{"home": "/work", "translation": {"language": "ja", "agent": 1}}"#,
         ] {
             let saved = Saved::parse(wrong).unwrap();
             assert_eq!(saved.translation, None);

@@ -24,6 +24,7 @@ use crate::ui::markdown::{self, Block};
 use crate::ui::paths::shortened;
 use crate::ui::text::Reading;
 use crate::ui::theme::{BORDER, DIM, FAILED};
+use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
 
 const KEY_CONTEXT: &str = "Document";
@@ -132,6 +133,17 @@ impl Document {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
         }
     }
+
+    /// Shows the translation of the text selected, or with nothing
+    /// selected leaves the keys to what holds the part.
+    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.selected_text();
+        if text.trim().is_empty() {
+            cx.propagate();
+            return;
+        }
+        crate::ui::translation::show(&text, window, cx);
+    }
 }
 
 impl Follows for Document {
@@ -239,6 +251,7 @@ impl Render for Document {
             .track_focus(&self.focus_handle)
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::translate))
             .size_full()
             .flex()
             .flex_col()
@@ -252,6 +265,15 @@ impl Render for Document {
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|document, _, window, cx| {
+                            let text = document.selected_text();
+                            if crate::ui::translation::offer(&text, window, cx) {
+                                cx.stop_propagation();
+                            }
+                        }),
+                    )
                     .on_mouse_move(cx.listener(Self::mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                     .on_mouse_up_out(

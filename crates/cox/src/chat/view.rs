@@ -69,6 +69,7 @@ use crate::ui::theme::{
     ACCENT, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND, GAP, LINK, RAISED,
     SURFACE, UI_FONT,
 };
+use crate::ui::translation::Translate;
 use crate::ui::{Copy, Panel, card, tip};
 use cox_acp::Login;
 
@@ -1043,6 +1044,17 @@ impl ChatView {
         }
     }
 
+    /// Shows the translation of the text selected, or with nothing
+    /// selected leaves the keys to what holds the part.
+    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.selected_text();
+        if text.trim().is_empty() {
+            cx.propagate();
+            return;
+        }
+        crate::ui::translation::show(&text, window, cx);
+    }
+
     /// Changes the conversation with `change`, keeping its end in view if
     /// it was: the human reads along as entries arrive, unless they have
     /// scrolled back to read something earlier.
@@ -1336,6 +1348,7 @@ impl ChatView {
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &Stop, _, cx| view.stop(cx)))
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::translate))
             .capture_key_down(cx.listener(Self::choose_with_key))
             // The list over the input takes its keys first, while it is
             // open.
@@ -1384,6 +1397,18 @@ impl ChatView {
                             .overflow_y_scroll()
                             .track_scroll(&self.scroll)
                             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(|view, _, window, cx| {
+                                    if crate::ui::translation::offer(
+                                        &view.selected_text(),
+                                        window,
+                                        cx,
+                                    ) {
+                                        cx.stop_propagation();
+                                    }
+                                }),
+                            )
                             .on_mouse_move(cx.listener(Self::mouse_move))
                             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                             .on_mouse_up_out(

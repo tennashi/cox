@@ -51,17 +51,18 @@ use cef::sys::{cef_paint_element_type_t, cef_thread_id_t};
 use cef::rc::Rc as _;
 use cef::{
     App, BrowserHost, BrowserProcessHandler, BrowserSettings, CefString, Client, CommandLine,
-    CompositionUnderline, DevToolsMessageObserver, DisplayHandler, ImplApp, ImplBrowser,
-    ImplBrowserHost, ImplBrowserProcessHandler, ImplClient, ImplCommandLine,
-    ImplDevToolsMessageObserver, ImplDisplayHandler, ImplFrame, ImplLifeSpanHandler,
-    ImplLoadHandler, ImplRenderHandler, ImplRequest, ImplRequestHandler, ImplTask, LifeSpanHandler,
-    LoadHandler, Registration, RenderHandler, RequestHandler, ResourceRequestHandler,
+    CompositionUnderline, ContextMenuHandler, ContextMenuParams, DevToolsMessageObserver,
+    DisplayHandler, ImplApp, ImplBrowser, ImplBrowserHost, ImplBrowserProcessHandler, ImplClient,
+    ImplCommandLine, ImplContextMenuHandler, ImplContextMenuParams, ImplDevToolsMessageObserver,
+    ImplDisplayHandler, ImplFrame, ImplLifeSpanHandler, ImplLoadHandler, ImplMenuModel,
+    ImplRenderHandler, ImplRequest, ImplRequestHandler, ImplTask, LifeSpanHandler, LoadHandler,
+    MenuModel, Registration, RenderHandler, RequestHandler, ResourceRequestHandler,
     SchemeRegistrar, Settings, Task, ThreadId, WindowInfo, WrapApp, WrapBrowserProcessHandler,
-    WrapClient, WrapDevToolsMessageObserver, WrapDisplayHandler, WrapLifeSpanHandler,
-    WrapLoadHandler, WrapRenderHandler, WrapRequestHandler, WrapTask, wrap_app,
-    wrap_browser_process_handler, wrap_client, wrap_dev_tools_message_observer,
-    wrap_display_handler, wrap_life_span_handler, wrap_load_handler, wrap_render_handler,
-    wrap_request_handler, wrap_task,
+    WrapClient, WrapContextMenuHandler, WrapDevToolsMessageObserver, WrapDisplayHandler,
+    WrapLifeSpanHandler, WrapLoadHandler, WrapRenderHandler, WrapRequestHandler, WrapTask,
+    wrap_app, wrap_browser_process_handler, wrap_client, wrap_context_menu_handler,
+    wrap_dev_tools_message_observer, wrap_display_handler, wrap_life_span_handler,
+    wrap_load_handler, wrap_render_handler, wrap_request_handler, wrap_task,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::watch;
@@ -111,6 +112,10 @@ pub enum Event {
     FileLink(String),
     /// The page asks for another cursor: see [`Browser::cursor`].
     Cursor,
+    /// The human pressed the right button over text selected in the page,
+    /// at this point of the page, for the stage to offer what to do with
+    /// the text: the browser shows no menu of its own.
+    Selected { x: i32, y: i32, text: String },
 }
 
 /// Where the browser is in its history, as the toolbar shows it, and what

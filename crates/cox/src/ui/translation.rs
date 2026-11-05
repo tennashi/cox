@@ -1,0 +1,343 @@
+//! What the human selected, read in their language: [`Translate`] in any
+//! part of the window with text selected, or "Translate" in the menu the
+//! right button opens on it (see [`offer`]), shows a card by the mouse with the text's
+//! translation once it arrives (see [`crate::translate`]), which the human
+//! copies, and closes with Escape, the ×, or a click beside it.
+
+use gpui::{
+    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global,
+    InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Pixels, Point, Render,
+    StatefulInteractiveElement, Styled, Task, Window, actions, anchored, deferred, div, point,
+    prelude::FluentBuilder as _, px, rgb,
+};
+
+use crate::translate::Way;
+use crate::ui::theme::{
+    ACCENT_GROUND, BORDER_STRONG, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED,
+};
+
+actions!(
+    cox,
+    [
+        /// Translates the text selected in the part with the keyboard.
+        Translate,
+        /// Closes the translation.
+        CloseTranslation,
+    ]
+);
+
+/// The keys of the card.
+const KEY_CONTEXT: &str = "Translation";
+
+/// How wide the card is.
+const WIDTH: f32 = 380.;
+
+/// How far under the mouse the card hangs.
+const LINE: f32 = 14.;
+
+/// How tall the card grows before it scrolls.
+const HEIGHT: f32 = 320.;
+
+/// What the human is told when they name no language to read in.
+const NO_LANGUAGE: &str = "Name the language you read in settings.json, as \
+    {\"translation\": {\"language\": \"Japanese\"}}, to translate what you select.";
+
+/// Binds the keys that translate, and close the card.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("secondary-shift-t", Translate, None),
+        KeyBinding::new("escape", CloseTranslation, Some(KEY_CONTEXT)),
+    ]);
+    cx.set_global(Shown::default());
+}
+
+/// The card the window shows, if it shows one.
+#[derive(Default)]
+pub struct Shown(pub Option<Entity<TranslationCard>>);
+
+impl Global for Shown {}
+
+/// Shows the translation of `text`, by the mouse, unless it is only
+/// space: the card takes the keyboard until it closes.
+pub fn show(text: &str, window: &mut Window, cx: &mut App) {
+    open(text, false, window, cx);
+}
+
+/// Offers to translate or copy `text`, the selection the right button
+/// was pressed on, in a menu by the mouse, unless it is only space,
+/// saying whether it does, for the part to keep the press to itself.
+pub fn offer(text: &str, window: &mut Window, cx: &mut App) -> bool {
+    open(text, true, window, cx)
+}
+
+/// Opens the card on `text`, translating it or `offered`, unless it is
+/// only space.
+fn open(text: &str, offered: bool, window: &mut Window, cx: &mut App) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+    let at = window.mouse_position();
+    let before = window.focused(cx);
+    let card = cx.new(|cx| {
+        let mut card = TranslationCard::new(text, at, before, cx);
+        if !offered {
+            card.translate(cx);
+        }
+        card
+    });
+    window.focus(&card.focus_handle(cx));
+    cx.set_global(Shown(Some(card)));
+    true
+}
+
+/// Closes the card, giving the keyboard back to where it was.
+pub fn close(window: &mut Window, cx: &mut App) {
+    if !cx.has_global::<Shown>() {
+        return;
+    }
+    let Some(card) = cx.global_mut::<Shown>().0.take() else {
+        return;
+    };
+    if let Some(before) = card.read(cx).before.clone() {
+        window.focus(&before);
+    }
+    cx.refresh_windows();
+}
+
+/// The card of a translation, or, before it, the menu that offers it.
+pub struct TranslationCard {
+    /// What the human selected.
+    text: String,
+    /// Whether the menu still offers the translation, which it has not
+    /// asked for.
+    offered: bool,
+    /// Which way it is translated, if it is.
+    way: Option<Way>,
+    /// What it came to, once it did.
+    translated: Option<Result<String, String>>,
+    /// Where the mouse was, which the card hangs from.
+    at: Point<Pixels>,
+    focus: FocusHandle,
+    /// What had the keyboard before.
+    before: Option<FocusHandle>,
+    /// The translation on its way, dropped with the card.
+    waits: Option<Task<()>>,
+}
+
+impl TranslationCard {
+    fn new(
+        text: &str,
+        at: Point<Pixels>,
+        before: Option<FocusHandle>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            text: text.trim().to_owned(),
+            offered: true,
+            way: None,
+            translated: None,
+            at,
+            focus: cx.focus_handle(),
+            before,
+            waits: None,
+        }
+    }
+
+    /// Asks for the translation, which the card shows once it arrives.
+    fn translate(&mut self, cx: &mut Context<Self>) {
+        self.offered = false;
+        let Some((way, answer)) = crate::translate::text(&self.text) else {
+            self.translated = Some(Err(NO_LANGUAGE.to_owned()));
+            cx.notify();
+            return;
+        };
+        self.way = Some(way);
+        self.waits = Some(cx.spawn(async move |card, cx| {
+            let translated = answer
+                .await
+                .unwrap_or_else(|_| Err("the translator stopped".to_owned()));
+            let _ = card.update(cx, |card, cx| {
+                card.translated = Some(translated);
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// What the card says it is at, as `inspect` tells it.
+    #[must_use]
+    pub fn said(&self) -> String {
+        if self.offered {
+            return format!("{:?}, offered in a menu to translate or copy", self.text);
+        }
+        let way = self
+            .way
+            .as_ref()
+            .map(|way| format!("{} to {}", way.from, way.to))
+            .unwrap_or_default();
+        let at = match &self.translated {
+            None => "translating".to_owned(),
+            Some(Ok(text)) => format!("{text:?}"),
+            Some(Err(error)) => format!("failed: {error}"),
+        };
+        format!("{:?}, {way}: {at}", self.text)
+    }
+}
+
+impl Focusable for TranslationCard {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl Render for TranslationCard {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.offered {
+            return self.render_menu(cx).into_any_element();
+        }
+        let way = self.way.as_ref().map_or_else(
+            || "Translate".to_owned(),
+            |way| format!("{} → {}", way.from, way.to),
+        );
+        let copied = self.translated.clone().and_then(Result::ok);
+        let head = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_size(px(11.5))
+            .text_color(rgb(FAINT))
+            .child(div().flex_1().child(way))
+            .when_some(copied, |head, text| {
+                head.child(
+                    button("translation-copy", "Copy").on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    }),
+                )
+            })
+            .child(button("translation-close", "×").on_click(|_, window, cx| close(window, cx)));
+        let body = match &self.translated {
+            None => div().text_color(rgb(DIM)).child("Translating…"),
+            Some(Ok(text)) => div().text_color(rgb(FOREGROUND)).child(text.clone()),
+            Some(Err(error)) => div().text_color(rgb(FAILED)).child(error.clone()),
+        };
+        let card = div()
+            .id("translation")
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(|_: &CloseTranslation, window, cx| close(window, cx))
+            // Not through the card, which `close` reads.
+            .on_mouse_down_out(|_, window, cx| close(window, cx))
+            // Keeping the keyboard, for Escape, after a click on it.
+            .occlude()
+            .on_mouse_down(MouseButton::Left, {
+                let focus = self.focus.clone();
+                move |_, window, _| window.focus(&focus)
+            })
+            .w(px(WIDTH))
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(BORDER_STRONG))
+            .rounded(px(10.))
+            .shadow_lg()
+            .text_size(px(13.))
+            .child(head)
+            .child(
+                div()
+                    .id("translation-text")
+                    .max_h(px(HEIGHT))
+                    .overflow_y_scroll()
+                    .child(body),
+            );
+        deferred(
+            anchored()
+                .position(self.at)
+                // Under the mouse, clear of the line it selected.
+                .offset(point(px(0.), px(LINE)))
+                .snap_to_window_with_margin(px(8.))
+                .child(card),
+        )
+        .with_priority(3)
+        .into_any_element()
+    }
+}
+
+impl TranslationCard {
+    /// The menu by the mouse that offers to translate the selection, or
+    /// copy it.
+    fn render_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // Copy's keys are the part's own, as a terminal's off macOS.
+        let translate = if cfg!(target_os = "macos") {
+            "⌘⇧T"
+        } else {
+            "Ctrl-Shift-T"
+        };
+        let text = self.text.clone();
+        let menu = div()
+            .id("translation")
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(|_: &CloseTranslation, window, cx| close(window, cx))
+            .on_action(cx.listener(|card, _: &Translate, _, cx| card.translate(cx)))
+            .on_mouse_down_out(|_, window, cx| close(window, cx))
+            .occlude()
+            .min_w(px(200.))
+            .p_1()
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(BORDER_STRONG))
+            .rounded_md()
+            .shadow_md()
+            .text_size(px(13.))
+            .text_color(rgb(FOREGROUND))
+            .child(
+                item("translation-translate", "Translate", translate)
+                    .on_click(cx.listener(|card, _, _, cx| card.translate(cx))),
+            )
+            .child(item("translation-copy-selection", "Copy", "").on_click(
+                move |_, window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    close(window, cx);
+                },
+            ));
+        deferred(
+            anchored()
+                .position(self.at)
+                .snap_to_window_with_margin(px(8.))
+                .child(menu),
+        )
+        .with_priority(3)
+    }
+}
+
+/// An item of the menu, with the keys that do the same.
+fn item(id: &'static str, label: &'static str, keys: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.to_owned())
+        .flex()
+        .justify_between()
+        .gap_4()
+        .px_2()
+        .py_0p5()
+        .rounded_sm()
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(ACCENT_GROUND)))
+        .child(label)
+        .child(div().text_color(rgb(DIM)).child(keys))
+}
+
+/// A small button of the card's head.
+fn button(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .px_1()
+        .rounded_sm()
+        .cursor_pointer()
+        .text_color(rgb(DIM))
+        .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(FOREGROUND)))
+        .child(label)
+}

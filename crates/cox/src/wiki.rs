@@ -23,10 +23,9 @@
 //! The agents write the pages in English, whatever language their chat
 //! speaks, so that a page is found by the same words from every chat;
 //! the human reads them in a language of their own, as Cox translates
-//! them (see [`translate`]).
+//! them (see [`crate::translate`]).
 
 pub mod told;
-pub mod translate;
 
 use std::fmt::Write as _;
 use std::fs;
