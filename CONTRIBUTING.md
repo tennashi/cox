@@ -44,8 +44,16 @@ shown last. A project is a folder: "Open folder…", the + at the foot of
 the rail (Command-O on macOS, Control-O elsewhere), opens a chat in the
 project of a folder of your choice, and the + after the tabs opens
 another chat in the project chosen. "New chat" (Command-N, Control-N)
-opens one in no project, which works in `<dir>`, `~/Cox` unless given,
-and which the rail shows as `~`. Each chat starts its own
+opens one in no project, which works in Cox's home: `<dir>` when given,
+or else the folder the settings set, or else `~/Cox`; the rail shows it
+as `~`. The gear at the foot of the rail (Command-, on macOS, Control-,
+elsewhere) opens the settings, on a card over the window, where the
+human sets the home: a path typed in its input, whole or from `~`, which
+Enter sets, or a folder "Choose…" asks for. The settings are kept in
+`settings.json`, beside the chats' database, as `agents.json` is, and the
+chats in no project that open from then on work there; `--home` still
+goes ahead of them for its run, until the human sets the home. Escape,
+the ×, or a click beside the card closes it. Each chat starts its own
 `<agent command>` working in its project's folder, and has a stage of its
 own, showing `<url>` first. When the folder has a `COX.md`, the agent gets
 what it says ahead of the first line sent in the chat, and the chat says
@@ -738,7 +746,9 @@ shows.
 builds Cox and runs it with the fake agent playing `<scenario>`, the tour
 unless given, or with `<agent command>`, keeping what lasts in `<dir>`,
 or afresh in `target/debug/cox-run` each time (see `--data` in
-[The stage](#the-stage)), and says where the files of its runs are.
+[The stage](#the-stage)), and says where the files of its runs are. Its
+chats in no project work in `home` there, as its settings set it the
+first time, until the human sets another.
 `--headless`, on Linux, runs Cox on a display of its own, which Xvfb
 draws in memory, with no screen; `cox --inspect` (see
 [Asking Cox how it stands](#asking-cox-how-it-stands)) looks at it and

@@ -17,6 +17,8 @@
 //!   hands the agent.
 //! - [`agents`] is the agents a chat can talk to: the command line's,
 //!   the human's, and the ACP Registry's.
+//! - [`settings`] is what the human sets of Cox itself, on its settings
+//!   screen: the folder chats in no project work in.
 //! - [`notices`] tells the human of chats that need them while they look
 //!   elsewhere.
 //! - [`inspect`] answers for the window to an agent that debugs Cox, on a
@@ -41,6 +43,7 @@ pub mod inspect;
 pub mod logs;
 pub mod notices;
 pub mod process;
+pub mod settings;
 pub mod stage;
 pub mod storage;
 pub mod ui;

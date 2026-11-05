@@ -62,6 +62,18 @@ pub fn describe(
         window.scale_factor(),
         focused(workspace, window, cx)
     );
+    let _ = writeln!(
+        told,
+        "Chats in no project work in {}",
+        workspace.home().display()
+    );
+    if let Some(settings) = workspace.settings() {
+        let _ = writeln!(
+            told,
+            "The settings are open, the home's input holding {:?}",
+            settings.read(cx).input().read(cx).text()
+        );
+    }
     told.push('\n');
     list(&mut told, workspace, cx);
     let about = match chat {
@@ -86,6 +98,11 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
     let Some(focused) = window.focused(cx) else {
         return "nothing".to_owned();
     };
+    if let Some(settings) = workspace.settings()
+        && focused == settings.read(cx).input().focus_handle(cx)
+    {
+        return "the settings' input".to_owned();
+    }
     let Some(shown) = workspace.shown().and_then(Chat::view) else {
         return if focused == workspace.focus_handle(cx) {
             "the window, which shows no chat".to_owned()

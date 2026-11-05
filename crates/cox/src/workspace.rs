@@ -21,6 +21,10 @@
 //! chat leaves the list for "Archived" at the end of the tabs, from where
 //! a click brings it back.
 //!
+//! The gear at the foot of the rail opens the settings screen over the
+//! window (see [`crate::settings::view`]), where the human sets Cox's
+//! home: the chats in no project opened from then on work there.
+//!
 //! A chat that comes to wait for the human, or whose turn ends, while the
 //! human is not looking at it, tells them so (see [`crate::notices`]),
 //! and the app's icon counts the chats that wait for them or that they
@@ -54,6 +58,7 @@ use crate::chat::trial::{self, Trial};
 use crate::chat::view::{Asked, ChatView, Reopened, SwitchAgent};
 use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
+use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView};
 use crate::stage::{NewPage, NewTerminal, OpenFile, Stage};
 use crate::storage;
 use crate::ui::icons::{Icon, icon};
@@ -94,6 +99,10 @@ const TAB_HEIGHT: f32 = 34.;
 const TAB_WIDTH: f32 = 240.;
 const TAB_RADIUS: f32 = 11.;
 
+/// The ground over the window while the settings are open: the window's
+/// own, mostly opaque.
+const BACKDROP: u32 = 0x0e0e_0fb8;
+
 /// What the project of chats with no folder is called.
 const NO_PROJECT: &str = "No project";
 
@@ -109,6 +118,7 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("secondary-n", NewChat, Some("Workspace")),
         KeyBinding::new("secondary-o", OpenFolder, Some("Workspace")),
+        KeyBinding::new("secondary-,", OpenSettings, Some("Workspace")),
         KeyBinding::new("ctrl-tab", NextChat, Some("Workspace")),
         KeyBinding::new("ctrl-shift-tab", PreviousChat, Some("Workspace")),
         // What the menu of the stage's + opens, on the stage of the chat
@@ -331,6 +341,11 @@ pub struct Workspace {
     /// The agents waiting for a chat, by its key, to end its turn or to
     /// come to wait for the human.
     waiting: Vec<(u64, oneshot::Sender<Result<Waited, String>>)>,
+    /// Whether `--home` gave the home, the folder of no project, for this
+    /// run, ahead of what the settings keep.
+    home_given: bool,
+    /// The settings screen, while it is open.
+    settings: Option<(Entity<SettingsView>, [Subscription; 2])>,
     opens: Rc<dyn Opens>,
     store: Rc<Store>,
     focus_handle: FocusHandle,
@@ -338,9 +353,11 @@ pub struct Workspace {
 
 impl Workspace {
     /// A window with no chat open, listing the chats kept in `store`.
-    /// `opens` opens chats, and chats in no project work in `home`.
+    /// `opens` opens chats, and chats in no project work in `home`, which
+    /// `--home` gave when `home_given` says so.
     pub fn new(
         home: PathBuf,
+        home_given: bool,
         store: Rc<Store>,
         opens: Rc<dyn Opens>,
         cx: &mut Context<Self>,
@@ -356,6 +373,8 @@ impl Workspace {
             menu: None,
             renaming: None,
             waiting: Vec::new(),
+            home_given,
+            settings: None,
             opens,
             store,
             focus_handle: cx.focus_handle(),
@@ -842,6 +861,53 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    /// Where chats in no project work: Cox's home.
+    #[must_use]
+    pub fn home(&self) -> &Path {
+        &self.projects[0].folder
+    }
+
+    /// The settings screen, while it is open.
+    #[must_use]
+    pub fn settings(&self) -> Option<&Entity<SettingsView>> {
+        self.settings.as_ref().map(|(view, _)| view)
+    }
+
+    /// Opens the settings screen over the window, with the keyboard in it.
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.archived_open = false;
+        let view = if let Some((view, _)) = &self.settings {
+            view.clone()
+        } else {
+            let home = self.home().to_owned();
+            let given = self.home_given;
+            let view = cx.new(|cx| SettingsView::new(home, given, window, cx));
+            let changed = cx.subscribe(&view, |workspace, _, HomeChanged(home), cx| {
+                workspace.projects[0].folder.clone_from(home);
+                workspace.home_given = false;
+                cx.notify();
+            });
+            let dismissed =
+                cx.subscribe_in(&view, window, |workspace, _, Dismissed, window, cx| {
+                    workspace.close_settings(window, cx);
+                });
+            self.settings = Some((view.clone(), [changed, dismissed]));
+            view
+        };
+        window.focus(&view.focus_handle(cx));
+        cx.notify();
+    }
+
+    /// Closes the settings screen, giving the keyboard back to the chat
+    /// shown.
+    pub fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.take().is_some() {
+            window.focus(&self.focus_handle(cx));
+            cx.notify();
+        }
     }
 
     /// Shows the chat at `index` in the list, with the keyboard in its
@@ -1388,7 +1454,7 @@ impl Workspace {
     /// The rail down the window's left side: a button for each project,
     /// which chooses it, marked when it is the one chosen and counting its
     /// chats that wait for the human, and at its foot the button that
-    /// opens a folder.
+    /// opens a folder, and the gear that opens the settings.
     fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let projects = self
             .projects
@@ -1431,6 +1497,64 @@ impl Workspace {
                         workspace.choose_folder(window, cx);
                     })),
             )
+            .child(self.render_settings_button(cx))
+    }
+
+    /// The gear at the foot of the rail, which opens the settings, lit
+    /// while they are open.
+    fn render_settings_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let open = self.settings.is_some();
+        let key = if cfg!(target_os = "macos") {
+            "⌘,"
+        } else {
+            "Ctrl+,"
+        };
+        let ink = if open { FOREGROUND } else { FAINT };
+        div()
+            .id("open-settings")
+            .debug_selector(|| "open-settings".to_owned())
+            .flex_shrink_0()
+            .size(px(32.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(10.))
+            .cursor_pointer()
+            .when(open, |button| button.bg(rgb(SELECTED)))
+            .hover(|style| style.bg(rgb(HOVER)))
+            .tooltip(tip(format!("Settings ({key})")))
+            .child(icon(Icon::Settings, 18., ink))
+            .on_click(cx.listener(|workspace, _, window, cx| {
+                workspace.open_settings(window, cx);
+            }))
+    }
+
+    /// The settings screen, over the window and dimming it, while it is
+    /// open: a click beside it closes it.
+    fn render_settings(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (view, _) = self.settings.as_ref()?;
+        Some(
+            deferred(
+                div()
+                    .id("settings-backdrop")
+                    .occlude()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .p(px(GAP * 2.))
+                    .bg(gpui::rgba(BACKDROP))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|workspace, _, window, cx| {
+                            workspace.close_settings(window, cx);
+                        }),
+                    )
+                    .child(view.clone()),
+            )
+            .with_priority(3),
+        )
     }
 
     /// The button of the project at `index` on the rail: a folder in a
@@ -1921,8 +2045,12 @@ fn keep_archived(chat: &Chat, archived: bool, store: &Store) {
 }
 
 impl Focusable for Workspace {
-    /// The shown chat's input, or the window itself while none is open.
+    /// The settings' input while they are open, or else the shown chat's
+    /// input, or the window itself while none is open.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
+        if let Some((settings, _)) = &self.settings {
+            return settings.focus_handle(cx);
+        }
         match self.shown().and_then(Chat::view) {
             Some(view) => view.focus_handle(cx),
             None => self.focus_handle.clone(),
@@ -1956,6 +2084,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|workspace, _: &OpenFolder, window, cx| {
                 workspace.choose_folder(window, cx);
             }))
+            .on_action(cx.listener(|workspace, _: &OpenSettings, window, cx| {
+                workspace.open_settings(window, cx);
+            }))
             .on_action(cx.listener(|workspace, _: &NextChat, window, cx| {
                 workspace.step(1, window, cx);
             }))
@@ -1976,6 +2107,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|workspace, _: &OpenFile, window, cx| {
                 workspace.on_stage(window, cx, |_, window, cx| Stage::choose_file(window, cx));
             }))
+            .relative()
             .size_full()
             .flex()
             .bg(rgb(GROUND))
@@ -1999,5 +2131,6 @@ impl Render for Workspace {
                     .child(div().flex_1().min_h_0().child(shown)),
             )
             .children(self.render_menu(cx))
+            .children(self.render_settings(cx))
     }
 }
