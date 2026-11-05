@@ -37,6 +37,7 @@
 //! the agent gives it. Which chat opened it, and how, is kept with it,
 //! and the agent waits for it with `wait_chat`.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -345,6 +346,14 @@ pub struct Workspace {
     /// The menu of the right button, where it opened in the window, for
     /// the chat at an index in the list.
     menu: Option<(Point<Pixels>, usize)>,
+    /// The menu of the right button on the rail, where it opened in the
+    /// window, for the project at an index, with the chats of it to keep
+    /// in the wiki, by their keys.
+    project_menu: Option<(Point<Pixels>, usize, Vec<u64>)>,
+    /// The chats, by their keys, whose agents are yet to be asked, one
+    /// after another, to keep what they learned in the wiki, and the one
+    /// asked now, while it is at it.
+    saving: (VecDeque<u64>, Option<u64>),
     /// The chat at an index in the list being renamed, in an input.
     renaming: Option<(usize, Entity<LineInput>, Subscription)>,
     /// The agents waiting for a chat, by its key, to end its turn or to
@@ -380,6 +389,8 @@ impl Workspace {
             last_key: 0,
             badged: 0,
             menu: None,
+            project_menu: None,
+            saving: (VecDeque::new(), None),
             renaming: None,
             waiting: Vec::new(),
             home_given,
@@ -1072,6 +1083,15 @@ impl Workspace {
             (Some(Ends::Summing), Some(index)) => self.finish_trial(index, window, cx),
             _ => {}
         }
+        // The chats asked to keep what they learned in the wiki are
+        // asked one after another, each once the one before is done.
+        let saved = index
+            .map(|index| self.chats[index].key)
+            .filter(|key| self.saving.1 == Some(*key) && !working(state));
+        if saved.is_some() {
+            self.saving.1 = None;
+            self.save_next(window, cx);
+        }
         self.badge(cx);
         cx.notify();
     }
@@ -1326,6 +1346,84 @@ impl Workspace {
         self.chats
             .get(index)
             .is_some_and(|chat| !working(chat.state) && keeps_in_wiki(chat.setup.as_ref()))
+    }
+
+    /// The chats of the project at `project`, by their keys, whose agents
+    /// can keep in the wiki what they learned and have not been asked to
+    /// since the human last said something: chats of earlier runs too,
+    /// read from what is kept of them.
+    #[must_use]
+    pub fn unsaved_chats(&self, project: usize, cx: &App) -> Vec<u64> {
+        let save = workflow::WIKI_SAVE.say(&[]);
+        self.chats
+            .iter()
+            .enumerate()
+            .filter(|(index, chat)| chat.project == project && self.saves_to_wiki(*index))
+            .filter(|(_, chat)| {
+                let unsaved = |entries: &[Entry]| unsaved(entries, &save);
+                match (&chat.view, chat.kept) {
+                    (Some(view), _) => unsaved(view.read(cx).conversation().entries()),
+                    (None, Some(kept)) => self
+                        .store
+                        .entries(kept)
+                        .is_ok_and(|entries| unsaved(&entries)),
+                    (None, None) => false,
+                }
+            })
+            .map(|(_, chat)| chat.key)
+            .collect()
+    }
+
+    /// Asks the agents of the chats `keys`, one after another, to keep
+    /// what they learned in the wiki, as "Save to wiki" does each, each
+    /// once the one before is done, and without showing them, so that the
+    /// human goes on where they are.
+    pub fn save_chats_to_wiki(
+        &mut self,
+        keys: Vec<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.project_menu = None;
+        self.saving.0.extend(keys);
+        self.save_next(window, cx);
+        cx.notify();
+    }
+
+    /// Asks the agent of the next chat waiting to keep what it learned in
+    /// the wiki, unless one is at it: starting it again if it is closed.
+    fn save_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        while self.saving.1.is_none() {
+            let Some(key) = self.saving.0.pop_front() else {
+                return;
+            };
+            let Some(index) = self.chats.iter().position(|chat| chat.key == key) else {
+                continue;
+            };
+            if !self.saves_to_wiki(index) {
+                continue;
+            }
+            self.read(index, window, cx);
+            let Some(view) = self.chats[index].view.clone() else {
+                continue;
+            };
+            let line = workflow::WIKI_SAVE.say(&[]);
+            let asked = view.update(cx, |view, cx| {
+                view.go_on(&line, window, cx);
+                working(view.conversation().state())
+            });
+            if asked {
+                self.saving.1 = Some(key);
+            }
+        }
+    }
+
+    /// Opens the menu of the right button on the project at `project`,
+    /// at `at`.
+    fn open_project_menu(&mut self, project: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let unsaved = self.unsaved_chats(project, cx);
+        self.project_menu = Some((at, project, unsaved));
+        cx.notify();
     }
 
     /// Whether the human can open a trial beside the chat at `index`: it
@@ -1867,6 +1965,11 @@ impl Workspace {
             (SURFACE, BORDER, FAINT, FAINT)
         };
         let folder = shortened(&project.folder);
+        // The folder does not show over the project's menu.
+        let menu = self
+            .project_menu
+            .as_ref()
+            .is_some_and(|(_, project, _)| *project == index);
         div()
             .id(("project", index))
             .debug_selector(move || format!("project-{}", index + 1))
@@ -1878,10 +1981,16 @@ impl Workspace {
             .items_center()
             .gap(px(5.))
             .cursor_pointer()
-            .tooltip(tip(folder))
+            .when(!menu, |button| button.tooltip(tip(folder)))
             .on_click(cx.listener(move |workspace, _, window, cx| {
                 workspace.choose(index, window, cx);
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |workspace, event: &MouseDownEvent, _, cx| {
+                    workspace.open_project_menu(index, event.position, cx);
+                }),
+            )
             .when(chosen, |button| {
                 button.child(
                     div()
@@ -1914,27 +2023,7 @@ impl Workspace {
                         Some(_) => square.child(icon(Icon::Folder, 18., ink)),
                     })
                     .when(waiting > 0, |square| {
-                        square.child(
-                            div()
-                                .debug_selector(move || format!("project-{}-waiting", index + 1))
-                                .absolute()
-                                .top(px(-5.))
-                                .right(px(-5.))
-                                .min_w(px(17.))
-                                .h(px(17.))
-                                .px(px(4.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(9.))
-                                .border_2()
-                                .border_color(rgb(GROUND))
-                                .bg(rgb(if asking > 0 { ASKING } else { ACCENT }))
-                                .text_color(rgb(GROUND))
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::BOLD)
-                                .child(waiting.to_string()),
-                        )
+                        square.child(waiting_badge(index, waiting, asking > 0))
                     }),
             )
             .child(
@@ -2235,6 +2324,54 @@ impl Workspace {
         Some(div().flex_shrink_0().child(button).children(menu))
     }
 
+    /// The menu of the right button on a project of the rail, while it is
+    /// open: "Save chats to wiki", which asks the agents of its chats
+    /// that have not kept what they learned to, one after another, or a
+    /// line that says every chat has.
+    fn render_project_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (at, _, unsaved) = self.project_menu.as_ref()?;
+        let count = unsaved.len();
+        let keys = unsaved.clone();
+        let item = if count == 0 {
+            div()
+                .id("save-chats-to-wiki")
+                .debug_selector(|| "save-chats-to-wiki".to_owned())
+                .px_2()
+                .py_0p5()
+                .text_color(rgb(DISABLED))
+                .child("Every chat is saved to the wiki")
+        } else {
+            let chats = if count == 1 { "chat" } else { "chats" };
+            div()
+                .id("save-chats-to-wiki")
+                .debug_selector(|| "save-chats-to-wiki".to_owned())
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(ACCENT_GROUND)))
+                .child(format!("Save {count} {chats} to wiki"))
+                .on_click(cx.listener(move |workspace, _, window, cx| {
+                    workspace.save_chats_to_wiki(keys.clone(), window, cx);
+                }))
+        };
+        let menu = div()
+            .occlude()
+            .min_w(px(160.))
+            .p_1()
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(BORDER_STRONG))
+            .rounded_md()
+            .shadow_md()
+            .on_mouse_down_out(cx.listener(|workspace, _, _, cx| {
+                workspace.project_menu = None;
+                cx.notify();
+            }))
+            .child(item);
+        Some(deferred(anchored().position(*at).child(menu)).with_priority(2))
+    }
+
     /// The menu of the right button on a chat, if it is open.
     fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (at, index) = self.menu?;
@@ -2328,6 +2465,51 @@ enum Ends {
 fn make_trial(trial: Trial, from: &Path) -> Result<PathBuf, String> {
     let trials = storage::path(trial::FOLDER).ok_or("Cox cannot tell where to keep trials")?;
     trial::make(trial, from, &trials)
+}
+
+/// The count on the square of the project at `index` of the chats
+/// that wait for the human or that they have not seen, in amber when
+/// one of them `asks`.
+fn waiting_badge(index: usize, waiting: usize, asks: bool) -> Div {
+    div()
+        .debug_selector(move || format!("project-{}-waiting", index + 1))
+        .absolute()
+        .top(px(-5.))
+        .right(px(-5.))
+        .min_w(px(17.))
+        .h(px(17.))
+        .px(px(4.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(9.))
+        .border_2()
+        .border_color(rgb(GROUND))
+        .bg(rgb(if asks { ASKING } else { ACCENT }))
+        .text_color(rgb(GROUND))
+        .text_size(px(10.))
+        .font_weight(FontWeight::BOLD)
+        .child(waiting.to_string())
+}
+
+/// Whether `entries`, a chat's conversation, hold a line of the human's
+/// after the last time the chat's agent was asked `save`, to keep what
+/// it learned in the wiki, or wrote to it, or since it began, if it
+/// never did. A call is told by its title, which each agent gives its
+/// own way, but with the tool's name in it.
+fn unsaved(entries: &[Entry], save: &str) -> bool {
+    let said = entries
+        .iter()
+        .rposition(|entry| matches!(entry, Entry::Human(_)));
+    let saved = entries.iter().rposition(|entry| match entry {
+        Entry::Cox(line) => line == save,
+        Entry::ToolCall { title, .. } => title.contains("wiki_write"),
+        _ => false,
+    });
+    match (said, saved) {
+        (Some(said), Some(saved)) => said > saved,
+        (said, _) => said.is_some(),
+    }
 }
 
 /// Whether an agent that stands as `state` is at work.
@@ -2453,6 +2635,7 @@ impl Render for Workspace {
                     .child(div().flex_1().min_h_0().child(shown)),
             )
             .children(self.render_menu(cx))
+            .children(self.render_project_menu(cx))
             .children(self.render_settings(cx))
     }
 }

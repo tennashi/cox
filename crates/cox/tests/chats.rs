@@ -2771,3 +2771,102 @@ async fn the_human_asks_a_chat_to_keep_what_it_learned_in_the_wiki(cx: &mut Test
     assert!(asked.contains("wiki_write"), "{asked}");
     assert!(entries(cx, &view).contains(&Entry::Cox(asked)));
 }
+
+#[gpui::test]
+async fn the_human_keeps_what_a_projects_past_chats_learned_in_the_wiki(cx: &mut TestAppContext) {
+    let folder = scratch("wiki-past");
+    let (store, _) = kept_chat(&folder, Some("session-1"));
+    let project = store.project(&folder, "project").unwrap();
+    // A chat whose agent was asked already, since the human last said
+    // something, and one where nothing was said, are not asked again.
+    let save = workflow::WIKI_SAVE.say(&[]);
+    let saved = store.add_chat(Some(project), "Saved").unwrap();
+    for (number, entry) in [Entry::Human("hi".to_owned()), Entry::Cox(save.clone())]
+        .iter()
+        .enumerate()
+    {
+        store.keep_entry(saved, number, entry).unwrap();
+    }
+    store.add_chat(Some(project), "Empty").unwrap();
+    // Nor is one whose agent wrote to the wiki, as its title names the
+    // tool.
+    let wrote = store.add_chat(Some(project), "Wrote").unwrap();
+    let call = Entry::ToolCall {
+        id: "call-1".to_owned(),
+        title: "mcp__cox__wiki_write".to_owned(),
+        content: Vec::new(),
+        result: None,
+    };
+    for (number, entry) in [Entry::Human("hi".to_owned()), call].iter().enumerate() {
+        store.keep_entry(wrote, number, entry).unwrap();
+    }
+    let second = store.add_chat(Some(project), "Chat 2").unwrap();
+    for (number, entry) in said().iter().enumerate() {
+        store.keep_entry(second, number, entry).unwrap();
+    }
+    let (agents, workspace, cx) = open_window_resuming(
+        cx,
+        scratch("wiki-past-home"),
+        Rc::clone(&store),
+        Resumes::Resume,
+    );
+    cx.run_until_parked();
+
+    // The project's menu asks the two that were not, one after another,
+    // without showing them.
+    let shown_before = workspace.read_with(cx, |workspace, _| workspace.shown().map(Chat::key));
+    right_click(cx, "project-2");
+    cx.run_until_parked();
+    let item = cx.debug_bounds("save-chats-to-wiki").unwrap();
+    assert!(item.size.width > gpui::px(0.));
+    click(cx, "save-chats-to-wiki");
+    cx.run_until_parked();
+    let chats = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, cx| {
+            workspace
+                .chats(1)
+                .map(|chat| {
+                    chat.view()
+                        .map(|view| view.read(cx).conversation().entries().to_vec())
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let asked = |entries: &Option<Vec<Entry>>| {
+        entries
+            .as_ref()
+            .is_some_and(|entries| entries.contains(&Entry::Cox(save.clone())))
+    };
+    cx.condition(&workspace, |workspace, cx| {
+        workspace.chats(1).all(|chat| {
+            chat.view()
+                .is_none_or(|view| !matches!(view.read(cx).conversation().state(), State::Busy))
+        })
+    })
+    .await;
+    let after = chats(cx);
+    assert_eq!(after.len(), 5);
+    assert!(asked(&after[0]), "{:?}", after[0]);
+    assert!(after[1..4].iter().all(Option::is_none), "{after:?}");
+    assert!(asked(&after[4]), "{:?}", after[4]);
+    assert_eq!(agents.borrow().len(), 2);
+    assert!(
+        agents
+            .borrow()
+            .iter()
+            .all(|agent| agent.prompts().concat().contains(&save)),
+        "{:?}",
+        agents
+            .borrow()
+            .iter()
+            .map(|agent| agent.prompts())
+            .collect::<Vec<_>>()
+    );
+    // The human goes on where they were.
+    let shown_now = workspace.read_with(cx, |workspace, _| workspace.shown().map(Chat::key));
+    assert_eq!(shown_now, shown_before);
+
+    // Then the project has nothing more to keep.
+    let left = workspace.read_with(cx, |workspace, cx| workspace.unsaved_chats(1, cx));
+    assert_eq!(left, [] as [u64; 0]);
+}

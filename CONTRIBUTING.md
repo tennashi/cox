@@ -389,7 +389,13 @@ for a trial the trial's own agent, which found it, and goes on in the
 project, and "Not now" lets it be. A goal is asked of once for a line
 of the human's, so that the turn that keeps it, which meets the goal
 again, does not ask again; and a chat whose agent has no `wiki_write`
-is not asked.
+is not asked. For the chats of before, the menu of the right button on
+a project of the rail has "Save N chats to wiki": the chats of the
+project, of earlier runs too, where the human said something since the
+agent was last asked to keep it, or wrote to the wiki, each of whose
+agents it asks, as
+"Save to wiki" does, one after another, without showing them, starting
+a closed chat's agent again.
 
 "Wiki" on the stage's bar, a plugin (see below), at `cox://wiki/`,
 shows the wiki to the human: its pages, with their titles, their first
