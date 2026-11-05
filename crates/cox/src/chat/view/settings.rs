@@ -34,6 +34,9 @@ const CHOICES_HEIGHT: f32 = 360.;
 /// How tall the pill is, which the list opens under.
 const PILL_HEIGHT: f32 = 32.;
 
+/// How tall the line of what the settings are set to is, in the pill.
+const SUMMARY_HEIGHT: f32 = 18.;
+
 /// What the list under the pill shows, while it is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Menu {
@@ -57,18 +60,16 @@ impl ChatView {
         }
         let idle = matches!(self.conversation.state(), State::Idle | State::Closed);
         let open = self.setting_open;
-        let summary = settings
-            .iter()
-            .map(|setting| chosen_name(setting).to_owned())
-            .collect::<Vec<_>>()
-            .join(" · ");
         let pill = div()
             .id("settings")
             .debug_selector(|| "settings".to_owned())
             .h(px(PILL_HEIGHT))
             .flex()
             .items_center()
-            .flex_shrink_0()
+            // In a narrow window the pill gives way, down to the agent's
+            // name.
+            .min_w_0()
+            .overflow_hidden()
             .gap(px(8.))
             .px(px(12.))
             .rounded_full()
@@ -93,13 +94,12 @@ impl ChatView {
             )
             .children(agent.is_some().then(|| {
                 div()
+                    .flex_shrink_0()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(FOREGROUND))
                     .child(self.agent_name())
             }))
-            .when(!summary.is_empty(), |pill| {
-                pill.child(div().text_color(rgb(DIM)).child(summary))
-            })
+            .children(summary(settings))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseDownEvent, window, cx| {
@@ -137,6 +137,7 @@ impl ChatView {
         });
         Some(
             div()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .child(pill)
@@ -350,6 +351,36 @@ impl ChatView {
         }
         list
     }
+}
+
+/// What each of `settings` is set to, after a dot from the second on, on
+/// a line as tall as the text, unless there are none. The values wrap to
+/// a second line, which the line hides, when they do not fit, so that it
+/// shows as many as fit, each whole.
+fn summary(settings: &[Setting]) -> Option<gpui::Div> {
+    if settings.is_empty() {
+        return None;
+    }
+    let values = settings.iter().enumerate().map(|(index, setting)| {
+        let name = chosen_name(setting);
+        div().whitespace_nowrap().child(if index == 0 {
+            name.to_owned()
+        } else {
+            format!("· {name}")
+        })
+    });
+    Some(
+        div()
+            .min_w_0()
+            .h(px(SUMMARY_HEIGHT))
+            .line_height(px(SUMMARY_HEIGHT))
+            .flex()
+            .flex_wrap()
+            .gap_x(px(4.))
+            .overflow_hidden()
+            .text_color(rgb(DIM))
+            .children(values),
+    )
 }
 
 /// The name of what `setting` is set to.

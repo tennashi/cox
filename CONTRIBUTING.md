@@ -89,7 +89,8 @@ its agent lets the human choose of its session, such as the model it
 uses, its mode, or how hard it thinks: ACP's session config options, of
 the kind that chooses one of a list, as the agent names them and in its
 order, so Cox knows nothing of any agent's models. It shows what each is
-set to, after a dot in the accent and the agent's name, and a click opens a list of them, each
+set to, after a dot in the accent and the agent's name, as many as
+fit in a narrow window, each whole, and a click opens a list of them, each
 on a row; a click on a row shows what it can be set to, under the groups
 the agent puts them in, with a line back to the rows; a click on one
 sets it (ACP's `session/set_config_option`), while a turn runs
