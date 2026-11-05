@@ -594,8 +594,8 @@ impl ChatView {
             .into_any_element()
     }
 
-    /// What the agent thought, on a line that shows its start, opening to
-    /// all of it.
+    /// What the agent thought, as an aside: its start, in italics on a
+    /// line of its own, which opens to all of it.
     fn render_thought(
         &self,
         index: usize,
@@ -610,11 +610,7 @@ impl ChatView {
             .id(("line", index))
             .debug_selector(move || format!("line-{index}"))
             .flex()
-            .gap_2()
-            .text_color(rgb(DIM))
-            .child(disclosure(Some(open)))
-            .child(div().flex_shrink_0().child("∴"))
-            .child(div().flex_1().min_w_0().truncate().italic().child(if open {
+            .child(div().flex_1().min_w_0().truncate().child(if open {
                 "Thinking".to_owned()
             } else {
                 text.lines().next().unwrap_or_default().to_owned()
@@ -623,15 +619,19 @@ impl ChatView {
             .flex()
             .flex_col()
             .gap_1()
-            .child(folding(line, Some(fold), cx))
-            .when(open, |thought| {
-                thought.child(
-                    div()
-                        .pl(px(INDENT))
-                        .text_color(rgb(DIM))
-                        .child(writer.markdown(text)),
-                )
-            })
+            .italic()
+            .text_size(px(13.))
+            .text_color(rgb(FAINT))
+            .child(
+                // An aside, which only its text marks as one to open.
+                line.cursor_pointer()
+                    .hover(|style| style.text_color(rgb(DIM)))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.folds.flip(fold);
+                        cx.notify();
+                    })),
+            )
+            .when(open, |thought| thought.child(writer.markdown(text)))
             .into_any_element()
     }
 
