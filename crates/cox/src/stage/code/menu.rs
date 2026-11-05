@@ -1,5 +1,6 @@
 //! The menu of the right button, for the word under the mouse: go to
-//! where it is defined, or list where it is used.
+//! where it is defined, or list where it is used; and, with text
+//! selected, translate it.
 
 use gpui::{Context, IntoElement, anchored, deferred, div, prelude::*, px, rgb};
 
@@ -18,6 +19,12 @@ impl Code {
         } else {
             "Ctrl-click"
         };
+        let translate = if cfg!(target_os = "macos") {
+            "⌘⇧T"
+        } else {
+            "Ctrl-Shift-T"
+        };
+        let selected = self.chosen_text();
         let item = |id: &'static str, label: &'static str, key: &'static str| {
             div()
                 .id(id)
@@ -62,7 +69,18 @@ impl Code {
                         code.find_references(place, cx);
                     },
                 )),
-            );
+            )
+            .when(!selected.trim().is_empty(), |menu| {
+                menu.child(
+                    item("translate-selection", "Translate", translate).on_click(cx.listener(
+                        move |code, _, window, cx| {
+                            code.menu = None;
+                            crate::ui::translation::show(&selected, window, cx);
+                            cx.notify();
+                        },
+                    )),
+                )
+            });
         Some(deferred(anchored().position(at).child(menu)).with_priority(2))
     }
 }

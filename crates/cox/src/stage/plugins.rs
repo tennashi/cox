@@ -32,7 +32,7 @@
 //!   with it; and `cox://api/wiki/<page>`, a page, with its text as HTML,
 //!   and, when the human reads the wiki in a language of their own, as
 //!   HTML in that language too, as far as it is translated (see
-//!   [`crate::wiki::told`] and [`crate::wiki::translate`]).
+//!   [`crate::wiki::told`] and [`crate::translate`]).
 //!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Map plugin does for a box's code.
@@ -46,8 +46,8 @@ use crate::stage::calls::Calls;
 use crate::stage::lines;
 use crate::stage::map;
 use crate::stage::outline::Outlines;
+use crate::translate;
 use crate::wiki::told as wiki;
-use crate::wiki::translate;
 
 /// Where a project keeps its plugins, under its folder.
 const PROJECT_PLUGINS: &str = ".cox/plugins";

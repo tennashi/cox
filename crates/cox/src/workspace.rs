@@ -388,6 +388,9 @@ impl Workspace {
             store,
             focus_handle: cx.focus_handle(),
         };
+        // The translation of what the human selects shows over the window.
+        cx.observe_global::<crate::ui::translation::Shown>(|_, cx| cx.notify())
+            .detach();
         let kept = workspace
             .store
             .projects()
@@ -2454,5 +2457,9 @@ impl Render for Workspace {
             )
             .children(self.render_menu(cx))
             .children(self.render_settings(cx))
+            .children(
+                cx.try_global::<crate::ui::translation::Shown>()
+                    .and_then(|shown| shown.0.clone()),
+            )
     }
 }

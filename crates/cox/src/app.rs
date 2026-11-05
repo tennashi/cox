@@ -153,7 +153,7 @@ pub fn run(settings: Settings) -> ExitCode {
     );
     let agents = Agents::read(settings.command);
     agents.fetch();
-    crate::wiki::translate::start(agents.clone());
+    crate::translate::start(agents.clone());
     let launcher = Launcher {
         agents,
         stage: settings.stage,
@@ -207,6 +207,7 @@ fn open_store() -> Store {
 /// Binds the keys of every part of the window, and of quitting.
 fn bind_keys(cx: &mut App) {
     crate::ui::input::bind_keys(cx);
+    crate::ui::translation::bind_keys(cx);
     crate::settings::view::bind_keys(cx);
     crate::chat::view::bind_keys(cx);
     crate::stage::document::bind_keys(cx);

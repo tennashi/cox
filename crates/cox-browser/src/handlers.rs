@@ -119,7 +119,8 @@ fn create(new: NewBrowser) {
         StageLifeSpanHandler::new(Arc::clone(&shared), events.clone(), target),
         StageLoadHandler::new(Arc::clone(&shared), events.clone()),
         StageDisplayHandler::new(Arc::clone(&shared), events.clone()),
-        StageRequestHandler::new(events, serve),
+        StageRequestHandler::new(events.clone(), serve),
+        StageContextMenuHandler::new(events),
     );
     let settings = BrowserSettings {
         windowless_frame_rate: 60,
@@ -174,6 +175,7 @@ wrap_client! {
         load: LoadHandler,
         display: DisplayHandler,
         request: RequestHandler,
+        context_menu: ContextMenuHandler,
     }
 
     impl Client {
@@ -195,6 +197,44 @@ wrap_client! {
 
         fn request_handler(&self) -> Option<RequestHandler> {
             Some(self.request.clone())
+        }
+
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            Some(self.context_menu.clone())
+        }
+    }
+}
+
+wrap_context_menu_handler! {
+    struct StageContextMenuHandler {
+        events: UnboundedSender<Event>,
+    }
+
+    impl ContextMenuHandler {
+        /// The human pressed the right button in the page. The browser has
+        /// no window to show its menu in, so it shows none; when text is
+        /// selected, the stage offers what to do with it instead.
+        fn on_before_context_menu(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            params: Option<&mut ContextMenuParams>,
+            model: Option<&mut MenuModel>,
+        ) {
+            if let Some(model) = model {
+                model.clear();
+            }
+            let Some(params) = params else {
+                return;
+            };
+            let text = CefString::from(&params.selection_text()).to_string();
+            if !text.trim().is_empty() {
+                let _ = self.events.send(Event::Selected {
+                    x: params.xcoord(),
+                    y: params.ycoord(),
+                    text,
+                });
+            }
         }
     }
 }

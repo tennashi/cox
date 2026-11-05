@@ -50,6 +50,7 @@ pub mod process;
 pub mod settings;
 pub mod stage;
 pub mod storage;
+pub mod translate;
 pub mod ui;
 pub mod wiki;
 pub mod workflow;

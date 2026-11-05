@@ -31,6 +31,7 @@ use gpui::{
 
 use self::draft::{Draft, one_line, unix_line_breaks};
 use crate::ui::theme::{FAINT, FOREGROUND, SELECTION};
+use crate::ui::translation::Translate;
 
 actions!(
     line_input,
@@ -444,6 +445,17 @@ impl LineInput {
         }
     }
 
+    /// Shows the translation of the text selected, or with nothing
+    /// selected leaves the keys to what holds the part.
+    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.draft.selected_text().to_owned();
+        if text.trim().is_empty() {
+            cx.propagate();
+            return;
+        }
+        crate::ui::translation::show(&text, window, cx);
+    }
+
     fn paste(&mut self, _: &Paste, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let text = if self.wraps {
@@ -769,8 +781,18 @@ impl Render for LineInput {
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::translate))
             .on_action(cx.listener(Self::paste))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|input, _, window, cx| {
+                    let text = input.draft.selected_text().to_owned();
+                    if crate::ui::translation::offer(&text, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))

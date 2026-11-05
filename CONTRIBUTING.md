@@ -410,35 +410,46 @@ human sees every page. The page reads the wiki again every two seconds.
 
 The agents write the wiki in English, whatever language their chats
 speak, as Cox's tools and `wiki/save.md` tell them, so that a page is
-found by the same words from every chat; the human reads it in a
-language of their own, as `settings.json` names it, as
-`{"wiki_translation": {"language": "Japanese"}}`. "Wiki" then shows a
-page in that language, as far as it is translated, the rest as it is
-written, with how far it has gone, and a chip "As written" over it to
-read it as the agent wrote it. It is translated a block at a time, its
-paragraphs, headings, lists, quotes and tables, as it is opened, and
-not its code or the HTML it holds; each block's translation is kept,
-by what it says and the language, in `wiki-translations` beside the
-chats' database, so that a page that changed is translated again only
-where it changed, and the wiki's folder holds only what was written.
+found by the same words from every chat; the human reads it, and
+whatever else they select in the window, in a language of their own,
+as `settings.json` names it, as `{"translation": {"language":
+"Japanese"}}`. "Wiki" then shows a page in that language, as far as it
+is translated, the rest as it is written, with how far it has gone,
+and a chip "As written" over it to read it as the agent wrote it. It
+is translated a block at a time, its paragraphs, headings, lists,
+quotes and tables, as it is opened, and not its code or the HTML it
+holds. Text selected anywhere in the window, in the conversation, an
+input, a tab of code or Markdown, a terminal, or a page of the stage,
+is translated with "Translate" in the menu the right button opens on
+it, with "Copy", a tab of code's own menu having "Translate", and Cox's
+menu showing on a page in place of the browser's; or, but on a page,
+with Command-Shift-T (Control-Shift-T off macOS). A card by the mouse
+says it is translating, then shows the translation, which "Copy"
+copies, and Escape, the ×, or a click beside it closes. Text in
+English goes into the human's language, and the rest, as text mostly
+of other letters, into English. Each translation is kept, by what it
+says, the way it goes and what translated it, in `translations` beside the chats'
+database, so that a page that changed is translated again only where
+it changed, and the wiki's folder holds only what was written.
 What translates is the human's to choose: `command`, a command that
 reads the text on its standard input and writes its translation on its
-standard output, with `{language}` in its arguments standing for the
-language, as a model run on the machine, such as PLaMo 3 Translate
-through [plamo-translate-cli](https://github.com/pfnet/plamo-translate-cli),
-which `plamo-translate server` keeps loaded between blocks:
+standard output, with `{from}` and `{to}` in its arguments standing
+for the languages, as a model run on the machine, such as PLaMo 3
+Translate through
+[plamo-translate-cli](https://github.com/pfnet/plamo-translate-cli),
+which `plamo-translate server` keeps loaded between texts:
 
 ```json
-{"wiki_translation": {"language": "Japanese",
-  "command": ["plamo-translate", "--from", "English", "--to", "{language}"]}}
+{"translation": {"language": "Japanese",
+  "command": ["plamo-translate", "--from", "{from}", "--to", "{to}"]}}
 ```
 
 or else `agent`, an agent Cox knows, by its name, as `"Codex"`, or,
 unless given, the agent a new chat talks to, which Cox asks over ACP,
 as it does the judge of a goal: not a chat, with no tools, its
-permission requests refused. A translation that fails says why over
-the page, and is not tried again until `settings.json` says another
-way.
+permission requests refused. A page's translation that fails says why
+over the page, and is not tried again until `settings.json` says
+another way; a selection's says why on its card.
 
 The conversation runs down a line on its left, which names who speaks
 where they start, with a dot: the human (YOU), Cox in their place

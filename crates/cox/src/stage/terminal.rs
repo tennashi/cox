@@ -62,6 +62,7 @@ use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED};
+use crate::ui::translation::Translate;
 
 const KEY_CONTEXT: &str = "Terminal";
 
@@ -311,6 +312,17 @@ impl Terminal {
         if let Some(text) = self.selected_text().filter(|text| !text.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+    }
+
+    /// Shows the translation of the text selected, or with nothing
+    /// selected leaves the keys to what holds the part.
+    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.selected_text().unwrap_or_default();
+        if text.trim().is_empty() {
+            cx.propagate();
+            return;
+        }
+        crate::ui::translation::show(&text, window, cx);
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
@@ -622,8 +634,18 @@ impl Render for Terminal {
                     .key_context(KEY_CONTEXT)
                     .on_key_down(cx.listener(Self::key_down))
                     .on_action(cx.listener(Self::copy))
+                    .on_action(cx.listener(Self::translate))
                     .on_action(cx.listener(Self::paste))
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|terminal, _, window, cx| {
+                            let text = terminal.selected_text().unwrap_or_default();
+                            if crate::ui::translation::offer(&text, window, cx) {
+                                cx.stop_propagation();
+                            }
+                        }),
+                    )
                     .on_mouse_move(cx.listener(Self::mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                     .on_scroll_wheel(cx.listener(Self::scroll))

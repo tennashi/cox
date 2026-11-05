@@ -13,6 +13,7 @@ use crate::chat::conversation::{
     Answer, Content, Entry, GOAL_TURNS, State, StepState, ToolCallResult,
 };
 use crate::chat::view::ChatView;
+use crate::ui::translation::Shown;
 use crate::workspace::{Chat, Workspace};
 
 /// The most of a reply, a thought or a note the state tells; the rest is
@@ -75,6 +76,12 @@ pub fn describe(
             settings.read(cx).input().read(cx).text()
         );
     }
+    if let Some(card) = cx
+        .try_global::<crate::ui::translation::Shown>()
+        .and_then(|shown| shown.0.as_ref())
+    {
+        let _ = writeln!(told, "A translation shows: {}", card.read(cx).said());
+    }
     told.push('\n');
     list(&mut told, workspace, cx);
     let about = match chat {
@@ -99,6 +106,11 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
     let Some(focused) = window.focused(cx) else {
         return "nothing".to_owned();
     };
+    if let Some(card) = cx.try_global::<Shown>().and_then(|shown| shown.0.as_ref())
+        && focused == card.focus_handle(cx)
+    {
+        return "the translation's card".to_owned();
+    }
     if let Some(settings) = workspace.settings()
         && focused == settings.read(cx).input().focus_handle(cx)
     {

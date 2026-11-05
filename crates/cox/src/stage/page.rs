@@ -8,6 +8,9 @@
 //!   shortcuts.
 //! - [`pointer`] draws the agent's pointer over the page: where the agent
 //!   points, clicks and types, as the relay saw it.
+//!
+//! The right button over text selected in the page opens a menu of what
+//! to do with it, "Translate" and "Copy", as the browser shows none.
 
 mod keys;
 mod picture;
@@ -19,16 +22,16 @@ use std::time::{Duration, Instant};
 
 use cox_core::tabs::KeptTab;
 use gpui::{
-    App, Bounds, Context, Div, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    IntoElement, Pixels, Point, RenderImage, Stateful, Subscription, Task, UTF16Selection, Window,
-    div, point, prelude::*, px, rgb, size,
+    App, Bounds, ClipboardItem, Context, Div, Entity, EntityInputHandler, EventEmitter,
+    FocusHandle, Focusable, IntoElement, Pixels, Point, RenderImage, Stateful, Subscription, Task,
+    UTF16Selection, Window, anchored, deferred, div, point, prelude::*, px, rgb, size,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use self::picture::Picture;
 use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
-use crate::ui::theme::{BORDER, BUTTON, DISABLED, SELECTED};
+use crate::ui::theme::{ACCENT_GROUND, BORDER, BORDER_STRONG, BUTTON, DISABLED, RAISED, SELECTED};
 use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
 use cox_browser::{Browser, Caret, Event, Navigation, TargetId};
@@ -54,6 +57,11 @@ pub struct Page {
     look: Option<Look>,
     /// Renders the tab again when the pointer's look next changes.
     _pointer_changes: Option<Task<()>>,
+    /// Where the page was drawn in the window last.
+    origin: Point<Pixels>,
+    /// The menu of the text selected in the page, where it opened, while
+    /// it is open.
+    menu: Option<(Point<Pixels>, String)>,
     _events: Task<()>,
     /// Checks now and then that the browser answered the last resize.
     _ticks: Task<()>,
@@ -101,6 +109,10 @@ impl Page {
                         Event::Navigated => page.navigated(cx),
                         Event::Popup(url) => cx.emit(Opens::Tab(url)),
                         Event::FileLink(url) => cx.emit(Opens::File(url)),
+                        Event::Selected { x, y, text } => {
+                            let at = page.origin + point(in_window(x), in_window(y));
+                            page.menu = Some((at, text));
+                        }
                         _ => {}
                     }
                     cx.notify();
@@ -138,6 +150,8 @@ impl Page {
             pointer: AgentPointer::default(),
             look: None,
             _pointer_changes: None,
+            origin: Point::default(),
+            menu: None,
             _events: task,
             _ticks: ticks,
             _submitted: submitted,
@@ -445,6 +459,64 @@ pub(super) fn address_to_url(typed: &str) -> Option<String> {
     })
 }
 
+/// A length of the page, in the browser's whole pixels, in the window's.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a page is not millions of pixels wide"
+)]
+fn in_window(length: i32) -> Pixels {
+    px(length as f32)
+}
+
+impl Page {
+    /// The menu of the text selected in the page, while it is open.
+    fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (at, text) = self.menu.clone()?;
+        let item = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .debug_selector(move || id.to_owned())
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(ACCENT_GROUND)))
+                .child(label)
+        };
+        let copied = text.clone();
+        let menu = div()
+            .occlude()
+            .min_w(px(140.))
+            .p_1()
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(BORDER_STRONG))
+            .rounded_md()
+            .shadow_md()
+            .on_mouse_down_out(cx.listener(|page, _, _, cx| {
+                page.menu = None;
+                cx.notify();
+            }))
+            .child(
+                item("translate-selection", "Translate").on_click(cx.listener(
+                    move |page, _, window, cx| {
+                        page.menu = None;
+                        crate::ui::translation::show(&text, window, cx);
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                item("copy-selection", "Copy").on_click(cx.listener(move |page, _, _, cx| {
+                    page.menu = None;
+                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                    cx.notify();
+                })),
+            );
+        Some(deferred(anchored().position(at).child(menu)).with_priority(2))
+    }
+}
+
 impl Render for Page {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.update_look(cx);
@@ -469,6 +541,7 @@ impl Render for Page {
                     .child(Picture { page: cx.entity() })
                     .children(self.look.as_ref().map(Self::render_label)),
             )
+            .children(self.render_menu(cx))
     }
 }
 

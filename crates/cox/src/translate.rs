@@ -1,54 +1,104 @@
-//! The wiki read in the human's language: the agents write its pages in
-//! English, so that every page is found by the same words, and the Wiki
-//! plugin shows a page in the language `settings.json` names, as
-//! `{"wiki_translation": {"language": "Japanese"}}` (see
-//! [`crate::settings::Translation`]), translated as the human opens it.
+//! Text read in the human's language: the agents write the wiki in
+//! English, so that every page is found by the same words, and the human
+//! reads it, and whatever else they select in the window, in the language
+//! `settings.json` names, as `{"translation": {"language": "Japanese"}}`
+//! (see [`crate::settings::Translation`]).
 //!
 //! What translates is the human's to choose: a command, as
-//! `["plamo-translate", "--from", "English", "--to", "{language}"]`,
-//! which reads a stretch of the page on its standard input and writes
-//! its translation on its standard output, `{language}` standing for the
-//! language in its arguments; or else an agent, over ACP, which the
-//! human names among the agents Cox knows, as `"agent": "Codex"`, or the
-//! one a new chat talks to: no chat, as the judge of a goal is not, given
-//! no tools, and its permission requests refused.
+//! `["plamo-translate", "--from", "{from}", "--to", "{to}"]`, which reads
+//! the text on its standard input and writes its translation on its
+//! standard output, `{from}` and `{to}` standing for the languages in its
+//! arguments; or else an agent, over ACP, which the human names among the
+//! agents Cox knows, as `"agent": "Codex"`, or the one a new chat talks
+//! to: no chat, as the judge of a goal is not, given no tools, and its
+//! permission requests refused.
 //!
-//! A page is translated a block at a time, its paragraphs, headings,
+//! Text goes into the human's language when it is in English, and into
+//! English when it is not (see [`Way::of`]). A page of the wiki goes into
+//! the human's language a block at a time, its paragraphs, headings,
 //! lists, quotes and tables, in the order of the page, while its code,
 //! the HTML it holds, and its rules stay as they are, so that a model
 //! made to translate, and not to keep Markdown, has only prose to
-//! translate. Each block's translation is kept, by what it says and the
-//! language, in `wiki-translations` where Cox keeps what lasts, so that a
-//! page that changed is translated again only where it changed, and the
-//! wiki's own folder holds only what the agents and the human wrote.
-//! Until a block is translated, the page shows it as it is written.
+//! translate (see [`page`]); what the human selects goes whole, ahead of
+//! the pages' blocks (see [`text`]). Each translation is kept, by what it
+//! says and its way, in `translations` where Cox keeps what lasts, so
+//! that a page that changed is translated again only where it changed,
+//! and the wiki's own folder holds only what the agents and the human
+//! wrote.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Write as _;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
 
 use cox_acp::{PermissionAnswer, StopReason};
 use pulldown_cmark::{Event, Parser, Tag};
 use sha2::{Digest, Sha256};
+use tokio::sync::oneshot;
 
-use super::told::options;
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{Agent, AgentEvent, Command, Start};
 use crate::agents::Agents;
 use crate::settings::Translation;
+use crate::wiki::told::options;
 
 /// Where Cox keeps the translations, where it keeps what lasts.
-const FOLDER: &str = "wiki-translations";
+const FOLDER: &str = "translations";
 
-/// The translator of the wiki, once Cox has started it.
+/// The language the agents write in, and that text not in it goes into.
+pub const ENGLISH: &str = "English";
+
+/// The translator, once Cox has started it.
 static TRANSLATOR: OnceLock<Translator> = OnceLock::new();
+
+/// Which way text is translated: from one language into another, by the
+/// names the human gives them, as the command and the agent are told.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Way {
+    pub from: String,
+    pub to: String,
+}
+
+impl Way {
+    /// The way the human reads `text`, they reading `language`: into it,
+    /// when `text` is in English, as most of its letters are of the Latin
+    /// alphabet; or else into English, from `language`.
+    #[must_use]
+    pub fn of(text: &str, language: &str) -> Self {
+        let (latin, other) = text.chars().filter(|c| c.is_alphabetic()).fold(
+            (0usize, 0usize),
+            |(latin, other), c| {
+                if c.is_ascii() {
+                    (latin + 1, other)
+                } else {
+                    (latin, other + 1)
+                }
+            },
+        );
+        if latin >= other {
+            Self::into(language)
+        } else {
+            Self {
+                from: language.to_owned(),
+                to: ENGLISH.to_owned(),
+            }
+        }
+    }
+
+    /// From English into `language`, as the wiki is read.
+    #[must_use]
+    pub fn into(language: &str) -> Self {
+        Self {
+            from: ENGLISH.to_owned(),
+            to: language.to_owned(),
+        }
+    }
+}
 
 /// A page as the human reads it in their language.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,11 +115,15 @@ pub struct Translated {
     pub error: Option<String>,
 }
 
-/// Starts the translator of the wiki, which works on a thread of its
-/// own, its agent, when it needs one, being one of `agents`.
+/// What a translation of text the human selected comes to: the
+/// translation, or why there is none.
+pub type Answer = oneshot::Receiver<Result<String, String>>;
+
+/// Starts the translator, which works on a thread of its own, its agent,
+/// when it needs one, being one of `agents`.
 pub fn start(agents: Agents) {
     let Some(folder) = crate::storage::path(FOLDER) else {
-        tracing::error!("the wiki is not translated: there is no place to keep translations");
+        tracing::error!("nothing is translated: there is no place to keep translations");
         return;
     };
     let _ = TRANSLATOR.set(Translator::start(folder, Some(agents)));
@@ -77,39 +131,67 @@ pub fn start(agents: Agents) {
 
 /// The page whose text is `body`, as the human reads it in the language
 /// `settings.json` names, as far as it is translated, the rest of it
-/// being translated from now on; or `None` when the human reads the wiki
-/// as it is written.
+/// being translated from now on; or `None` when the human reads as it is
+/// written.
 #[must_use]
 pub fn page(body: &str) -> Option<Translated> {
-    let translation = crate::settings::wiki_translation()?;
+    let translation = crate::settings::translation()?;
     Some(TRANSLATOR.get()?.page(body, &translation))
 }
 
-/// What translates the wiki, a block at a time, on a thread of its own.
+/// Translates `text`, which the human selected, the way they read it, and
+/// answers which way, and what it comes to; or `None` when the human
+/// names no language to read in.
+#[must_use]
+pub fn text(text: &str) -> Option<(Way, Answer)> {
+    let translation = crate::settings::translation()?;
+    let translator = TRANSLATOR.get()?;
+    let way = Way::of(text, &translation.language);
+    let answer = translator.text(text.trim(), way.clone(), translation);
+    Some((way, answer))
+}
+
+/// What translates, a text at a time, on a thread of its own.
 struct Translator {
     /// Where the translations are kept.
     folder: PathBuf,
-    jobs: Sender<Job>,
-    state: Arc<Mutex<State>>,
+    shared: Arc<Shared>,
 }
 
-/// A block to translate: what it says, how, and the file its translation
-/// is kept in.
+/// What the translator and its thread share.
+struct Shared {
+    state: Mutex<State>,
+    /// Told when a job is added.
+    added: Condvar,
+}
+
+impl Shared {
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().expect("no one panics holding it")
+    }
+}
+
+/// A text to translate: what it says, which way, how, the file its
+/// translation is kept in, and who waits for it, if anyone does.
 struct Job {
     text: String,
+    way: Way,
     translation: Translation,
     file: PathBuf,
+    answer: Option<oneshot::Sender<Result<String, String>>>,
 }
 
 /// What the translator is at.
 #[derive(Default)]
 struct State {
-    /// The files of the translations on the way.
+    /// The texts to translate, in turn.
+    jobs: VecDeque<Job>,
+    /// The files of the pages' translations on the way.
     pending: HashSet<PathBuf>,
-    /// The files of the translations that failed, with how, which are
-    /// not tried again until the human says another way.
+    /// The files of the pages' translations that failed, with how, which
+    /// are not tried again until the human says another way.
     failed: HashMap<PathBuf, Translation>,
-    /// Why translating failed last, and how it was translated then.
+    /// Why translating a page failed last, and how it was translated then.
     error: Option<(Translation, String)>,
 }
 
@@ -117,46 +199,49 @@ impl Translator {
     /// Starts the translator, keeping translations in `folder`, its agent,
     /// when it needs one, being one of `agents`.
     fn start(folder: PathBuf, agents: Option<Agents>) -> Self {
-        let (jobs, received) = channel();
-        let state = Arc::new(Mutex::new(State::default()));
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State::default()),
+            added: Condvar::new(),
+        });
         let works = Worker {
             agents,
             agent: None,
             cwd: folder.clone(),
-            state: state.clone(),
+            shared: shared.clone(),
         };
         thread::Builder::new()
-            .name("wiki-translate".to_owned())
-            .spawn(move || works.work(&received))
+            .name("translate".to_owned())
+            .spawn(move || works.work())
             .expect("a thread starts");
-        Self {
-            folder,
-            jobs,
-            state,
-        }
+        Self { folder, shared }
     }
 
     /// The page whose text is `body` in the language of `translation`, as
     /// far as it is translated, the blocks that are not yet given to the
     /// translator.
     fn page(&self, body: &str, translation: &Translation) -> Translated {
-        let mut state = self.state.lock().expect("no one panics holding it");
+        let way = Way::into(&translation.language);
+        let mut state = self.shared.state();
         let mut done = 0;
         let mut of = 0;
+        let mut added = false;
         let markdown = rebuilt(body, |text| {
             of += 1;
-            let file = self.folder.join(key(&translation.language, text));
+            let file = self.folder.join(key(&way, translation, text));
             if let Ok(translated) = fs::read_to_string(&file) {
                 done += 1;
                 return Some(translated);
             }
             let failed = state.failed.get(&file) == Some(translation);
             if !failed && state.pending.insert(file.clone()) {
-                let _ = self.jobs.send(Job {
+                state.jobs.push_back(Job {
                     text: text.to_owned(),
+                    way: way.clone(),
                     translation: translation.clone(),
                     file,
+                    answer: None,
                 });
+                added = true;
             }
             None
         });
@@ -165,6 +250,10 @@ impl Translator {
             .as_ref()
             .filter(|(how, _)| how == translation)
             .map(|(_, error)| error.clone());
+        drop(state);
+        if added {
+            self.shared.added.notify_one();
+        }
         Translated {
             language: translation.language.clone(),
             markdown,
@@ -172,6 +261,26 @@ impl Translator {
             of,
             error,
         }
+    }
+
+    /// Translates `text` the way `way` says, as `translation` says, ahead
+    /// of the pages' blocks, or answers what was kept of it.
+    fn text(&self, text: &str, way: Way, translation: Translation) -> Answer {
+        let (answer, answered) = oneshot::channel();
+        let file = self.folder.join(key(&way, &translation, text));
+        if let Ok(translated) = fs::read_to_string(&file) {
+            let _ = answer.send(Ok(translated));
+            return answered;
+        }
+        self.shared.state().jobs.push_front(Job {
+            text: text.to_owned(),
+            way,
+            translation,
+            file,
+            answer: Some(answer),
+        });
+        self.shared.added.notify_one();
+        answered
     }
 }
 
@@ -183,28 +292,48 @@ struct Worker {
     agent: Option<(Option<String>, Agent)>,
     /// Where the agent works.
     cwd: PathBuf,
-    state: Arc<Mutex<State>>,
+    shared: Arc<Shared>,
 }
 
 impl Worker {
-    /// Translates each job of `jobs` in turn, keeping what it makes.
-    fn work(mut self, jobs: &Receiver<Job>) {
-        let span = tracing::info_span!("wiki_translate");
+    /// Translates each job in turn, keeping what it makes.
+    fn work(mut self) {
+        let span = tracing::info_span!("translate");
         let _entered = span.enter();
-        for job in jobs {
-            let language = &job.translation.language;
+        loop {
+            let job = {
+                let mut state = self.shared.state();
+                loop {
+                    if let Some(job) = state.jobs.pop_front() {
+                        break job;
+                    }
+                    state = self
+                        .shared
+                        .added
+                        .wait(state)
+                        .expect("no one panics holding it");
+                }
+            };
             let translated = match &job.translation.command {
-                Some(command) => run(command, language, &job.text),
-                None => self.ask(job.translation.agent.as_deref(), language, &job.text),
+                Some(command) => run(command, &job.way, &job.text),
+                None => self.ask(job.translation.agent.as_deref(), &job.way, &job.text),
             }
             .and_then(|translated| {
                 keep(&job.file, &translated)
-                    .map_err(|error| format!("cannot keep the translation: {error}"))
+                    .map_err(|error| format!("cannot keep the translation: {error}"))?;
+                Ok(translated)
             });
-            let mut state = self.state.lock().expect("no one panics holding it");
+            if let Err(error) = &translated {
+                tracing::error!("cannot translate: {error}");
+            }
+            if let Some(answer) = job.answer {
+                let _ = answer.send(translated);
+                continue;
+            }
+            let mut state = self.shared.state();
             state.pending.remove(&job.file);
             match translated {
-                Ok(()) => {
+                Ok(_) => {
                     if state
                         .error
                         .as_ref()
@@ -214,7 +343,6 @@ impl Worker {
                     }
                 }
                 Err(error) => {
-                    tracing::error!("the wiki cannot be translated: {error}");
                     state.failed.insert(job.file, job.translation.clone());
                     state.error = Some((job.translation, error));
                 }
@@ -222,19 +350,19 @@ impl Worker {
         }
     }
 
-    /// What the agent named `named` says `text` is in `language`, starting
-    /// it first if it is not running.
-    fn ask(&mut self, named: Option<&str>, language: &str, text: &str) -> Result<String, String> {
-        let asked = self.asked(named, language, text);
+    /// What the agent named `named` says `text` is, the way `way` says,
+    /// starting it first if it is not running.
+    fn ask(&mut self, named: Option<&str>, way: &Way, text: &str) -> Result<String, String> {
+        let asked = self.asked(named, way, text);
         if asked.is_err() {
             // A turn that failed may leave the agent in a state of its own;
-            // the next block starts another.
+            // the next text starts another.
             self.agent = None;
         }
         asked
     }
 
-    fn asked(&mut self, named: Option<&str>, language: &str, text: &str) -> Result<String, String> {
+    fn asked(&mut self, named: Option<&str>, way: &Way, text: &str) -> Result<String, String> {
         if self
             .agent
             .as_ref()
@@ -265,7 +393,7 @@ impl Worker {
         let (_, agent) = self.agent.as_mut().expect("started above");
         agent
             .commands
-            .send(Command::Prompt(prompt(language, text)))
+            .send(Command::Prompt(prompt(way, text)))
             .map_err(|_| "the agent closed".to_owned())?;
         let mut reply = String::new();
         loop {
@@ -281,8 +409,7 @@ impl Worker {
                 }
                 AgentEvent::LoginNeeded { .. } => {
                     return Err(
-                        "the agent asks to log in: log in from a chat of it, then open the page \
-                         again"
+                        "the agent asks to log in: log in from a chat of it, then try again"
                             .to_owned(),
                     );
                 }
@@ -324,14 +451,15 @@ fn setup() -> Setup {
     }
 }
 
-/// What the agent is asked, to translate `text` into `language`.
-fn prompt(language: &str, text: &str) -> String {
+/// What the agent is asked, to translate `text` the way `way` says.
+fn prompt(way: &Way, text: &str) -> String {
+    let Way { from, to } = way;
     format!(
-        "Translate this Markdown, a block of a page of a wiki, into {language}. Answer with the \
-         translation alone, as Markdown: no words of your own before or after it, and no code \
-         fence around it. Keep the Markdown as it is: links and where they go, the names in \
-         [[name]] and [[name|text]] links, of which you translate only the text after the |, \
-         inline code, and paths. Use no tools.\n\n{text}"
+        "Translate this text from {from} into {to}. Answer with the translation alone: no \
+         words of your own before or after it, and no code fence around it. Keep any Markdown \
+         as it is: links and where they go, the names in [[name]] and [[name|text]] links, of \
+         which you translate only the text after the |, inline code, code, and paths. Use no \
+         tools.\n\n{text}"
     )
 }
 
@@ -351,11 +479,12 @@ fn unfenced(reply: &str, text: &str) -> String {
 }
 
 /// What `command` writes for `text`, given on its standard input, with
-/// `{language}` in its arguments standing for `language`.
-fn run(command: &[String], language: &str, text: &str) -> Result<String, String> {
+/// `{from}` and `{to}` in its arguments standing for the languages of
+/// `way`.
+fn run(command: &[String], way: &Way, text: &str) -> Result<String, String> {
     let words: Vec<String> = command
         .iter()
-        .map(|word| word.replace("{language}", language))
+        .map(|word| word.replace("{from}", &way.from).replace("{to}", &way.to))
         .collect();
     let (program, arguments) = words.split_first().ok_or("the command is empty")?;
     let mut child = Process::new(program)
@@ -386,7 +515,7 @@ fn run(command: &[String], language: &str, text: &str) -> Result<String, String>
     Ok(translated)
 }
 
-/// Keeps `translated` in `file`, whole or not at all, as the page may be
+/// Keeps `translated` in `file`, whole or not at all, as a page may be
 /// read at any time.
 fn keep(file: &Path, translated: &str) -> std::io::Result<()> {
     if let Some(folder) = file.parent() {
@@ -397,11 +526,29 @@ fn keep(file: &Path, translated: &str) -> std::io::Result<()> {
     fs::rename(&part, file)
 }
 
-/// The name of the file the translation of `text` into `language` is
-/// kept in.
-fn key(language: &str, text: &str) -> String {
+/// The name of the file the translation of `text` the way `way` says, by
+/// what `translation` translates with, is kept in: another command or
+/// agent translates it again.
+fn key(way: &Way, translation: &Translation, text: &str) -> String {
     let mut hash = Sha256::new();
-    hash.update(language.trim().to_lowercase().as_bytes());
+    hash.update(way.from.trim().to_lowercase().as_bytes());
+    hash.update(b"\n");
+    hash.update(way.to.trim().to_lowercase().as_bytes());
+    hash.update(b"\n");
+    match (&translation.command, &translation.agent) {
+        (Some(command), _) => {
+            hash.update(b"command");
+            for word in command {
+                hash.update(b"\0");
+                hash.update(word.as_bytes());
+            }
+        }
+        (None, Some(agent)) => {
+            hash.update(b"agent\0");
+            hash.update(agent.as_bytes());
+        }
+        (None, None) => hash.update(b"agent"),
+    }
     hash.update(b"\n");
     hash.update(text.as_bytes());
     let mut name = String::new();
@@ -536,10 +683,48 @@ mod tests {
     }
 
     #[test]
-    fn a_translation_is_kept_by_what_it_says_and_the_language() {
-        assert_eq!(key("Japanese", "a"), key("japanese", "a"));
-        assert_ne!(key("Japanese", "a"), key("Japanese", "b"));
-        assert_ne!(key("Japanese", "a"), key("French", "a"));
+    fn a_translation_is_kept_by_what_it_says_its_way_and_its_translator() {
+        let japanese = Way::into("Japanese");
+        let agent = Translation {
+            language: "Japanese".to_owned(),
+            command: None,
+            agent: None,
+        };
+        let key = |way: &Way, text: &str| key(way, &agent, text);
+        assert_eq!(key(&japanese, "a"), key(&Way::into("japanese"), "a"));
+        assert_ne!(key(&japanese, "a"), key(&japanese, "b"));
+        assert_ne!(key(&japanese, "a"), key(&Way::into("French"), "a"));
+        assert_ne!(key(&japanese, "a"), key(&Way::of("あ", "Japanese"), "a"));
+        let codex = Translation {
+            agent: Some("Codex".to_owned()),
+            ..agent.clone()
+        };
+        let plamo = Translation {
+            command: Some(vec!["plamo-translate".to_owned()]),
+            ..agent.clone()
+        };
+        let cat = Translation {
+            command: Some(vec!["cat".to_owned()]),
+            ..agent.clone()
+        };
+        let keys = [&agent, &codex, &plamo, &cat].map(|how| super::key(&japanese, how, "a"));
+        for (at, one) in keys.iter().enumerate() {
+            assert!(!keys[at + 1..].contains(one), "{keys:?}");
+        }
+    }
+
+    #[test]
+    fn english_goes_into_the_humans_language_and_the_rest_into_english() {
+        assert_eq!(Way::of("Hello, world.", "Japanese"), Way::into("Japanese"));
+        assert_eq!(
+            Way::of("`div` を縮める", "Japanese"),
+            Way {
+                from: "Japanese".to_owned(),
+                to: ENGLISH.to_owned(),
+            }
+        );
+        // Code and numbers alone go the way English does.
+        assert_eq!(Way::of("42", "Japanese"), Way::into("Japanese"));
     }
 
     #[test]
@@ -554,7 +739,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         let folder =
-            std::env::temp_dir().join(format!("cox-wiki-translate-{name}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("cox-translate-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&folder);
         folder
     }
@@ -581,8 +766,9 @@ mod tests {
             command: Some(vec![
                 "sh".to_owned(),
                 "-c".to_owned(),
-                "printf '%s: ' \"$0\"; tr a-z A-Z".to_owned(),
-                "{language}".to_owned(),
+                "printf '%s to %s: ' \"$0\" \"$1\"; tr a-z A-Z".to_owned(),
+                "{from}".to_owned(),
+                "{to}".to_owned(),
             ]),
             agent: None,
         };
@@ -591,7 +777,8 @@ mod tests {
             page,
             Translated {
                 language: "Shouting".to_owned(),
-                markdown: "# Shouting: HELLO\n\nShouting: A [[LINK]].\n".to_owned(),
+                markdown: "# English to Shouting: HELLO\n\nEnglish to Shouting: A [[LINK]].\n"
+                    .to_owned(),
                 done: 2,
                 of: 2,
                 error: None,
@@ -623,15 +810,46 @@ mod tests {
         assert!(error.starts_with("sh failed"), "{error}");
         assert!(error.ends_with("no model"), "{error}");
         // It is not tried again the same way, but another way is.
-        assert!(translator.state.lock().unwrap().pending.is_empty());
+        assert!(translator.shared.state().pending.is_empty());
         let _ = translator.page("Hello.\n", &failing);
-        assert!(translator.state.lock().unwrap().pending.is_empty());
+        assert!(translator.shared.state().pending.is_empty());
         let working = Translation {
             command: Some(vec!["cat".to_owned()]),
             ..failing
         };
         let page = translated(&translator, "Hello.\n", &working);
         assert_eq!((page.done, page.error), (1, None));
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_selection_is_translated_whole_and_kept() {
+        let folder = scratch("selection");
+        let translator = Translator::start(folder.clone(), None);
+        let marked = Translation {
+            language: "Japanese".to_owned(),
+            command: Some(vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "printf '%s>%s ' \"$0\" \"$1\"; cat".to_owned(),
+                "{from}".to_owned(),
+                "{to}".to_owned(),
+            ]),
+            agent: None,
+        };
+        let text = "縮める。\n\n二つ目。";
+        let way = Way::of(text, &marked.language);
+        let answer = translator.text(text, way.clone(), marked.clone());
+        assert_eq!(
+            answer.blocking_recv().unwrap(),
+            Ok("Japanese>English 縮める。\n\n二つ目。".to_owned())
+        );
+        // Kept, it is answered at once.
+        let mut again = translator.text(text, way, marked);
+        assert_eq!(
+            again.try_recv(),
+            Ok(Ok("Japanese>English 縮める。\n\n二つ目。".to_owned()))
+        );
         let _ = fs::remove_dir_all(&folder);
     }
 }

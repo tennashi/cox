@@ -59,6 +59,7 @@ use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::servers::{LanguageServer, Servers};
 use crate::stage::tab::{self, Shows, ShowsFile};
 use crate::ui::paths::shortened;
+use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
 
 actions!(
@@ -708,13 +709,29 @@ impl Code {
         cx.stop_propagation();
     }
 
-    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let text = self
-            .hover
+    /// Shows the translation of the text selected, or with nothing
+    /// selected leaves the keys to what holds the part.
+    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.chosen_text();
+        if text.trim().is_empty() {
+            cx.propagate();
+            return;
+        }
+        crate::ui::translation::show(&text, window, cx);
+    }
+
+    /// The text selected: in what the mouse rests on, if any of it is,
+    /// or else in the code.
+    fn chosen_text(&self) -> String {
+        self.hover
             .as_ref()
             .map(hover::Hovered::selected_text)
             .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| self.selected_text());
+            .unwrap_or_else(|| self.selected_text())
+    }
+
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        let text = self.chosen_text();
         if !text.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
@@ -810,6 +827,7 @@ impl Render for Code {
             .track_focus(&self.focus_handle)
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::translate))
             .on_action(cx.listener(Self::back))
             .on_action(cx.listener(Self::forward))
             .on_action(cx.listener(Self::dismiss))
