@@ -2,9 +2,12 @@
 //! [`view`]), which lasts across runs in `settings.json`, where Cox keeps
 //! what lasts (see [`crate::storage`]), as `{"home": "/home/me/Cox"}`.
 //!
-//! For now that is Cox's home: the folder chats in no project work in,
-//! which the rail shows as `~`. `--home` on the command line goes ahead
-//! of it for the run, and without either, the home is `~/Cox`.
+//! That is Cox's home: the folder chats in no project work in, which the
+//! rail shows as `~`. `--home` on the command line goes ahead of it for
+//! the run, and without either, the home is `~/Cox`. The file also says
+//! where the human keeps how they work with Cox, whatever the project, as
+//! `{"workflow": "~/dotfiles/cox"}` (see [`workflow`]), which the human
+//! writes in it themselves.
 
 pub mod view;
 
@@ -18,11 +21,17 @@ use serde_json::{Map, Value};
 /// What the file is called, where Cox keeps what lasts.
 const FILE: &str = "settings.json";
 
+/// What the folder of the human's workflow is called, where Cox keeps
+/// what lasts, when `settings.json` names no other.
+const WORKFLOW: &str = "workflow";
+
 /// The settings as `settings.json` keeps them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Saved {
     /// Where chats in no project work, if the human chose it.
     pub home: Option<PathBuf>,
+    /// The folder of the human's workflow, if they named one.
+    pub workflow: Option<PathBuf>,
 }
 
 impl Saved {
@@ -54,8 +63,34 @@ impl Saved {
             Some(Value::String(home)) => Some(PathBuf::from(home)),
             Some(_) => anyhow::bail!("\"home\" is not a path"),
         };
-        Ok(Self { home })
+        // The human writes it in the file themselves, so what is wrong
+        // with it is said, and the rest of the file still counts.
+        let workflow = match value.get("workflow") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(workflow)) => {
+                let user = std::env::var_os("HOME").map(PathBuf::from);
+                folder_of(workflow, user.as_deref())
+                    .inspect_err(|why| tracing::error!("\"workflow\" names no folder: {why}"))
+                    .ok()
+            }
+            Some(_) => {
+                tracing::error!("\"workflow\" is not a path");
+                None
+            }
+        };
+        Ok(Self { home, workflow })
     }
+}
+
+/// The folder where the human keeps how they work with Cox, whatever the
+/// project: what `settings.json` names, as a folder of their dotfiles, or
+/// else `workflow` where Cox keeps what lasts. Its `COX.md` is what every
+/// chat's agent is told first (see [`crate::agent::instructions`]).
+#[must_use]
+pub fn workflow() -> Option<PathBuf> {
+    Saved::read()
+        .workflow
+        .or_else(|| crate::storage::path(WORKFLOW))
 }
 
 /// Keeps `home` as where chats in no project work, in this Cox's
@@ -155,6 +190,23 @@ mod tests {
     fn a_home_that_is_not_a_path_is_not_read() {
         assert!(Saved::parse(br#"{"home": 3}"#).is_err());
         assert_eq!(Saved::parse(b"{}").unwrap(), Saved::default());
+    }
+
+    #[test]
+    fn the_workflow_is_a_folder_named_whole_or_from_the_home_directory() {
+        let saved = Saved::parse(br#"{"workflow": "/srv/cox"}"#).unwrap();
+        assert_eq!(saved.workflow, Some(PathBuf::from("/srv/cox")));
+        if let Some(user) = std::env::var_os("HOME") {
+            let saved = Saved::parse(br#"{"workflow": "~/dotfiles/cox"}"#).unwrap();
+            assert_eq!(
+                saved.workflow,
+                Some(PathBuf::from(user).join("dotfiles/cox"))
+            );
+        }
+        let saved = Saved::parse(br#"{"home": "/work", "workflow": "dotfiles"}"#).unwrap();
+        assert_eq!(saved.home, Some(PathBuf::from("/work")));
+        assert_eq!(saved.workflow, None);
+        assert_eq!(Saved::parse(br#"{"workflow": 3}"#).unwrap().workflow, None);
     }
 
     #[test]

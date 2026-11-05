@@ -2,8 +2,9 @@
 //! the project chosen in tabs along its top, and the one shown under
 //! them. A project is a folder
 //! the human opened: each chat in it works there, and its agent gets the
-//! instructions in the folder's `COX.md`. Chats in no project work in
-//! Cox's home, with the instructions there.
+//! human's instructions, then those in the folder's `COX.md` (see
+//! [`crate::agent::instructions`]). Chats in no project work in Cox's
+//! home, with the instructions there.
 //!
 //! The projects and chats are kept as they go (see [`cox_core::store`]).
 //! A chat's agent runs until Cox quits; the chats of earlier runs stay in
@@ -616,7 +617,7 @@ impl Workspace {
             .unwrap_or_else(|| project.folder.clone());
         let view = self
             .opens
-            .open(cwd, instructions, setup.clone(), record, window, cx);
+            .open(cwd, Some(instructions), setup.clone(), record, window, cx);
         let changes = Self::follow(&view, window, cx);
         let key = self.next_key();
         self.add(Chat {

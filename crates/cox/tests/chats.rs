@@ -540,11 +540,11 @@ async fn the_agent_gets_the_projects_instructions_with_the_first_line(cx: &mut T
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
 
-    let instructions = Instructions::read(&folder).unwrap();
+    let instructions = Instructions::project(&folder).unwrap();
     assert_eq!(
         agents.borrow()[0].prompt_blocks(),
         [
-            vec![instructions.prompt(), "hello".to_owned()],
+            [instructions.prompts(), vec!["hello".to_owned()]].concat(),
             vec!["again".to_owned()],
         ]
     );
@@ -553,6 +553,13 @@ async fn the_agent_gets_the_projects_instructions_with_the_first_line(cx: &mut T
         agents.borrow()[1].prompt_blocks(),
         [vec!["hello".to_owned()]]
     );
+    // Each new session is told first how to work with Cox's tools, as Cox
+    // has it for a human who keeps no instructions of their own.
+    for agent in agents.borrow().iter() {
+        let told = agent.told_by_cox();
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert!(told[0].contains("start_trial"), "{told:?}");
+    }
     click(cx, "project-2");
     click(cx, "chat-2");
     let view = shown(cx, &workspace);
@@ -592,12 +599,12 @@ async fn a_command_goes_first_and_the_instructions_with_the_next_line(cx: &mut T
     });
     assert_eq!(commands, [fake_agent::COMMAND]);
     // The agent knows a command by the prompt's first block.
-    let instructions = Instructions::read(&folder).unwrap();
+    let instructions = Instructions::project(&folder).unwrap();
     assert_eq!(
         agents.borrow()[0].prompt_blocks(),
         [
             vec![command],
-            vec![instructions.prompt(), "hello".to_owned()]
+            [instructions.prompts(), vec!["hello".to_owned()]].concat()
         ]
     );
     let _ = std::fs::remove_dir_all(&home);
@@ -982,21 +989,20 @@ fn assert_retold(
     folder: &std::path::Path,
     lost: bool,
 ) {
-    let instructions = Instructions::read(folder).unwrap();
+    let told = Instructions::project(folder).unwrap().prompts();
     let blocks = agent.prompt_blocks();
     assert_eq!(blocks.len(), 1);
-    assert_eq!(blocks[0].len(), 3, "{blocks:?}");
-    assert_eq!(blocks[0][0], instructions.prompt());
+    assert_eq!(blocks[0].len(), told.len() + 2, "{blocks:?}");
+    assert_eq!(blocks[0][..told.len()], told);
+    let [earlier, line] = &blocks[0][told.len()..] else {
+        unreachable!()
+    };
     assert!(
-        blocks[0][1].ends_with("[human]\nhello\n\n[you]\necho: hello"),
+        earlier.ends_with("[human]\nhello\n\n[you]\necho: hello"),
         "{blocks:?}"
     );
-    assert_eq!(blocks[0][2], "again");
-    assert_eq!(
-        blocks[0][1].contains("could not be resumed"),
-        lost,
-        "{blocks:?}"
-    );
+    assert_eq!(line, "again");
+    assert_eq!(earlier.contains("could not be resumed"), lost, "{blocks:?}");
     let shown = shown_entries(cx, workspace);
     assert_eq!(shown[3], Entry::Human("again".to_owned()));
     let notes = if lost {

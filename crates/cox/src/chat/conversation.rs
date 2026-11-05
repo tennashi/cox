@@ -874,7 +874,7 @@ impl Conversation {
                                 .to_owned(),
                         ));
                     }
-                    if let Some(path) = instructions {
+                    for path in instructions {
                         self.push(Entry::Note(instructions_note(&path)));
                     }
                     if let Some(context) = context {

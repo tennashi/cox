@@ -216,7 +216,7 @@ impl Judge {
     /// [`ChatView::judged`].
     pub fn start(starts: &Starts, cwd: PathBuf, goal: &str, cx: &mut Context<ChatView>) -> Self {
         let start = Start::New {
-            instructions: Instructions::read(&cwd),
+            instructions: Instructions::project(&cwd),
             setup: Some(setup(goal, &stance(&cwd))),
         };
         let Agent {

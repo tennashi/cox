@@ -55,9 +55,15 @@ chats in no project that open from then on work there; `--home` still
 goes ahead of them for its run, until the human sets the home. Escape,
 the ×, or a click beside the card closes it. Each chat starts its own
 `<agent command>` working in its project's folder, and has a stage of its
-own, showing `<url>` first. When the folder has a `COX.md`, the agent gets
-what it says ahead of the first line sent in the chat, and the chat says
-so at its top. The tabs switch between chats (Control-Tab and
+own, showing `<url>` first. Ahead of the first line sent in the chat, the
+agent gets how the human works with Cox, whatever the project: the
+`COX.md` of their workflow's folder, which `settings.json` names, whole
+or from `~`, as `{"workflow": "~/dotfiles/cox"}`, or else `workflow`
+beside it, or, when there is none, Cox's own
+([`cox.md`](crates/cox/src/agent/instructions/cox.md)), which says when
+to use Cox's tools, as when to try work out in a trial, since the tools
+only say what they do. After it, when the folder has a `COX.md`, the agent
+gets what it says. The chat says at its top which files it got. The tabs switch between chats (Control-Tab and
 Control-Shift-Tab go along every project's). A chat is named by a number at first, then
 after the first line sent in it, then by the title its agent gives its
 session, if it gives one (ACP's `session_info_update`, as
