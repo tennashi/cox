@@ -22,6 +22,7 @@ use cox::chat::trial::Trial;
 use cox::chat::view::{Again, ChatView};
 use cox::chat::{Closed, Opens};
 use cox::notices::{AppNotices, Notices};
+use cox::workflow;
 use cox::workspace::{Chat, Workspace};
 use cox_core::goal::Goal as KeptGoal;
 use cox_core::settings::{Choice, Setting};
@@ -2272,7 +2273,7 @@ async fn an_ended_trial_goes_on_in_the_project(cx: &mut TestAppContext) {
     cx.simulate_input("slow");
     cx.simulate_keystrokes("enter");
     workspace.update_in(cx, |workspace, window, cx| {
-        workspace.discard_trial(1, window, cx);
+        workspace.end_trial_as(1, own_ending("Discard trial"), window, cx);
     });
     let last = trial.read_with(cx, |view, _| {
         assert_eq!(view.conversation().state(), State::Busy);
@@ -2326,8 +2327,94 @@ async fn an_ended_trial_goes_on_in_the_project(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }
 
+/// The way to end a trial of Cox's own workflow named `name`.
+fn own_ending(name: &str) -> workflow::Ending {
+    workflow::trial_in(None)
+        .endings
+        .into_iter()
+        .find(|ending| ending.name == name)
+        .unwrap()
+}
+
 #[gpui::test]
-async fn a_trial_ends_kept_as_a_branch_or_discarded(cx: &mut TestAppContext) {
+async fn a_trial_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
+    let home = repository("trial-rewrite-home");
+    let kept = scratch("trial-rewrite-kept").join("chats.sqlite");
+    let store = Rc::new(Store::open(&kept).unwrap());
+    let (agents, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), Rc::clone(&store), Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let folder = open_trial(cx, &workspace, &asks, Trial::Project, 2).await;
+
+    // An ending of the human's own keeps what the trial of the project
+    // changed apart, and the chat goes on in the project, toward the
+    // ending's goal, its agent told what the human says then, with where
+    // what the trial changed is kept.
+    let then = format!("trial/rewrite-{}.md", std::process::id());
+    let then_file = cox::settings::workflow().unwrap().join(&then);
+    std::fs::create_dir_all(then_file.parent().unwrap()).unwrap();
+    std::fs::write(&then_file, "Rewrite what {kept} shows, commit by commit.\n").unwrap();
+    std::fs::write(folder.join("main.rs"), "fn main() { trial() }\n").unwrap();
+    let rewrite = workflow::Ending {
+        name: "Rewrite in project".to_owned(),
+        from: Some(Trial::Project),
+        sum_up: None,
+        keep: true,
+        open: false,
+        then: Some(then),
+        goal: Some("$ true".to_owned()),
+    };
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.end_trial_as(1, rewrite, window, cx);
+    });
+    let _ = std::fs::remove_file(&then_file);
+    assert!(!folder.exists());
+    let name = format!(
+        "refs/cox/discarded/{}",
+        folder.file_name().unwrap().to_string_lossy()
+    );
+    let shown = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&home)
+        .arg("show")
+        .arg(format!("{name}:main.rs"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&shown.stdout),
+        "fn main() { trial() }\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("main.rs")).unwrap(),
+        "fn main() {}\n"
+    );
+    assert_eq!(
+        goals(cx, &workspace, 0)[1],
+        Some(KeptGoal::Command("true".to_owned()))
+    );
+    let told = format!("Rewrite what {name} shows, commit by commit.");
+    let rewriting = Rc::clone(&agents);
+    let home_again = home.clone();
+    cx.condition(&workspace, move |_, _| {
+        rewriting.borrow().last().is_some_and(|agent| {
+            agent.cwd().as_ref() == Some(&home_again)
+                && agent
+                    .prompts()
+                    .last()
+                    .is_some_and(|prompt| prompt.contains(&told))
+        })
+    })
+    .await;
+    let endings = workspace.read_with(cx, |workspace, _| workspace.endings(1));
+    assert!(endings.is_empty(), "{endings:?}");
+
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+}
+
+#[gpui::test]
+async fn a_trial_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
     let home = repository("trial-end-home");
     let kept = scratch("trial-end-kept").join("chats.sqlite");
     let store = Rc::new(Store::open(&kept).unwrap());
@@ -2345,46 +2432,27 @@ async fn a_trial_ends_kept_as_a_branch_or_discarded(cx: &mut TestAppContext) {
             (chat.is_open(), view.conversation().state(), last)
         })
     };
-
-    // The trial of the project is kept as a branch, with what it changed,
-    // and ends.
-    std::fs::write(folder.join("main.rs"), "fn main() { trial() }\n").unwrap();
-    let branch = format!("trial/{}", folder.file_name().unwrap().to_string_lossy());
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.keep_trial(1, window, cx);
-    });
-    assert!(!folder.exists());
-    let shown = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&home)
-        .arg("show")
-        .arg(format!("{branch}:main.rs"))
-        .output()
-        .unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&shown.stdout),
-        "fn main() { trial() }\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(home.join("main.rs")).unwrap(),
-        "fn main() {}\n"
-    );
-    let (open, state, last) = ended(cx, 1);
-    assert!(!open);
-    assert_eq!(state, State::Closed);
-    assert!(
-        matches!(&last, Some(Entry::Note(note)) if note.contains(&format!("the branch {branch} "))),
-        "{last:?}"
-    );
+    let names = |cx: &mut VisualTestContext, index: usize| {
+        workspace.read_with(cx, |workspace, _| {
+            workspace
+                .endings(index)
+                .into_iter()
+                .map(|ending| ending.name)
+                .collect::<Vec<_>>()
+        })
+    };
+    // Cox's own workflow opens only a trial from nothing as a project.
+    assert_eq!(names(cx, 1), ["Discard trial"]);
+    assert_eq!(names(cx, 2), ["Open as project", "Discard trial"]);
 
     // The trial from nothing is discarded, its folder with it. Another
     // test may make a trial from nothing in a folder of the same name once
     // this one is gone, so what goes is what this trial made.
     let made = empty.join("made.txt");
     std::fs::write(&made, "made in the trial\n").unwrap();
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.discard_trial(2, window, cx);
-    });
+    // The menu of the right button offers the ways it ends.
+    right_click(cx, "chat-3");
+    click(cx, "trial-ending-1");
     wait_for_discarded(cx, &workspace, &made).await;
     let (open, state, last) = ended(cx, 2);
     assert!(!open);
@@ -2416,8 +2484,8 @@ async fn a_trial_ends_kept_as_a_branch_or_discarded(cx: &mut TestAppContext) {
     // with, so it is no longer discarded.
     let empty = open_trial(cx, &workspace, &asks, Trial::Empty, 4).await;
     workspace.update_in(cx, |workspace, window, cx| {
-        workspace.open_trial(3, window, cx);
-        workspace.discard_trial(3, window, cx);
+        workspace.end_trial_as(3, own_ending("Open as project"), window, cx);
+        workspace.end_trial_as(3, own_ending("Discard trial"), window, cx);
     });
     let opened = workspace.read_with(cx, |workspace, _| {
         workspace
@@ -2429,6 +2497,7 @@ async fn a_trial_ends_kept_as_a_branch_or_discarded(cx: &mut TestAppContext) {
     assert!(empty.exists());
 
     let _ = std::fs::remove_dir_all(&empty);
+    let _ = std::fs::remove_dir_all(&folder);
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(kept.parent().unwrap());
 }

@@ -1,0 +1,7 @@
+{
+  "allow": ["edit:*", "delete:*", "move:*"],
+  "endings": [
+    {"name": "Open as project", "from": "empty", "folder": "open"},
+    {"name": "Discard trial", "sum_up": "trial/discard.md", "keep": "ref"}
+  ]
+}

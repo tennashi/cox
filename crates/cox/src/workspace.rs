@@ -202,9 +202,9 @@ pub struct Chat {
     /// What its agent is told to go on with once it moves into the trial
     /// the chat became, which it does when its turn ends.
     moving: Option<String>,
-    /// How far it is on its way to being discarded, a trial the human
-    /// discards once its agent has summed it up.
-    discarding: Option<Discarding>,
+    /// The way a trial the human ends ends, and how far it is on its way
+    /// there, while its agent sums it up first.
+    ending: Option<(Ends, workflow::Ending)>,
     /// Its view, or `None` for a closed chat the human has not read yet.
     view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
@@ -241,7 +241,7 @@ impl Chat {
             parent,
             setup,
             moving: None,
-            discarding: None,
+            ending: None,
             view: None,
             _changes: Vec::new(),
         }
@@ -634,7 +634,7 @@ impl Workspace {
             parent: from.map(|(parent, _)| parent),
             setup,
             moving: None,
-            discarding: None,
+            ending: None,
             view: Some(view),
             _changes: changes,
         })
@@ -785,7 +785,8 @@ impl Workspace {
                         });
                     match made {
                         Ok(made) => {
-                            setup.policy = trial::allow(setup.policy, &made);
+                            setup.policy =
+                                trial::allow(setup.policy, &made, &workflow::trial().allow);
                             setup.trial = Some(trial);
                             Some(made)
                         }
@@ -1003,7 +1004,7 @@ impl Workspace {
             parent: chat.parent,
             setup: chat.setup.take(),
             moving: chat.moving.take(),
-            discarding: chat.discarding.take(),
+            ending: chat.ending.take(),
             view: Some(view),
             _changes: {
                 changes.push(reopened);
@@ -1064,7 +1065,11 @@ impl Workspace {
         }
         let waited = (!at_work(state)).then(|| (chat.key, stands(chat, cx)));
         let moves = chat.moving.is_some() && !working(state);
-        let discarding = chat.discarding.filter(|_| !working(state));
+        let ends = chat
+            .ending
+            .as_ref()
+            .map(|(ends, _)| *ends)
+            .filter(|_| !working(state));
         if let Some((key, stands)) = waited {
             for (_, answer) in self.waiting.extract_if(.., |(waited, _)| *waited == key) {
                 answer.send(Ok(stands.clone())).ok();
@@ -1078,11 +1083,11 @@ impl Workspace {
         if moves && let Some(index) = index {
             self.move_into_trial(index, window, cx);
         }
-        // A trial the human discards is summed up once its turn ends, and
-        // discarded once that is done.
-        match (discarding, index) {
-            (Some(Discarding::Waiting), Some(index)) => self.sum_up(index, window, cx),
-            (Some(Discarding::Summing), Some(index)) => self.end_discarding(index, window, cx),
+        // A trial the human ends is summed up once its turn ends, and
+        // ends once that is done.
+        match (ends, index) {
+            (Some(Ends::Waiting), Some(index)) => self.sum_up(index, window, cx),
+            (Some(Ends::Summing), Some(index)) => self.finish_trial(index, window, cx),
             _ => {}
         }
         self.badge(cx);
@@ -1123,7 +1128,7 @@ impl Workspace {
         let setup = Setup {
             folder: Some(folder.clone()),
             trial: Some(started),
-            policy: trial::allow(setup.policy, &folder),
+            policy: trial::allow(setup.policy, &folder, &workflow::trial().allow),
             ..setup
         };
         let chat = &mut self.chats[index];
@@ -1308,48 +1313,63 @@ impl Workspace {
         Some((setup.trial?, folder))
     }
 
-    /// Whether the trial at `index` can be discarded: its folder is there,
-    /// and was not opened as a project, which the human goes on with, and
-    /// it is not on its way to being discarded already.
-    fn discards(&self, index: usize) -> bool {
-        self.chats[index].discarding.is_none()
+    /// Whether the trial at `index` can end: its folder is there, and was
+    /// not opened as a project, which the human goes on with, and it is
+    /// not on its way to an end already.
+    fn ends_trial(&self, index: usize) -> bool {
+        self.chats[index].ending.is_none()
             && self.trial_of(index).is_some_and(|(_, folder)| {
                 !self.projects.iter().any(|project| project.folder == folder)
             })
     }
 
-    /// Keeps what the trial at `index` made as a branch of the project's
-    /// repository, and ends the trial (see [`trial::keep`]).
-    pub fn keep_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((Trial::Project, folder)) = self.trial_of(index) else {
-            return;
+    /// The ways the trial at `index` can end, as the human's workflow
+    /// says them (see [`workflow::trial`]), in the order the menu offers
+    /// them; none, unless it can end now.
+    #[must_use]
+    pub fn endings(&self, index: usize) -> Vec<workflow::Ending> {
+        let Some((from, _)) = self.trial_of(index).filter(|_| self.ends_trial(index)) else {
+            return Vec::new();
         };
-        let title = self.chats[index].name.to_string();
-        let kept = trial::keep(&folder, &title).map(|branch| {
-            format!(
-                "The trial is kept as the branch {branch} of the project, and its folder is gone."
-            )
-        });
-        self.end_trial(index, &folder, kept, window, cx);
+        workflow::trial()
+            .endings
+            .into_iter()
+            .filter(|ending| ending.ends(from))
+            .collect()
     }
 
-    /// Discards the trial at `index`: asks its agent to sum it up in the
-    /// conversation, once its turn ends if one goes on, and discards it,
-    /// its folder with it, once that is done (see [`trial::discard`]).
-    pub fn discard_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index >= self.chats.len() || !self.discards(index) {
+    /// Ends the trial at `index` as `ending` says: asks its agent to sum
+    /// it up in the conversation first, if the ending says to, once its
+    /// turn ends if one goes on, and ends it once that is done (see
+    /// [`Self::finish_trial`]).
+    pub fn end_trial_as(
+        &mut self,
+        index: usize,
+        ending: workflow::Ending,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.menu = None;
+        let ends = index < self.chats.len()
+            && self.ends_trial(index)
+            && self
+                .trial_of(index)
+                .is_some_and(|(from, _)| ending.ends(from));
+        if !ends {
             return;
         }
-        self.menu = None;
         self.show(index, window, cx);
-        if working(self.chats[index].state) {
-            self.chats[index].discarding = Some(Discarding::Waiting);
+        let waits = ending.sum_up.is_some() && working(self.chats[index].state);
+        let name = ending.name.clone();
+        self.chats[index].ending = Some((Ends::Waiting, ending));
+        if waits {
             if let Some(view) = self.chats[index].view.clone() {
                 view.update(cx, |view, cx| {
                     view.note(
-                        "The trial is discarded once this turn ends, and its agent has \
-                         summed it up."
-                            .to_owned(),
+                        format!(
+                            "The trial ends as \"{name}\" once this turn ends, and its agent \
+                             has summed it up."
+                        ),
                         cx,
                     );
                 });
@@ -1360,13 +1380,20 @@ impl Workspace {
         }
     }
 
-    /// Asks the agent of the trial at `index`, which the human discards,
-    /// to sum it up in the conversation, starting it again if it is
-    /// closed; the trial is discarded once it is done, or at once if the
-    /// agent cannot be asked.
+    /// Asks the agent of the trial at `index`, which the human ends, to
+    /// sum it up in the conversation, as its ending says, starting it
+    /// again if it is closed; the trial ends once it is done, or at once if
+    /// the ending asks for none, or the agent cannot be asked.
     fn sum_up(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, ending)) = self.chats[index].ending.clone() else {
+            return;
+        };
+        let Some(text) = ending.sum_up.clone() else {
+            self.finish_trial(index, window, cx);
+            return;
+        };
         let Some((_, folder)) = self.trial_of(index) else {
-            self.chats[index].discarding = None;
+            self.chats[index].ending = None;
             return;
         };
         let left_out = trial::left_out(&folder).unwrap_or_else(|error| {
@@ -1377,41 +1404,46 @@ impl Workspace {
             self.show(index, window, cx);
         }
         let Some(view) = self.chats[index].view.clone() else {
-            self.chats[index].discarding = None;
+            self.chats[index].ending = None;
             return;
         };
-        self.chats[index].discarding = Some(Discarding::Summing);
-        let line = trial::summing_up(&left_out);
+        let Some(line) = workflow::say(&text, &[("left_out", &trial::left_out_lines(&left_out))])
+        else {
+            view.update(cx, |view, cx| {
+                view.note(
+                    format!("The trial is not summed up: the workflow has no {text}."),
+                    cx,
+                );
+            });
+            self.finish_trial(index, window, cx);
+            return;
+        };
+        self.chats[index].ending = Some((Ends::Summing, ending));
         let asked = view.update(cx, |view, cx| {
             view.go_on(&line, window, cx);
             working(view.conversation().state())
         });
         if !asked {
-            self.end_discarding(index, window, cx);
+            self.finish_trial(index, window, cx);
         }
     }
 
-    /// Discards the trial at `index`, whose agent has summed it up, its
-    /// folder with it, keeping what it changed apart, and ends the trial.
-    fn end_discarding(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.chats[index].discarding = None;
-        let Some((started, folder)) = self.trial_of(index).filter(|_| self.discards(index)) else {
+    /// Ends the trial at `index`, whose agent has summed it up if its
+    /// ending asked, as the ending says. Its folder is opened as a project
+    /// of its own, to go on with what the trial made, for an ending that
+    /// opens it; or else it goes, what the trial changed kept apart first
+    /// if the ending says to (see [`trial::discard`]), and the trial ends,
+    /// its chat going on in the project toward the ending's goal, if it
+    /// has one, its agent told what the ending says then.
+    fn finish_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, ending)) = self.chats[index].ending.take() else {
             return;
         };
-        let title = self.chats[index].name.to_string();
-        let discarded = storage::path(trial::FOLDER)
-            .map(|trials| trials.join(trial::DISCARDED))
-            .ok_or_else(|| "Cox cannot tell where to keep discarded trials".to_owned())
-            .and_then(|bundles| trial::discard(started, &folder, &title, &bundles))
-            .map(|discarded| discarded.note());
-        self.end_trial(index, &folder, discarded, window, cx);
-    }
-
-    /// Opens the folder of the trial from nothing at `index` as a project
-    /// of its own, with a chat in it, to go on with what the trial made.
-    pub fn open_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.menu = None;
-        if let Some((Trial::Empty, folder)) = self.trial_of(index) {
+        let Some((started, folder)) = self.trial_of(index).filter(|_| self.ends_trial(index))
+        else {
+            return;
+        };
+        if ending.open {
             // A project now, what changed in it is what changed since its
             // last commit.
             if let Err(error) = cox_editor::changes::forget(&folder) {
@@ -1421,11 +1453,48 @@ impl Workspace {
                 );
             }
             self.open(Some(folder), window, cx);
+            return;
+        }
+        let title = self.chats[index].name.to_string();
+        let discarded = storage::path(trial::FOLDER)
+            .map(|trials| trials.join(trial::DISCARDED))
+            .ok_or_else(|| "Cox cannot tell where to keep discarded trials".to_owned())
+            .and_then(|bundles| trial::discard(started, &folder, &title, &bundles, ending.keep));
+        let kept = discarded
+            .as_ref()
+            .ok()
+            .and_then(|discarded| discarded.kept.as_ref())
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let ended = self.end_trial(
+            index,
+            &folder,
+            discarded.map(|discarded| discarded.note()),
+            window,
+            cx,
+        );
+        let Some(view) = self.chats[index].view.clone().filter(|_| ended) else {
+            return;
+        };
+        if let Some(goal) = &ending.goal {
+            view.update(cx, |view, cx| view.set_goal(Goal::parse(goal), cx));
+        }
+        if let Some(text) = &ending.then {
+            match workflow::say(text, &[("kept", &kept)]) {
+                Some(line) => view.update(cx, |view, cx| view.go_on(&line, window, cx)),
+                None => view.update(cx, |view, cx| {
+                    view.note(
+                        format!("The agent is told nothing: the workflow has no {text}."),
+                        cx,
+                    );
+                }),
+            }
         }
     }
 
     /// Shows the chat at `index`, a trial that worked in `folder`, and
-    /// ends the trial as `ended` says, or says why it could not. Ended,
+    /// ends the trial as `ended` says, or says why it could not, and
+    /// answers whether it ended. Ended,
     /// the trial's chat goes on in the project, as do the chats it opened,
     /// which worked in its folder too: each is closed, its agent stopped,
     /// and set up to work in the project, asking the human as any chat
@@ -1438,7 +1507,7 @@ impl Workspace {
         ended: Result<String, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         self.menu = None;
         self.show(index, window, cx);
         let note = match ended {
@@ -1449,7 +1518,7 @@ impl Workspace {
                         view.note(format!("The trial could not end: {error}"), cx);
                     });
                 }
-                return;
+                return false;
             }
         };
         let goes_on = "The chat goes on in the project: a line sent starts its agent again \
@@ -1507,6 +1576,7 @@ impl Workspace {
         // closed, to go on with.
         self.show(index, window, cx);
         cx.notify();
+        true
     }
 
     /// Takes the chat at `index` out of the list, to "Archived" at its
@@ -2102,8 +2172,7 @@ impl Workspace {
             .chats
             .get(index)
             .is_some_and(|chat| chat.goal.is_some());
-        let trial = self.trial_of(index).map(|(trial, _)| trial);
-        let discards = self.discards(index);
+        let endings = self.endings(index);
         let starts_trial = self.starts_trial(index);
         let item = |id: &'static str, label: &'static str| {
             div()
@@ -2147,21 +2216,20 @@ impl Workspace {
                     move |workspace, _, window, cx| workspace.edit_trial(index, window, cx),
                 )))
             })
-            .when(trial == Some(Trial::Project), |menu| {
-                menu.child(item("keep-trial", "Keep as branch").on_click(cx.listener(
-                    move |workspace, _, window, cx| workspace.keep_trial(index, window, cx),
-                )))
-            })
-            .when(trial == Some(Trial::Empty), |menu| {
-                menu.child(item("open-trial", "Open as project").on_click(cx.listener(
-                    move |workspace, _, window, cx| workspace.open_trial(index, window, cx),
-                )))
-            })
-            .when(discards, |menu| {
-                menu.child(item("discard-trial", "Discard trial").on_click(cx.listener(
-                    move |workspace, _, window, cx| workspace.discard_trial(index, window, cx),
-                )))
-            })
+            .children(endings.into_iter().enumerate().map(|(at, ending)| {
+                div()
+                    .id(("trial-ending", at))
+                    .debug_selector(move || format!("trial-ending-{at}"))
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(ACCENT_GROUND)))
+                    .child(ending.name.clone())
+                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                        workspace.end_trial_as(index, ending.clone(), window, cx);
+                    }))
+            }))
             .child(item("archive-chat", "Archive").on_click(
                 cx.listener(move |workspace, _, window, cx| workspace.archive(index, window, cx)),
             ));
@@ -2169,13 +2237,13 @@ impl Workspace {
     }
 }
 
-/// How far a trial the human discards is on its way to being discarded.
+/// How far a trial the human ends is on its way to its end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Discarding {
+enum Ends {
     /// Its turn goes on; its agent is asked to sum it up once the turn
     /// ends.
     Waiting,
-    /// Its agent sums it up; it is discarded once that turn ends.
+    /// Its agent sums it up; it ends once that turn ends.
     Summing,
 }
 
