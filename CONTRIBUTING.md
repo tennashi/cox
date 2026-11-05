@@ -84,22 +84,24 @@ conversation stays, and the next line can be sent once the agent has
 stopped. A click on a link in a chat's conversation opens it on that
 chat's stage.
 
-The bar above a chat's conversation shows what its agent lets the human
-choose of its session, such as the model it uses, its mode, or how hard
-it thinks: ACP's session config options, of the kind that chooses one of
-a list, as the agent names them and in its order, so Cox knows nothing
-of any agent's models. Each shows what it is set to, and a click opens
-what it can be set to, under the groups the agent puts them in; a click
-on one sets it (ACP's `session/set_config_option`), while a turn runs
-too, and the bar follows what the agent sets on its own. The chat keeps
+A pill at the right of the bar above a chat's conversation shows what
+its agent lets the human choose of its session, such as the model it
+uses, its mode, or how hard it thinks: ACP's session config options, of
+the kind that chooses one of a list, as the agent names them and in its
+order, so Cox knows nothing of any agent's models. It shows what each is
+set to, after the agent's name, and a click opens a list of them, each
+on a row; a click on a row shows what it can be set to, under the groups
+the agent puts them in, with a line back to the rows; a click on one
+sets it (ACP's `session/set_config_option`), while a turn runs
+too, and the pill follows what the agent sets on its own. The chat keeps
 how each is set, a closed chat too, where a choice waits for its agent
 to start again, and sets its session so again when it does. A new chat,
 the human's or one an agent opens, starts with the model, and what goes
 with it (ACP's categories `model`, `model_config` and `thought_level`),
 as the human chose last in any chat; its mode is its own.
 
-The bar starts with the agent the chat talks to, which a click on it
-chooses among the agents Cox knows, while no turn runs: first the
+The list starts with the agent the chat talks to, which a click on its
+row chooses among the agents Cox knows, while no turn runs: first the
 `<agent command>`, which a new chat talks to, then those the human lists
 in `agents.json`, beside the chats' database (see
 [The stage](#the-stage)), as `[{"name": "Codex", "command": ["npx", "-y",

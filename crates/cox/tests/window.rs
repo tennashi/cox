@@ -1070,6 +1070,7 @@ async fn sets_a_setting_of_the_session_with_a_click(cx: &mut TestAppContext) {
     let (agent, view, cx) = open(cx);
     wait_for_setting(cx, &view, fake_agent::MODEL, "large").await;
 
+    click(cx, "settings");
     click(cx, "setting-0");
     assert!(cx.debug_bounds("setting-choices").is_some());
     click(cx, "choice-1");
@@ -1090,6 +1091,7 @@ async fn sets_a_setting_while_a_turn_runs(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     wait_for(cx, &view, State::Busy).await;
 
+    click(cx, "settings");
     click(cx, "setting-1");
     click(cx, "choice-1");
     wait_for_setting(cx, &view, fake_agent::MODE, "plan").await;
