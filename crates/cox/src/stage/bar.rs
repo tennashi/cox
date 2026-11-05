@@ -243,10 +243,10 @@ impl Stage {
                 .child(label)
         };
         let plugins = plugins.into_iter().map(|plugin| {
-            let glyph = if plugin.name == "map" {
-                Icon::Map
-            } else {
-                Icon::Plug
+            let glyph = match plugin.name.as_str() {
+                "map" => Icon::Map,
+                "wiki" => Icon::Book,
+                _ => Icon::Plug,
             };
             let name = plugin.name.clone();
             button(

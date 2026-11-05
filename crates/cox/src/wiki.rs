@@ -11,7 +11,10 @@
 //! the day, the project, the chat, the commit the chat's folder was at,
 //! and the paths of the code the page is of, so that a page says where it
 //! came from without the agent writing it. Cox keeps `index.md`, the
-//! page that lists the others, unless the human wrote their own.
+//! page that lists the others, unless the human wrote their own. The
+//! stage's Wiki plugin shows the pages to the human (see [`told`]).
+
+pub mod told;
 
 use std::fmt::Write as _;
 use std::fs;

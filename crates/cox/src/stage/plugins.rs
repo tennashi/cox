@@ -27,6 +27,11 @@
 //!   the line is within, as its function's `fn` line and its impl's
 //!   (see [`crate::stage::lines`]).
 //!
+//! - `cox://api/wiki`: the human's wiki, its pages, each with what it
+//!   links to, what links to it, where it was used, and what is wrong
+//!   with it; and `cox://api/wiki/<page>`, a page, with its text as HTML
+//!   (see [`crate::wiki::told`]).
+//!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Map plugin does for a box's code.
 
@@ -39,6 +44,7 @@ use crate::stage::calls::Calls;
 use crate::stage::lines;
 use crate::stage::map;
 use crate::stage::outline::Outlines;
+use crate::wiki::told as wiki;
 
 /// Where a project keeps its plugins, under its folder.
 const PROJECT_PLUGINS: &str = ".cox/plugins";
@@ -46,19 +52,35 @@ const PROJECT_PLUGINS: &str = ".cox/plugins";
 /// The files of a plugin, by their paths within it.
 type Files = &'static [(&'static str, &'static [u8])];
 
-/// What is built into Cox at `cox://<name>/`: the Map plugin, with its
-/// files.
-const BUILT_IN: &[(&str, Files)] = &[(
-    "map",
-    &[
-        (
-            "plugin.json",
-            include_bytes!("../../plugins/map/plugin.json"),
-        ),
-        ("index.html", include_bytes!("../../plugins/map/index.html")),
-        ("app.js", include_bytes!("../../plugins/map/app.js")),
-    ],
-)];
+/// What is built into Cox at `cox://<name>/`: the Map and Wiki plugins,
+/// with their files.
+const BUILT_IN: &[(&str, Files)] = &[
+    (
+        "map",
+        &[
+            (
+                "plugin.json",
+                include_bytes!("../../plugins/map/plugin.json"),
+            ),
+            ("index.html", include_bytes!("../../plugins/map/index.html")),
+            ("app.js", include_bytes!("../../plugins/map/app.js")),
+        ],
+    ),
+    (
+        "wiki",
+        &[
+            (
+                "plugin.json",
+                include_bytes!("../../plugins/wiki/plugin.json"),
+            ),
+            (
+                "index.html",
+                include_bytes!("../../plugins/wiki/index.html"),
+            ),
+            ("app.js", include_bytes!("../../plugins/wiki/app.js")),
+        ],
+    ),
+];
 
 /// A plugin the stage can show.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,6 +185,14 @@ impl Plugins {
         let (what, rest) = what.split_once('/').unwrap_or((what, ""));
         let json = match what {
             "map" if rest.is_empty() => map::told(&self.root),
+            "wiki" => {
+                let root = crate::settings::wiki()?;
+                if rest.is_empty() {
+                    wiki::told(&root)
+                } else {
+                    wiki::page(&root, &percent_decoded(rest))?
+                }
+            }
             "file" if !rest.is_empty() => {
                 let path = PathBuf::from(format!("/{}", percent_decoded(rest)));
                 self.outlines.told(&self.root, &path)?
@@ -366,10 +396,11 @@ mod tests {
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
-        assert_eq!(names, ["map", "tour"]);
+        assert_eq!(names, ["map", "wiki", "tour"]);
         assert_eq!(listed[0].title, "Map");
-        assert_eq!(listed[1].title, "A tour");
-        assert_eq!(listed[1].url(), "cox://tour/");
+        assert_eq!(listed[1].title, "Wiki");
+        assert_eq!(listed[2].title, "A tour");
+        assert_eq!(listed[2].url(), "cox://tour/");
         assert_eq!(
             plugins.resource("cox://tour/").unwrap().body,
             b"<h1>Tour</h1>"

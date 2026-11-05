@@ -375,6 +375,22 @@ the workflow's `wiki/save.md` says, or else Cox's own
 keep the decisions and why, what failed and why, and what a tool needs,
 not how the code works, and no secrets.
 
+"Wiki" on the stage's bar, a plugin (see below), at `cox://wiki/`,
+shows the wiki to the human: its pages, with their titles, their first
+lines and where they were used last, which a line at the top narrows to
+those that have every word typed; and a page, at `cox://wiki/#` and its
+name, as `cox://wiki/#rust/errors`, drawn as Markdown, its links going
+to the pages they name, `[[name]]` or `[[name|what it says]]`, as
+Obsidian writes them, or a Markdown link to a page's file, a name that
+is no page's naming the only page whose last part it is, as Obsidian
+finds it; then where it was used, the pages that link to it, and its
+file, which a click opens on a tab. HTML a page holds shows as text,
+so that what an agent wrote runs nothing on the stage. Cox marks, with
+no agent, the pages with links to no page, those no page links to, the
+index aside, those with no title, and those that say nowhere where they
+were used, as those the human wrote; chips over the pages narrow them
+to those of a mark. The page reads the wiki again every two seconds.
+
 The conversation runs down a line on its left, which names who speaks
 where they start, with a dot: the human (YOU), Cox in their place
 (COX), or the agent, by the name the human knows it by; and marks in
@@ -702,7 +718,7 @@ page's hash, as `cox://map/#cox/stage`.
 A tab can show a plugin: a page, in HTML and JavaScript, that draws
 what Cox knows as a tab Cox draws would, for whoever wants a view of
 their own on the stage, the agent included, since it writes HTML and
-reads pages. "Map" is the one built in. A plugin is a
+reads pages. "Map" and "Wiki" are built in. A plugin is a
 folder with an `index.html`, and a `plugin.json` naming its `title` if
 it has one: those built into Cox, in `crates/cox/plugins`, and the
 project's, in `.cox/plugins/<name>` under its folder. The bar has a
@@ -720,7 +736,10 @@ the file at `<path>`, an absolute path in the project, once it has
 answered, which the page reads again for: the symbols it defines, how
 many places use each, and which files use them;
 `cox://api/call/<path>:<line>` is what the server says a line of the
-file calls, for a step of a flow made there; and
+file calls, for a step of a flow made there;
+`cox://api/wiki` is the human's wiki, its pages, each with what it
+links to, what links to it, where it was used and what Cox marks of it,
+and `cox://api/wiki/<page>` a page, with its text as HTML; and
 `cox://api/lines/<path>:<line>` is the lines of the file around that
 line, each as its stretches with what the syntax says each is, and
 before them the lines that open what the line is within, as its
