@@ -66,6 +66,13 @@ struct FakeOpens {
 }
 
 /// The agent a chat starts with, and the other it can switch to.
+/// How long a test waits for what it waits for before it fails, saying
+/// it never came. It only catches what hangs: a debug build lays out a
+/// long conversation slowly, as one that a discarded trial sums up and
+/// that is told again to an agent that starts anew, which can take
+/// seconds on a slow machine, as CI's.
+const GIVEN_UP: Duration = Duration::from_secs(30);
+
 const FIRST_AGENT: &str = "fake-first";
 const SECOND_AGENT: &str = "Fake second";
 
@@ -363,7 +370,7 @@ async fn say(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, text: &s
 async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(GIVEN_UP);
         let _ = timed_out.send(());
     });
     tokio::select! {
@@ -1477,7 +1484,7 @@ async fn wait_until(
 ) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(GIVEN_UP);
         let _ = timed_out.send(());
     });
     tokio::select! {
@@ -1989,7 +1996,7 @@ async fn wait_for_discarded(
 ) {
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(GIVEN_UP);
         let _ = timed_out.send(());
     });
     let made = made.to_owned();
