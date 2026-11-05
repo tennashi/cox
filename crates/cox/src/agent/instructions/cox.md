@@ -8,3 +8,9 @@ open_chat, giving it `trial`.
 Once a trial has tried it, show the human what it made with
 show_changes, giving the trial's folder, and propose a goal from it with
 propose_goal.
+
+The human keeps a wiki, of what the agents of all their projects
+learned. Before you work out something that another project may have
+met, search it with wiki_search, and read what it finds with wiki_read;
+say which pages you used. Write to it with wiki_write only when the
+human asks you to keep something there.

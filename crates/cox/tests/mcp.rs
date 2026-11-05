@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use cox::agent::mcp::{Ended, Ran, ToolRequest, ToolServer};
+use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, ToolServer, Whereabouts};
 use serde_json::{Value, json};
 
 fn scratch(name: &str) -> PathBuf {
@@ -191,4 +191,85 @@ fn the_agent_gets_only_the_tools_its_setup_names() {
     ));
     drop(agent);
     std::fs::remove_dir_all(cwd).unwrap();
+}
+
+/// Starts the server of a chat of the project `project`, in `cwd`, that
+/// answers where it is as the chat `chat` of that project, and the
+/// agent's end of the bridge to it.
+fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServer) {
+    let mut server = cox::agent::mcp::start(cwd.to_owned(), None).unwrap();
+    let agent = Agent::start(&server);
+    let mut chat_requests = std::mem::replace(
+        &mut server.chat_requests,
+        tokio::sync::mpsc::unbounded_channel().1,
+    );
+    let (project, chat) = (project.to_owned(), chat.to_owned());
+    std::thread::spawn(move || {
+        while let Some(request) = chat_requests.blocking_recv() {
+            if let ChatRequest::Whereabouts { answer } = request {
+                let _ = answer.send(Whereabouts {
+                    project: project.clone(),
+                    chat: chat.clone(),
+                    kept: Some("7".to_owned()),
+                });
+            }
+        }
+    });
+    (agent, server)
+}
+
+#[test]
+fn a_page_one_project_keeps_in_the_wiki_is_found_from_another() {
+    let data = scratch("wiki-data");
+    cox::storage::keep_in(&data);
+    let one = scratch("wiki-one");
+    let other = scratch("wiki-other");
+    let (mut writer, _one) = chat_in(&one, "one", "Fix scroll");
+    let (mut reader, _other) = chat_in(&other, "other", "Layout");
+
+    writer.call(
+        2,
+        "wiki_write",
+        &json!({
+            "page": "gpui/scroll",
+            "text": "# Scrolling in GPUI\n\nA flex child needs `min_h_0` to scroll.\n",
+            "paths": ["src/view.rs"],
+        }),
+    );
+    let written = writer.hear();
+    assert_eq!(written["result"]["isError"], false, "{written}");
+    let page = data.join("wiki/gpui/scroll.md");
+    assert!(
+        written["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("{} is written", page.display())),
+        "{written}"
+    );
+
+    reader.call(3, "wiki_search", &json!({ "query": "scroll min_h_0" }));
+    let found = reader.hear();
+    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(found.contains("gpui/scroll: Scrolling in GPUI"), "{found}");
+    assert!(found.contains("`min_h_0`"), "{found}");
+
+    reader.call(4, "wiki_read", &json!({ "page": "gpui/scroll" }));
+    let read = reader.hear();
+    let read = read["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(read.starts_with("# Scrolling in GPUI\n"), "{read}");
+    assert!(
+        read.ends_with(" in one, chat \"Fix scroll\" (#7): src/view.rs\n"),
+        "{read}"
+    );
+    reader.call(5, "wiki_read", &json!({}));
+    let index = reader.hear();
+    let index = index["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        index.contains("- [[gpui/scroll|Scrolling in GPUI]]: A flex child"),
+        "{index}"
+    );
+    drop((writer, reader));
+    for folder in [data, one, other] {
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 }

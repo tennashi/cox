@@ -53,7 +53,7 @@ use crate::agent::{self, instructions::Instructions};
 use crate::workflow;
 use tokio::sync::oneshot;
 
-use crate::agent::mcp::{ChatRequest, OpenedChat, Waited};
+use crate::agent::mcp::{ChatRequest, OpenedChat, Waited, Whereabouts};
 use crate::agent::setup::{Policy, Setup};
 use crate::chat::conversation::{Entry, State};
 use crate::chat::trial::{self, Trial};
@@ -758,6 +758,20 @@ impl Workspace {
                 cx.notify();
             }
             ChatRequest::WaitChat { chat, answer } => self.wait_chat(chat, answer, cx),
+            ChatRequest::Whereabouts { answer } => {
+                let whereabouts = self
+                    .chats
+                    .iter()
+                    .chain(&self.archived)
+                    .find(|chat| chat.view.as_ref() == Some(view))
+                    .map(|chat| Whereabouts {
+                        project: self.projects[chat.project].name.to_string(),
+                        chat: chat.name.to_string(),
+                        kept: chat.kept.map(|kept| kept.to_string()),
+                    })
+                    .unwrap_or_default();
+                answer.send(whereabouts).ok();
+            }
         }
     }
 
@@ -1258,6 +1272,35 @@ impl Workspace {
         if let Some(view) = chat.view() {
             view.update(cx, |view, cx| view.edit_trial(from, window, cx));
         }
+    }
+
+    /// Shows the chat at `index`, and asks its agent, in the human's
+    /// place, to keep what the chat learned in the human's wiki, as their
+    /// workflow says to (see [`workflow::WIKI_SAVE`]).
+    pub fn save_to_wiki(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        if !self.saves_to_wiki(index) {
+            return;
+        }
+        self.show(index, window, cx);
+        if let Some(view) = self.chats.get(index).and_then(Chat::view) {
+            let line = workflow::WIKI_SAVE.say(&[]);
+            view.update(cx, |view, cx| view.go_on(&line, window, cx));
+        }
+        cx.notify();
+    }
+
+    /// Whether the human can ask the agent of the chat at `index` to keep
+    /// what it learned in the wiki: it is not at work, and has the tool.
+    fn saves_to_wiki(&self, index: usize) -> bool {
+        self.chats.get(index).is_some_and(|chat| {
+            !working(chat.state)
+                && chat
+                    .setup
+                    .as_ref()
+                    .and_then(|setup| setup.tools.as_ref())
+                    .is_none_or(|tools| tools.iter().any(|tool| tool == "wiki_write"))
+        })
     }
 
     /// Whether the human can open a trial beside the chat at `index`: it
@@ -2165,6 +2208,7 @@ impl Workspace {
             .is_some_and(|chat| chat.goal.is_some());
         let endings = self.endings(index);
         let starts_trial = self.starts_trial(index);
+        let saves_to_wiki = self.saves_to_wiki(index);
         let item = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -2205,6 +2249,11 @@ impl Workspace {
             .when(starts_trial, |menu| {
                 menu.child(item("start-trial", "Start trial…").on_click(cx.listener(
                     move |workspace, _, window, cx| workspace.edit_trial(index, window, cx),
+                )))
+            })
+            .when(saves_to_wiki, |menu| {
+                menu.child(item("save-to-wiki", "Save to wiki").on_click(cx.listener(
+                    move |workspace, _, window, cx| workspace.save_to_wiki(index, window, cx),
                 )))
             })
             .children(endings.into_iter().enumerate().map(|(at, ending)| {

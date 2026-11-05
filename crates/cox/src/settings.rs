@@ -6,7 +6,8 @@
 //! rail shows as `~`. `--home` on the command line goes ahead of it for
 //! the run, and without either, the home is `~/Cox`. The file also says
 //! where the human keeps how they work with Cox, whatever the project, as
-//! `{"workflow": "~/dotfiles/cox"}` (see [`workflow`]), which the human
+//! `{"workflow": "~/dotfiles/cox"}` (see [`workflow`]), and where their
+//! wiki is, as `{"wiki": "~/notes/cox"}` (see [`wiki`]), which the human
 //! writes in it themselves.
 
 pub mod view;
@@ -25,6 +26,10 @@ const FILE: &str = "settings.json";
 /// what lasts, when `settings.json` names no other.
 const WORKFLOW: &str = "workflow";
 
+/// What the folder of the human's wiki is called, where Cox keeps what
+/// lasts, when `settings.json` names no other.
+const WIKI: &str = "wiki";
+
 /// The settings as `settings.json` keeps them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Saved {
@@ -32,6 +37,8 @@ pub struct Saved {
     pub home: Option<PathBuf>,
     /// The folder of the human's workflow, if they named one.
     pub workflow: Option<PathBuf>,
+    /// The folder of the human's wiki, if they named one.
+    pub wiki: Option<PathBuf>,
 }
 
 impl Saved {
@@ -63,22 +70,28 @@ impl Saved {
             Some(Value::String(home)) => Some(PathBuf::from(home)),
             Some(_) => anyhow::bail!("\"home\" is not a path"),
         };
-        // The human writes it in the file themselves, so what is wrong
-        // with it is said, and the rest of the file still counts.
-        let workflow = match value.get("workflow") {
+        // The human writes them in the file themselves, so what is wrong
+        // with one is said, and the rest of the file still counts.
+        let folder = |key: &str| match value.get(key) {
             None | Some(Value::Null) => None,
-            Some(Value::String(workflow)) => {
+            Some(Value::String(folder)) => {
                 let user = std::env::var_os("HOME").map(PathBuf::from);
-                folder_of(workflow, user.as_deref())
-                    .inspect_err(|why| tracing::error!("\"workflow\" names no folder: {why}"))
+                folder_of(folder, user.as_deref())
+                    .inspect_err(|why| tracing::error!("\"{key}\" names no folder: {why}"))
                     .ok()
             }
             Some(_) => {
-                tracing::error!("\"workflow\" is not a path");
+                tracing::error!("\"{key}\" is not a path");
                 None
             }
         };
-        Ok(Self { home, workflow })
+        let workflow = folder("workflow");
+        let wiki = folder("wiki");
+        Ok(Self {
+            home,
+            workflow,
+            wiki,
+        })
     }
 }
 
@@ -91,6 +104,14 @@ pub fn workflow() -> Option<PathBuf> {
     Saved::read()
         .workflow
         .or_else(|| crate::storage::path(WORKFLOW))
+}
+
+/// The folder of the human's wiki, where the agents keep what they
+/// learned (see [`crate::wiki`]): what `settings.json` names, as a vault
+/// of their notes, or else `wiki` where Cox keeps what lasts.
+#[must_use]
+pub fn wiki() -> Option<PathBuf> {
+    Saved::read().wiki.or_else(|| crate::storage::path(WIKI))
 }
 
 /// Keeps `home` as where chats in no project work, in this Cox's
@@ -207,6 +228,14 @@ mod tests {
         assert_eq!(saved.home, Some(PathBuf::from("/work")));
         assert_eq!(saved.workflow, None);
         assert_eq!(Saved::parse(br#"{"workflow": 3}"#).unwrap().workflow, None);
+    }
+
+    #[test]
+    fn the_wiki_is_a_folder_as_the_workflow_is() {
+        let saved = Saved::parse(br#"{"wiki": "/srv/notes", "workflow": "/srv/cox"}"#).unwrap();
+        assert_eq!(saved.wiki, Some(PathBuf::from("/srv/notes")));
+        assert_eq!(saved.workflow, Some(PathBuf::from("/srv/cox")));
+        assert_eq!(Saved::parse(br#"{"wiki": "notes"}"#).unwrap().wiki, None);
     }
 
     #[test]

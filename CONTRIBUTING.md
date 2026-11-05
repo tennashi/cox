@@ -231,7 +231,7 @@ which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `run_command`,
-`open_chat`, `wait_chat`, `propose_goal`, `start_trial`), all of them unless given; `stage`, `drive` for the tools
+`open_chat`, `wait_chat`, `propose_goal`, `start_trial`, `wiki_search`, `wiki_read`, `wiki_write`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the permission requests Cox answers
 in the human's place, a request both match being rejected, and the
@@ -352,6 +352,28 @@ the agent gives Cox's `wait_chat` tool to wait for the chat's turn to
 end, or for the chat to come to wait for the human, and hear how it
 stands then: what its agent last said, or what it asks the human. A
 chat that is not at work answers at once.
+
+The human keeps a wiki, one for all their projects, of what the agents
+learned: Markdown pages by topic, as `gpui-layout.md` or
+`rust/errors.md`, in the folder `settings.json` names, whole or from
+`~`, as `{"wiki": "~/notes/cox"}`, an Obsidian vault or a Git repository
+of theirs, or else `wiki` beside the chats' database. A chat's agent
+searches it with Cox's `wiki_search`, for the pages that have every word
+it looks for, reads a page with `wiki_read`, or the index without one,
+and writes a page whole with `wiki_write`, through Cox, which adds,
+under the page's "Used in", where it was used: the day, the project,
+the chat, by its name and the number it is kept by, the commit its
+folder is at, and the paths of the code the agent gives, so that a page
+read from another project says where it came from. Cox keeps
+`index.md`, a line for each page with its title and its first line,
+unless the human wrote an index of their own. Cox's own `cox.md` tells
+the agent to search the wiki before it works out what another project
+may have met, and to write to it only when the human asks; "Save to
+wiki" in the menu of the right button asks, in the human's place, as
+the workflow's `wiki/save.md` says, or else Cox's own
+([`workflow/wiki/save.md`](crates/cox/src/workflow/wiki/save.md)): to
+keep the decisions and why, what failed and why, and what a tool needs,
+not how the code works, and no secrets.
 
 The conversation runs down a line on its left, which names who speaks
 where they start, with a dot: the human (YOU), Cox in their place

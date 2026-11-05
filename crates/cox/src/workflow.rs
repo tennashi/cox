@@ -1,6 +1,7 @@
 //! What Cox tells a chat's agent in the human's place at the turns of a
 //! trial: as it starts, as a trial an agent opened is open, and before
-//! it is discarded. Each is the human's to say, since how they work with
+//! it is discarded; and as the human asks it to keep what the chat
+//! learned in their wiki (see [`crate::wiki`]). Each is the human's to say, since how they work with
 //! trials is theirs: a file of their workflow's folder (see
 //! [`crate::settings::workflow`]), as `trial/start.md`, or else Cox's own,
 //! in `workflow/` beside this file. A file says where Cox puts what it
@@ -47,8 +48,15 @@ pub const TRIAL_DISCARD: Text = Text {
     own: include_str!("workflow/trial/discard.md"),
 };
 
+/// What a chat's agent is asked when the human asks it to keep what the
+/// chat learned in their wiki.
+pub const WIKI_SAVE: Text = Text {
+    name: "wiki/save.md",
+    own: include_str!("workflow/wiki/save.md"),
+};
+
 /// The texts Cox has of its own, by where the human keeps theirs.
-const OWN: [&Text; 3] = [&TRIAL_START, &TRIAL_OPENED, &TRIAL_DISCARD];
+const OWN: [&Text; 4] = [&TRIAL_START, &TRIAL_OPENED, &TRIAL_DISCARD, &WIKI_SAVE];
 
 /// The text the human keeps as `name` in their workflow, or else Cox's
 /// own of that name, with `values` in place of the names they stand for;
