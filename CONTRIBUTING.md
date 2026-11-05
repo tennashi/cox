@@ -269,7 +269,21 @@ repository, `trial/` and the name of its folder, for the human to merge
 or not, and takes the worktree away; "Open as project", for a trial
 from nothing, opens its folder as a project, with a chat in it, to go on
 with what it made; and "Discard trial" takes its folder away, unless
-it was opened as a project, which the human goes on with. A trial
+it was opened as a project, which the human goes on with. Before it
+does, once the turn that goes on has ended, Cox asks the trial's agent,
+in the human's place, to sum the trial up in the conversation, for it
+to be done again from the conversation alone: what it tried, how, the
+commands it ran and what they showed, what it found, and the changes
+that matter, as code; Escape stops that, and the trial goes as it is.
+What the trial changed since it started is kept too, as one commit on
+where it started, apart from the commits the trial made itself:
+`refs/cox/discarded/` and the name of its folder in the project's
+repository, for a trial from the project, which `git show` reads, and
+for a trial from nothing, a Git bundle in `trials/discarded`, which
+`git clone` makes again. A file over 256 KB, or past 1 MB with the
+files kept with it, the smaller kept first, is left out: the agent is
+asked how to make it again, and the chat notes its path, its size and
+the hash Git names it by. A trial
 kept or discarded stops its agent, and those of the chats it opened,
 which worked in its folder, and each chat goes on in the project: a
 line sent starts its agent again there, with the conversation so far,

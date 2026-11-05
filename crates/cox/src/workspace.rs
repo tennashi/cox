@@ -200,6 +200,9 @@ pub struct Chat {
     /// What its agent is told to go on with once it moves into the trial
     /// the chat became, which it does when its turn ends.
     moving: Option<String>,
+    /// How far it is on its way to being discarded, a trial the human
+    /// discards once its agent has summed it up.
+    discarding: Option<Discarding>,
     /// Its view, or `None` for a closed chat the human has not read yet.
     view: Option<Entity<ChatView>>,
     /// Redraws the list as the chat's state changes, and hears a closed
@@ -236,6 +239,7 @@ impl Chat {
             parent,
             setup,
             moving: None,
+            discarding: None,
             view: None,
             _changes: Vec::new(),
         }
@@ -628,6 +632,7 @@ impl Workspace {
             parent: from.map(|(parent, _)| parent),
             setup,
             moving: None,
+            discarding: None,
             view: Some(view),
             _changes: changes,
         })
@@ -996,6 +1001,7 @@ impl Workspace {
             parent: chat.parent,
             setup: chat.setup.take(),
             moving: chat.moving.take(),
+            discarding: chat.discarding.take(),
             view: Some(view),
             _changes: {
                 changes.push(reopened);
@@ -1056,19 +1062,26 @@ impl Workspace {
         }
         let waited = (!at_work(state)).then(|| (chat.key, stands(chat, cx)));
         let moves = chat.moving.is_some() && !working(state);
+        let discarding = chat.discarding.filter(|_| !working(state));
         if let Some((key, stands)) = waited {
             for (_, answer) in self.waiting.extract_if(.., |(waited, _)| *waited == key) {
                 answer.send(Ok(stands.clone())).ok();
             }
         }
+        let index = self
+            .chats
+            .iter()
+            .position(|chat| chat.view.as_ref() == Some(view));
         // A chat that became a trial moves into it once its turn ends.
-        if moves
-            && let Some(index) = self
-                .chats
-                .iter()
-                .position(|chat| chat.view.as_ref() == Some(view))
-        {
+        if moves && let Some(index) = index {
             self.move_into_trial(index, window, cx);
+        }
+        // A trial the human discards is summed up once its turn ends, and
+        // discarded once that is done.
+        match (discarding, index) {
+            (Some(Discarding::Waiting), Some(index)) => self.sum_up(index, window, cx),
+            (Some(Discarding::Summing), Some(index)) => self.end_discarding(index, window, cx),
+            _ => {}
         }
         self.badge(cx);
         cx.notify();
@@ -1251,11 +1264,13 @@ impl Workspace {
     }
 
     /// Whether the trial at `index` can be discarded: its folder is there,
-    /// and was not opened as a project, which the human goes on with.
+    /// and was not opened as a project, which the human goes on with, and
+    /// it is not on its way to being discarded already.
     fn discards(&self, index: usize) -> bool {
-        self.trial_of(index).is_some_and(|(_, folder)| {
-            !self.projects.iter().any(|project| project.folder == folder)
-        })
+        self.chats[index].discarding.is_none()
+            && self.trial_of(index).is_some_and(|(_, folder)| {
+                !self.projects.iter().any(|project| project.folder == folder)
+            })
     }
 
     /// Keeps what the trial at `index` made as a branch of the project's
@@ -1273,14 +1288,77 @@ impl Workspace {
         self.end_trial(index, &folder, kept, window, cx);
     }
 
-    /// Discards the trial at `index`, its folder with it, and ends the
-    /// trial (see [`trial::discard`]).
+    /// Discards the trial at `index`: asks its agent to sum it up in the
+    /// conversation, once its turn ends if one goes on, and discards it,
+    /// its folder with it, once that is done (see [`trial::discard`]).
     pub fn discard_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.chats.len() || !self.discards(index) {
+            return;
+        }
+        self.menu = None;
+        self.show(index, window, cx);
+        if working(self.chats[index].state) {
+            self.chats[index].discarding = Some(Discarding::Waiting);
+            if let Some(view) = self.chats[index].view.clone() {
+                view.update(cx, |view, cx| {
+                    view.note(
+                        "The trial is discarded once this turn ends, and its agent has \
+                         summed it up."
+                            .to_owned(),
+                        cx,
+                    );
+                });
+            }
+            cx.notify();
+        } else {
+            self.sum_up(index, window, cx);
+        }
+    }
+
+    /// Asks the agent of the trial at `index`, which the human discards,
+    /// to sum it up in the conversation, starting it again if it is
+    /// closed; the trial is discarded once it is done, or at once if the
+    /// agent cannot be asked.
+    fn sum_up(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, folder)) = self.trial_of(index) else {
+            self.chats[index].discarding = None;
+            return;
+        };
+        let left_out = trial::left_out(&folder).unwrap_or_else(|error| {
+            tracing::warn!("cannot tell what the trial changed: {error}");
+            Vec::new()
+        });
+        if self.chats[index].view.is_none() {
+            self.show(index, window, cx);
+        }
+        let Some(view) = self.chats[index].view.clone() else {
+            self.chats[index].discarding = None;
+            return;
+        };
+        self.chats[index].discarding = Some(Discarding::Summing);
+        let line = trial::summing_up(&left_out);
+        let asked = view.update(cx, |view, cx| {
+            view.go_on(&line, window, cx);
+            working(view.conversation().state())
+        });
+        if !asked {
+            self.end_discarding(index, window, cx);
+        }
+    }
+
+    /// Discards the trial at `index`, whose agent has summed it up, its
+    /// folder with it, keeping what it changed apart, and ends the trial.
+    fn end_discarding(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.chats[index].discarding = None;
         let Some((started, folder)) = self.trial_of(index).filter(|_| self.discards(index)) else {
             return;
         };
-        let discarded = trial::discard(started, &folder)
-            .map(|()| "The trial is discarded, and its folder is gone.".to_owned());
+        let title = self.chats[index].name.to_string();
+        let discarded = storage::path(trial::FOLDER)
+            .map(|trials| trials.join(trial::DISCARDED))
+            .ok_or_else(|| "Cox cannot tell where to keep discarded trials".to_owned())
+            .and_then(|bundles| trial::discard(started, &folder, &title, &bundles))
+            .map(|discarded| discarded.note());
         self.end_trial(index, &folder, discarded, window, cx);
     }
 
@@ -2013,6 +2091,16 @@ impl Workspace {
             ));
         Some(deferred(anchored().position(at).child(menu)).with_priority(2))
     }
+}
+
+/// How far a trial the human discards is on its way to being discarded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Discarding {
+    /// Its turn goes on; its agent is asked to sum it up once the turn
+    /// ends.
+    Waiting,
+    /// Its agent sums it up; it is discarded once that turn ends.
+    Summing,
 }
 
 /// Whether an agent that stands as `state` is at work.
