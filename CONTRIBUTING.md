@@ -37,8 +37,8 @@ build downloads the matching CEF distribution from the official builds
 
 `cox [--stage <url>] [--home <dir>] [--data <dir>] <agent command>` opens a window with
 no chat in it. The rail on the left of the window shows the projects,
-each by the first letter of its name, with its folder where the mouse
-rests, and the tabs along the top show the chats of the project chosen
+each as a folder with its name under it, and its folder's path where
+the mouse rests, and the tabs along the top show the chats of the project chosen
 on the rail. A click on a project chooses it, showing the chat of it
 shown last. A project is a folder: "Open folder…", the + at the foot of
 the rail (Command-O on macOS, Control-O elsewhere), opens a chat in the

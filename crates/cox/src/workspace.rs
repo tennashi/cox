@@ -56,6 +56,7 @@ use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
 use crate::stage::{NewPage, NewTerminal, OpenFile, Stage};
 use crate::storage;
+use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
@@ -1422,16 +1423,16 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
                     .tooltip(tip("Open folder…"))
-                    .child("+")
+                    .child(icon(Icon::Plus, 16., FAINT))
                     .on_click(cx.listener(|workspace, _, window, cx| {
                         workspace.choose_folder(window, cx);
                     })),
             )
     }
 
-    /// The button of the project at `index` on the rail: the first letter
-    /// of its name in a square, and its name under it, with its folder
-    /// where the mouse rests.
+    /// The button of the project at `index` on the rail: a folder in a
+    /// square, or `~` for no project, and its name under it, with its
+    /// folder where the mouse rests.
     fn render_project(
         &self,
         index: usize,
@@ -1447,15 +1448,6 @@ impl Workspace {
         let waiting = chats
             .filter(|chat| chat.unread || chat.state == State::Asking)
             .count();
-        let letter: String = match project.id {
-            None => "~".to_owned(),
-            Some(_) => project
-                .name
-                .chars()
-                .take(1)
-                .flat_map(char::to_uppercase)
-                .collect(),
-        };
         let (ground, edge, ink, label) = if chosen {
             (ACCENT_GROUND, ACCENT, ACCENT, LINK)
         } else {
@@ -1504,7 +1496,10 @@ impl Workspace {
                     .text_size(px(16.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .when(!chosen, |square| square.hover(|style| style.bg(rgb(HOVER))))
-                    .child(letter)
+                    .map(|square| match project.id {
+                        None => square.child("~"),
+                        Some(_) => square.child(icon(Icon::Folder, 18., ink)),
+                    })
                     .when(waiting > 0, |square| {
                         square.child(
                             div()
