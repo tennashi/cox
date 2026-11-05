@@ -56,6 +56,7 @@ use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
 use crate::stage::{NewPage, NewTerminal, OpenFile, Stage};
 use crate::storage;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
@@ -1530,11 +1531,11 @@ impl Workspace {
             .child(
                 div()
                     .max_w(px(RAIL_WIDTH - 8.))
-                    .truncate()
+                    .overflow_hidden()
                     .text_size(px(11.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(label))
-                    .child(project.name.clone()),
+                    .child(ellipsis(project.name.clone())),
             )
     }
 
@@ -1728,10 +1729,10 @@ impl Workspace {
                 .child(input.clone()),
             _ => div()
                 .min_w_0()
-                .truncate()
+                .overflow_hidden()
                 // A closed chat is there to read.
                 .when(!chat.open, |name| name.text_color(rgb(FAINT)))
-                .child(chat.name.clone()),
+                .child(ellipsis(chat.name.clone())),
         }
     }
 
@@ -1778,7 +1779,13 @@ impl Workspace {
                     .cursor_pointer()
                     .text_color(rgb(DIM))
                     .hover(|style| style.bg(rgb(ACCENT_GROUND)).text_color(rgb(FOREGROUND)))
-                    .child(div().flex_1().min_w_0().truncate().child(chat.name.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(ellipsis(chat.name.clone())),
+                    )
                     .child(
                         div()
                             .flex_shrink_0()

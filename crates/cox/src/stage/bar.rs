@@ -22,6 +22,7 @@ use super::tab::{Tab, TabContent};
 use super::terminal::Program;
 use super::typed::{Typed, typed};
 use super::{Stage, TAB_WIDTH, TITLE_LENGTH};
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{
@@ -331,7 +332,7 @@ impl Stage {
             })
             .on_click(cx.listener(move |stage, _, window, cx| stage.show(index, window, cx)))
             .child(icon(glyph, 14., if shown { DIM } else { FAINT }))
-            .child(div().min_w_0().truncate().child(title))
+            .child(div().min_w_0().overflow_hidden().child(ellipsis(title)))
             .when(self.tabs.len() > 1, |tab| {
                 tab.child(
                     div()

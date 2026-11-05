@@ -3,6 +3,7 @@
 use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
 
 use super::Code;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FOREGROUND};
 
@@ -68,8 +69,8 @@ impl Code {
                     .debug_selector(|| "code-path".to_owned())
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .child(shortened(&self.file.path)),
+                    .overflow_hidden()
+                    .child(ellipsis(shortened(&self.file.path))),
             )
             .children(lines.map(|lines| div().flex_shrink_0().child(lines)))
             .children(self.notice.as_ref().map(|notice| {
@@ -83,8 +84,8 @@ impl Code {
                     .debug_selector(|| "code-server".to_owned())
                     .min_w_0()
                     .max_w(px(240.))
-                    .truncate()
-                    .child(server)
+                    .overflow_hidden()
+                    .child(ellipsis(server))
             }))
             .children(self.file.unread.as_ref().map(|error| {
                 div()

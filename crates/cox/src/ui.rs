@@ -12,6 +12,7 @@
 //!   the stage of a chat share: whether the stage is open.
 //! - A [`card`] is what the window's parts sit in, on its ground.
 
+pub mod ellipsis;
 pub mod icons;
 pub mod input;
 pub mod markdown;

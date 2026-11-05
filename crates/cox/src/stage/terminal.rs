@@ -58,6 +58,7 @@ pub use self::pty::{Program, Running};
 use crate::agent::mcp::{Ended, Ran};
 use crate::stage::tab::Shows;
 use crate::ui::Copy;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED};
@@ -438,8 +439,8 @@ impl Terminal {
                     .debug_selector(|| "terminal-program".to_owned())
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .child(what),
+                    .overflow_hidden()
+                    .child(ellipsis(what)),
             )
             .children(state.map(|(state, color)| {
                 div()
