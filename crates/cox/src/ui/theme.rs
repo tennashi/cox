@@ -75,6 +75,9 @@ pub const ASKING_EDGE: u32 = 0x4a_3d25;
 pub const ASKING_BUTTON: u32 = 0x2e_2920;
 /// What went wrong.
 pub const FAILED: u32 = 0xec_8580;
+/// The ground of what went wrong, and the mark on it.
+pub const FAILED_GROUND: u32 = 0x2a_1a1a;
+pub const FAILED_MARK: u32 = 0xde_6b66;
 /// The ground of lines a change adds, and of those it removes.
 pub const ADDED_GROUND: u32 = 0x14_2c29;
 pub const REMOVED_GROUND: u32 = 0x36_1e1e;

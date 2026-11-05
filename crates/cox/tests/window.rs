@@ -792,10 +792,16 @@ async fn what_a_tool_call_printed_opens_with_a_click(cx: &mut TestAppContext) {
     let closed = top(cx, "reply-2");
     assert!(cx.debug_bounds("content-1").is_none());
 
+    // The call shows as a step, whose chip opens its line.
+    click(cx, "step-1");
+    assert!(top(cx, "reply-2") > closed);
+    let line = top(cx, "reply-2");
     click(cx, "line-1");
     assert!(cx.debug_bounds("content-1").is_some());
-    assert!(top(cx, "reply-2") > closed);
+    assert!(top(cx, "reply-2") > line);
     click(cx, "line-1");
+    assert_eq!(top(cx, "reply-2"), line);
+    click(cx, "step-1");
     assert_eq!(top(cx, "reply-2"), closed);
 }
 
@@ -808,6 +814,9 @@ async fn tool_calls_in_a_row_fold_into_one_line(cx: &mut TestAppContext) {
     wait_for(cx, &view, State::Idle).await;
     let folded = top(cx, "reply-3");
     assert!(folded > top(cx, "work-1"));
+    // Each call is a step, side by side.
+    assert_eq!(top(cx, "step-1"), top(cx, "step-2"));
+    assert!(top(cx, "step-1") > top(cx, "work-1"));
 
     click(cx, "work-1");
     assert!(top(cx, "line-1") > top(cx, "work-1"));
@@ -995,6 +1004,9 @@ fn stage_is_open(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> bool {
 #[gpui::test]
 fn opens_and_closes_the_stage_with_its_button(cx: &mut TestAppContext) {
     let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Opened::default(), None, true);
+    // The bar settles once the agent's session opens, its settings
+    // taking their place beside the button.
+    cx.run_until_parked();
 
     assert!(!stage_is_open(cx, &view));
     assert!(cx.debug_bounds("stage-panel").is_none());
@@ -1116,10 +1128,13 @@ async fn shows_a_setting_the_agent_changes_on_its_own(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_files_chip_starts_a_path_at_the_cursor(cx: &mut TestAppContext) {
+async fn the_files_chip_starts_a_path_at_the_cursor(cx: &mut TestAppContext) {
     let (_agent, view, cx) = open(cx);
 
-    // The chips are drawn once the agent has started.
+    // The chips settle once the agent has told its commands, whose chip
+    // comes ahead of the files'.
+    cx.condition(&view, |view, _| !view.conversation().commands().is_empty())
+        .await;
     cx.run_until_parked();
     click(cx, "start-file");
     assert_eq!(input_text(cx, &view), "@");

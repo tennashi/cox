@@ -304,9 +304,15 @@ with each step marked as waiting, under way or done. The plan also
 stays in sight on a card over the top right of the conversation, after
 its turn too, until the next line is sent; a click on the card's line
 folds it to that line. The tool calls, thoughts and
-plan of the agent one after another fold into one line, under which
-only the calls still running and the thought still arriving show, until
-a click opens it. When the agent asks permission, a click on an option,
+plan of the agent one after another fold under one line, which names
+the agent where it starts to speak and counts the steps, its tool
+calls, as `CLAUDE · 4 STEPS`, and how far the plan has gone: each call
+shows under it as a chip with its title, short, and a mark of how it
+goes, a ring while it runs, then a dot, in the accent once done, or in
+red, on red, when it failed; a click on a chip opens the call's line
+under the chips, and the last thought shows under them, while it
+arrives too, until a click on the line opens all of the work, each on
+its line. When the agent asks permission, a click on an option,
 or its number, answers. The input, while it is empty, tells what the
 chat waits for, while it is not the next line to send, or else that it
 waits for a reply.
