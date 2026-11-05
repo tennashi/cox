@@ -424,8 +424,9 @@ is translated with "Translate" in the menu the right button opens on
 it, with "Copy", a tab of code's own menu having "Translate", and Cox's
 menu showing on a page in place of the browser's; or, but on a page,
 with Command-Shift-T (Control-Shift-T off macOS). A card by the mouse
-says it is translating, then shows the translation, which "Copy"
-copies, and Escape, the ×, or a click beside it closes. Text in
+shows the translation as it arrives, as far as the command or the
+agent has written it, which "Copy" copies once it is whole, and
+Escape, the ×, or a click beside it closes. Text in
 English goes into the human's language, and the rest, as text mostly
 of other letters, into English. Each translation is kept, by what it
 says, the way it goes and what translated it, in `translations` beside the chats'
