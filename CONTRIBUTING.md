@@ -298,8 +298,9 @@ says over ACP as the call's `rawInput`, or, when it does not say them,
 by when it came; for another tool,
 such as the agent's own `Read`, the flow shows only what the agent says
 of it, and its permission request and Cox's answer when it asks one.
-What the agent thinks on its way, when it sends it, shows on a line of
-its own too, open while it arrives, and so does the plan it works to,
+What the agent thinks on its way, when it sends it, shows as an aside,
+its start in italics on a line of its own, which a click opens to all
+of it, and open while it arrives, and so does the plan it works to,
 with each step marked as waiting, under way or done. The plan also
 stays in sight on a card over the top right of the conversation, after
 its turn too, until the next line is sent; a click on the card's line
