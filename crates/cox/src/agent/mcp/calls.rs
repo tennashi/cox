@@ -18,7 +18,7 @@ use crate::agent::mcp::{
     ASKS, Answered, ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest, Whereabouts, answered,
 };
 use crate::agent::setup::{Policy, Setup, StageUse};
-use crate::chat::trial::Trial;
+use crate::chat::sketch::Sketch;
 use crate::wiki;
 
 const SHOW_MARKDOWN: &str = "show_markdown";
@@ -29,7 +29,7 @@ const RUN_COMMAND: &str = "run_command";
 const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
-const START_TRIAL: &str = "start_trial";
+const START_SKETCH: &str = "start_sketch";
 const WIKI_SEARCH: &str = "wiki_search";
 const WIKI_READ: &str = "wiki_read";
 const WIKI_WRITE: &str = "wiki_write";
@@ -182,7 +182,7 @@ fn all_tools() -> Value {
         },
     },
     propose_goal_tool(),
-    start_trial_tool(),
+    start_sketch_tool(),
     ]);
     if let Some(all) = tools.as_array_mut() {
         all.extend(wiki_tools());
@@ -283,7 +283,7 @@ fn show_changes_tool() -> Value {
         "name": SHOW_CHANGES,
         "description": "Shows the human what changed in the files of a Git repository, \
             file by file and line by line, on a tab of the stage beside the conversation, \
-            where a click on a line opens the file there: in a trial, all it changed since \
+            where a click on a line opens the file there: in a sketch, all it changed since \
             it started, and elsewhere what changed since the last commit, with the files \
             Git does not track yet. Use it to show the human what you made, before you talk \
             it through or propose a goal from it. The tab follows the files as they change. \
@@ -294,7 +294,7 @@ fn show_changes_tool() -> Value {
                 "folder": {
                     "type": "string",
                     "description": "A folder of the repository, absolute or from the working \
-                        directory, such as a trial's folder: the working directory unless \
+                        directory, such as a sketch's folder: the working directory unless \
                         given.",
                 },
             },
@@ -334,18 +334,18 @@ fn show_map_tool() -> Value {
     })
 }
 
-/// The tool that opens a trial beside the chat, as the agent learns of it.
-fn start_trial_tool() -> Value {
+/// The tool that opens a sketch beside the chat, as the agent learns of it.
+fn start_sketch_tool() -> Value {
     json!(
     {
-        "name": START_TRIAL,
-        "description": "Opens a trial beside this chat: a chat of its own, under this one, \
+        "name": START_SKETCH,
+        "description": "Opens a sketch beside this chat: a chat of its own, under this one, \
             which works apart from the project, in a folder Cox makes for it, and changes \
             and tests files there without asking the human. Its agent is set up as you are, \
             and told what this chat talked through so far, and what it tries. This chat \
             stays in the project. `from` is \"project\", a Git worktree of the project's \
             last commit, to try a change to the project, or \"empty\", an empty Git \
-            repository, to try something from nothing. The human ends the trial, and this \
+            repository, to try something from nothing. The human ends the sketch, and this \
             chat hears how it ended.",
         "inputSchema": {
             "type": "object",
@@ -353,13 +353,13 @@ fn start_trial_tool() -> Value {
                 "from": {
                     "type": "string",
                     "enum": ["project", "empty"],
-                    "description": "What the trial starts from: the project's last \
+                    "description": "What the sketch starts from: the project's last \
                         commit, or nothing.",
                 },
                 "what": {
                     "type": "string",
-                    "description": "What the trial tries, in a sentence: its agent is \
-                        told it, and the trial is named after it.",
+                    "description": "What the sketch tries, in a sentence: its agent is \
+                        told it, and the sketch is named after it.",
                 },
             },
             "required": ["from", "what"],
@@ -423,8 +423,8 @@ fn open_chat_tool() -> Value {
             in the human's place, once each, with `*` for any run of characters (a title \
             both match is rejected, and the human is asked about the rest); `goal` is \
             what the chat works until it is met, as a goal the human sets: `$ ` and a \
-            shell command, which has to pass, or words, which an agent judges; `trial` \
-            makes the chat a trial, which works in a folder of its own, apart from the \
+            shell command, which has to pass, or words, which an agent judges; `sketch` \
+            makes the chat a sketch, which works in a folder of its own, apart from the \
             project, and changes and tests its files there without asking the human: \
             \"project\", a Git worktree of the project's last commit, to try a change to \
             the project, or \"empty\", an empty Git repository, to try something from \
@@ -475,7 +475,7 @@ fn open_chat_tool() -> Value {
                     "description": "What the chat works until it is met: \"$ \" and a shell \
                         command, which has to pass, or words, which an agent judges.",
                 },
-                "trial": {
+                "sketch": {
                     "type": "string",
                     "enum": ["project", "empty"],
                     "description": "What the chat starts from when it tries the work out \
@@ -512,7 +512,7 @@ pub(super) async fn call(
         OPEN_CHAT => open_chat(arguments, chats).await,
         WAIT_CHAT => wait_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
-        START_TRIAL => start_trial(arguments, chats).await,
+        START_SKETCH => start_sketch(arguments, chats).await,
         WIKI_SEARCH => wiki_search(arguments, chats).await,
         WIKI_READ => wiki_read(arguments, chats).await,
         WIKI_WRITE => wiki_write(arguments, cwd, chats).await,
@@ -882,11 +882,11 @@ async fn open_chat(
             within: None,
         },
         folder: None,
-        trial: None,
+        sketch: None,
     };
     let goal = string("goal")?.as_deref().and_then(Goal::parse);
-    let trial = string("trial")?
-        .map(|name| Trial::parse(&name).ok_or("`trial` is not \"project\" or \"empty\""))
+    let sketch = string("sketch")?
+        .map(|name| Sketch::parse(&name).ok_or("`sketch` is not \"project\" or \"empty\""))
         .transpose()?;
     let (answer, opened) = oneshot::channel();
     chats
@@ -894,7 +894,7 @@ async fn open_chat(
             text: text.to_owned(),
             setup,
             goal,
-            trial,
+            sketch,
             answer,
         })
         .map_err(|_| "the chat has closed".to_owned())?;
@@ -906,13 +906,13 @@ async fn open_chat(
          end with wait_chat, giving {}.",
         opened.name, opened.number, opened.number
     );
-    if let (Some(trial), Some(folder)) = (trial, &opened.folder) {
+    if let (Some(sketch), Some(folder)) = (sketch, &opened.folder) {
         let _ = write!(
             told,
             " {}",
-            crate::workflow::TRIAL_OPENED.say(&[
+            crate::workflow::SKETCH_OPENED.say(&[
                 ("folder", &folder.display().to_string()),
-                ("from", trial.what()),
+                ("from", sketch.what()),
             ])
         );
     }
@@ -986,16 +986,16 @@ async fn propose_goal(
     Ok(told)
 }
 
-/// Asks the window to open a trial beside the chat, as `arguments` say,
+/// Asks the window to open a sketch beside the chat, as `arguments` say,
 /// and tells the agent how it goes by.
-async fn start_trial(
+async fn start_sketch(
     arguments: &Value,
     chats: &UnboundedSender<ChatRequest>,
 ) -> Result<String, String> {
-    let trial = arguments
+    let sketch = arguments
         .get("from")
         .and_then(Value::as_str)
-        .and_then(Trial::parse)
+        .and_then(Sketch::parse)
         .ok_or("`from` is not \"project\" or \"empty\"")?;
     let what = arguments
         .get("what")
@@ -1006,8 +1006,8 @@ async fn start_trial(
         .to_owned();
     let (answer, made) = oneshot::channel();
     chats
-        .send(ChatRequest::StartTrial {
-            trial,
+        .send(ChatRequest::StartSketch {
+            sketch,
             what,
             show: false,
             answer,
@@ -1015,9 +1015,9 @@ async fn start_trial(
         .map_err(|_| "the chat has closed".to_owned())?;
     let opened = made
         .await
-        .map_err(|_| "the chat closed before the trial was made".to_owned())??;
+        .map_err(|_| "the chat closed before the sketch was made".to_owned())??;
     let mut told = format!(
-        "The trial {} is open beside this chat as chat {}, trying it. Wait for its turn to \
+        "The sketch {} is open beside this chat as chat {}, trying it. Wait for its turn to \
          end with wait_chat, giving {}.",
         opened.name, opened.number, opened.number
     );
@@ -1025,9 +1025,9 @@ async fn start_trial(
         let _ = write!(
             told,
             " {}",
-            crate::workflow::TRIAL_OPENED.say(&[
+            crate::workflow::SKETCH_OPENED.say(&[
                 ("folder", &folder.display().to_string()),
-                ("from", trial.what()),
+                ("from", sketch.what()),
             ])
         );
     }
@@ -1223,7 +1223,7 @@ mod tests {
         assert_eq!(listed[3]["name"], SHOW_MAP);
         assert_eq!(listed[4]["name"], RUN_COMMAND);
         assert_eq!(listed[5]["name"], OPEN_CHAT);
-        assert_eq!(listed[8]["name"], START_TRIAL);
+        assert_eq!(listed[8]["name"], START_SKETCH);
     }
 
     #[test]
@@ -1305,12 +1305,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn asks_the_window_to_make_the_chat_a_trial() {
+    async fn asks_the_window_to_make_the_chat_a_sketch() {
         let (sent, _requests) = unbounded_channel();
         let (chats, mut asked) = unbounded_channel();
         let window = tokio::spawn(async move {
-            let Some(ChatRequest::StartTrial {
-                trial,
+            let Some(ChatRequest::StartSketch {
+                sketch,
                 what,
                 show,
                 answer,
@@ -1322,11 +1322,11 @@ mod tests {
             let _ = answer.send(Ok(OpenedChat {
                 number: 3,
                 name: "A warmer greeting.".to_owned(),
-                folder: Some("/trials/greet-1".into()),
+                folder: Some("/sketches/greet-1".into()),
             }));
-            (trial, what)
+            (sketch, what)
         });
-        let params = json!({ "name": START_TRIAL, "arguments": {
+        let params = json!({ "name": START_SKETCH, "arguments": {
             "from": "project",
             "what": "A warmer greeting.",
         } });
@@ -1337,17 +1337,17 @@ mod tests {
         let told = answered["content"][0]["text"].as_str().unwrap();
         assert!(
             told.starts_with(
-                "The trial A warmer greeting. is open beside this chat as chat 3, trying it."
+                "The sketch A warmer greeting. is open beside this chat as chat 3, trying it."
             ),
             "{told}"
         );
         assert!(
-            told.contains("working in /trials/greet-1, a worktree"),
+            told.contains("working in /sketches/greet-1, a worktree"),
             "{told}"
         );
         assert_eq!(
             window.await.unwrap(),
-            (Trial::Project, "A warmer greeting.".to_owned())
+            (Sketch::Project, "A warmer greeting.".to_owned())
         );
 
         // It says what it tries, and from what.
@@ -1357,7 +1357,7 @@ mod tests {
             json!({ "from": "container", "what": "A greeting." }),
             json!({ "from": "empty", "what": " " }),
         ] {
-            let params = json!({ "name": START_TRIAL, "arguments": arguments });
+            let params = json!({ "name": START_SKETCH, "arguments": arguments });
             let answered = call(&params, Path::new("/"), None, &sent, &chats)
                 .await
                 .unwrap();
@@ -1460,23 +1460,23 @@ mod tests {
     #[test]
     fn shows_what_changed_in_a_folder_and_tells_the_agent() {
         let cwd = scratch("changes");
-        let trial = cwd.join("trial");
-        fs::create_dir_all(&trial).unwrap();
+        let sketch = cwd.join("sketch");
+        fs::create_dir_all(&sketch).unwrap();
         let git = |args: &[&str]| {
             let ran = std::process::Command::new("git")
                 .arg("-C")
-                .arg(&trial)
+                .arg(&sketch)
                 .args(args)
                 .output()
                 .unwrap();
             assert!(ran.status.success(), "{ran:?}");
         };
         git(&["init", "--quiet"]);
-        changes::start(&trial).unwrap();
-        fs::write(trial.join("hello.txt"), "Hello\nthere\n").unwrap();
+        changes::start(&sketch).unwrap();
+        fs::write(sketch.join("hello.txt"), "Hello\nthere\n").unwrap();
         let (sent, mut requests) = unbounded_channel();
 
-        let shown = call_now(SHOW_CHANGES, &json!({ "folder": "trial" }), &cwd, &sent);
+        let shown = call_now(SHOW_CHANGES, &json!({ "folder": "sketch" }), &cwd, &sent);
         assert_eq!(shown["isError"], false);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert!(told.contains("since nothing"), "{told}");
@@ -1485,7 +1485,7 @@ mod tests {
             "{told}"
         );
         match requests.try_recv() {
-            Ok(ToolRequest::ShowChanges { folder }) => assert_eq!(folder, trial),
+            Ok(ToolRequest::ShowChanges { folder }) => assert_eq!(folder, sketch),
             _ => panic!("the stage was not asked to show what changed"),
         }
 
@@ -1626,7 +1626,7 @@ mod tests {
                 text,
                 setup,
                 goal,
-                trial,
+                sketch,
                 answer,
             }) = asked.recv().await
             else {
@@ -1635,9 +1635,9 @@ mod tests {
             let _ = answer.send(Ok(OpenedChat {
                 number: 7,
                 name: "Chat 2".to_owned(),
-                folder: Some("/trials/greet-1".into()),
+                folder: Some("/sketches/greet-1".into()),
             }));
-            (text, setup, goal, trial)
+            (text, setup, goal, sketch)
         });
         let params = json!({ "name": OPEN_CHAT, "arguments": {
             "text": "Build the first unit.",
@@ -1647,7 +1647,7 @@ mod tests {
             "allow": ["Read *", "cargo *"],
             "reject": ["Edit *"],
             "goal": "$ cargo xtask ci",
-            "trial": "project",
+            "sketch": "project",
         } });
         let answered = call(&params, Path::new("/work"), None, &sent, &chats)
             .await
@@ -1656,11 +1656,11 @@ mod tests {
         let told = answered["content"][0]["text"].as_str().unwrap();
         assert!(told.contains("Chat 2") && told.contains("chat 7"), "{told}");
         assert!(
-            told.contains("a trial, working in /trials/greet-1"),
+            told.contains("a sketch, working in /sketches/greet-1"),
             "{told}"
         );
-        let (text, setup, goal, trial) = window.await.unwrap();
-        assert_eq!(trial, Some(Trial::Project));
+        let (text, setup, goal, sketch) = window.await.unwrap();
+        assert_eq!(sketch, Some(Sketch::Project));
         assert_eq!(text, "Build the first unit.");
         assert_eq!(goal, Some(Goal::Command("cargo xtask ci".to_owned())));
         assert_eq!(
@@ -1675,7 +1675,7 @@ mod tests {
                     within: None,
                 },
                 folder: None,
-                trial: None,
+                sketch: None,
             }
         );
     }
@@ -1798,8 +1798,8 @@ mod tests {
             json!({ "text": " " }),
             json!({ "text": "go", "stage": "fly" }),
             json!({ "text": "go", "allow": "Read *" }),
-            json!({ "text": "go", "trial": true }),
-            json!({ "text": "go", "trial": "container" }),
+            json!({ "text": "go", "sketch": true }),
+            json!({ "text": "go", "sketch": "container" }),
         ] {
             let params = json!({ "name": OPEN_CHAT, "arguments": arguments });
             let answered = call(&params, Path::new("/"), None, &sent, &chats)

@@ -180,7 +180,7 @@ pub fn setup(goal: &str, stance: &str) -> Setup {
             within: None,
         },
         folder: None,
-        trial: None,
+        sketch: None,
     }
 }
 

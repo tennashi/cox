@@ -1000,7 +1000,12 @@ mod tests {
         let store = Store::in_memory().unwrap();
         let parent = store.add_chat(None, "Chat 1").unwrap();
         let chat = store
-            .add_chat_under(parent, None, "Chat 2", Some(r#"{"folder":"/trials/a-1"}"#))
+            .add_chat_under(
+                parent,
+                None,
+                "Chat 2",
+                Some(r#"{"folder":"/sketches/a-1"}"#),
+            )
             .unwrap();
         store.keep_session(chat, "session-1").unwrap();
 

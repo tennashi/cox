@@ -146,7 +146,7 @@ impl Opens for Launcher {
             )
         });
         // 2 to 5, once the human sends to the chat; but not to a chat of a
-        // trial whose folder is gone from under it.
+        // sketch whose folder is gone from under it.
         let gone = setup.as_ref().is_some_and(|setup| setup.folder.is_some()) && !cwd.exists();
         let keeps = crate::agent::setup::keeps_in_wiki(setup.as_ref());
         let launcher = self.clone();

@@ -120,10 +120,10 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
     {
         "the goal's input".to_owned()
     } else if shown
-        .trial_input()
+        .sketch_input()
         .is_some_and(|(input, _)| focused == input.focus_handle(cx))
     {
-        "the trial's input".to_owned()
+        "the sketch's input".to_owned()
     } else {
         "the stage, or a chat's name being changed".to_owned()
     }
@@ -184,8 +184,8 @@ fn row(chat: &Chat, workspace: &Workspace, cx: &App) -> String {
     if chat.goal().is_some() {
         row.push_str(", goal");
     }
-    if chat.is_trial() {
-        row.push_str(", trial");
+    if chat.is_sketch() {
+        row.push_str(", sketch");
     }
     if let Some(parent) = chat.parent() {
         let _ = write!(row, ", opened by chat {parent}");
@@ -230,11 +230,11 @@ fn tell(told: &mut String, chat: &Chat, workspace: &Workspace, cx: &App) {
     if let Some(input) = view.goal_input() {
         let _ = writeln!(told, "  Goal input, open: {:?}", input.read(cx).text());
     }
-    if let Some((input, trial)) = view.trial_input() {
+    if let Some((input, sketch)) = view.sketch_input() {
         let _ = writeln!(
             told,
-            "  Trial input, open, from {}: {:?}",
-            trial.name(),
+            "  Sketch input, open, from {}: {:?}",
+            sketch.name(),
             input.read(cx).text()
         );
     }

@@ -22,7 +22,7 @@
 //! - [`wiki`] is the human's wiki, where the agents keep what they
 //!   learned, for those of every project to find again.
 //! - [`workflow`] is what Cox tells a chat's agent in the human's place
-//!   at the turns of a trial, which the human's workflow can say instead.
+//!   at the turns of a sketch, which the human's workflow can say instead.
 //! - [`notices`] tells the human of chats that need them while they look
 //!   elsewhere.
 //! - [`inspect`] answers for the window to an agent that debugs Cox, on a

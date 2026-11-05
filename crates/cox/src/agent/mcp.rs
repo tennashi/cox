@@ -48,7 +48,7 @@ use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
 use crate::agent::setup::Setup;
-use crate::chat::trial::Trial;
+use crate::chat::sketch::Sketch;
 
 mod calls;
 
@@ -146,18 +146,18 @@ pub enum ChatRequest {
         text: String,
         setup: Setup,
         goal: Option<Goal>,
-        /// What the chat starts from when it is a trial, working in a
+        /// What the chat starts from when it is a sketch, working in a
         /// folder of its own.
-        trial: Option<Trial>,
+        sketch: Option<Sketch>,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
     },
-    /// Open a trial beside the chat, under it in the list, that starts
-    /// from `trial`, to try out `what`, its agent set up as the chat's
+    /// Open a sketch beside the chat, under it in the list, that starts
+    /// from `sketch`, to try out `what`, its agent set up as the chat's
     /// and told what the chat talked through so far; show it if `show`
     /// says to, as for the human who asked for it; answer how it goes by,
     /// or why it cannot open.
-    StartTrial {
-        trial: Trial,
+    StartSketch {
+        sketch: Sketch,
         what: String,
         show: bool,
         answer: oneshot::Sender<Result<OpenedChat, String>>,
@@ -175,7 +175,7 @@ pub enum ChatRequest {
         answer: oneshot::Sender<Whereabouts>,
     },
     /// Ask the agent of the chat, or of the chat kept as `chat`, such as
-    /// a trial that ended beside it, to keep what it learned in the wiki,
+    /// a sketch that ended beside it, to keep what it learned in the wiki,
     /// as the human chose on the card that asked them: no tool asks it.
     SaveToWiki { chat: Option<ChatId> },
 }
@@ -208,7 +208,7 @@ pub struct OpenedChat {
     pub number: u64,
     /// What the human sees it as, in the list.
     pub name: String,
-    /// The folder it works in, when it is a trial.
+    /// The folder it works in, when it is a sketch.
     pub folder: Option<PathBuf>,
 }
 

@@ -24,7 +24,7 @@ use cox_acp::ToolKind;
 
 use serde::{Deserialize, Serialize};
 
-use crate::chat::trial::Trial;
+use crate::chat::sketch::Sketch;
 
 /// How a chat's agent is set up, as the chat that opened it said.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,12 +41,14 @@ pub struct Setup {
     /// What answers the agent's permission requests in the human's place.
     pub policy: Policy,
     /// The folder the agent works in, in place of the project's, when the
-    /// chat is a trial: a folder of its own (see
-    /// [`crate::chat::trial`]).
+    /// chat is a sketch: a folder of its own (see
+    /// [`crate::chat::sketch`]).
     pub folder: Option<PathBuf>,
-    /// What the chat started from, when it is a trial: not a chat that a
-    /// trial opened, which works in its folder too.
-    pub trial: Option<Trial>,
+    /// What the chat started from, when it is a sketch: not a chat that a
+    /// sketch opened, which works in its folder too. A Cox from before
+    /// sketches were named so kept it as `trial`.
+    #[serde(alias = "trial")]
+    pub sketch: Option<Sketch>,
 }
 
 /// Whether the agent of a chat set up as `setup`, or not set up, gets
@@ -241,15 +243,21 @@ mod tests {
             policy: Policy {
                 allow: ["read:*", "grep *"].map(str::to_owned).to_vec(),
                 reject: ["Edit *", "Write *"].map(str::to_owned).to_vec(),
-                within: Some("/trials/greet-1".into()),
+                within: Some("/sketches/greet-1".into()),
             },
-            folder: Some("/trials/greet-1".into()),
-            trial: Some(Trial::Project),
+            folder: Some("/sketches/greet-1".into()),
+            sketch: Some(Sketch::Project),
         };
         let json = setup.to_json();
         assert_eq!(Setup::from_json(&json).unwrap(), setup);
         assert!(json.contains("\"stage\":\"look\""), "{json}");
-        assert!(json.contains("\"trial\":\"project\""), "{json}");
+        assert!(json.contains("\"sketch\":\"project\""), "{json}");
+
+        // A Cox from before sketches were named so kept it as `trial`.
+        assert_eq!(
+            Setup::from_json(r#"{"trial":"empty"}"#).unwrap().sketch,
+            Some(Sketch::Empty)
+        );
 
         // Every part can be left out.
         assert_eq!(Setup::from_json("{}").unwrap(), Setup::default());
@@ -368,7 +376,7 @@ mod tests {
         let policy = Policy {
             allow: ["edit:*", "move:*", "read:*"].map(str::to_owned).to_vec(),
             reject: Vec::new(),
-            within: Some("/trials/scratch-1".into()),
+            within: Some("/sketches/scratch-1".into()),
         };
         let decide = |kind, locations: &[&str]| {
             let locations: Vec<PathBuf> = locations.iter().map(PathBuf::from).collect();
@@ -379,25 +387,31 @@ mod tests {
             })
         };
         assert_eq!(
-            decide(ToolKind::Edit, &["/trials/scratch-1/notes.md"]),
+            decide(ToolKind::Edit, &["/sketches/scratch-1/notes.md"]),
             Some(Decision::Allow)
         );
         assert_eq!(
             decide(
                 ToolKind::Move,
-                &["/trials/scratch-1/a.md", "/trials/scratch-1/b/a.md"]
+                &["/sketches/scratch-1/a.md", "/sketches/scratch-1/b/a.md"]
             ),
             Some(Decision::Allow)
         );
         // Elsewhere, partly elsewhere, or nowhere it says.
         assert_eq!(decide(ToolKind::Edit, &["/home/me/notes.md"]), None);
         assert_eq!(
-            decide(ToolKind::Move, &["/trials/scratch-1/a.md", "/home/me/a.md"]),
+            decide(
+                ToolKind::Move,
+                &["/sketches/scratch-1/a.md", "/home/me/a.md"]
+            ),
             None
         );
         assert_eq!(decide(ToolKind::Edit, &[]), None);
-        assert_eq!(decide(ToolKind::Edit, &["/trials/scratch-1/../x.md"]), None);
-        assert_eq!(decide(ToolKind::Edit, &["/trials/scratch-10/x.md"]), None);
+        assert_eq!(
+            decide(ToolKind::Edit, &["/sketches/scratch-1/../x.md"]),
+            None
+        );
+        assert_eq!(decide(ToolKind::Edit, &["/sketches/scratch-10/x.md"]), None);
         assert_eq!(decide(ToolKind::Edit, &["notes.md"]), None);
         // A call that changes no files goes anywhere.
         assert_eq!(
