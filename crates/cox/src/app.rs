@@ -68,7 +68,8 @@ pub enum Mode {
 pub struct Settings {
     /// The page each chat's stage shows first.
     pub stage: String,
-    /// Where chats in no project work, if not in `~/Cox`.
+    /// Where chats in no project work for this run, if not where the
+    /// settings say, or `~/Cox` (see [`crate::settings`]).
     pub home: Option<PathBuf>,
     /// Where Cox keeps what lasts across its runs, if not where it keeps
     /// it from the place it runs from (see [`crate::storage`]).
@@ -144,7 +145,12 @@ pub fn run(settings: Settings) -> ExitCode {
     }
     let store = Rc::new(open_store());
 
-    let home = home_for_chats(settings.home);
+    let home_given = settings.home.is_some();
+    let home = home_for_chats(
+        settings
+            .home
+            .or_else(|| crate::settings::Saved::read().home),
+    );
     let agents = Agents::read(settings.command);
     agents.fetch();
     let launcher = Launcher {
@@ -167,7 +173,7 @@ pub fn run(settings: Settings) -> ExitCode {
             serve_browser(&cef, cx);
             quit_when_asked(cx);
             shut_down_on_quit(cef, cx);
-            let window = open_window(home, store, launcher, cx);
+            let window = open_window(home, home_given, store, launcher, cx);
             crate::inspect::start(window, devtools, cx);
         });
     ExitCode::SUCCESS
@@ -200,6 +206,7 @@ fn open_store() -> Store {
 /// Binds the keys of every part of the window, and of quitting.
 fn bind_keys(cx: &mut App) {
     crate::ui::input::bind_keys(cx);
+    crate::settings::view::bind_keys(cx);
     crate::chat::view::bind_keys(cx);
     crate::stage::document::bind_keys(cx);
     crate::stage::code::bind_keys(cx);
@@ -267,9 +274,11 @@ fn shut_down_on_quit(cef: Cef, cx: &mut App) {
 
 /// Opens the window, with no chat in it, listing the chats kept in
 /// `store`, where `launcher` opens chats, and chats in no project work in
-/// `home`. The app quits when the window closes.
+/// `home`, which `--home` gave when `home_given` says so. The app quits
+/// when the window closes.
 fn open_window(
     home: PathBuf,
+    home_given: bool,
     store: Rc<Store>,
     launcher: Launcher,
     cx: &mut App,
@@ -282,7 +291,7 @@ fn open_window(
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| Workspace::new(home, store, opens, cx)),
+            |_, cx| cx.new(|cx| Workspace::new(home, home_given, store, opens, cx)),
         )
         .expect("the window opens");
     window

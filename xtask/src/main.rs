@@ -295,8 +295,15 @@ fn run(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
         sh.remove_path(&data)?;
         data
     };
-    let home = data.join("home");
-    sh.create_dir(&home)?;
+    // Chats in no project work in a folder of the run's, kept as the
+    // settings screen keeps it, which the human can change from there.
+    let settings = data.join("settings.json");
+    if !sh.path_exists(&settings) {
+        let home = data.join("home");
+        sh.create_dir(&home)?;
+        let home = serde_json::json!({ "home": home });
+        sh.write_file(&settings, format!("{home:#}\n"))?;
+    }
     let display = if asked.headless {
         Some(Display::start()?)
     } else {
@@ -312,7 +319,7 @@ fn run(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
     if let Some(display) = &display {
         println!("It runs on DISPLAY={}", display.name);
     }
-    let mut cox = cmd!(sh, "{cox} --data {data} --home {home} {agent...}");
+    let mut cox = cmd!(sh, "{cox} --data {data} {agent...}");
     if let Some(display) = &display {
         cox = cox.env("DISPLAY", &display.name);
     }

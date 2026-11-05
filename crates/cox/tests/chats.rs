@@ -261,12 +261,13 @@ fn open_window_asking(
     cx.update(|cx| {
         cox::ui::input::bind_keys(cx);
         cox::chat::view::bind_keys(cx);
+        cox::settings::view::bind_keys(cx);
         cox::workspace::bind_keys(cx);
     });
     let agents = Agents::default();
     let asks = Asks::default();
     let opens = opens(&agents, &asks, resumes);
-    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, store, opens, cx));
+    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, false, store, opens, cx));
     cx.update(|window, cx| window.focus(&workspace.focus_handle(cx)));
     (agents, asks, workspace, cx)
 }
@@ -294,7 +295,7 @@ fn open_window_logging_in(
         logs_in,
     });
     let store = Rc::new(Store::in_memory().unwrap());
-    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, store, opens, cx));
+    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(home, false, store, opens, cx));
     cx.update(|window, cx| window.focus(&workspace.focus_handle(cx)));
     (agents, workspace, cx)
 }
@@ -455,6 +456,56 @@ async fn the_rail_chooses_the_project_whose_chats_the_tabs_show(cx: &mut TestApp
     assert_eq!(shown_name(cx), None);
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui::test]
+async fn the_settings_set_where_chats_in_no_project_work(cx: &mut TestAppContext) {
+    let home = scratch("settings-home");
+    let other = scratch("settings-other");
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "before").await;
+
+    // The gear opens the settings, with the keyboard in the home's input.
+    click(cx, "open-settings");
+    let settings = workspace.read_with(cx, |workspace, _| {
+        workspace.settings().expect("the settings are open").clone()
+    });
+    let typed = |cx: &mut VisualTestContext| {
+        settings.read_with(cx, |settings, cx| {
+            settings.input().read(cx).text().to_owned()
+        })
+    };
+    assert_eq!(typed(cx), home.display().to_string());
+
+    // What is not a whole path is not set.
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input("elsewhere");
+    cx.simulate_keystrokes("enter");
+    let kept = workspace.read_with(cx, |workspace, _| workspace.home().to_owned());
+    assert_eq!(kept, home);
+
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input(&other.display().to_string());
+    cx.simulate_keystrokes("enter");
+    let kept = workspace.read_with(cx, |workspace, _| workspace.home().to_owned());
+    assert_eq!(kept, other);
+    assert_eq!(
+        cox::settings::Saved::read().home.as_deref(),
+        Some(other.as_path()),
+        "the home lasts across runs"
+    );
+
+    // Escape closes them, and the next chat in no project works there.
+    cx.simulate_keystrokes("escape");
+    let open = workspace.read_with(cx, |workspace, _| workspace.settings().is_some());
+    assert!(!open);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "after").await;
+    let cwds: Vec<_> = agents.borrow().iter().map(|agent| agent.cwd()).collect();
+    assert_eq!(cwds, [Some(home.clone()), Some(other.clone())]);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&other);
 }
 
 #[gpui::test]
@@ -765,7 +816,7 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     let again = cx.update(|_, cx| {
         let store = Rc::new(Store::open(&kept).unwrap());
         let opens = opens(&agents, &Asks::default(), Resumes::Resume);
-        cx.new(|cx| Workspace::new(home.clone(), store, opens, cx))
+        cx.new(|cx| Workspace::new(home.clone(), false, store, opens, cx))
     });
     let name = folder.file_name().unwrap().to_string_lossy().into_owned();
     assert_eq!(
@@ -1365,7 +1416,7 @@ async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut Test
     let again = cx.update(|_, cx| {
         let store = Rc::new(Store::open(&kept).unwrap());
         let opens = opens(&agents, &Asks::default(), Resumes::Resume);
-        cx.new(|cx| Workspace::new(home.clone(), store, opens, cx))
+        cx.new(|cx| Workspace::new(home.clone(), false, store, opens, cx))
     });
     assert_eq!(names(cx, &again), listed(&[("No project", &["first"])]));
     let archived = again.read_with(cx, |workspace, _| {
@@ -1860,7 +1911,7 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     let again = cx.update(|_, cx| {
         let store = Rc::new(Store::open(&kept).unwrap());
         let opens = opens(&agents, &Asks::default(), Resumes::Resume);
-        cx.new(|cx| Workspace::new(home.clone(), store, opens, cx))
+        cx.new(|cx| Workspace::new(home.clone(), false, store, opens, cx))
     });
     assert_eq!(
         names(cx, &again),
