@@ -141,6 +141,42 @@ impl Draft {
         self.select_to(self.next_boundary(self.cursor()));
     }
 
+    /// Option+Left (Control+Left off macOS): to the start of the word
+    /// before the selection, or before the cursor.
+    pub fn move_word_left(&mut self) {
+        self.move_to(self.previous_word_start(self.selected.start));
+    }
+
+    /// Option+Right (Control+Right off macOS): to the end of the word after
+    /// the selection, or after the cursor.
+    pub fn move_word_right(&mut self) {
+        self.move_to(self.next_word_end(self.selected.end));
+    }
+
+    /// The selection grows, or shrinks, to the start of the word before
+    /// the cursor.
+    pub fn select_word_left(&mut self) {
+        self.select_to(self.previous_word_start(self.cursor()));
+    }
+
+    /// The selection grows, or shrinks, to the end of the word after the
+    /// cursor.
+    pub fn select_word_right(&mut self) {
+        self.select_to(self.next_word_end(self.cursor()));
+    }
+
+    /// Selects from where `origin` starts or ends to where `reached` does,
+    /// whichever takes in both: a drag that started by selecting `origin`,
+    /// a word or a line, and is now over `reached`, another.
+    pub fn select_spanning(&mut self, origin: &Range<usize>, reached: &Range<usize>) {
+        self.reversed = reached.start < origin.start;
+        self.selected = if self.reversed {
+            reached.start..origin.end
+        } else {
+            origin.start..reached.end.max(origin.end)
+        };
+    }
+
     /// Backspace: takes out the selection, or the character before the
     /// cursor.
     pub fn delete_backward(&mut self) {
@@ -158,6 +194,60 @@ impl Draft {
             self.selected = self.selected.start..end;
         }
         self.commit(None, "");
+    }
+
+    /// Option+Backspace (Control+Backspace off macOS): takes out the
+    /// selection, or the word before the cursor.
+    pub fn delete_word_backward(&mut self) {
+        self.delete_to(self.previous_word_start(self.selected.start));
+    }
+
+    /// Option+Delete (Control+Delete off macOS): takes out the selection,
+    /// or the word after the cursor.
+    pub fn delete_word_forward(&mut self) {
+        self.delete_to(self.next_word_end(self.selected.end));
+    }
+
+    /// Takes out the selection, or what is between the cursor and
+    /// `offset`.
+    pub fn delete_to(&mut self, offset: usize) {
+        if self.selected.is_empty() {
+            let cursor = self.selected.start;
+            self.selected = cursor.min(offset)..cursor.max(offset);
+        }
+        self.commit(None, "");
+    }
+
+    /// What a double click at `offset` selects: the word there, or the run
+    /// of spaces or of punctuation, or at the end of a line, the one
+    /// before it.
+    #[must_use]
+    pub fn word_at(&self, offset: usize) -> Range<usize> {
+        let mut before = offset..offset;
+        for (start, piece) in self.text.split_word_bound_indices() {
+            if piece.starts_with(['\n', '\r']) {
+                continue;
+            }
+            let piece = start..start + piece.len();
+            if piece.contains(&offset) {
+                return piece;
+            }
+            if piece.end == offset {
+                before = piece;
+            }
+        }
+        before
+    }
+
+    /// What a triple click at `offset` selects: the line there, between
+    /// line breaks.
+    #[must_use]
+    pub fn line_at(&self, offset: usize) -> Range<usize> {
+        let start = self.text[..offset].rfind('\n').map_or(0, |at| at + 1);
+        let end = self.text[offset..]
+            .find(['\r', '\n'])
+            .map_or(self.text.len(), |at| offset + at);
+        start..end
     }
 
     /// Final text, typed or committed by the input method: `text` in place
@@ -256,6 +346,34 @@ impl Draft {
             .grapheme_indices(true)
             .map(|(index, _)| index)
             .find(|&index| index > offset)
+            .unwrap_or(self.text.len())
+    }
+
+    /// The words of the text: the pieces Unicode tells words apart into
+    /// that hold a letter or a digit, rather than spaces or punctuation.
+    fn words(&self) -> impl Iterator<Item = Range<usize>> + '_ {
+        self.text
+            .split_word_bound_indices()
+            .filter(|(_, piece)| piece.chars().any(char::is_alphanumeric))
+            .map(|(start, piece)| start..start + piece.len())
+    }
+
+    /// The start of the word before `offset`, or in it, or the start of
+    /// the text.
+    fn previous_word_start(&self, offset: usize) -> usize {
+        self.words()
+            .map(|word| word.start)
+            .take_while(|&start| start < offset)
+            .last()
+            .unwrap_or(0)
+    }
+
+    /// The end of the word after `offset`, or in it, or the end of the
+    /// text.
+    fn next_word_end(&self, offset: usize) -> usize {
+        self.words()
+            .map(|word| word.end)
+            .find(|&end| end > offset)
             .unwrap_or(self.text.len())
     }
 
@@ -454,6 +572,94 @@ mod tests {
         assert_eq!(draft.text(), "hello");
         assert_eq!(draft.cursor(), 5);
         assert!(!draft.is_composing());
+    }
+
+    #[test]
+    fn the_cursor_moves_by_words_past_spaces_and_punctuation() {
+        let mut draft = draft("one, two  three");
+        draft.move_word_left();
+        assert_eq!(draft.cursor(), 10);
+        draft.move_word_left();
+        assert_eq!(draft.cursor(), 5);
+        draft.move_word_left();
+        draft.move_word_left();
+        assert_eq!(draft.cursor(), 0);
+        draft.move_word_right();
+        assert_eq!(draft.cursor(), 3);
+        draft.move_word_right();
+        assert_eq!(draft.cursor(), 8);
+        // From the middle of a word, to its end.
+        draft.move_to(11);
+        draft.move_word_right();
+        assert_eq!(draft.cursor(), 15);
+        draft.move_word_right();
+        assert_eq!(draft.cursor(), 15);
+    }
+
+    #[test]
+    fn a_selection_grows_by_words() {
+        let mut draft = draft("one two three");
+        draft.move_to(7);
+        draft.select_word_left();
+        assert_eq!(draft.selected_text(), "two");
+        draft.select_word_left();
+        assert_eq!(draft.selected_text(), "one two");
+        // The cursor goes to the end of the word it was at the start of.
+        draft.select_word_right();
+        assert_eq!(draft.selected_text(), " two");
+        // A move with a selection starts from its end on that side.
+        draft.move_word_right();
+        assert_eq!(draft.cursor(), 13);
+    }
+
+    #[test]
+    fn whole_words_are_taken_out_with_what_is_between() {
+        let mut draft = draft("one two  three");
+        draft.move_to(7);
+        draft.delete_word_forward();
+        assert_eq!(draft.text(), "one two");
+        draft.delete_word_backward();
+        assert_eq!(draft.text(), "one ");
+        draft.delete_word_backward();
+        assert_eq!(draft.text(), "");
+        draft.set_text("abc");
+        draft.delete_to(1);
+        assert_eq!(draft.text(), "a");
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_or_what_is_between_words() {
+        let draft = draft("one, two\nthree");
+        assert_eq!(draft.word_at(1), 0..3);
+        assert_eq!(draft.word_at(3), 3..4);
+        assert_eq!(draft.word_at(4), 4..5);
+        // At the end of a line, and of the text, the word before.
+        assert_eq!(draft.word_at(8), 5..8);
+        assert_eq!(draft.word_at(14), 9..14);
+        assert_eq!(draft.word_at(0), 0..3);
+        assert_eq!(Draft::new().word_at(0), 0..0);
+    }
+
+    #[test]
+    fn a_triple_click_selects_the_line() {
+        let draft = draft("one\ntwo three\r\nfour");
+        assert_eq!(draft.line_at(1), 0..3);
+        assert_eq!(draft.line_at(3), 0..3);
+        assert_eq!(draft.line_at(6), 4..13);
+        assert_eq!(draft.line_at(15), 15..19);
+    }
+
+    #[test]
+    fn a_drag_selects_whole_words_either_way() {
+        let mut draft = draft("one two three");
+        draft.select_spanning(&(4..7), &(8..13));
+        assert_eq!(draft.selected_text(), "two three");
+        assert!(!draft.is_reversed());
+        draft.select_spanning(&(4..7), &(0..3));
+        assert_eq!(draft.selected_text(), "one two");
+        assert!(draft.is_reversed());
+        draft.select_spanning(&(4..7), &(4..7));
+        assert_eq!(draft.selected_text(), "two");
     }
 
     #[test]

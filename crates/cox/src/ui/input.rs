@@ -49,6 +49,18 @@ actions!(
         SelectDown,
         SelectToHome,
         SelectToEnd,
+        WordLeft,
+        WordRight,
+        SelectWordLeft,
+        SelectWordRight,
+        TextStart,
+        TextEnd,
+        SelectToTextStart,
+        SelectToTextEnd,
+        DeleteWordBackward,
+        DeleteWordForward,
+        DeleteToHome,
+        DeleteToEnd,
         SelectAll,
         Cut,
         Copy,
@@ -85,6 +97,42 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", Submit, Some(KEY_CONTEXT)),
         KeyBinding::new("shift-enter", Newline, Some(KEY_CONTEXT)),
     ]);
+    if cfg!(target_os = "macos") {
+        // As text fields on macOS take them, Emacs's Control keys too.
+        cx.bind_keys([
+            KeyBinding::new("alt-left", WordLeft, Some(KEY_CONTEXT)),
+            KeyBinding::new("alt-right", WordRight, Some(KEY_CONTEXT)),
+            KeyBinding::new("alt-shift-left", SelectWordLeft, Some(KEY_CONTEXT)),
+            KeyBinding::new("alt-shift-right", SelectWordRight, Some(KEY_CONTEXT)),
+            KeyBinding::new("alt-backspace", DeleteWordBackward, Some(KEY_CONTEXT)),
+            KeyBinding::new("alt-delete", DeleteWordForward, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-left", Home, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-right", End, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-shift-left", SelectToHome, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-shift-right", SelectToEnd, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-up", TextStart, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-down", TextEnd, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-shift-up", SelectToTextStart, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-shift-down", SelectToTextEnd, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-backspace", DeleteToHome, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-a", Home, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-e", End, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-k", DeleteToEnd, Some(KEY_CONTEXT)),
+        ]);
+    } else {
+        cx.bind_keys([
+            KeyBinding::new("ctrl-left", WordLeft, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-right", WordRight, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-shift-left", SelectWordLeft, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-shift-right", SelectWordRight, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-backspace", DeleteWordBackward, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-delete", DeleteWordForward, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-home", TextStart, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-end", TextEnd, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-shift-home", SelectToTextStart, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-shift-end", SelectToTextEnd, Some(KEY_CONTEXT)),
+        ]);
+    }
 }
 
 /// The human pressed Enter with no composition in progress.
@@ -95,8 +143,9 @@ pub struct LineInput {
     /// The text, with its selection and what the input method is
     /// composing, which is shown underlined.
     draft: Draft,
-    /// Whether a mouse button went down on the input and is still held.
-    selecting: bool,
+    /// What the mouse selects by while its button, which went down on the
+    /// input, is held.
+    drag: Option<Drag>,
     /// Whether lines wrap at the input's width, rather than the input
     /// holding one line.
     wraps: bool,
@@ -111,6 +160,16 @@ pub struct LineInput {
     placeholder: SharedString,
 }
 
+/// What a drag selects by: characters, after a click; words, after a
+/// double click; lines, after a triple click, each word or line the mouse
+/// passes adding to the one first selected.
+#[derive(Clone, Debug)]
+enum Drag {
+    Characters,
+    Words(Range<usize>),
+    Lines(Range<usize>),
+}
+
 /// How many rows an input that wraps grows to before it scrolls.
 const MAX_ROWS: usize = 8;
 
@@ -120,7 +179,7 @@ impl LineInput {
         Self {
             focus_handle: cx.focus_handle(),
             draft: Draft::new(),
-            selecting: false,
+            drag: None,
             wraps: false,
             last_layout: None,
             last_bounds: None,
@@ -279,6 +338,89 @@ impl LineInput {
         self.edit(cx, |draft| draft.select_to(offset));
     }
 
+    fn word_left(&mut self, _: &WordLeft, _window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, Draft::move_word_left);
+    }
+
+    fn word_right(&mut self, _: &WordRight, _window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, Draft::move_word_right);
+    }
+
+    fn select_word_left(
+        &mut self,
+        _: &SelectWordLeft,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, Draft::select_word_left);
+    }
+
+    fn select_word_right(
+        &mut self,
+        _: &SelectWordRight,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, Draft::select_word_right);
+    }
+
+    fn text_start(&mut self, _: &TextStart, _window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, |draft| draft.move_to(0));
+    }
+
+    fn text_end(&mut self, _: &TextEnd, _window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, |draft| draft.move_to(draft.text().len()));
+    }
+
+    fn select_to_text_start(
+        &mut self,
+        _: &SelectToTextStart,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, |draft| draft.select_to(0));
+    }
+
+    fn select_to_text_end(
+        &mut self,
+        _: &SelectToTextEnd,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, |draft| draft.select_to(draft.text().len()));
+    }
+
+    fn delete_word_backward(
+        &mut self,
+        _: &DeleteWordBackward,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, Draft::delete_word_backward);
+    }
+
+    fn delete_word_forward(
+        &mut self,
+        _: &DeleteWordForward,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, Draft::delete_word_forward);
+    }
+
+    /// Command+Backspace: takes out the selection, or the row up to the
+    /// cursor.
+    fn delete_to_home(&mut self, _: &DeleteToHome, _window: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.row_start();
+        self.edit(cx, |draft| draft.delete_to(offset));
+    }
+
+    /// Control+K: takes out the selection, or the row from the cursor on.
+    fn delete_to_end(&mut self, _: &DeleteToEnd, _window: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.row_end();
+        self.edit(cx, |draft| draft.delete_to(offset));
+    }
+
     fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
         self.select_whole(cx);
     }
@@ -324,25 +466,53 @@ impl LineInput {
         true
     }
 
+    /// A click puts the cursor there, or with Shift, selects up to there; a
+    /// double click selects the word there, and a triple click the line.
     fn mouse_down(&mut self, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.selecting = true;
-        let offset = self.offset_at(event.position);
-        if event.modifiers.shift {
-            self.edit(cx, |draft| draft.select_to(offset));
-        } else {
-            self.edit(cx, |draft| draft.move_to(offset));
-        }
+        let drag = match event.click_count {
+            0 | 1 => {
+                let offset = self.offset_at(event.position);
+                if event.modifiers.shift {
+                    self.edit(cx, |draft| draft.select_to(offset));
+                } else {
+                    self.edit(cx, |draft| draft.move_to(offset));
+                }
+                Drag::Characters
+            }
+            2 => {
+                let word = self.draft.word_at(self.char_at(event.position));
+                self.edit(cx, |draft| draft.select_spanning(&word, &word));
+                Drag::Words(word)
+            }
+            _ => {
+                let line = self.draft.line_at(self.char_at(event.position));
+                self.edit(cx, |draft| draft.select_spanning(&line, &line));
+                Drag::Lines(line)
+            }
+        };
+        self.drag = Some(drag);
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.selecting {
-            let offset = self.offset_at(event.position);
-            self.edit(cx, |draft| draft.select_to(offset));
+        match self.drag.clone() {
+            None => {}
+            Some(Drag::Characters) => {
+                let offset = self.offset_at(event.position);
+                self.edit(cx, |draft| draft.select_to(offset));
+            }
+            Some(Drag::Words(word)) => {
+                let reached = self.draft.word_at(self.char_at(event.position));
+                self.edit(cx, |draft| draft.select_spanning(&word, &reached));
+            }
+            Some(Drag::Lines(line)) => {
+                let reached = self.draft.line_at(self.char_at(event.position));
+                self.edit(cx, |draft| draft.select_spanning(&line, &reached));
+            }
         }
     }
 
     fn mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.selecting = false;
+        self.drag = None;
     }
 
     /// Leaves the cursor where it is, with nothing selected.
@@ -356,6 +526,15 @@ impl LineInput {
             return 0;
         };
         layout.index_at(position - self.text_origin(bounds))
+    }
+
+    /// The offset of the character under `position` in the window, or of
+    /// the end of the line, past its end.
+    fn char_at(&self, position: Point<Pixels>) -> usize {
+        let (Some(bounds), Some(layout)) = (self.last_bounds, self.last_layout.as_ref()) else {
+            return 0;
+        };
+        layout.char_at(position - self.text_origin(bounds))
     }
 
     /// Where the text starts in the window, in an input at `bounds`: left
@@ -575,6 +754,18 @@ impl Render for LineInput {
             .on_action(cx.listener(Self::select_down))
             .on_action(cx.listener(Self::select_to_home))
             .on_action(cx.listener(Self::select_to_end))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
+            .on_action(cx.listener(Self::text_start))
+            .on_action(cx.listener(Self::text_end))
+            .on_action(cx.listener(Self::select_to_text_start))
+            .on_action(cx.listener(Self::select_to_text_end))
+            .on_action(cx.listener(Self::delete_word_backward))
+            .on_action(cx.listener(Self::delete_word_forward))
+            .on_action(cx.listener(Self::delete_to_home))
+            .on_action(cx.listener(Self::delete_to_end))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
@@ -583,6 +774,7 @@ impl Render for LineInput {
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
+            .cursor_text()
             .w_full()
             .child(LineElement { input: cx.entity() })
     }
@@ -674,6 +866,18 @@ impl Layout {
 
     /// The offset nearest `position`.
     fn index_at(&self, position: Point<Pixels>) -> usize {
+        self.hit(position, true)
+    }
+
+    /// The offset of the character under `position`, or of the end of its
+    /// line, past the line's end.
+    fn char_at(&self, position: Point<Pixels>) -> usize {
+        self.hit(position, false)
+    }
+
+    /// The offset `position` is at: the nearest, if `closest`, or else that
+    /// of the character under it.
+    fn hit(&self, position: Point<Pixels>, closest: bool) -> usize {
         let last = self.lines.len().saturating_sub(1);
         for (n, (start, top, line)) in self.placed().enumerate() {
             let height = rows_height(self.line_height, rows(line));
@@ -682,8 +886,12 @@ impl Layout {
                 let y = (position.y - top)
                     .max(px(0.))
                     .min(height - self.line_height / 2.);
-                let (Ok(index) | Err(index)) =
-                    line.closest_index_for_position(point(position.x, y), self.line_height);
+                let at = point(position.x.max(px(0.)), y);
+                let (Ok(index) | Err(index)) = if closest {
+                    line.closest_index_for_position(at, self.line_height)
+                } else {
+                    line.index_for_position(at, self.line_height)
+                };
                 return start + index;
             }
         }
