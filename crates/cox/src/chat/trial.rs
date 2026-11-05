@@ -14,10 +14,10 @@
 //! trial changed shows on the stage as all it changed since then (see
 //! [`cox_editor::changes`]).
 //!
-//! Once the human has what they wanted of it, the trial ends: a trial of
-//! the project's is kept as a branch of the project's repository, with
-//! what it changed, or a trial from nothing is opened as a project of its
-//! own; or the trial is discarded, its folder with it, its agent first
+//! Once the human has what they wanted of it, the trial ends, in the
+//! ways the human's workflow says (see [`crate::workflow::Trial`]): as
+//! Cox's own says, a trial from nothing is opened as a project of its
+//! own, or the trial is discarded, its folder with it, its agent first
 //! summing it up in the conversation, and what it changed kept apart,
 //! but for the files too big to keep. The chat goes on, in the project.
 
@@ -78,26 +78,19 @@ impl Trial {
     }
 }
 
-/// The permission requests a trial's agent goes on with unasked, on top
-/// of what the chat that opened it said, by ACP's kinds of tool: changing
-/// files, which [`allow`] keeps to the trial's own, and what a judge may
-/// run, which reads and tests.
-const ALLOWED: &[&str] = &["edit:*", "delete:*", "move:*"];
-
 /// `policy` with what a trial's agent, working in `folder`, goes on with
-/// unasked: changing the files in `folder`, and what a judge may run.
+/// unasked, on top of what the chat that opened it said: the requests
+/// `patterns` match, as the human's workflow says them (see
+/// [`crate::workflow::Trial::allow`]), when they change the files in
+/// `folder` only, and what a judge may run, which reads and tests.
 #[must_use]
-pub fn allow(policy: Policy, folder: &Path) -> Policy {
+pub fn allow(policy: Policy, folder: &Path, patterns: &[String]) -> Policy {
     Policy {
         allow: policy
             .allow
             .into_iter()
-            .chain(
-                ALLOWED
-                    .iter()
-                    .chain(judge::ALLOWED)
-                    .map(|&pattern| pattern.to_owned()),
-            )
+            .chain(patterns.iter().cloned())
+            .chain(judge::ALLOWED.iter().map(|&pattern| pattern.to_owned()))
             .collect(),
         within: Some(folder.to_owned()),
         ..policy
@@ -155,49 +148,6 @@ fn worktree(project: &Path, trials: &Path) -> Result<PathBuf, String> {
     } else {
         folder.join(within)
     })
-}
-
-/// Keeps what the trial of the project's that works in `folder` made as
-/// a branch of the project's repository, `trial/` and the name of its
-/// folder, with what it changed committed as `title` says, and takes its
-/// worktree away; and answers the branch's name.
-///
-/// # Errors
-///
-/// When Git cannot commit what the trial changed, make the branch, or
-/// take the worktree away, with what Git said.
-pub fn keep(folder: &Path, title: &str) -> Result<String, String> {
-    let top = top(folder)?;
-    git(&top, &["add", "--all"])?;
-    if !git(&top, &["status", "--porcelain"])?.trim().is_empty() {
-        let message = format!("Trial: {title}");
-        git(&top, &["commit", "--quiet", "--no-verify", "-m", &message])?;
-    }
-    let name = top.file_name().map_or_else(
-        || "trial".to_owned(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    let branch = (1..=u32::MAX)
-        .map(|number| match number {
-            1 => format!("trial/{name}"),
-            _ => format!("trial/{name}-{number}"),
-        })
-        .find(|branch| {
-            git(
-                &top,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("refs/heads/{branch}"),
-                ],
-            )
-            .is_err()
-        })
-        .ok_or_else(|| "there is no name left for the branch".to_owned())?;
-    git(&top, &["branch", &branch])?;
-    remove_worktree(&top)?;
-    Ok(branch)
 }
 
 /// What Cox calls the folder, in the folder of trials, that keeps what
@@ -296,12 +246,12 @@ pub fn left_out(folder: &Path) -> Result<Vec<LeftOut>, String> {
     sort(folder).map(|sorted| sorted.left_out)
 }
 
-/// What the agent of a trial the human discards is told, to sum the
-/// trial up in the conversation before its folder goes, so that it can
-/// be done again from the conversation alone; the files `left_out`, too
-/// big to keep, it is asked how to make again.
+/// The files `left_out` of a trial, too big to keep, as its agent is
+/// asked to say how to make each of them again before the trial ends, in
+/// place of `{left_out}` (see [`crate::workflow::TRIAL_DISCARD`]); or
+/// nothing, when there are none.
 #[must_use]
-pub fn summing_up(left_out: &[LeftOut]) -> String {
+pub fn left_out_lines(left_out: &[LeftOut]) -> String {
     let mut files = String::new();
     if !left_out.is_empty() {
         files.push_str(
@@ -312,7 +262,7 @@ pub fn summing_up(left_out: &[LeftOut]) -> String {
             let _ = write!(files, "\n- {} ({})", file.path, size(file.size));
         }
     }
-    crate::workflow::TRIAL_DISCARD.say(&[("left_out", &files)])
+    files
 }
 
 /// Where what a discarded trial changed is kept.
@@ -323,6 +273,16 @@ pub enum Kept {
     /// A bundle of Git's, for a trial from nothing, whose repository goes
     /// with its folder.
     Bundle(PathBuf),
+}
+
+impl std::fmt::Display for Kept {
+    /// Where it is kept: the ref's name, or the bundle's path.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ref(name) => f.write_str(name),
+            Self::Bundle(bundle) => write!(f, "{}", bundle.display()),
+        }
+    }
 }
 
 /// What is kept of a discarded trial.
@@ -369,10 +329,11 @@ impl Discarded {
 }
 
 /// Discards the trial that starts from `trial`, named `title`, that works
-/// in `folder`, taking its folder away. What it changed since it started
-/// is kept first, as one commit from where it started, but for the files
-/// too big to keep: as a ref of the project's repository for a trial of
-/// the project's, and as a bundle in `bundles` for a trial from nothing.
+/// in `folder`, taking its folder away. When `keep` says to, what it
+/// changed since it started is kept first, as one commit from where it
+/// started, but for the files too big to keep: as a ref of the project's
+/// repository for a trial of the project's, and as a bundle in `bundles`
+/// for a trial from nothing.
 ///
 /// # Errors
 ///
@@ -383,9 +344,14 @@ pub fn discard(
     folder: &Path,
     title: &str,
     bundles: &Path,
+    keep: bool,
 ) -> Result<Discarded, String> {
     let top = top(folder)?;
-    let sorted = sort(folder)?;
+    let sorted = if keep {
+        sort(folder)?
+    } else {
+        Sorted::default()
+    };
     let commit = commit_kept(&top, &sorted.kept, title)?;
     let kept = match (commit, trial) {
         (None, _) => None,
@@ -761,41 +727,6 @@ mod tests {
     }
 
     #[test]
-    fn a_trial_is_kept_as_a_branch_with_what_it_changed() {
-        let root = scratch("keep");
-        let project = root.join("greet");
-        repository(&project);
-        let trials = root.join("trials");
-        let trial = make(Trial::Project, &project, &trials).unwrap();
-        std::fs::write(trial.join("main.rs"), "fn main() { trial() }\n").unwrap();
-        std::fs::write(trial.join("new.rs"), "fn trial() {}\n").unwrap();
-
-        assert_eq!(keep(&trial, "Try a greeting").unwrap(), "trial/greet-1");
-        assert!(!trial.exists());
-        let shown = |what: &str| git(&project, &["show", what]).unwrap();
-        assert_eq!(shown("trial/greet-1:main.rs"), "fn main() { trial() }\n");
-        assert_eq!(shown("trial/greet-1:new.rs"), "fn trial() {}\n");
-        assert_eq!(
-            git(&project, &["log", "-1", "--format=%s", "trial/greet-1"])
-                .unwrap()
-                .trim(),
-            "Trial: Try a greeting"
-        );
-        // The project's own files stay as they were.
-        assert_eq!(
-            std::fs::read_to_string(project.join("main.rs")).unwrap(),
-            "fn main() {}\n"
-        );
-
-        // A trial that changed nothing is kept too, under a name of its
-        // own when the first is taken.
-        let again = make(Trial::Project, &project, &trials).unwrap();
-        assert_eq!(again, trials.join("greet-1"));
-        assert_eq!(keep(&again, "Again").unwrap(), "trial/greet-1-2");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn a_trial_is_discarded_keeping_what_it_changed() {
         let root = scratch("discard");
         let project = root.join("greet");
@@ -825,10 +756,11 @@ mod tests {
         assert_eq!(paths, ["big.bin", "e.txt"]);
         assert_eq!(left_out[0].size, 300 * 1024);
         assert_eq!(left_out[0].hash, big_hash.trim());
-        let line = summing_up(&left_out);
-        assert!(line.contains("- big.bin (300 KB)"), "{line}");
+        let lines = left_out_lines(&left_out);
+        assert!(lines.contains("- big.bin (300 KB)"), "{lines}");
+        assert_eq!(left_out_lines(&[]), "");
 
-        let discarded = discard(Trial::Project, &trial, "Try a greeting", &bundles).unwrap();
+        let discarded = discard(Trial::Project, &trial, "Try a greeting", &bundles, true).unwrap();
         assert!(!trial.exists());
         let name = "refs/cox/discarded/greet-1";
         assert_eq!(discarded.kept, Some(Kept::Ref(name.to_owned())));
@@ -868,24 +800,31 @@ mod tests {
         // its own when the first is taken.
         let again = make(Trial::Project, &project, &trials).unwrap();
         std::fs::remove_file(again.join("main.rs")).unwrap();
-        let discarded = discard(Trial::Project, &again, "Again", &bundles).unwrap();
+        let discarded = discard(Trial::Project, &again, "Again", &bundles, true).unwrap();
         let name = "refs/cox/discarded/greet-1-2";
         assert_eq!(discarded.kept, Some(Kept::Ref(name.to_owned())));
         assert!(shown(&format!("{name}:main.rs")).is_err());
 
         // A trial that changed nothing keeps nothing.
         let unchanged = make(Trial::Project, &project, &trials).unwrap();
-        let discarded = discard(Trial::Project, &unchanged, "Nothing", &bundles).unwrap();
+        let discarded = discard(Trial::Project, &unchanged, "Nothing", &bundles, true).unwrap();
         assert_eq!(discarded.kept, None);
         assert_eq!(
             discarded.note(),
             "The trial is discarded, and its folder is gone."
         );
 
+        // One whose ending keeps nothing goes as it is.
+        let unkept = make(Trial::Project, &project, &trials).unwrap();
+        std::fs::write(unkept.join("main.rs"), "fn main() { unkept() }\n").unwrap();
+        let discarded = discard(Trial::Project, &unkept, "Unkept", &bundles, false).unwrap();
+        assert!(!unkept.exists());
+        assert_eq!(discarded.kept, None);
+
         // A trial from nothing is kept as a bundle, which makes it again.
         let empty = make(Trial::Empty, &project, &trials).unwrap();
         std::fs::write(empty.join("main.rs"), "fn main() {}\n").unwrap();
-        let discarded = discard(Trial::Empty, &empty, "From nothing", &bundles).unwrap();
+        let discarded = discard(Trial::Empty, &empty, "From nothing", &bundles, true).unwrap();
         assert!(!empty.exists());
         let bundle = bundles.join("scratch-1.bundle");
         assert_eq!(discarded.kept, Some(Kept::Bundle(bundle.clone())));
@@ -920,7 +859,8 @@ mod tests {
             reject: vec!["execute:git push*".to_owned()],
             within: None,
         };
-        let policy = allow(opened, Path::new("/trials/scratch-1"));
+        let own = crate::workflow::trial_in(None);
+        let policy = allow(opened, Path::new("/trials/scratch-1"), &own.allow);
         let decide = |title, kind, location: &str| {
             policy.decide(Asked {
                 title,
