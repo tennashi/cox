@@ -1,1 +1,0 @@
-You work in a trial now, in {folder}, {from}, apart from the project: there you change and test files without asking the human. Once you have tried it, show the human what you made with show_changes. Go on with what you try: {what}

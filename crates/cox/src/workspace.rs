@@ -18,7 +18,7 @@
 //! it has a goal, and the project's button on the rail counts its chats
 //! that wait for the human. The menu of the right button on a tab
 //! renames the chat, as a double click does, sets or clears its goal,
-//! ends a trial (see [`crate::chat::trial`]), or archives it: an archived
+//! ends a sketch (see [`crate::chat::sketch`]), or archives it: an archived
 //! chat leaves the list for "Archived" at the end of the tabs, from where
 //! a click brings it back.
 //!
@@ -56,7 +56,7 @@ use tokio::sync::oneshot;
 use crate::agent::mcp::{ChatRequest, OpenedChat, Waited, Whereabouts};
 use crate::agent::setup::{Policy, Setup, keeps_in_wiki};
 use crate::chat::conversation::{Entry, State};
-use crate::chat::trial::{self, Trial};
+use crate::chat::sketch::{self, Sketch};
 use crate::chat::view::{Asked, ChatView, Reopened, SwitchAgent};
 use crate::chat::{Closed, Opens};
 use crate::notices::AppNotices;
@@ -197,9 +197,9 @@ pub struct Chat {
     /// that chat is in the list or archived.
     parent: Option<u64>,
     /// How its agent is set up, when the chat that opened it said, or
-    /// once it became a trial.
+    /// once it became a sketch.
     setup: Option<Setup>,
-    /// The way a trial the human ends ends, and how far it is on its way
+    /// The way a sketch the human ends ends, and how far it is on its way
     /// there, while its agent sums it up first.
     ending: Option<(Ends, workflow::Ending)>,
     /// Its view, or `None` for a closed chat the human has not read yet.
@@ -277,12 +277,12 @@ impl Chat {
         self.project
     }
 
-    /// Whether it is a trial, working in a folder of its own.
+    /// Whether it is a sketch, working in a folder of its own.
     #[must_use]
-    pub fn is_trial(&self) -> bool {
+    pub fn is_sketch(&self) -> bool {
         self.setup
             .as_ref()
-            .is_some_and(|setup| setup.trial.is_some())
+            .is_some_and(|setup| setup.sketch.is_some())
     }
 
     /// Whether a turn ended while the chat was not shown, and it has not
@@ -720,7 +720,7 @@ impl Workspace {
     }
 
     /// Answers `request`, which the agent of the chat of `view` asks of the
-    /// window: opens a trial beside the chat, shows a goal it proposes,
+    /// window: opens a sketch beside the chat, shows a goal it proposes,
     /// opens a chat under it, as the agent says, or waits for one.
     fn asked(
         &mut self,
@@ -730,13 +730,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match request {
-            ChatRequest::StartTrial {
-                trial,
+            ChatRequest::StartSketch {
+                sketch,
                 what,
                 show,
                 answer,
             } => {
-                let opened = self.start_trial(view, trial, &what, window, cx);
+                let opened = self.start_sketch(view, sketch, &what, window, cx);
                 if show && let Ok(opened) = &opened {
                     let key = opened.number;
                     self.reveal(key, window, cx);
@@ -755,10 +755,10 @@ impl Workspace {
                 text,
                 setup,
                 goal,
-                trial,
+                sketch,
                 answer,
             } => {
-                let setup = Setup { trial, ..setup };
+                let setup = Setup { sketch, ..setup };
                 let opened = self.open_chat(view, &text, setup, goal, window, cx);
                 answer.send(opened).ok();
                 cx.notify();
@@ -1065,11 +1065,11 @@ impl Workspace {
             .chats
             .iter()
             .position(|chat| chat.view.as_ref() == Some(view));
-        // A trial the human ends is summed up once its turn ends, and
+        // A sketch the human ends is summed up once its turn ends, and
         // ends once that is done.
         match (ends, index) {
             (Some(Ends::Waiting), Some(index)) => self.sum_up(index, window, cx),
-            (Some(Ends::Summing), Some(index)) => self.finish_trial(index, window, cx),
+            (Some(Ends::Summing), Some(index)) => self.finish_sketch(index, window, cx),
             _ => {}
         }
         self.badge(cx);
@@ -1078,8 +1078,8 @@ impl Workspace {
 
     /// Opens a chat under the chat of `view`, in its project, set up as
     /// `setup` says, which works until `goal` is met if given, and gets
-    /// `text` as its first line, and answers how it goes by. A trial, as
-    /// the setup's `trial` makes it, works in a folder of its own; any
+    /// `text` as its first line, and answers how it goes by. A sketch, as
+    /// the setup's `sketch` makes it, works in a folder of its own; any
     /// other chat works where the chat that opened it does.
     fn open_chat(
         &mut self,
@@ -1100,11 +1100,11 @@ impl Workspace {
                 (chat.project, folder)
             })
             .ok_or("the chat is gone")?;
-        setup.folder = match setup.trial {
-            Some(trial) => {
+        setup.folder = match setup.sketch {
+            Some(sketch) => {
                 let from = folder.unwrap_or_else(|| self.projects[project].folder.clone());
-                let made = make_trial(trial, &from)?;
-                setup.policy = trial::allow(setup.policy, &made, &workflow::trial().allow);
+                let made = make_sketch(sketch, &from)?;
+                setup.policy = sketch::allow(setup.policy, &made, &workflow::sketch().allow);
                 Some(made)
             }
             None => folder,
@@ -1130,13 +1130,13 @@ impl Workspace {
             .find(|chat| chat.view.as_ref() == Some(view))
             .map(|chat| (chat.project, chat.key, chat.kept, chat.name.to_string()))
             .ok_or("the chat is gone")?;
-        let trial = setup.trial;
+        let sketch = setup.sketch;
         let index = self.open_in(project, Some((key, kept)), Some(setup), window, cx);
         let chat = &self.chats[index];
         let opened = OpenedChat {
             number: chat.key,
             name: chat.name.to_string(),
-            folder: trial
+            folder: sketch
                 .and(chat.setup.as_ref())
                 .and_then(|setup| setup.folder.clone()),
         };
@@ -1146,16 +1146,16 @@ impl Workspace {
         Ok(opened)
     }
 
-    /// Opens a trial beside the chat of `view`, under it in the list, that
+    /// Opens a sketch beside the chat of `view`, under it in the list, that
     /// starts from `started`, to try out `what`, and answers how it goes
-    /// by, or why it cannot open. The trial's agent is set up as the
+    /// by, or why it cannot open. The sketch's agent is set up as the
     /// chat's is, and told what the chat talked through so far, and what
     /// it tries; the chat goes on in the project, apart from it, and hears
-    /// how it ends (see [`Self::finish_trial`]).
-    fn start_trial(
+    /// how it ends (see [`Self::finish_sketch`]).
+    fn start_sketch(
         &mut self,
         view: &Entity<ChatView>,
-        started: Trial,
+        started: Sketch,
         what: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1167,9 +1167,9 @@ impl Workspace {
             .ok_or("the chat is not in the list")?;
         let chat = &self.chats[index];
         let setup = chat.setup.clone().unwrap_or_default();
-        if let (Some(_), Some(folder)) = (setup.trial, &setup.folder) {
+        if let (Some(_), Some(folder)) = (setup.sketch, &setup.folder) {
             return Err(format!(
-                "the chat is a trial already, working in {}",
+                "the chat is a sketch already, working in {}",
                 folder.display()
             ));
         }
@@ -1178,7 +1178,7 @@ impl Workspace {
             .clone()
             .unwrap_or_else(|| self.projects[chat.project].folder.clone());
         let talked = agent::talked_through(view.read(cx).conversation().entries());
-        let folder = make_trial(started, &from)?;
+        let folder = make_sketch(started, &from)?;
         let context = [setup.context.clone(), talked]
             .into_iter()
             .flatten()
@@ -1187,11 +1187,11 @@ impl Workspace {
         let setup = Setup {
             context: (!context.is_empty()).then_some(context),
             folder: Some(folder.clone()),
-            trial: Some(started),
-            policy: trial::allow(setup.policy, &folder, &workflow::trial().allow),
+            sketch: Some(started),
+            policy: sketch::allow(setup.policy, &folder, &workflow::sketch().allow),
             ..setup
         };
-        let line = workflow::TRIAL_START.say(&[
+        let line = workflow::SKETCH_START.say(&[
             ("folder", &folder.display().to_string()),
             ("from", started.what()),
             ("what", what),
@@ -1205,7 +1205,7 @@ impl Workspace {
         view.update(cx, |view, cx| {
             view.note(
                 format!(
-                    "Trial: chat {} opens beside this chat, in {}, to try: {what}",
+                    "Sketch: chat {} opens beside this chat, in {}, to try: {what}",
                     opened.number,
                     folder.display()
                 ),
@@ -1288,19 +1288,19 @@ impl Workspace {
     }
 
     /// Shows the chat at `index`, and opens the input that makes it a
-    /// trial, of what the human says it is to try.
-    pub fn edit_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    /// sketch, of what the human says it is to try.
+    pub fn edit_sketch(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
-        if !self.starts_trial(index) {
+        if !self.starts_sketch(index) {
             return;
         }
         self.show(index, window, cx);
         let Some(chat) = self.chats.get(index) else {
             return;
         };
-        let from = trial::from_at_first(&self.projects[chat.project].folder);
+        let from = sketch::from_at_first(&self.projects[chat.project].folder);
         if let Some(view) = chat.view() {
-            view.update(cx, |view, cx| view.edit_trial(from, window, cx));
+            view.update(cx, |view, cx| view.edit_sketch(from, window, cx));
         }
     }
 
@@ -1328,13 +1328,13 @@ impl Workspace {
             .is_some_and(|chat| !working(chat.state) && keeps_in_wiki(chat.setup.as_ref()))
     }
 
-    /// Whether the human can open a trial beside the chat at `index`: it
-    /// is not a trial itself.
-    fn starts_trial(&self, index: usize) -> bool {
+    /// Whether the human can open a sketch beside the chat at `index`: it
+    /// is not a sketch itself.
+    fn starts_sketch(&self, index: usize) -> bool {
         self.chats.get(index).is_some_and(|chat| {
             chat.setup
                 .as_ref()
-                .is_none_or(|setup| setup.trial.is_none())
+                .is_none_or(|setup| setup.sketch.is_none())
         })
     }
 
@@ -1347,44 +1347,44 @@ impl Workspace {
         }
     }
 
-    /// The trial the chat at `index` is, what it started from and the
+    /// The sketch the chat at `index` is, what it started from and the
     /// folder it works in, while the folder is there.
-    fn trial_of(&self, index: usize) -> Option<(Trial, PathBuf)> {
+    fn sketch_of(&self, index: usize) -> Option<(Sketch, PathBuf)> {
         let setup = self.chats.get(index)?.setup.as_ref()?;
         let folder = setup.folder.clone().filter(|folder| folder.exists())?;
-        Some((setup.trial?, folder))
+        Some((setup.sketch?, folder))
     }
 
-    /// Whether the trial at `index` can end: its folder is there, and was
+    /// Whether the sketch at `index` can end: its folder is there, and was
     /// not opened as a project, which the human goes on with, and it is
     /// not on its way to an end already.
-    fn ends_trial(&self, index: usize) -> bool {
+    fn ends_sketch(&self, index: usize) -> bool {
         self.chats[index].ending.is_none()
-            && self.trial_of(index).is_some_and(|(_, folder)| {
+            && self.sketch_of(index).is_some_and(|(_, folder)| {
                 !self.projects.iter().any(|project| project.folder == folder)
             })
     }
 
-    /// The ways the trial at `index` can end, as the human's workflow
-    /// says them (see [`workflow::trial`]), in the order the menu offers
+    /// The ways the sketch at `index` can end, as the human's workflow
+    /// says them (see [`workflow::sketch`]), in the order the menu offers
     /// them; none, unless it can end now.
     #[must_use]
     pub fn endings(&self, index: usize) -> Vec<workflow::Ending> {
-        let Some((from, _)) = self.trial_of(index).filter(|_| self.ends_trial(index)) else {
+        let Some((from, _)) = self.sketch_of(index).filter(|_| self.ends_sketch(index)) else {
             return Vec::new();
         };
-        workflow::trial()
+        workflow::sketch()
             .endings
             .into_iter()
             .filter(|ending| ending.ends(from))
             .collect()
     }
 
-    /// Ends the trial at `index` as `ending` says: asks its agent to sum
+    /// Ends the sketch at `index` as `ending` says: asks its agent to sum
     /// it up in the conversation first, if the ending says to, once its
     /// turn ends if one goes on, and ends it once that is done (see
-    /// [`Self::finish_trial`]).
-    pub fn end_trial_as(
+    /// [`Self::finish_sketch`]).
+    pub fn end_sketch_as(
         &mut self,
         index: usize,
         ending: workflow::Ending,
@@ -1393,9 +1393,9 @@ impl Workspace {
     ) {
         self.menu = None;
         let ends = index < self.chats.len()
-            && self.ends_trial(index)
+            && self.ends_sketch(index)
             && self
-                .trial_of(index)
+                .sketch_of(index)
                 .is_some_and(|(from, _)| ending.ends(from));
         if !ends {
             return;
@@ -1409,7 +1409,7 @@ impl Workspace {
                 view.update(cx, |view, cx| {
                     view.note(
                         format!(
-                            "The trial ends as \"{name}\" once this turn ends, and its agent \
+                            "The sketch ends as \"{name}\" once this turn ends, and its agent \
                              has summed it up."
                         ),
                         cx,
@@ -1422,24 +1422,24 @@ impl Workspace {
         }
     }
 
-    /// Asks the agent of the trial at `index`, which the human ends, to
+    /// Asks the agent of the sketch at `index`, which the human ends, to
     /// sum it up in the conversation, as its ending says, starting it
-    /// again if it is closed; the trial ends once it is done, or at once if
+    /// again if it is closed; the sketch ends once it is done, or at once if
     /// the ending asks for none, or the agent cannot be asked.
     fn sum_up(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some((_, ending)) = self.chats[index].ending.clone() else {
             return;
         };
         let Some(text) = ending.sum_up.clone() else {
-            self.finish_trial(index, window, cx);
+            self.finish_sketch(index, window, cx);
             return;
         };
-        let Some((_, folder)) = self.trial_of(index) else {
+        let Some((_, folder)) = self.sketch_of(index) else {
             self.chats[index].ending = None;
             return;
         };
-        let left_out = trial::left_out(&folder).unwrap_or_else(|error| {
-            tracing::warn!("cannot tell what the trial changed: {error}");
+        let left_out = sketch::left_out(&folder).unwrap_or_else(|error| {
+            tracing::warn!("cannot tell what the sketch changed: {error}");
             Vec::new()
         });
         if self.chats[index].view.is_none() {
@@ -1449,15 +1449,15 @@ impl Workspace {
             self.chats[index].ending = None;
             return;
         };
-        let Some(line) = workflow::say(&text, &[("left_out", &trial::left_out_lines(&left_out))])
+        let Some(line) = workflow::say(&text, &[("left_out", &sketch::left_out_lines(&left_out))])
         else {
             view.update(cx, |view, cx| {
                 view.note(
-                    format!("The trial is not summed up: the workflow has no {text}."),
+                    format!("The sketch is not summed up: the workflow has no {text}."),
                     cx,
                 );
             });
-            self.finish_trial(index, window, cx);
+            self.finish_sketch(index, window, cx);
             return;
         };
         self.chats[index].ending = Some((Ends::Summing, ending));
@@ -1466,22 +1466,22 @@ impl Workspace {
             working(view.conversation().state())
         });
         if !asked {
-            self.finish_trial(index, window, cx);
+            self.finish_sketch(index, window, cx);
         }
     }
 
-    /// Ends the trial at `index`, whose agent has summed it up if its
+    /// Ends the sketch at `index`, whose agent has summed it up if its
     /// ending asked, as the ending says. Its folder is opened as a project
-    /// of its own, to go on with what the trial made, for an ending that
-    /// opens it; or else it goes, what the trial changed kept apart first
-    /// if the ending says to (see [`trial::discard`]), and the trial ends,
+    /// of its own, to go on with what the sketch made, for an ending that
+    /// opens it; or else it goes, what the sketch changed kept apart first
+    /// if the ending says to (see [`sketch::discard`]), and the sketch ends,
     /// its chat going on in the project toward the ending's goal, if it
     /// has one, its agent told what the ending says then.
-    fn finish_trial(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_sketch(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some((_, ending)) = self.chats[index].ending.take() else {
             return;
         };
-        let Some((started, folder)) = self.trial_of(index).filter(|_| self.ends_trial(index))
+        let Some((started, folder)) = self.sketch_of(index).filter(|_| self.ends_sketch(index))
         else {
             return;
         };
@@ -1498,7 +1498,7 @@ impl Workspace {
             return;
         }
         let title = self.chats[index].name.to_string();
-        // What the trial's agent said last, as its summing up.
+        // What the sketch's agent said last, as its summing up.
         let summary = self.chats[index]
             .view
             .as_ref()
@@ -1514,22 +1514,22 @@ impl Workspace {
                     })
             })
             .unwrap_or_default();
-        let discarded = storage::path(trial::FOLDER)
-            .map(|trials| trials.join(trial::DISCARDED))
-            .ok_or_else(|| "Cox cannot tell where to keep discarded trials".to_owned())
-            .and_then(|bundles| trial::discard(started, &folder, &title, &bundles, ending.keep));
+        let discarded = storage::path(sketch::FOLDER)
+            .map(|sketches| sketches.join(sketch::DISCARDED))
+            .ok_or_else(|| "Cox cannot tell where to keep discarded sketches".to_owned())
+            .and_then(|bundles| sketch::discard(started, &folder, &title, &bundles, ending.keep));
         let kept = discarded
             .as_ref()
             .ok()
             .and_then(|discarded| discarded.kept.as_ref())
             .map(ToString::to_string)
             .unwrap_or_default();
-        let note = discarded.as_ref().map(trial::Discarded::note).ok();
-        let trial_key = self.chats[index].key;
-        let trial_kept = self.chats[index].kept;
-        let trial_keeps = keeps_in_wiki(self.chats[index].setup.as_ref());
+        let note = discarded.as_ref().map(sketch::Discarded::note).ok();
+        let sketch_key = self.chats[index].key;
+        let sketch_kept = self.chats[index].kept;
+        let sketch_keeps = keeps_in_wiki(self.chats[index].setup.as_ref());
         let parent = self.chats[index].parent;
-        let ended = self.end_trial(
+        let ended = self.end_sketch(
             index,
             &folder,
             discarded.map(|discarded| discarded.note()),
@@ -1539,8 +1539,8 @@ impl Workspace {
         if !ended {
             return;
         }
-        // The chat the trial was opened beside goes on with it, in the
-        // project; a trial opened beside none goes on itself.
+        // The chat the sketch was opened beside goes on with it, in the
+        // project; a sketch opened beside none goes on itself.
         let goes_on = parent
             .and_then(|parent| self.chats.iter().position(|chat| chat.key == parent))
             .unwrap_or(index);
@@ -1550,7 +1550,7 @@ impl Workspace {
             if let (Some(view), Some(note)) = (self.chats[goes_on].view.clone(), note) {
                 view.update(cx, |view, cx| {
                     view.note(
-                        format!("The trial \"{title}\" (chat {trial_key}) ended: {note}"),
+                        format!("The sketch \"{title}\" (chat {sketch_key}) ended: {note}"),
                         cx,
                     );
                 });
@@ -1559,11 +1559,11 @@ impl Workspace {
         let Some(view) = self.chats[goes_on].view.clone() else {
             return;
         };
-        // What the trial found, and why it ended, is the trial's agent's to
+        // What the sketch found, and why it ended, is the sketch's agent's to
         // keep, as the human chooses where they go on.
-        let keeps = (goes_on != index).then_some(trial_kept);
-        if trial_keeps && keeps.is_none_or(|kept| kept.is_some()) {
-            let why = format!("The trial \"{title}\" ended.");
+        let keeps = (goes_on != index).then_some(sketch_kept);
+        if sketch_keeps && keeps.is_none_or(|kept| kept.is_some()) {
+            let why = format!("The sketch \"{title}\" ended.");
             view.update(cx, |view, cx| {
                 view.ask_to_keep(why, keeps.flatten(), cx);
             });
@@ -1584,15 +1584,15 @@ impl Workspace {
         }
     }
 
-    /// Shows the chat at `index`, a trial that worked in `folder`, and
-    /// ends the trial as `ended` says, or says why it could not, and
+    /// Shows the chat at `index`, a sketch that worked in `folder`, and
+    /// ends the sketch as `ended` says, or says why it could not, and
     /// answers whether it ended. Ended,
-    /// the trial's chat goes on in the project, as do the chats it opened,
+    /// the sketch's chat goes on in the project, as do the chats it opened,
     /// which worked in its folder too: each is closed, its agent stopped,
     /// and set up to work in the project, asking the human as any chat
     /// does, so that a line sent starts its agent again there, with the
     /// conversation so far.
-    fn end_trial(
+    fn end_sketch(
         &mut self,
         index: usize,
         folder: &Path,
@@ -1607,7 +1607,7 @@ impl Workspace {
             Err(error) => {
                 if let Some(view) = self.chats.get(index).and_then(Chat::view) {
                     view.update(cx, |view, cx| {
-                        view.note(format!("The trial could not end: {error}"), cx);
+                        view.note(format!("The sketch could not end: {error}"), cx);
                     });
                 }
                 return false;
@@ -1615,7 +1615,7 @@ impl Workspace {
         };
         let goes_on = "The chat goes on in the project: a line sent starts its agent again \
                        there, with the conversation so far.";
-        let trial = self.chats[index].key;
+        let sketch = self.chats[index].key;
         let mut ended = Vec::new();
         for chat in self.chats.iter_mut().chain(&mut self.archived) {
             let worked_there = chat.setup.as_ref().is_some_and(|setup| {
@@ -1627,11 +1627,11 @@ impl Workspace {
             if !worked_there {
                 continue;
             }
-            let told = if chat.key == trial {
+            let told = if chat.key == sketch {
                 format!("{note} {goes_on}")
             } else {
                 format!(
-                    "The trial this chat worked in has ended, and its folder is gone. {goes_on}"
+                    "The sketch this chat worked in has ended, and its folder is gone. {goes_on}"
                 )
             };
             if let Some(view) = chat.view.take() {
@@ -1641,7 +1641,7 @@ impl Workspace {
             chat.state = State::Closed;
             chat.setup = chat.setup.take().map(|setup| Setup {
                 folder: None,
-                trial: None,
+                sketch: None,
                 policy: Policy::default(),
                 ..setup
             });
@@ -1664,7 +1664,7 @@ impl Workspace {
                 answer.send(Ok(stands)).ok();
             }
         }
-        // The trial's chat, shown again, gets a view of it read again,
+        // The sketch's chat, shown again, gets a view of it read again,
         // closed, to go on with.
         self.show(index, window, cx);
         cx.notify();
@@ -2020,14 +2020,14 @@ impl Workspace {
 
     /// The tab of the chat at `index` in the list, which numbers its chats
     /// from 1: a dot of how it stands, its name, or the input that renames
-    /// it, and whether it is a trial and has a goal.
+    /// it, and whether it is a sketch and has a goal.
     fn render_tab(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Stateful<Div> {
         let number = index + 1;
         let shown = self.chats.shown_index() == Some(index);
-        let trial = chat
+        let sketch = chat
             .setup
             .as_ref()
-            .is_some_and(|setup| setup.trial.is_some());
+            .is_some_and(|setup| setup.sketch.is_some());
         let state = chat
             .view
             .as_ref()
@@ -2108,8 +2108,8 @@ impl Workspace {
                 }
             }))
             .child(name)
-            .when(trial, |tab| {
-                tab.child(small("trial", format!("trial-{number}")))
+            .when(sketch, |tab| {
+                tab.child(small("sketch", format!("sketch-{number}")))
             })
             .when(chat.goal.is_some(), |tab| {
                 tab.child(small("◎", format!("goal-{number}")))
@@ -2243,7 +2243,7 @@ impl Workspace {
             .get(index)
             .is_some_and(|chat| chat.goal.is_some());
         let endings = self.endings(index);
-        let starts_trial = self.starts_trial(index);
+        let starts_sketch = self.starts_sketch(index);
         let saves_to_wiki = self.saves_to_wiki(index);
         let item = |id: &'static str, label: &'static str| {
             div()
@@ -2282,9 +2282,9 @@ impl Workspace {
                     move |workspace, _, window, cx| workspace.clear_goal(index, window, cx),
                 )))
             })
-            .when(starts_trial, |menu| {
-                menu.child(item("start-trial", "Start trial…").on_click(cx.listener(
-                    move |workspace, _, window, cx| workspace.edit_trial(index, window, cx),
+            .when(starts_sketch, |menu| {
+                menu.child(item("start-sketch", "Start sketch…").on_click(cx.listener(
+                    move |workspace, _, window, cx| workspace.edit_sketch(index, window, cx),
                 )))
             })
             .when(saves_to_wiki, |menu| {
@@ -2294,8 +2294,8 @@ impl Workspace {
             })
             .children(endings.into_iter().enumerate().map(|(at, ending)| {
                 div()
-                    .id(("trial-ending", at))
-                    .debug_selector(move || format!("trial-ending-{at}"))
+                    .id(("sketch-ending", at))
+                    .debug_selector(move || format!("sketch-ending-{at}"))
                     .px_2()
                     .py_0p5()
                     .rounded_sm()
@@ -2303,7 +2303,7 @@ impl Workspace {
                     .hover(|style| style.bg(rgb(ACCENT_GROUND)))
                     .child(ending.name.clone())
                     .on_click(cx.listener(move |workspace, _, window, cx| {
-                        workspace.end_trial_as(index, ending.clone(), window, cx);
+                        workspace.end_sketch_as(index, ending.clone(), window, cx);
                     }))
             }))
             .child(item("archive-chat", "Archive").on_click(
@@ -2313,7 +2313,7 @@ impl Workspace {
     }
 }
 
-/// How far a trial the human ends is on its way to its end.
+/// How far a sketch the human ends is on its way to its end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Ends {
     /// Its turn goes on; its agent is asked to sum it up once the turn
@@ -2323,11 +2323,11 @@ enum Ends {
     Summing,
 }
 
-/// Makes the folder of a trial that starts from `trial`, of the folder
+/// Makes the folder of a sketch that starts from `sketch`, of the folder
 /// `from`, and answers it.
-fn make_trial(trial: Trial, from: &Path) -> Result<PathBuf, String> {
-    let trials = storage::path(trial::FOLDER).ok_or("Cox cannot tell where to keep trials")?;
-    trial::make(trial, from, &trials)
+fn make_sketch(sketch: Sketch, from: &Path) -> Result<PathBuf, String> {
+    let sketches = storage::path(sketch::FOLDER).ok_or("Cox cannot tell where to keep sketches")?;
+    sketch::make(sketch, from, &sketches)
 }
 
 /// Whether an agent that stands as `state` is at work.

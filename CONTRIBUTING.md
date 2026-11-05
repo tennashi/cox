@@ -61,15 +61,15 @@ agent gets how the human works with Cox, whatever the project: the
 or from `~`, as `{"workflow": "~/dotfiles/cox"}`, or else `workflow`
 beside it, or, when there is none, Cox's own
 ([`cox.md`](crates/cox/src/agent/instructions/cox.md)), which says when
-to use Cox's tools, as when to try work out in a trial, since the tools
+to use Cox's tools, as when to try work out in a sketch, since the tools
 only say what they do. After it, when the folder has a `COX.md`, the agent
 gets what it says. The chat says at its top which files it got. What Cox
-tells the agent in the human's place at the turns of a trial is the
-workflow's too, in `trial/` there, or else Cox's own
-([`workflow/trial`](crates/cox/src/workflow/trial)): `start.md`, the
-first line of a trial opened beside a chat, in `{folder}`, which is `{from}`, to try `{what}`;
-`opened.md`, what the agent that opened a trial with `open_chat` hears of
-it; and `discard.md`, what the trial's agent is asked before the trial
+tells the agent in the human's place at the turns of a sketch is the
+workflow's too, in `sketch/` there, or else Cox's own
+([`workflow/sketch`](crates/cox/src/workflow/sketch)): `start.md`, the
+first line of a sketch opened beside a chat, in `{folder}`, which is `{from}`, to try `{what}`;
+`opened.md`, what the agent that opened a sketch with `open_chat` hears of
+it; and `discard.md`, what the sketch's agent is asked before the sketch
 is discarded, with `{left_out}`, the files too big to keep. The tabs switch between chats (Control-Tab and
 Control-Shift-Tab go along every project's). A chat is named by a number at first, then
 after the first line sent in it, then by the title its agent gives its
@@ -97,7 +97,7 @@ the chat's session when it can (ACP's `session/resume`, or else
 `session/load`); otherwise the agent starts a new session, and gets the
 conversation so far, as Cox kept it, ahead of that line, and the chat
 notes that the agent could not resume. A chat with no session to go on
-with, as one that moved into a trial or out of one, starts a new
+with, as one that moved into a sketch or out of one, starts a new
 session the same way, without the note.
 Escape in a chat's
 conversation, or its Stop button, stops the turn its agent is taking; the
@@ -231,14 +231,14 @@ which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `run_command`,
-`open_chat`, `wait_chat`, `propose_goal`, `start_trial`, `wiki_search`, `wiki_read`, `wiki_write`), all of them unless given; `stage`, `drive` for the tools
+`open_chat`, `wait_chat`, `propose_goal`, `start_sketch`, `wiki_search`, `wiki_read`, `wiki_write`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the permission requests Cox answers
 in the human's place, a request both match being rejected, and the
 rest asked of the human as usual, with the conversation saying which
 Cox answered; and `goal`, what the chat works until it is met,
-as "Set goal…" takes it: `$ ` and a command, or words; and `trial`,
-which makes the chat a trial, from the project (`project`) or from
+as "Set goal…" takes it: `$ ` and a command, or words; and `sketch`,
+which makes the chat a sketch, from the project (`project`) or from
 nothing (`empty`). A pattern matches the title of the call the request
 is for, where `*` stands for any run of characters: the agent's title,
 as the conversation shows it, as `Edit src/main.rs`. Since each agent
@@ -252,100 +252,100 @@ commands, is the command. A
 chat the human opens is set up with none of this: its agent gets every
 tool, and the human answers every request. Which chat opened a chat, and
 how its agent is set up, last across runs with the rest of the chat.
-A trial tries the work out apart from the project, before the human and
-the agent agree what it is to be. A trial is a chat of its own,
+A sketch tries the work out apart from the project, before the human and
+the agent agree what it is to be. A sketch is a chat of its own,
 beside the chat it is opened from, so that what it tries, and its
 stage, stay apart from the work the chat goes on with in the project. A
-chat's agent opens one with Cox's `start_trial` tool, saying what the
-trial starts from, `project` or `empty`, and what it tries: the trial
+chat's agent opens one with Cox's `start_sketch` tool, saying what the
+sketch starts from, `project` or `empty`, and what it tries: the sketch
 opens under the chat, marked ↳ as a chat an agent opens is, named after
 what it tries, its agent set up as the chat's, and told what the chat
 talked through so far, as an agent that could not resume is told the
 conversation, and then what it tries; the chat notes it, and its agent
-hears the number the trial goes by, for `wait_chat`. `trial` in
-`open_chat` opens a trial too, on a line of the agent's own, for trying
-several ways side by side, one trial each. The human opens one with
-"Start trial…" in the menu of the right button, which opens an input
-above the chat's own, where the human writes what the trial is to try,
+hears the number the sketch goes by, for `wait_chat`. `sketch` in
+`open_chat` opens a sketch too, on a line of the agent's own, for trying
+several ways side by side, one sketch each. The human opens one with
+"Start sketch…" in the menu of the right button, which opens an input
+above the chat's own, where the human writes what the sketch is to try,
 as what to find out, and a click on "from the project" or "from
 nothing" beside it chooses what it starts from (from the project at
-first, when the project is in a Git repository). Enter opens the trial,
-as `start_trial` does, and shows it, and Escape leaves the chat as it
-was. A trial opens no trial beside it. A trial's agent works in a
-folder Cox makes for it in `trials`, beside the chats' database (see
+first, when the project is in a Git repository). Enter opens the sketch,
+as `start_sketch` does, and shows it, and Escape leaves the chat as it
+was. A sketch opens no sketch beside it. A sketch's agent works in a
+folder Cox makes for it in `sketches`, beside the chats' database (see
 [The stage](#the-stage)), and changes and tests the files there
 without asking the human, the policy allowing the calls the workflow's
 `allow` names (see below), as Cox's own those that edit, delete or move
 files (`edit:*`, `delete:*`, `move:*`), when every file the agent says
-the call works on is in the trial's folder, and what the judge of a
+the call works on is in the sketch's folder, and what the judge of a
 goal may run; a call that changes files elsewhere, or
-does not say which, is asked of the human. A trial from the project works in a Git worktree of
+does not say which, is asked of the human. A sketch from the project works in a Git worktree of
 the project's last commit, so the project has to be in a Git
-repository; a trial from nothing works in an empty folder, `scratch-`
+repository; a sketch from nothing works in an empty folder, `scratch-`
 and a number, made a Git repository of its own, for a project of any
 kind or none, which "Open folder…" opens as a project once the human
 wants to go on with it. The chat notes where it works from then on,
-and the agent that opened a trial with `open_chat` is told, to read
-what the trial made and propose a goal from it. A chat a trial opens works in the trial's
-folder too, and a trial goes on there once it is started again. The
-menu of the right button on a trial ends it once the human has what
+and the agent that opened a sketch with `open_chat` is told, to read
+what the sketch made and propose a goal from it. A chat a sketch opens works in the sketch's
+folder too, and a sketch goes on there once it is started again. The
+menu of the right button on a sketch ends it once the human has what
 they wanted of it, in the ways the human's workflow says, in its
-`trial.json`, or else as Cox's own
-([`trial.json`](crates/cox/src/workflow/trial.json)) does: "Open as
-project", for a trial from nothing, opens its folder as a project, with
-a chat in it, to go on with what it made; and "Discard trial" takes its
+`sketch.json`, or else as Cox's own
+([`sketch.json`](crates/cox/src/workflow/sketch.json)) does: "Open as
+project", for a sketch from nothing, opens its folder as a project, with
+a chat in it, to go on with what it made; and "Discard sketch" takes its
 folder away, unless it was opened as a project, which the human goes
 on with. Before it does, once the turn that goes on has ended, Cox asks
-the trial's agent, in the human's place, to sum the trial up in the
+the sketch's agent, in the human's place, to sum the sketch up in the
 conversation, for it to be done again from the conversation alone:
 what it tried, how, the commands it ran and what they showed, what it
 found, and the changes that matter, as code; Escape stops that, and
-the trial goes as it is. What the trial changed since it started is
+the sketch goes as it is. What the sketch changed since it started is
 kept too, as one commit on where it started, apart from the commits
-the trial made itself: `refs/cox/discarded/` and the name of its folder
-in the project's repository, for a trial from the project, which
-`git show` reads, and for a trial from nothing, a Git bundle in
-`trials/discarded`, which `git clone` makes again. A file over 256 KB,
+the sketch made itself: `refs/cox/discarded/` and the name of its folder
+in the project's repository, for a sketch from the project, which
+`git show` reads, and for a sketch from nothing, a Git bundle in
+`sketches/discarded`, which `git clone` makes again. A file over 256 KB,
 or past 1 MB with the files kept with it, the smaller kept first, is
 left out: the agent is asked how to make it again, and the chat notes
-its path, its size and the hash Git names it by. A trial ended stops
+its path, its size and the hash Git names it by. A sketch ended stops
 its agent, and those of the chats it opened, which worked in its
 folder, and each chat goes on in the project: a line sent starts its
 agent again there, with the conversation so far, asking the human as
-any chat does, since what it was allowed was for the trial. The chat
-the trial was opened beside notes how the trial ended, and goes on with
-it, as the ending says (see below); a trial opened beside no chat, as
+any chat does, since what it was allowed was for the sketch. The chat
+the sketch was opened beside notes how the sketch ended, and goes on with
+it, as the ending says (see below); a sketch opened beside no chat, as
 one of an earlier Cox, goes on itself.
 
-`trial.json` names, as `allow`, the patterns of the calls a trial's
+`sketch.json` names, as `allow`, the patterns of the calls a sketch's
 agent makes unasked, as `open_chat`'s `allow` takes them, and, as
-`endings`, the ways a trial ends, in the order the menu offers them.
+`endings`, the ways a sketch ends, in the order the menu offers them.
 Each has its `name`, as the menu shows it, and says what it does: `from`,
-`project` or `empty`, for an ending of those trials only; `sum_up`, a
-text of the workflow, from its folder, which the trial's agent is asked
-first, as `trial/discard.md`, with `{left_out}`; `keep`, as `"ref"`, to
-keep what the trial changed as discarding does; `folder`, `"open"` to
-open a trial from nothing as a project, in place of its folder going;
-and, for the chat the trial was opened beside, which goes on in the
+`project` or `empty`, for an ending of those sketches only; `sum_up`, a
+text of the workflow, from its folder, which the sketch's agent is asked
+first, as `sketch/discard.md`, with `{left_out}`; `keep`, as `"ref"`, to
+keep what the sketch changed as discarding does; `folder`, `"open"` to
+open a sketch from nothing as a project, in place of its folder going;
+and, for the chat the sketch was opened beside, which goes on in the
 project, `goal`, as "Set goal…" takes it, and `then`, a text of the
 workflow, which its agent is told at once, in the human's place, with
-`{kept}`, the ref or the bundle what the trial changed is kept in, and
-`{summary}`, what the trial's agent said last, as its summing up. So a human who spikes first and
-rewrites after can end a trial with "Rewrite in project":
+`{kept}`, the ref or the bundle what the sketch changed is kept in, and
+`{summary}`, what the sketch's agent said last, as its summing up. So a human who sketches first and
+rewrites after can end a sketch with "Rewrite in project":
 
 ```json
 {
   "allow": ["edit:*", "delete:*", "move:*"],
   "endings": [
     {"name": "Rewrite in project", "from": "project",
-     "sum_up": "trial/discard.md", "keep": "ref",
-     "then": "trial/rewrite.md", "goal": "$ cargo xtask ci"},
-    {"name": "Discard trial", "sum_up": "trial/discard.md", "keep": "ref"}
+     "sum_up": "sketch/discard.md", "keep": "ref",
+     "then": "sketch/rewrite.md", "goal": "$ cargo xtask ci"},
+    {"name": "Discard sketch", "sum_up": "sketch/discard.md", "keep": "ref"}
   ]
 }
 ```
 
-A `trial.json` Cox cannot read is said in the log, and Cox's own counts
+A `sketch.json` Cox cannot read is said in the log, and Cox's own counts
 in its place.
 `open_chat` answers with a number the chat goes by for this run, which
 the agent gives Cox's `wait_chat` tool to wait for the chat's turn to
@@ -382,10 +382,10 @@ find the page, read it, see it in the index, or write it. The human
 can write the line themselves too.
 
 So that the human need not remember to, Cox asks at a chat's
-milestones, when its goal is met and when a trial ends, on a card in
+milestones, when its goal is met and when a sketch ends, on a card in
 the conversation of the chat they go on in, whether to keep what was
 learned in the wiki: "Save to wiki" asks the agent as the menu's does,
-for a trial the trial's own agent, which found it, and goes on in the
+for a sketch the sketch's own agent, which found it, and goes on in the
 project, and "Not now" lets it be. A goal is asked of once for a line
 of the human's, so that the turn that keeps it, which meets the goal
 again, does not ask again; and a chat whose agent has no `wiki_write`
@@ -639,7 +639,7 @@ and a closed chat's stage opens it again with the same folders open.
 
 "Changes" opens a tab of what changed in the project's files,
 as Git tells it, file by file and line by line, with the files Git does
-not track yet but does not ignore: in a trial, all it changed since it
+not track yet but does not ignore: in a sketch, all it changed since it
 started, what it committed too, and elsewhere what changed since the
 last commit. A click on a file, or on a line, opens the file there, as
 a link to it does. The tab follows the files as they change, and while
@@ -647,10 +647,10 @@ the stage is open, its button counts the files that changed, whether
 the tab is open or not. The agent
 opens it with Cox's `show_changes` tool, to show the human what it
 made, and hears which files changed; given another folder, such as that
-of a trial it opened, the tab shows what changed there. A trial marks
+of a sketch it opened, the tab shows what changed there. A sketch marks
 where it starts with a ref of its worktree's own,
 `refs/worktree/cox-start`: the commit it starts from, or the empty tree
-for a trial from nothing, which then counts all it made; a trial opened
+for a sketch from nothing, which then counts all it made; a sketch opened
 as a project forgets it.
 
 "Map" opens a tab of the project's map, for the human to see

@@ -320,7 +320,7 @@ fn setup() -> Setup {
             within: None,
         },
         folder: None,
-        trial: None,
+        sketch: None,
     }
 }
 

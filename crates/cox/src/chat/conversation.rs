@@ -230,7 +230,7 @@ impl Conversation {
 
     /// Asks the human, on a card, whether to keep what a chat learned in
     /// the wiki, at the milestone `why` says: this chat's, or, given
-    /// `chat`, another's, as a trial that ended beside it.
+    /// `chat`, another's, as a sketch that ended beside it.
     pub fn ask_to_keep(&mut self, why: String, chat: Option<ChatId>) {
         self.push(Entry::Keep {
             why,
@@ -932,7 +932,7 @@ impl Conversation {
                     context,
                 } => {
                     // A chat with no session to go on with, as one that
-                    // moved into a trial, goes on as if it had one.
+                    // moved into a sketch, goes on as if it had one.
                     if lost {
                         self.push(Entry::Note(
                             "The agent could not resume its session: a new one is told the conversation so far."
@@ -1073,12 +1073,12 @@ pub fn context_note(context: &str) -> String {
     format!("Context: {}", context.trim())
 }
 
-/// The note that tells the human a chat works in `folder`, a trial's,
+/// The note that tells the human a chat works in `folder`, a sketch's,
 /// apart from the project.
 #[must_use]
-pub fn trial_note(folder: &Path) -> String {
+pub fn sketch_note(folder: &Path) -> String {
     format!(
-        "Trial: works in {}, apart from the project.",
+        "Sketch: works in {}, apart from the project.",
         folder.display()
     )
 }

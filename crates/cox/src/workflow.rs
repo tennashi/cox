@@ -1,23 +1,23 @@
 //! What Cox tells a chat's agent in the human's place at the turns of a
-//! trial: as it starts, as a trial an agent opened is open, and before
+//! sketch: as it starts, as a sketch an agent opened is open, and before
 //! it is discarded; and as the human asks it to keep what the chat
 //! learned in their wiki (see [`crate::wiki`]). Each is the human's to say, since how they work with
-//! trials is theirs: a file of their workflow's folder (see
-//! [`crate::settings::workflow`]), as `trial/start.md`, or else Cox's own,
+//! sketches is theirs: a file of their workflow's folder (see
+//! [`crate::settings::workflow`]), as `sketch/start.md`, or else Cox's own,
 //! in `workflow/` beside this file. A file says where Cox puts what it
 //! knows then with a name in braces, as `{folder}`, and a name a text
 //! does not know stays as it is.
 //!
-//! How a trial ends is the human's too: the ways the menu of the right
-//! button offers, and what the trial's agent goes on with unasked, which
-//! their workflow's `trial.json` says (see [`Trial`]), or else Cox's own,
-//! `workflow/trial.json`.
+//! How a sketch ends is the human's too: the ways the menu of the right
+//! button offers, and what the sketch's agent goes on with unasked, which
+//! their workflow's `sketch.json` says (see [`Sketch`]), or else Cox's own,
+//! `workflow/sketch.json`.
 
 use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::chat::trial::Trial as From;
+use crate::chat::sketch::Sketch as From;
 
 /// A text Cox says at a turn of the human's workflow.
 pub struct Text {
@@ -27,25 +27,25 @@ pub struct Text {
     own: &'static str,
 }
 
-/// The first line of a trial opened beside a chat, which its agent is
+/// The first line of a sketch opened beside a chat, which its agent is
 /// told: that it works in `{folder}`, which is `{from}`, to try `{what}`.
-pub const TRIAL_START: Text = Text {
-    name: "trial/start.md",
-    own: include_str!("workflow/trial/start.md"),
+pub const SKETCH_START: Text = Text {
+    name: "sketch/start.md",
+    own: include_str!("workflow/sketch/start.md"),
 };
 
-/// What the agent that opened a trial with `open_chat` is told of it:
+/// What the agent that opened a sketch with `open_chat` is told of it:
 /// that it works in `{folder}`, which is `{from}`.
-pub const TRIAL_OPENED: Text = Text {
-    name: "trial/opened.md",
-    own: include_str!("workflow/trial/opened.md"),
+pub const SKETCH_OPENED: Text = Text {
+    name: "sketch/opened.md",
+    own: include_str!("workflow/sketch/opened.md"),
 };
 
-/// What a trial's agent is asked before the trial is discarded, with
+/// What a sketch's agent is asked before the sketch is discarded, with
 /// `{left_out}`, the files too big to keep, when there are any.
-pub const TRIAL_DISCARD: Text = Text {
-    name: "trial/discard.md",
-    own: include_str!("workflow/trial/discard.md"),
+pub const SKETCH_DISCARD: Text = Text {
+    name: "sketch/discard.md",
+    own: include_str!("workflow/sketch/discard.md"),
 };
 
 /// What a chat's agent is asked when the human asks it to keep what the
@@ -56,7 +56,7 @@ pub const WIKI_SAVE: Text = Text {
 };
 
 /// The texts Cox has of its own, by where the human keeps theirs.
-const OWN: [&Text; 4] = [&TRIAL_START, &TRIAL_OPENED, &TRIAL_DISCARD, &WIKI_SAVE];
+const OWN: [&Text; 4] = [&SKETCH_START, &SKETCH_OPENED, &SKETCH_DISCARD, &WIKI_SAVE];
 
 /// The text the human keeps as `name` in their workflow, or else Cox's
 /// own of that name, with `values` in place of the names they stand for;
@@ -93,38 +93,38 @@ fn human(path: &Path) -> Option<String> {
     }
 }
 
-/// How the human's trials go: what their agent goes on with unasked, and
+/// How the human's sketches go: what their agent goes on with unasked, and
 /// the ways they end.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Trial {
-    /// The patterns of the permission requests a trial's agent goes on
+pub struct Sketch {
+    /// The patterns of the permission requests a sketch's agent goes on
     /// with unasked, on top of what reads and tests, when they change the
-    /// trial's own files only.
+    /// sketch's own files only.
     pub allow: Vec<String>,
-    /// The ways a trial ends, in the order the menu offers them.
+    /// The ways a sketch ends, in the order the menu offers them.
     pub endings: Vec<Ending>,
 }
 
-/// A way a trial ends, as the menu of the right button offers it.
+/// A way a sketch ends, as the menu of the right button offers it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ending {
     /// What the menu calls it.
     pub name: String,
-    /// The trials it ends, those from the project or from nothing, or
+    /// The sketches it ends, those from the project or from nothing, or
     /// either when `None`.
     pub from: Option<From>,
-    /// The text the trial's agent is asked first, to sum the trial up, by
-    /// where the human keeps it, as `trial/discard.md`.
+    /// The text the sketch's agent is asked first, to sum the sketch up, by
+    /// where the human keeps it, as `sketch/discard.md`.
     pub sum_up: Option<String>,
-    /// Whether what the trial changed is kept apart (see
-    /// [`crate::chat::trial::discard`]) before its folder goes.
+    /// Whether what the sketch changed is kept apart (see
+    /// [`crate::chat::sketch::discard`]) before its folder goes.
     pub keep: bool,
-    /// Whether the trial's folder is opened as a project, in place of
-    /// going, for a trial from nothing.
+    /// Whether the sketch's folder is opened as a project, in place of
+    /// going, for a sketch from nothing.
     pub open: bool,
-    /// The text the agent of the chat the trial was opened beside is told
-    /// once the trial ends, with `{kept}`, where what the trial changed is
-    /// kept, and `{summary}`, what the trial's agent said last.
+    /// The text the agent of the chat the sketch was opened beside is told
+    /// once the sketch ends, with `{kept}`, where what the sketch changed is
+    /// kept, and `{summary}`, what the sketch's agent said last.
     pub then: Option<String>,
     /// The goal the chat works toward once it goes on in the project, as
     /// "Set goal…" takes it.
@@ -132,14 +132,14 @@ pub struct Ending {
 }
 
 impl Ending {
-    /// Whether it ends a trial that started from `from`.
+    /// Whether it ends a sketch that started from `from`.
     #[must_use]
     pub fn ends(&self, from: From) -> bool {
         self.from.is_none_or(|ends| ends == from) && (!self.open || from == From::Empty)
     }
 }
 
-/// `trial.json` as it is written.
+/// `sketch.json` as it is written.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Written {
@@ -172,40 +172,40 @@ enum Folder {
     Open,
 }
 
-/// Cox's own `trial.json`, for a human who keeps none.
-const OWN_TRIAL: &str = include_str!("workflow/trial.json");
+/// Cox's own `sketch.json`, for a human who keeps none.
+const OWN_SKETCH: &str = include_str!("workflow/sketch.json");
 
-/// How the human's trials go, as their workflow's `trial.json` says, or
+/// How the human's sketches go, as their workflow's `sketch.json` says, or
 /// else as Cox's own does.
 #[must_use]
-pub fn trial() -> Trial {
-    trial_in(crate::settings::workflow().as_deref())
+pub fn sketch() -> Sketch {
+    sketch_in(crate::settings::workflow().as_deref())
 }
 
-/// As [`trial`], with the human's workflow in `workflow`. What cannot be
+/// As [`sketch`], with the human's workflow in `workflow`. What cannot be
 /// read of theirs is said, and Cox's own counts in its place.
 ///
 /// # Panics
 ///
-/// Only were Cox's own `trial.json` not to read, which its tests check.
+/// Only were Cox's own `sketch.json` not to read, which its tests check.
 #[must_use]
-pub fn trial_in(workflow: Option<&Path>) -> Trial {
-    let path = workflow.map(|workflow| workflow.join("trial.json"));
+pub fn sketch_in(workflow: Option<&Path>) -> Sketch {
+    let path = workflow.map(|workflow| workflow.join("sketch.json"));
     if let Some(text) = path.as_deref().and_then(human) {
         match parse(&text) {
-            Ok(trial) => return trial,
+            Ok(sketch) => return sketch,
             Err(error) => tracing::error!(
                 "{} cannot be read, so Cox's own counts: {error}",
                 path.unwrap_or_default().display()
             ),
         }
     }
-    parse(OWN_TRIAL).expect("Cox's own trial.json reads")
+    parse(OWN_SKETCH).expect("Cox's own sketch.json reads")
 }
 
-fn parse(text: &str) -> serde_json::Result<Trial> {
+fn parse(text: &str) -> serde_json::Result<Sketch> {
     let written: Written = serde_json::from_str(text)?;
-    Ok(Trial {
+    Ok(Sketch {
         allow: written.allow.unwrap_or_default(),
         endings: written
             .endings
@@ -288,64 +288,64 @@ mod tests {
     }
 
     #[test]
-    fn cox_s_own_trials_open_from_nothing_and_are_discarded() {
-        let own = trial_in(None);
+    fn cox_s_own_sketches_open_from_nothing_and_are_discarded() {
+        let own = sketch_in(None);
         assert_eq!(own.allow, ["edit:*", "delete:*", "move:*"]);
         let names: Vec<_> = own
             .endings
             .iter()
             .map(|ending| ending.name.as_str())
             .collect();
-        assert_eq!(names, ["Open as project", "Discard trial"]);
+        assert_eq!(names, ["Open as project", "Discard sketch"]);
         let [open, discard] = &own.endings[..] else {
             unreachable!()
         };
         assert!(open.open && !open.ends(From::Project) && open.ends(From::Empty));
         assert!(discard.keep && discard.ends(From::Project) && discard.ends(From::Empty));
-        assert_eq!(discard.sum_up.as_deref(), Some("trial/discard.md"));
+        assert_eq!(discard.sum_up.as_deref(), Some("sketch/discard.md"));
     }
 
     #[test]
-    fn the_human_s_trial_json_goes_ahead_of_cox_s() {
+    fn the_human_s_sketch_json_goes_ahead_of_cox_s() {
         let folder = std::env::temp_dir().join(format!("cox-workflow-json-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(folder.join("trial")).unwrap();
+        std::fs::create_dir_all(folder.join("sketch")).unwrap();
         std::fs::write(
-            folder.join("trial.json"),
-            r#"{"endings": [{"name": "Rewrite in project", "sum_up": "trial/understand.md",
-                "keep": "ref", "then": "trial/rewrite.md", "goal": "$ cargo test"}]}"#,
+            folder.join("sketch.json"),
+            r#"{"endings": [{"name": "Rewrite in project", "sum_up": "sketch/understand.md",
+                "keep": "ref", "then": "sketch/rewrite.md", "goal": "$ cargo test"}]}"#,
         )
         .unwrap();
-        let trial = trial_in(Some(&folder));
-        assert_eq!(trial.allow, Vec::<String>::new());
+        let sketch = sketch_in(Some(&folder));
+        assert_eq!(sketch.allow, Vec::<String>::new());
         assert_eq!(
-            trial.endings,
+            sketch.endings,
             [Ending {
                 name: "Rewrite in project".to_owned(),
                 from: None,
-                sum_up: Some("trial/understand.md".to_owned()),
+                sum_up: Some("sketch/understand.md".to_owned()),
                 keep: true,
                 open: false,
-                then: Some("trial/rewrite.md".to_owned()),
+                then: Some("sketch/rewrite.md".to_owned()),
                 goal: Some("$ cargo test".to_owned()),
             }]
         );
         // A text of the human's own is theirs to keep; Cox has none of it.
-        std::fs::write(folder.join("trial/rewrite.md"), "Rewrite from {kept}.\n").unwrap();
+        std::fs::write(folder.join("sketch/rewrite.md"), "Rewrite from {kept}.\n").unwrap();
         assert_eq!(
-            say_in(Some(&folder), "trial/rewrite.md", &[("kept", "refs/x")]).as_deref(),
+            say_in(Some(&folder), "sketch/rewrite.md", &[("kept", "refs/x")]).as_deref(),
             Some("Rewrite from refs/x.")
         );
-        assert_eq!(say_in(Some(&folder), "trial/understand.md", &[]), None);
-        assert!(say_in(Some(&folder), "trial/discard.md", &[]).is_some());
+        assert_eq!(say_in(Some(&folder), "sketch/understand.md", &[]), None);
+        assert!(say_in(Some(&folder), "sketch/discard.md", &[]).is_some());
 
         // What cannot be read counts as Cox's own.
         std::fs::write(
-            folder.join("trial.json"),
+            folder.join("sketch.json"),
             r#"{"endings": [{"keep": "branch"}]}"#,
         )
         .unwrap();
-        assert_eq!(trial_in(Some(&folder)), trial_in(None));
+        assert_eq!(sketch_in(Some(&folder)), sketch_in(None));
         let _ = std::fs::remove_dir_all(&folder);
     }
 
@@ -359,9 +359,9 @@ mod tests {
             ("what", "a greeting"),
         ];
 
-        let own = TRIAL_START.say_in(Some(&folder), &values);
+        let own = SKETCH_START.say_in(Some(&folder), &values);
         assert!(
-            own.starts_with("You work in a trial now, in /t, nothing,"),
+            own.starts_with("You work in a sketch now, in /t, nothing,"),
             "{own}"
         );
         assert!(
@@ -369,19 +369,19 @@ mod tests {
             "{own}"
         );
 
-        std::fs::create_dir_all(folder.join("trial")).unwrap();
+        std::fs::create_dir_all(folder.join("sketch")).unwrap();
         std::fs::write(
-            folder.join("trial/start.md"),
+            folder.join("sketch/start.md"),
             "Spike {what} in {folder}.\n\n",
         )
         .unwrap();
         assert_eq!(
-            TRIAL_START.say_in(Some(&folder), &values),
+            SKETCH_START.say_in(Some(&folder), &values),
             "Spike a greeting in /t."
         );
         // An empty file says nothing of the human's.
-        std::fs::write(folder.join("trial/start.md"), "\n").unwrap();
-        assert_eq!(TRIAL_START.say_in(Some(&folder), &values), own);
+        std::fs::write(folder.join("sketch/start.md"), "\n").unwrap();
+        assert_eq!(SKETCH_START.say_in(Some(&folder), &values), own);
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

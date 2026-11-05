@@ -1,17 +1,17 @@
-//! What changed in the files of a Git repository: since a trial started
+//! What changed in the files of a Git repository: since a sketch started
 //! in it, or else since its last commit, as Git tells it, with the files
 //! Git does not track yet but does not ignore either, which are new.
 //!
-//! A trial marks where it starts with a ref of its worktree's own,
-//! [`START`], which Git keeps apart for each worktree: the commit a trial
-//! of a project starts from, or the empty tree, for a trial from nothing,
+//! A sketch marks where it starts with a ref of its worktree's own,
+//! [`START`], which Git keeps apart for each worktree: the commit a sketch
+//! of a project starts from, or the empty tree, for a sketch from nothing,
 //! so that all it made counts as changed, whatever it commits.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The ref that marks where a trial started, in its worktree.
+/// The ref that marks where a sketch started, in its worktree.
 pub const START: &str = "refs/worktree/cox-start";
 
 /// The most of a new file that is read, to show it: a larger one is shown
@@ -32,9 +32,9 @@ pub struct Diff {
 /// What the files of a [`Diff`] changed since.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Since {
-    /// The commit a trial started from, by its short name.
+    /// The commit a sketch started from, by its short name.
     Start(String),
-    /// Nothing: every file is new, as in a trial from nothing.
+    /// Nothing: every file is new, as in a sketch from nothing.
     Nothing,
     /// The last commit, by its short name.
     Head(String),
@@ -121,7 +121,7 @@ impl Since {
     #[must_use]
     pub fn said(&self) -> String {
         match self {
-            Self::Start(commit) => format!("since the trial started, at {commit}"),
+            Self::Start(commit) => format!("since the sketch started, at {commit}"),
             Self::Nothing => "since nothing, every file new".to_owned(),
             Self::Head(commit) => format!("since the last commit, {commit}"),
         }
@@ -223,8 +223,8 @@ fn since(folder: &Path) -> Result<(PathBuf, Since, String), String> {
     Ok((top, since, from))
 }
 
-/// Marks where a trial starts in the worktree at `folder`: at its last
-/// commit, or at nothing, when it has none, as a trial from nothing.
+/// Marks where a sketch starts in the worktree at `folder`: at its last
+/// commit, or at nothing, when it has none, as a sketch from nothing.
 ///
 /// # Errors
 ///
@@ -239,7 +239,7 @@ pub fn start(folder: &Path) -> Result<(), String> {
     git(folder, &["update-ref", START, &from]).map(drop)
 }
 
-/// Forgets where a trial started in the worktree at `folder`, which goes
+/// Forgets where a sketch started in the worktree at `folder`, which goes
 /// on as a project of its own: what changed is then what changed since
 /// its last commit.
 ///
@@ -568,8 +568,8 @@ mod tests {
     }
 
     #[test]
-    fn a_trial_counts_what_it_committed_since_it_started() {
-        let folder = repository("trial", &[("a.txt", "a\n")]);
+    fn a_sketch_counts_what_it_committed_since_it_started() {
+        let folder = repository("sketch", &[("a.txt", "a\n")]);
         start(&folder).unwrap();
         std::fs::write(folder.join("a.txt"), "b\n").unwrap();
         commit_all(&folder);
@@ -583,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn a_trial_from_nothing_counts_all_it_made() {
+    fn a_sketch_from_nothing_counts_all_it_made() {
         let folder = repository("nothing", &[]);
         start(&folder).unwrap();
         std::fs::write(folder.join("a.txt"), "a\n").unwrap();

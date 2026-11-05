@@ -1,6 +1,6 @@
 //! A tab of the stage that shows what changed in the files of the chat's
-//! project, or of another folder, such as a trial the chat opened, as Git
-//! tells it (see [`cox_editor::changes`]): in a trial, all it changed
+//! project, or of another folder, such as a sketch the chat opened, as Git
+//! tells it (see [`cox_editor::changes`]): in a sketch, all it changed
 //! since it started, and elsewhere what changed since the last commit. Each file that changed heads the lines that changed in
 //! it, with some around them, and a click on a file or a line opens the
 //! file there, as a link to it would (see [`crate::stage`]).

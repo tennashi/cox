@@ -60,7 +60,7 @@ use crate::chat::conversation::{
     self, Answer, Conversation, Entry, GOAL_TURNS, Goal, LoginOption, State, TerminalLogin,
 };
 use crate::chat::judge::{Judge, Starts};
-use crate::chat::trial::Trial;
+use crate::chat::sketch::Sketch;
 use crate::stage::Stage;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{self, LineInput, Submitted};
@@ -85,8 +85,8 @@ actions!(
         Stop,
         /// Leaves the chat's goal as it was.
         CancelGoal,
-        /// Closes the input that starts a trial, starting none.
-        CancelTrial,
+        /// Closes the input that starts a sketch, starting none.
+        CancelSketch,
     ]
 );
 
@@ -95,8 +95,8 @@ const KEY_CONTEXT: &str = "Conversation";
 /// The key context of the input that sets the chat's goal.
 const GOAL: &str = "Goal";
 
-/// The key context of the input that starts a trial of the chat.
-const TRIAL: &str = "Trial";
+/// The key context of the input that starts a sketch of the chat.
+const SKETCH: &str = "Sketch";
 
 /// How long the name of the chat that opened a chat grows, in
 /// characters, in the note that says so.
@@ -114,7 +114,7 @@ pub fn bind_keys(cx: &mut App) {
         // The secondary key is Command on macOS, Control elsewhere.
         KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT)),
         KeyBinding::new("escape", CancelGoal, Some(GOAL)),
-        KeyBinding::new("escape", CancelTrial, Some(TRIAL)),
+        KeyBinding::new("escape", CancelSketch, Some(SKETCH)),
     ]);
 }
 
@@ -211,9 +211,9 @@ pub struct ChatView {
     /// The input the human sets the goal in, while it is open, with the
     /// index of the proposed goal it changes, when it changes one.
     goal_input: Option<(Entity<LineInput>, Option<usize>, Subscription)>,
-    /// The input the human says what a trial of the chat tries in, while
-    /// it is open, with what the trial is to start from.
-    trial_input: Option<(Entity<LineInput>, Trial, Subscription)>,
+    /// The input the human says what a sketch of the chat tries in, while
+    /// it is open, with what the sketch is to start from.
+    sketch_input: Option<(Entity<LineInput>, Sketch, Subscription)>,
     /// The setting whose choices are open, by its place in the
     /// conversation's settings, while they are.
     setting_open: Option<settings::Menu>,
@@ -256,7 +256,7 @@ impl ChatView {
                     .setup
                     .iter()
                     .filter_map(|setup| setup.folder.as_deref())
-                    .map(conversation::trial_note),
+                    .map(conversation::sketch_note),
             )
             .chain(
                 agent
@@ -360,7 +360,7 @@ impl ChatView {
             judge: None,
             cwd: None,
             goal_input: None,
-            trial_input: None,
+            sketch_input: None,
             setting_open: None,
             setting_closed_at: None,
             agents: None,
@@ -548,7 +548,7 @@ impl ChatView {
 
     /// Starts the agent of the chat again, if it is closed and can be,
     /// and sends it `text` in the human's place, as when the chat moves
-    /// into a trial and goes on there.
+    /// into a sketch and goes on there.
     pub fn go_on(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.start_again(window, cx);
         if let Some(command) = self.follow(|conversation| conversation.told(text)) {
@@ -733,39 +733,39 @@ impl ChatView {
     }
 
     /// Opens an input above the chat's own, for the human to say what a
-    /// trial of the chat is to try, such as what to find out, and to
+    /// sketch of the chat is to try, such as what to find out, and to
     /// choose what it starts from, `from` at first. Enter makes the chat a
-    /// trial of it, as an agent's `start_trial` does, and Escape closes the
+    /// sketch of it, as an agent's `start_sketch` does, and Escape closes the
     /// input, making none.
-    pub fn edit_trial(&mut self, from: Trial, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn edit_sketch(&mut self, from: Sketch, window: &mut Window, cx: &mut Context<Self>) {
         self.goal_input = None;
         let input = cx.new(LineInput::new);
         let submitted = cx.subscribe_in(&input, window, |view, _, Submitted, window, cx| {
-            view.end_editing_trial(true, window, cx);
+            view.end_editing_sketch(true, window, cx);
         });
         window.focus(&input.focus_handle(cx));
-        self.trial_input = Some((input, from, submitted));
+        self.sketch_input = Some((input, from, submitted));
         cx.notify();
     }
 
-    /// Changes what the trial the input starts starts from: the project,
+    /// Changes what the sketch the input starts starts from: the project,
     /// or nothing, and gives the input back the keyboard.
-    fn flip_trial(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((input, from, _)) = &mut self.trial_input {
+    fn flip_sketch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((input, from, _)) = &mut self.sketch_input {
             *from = match from {
-                Trial::Project => Trial::Empty,
-                Trial::Empty => Trial::Project,
+                Sketch::Project => Sketch::Empty,
+                Sketch::Empty => Sketch::Project,
             };
             window.focus(&input.focus_handle(cx));
             cx.notify();
         }
     }
 
-    /// Closes the input that starts a trial, and, when `start` says to and
-    /// it says what to try, asks the window to open a trial of it beside
+    /// Closes the input that starts a sketch, and, when `start` says to and
+    /// it says what to try, asks the window to open a sketch of it beside
     /// the chat, and show it, noting why when it cannot open.
-    fn end_editing_trial(&mut self, start: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((input, trial, _)) = self.trial_input.take() else {
+    fn end_editing_sketch(&mut self, start: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((input, sketch, _)) = self.sketch_input.take() else {
             return;
         };
         window.focus(&self.input.focus_handle(cx));
@@ -775,8 +775,8 @@ impl ChatView {
             return;
         }
         let (answer, answered) = oneshot::channel();
-        cx.emit(Asked(RefCell::new(Some(ChatRequest::StartTrial {
-            trial,
+        cx.emit(Asked(RefCell::new(Some(ChatRequest::StartSketch {
+            sketch,
             what,
             show: true,
             answer,
@@ -784,7 +784,7 @@ impl ChatView {
         cx.spawn(async move |this, cx| {
             if let Ok(Err(why)) = answered.await {
                 let _ = this.update(cx, |view, cx| {
-                    view.note(format!("The trial cannot start: {why}"), cx);
+                    view.note(format!("The sketch cannot start: {why}"), cx);
                 });
             }
         })
@@ -872,7 +872,7 @@ impl ChatView {
         cx.notify();
     }
 
-    /// Closes the chat, as `note` says why, as when the trial it works in
+    /// Closes the chat, as `note` says why, as when the sketch it works in
     /// ends: its agent stops, and the chat cannot start it again; what
     /// goes on with it is a view of it read again.
     pub fn close(&mut self, note: String, cx: &mut Context<Self>) {
@@ -892,7 +892,7 @@ impl ChatView {
         self.cwd = None;
         self.again = None;
         self.goal_input = None;
-        self.trial_input = None;
+        self.sketch_input = None;
     }
 
     /// Whether the chat's agent runs: it was opened in this run, or the
@@ -957,13 +957,13 @@ impl ChatView {
         self.goal_input.as_ref().map(|(input, _, _)| input)
     }
 
-    /// The input the human says what a trial tries in, while it is open,
-    /// with what the trial is to start from.
+    /// The input the human says what a sketch tries in, while it is open,
+    /// with what the sketch is to start from.
     #[must_use]
-    pub fn trial_input(&self) -> Option<(&Entity<LineInput>, Trial)> {
-        self.trial_input
+    pub fn sketch_input(&self) -> Option<(&Entity<LineInput>, Sketch)> {
+        self.sketch_input
             .as_ref()
-            .map(|(input, trial, _)| (input, *trial))
+            .map(|(input, sketch, _)| (input, *sketch))
     }
 
     /// The stage's tabs, as they are kept, when the chat has a stage.
@@ -1329,7 +1329,7 @@ impl ChatView {
         self.input
             .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
         let goal_input = self.render_goal_input(cx);
-        let trial_input = self.render_trial_input(cx);
+        let sketch_input = self.render_sketch_input(cx);
         let plan = self.render_plan(cx);
         let goal = self.render_goal();
         div()
@@ -1400,7 +1400,7 @@ impl ChatView {
                     .children(plan),
             )
             .children(goal_input)
-            .children(trial_input)
+            .children(sketch_input)
             .child(
                 // A column, which stretches the input across it, whatever
                 // its placeholder's width.
@@ -1630,32 +1630,32 @@ impl ChatView {
         )
     }
 
-    /// The input that starts a trial, with what the trial starts from,
+    /// The input that starts a sketch, with what the sketch starts from,
     /// which a click changes, while it is open.
-    fn render_trial_input(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let (input, trial, _) = self.trial_input.as_ref()?;
-        let from = match trial {
-            Trial::Project => "from the project",
-            Trial::Empty => "from nothing",
+    fn render_sketch_input(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (input, sketch, _) = self.sketch_input.as_ref()?;
+        let from = match sketch {
+            Sketch::Project => "from the project",
+            Sketch::Empty => "from nothing",
         };
         Some(
             div()
-                .key_context(TRIAL)
-                .debug_selector(|| "trial-input".to_owned())
+                .key_context(SKETCH)
+                .debug_selector(|| "sketch-input".to_owned())
                 .px_3()
                 .py_1()
                 .flex()
                 .items_center()
                 .gap_2()
                 .text_size(px(12.))
-                .on_action(cx.listener(|view, _: &CancelTrial, window, cx| {
-                    view.end_editing_trial(false, window, cx);
+                .on_action(cx.listener(|view, _: &CancelSketch, window, cx| {
+                    view.end_editing_sketch(false, window, cx);
                 }))
                 .child(
                     div()
                         .flex_shrink_0()
                         .text_color(rgb(DIM))
-                        .child("Trial: what to try out"),
+                        .child("Sketch: what to try out"),
                 )
                 .child(
                     div()
@@ -1669,8 +1669,8 @@ impl ChatView {
                 )
                 .child(
                     div()
-                        .id("trial-from")
-                        .debug_selector(|| "trial-from".to_owned())
+                        .id("sketch-from")
+                        .debug_selector(|| "sketch-from".to_owned())
                         .flex_shrink_0()
                         .px_2()
                         .rounded_sm()
@@ -1680,7 +1680,7 @@ impl ChatView {
                         .cursor_pointer()
                         .hover(|style| style.text_color(rgb(FOREGROUND)))
                         .child(from)
-                        .on_click(cx.listener(|view, _, window, cx| view.flip_trial(window, cx))),
+                        .on_click(cx.listener(|view, _, window, cx| view.flip_sketch(window, cx))),
                 ),
         )
     }

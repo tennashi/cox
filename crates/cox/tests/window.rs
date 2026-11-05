@@ -814,7 +814,7 @@ async fn a_policy_answers_by_the_kind_the_call_was_told_to_be(cx: &mut TestAppCo
 
     // Kept to another folder, it is asked of the human.
     let mut elsewhere = set_up(&["edit:*"], &[]);
-    elsewhere.policy.within = Some("/trials/scratch-1".into());
+    elsewhere.policy.within = Some("/sketches/scratch-1".into());
     let (_agent, view, cx) = open_set_up(cx, elsewhere);
     cx.simulate_input("permission");
     cx.simulate_keystrokes("enter");

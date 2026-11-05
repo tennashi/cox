@@ -133,7 +133,7 @@ pub enum Opened {
     /// setup, if it was set up with one. The session the chat had is
     /// `lost` when the agent could not go on with it; a chat has none to
     /// go on with when it never got one, or when it moved, as into a
-    /// trial, where its agent works in another folder.
+    /// sketch, where its agent works in another folder.
     Retold {
         lost: bool,
         instructions: Vec<PathBuf>,
@@ -876,14 +876,14 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
     Some((told, switched))
 }
 
-/// What the agent of a trial opened beside a chat is told of what the
+/// What the agent of a sketch opened beside a chat is told of what the
 /// chat talked through so far, `entries`, ahead of what it tries; or
 /// nothing, when nothing was said in the chat.
 #[must_use]
 pub fn talked_through(entries: &[Entry]) -> Option<String> {
     let (told, _) = told_so_far(entries)?;
     Some(format!(
-        "This trial was opened beside a chat, which goes on in the project. This is what \
+        "This sketch was opened beside a chat, which goes on in the project. This is what \
          that chat talked through so far, as Cox kept it, where [you] stands for that chat's \
          agent:\n\n{told}"
     ))

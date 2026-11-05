@@ -1,4 +1,4 @@
-//! A trial: a chat that tries something out apart from its project,
+//! A sketch: a chat that tries something out apart from its project,
 //! before the human and the agent that opened it agree what the work is
 //! to be. Its agent works in a folder of its own, so what it changes
 //! leaves the project's files be: a Git worktree of the project's, made
@@ -8,16 +8,16 @@
 //! from it.
 //!
 //! Cox makes the folder when the chat opens, in a folder of its own for
-//! trials (see [`crate::storage`]), and keeps where it is with the chat's
+//! sketches (see [`crate::storage`]), and keeps where it is with the chat's
 //! setup, so the chat goes on there once it is started again. It marks
-//! where the trial starts in the folder's repository, so that what the
-//! trial changed shows on the stage as all it changed since then (see
+//! where the sketch starts in the folder's repository, so that what the
+//! sketch changed shows on the stage as all it changed since then (see
 //! [`cox_editor::changes`]).
 //!
-//! Once the human has what they wanted of it, the trial ends, in the
-//! ways the human's workflow says (see [`crate::workflow::Trial`]): as
-//! Cox's own says, a trial from nothing is opened as a project of its
-//! own, or the trial is discarded, its folder with it, its agent first
+//! Once the human has what they wanted of it, the sketch ends, in the
+//! ways the human's workflow says (see [`crate::workflow::Sketch`]): as
+//! Cox's own says, a sketch from nothing is opened as a project of its
+//! own, or the sketch is discarded, its folder with it, its agent first
 //! summing it up in the conversation, and what it changed kept apart,
 //! but for the files too big to keep. The chat goes on, in the project.
 
@@ -34,21 +34,21 @@ use cox_editor::changes;
 use crate::agent::setup::Policy;
 use crate::chat::judge;
 
-/// What Cox calls the folder that holds the trials' folders.
-pub const FOLDER: &str = "trials";
+/// What Cox calls the folder that holds the sketches' folders.
+pub const FOLDER: &str = "sketches";
 
-/// What a trial starts from.
+/// What a sketch starts from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Trial {
+pub enum Sketch {
     /// The project's last commit, in a worktree of the project's.
     Project,
     /// Nothing, in an empty folder.
     Empty,
 }
 
-impl Trial {
-    /// The name of the trial, as the agent names it.
+impl Sketch {
+    /// The name of the sketch, as the agent names it.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -57,7 +57,7 @@ impl Trial {
         }
     }
 
-    /// The trial `name` says, as the agent names it: `project` or
+    /// The sketch `name` says, as the agent names it: `project` or
     /// `empty`.
     #[must_use]
     pub fn parse(name: &str) -> Option<Self> {
@@ -68,7 +68,7 @@ impl Trial {
         }
     }
 
-    /// What the trial's folder is, as the agent that opened it is told.
+    /// What the sketch's folder is, as the agent that opened it is told.
     #[must_use]
     pub fn what(self) -> &'static str {
         match self {
@@ -78,10 +78,10 @@ impl Trial {
     }
 }
 
-/// `policy` with what a trial's agent, working in `folder`, goes on with
+/// `policy` with what a sketch's agent, working in `folder`, goes on with
 /// unasked, on top of what the chat that opened it said: the requests
 /// `patterns` match, as the human's workflow says them (see
-/// [`crate::workflow::Trial::allow`]), when they change the files in
+/// [`crate::workflow::Sketch::allow`]), when they change the files in
 /// `folder` only, and what a judge may run, which reads and tests.
 #[must_use]
 pub fn allow(policy: Policy, folder: &Path, patterns: &[String]) -> Policy {
@@ -97,44 +97,44 @@ pub fn allow(policy: Policy, folder: &Path, patterns: &[String]) -> Policy {
     }
 }
 
-/// Makes the folder of a trial that starts from `trial`, for a chat of
-/// `project`, in `trials`, and answers where the trial works in it.
+/// Makes the folder of a sketch that starts from `sketch`, for a chat of
+/// `project`, in `sketches`, and answers where the sketch works in it.
 ///
 /// # Errors
 ///
-/// When a trial of the project's is to be made and `project` is not in a
+/// When a sketch of the project's is to be made and `project` is not in a
 /// Git repository, or when Git cannot make the folder, with what Git
 /// said.
-pub fn make(trial: Trial, project: &Path, trials: &Path) -> Result<PathBuf, String> {
-    let folder = match trial {
-        Trial::Project => worktree(project, trials)?,
-        Trial::Empty => {
-            let folder = free(trials, "scratch")?;
+pub fn make(sketch: Sketch, project: &Path, sketches: &Path) -> Result<PathBuf, String> {
+    let folder = match sketch {
+        Sketch::Project => worktree(project, sketches)?,
+        Sketch::Empty => {
+            let folder = free(sketches, "scratch")?;
             git(&folder, &["init", "--quiet"])?;
             folder
         }
     };
-    // What the trial changed is what it changed since now.
+    // What the sketch changed is what it changed since now.
     changes::start(&folder)?;
     Ok(folder)
 }
 
 /// Makes a worktree of the Git repository `project` is in, from its last
-/// commit, in `trials`, and answers where the project is in it.
-fn worktree(project: &Path, trials: &Path) -> Result<PathBuf, String> {
+/// commit, in `sketches`, and answers where the project is in it.
+fn worktree(project: &Path, sketches: &Path) -> Result<PathBuf, String> {
     let top = git(project, &["rev-parse", "--show-toplevel"])
-        .map_err(|error| format!("a trial of the project needs a Git repository: {error}"))?;
+        .map_err(|error| format!("a sketch of the project needs a Git repository: {error}"))?;
     let name = Path::new(top.trim()).file_name().map_or_else(
         || "project".to_owned(),
         |name| name.to_string_lossy().into_owned(),
     );
-    let folder = free(trials, &name)?;
+    let folder = free(sketches, &name)?;
     let path = folder.to_string_lossy();
     if let Err(error) = git(project, &["worktree", "add", "--detach", &path, "HEAD"]) {
         let _ = std::fs::remove_dir(&folder);
         return Err(error);
     }
-    // Where in the repository the project is, the trial is too.
+    // Where in the repository the project is, the sketch is too.
     let within = project
         .canonicalize()
         .ok()
@@ -150,26 +150,26 @@ fn worktree(project: &Path, trials: &Path) -> Result<PathBuf, String> {
     })
 }
 
-/// What Cox calls the folder, in the folder of trials, that keeps what
-/// the discarded trials from nothing changed.
+/// What Cox calls the folder, in the folder of sketches, that keeps what
+/// the discarded sketches from nothing changed.
 pub const DISCARDED: &str = "discarded";
 
-/// Where the trials discarded from the project are kept in its
+/// Where the sketches discarded from the project are kept in its
 /// repository, each under the name of its folder: refs, which Git keeps
 /// what they name for, that are not branches, so that the project's
 /// branches stay the human's.
 const DISCARDED_REFS: &str = "refs/cox/discarded";
 
-/// The most a file the trial changed can hold to be kept, in bytes.
+/// The most a file the sketch changed can hold to be kept, in bytes.
 const FILE_KEPT: u64 = 256 * 1024;
 
-/// The most the files kept of a trial can hold together, in bytes.
+/// The most the files kept of a sketch can hold together, in bytes.
 const ALL_KEPT: u64 = 1024 * 1024;
 
-/// A file a trial made that is too big to keep once it is discarded.
+/// A file a sketch made that is too big to keep once it is discarded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeftOut {
-    /// Where it is, from the top of the trial's worktree.
+    /// Where it is, from the top of the sketch's worktree.
     pub path: String,
     /// How many bytes it holds.
     pub size: u64,
@@ -177,7 +177,7 @@ pub struct LeftOut {
     pub hash: String,
 }
 
-/// What of a trial is kept once it is discarded.
+/// What of a sketch is kept once it is discarded.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Sorted {
     /// The files it changed that are kept, or that it took away, from the
@@ -187,7 +187,7 @@ struct Sorted {
     left_out: Vec<LeftOut>,
 }
 
-/// Sorts what the trial that works in `folder` changed since it started
+/// Sorts what the sketch that works in `folder` changed since it started
 /// into what is kept once it is discarded, the files of up to
 /// [`FILE_KEPT`] bytes, as many as fit in [`ALL_KEPT`] together, the
 /// smaller first, and what is left out, the rest.
@@ -236,19 +236,19 @@ fn sort(folder: &Path) -> Result<Sorted, String> {
     Ok(sorted)
 }
 
-/// The files the trial that works in `folder` made that are too big to
+/// The files the sketch that works in `folder` made that are too big to
 /// keep once it is discarded.
 ///
 /// # Errors
 ///
-/// When Git cannot tell what the trial changed, with what Git said.
+/// When Git cannot tell what the sketch changed, with what Git said.
 pub fn left_out(folder: &Path) -> Result<Vec<LeftOut>, String> {
     sort(folder).map(|sorted| sorted.left_out)
 }
 
-/// The files `left_out` of a trial, too big to keep, as its agent is
-/// asked to say how to make each of them again before the trial ends, in
-/// place of `{left_out}` (see [`crate::workflow::TRIAL_DISCARD`]); or
+/// The files `left_out` of a sketch, too big to keep, as its agent is
+/// asked to say how to make each of them again before the sketch ends, in
+/// place of `{left_out}` (see [`crate::workflow::SKETCH_DISCARD`]); or
 /// nothing, when there are none.
 #[must_use]
 pub fn left_out_lines(left_out: &[LeftOut]) -> String {
@@ -265,12 +265,12 @@ pub fn left_out_lines(left_out: &[LeftOut]) -> String {
     files
 }
 
-/// Where what a discarded trial changed is kept.
+/// Where what a discarded sketch changed is kept.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kept {
-    /// A ref of the project's repository, for a trial of the project's.
+    /// A ref of the project's repository, for a sketch of the project's.
     Ref(String),
-    /// A bundle of Git's, for a trial from nothing, whose repository goes
+    /// A bundle of Git's, for a sketch from nothing, whose repository goes
     /// with its folder.
     Bundle(PathBuf),
 }
@@ -285,7 +285,7 @@ impl std::fmt::Display for Kept {
     }
 }
 
-/// What is kept of a discarded trial.
+/// What is kept of a discarded sketch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Discarded {
     /// Where what it changed is kept, if it changed anything to keep.
@@ -295,10 +295,10 @@ pub struct Discarded {
 }
 
 impl Discarded {
-    /// What the trial's chat notes of it.
+    /// What the sketch's chat notes of it.
     #[must_use]
     pub fn note(&self) -> String {
-        let mut note = "The trial is discarded, and its folder is gone.".to_owned();
+        let mut note = "The sketch is discarded, and its folder is gone.".to_owned();
         match &self.kept {
             Some(Kept::Ref(name)) => {
                 let _ = write!(
@@ -328,19 +328,19 @@ impl Discarded {
     }
 }
 
-/// Discards the trial that starts from `trial`, named `title`, that works
+/// Discards the sketch that starts from `sketch`, named `title`, that works
 /// in `folder`, taking its folder away. When `keep` says to, what it
 /// changed since it started is kept first, as one commit from where it
 /// started, but for the files too big to keep: as a ref of the project's
-/// repository for a trial of the project's, and as a bundle in `bundles`
-/// for a trial from nothing.
+/// repository for a sketch of the project's, and as a bundle in `bundles`
+/// for a sketch from nothing.
 ///
 /// # Errors
 ///
 /// When Git cannot keep what it changed, or the folder cannot be taken
 /// away, with why.
 pub fn discard(
-    trial: Trial,
+    sketch: Sketch,
     folder: &Path,
     title: &str,
     bundles: &Path,
@@ -353,19 +353,19 @@ pub fn discard(
         Sorted::default()
     };
     let commit = commit_kept(&top, &sorted.kept, title)?;
-    let kept = match (commit, trial) {
+    let kept = match (commit, sketch) {
         (None, _) => None,
-        (Some(commit), Trial::Project) => {
+        (Some(commit), Sketch::Project) => {
             let name = free_ref(&top)?;
             git(&top, &["update-ref", &name, &commit])?;
             Some(Kept::Ref(name))
         }
-        (Some(commit), Trial::Empty) => {
+        (Some(commit), Sketch::Empty) => {
             // The repository goes with the folder, so what the bundle
-            // holds can be its own: the branch `trial`, checked out, for
+            // holds can be its own: the branch `sketch`, checked out, for
             // a clone of it to check it out too.
-            git(&top, &["update-ref", "refs/heads/trial", &commit])?;
-            git(&top, &["symbolic-ref", "HEAD", "refs/heads/trial"])?;
+            git(&top, &["update-ref", "refs/heads/sketch", &commit])?;
+            git(&top, &["symbolic-ref", "HEAD", "refs/heads/sketch"])?;
             let bundle = free_bundle(bundles, &folder_name(&top))?;
             let path = bundle.to_string_lossy();
             git(
@@ -376,7 +376,7 @@ pub fn discard(
                     "--quiet",
                     &path,
                     "HEAD",
-                    "refs/heads/trial",
+                    "refs/heads/sketch",
                 ],
             )
             .inspect_err(|_| {
@@ -385,9 +385,9 @@ pub fn discard(
             Some(Kept::Bundle(bundle))
         }
     };
-    match trial {
-        Trial::Project => remove_worktree(&top)?,
-        Trial::Empty => std::fs::remove_dir_all(&top)
+    match sketch {
+        Sketch::Project => remove_worktree(&top)?,
+        Sketch::Empty => std::fs::remove_dir_all(&top)
             .map_err(|error| format!("cannot remove {}: {error}", top.display()))?,
     }
     Ok(Discarded {
@@ -396,12 +396,12 @@ pub fn discard(
     })
 }
 
-/// Commits the files `kept` of the trial whose worktree is at `top`, as
+/// Commits the files `kept` of the sketch whose worktree is at `top`, as
 /// they are now, onto where it started, as `title` says, leaving the rest
 /// as they were then, and answers the commit, unless that changes
 /// nothing. The commit is made apart from the worktree's own index and
-/// commits, so that it holds none of what the trial left out, even of
-/// what the trial committed itself.
+/// commits, so that it holds none of what the sketch left out, even of
+/// what the sketch committed itself.
 fn commit_kept(top: &Path, kept: &[String], title: &str) -> Result<Option<String>, String> {
     if kept.is_empty() {
         return Ok(None);
@@ -434,7 +434,7 @@ fn commit_kept(top: &Path, kept: &[String], title: &str) -> Result<Option<String
         if tree == from {
             return Ok(None);
         }
-        let message = format!("Discarded trial: {title}");
+        let message = format!("Discarded sketch: {title}");
         let mut args = vec!["commit-tree", &tree, "-m", &message];
         let parent = format!("{}^{{commit}}", changes::START);
         let parent = git(top, &["rev-parse", "--verify", "--quiet", &parent])
@@ -449,7 +449,7 @@ fn commit_kept(top: &Path, kept: &[String], title: &str) -> Result<Option<String
     committed
 }
 
-/// Who Cox commits what a discarded trial changed as: whoever Git says
+/// Who Cox commits what a discarded sketch changed as: whoever Git says
 /// commits in the repository at `top`, or else, when Git knows no one, as
 /// on a machine where no `user.name` is set, Cox itself, since the commit
 /// is Cox's to keep and not the human's to share.
@@ -470,10 +470,10 @@ fn identity(top: &Path) -> Vec<(&'static str, &'static OsStr)> {
     ]
 }
 
-/// The name of the folder of the worktree at `top`, as its trial goes by.
+/// The name of the folder of the worktree at `top`, as its sketch goes by.
 fn folder_name(top: &Path) -> String {
     top.file_name().map_or_else(
-        || "trial".to_owned(),
+        || "sketch".to_owned(),
         |name| name.to_string_lossy().into_owned(),
     )
 }
@@ -517,15 +517,15 @@ fn size(bytes: u64) -> String {
     }
 }
 
-/// What a trial the human starts for a chat working in `folder` starts
+/// What a sketch the human starts for a chat working in `folder` starts
 /// from at first: the project, when `folder` is in a Git repository,
-/// which a trial of the project's needs, or else nothing.
+/// which a sketch of the project's needs, or else nothing.
 #[must_use]
-pub fn from_at_first(folder: &Path) -> Trial {
+pub fn from_at_first(folder: &Path) -> Sketch {
     if top(folder).is_ok() {
-        Trial::Project
+        Sketch::Project
     } else {
-        Trial::Empty
+        Sketch::Empty
     }
 }
 
@@ -552,22 +552,22 @@ fn remove_worktree(top: &Path) -> Result<(), String> {
     .map(drop)
 }
 
-/// Makes the first folder in `trials` named `name`, a dash and a number
-/// that is not there yet, making `trials` if it is not there, and
-/// answers where it is. Making it claims it, so two trials made at once
+/// Makes the first folder in `sketches` named `name`, a dash and a number
+/// that is not there yet, making `sketches` if it is not there, and
+/// answers where it is. Making it claims it, so two sketches made at once
 /// get folders of their own.
-fn free(trials: &Path, name: &str) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(trials)
-        .map_err(|error| format!("cannot make {}: {error}", trials.display()))?;
+fn free(sketches: &Path, name: &str) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(sketches)
+        .map_err(|error| format!("cannot make {}: {error}", sketches.display()))?;
     for number in 1..=u32::MAX {
-        let folder = trials.join(format!("{name}-{number}"));
+        let folder = sketches.join(format!("{name}-{number}"));
         match std::fs::create_dir(&folder) {
             Ok(()) => return Ok(folder),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(format!("cannot make {}: {error}", folder.display())),
         }
     }
-    Err(format!("{} is full", trials.display()))
+    Err(format!("{} is full", sketches.display()))
 }
 
 /// Runs Git in `folder` with `args`, and answers what it printed, or
@@ -622,14 +622,14 @@ mod tests {
     use crate::agent::setup::{Asked, Decision};
 
     fn scratch(name: &str) -> PathBuf {
-        let folder = std::env::temp_dir().join(format!("cox-trial-{name}-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!("cox-sketch-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).unwrap();
         folder.canonicalize().unwrap()
     }
 
     #[test]
-    fn a_trial_works_in_a_worktree_of_the_last_commit() {
+    fn a_sketch_works_in_a_worktree_of_the_last_commit() {
         let root = scratch("worktree");
         let project = root.join("greet");
         std::fs::create_dir_all(project.join("app")).unwrap();
@@ -647,69 +647,69 @@ mod tests {
             "-m",
             "first",
         ]);
-        // Not committed, so not in the trial.
+        // Not committed, so not in the sketch.
         std::fs::write(project.join("app/main.rs"), "fn main() { todo!() }\n").unwrap();
 
-        let trials = root.join("trials");
-        let trial = make(Trial::Project, &project.join("app"), &trials).unwrap();
-        assert_eq!(trial, trials.join("greet-1/app"));
+        let sketches = root.join("sketches");
+        let sketch = make(Sketch::Project, &project.join("app"), &sketches).unwrap();
+        assert_eq!(sketch, sketches.join("greet-1/app"));
         assert_eq!(
-            std::fs::read_to_string(trial.join("main.rs")).unwrap(),
+            std::fs::read_to_string(sketch.join("main.rs")).unwrap(),
             "fn main() {}\n"
         );
-        std::fs::write(trial.join("main.rs"), "fn main() { trial() }\n").unwrap();
+        std::fs::write(sketch.join("main.rs"), "fn main() { sketch() }\n").unwrap();
         assert_eq!(
             std::fs::read_to_string(project.join("app/main.rs")).unwrap(),
             "fn main() { todo!() }\n"
         );
         // What it changed is what it changed since it started.
-        let diff = changes::read(&trial).unwrap();
+        let diff = changes::read(&sketch).unwrap();
         assert!(matches!(diff.since, changes::Since::Start(_)));
         assert_eq!(diff.counts(), (1, 1));
-        // Each trial gets a worktree of its own.
+        // Each sketch gets a worktree of its own.
         assert_eq!(
-            make(Trial::Project, &project, &trials).unwrap(),
-            trials.join("greet-2")
+            make(Sketch::Project, &project, &sketches).unwrap(),
+            sketches.join("greet-2")
         );
 
         let error = make(
-            Trial::Project,
-            &root.join("trials"),
+            Sketch::Project,
+            &root.join("sketches"),
             &root.join("elsewhere"),
         );
-        assert!(error.is_err_and(|error| error.starts_with("a trial of the project needs")));
+        assert!(error.is_err_and(|error| error.starts_with("a sketch of the project needs")));
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn a_trial_from_nothing_works_in_an_empty_repository() {
+    fn a_sketch_from_nothing_works_in_an_empty_repository() {
         let root = scratch("empty");
         // The project need not be in a Git repository.
         let project = root.join("notes");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("todo.md"), "- greet\n").unwrap();
 
-        let trials = root.join("trials");
-        let trial = make(Trial::Empty, &project, &trials).unwrap();
-        assert_eq!(trial, trials.join("scratch-1"));
-        let files: Vec<_> = std::fs::read_dir(&trial)
+        let sketches = root.join("sketches");
+        let sketch = make(Sketch::Empty, &project, &sketches).unwrap();
+        assert_eq!(sketch, sketches.join("scratch-1"));
+        let files: Vec<_> = std::fs::read_dir(&sketch)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(files, [".git"]);
         assert_eq!(
-            changes::read(&trial).unwrap().since,
+            changes::read(&sketch).unwrap().since,
             changes::Since::Nothing
         );
         assert_eq!(
-            git(&trial, &["rev-parse", "--show-toplevel"])
+            git(&sketch, &["rev-parse", "--show-toplevel"])
                 .unwrap()
                 .trim(),
-            trial.to_string_lossy()
+            sketch.to_string_lossy()
         );
         assert_eq!(
-            make(Trial::Empty, &project, &trials).unwrap(),
-            trials.join("scratch-2")
+            make(Sketch::Empty, &project, &sketches).unwrap(),
+            sketches.join("scratch-2")
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -727,31 +727,31 @@ mod tests {
     }
 
     #[test]
-    fn a_trial_is_discarded_keeping_what_it_changed() {
+    fn a_sketch_is_discarded_keeping_what_it_changed() {
         let root = scratch("discard");
         let project = root.join("greet");
         repository(&project);
-        let bundles = root.join("trials/discarded");
-        let trials = root.join("trials");
-        let trial = make(Trial::Project, &project, &trials).unwrap();
-        std::fs::write(trial.join("main.rs"), "fn main() { trial() }\n").unwrap();
-        std::fs::write(trial.join("new.rs"), "fn trial() {}\n").unwrap();
-        // A file too big to keep, which the trial's agent committed too.
+        let bundles = root.join("sketches/discarded");
+        let sketches = root.join("sketches");
+        let sketch = make(Sketch::Project, &project, &sketches).unwrap();
+        std::fs::write(sketch.join("main.rs"), "fn main() { sketch() }\n").unwrap();
+        std::fs::write(sketch.join("new.rs"), "fn sketch() {}\n").unwrap();
+        // A file too big to keep, which the sketch's agent committed too.
         let big = vec![b'x'; 300 * 1024];
-        std::fs::write(trial.join("big.bin"), &big).unwrap();
-        git(&trial, &["add", "--all"]).unwrap();
-        git(&trial, &["commit", "-q", "-m", "the agent's own"]).unwrap();
-        let big_hash = git(&trial, &["hash-object", "big.bin"]).unwrap();
+        std::fs::write(sketch.join("big.bin"), &big).unwrap();
+        git(&sketch, &["add", "--all"]).unwrap();
+        git(&sketch, &["commit", "-q", "-m", "the agent's own"]).unwrap();
+        let big_hash = git(&sketch, &["hash-object", "big.bin"]).unwrap();
         // Files that fit alone, but not all together.
         for name in ["a", "b", "c", "d", "e"] {
-            std::fs::write(trial.join(format!("{name}.txt")), vec![b'y'; 250 * 1024]).unwrap();
+            std::fs::write(sketch.join(format!("{name}.txt")), vec![b'y'; 250 * 1024]).unwrap();
         }
-        // What Git ignores is not the trial's to keep.
-        std::fs::write(trial.join(".gitignore"), "target/\n").unwrap();
-        std::fs::create_dir_all(trial.join("target")).unwrap();
-        std::fs::write(trial.join("target/out"), "built\n").unwrap();
+        // What Git ignores is not the sketch's to keep.
+        std::fs::write(sketch.join(".gitignore"), "target/\n").unwrap();
+        std::fs::create_dir_all(sketch.join("target")).unwrap();
+        std::fs::write(sketch.join("target/out"), "built\n").unwrap();
 
-        let left_out = left_out(&trial).unwrap();
+        let left_out = left_out(&sketch).unwrap();
         let paths: Vec<_> = left_out.iter().map(|file| file.path.as_str()).collect();
         assert_eq!(paths, ["big.bin", "e.txt"]);
         assert_eq!(left_out[0].size, 300 * 1024);
@@ -760,8 +760,9 @@ mod tests {
         assert!(lines.contains("- big.bin (300 KB)"), "{lines}");
         assert_eq!(left_out_lines(&[]), "");
 
-        let discarded = discard(Trial::Project, &trial, "Try a greeting", &bundles, true).unwrap();
-        assert!(!trial.exists());
+        let discarded =
+            discard(Sketch::Project, &sketch, "Try a greeting", &bundles, true).unwrap();
+        assert!(!sketch.exists());
         let name = "refs/cox/discarded/greet-1";
         assert_eq!(discarded.kept, Some(Kept::Ref(name.to_owned())));
         assert_eq!(discarded.left_out, left_out);
@@ -771,9 +772,12 @@ mod tests {
         let shown = |what: &str| git(&project, &["show", what]);
         assert_eq!(
             shown(&format!("{name}:main.rs")).unwrap(),
-            "fn main() { trial() }\n"
+            "fn main() { sketch() }\n"
         );
-        assert_eq!(shown(&format!("{name}:new.rs")).unwrap(), "fn trial() {}\n");
+        assert_eq!(
+            shown(&format!("{name}:new.rs")).unwrap(),
+            "fn sketch() {}\n"
+        );
         assert!(shown(&format!("{name}:d.txt")).is_ok());
         assert!(shown(&format!("{name}:e.txt")).is_err());
         assert!(shown(&format!("{name}:big.bin")).is_err());
@@ -787,44 +791,47 @@ mod tests {
             git(&project, &["log", "-1", "--format=%s", name])
                 .unwrap()
                 .trim(),
-            "Discarded trial: Try a greeting"
+            "Discarded sketch: Try a greeting"
         );
         let objects = git(&project, &["rev-list", "--objects", name]).unwrap();
         assert!(!objects.contains(big_hash.trim()), "{objects}");
         // No branch, and no worktree, is left.
-        assert_eq!(git(&project, &["branch", "--list", "trial/*"]).unwrap(), "");
+        assert_eq!(
+            git(&project, &["branch", "--list", "sketch/*"]).unwrap(),
+            ""
+        );
         let worktrees = git(&project, &["worktree", "list"]).unwrap();
         assert_eq!(worktrees.lines().count(), 1, "{worktrees}");
 
-        // A trial that took a file away keeps that it did, under a name of
+        // A sketch that took a file away keeps that it did, under a name of
         // its own when the first is taken.
-        let again = make(Trial::Project, &project, &trials).unwrap();
+        let again = make(Sketch::Project, &project, &sketches).unwrap();
         std::fs::remove_file(again.join("main.rs")).unwrap();
-        let discarded = discard(Trial::Project, &again, "Again", &bundles, true).unwrap();
+        let discarded = discard(Sketch::Project, &again, "Again", &bundles, true).unwrap();
         let name = "refs/cox/discarded/greet-1-2";
         assert_eq!(discarded.kept, Some(Kept::Ref(name.to_owned())));
         assert!(shown(&format!("{name}:main.rs")).is_err());
 
-        // A trial that changed nothing keeps nothing.
-        let unchanged = make(Trial::Project, &project, &trials).unwrap();
-        let discarded = discard(Trial::Project, &unchanged, "Nothing", &bundles, true).unwrap();
+        // A sketch that changed nothing keeps nothing.
+        let unchanged = make(Sketch::Project, &project, &sketches).unwrap();
+        let discarded = discard(Sketch::Project, &unchanged, "Nothing", &bundles, true).unwrap();
         assert_eq!(discarded.kept, None);
         assert_eq!(
             discarded.note(),
-            "The trial is discarded, and its folder is gone."
+            "The sketch is discarded, and its folder is gone."
         );
 
         // One whose ending keeps nothing goes as it is.
-        let unkept = make(Trial::Project, &project, &trials).unwrap();
+        let unkept = make(Sketch::Project, &project, &sketches).unwrap();
         std::fs::write(unkept.join("main.rs"), "fn main() { unkept() }\n").unwrap();
-        let discarded = discard(Trial::Project, &unkept, "Unkept", &bundles, false).unwrap();
+        let discarded = discard(Sketch::Project, &unkept, "Unkept", &bundles, false).unwrap();
         assert!(!unkept.exists());
         assert_eq!(discarded.kept, None);
 
-        // A trial from nothing is kept as a bundle, which makes it again.
-        let empty = make(Trial::Empty, &project, &trials).unwrap();
+        // A sketch from nothing is kept as a bundle, which makes it again.
+        let empty = make(Sketch::Empty, &project, &sketches).unwrap();
         std::fs::write(empty.join("main.rs"), "fn main() {}\n").unwrap();
-        let discarded = discard(Trial::Empty, &empty, "From nothing", &bundles, true).unwrap();
+        let discarded = discard(Sketch::Empty, &empty, "From nothing", &bundles, true).unwrap();
         assert!(!empty.exists());
         let bundle = bundles.join("scratch-1.bundle");
         assert_eq!(discarded.kept, Some(Kept::Bundle(bundle.clone())));
@@ -846,21 +853,21 @@ mod tests {
     }
 
     #[test]
-    fn a_trial_is_named_by_what_it_starts_from() {
-        assert_eq!(Trial::parse("project"), Some(Trial::Project));
-        assert_eq!(Trial::parse("empty"), Some(Trial::Empty));
-        assert_eq!(Trial::parse("container"), None);
+    fn a_sketch_is_named_by_what_it_starts_from() {
+        assert_eq!(Sketch::parse("project"), Some(Sketch::Project));
+        assert_eq!(Sketch::parse("empty"), Some(Sketch::Empty));
+        assert_eq!(Sketch::parse("container"), None);
     }
 
     #[test]
-    fn a_trial_changes_its_files_unasked() {
+    fn a_sketch_changes_its_files_unasked() {
         let opened = Policy {
             allow: vec!["fetch:*".to_owned()],
             reject: vec!["execute:git push*".to_owned()],
             within: None,
         };
-        let own = crate::workflow::trial_in(None);
-        let policy = allow(opened, Path::new("/trials/scratch-1"), &own.allow);
+        let own = crate::workflow::sketch_in(None);
+        let policy = allow(opened, Path::new("/sketches/scratch-1"), &own.allow);
         let decide = |title, kind, location: &str| {
             policy.decide(Asked {
                 title,
@@ -872,7 +879,7 @@ mod tests {
             decide(
                 "Write notes.md",
                 ToolKind::Edit,
-                "/trials/scratch-1/notes.md"
+                "/sketches/scratch-1/notes.md"
             ),
             Some(Decision::Allow)
         );
@@ -881,7 +888,7 @@ mod tests {
             None
         );
         assert_eq!(
-            decide("cargo test", ToolKind::Execute, "/trials/scratch-1"),
+            decide("cargo test", ToolKind::Execute, "/sketches/scratch-1"),
             Some(Decision::Allow)
         );
         // What the chat that opened it said stays.
@@ -890,7 +897,7 @@ mod tests {
             Some(Decision::Allow)
         );
         assert_eq!(
-            decide("git push", ToolKind::Execute, "/trials/scratch-1"),
+            decide("git push", ToolKind::Execute, "/sketches/scratch-1"),
             Some(Decision::Reject)
         );
     }

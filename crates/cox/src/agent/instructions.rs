@@ -5,7 +5,7 @@
 //! How the human works is the `COX.md` of their workflow's folder (see
 //! [`crate::settings::workflow`]), or, when they keep none, Cox's own
 //! (`instructions/cox.md`), which says when to use Cox's tools, such as
-//! when to try work out in a trial. The tools themselves only say what
+//! when to try work out in a sketch. The tools themselves only say what
 //! they do, so that how they are used is the human's to set.
 
 use std::path::{Path, PathBuf};
@@ -173,7 +173,7 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(&workflow).unwrap();
         std::fs::write(project.join("COX.md"), "Answer in Japanese.\n").unwrap();
-        std::fs::write(workflow.join("COX.md"), "Try vague work in a trial.\n").unwrap();
+        std::fs::write(workflow.join("COX.md"), "Try vague work in a sketch.\n").unwrap();
 
         let instructions = Instructions::read_with(&project, Some(&workflow));
         assert_eq!(
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(prompts.len(), 2);
         assert!(prompts[0].starts_with("The human's own instructions, from "));
         assert!(prompts[0].contains(&workflow.join("COX.md").display().to_string()));
-        assert!(prompts[0].ends_with("\n\nTry vague work in a trial.\n"));
+        assert!(prompts[0].ends_with("\n\nTry vague work in a sketch.\n"));
         assert!(prompts[1].contains(&project.join("COX.md").display().to_string()));
         assert!(prompts[1].ends_with("\n\nAnswer in Japanese.\n"));
         let _ = std::fs::remove_dir_all(&folder);
@@ -198,7 +198,7 @@ mod tests {
         let prompts = instructions.prompts();
         assert_eq!(prompts.len(), 1);
         assert!(prompts[0].starts_with(COX_START));
-        assert!(prompts[0].contains("start_trial"));
+        assert!(prompts[0].contains("start_sketch"));
 
         // Empty instructions count as none.
         std::fs::write(folder.join("COX.md"), " \n\n").unwrap();

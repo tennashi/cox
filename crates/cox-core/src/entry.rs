@@ -61,13 +61,13 @@ pub enum Entry {
         answer: Option<Answer>,
     },
     /// Cox asks the human whether to keep what a chat learned in the
-    /// wiki, at a milestone of it, as when its goal is met, or a trial
+    /// wiki, at a milestone of it, as when its goal is met, or a sketch
     /// ended.
     Keep {
         /// The milestone, as the card says it.
         why: String,
         /// The chat whose agent is to keep it, when it is another than
-        /// this one, as the trial that ended beside it.
+        /// this one, as the sketch that ended beside it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         chat: Option<ChatId>,
         /// Whether the human chose to keep it, once they chose.
