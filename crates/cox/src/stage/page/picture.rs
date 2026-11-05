@@ -3,22 +3,24 @@
 //! from CEF as BGRA pixels whenever the page changes; each frame uploads
 //! the newest as a GPUI image and paints it, with the dropdown of a
 //! `<select>`, which arrives as a picture of its own, over it where CEF
-//! says it goes, and the agent's pointer over both.
+//! says it goes, and the agent's pointer over both. The human's cursor
+//! over it is the one the page asks for, as a pointing hand over a link.
 
 use std::sync::Arc;
 
 use gpui::{
-    App, Bounds, ContentMask, Corners, DispatchPhase, Element, ElementId, ElementInputHandler,
-    Entity, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, ScrollDelta,
-    ScrollWheelEvent, Style, Window, fill, point, px, relative, rgb, size,
+    App, Bounds, ContentMask, Corners, CursorStyle, DispatchPhase, Element, ElementId,
+    ElementInputHandler, Entity, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
+    IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    RenderImage, ScrollDelta, ScrollWheelEvent, Style, Window, fill, point, px, relative, rgb,
+    size,
 };
 
 use super::Page;
 use super::keys::modifiers;
 use super::pointer::paint_agent;
 use crate::ui::theme::{CARD_INNER_RADIUS, RAISED};
-use cox_browser::{Frame, MouseButton};
+use cox_browser::{Cursor, Frame, MouseButton};
 
 /// How many logical pixels one line of a wheel scroll moves the page.
 const LINE_HEIGHT: f32 = 40.;
@@ -128,6 +130,30 @@ fn button(button: gpui::MouseButton) -> Option<MouseButton> {
 
 fn clicks(count: usize) -> i32 {
     i32::try_from(count).unwrap_or(i32::MAX)
+}
+
+/// The cursor GPUI draws for the one the page asks for.
+fn cursor_style(cursor: Cursor) -> CursorStyle {
+    match cursor {
+        Cursor::Arrow => CursorStyle::Arrow,
+        Cursor::Hand => CursorStyle::PointingHand,
+        Cursor::Text => CursorStyle::IBeam,
+        Cursor::VerticalText => CursorStyle::IBeamCursorForVerticalLayout,
+        Cursor::Crosshair => CursorStyle::Crosshair,
+        Cursor::Grab => CursorStyle::OpenHand,
+        Cursor::Grabbing => CursorStyle::ClosedHand,
+        Cursor::ResizeLeftRight => CursorStyle::ResizeLeftRight,
+        Cursor::ResizeUpDown => CursorStyle::ResizeUpDown,
+        Cursor::ResizeUpLeftDownRight => CursorStyle::ResizeUpLeftDownRight,
+        Cursor::ResizeUpRightDownLeft => CursorStyle::ResizeUpRightDownLeft,
+        Cursor::ResizeColumn => CursorStyle::ResizeColumn,
+        Cursor::ResizeRow => CursorStyle::ResizeRow,
+        Cursor::NotAllowed => CursorStyle::OperationNotAllowed,
+        Cursor::ContextMenu => CursorStyle::ContextualMenu,
+        Cursor::Copy => CursorStyle::DragCopy,
+        Cursor::Link => CursorStyle::DragLink,
+        Cursor::None => CursorStyle::None,
+    }
 }
 
 /// Paints the browser's picture and sends mouse events over it to the page.
@@ -240,6 +266,7 @@ impl Element for Picture {
         );
 
         self.paint_page(bounds, window, cx);
+        window.set_cursor_style(cursor_style(browser.cursor()), hitbox);
 
         let hovered = hitbox.clone();
         let target = browser.clone();

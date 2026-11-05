@@ -27,6 +27,7 @@
 //! - [`quit`] lets signals, and CEF on macOS, ask the app to quit, and
 //!   [`macos`] gives CEF what it expects of the app there.
 
+mod cursor;
 mod events;
 mod handlers;
 mod links;
@@ -65,6 +66,7 @@ use cef::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::watch;
 
+pub use crate::cursor::Cursor;
 use crate::events::{
     KeyKind, button_flag, button_type, event_flags, key_character, key_event, mouse_event,
 };
@@ -107,6 +109,8 @@ pub enum Event {
     /// the page went to a `cox://open/` address for it (see [`scheme`]):
     /// the page stays, for the stage to open the file on a tab of its own.
     FileLink(String),
+    /// The page asks for another cursor: see [`Browser::cursor`].
+    Cursor,
 }
 
 /// Where the browser is in its history, as the toolbar shows it, and what
@@ -191,6 +195,8 @@ struct Shared {
     /// that learns the page's target id.
     devtools: Option<Registration>,
     caret: Option<Caret>,
+    /// The cursor the page asks for where the mouse is.
+    cursor: Cursor,
     navigation: Navigation,
 }
 
@@ -213,6 +219,7 @@ impl Shared {
             host: None,
             devtools: None,
             caret: None,
+            cursor: Cursor::Arrow,
             navigation: Navigation {
                 url: url.to_owned(),
                 ..Default::default()
@@ -553,6 +560,13 @@ impl Browser {
     #[must_use]
     pub fn take_frame(&self) -> Option<Frame> {
         self.shared().frame.take()
+    }
+
+    /// The cursor the page asks for where the mouse is, which the stage
+    /// shows over the page.
+    #[must_use]
+    pub fn cursor(&self) -> Cursor {
+        self.shared().cursor
     }
 
     /// Where the browser is: its address and loading state.

@@ -384,7 +384,9 @@ else a command, which runs in a terminal; then "Web page", a
 new tab, "Terminal" (see below), and "File…", which asks for a file
 and opens it as a link to it does. Escape closes the menu. Their keys, Command-T, Control-` and
 Command-P (Control-T and Control-P off macOS), open them from anywhere
-in the window, on the stage of the chat shown, which opens. A page that asks for a window of its
+in the window, on the stage of the chat shown, which opens. The cursor over a page is the one
+the page asks for, as a pointing hand over a link, or an I-beam over
+text and fields. A page that asks for a window of its
 own, as a link with `target="_blank"` does, gets a tab instead. A link from the
 conversation gets a tab of its own, unless a tab shows it already. A link
 in a page to a file, as `file:///home/me/app/src/main.rs#L12`, opens the
