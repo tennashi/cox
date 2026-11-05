@@ -302,23 +302,17 @@ pub fn left_out(folder: &Path) -> Result<Vec<LeftOut>, String> {
 /// big to keep, it is asked how to make again.
 #[must_use]
 pub fn summing_up(left_out: &[LeftOut]) -> String {
-    let mut line = "The human discards this trial: its folder goes once this turn ends. \
-                    Cox keeps what it changed as a commit, but the conversation is what \
-                    is read later, so sum the trial up in your reply, for it to be done \
-                    again from the conversation alone: what it tried, and why; how; the \
-                    commands it ran, and what they showed; what it found, or why it is \
-                    dropped; and the changes that matter, as code. Change no files now."
-        .to_owned();
+    let mut files = String::new();
     if !left_out.is_empty() {
-        line.push_str(
-            "\n\nThese files it made are too big for Cox to keep, so say how to make each \
-             of them again:",
+        files.push_str(
+            "These files it made are too big for Cox to keep, so say how to make each of \
+             them again:",
         );
         for file in left_out {
-            let _ = write!(line, "\n- {} ({})", file.path, size(file.size));
+            let _ = write!(files, "\n- {} ({})", file.path, size(file.size));
         }
     }
-    line
+    crate::workflow::TRIAL_DISCARD.say(&[("left_out", &files)])
 }
 
 /// Where what a discarded trial changed is kept.
