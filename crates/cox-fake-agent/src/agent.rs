@@ -152,6 +152,18 @@ impl<W: Write> Agent<W> {
                         answer["configOptions"] = Value::from(self.scenario.config_options.clone());
                     }
                     self.answer(&id, &answer);
+                    // As `claude-agent-acp`, the agent tells its commands
+                    // once the session is open.
+                    if !self.scenario.commands.is_empty() {
+                        let commands = Value::from(self.scenario.commands.clone());
+                        self.update(
+                            &Value::from(session),
+                            &json!({
+                                "sessionUpdate": "available_commands_update",
+                                "availableCommands": commands,
+                            }),
+                        );
+                    }
                 }
                 ("session/set_config_option", Some(id)) => self.set(&id, &message["params"]),
                 ("session/prompt", Some(id)) => {

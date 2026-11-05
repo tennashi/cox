@@ -60,7 +60,7 @@ use crate::chat::conversation::{
 use crate::chat::judge::{Judge, Starts};
 use crate::stage::Stage;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::input::{LineInput, Submitted};
+use crate::ui::input::{self, LineInput, Submitted};
 use crate::ui::text::Reading;
 use crate::ui::theme::{
     ACCENT, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND, GAP, LINK, RAISED,
@@ -69,6 +69,7 @@ use crate::ui::theme::{
 use crate::ui::{Copy, Panel, card, tip};
 use cox_acp::Login;
 
+mod complete;
 mod entries;
 mod settings;
 
@@ -158,6 +159,9 @@ pub struct ChatView {
     scroll: ScrollHandle,
     /// The line the human is typing.
     input: Entity<LineInput>,
+    /// The list over the input of the agent's commands the line can go on
+    /// to run.
+    completion: complete::Completion,
     /// Where the agent and the human work together, beside the
     /// conversation.
     stage: Option<StageView>,
@@ -308,6 +312,7 @@ impl ChatView {
                 view.submit(&input, cx);
             }),
         };
+        let completion = complete::Completion::new(&input, cx);
         // The conversation's width changes, and its end stays in view if
         // it was.
         let panel_changes = stage.as_ref().map(|stage| {
@@ -322,6 +327,7 @@ impl ChatView {
             conversation,
             scroll: ScrollHandle::new(),
             input,
+            completion,
             stage,
             open_link,
             reading: Reading::default(),
@@ -1212,12 +1218,42 @@ impl ChatView {
         let goal_input = self.render_goal_input(cx);
         let plan = self.render_plan(cx);
         let goal = self.render_goal();
-        let input = self.input.clone();
         div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &Stop, _, cx| view.stop(cx)))
             .on_action(cx.listener(Self::copy))
             .capture_key_down(cx.listener(Self::choose_with_key))
+            // The list over the input takes its keys first, while it is
+            // open.
+            .capture_action(cx.listener(|view, _: &input::Up, window, cx| {
+                if view.complete_step(-1, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|view, _: &input::Down, window, cx| {
+                if view.complete_step(1, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|view, _: &input::Submit, window, cx| {
+                if view.complete_take(true, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|view, _: &Stop, window, cx| {
+                if view.complete_close(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                let keystroke = &event.keystroke;
+                if keystroke.key == "tab"
+                    && !keystroke.modifiers.modified()
+                    && view.complete_take(false, window, cx)
+                {
+                    cx.stop_propagation();
+                }
+            }))
             .size_full()
             .flex()
             .flex_col()
@@ -1261,36 +1297,80 @@ impl ChatView {
             .children(goal_input)
             .child(
                 div()
-                    .debug_selector(|| "input".to_owned())
-                    .flex()
-                    .items_center()
-                    .m(px(12.))
-                    .min_h(px(48.))
-                    .pl(px(16.))
-                    .pr(px(8.))
-                    .py(px(8.))
-                    .rounded(px(16.))
-                    .bg(rgb(RAISED))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_size(px(15.))
-                    // A click brings the keyboard back from the stage, and
-                    // keeps it from the window, which takes it otherwise.
-                    // What was selected in the conversation is let go, so
-                    // that the keys copy from the input.
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _, window, cx| {
-                            window.focus(&input.focus_handle(cx));
-                            window.prevent_default();
-                            if view.reading.deselect() {
-                                cx.notify();
-                            }
-                        }),
-                    )
-                    .child(div().flex_1().min_w_0().child(self.input.clone()))
-                    .when(running, |bar| bar.child(Self::render_stop(cx))),
+                    .relative()
+                    .child(self.render_input_box(running, cx))
+                    .children(self.render_completions(cx)),
             )
+    }
+}
+
+impl ChatView {
+    /// The box the human types the line in: the input, and under it the
+    /// chips that start a command, and the button that stops the turn
+    /// while it runs.
+    fn render_input_box(&self, running: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let input = self.input.clone();
+        let commands = !self.conversation.commands().is_empty();
+        div()
+            .debug_selector(|| "input".to_owned())
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .m(px(12.))
+            .min_h(px(48.))
+            .pl(px(16.))
+            .pr(px(8.))
+            .py(px(8.))
+            .rounded(px(16.))
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .text_size(px(15.))
+            // A click brings the keyboard back from the stage, and
+            // keeps it from the window, which takes it otherwise.
+            // What was selected in the conversation is let go, so
+            // that the keys copy from the input.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _, window, cx| {
+                    window.focus(&input.focus_handle(cx));
+                    window.prevent_default();
+                    if view.reading.deselect() {
+                        cx.notify();
+                    }
+                }),
+            )
+            .child(div().pt(px(4.)).min_w_0().child(self.input.clone()))
+            .when(commands || running, |bar| {
+                bar.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .when(commands, |row| row.child(Self::render_chip(cx)))
+                        .child(div().flex_1())
+                        .when(running, |row| row.child(Self::render_stop(cx))),
+                )
+            })
+    }
+
+    /// The chip under the input that starts a command, as `/` does.
+    fn render_chip(cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .id("start-command")
+            .debug_selector(|| "start-command".to_owned())
+            .h(px(24.))
+            .px(px(9.))
+            .flex()
+            .items_center()
+            .rounded(px(12.))
+            .bg(rgb(BUTTON))
+            .text_size(px(12.))
+            .text_color(rgb(FAINT))
+            .cursor_pointer()
+            .hover(|style| style.text_color(rgb(FOREGROUND)))
+            .child("/ commands")
+            .on_click(cx.listener(|view, _, window, cx| view.start_command(window, cx)))
     }
 }
 

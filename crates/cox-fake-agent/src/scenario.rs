@@ -15,6 +15,9 @@
 //! unless it says otherwise. A step is an object with one key, which says
 //! what it is (see [`Step`]). `configOptions`, beside `turns`, are the
 //! settings of each session, as ACP says them, such as its model.
+//! `commands` are the commands the agent runs when a line starts with `/`
+//! and one of their names, as ACP's `availableCommands` says them, which
+//! it tells Cox of as each session opens.
 //! `authMethods` are the ways the agent offers to log in, as ACP's
 //! `initialize` says them; with them, the agent asks Cox to log in, at
 //! `authRequired`, `session` (before it opens a session, the default) or
@@ -37,6 +40,10 @@ pub struct Scenario {
     /// which Cox sets with `session/set_config_option`.
     #[serde(default, rename = "configOptions")]
     pub config_options: Vec<Value>,
+    /// The commands the agent runs when a line starts with `/` and one of
+    /// their names, as ACP's `availableCommands` says them.
+    #[serde(default)]
+    pub commands: Vec<Value>,
     /// The ways the agent offers to log in, as ACP's `authMethods` says
     /// them.
     #[serde(default, rename = "authMethods")]

@@ -25,7 +25,16 @@
       ]
     }
   ],
+  "commands": [
+    { "name": "compact", "description": "Sum up the conversation so far, to go on with less" },
+    { "name": "review", "description": "Review the changes on this branch", "input": { "hint": "what to look at" } },
+    { "name": "init", "description": "Write a COX.md for the project" }
+  ],
   "turns": [
+    {
+      "when": "/compact",
+      "steps": [{ "say": "Summed up the conversation so far." }]
+    },
     {
       "steps": [
         { "think": "Look at what the program prints before changing anything." },

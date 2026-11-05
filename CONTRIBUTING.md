@@ -308,6 +308,21 @@ a click opens it. When the agent asks permission, a click on an option,
 or its number, answers. A line above the input tells what the chat waits
 for, while it is not the next line to send.
 
+An agent can run commands of its own, as `claude-agent-acp` runs Claude
+Code's `/compact` and `/review`, when a line starts with `/` and the
+command's name, with what follows the name as the command's input, and
+tells the chat which it has (ACP's `available_commands_update`). While
+the line is `/` and the start of a name, a list over the input shows the
+commands that fit, the names that start so first, each with what it
+does and what to write after it: Up and Down choose one, Tab or Enter
+put it in the line, as a click does, Enter sends a line that names it
+whole already, and Escape closes the list until the line changes. The
+chip "/ commands" under the input starts an empty line with `/`, while
+the agent has commands. A line that runs a command is sent as the
+prompt's first block, which is how the agent knows it: what goes ahead
+of the first line, as the project's `COX.md`, waits for the next line
+instead.
+
 The plan and the thoughts are ACP's `plan` and `agent_thought_chunk`
 updates, which Cox shows from any agent that sends them. How an agent
 is to be run to send them is the agent's: `claude-agent-acp` sends, as
@@ -693,6 +708,9 @@ with no GPU.
 A scenario's `configOptions`, beside its `turns`, are the settings of
 each session the agent opens, as ACP's `configOptions` says them, which
 it sets as Cox asks; the tour has a mode, a model and an effort.
+Its `commands` are the commands the agent runs, as ACP's
+`availableCommands` says them, which it tells Cox of as each session
+opens; the tour has three, and answers `/compact`.
 Its `authMethods` are the ways to log in it offers, as ACP's
 `initialize` says them: with them, the agent asks Cox to log in, before
 it opens a session, or, with `"authRequired": "prompt"`, as it takes a
