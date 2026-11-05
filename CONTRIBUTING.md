@@ -661,7 +661,10 @@ everything on but keeps the agent to its chat's pages: the agent hears
 nothing of other chats' pages, and the pages it opens and closes are
 tabs of its chat's stage. The relay also tells the stage where the agent
 points, clicks and types, so the stage can draw the agent's pointer over
-the page.
+the page. The server's tools that read or write files, as a screenshot
+saved to a file, may do so in the chat's folder and in `/tmp`, where
+Claude Code keeps its scratchpad, beside the system's folder of
+temporary files, which on macOS is elsewhere.
 
 The stage keeps its cookies, logins and storage in a profile that lasts
 across runs, one for each place Cox runs from. The Cox that

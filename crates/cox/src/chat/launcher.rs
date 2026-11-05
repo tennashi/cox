@@ -233,7 +233,7 @@ impl Launcher {
         // 3. The server of Cox's own tools, with the `cox` that reaches it.
         let server = self.server(&cwd, setup.and_then(|setup| setup.tools.clone()));
         // What the agent gets: the MCP servers it starts to reach both.
-        let tools = self.tools(relay.as_ref(), server.as_ref());
+        let tools = self.tools(&cwd, relay.as_ref(), server.as_ref());
         // 4. The stage works with the relay and the tools, and keeps its tabs.
         let (requests, asks, chat_requests) = match server {
             Some((_, server)) => (
@@ -295,16 +295,17 @@ impl Launcher {
         }
     }
 
-    /// The MCP servers the agent starts: one for the pages the human sees,
-    /// through `relay`, and one for Cox's own tools, through `server`, each
-    /// when it started.
+    /// The MCP servers the agent of a chat working in `cwd` starts: one
+    /// for the pages the human sees, through `relay`, and one for Cox's own
+    /// tools, through `server`, each when it started.
     fn tools(
         &self,
+        cwd: &std::path::Path,
         relay: Option<&Relay>,
         server: Option<&(PathBuf, ToolServer)>,
     ) -> Vec<McpServer> {
         relay
-            .and_then(|relay| crate::agent::tools::stage(relay.port, &self.path))
+            .and_then(|relay| crate::agent::tools::stage(relay.port, cwd, &self.path))
             .into_iter()
             .chain(
                 server.map(|(exe, server)| crate::agent::tools::cox(exe.clone(), &server.socket)),
