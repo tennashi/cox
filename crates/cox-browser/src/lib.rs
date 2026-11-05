@@ -641,10 +641,20 @@ impl Browser {
         self.shared().popup_frame.take()
     }
 
-    /// Gives the page keyboard focus.
+    /// Gives the page keyboard focus: it shows its caret, and focus rings.
     pub fn focus(&self) {
+        tracing::debug!("the page gets the keyboard");
         if let Some(host) = self.host() {
             host.set_focus(1);
+        }
+    }
+
+    /// Takes keyboard focus from the page, as when the human types
+    /// elsewhere: its caret stops blinking.
+    pub fn blur(&self) {
+        tracing::debug!("the page loses the keyboard");
+        if let Some(host) = self.host() {
+            host.set_focus(0);
         }
     }
 

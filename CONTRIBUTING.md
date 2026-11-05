@@ -400,7 +400,10 @@ and opens it as a link to it does. Escape closes the menu. Their keys, Command-T
 Command-P (Control-T and Control-P off macOS), open them from anywhere
 in the window, on the stage of the chat shown, which opens. The cursor over a page is the one
 the page asks for, as a pointing hand over a link, or an I-beam over
-text and fields. A page that asks for a window of its
+text and fields, and the page has the keyboard just while the stage
+has it, as after a click on the page, so that the field it is in shows
+its caret and focus ring then, and not while the human types in the
+chat or the window is behind another. A page that asks for a window of its
 own, as a link with `target="_blank"` does, gets a tab instead. A link from the
 conversation gets a tab of its own, unless a tab shows it already. A link
 in a page to a file, as `file:///home/me/app/src/main.rs#L12`, opens the

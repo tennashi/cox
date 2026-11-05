@@ -275,7 +275,11 @@ impl Element for Picture {
                 if !phase.bubble() || !hovered.is_hovered(window) {
                     return;
                 }
+                // The page has to have the keyboard before the click
+                // reaches it, for the field it lands in to show its caret:
+                // the focus of the window moves only on the next frame.
                 window.focus(&focus_handle);
+                target.focus();
                 if let Some(button) = button(event.button) {
                     let (x, y) = in_stage(event.position, bounds);
                     target.mouse_down(
