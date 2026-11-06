@@ -157,7 +157,9 @@ fn all_tools() -> Value {
             `cd` does not carry over to the next. It waits until the command ends, and \
             answers what the terminal shows, cut to the end when long, and the exit code. \
             A command that waits for input waits for the human; one that never ends, such \
-            as a server, holds you until the human stops it.",
+            as a server, holds you until the human stops it. While Cox's window is not \
+            open, as for a chat on a schedule, it runs where no one sees it, so nothing \
+            answers what it asks.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -972,6 +974,7 @@ async fn run_command(
             command: command.to_owned(),
             cwd: cwd.to_owned(),
             answer,
+            asks_human: false,
         },
     )?;
     let ran = ran
@@ -1814,6 +1817,7 @@ mod tests {
                     command,
                     cwd,
                     answer,
+                    ..
                 }) => {
                     assert_eq!(cwd, Path::new("/work"));
                     answer.send(ran).unwrap();

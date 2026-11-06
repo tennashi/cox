@@ -19,11 +19,14 @@
 //! - [`keys`] says what the program gets for the human's keys and pastes.
 //! - [`colors`] holds the terminal's colors, and what a program's names.
 //! - [`grid`] draws the grid.
+//! - [`unseen`] runs a command the agent asks for while no window is
+//!   there, with no tab to show it.
 
 mod colors;
 mod grid;
 mod keys;
 mod pty;
+mod unseen;
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -55,6 +58,7 @@ use self::grid::{FONT_SIZE, Grid, LINE_HEIGHT, Laid, whole_cells};
 use self::keys::{key_bytes, pasted};
 use self::pty::{Listener, START_SIZE, Size};
 pub use self::pty::{Program, Running};
+pub use self::unseen::run_unseen;
 use crate::agent::mcp::{Ended, Ran};
 use crate::stage::tab::Shows;
 use crate::ui::Copy;
@@ -69,6 +73,25 @@ const KEY_CONTEXT: &str = "Terminal";
 /// How often a command the agent runs looks whether the agent still waits
 /// for it.
 const WATCH_EVERY: Duration = Duration::from_millis(250);
+
+/// What `term` shows, with what scrolled off, as text: a line the
+/// terminal wrapped is one line.
+fn text_of(term: &Term<Listener>) -> String {
+    let start = Cell::new(term.topmost_line(), Column(0));
+    let end = Cell::new(term.bottommost_line(), term.last_column());
+    term.bounds_to_string(start, end).trim_end().to_owned()
+}
+
+/// How a program ended, as it exited with `status`, if it was learned.
+fn ended_of(status: Option<ExitStatus>) -> Ended {
+    match status {
+        Some(status) => status.code().map_or_else(
+            || status.signal().map_or(Ended::Unknown, Ended::Signal),
+            Ended::Exited,
+        ),
+        None => Ended::Unknown,
+    }
+}
 
 /// Binds the keys of the tab: copying and pasting with the secondary key,
 /// which is Command on macOS. Elsewhere it is Control, which the program
@@ -197,10 +220,7 @@ impl Terminal {
     /// the terminal wrapped is one line.
     #[must_use]
     pub fn text(&self) -> String {
-        let term = self.term.lock();
-        let start = Cell::new(term.topmost_line(), Column(0));
-        let end = Cell::new(term.bottommost_line(), term.last_column());
-        term.bounds_to_string(start, end).trim_end().to_owned()
+        text_of(&self.term.lock())
     }
 
     /// The text selected.
@@ -235,13 +255,7 @@ impl Terminal {
 
     /// The program ended, and the terminal holds all it wrote.
     fn exited(&mut self) {
-        let ended = match self.status {
-            Some(status) => status.code().map_or_else(
-                || status.signal().map_or(Ended::Unknown, Ended::Signal),
-                Ended::Exited,
-            ),
-            None => Ended::Unknown,
-        };
+        let ended = ended_of(self.status);
         self.ended = Some(ended);
         self.answer(ended);
     }

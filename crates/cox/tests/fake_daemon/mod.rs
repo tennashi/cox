@@ -188,6 +188,7 @@ pub fn fake_terminal() -> UnboundedSender<ToolRequest> {
                 command,
                 cwd,
                 answer,
+                ..
             } = request
             else {
                 continue;

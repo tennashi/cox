@@ -95,11 +95,16 @@ pub enum ToolRequest {
     /// Run `command` in a terminal on the stage, working in `cwd`, and
     /// answer how it went, or why it could not start, once it ends. The
     /// agent no longer waits for the answer once `answer` is closed: the
-    /// command is to stop.
+    /// command is to stop. While no window is there, coxd runs it on a
+    /// terminal no one sees, unless it `asks_human`, as a login does,
+    /// which then cannot run.
     RunCommand {
         command: String,
         cwd: PathBuf,
         answer: oneshot::Sender<Result<Ran, String>>,
+        /// Whether the command asks the human what it needs, in its
+        /// terminal, so that it runs only where they see it.
+        asks_human: bool,
     },
 }
 

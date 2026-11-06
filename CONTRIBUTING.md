@@ -1066,11 +1066,17 @@ the file away, or `systemctl --user disable coxd.service`.
 coxd takes one window at a time: a second Cox from the same place says
 another window has the chats, and stops. The window closing leaves
 coxd, and the agents at work, running; the next window to open shows
-the chats as they are then. While no window is there, what a chat asks
-of its stage, as a command to run, fails, and an agent that starts gets
-no tools for the stage. coxd follows `settings.json` and `agents.json`
-as the window does (see [The stage](#the-stage)), and keeps a log of
-its own run beside the window's (see
+the chats as they are then. While no window is there, coxd runs a
+command an agent asks for, or a goal's, itself, on a terminal of its
+own that no tab shows, as for a chat on a schedule (see
+[Schedules](#schedules)): the agent gets what the terminal shows and
+the exit code, as from a tab, and a command it stops waiting for gets
+Control-C, and then, if it goes on for five seconds more, a hang-up. A
+command that asks the human, as a login does, fails; what else a chat
+asks of its stage, as to show a file, shows nowhere; and an agent that
+starts gets no tools for the stage. coxd follows `settings.json` and
+`agents.json` as the window does (see [The stage](#the-stage)), and
+keeps a log of its own run beside the window's (see
 [What Cox keeps of each run](#what-cox-keeps-of-each-run)).
 
 coxd runs until it is stopped, with SIGTERM, SIGINT or SIGHUP, as
