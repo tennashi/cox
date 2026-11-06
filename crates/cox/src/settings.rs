@@ -326,6 +326,27 @@ pub fn keep_agent(agent: Option<&str>) -> anyhow::Result<()> {
     )
 }
 
+/// What this Cox's `settings.json` holds as `key`, as it is written, if
+/// it holds it.
+#[must_use]
+pub fn kept(key: &str) -> Option<Value> {
+    let file = crate::storage::path(Kept::Settings)?;
+    let mut settings: Map<String, Value> = serde_json::from_slice(&fs::read(file).ok()?).ok()?;
+    settings.remove(key).filter(|value| !value.is_null())
+}
+
+/// Keeps `value` as `key` in this Cox's `settings.json`, or takes `key`
+/// out with none, leaving the rest of what it holds as it was.
+///
+/// # Errors
+///
+/// When Cox has no place to keep it, or the file cannot be written.
+pub fn keep(key: &str, value: Option<Value>) -> anyhow::Result<()> {
+    let file =
+        crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
+    keep_in(&file, key, value)
+}
+
 /// Keeps `value` as `key` of `file`, or takes `key` out with none,
 /// leaving the rest of what it holds as it was.
 fn keep_in(file: &Path, key: &str, value: Option<Value>) -> anyhow::Result<()> {

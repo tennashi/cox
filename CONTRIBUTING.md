@@ -64,8 +64,13 @@ to open a session, in a folder of its own, saying whether it works,
 asks the human to log in first, or is not found on Cox's `PATH`; ×
 takes it out of the list; and "Add agent" adds one of the human's own,
 or one of the ACP Registry, as the registry runs it but for the version
-it pins, for the human to change. What else the files hold stays as it
-is. Escape, the ×, or a click beside the card closes it. Each chat starts its own
+it pins, for the human to change. The card also sets, as the home is
+set, the folders of the human's workflow and wiki (see below), kept from
+`~` when they are in the home directory, or, emptied, Cox's own; and the
+translation (see below): the language, which, emptied, turns it off, and
+what translates, the agent a new chat talks to, one of the human's, or
+a command on one line, as an agent's. What else the files hold stays as
+it is. Escape, the ×, or a click beside the card closes it. Each chat starts its own
 `<agent command>` working in its project's folder, and has a stage of its
 own, showing `<url>` first. Cox opened with no `<agent command>`, as the
 Finder, the Dock or a launcher such as Raycast opens an app, starts the

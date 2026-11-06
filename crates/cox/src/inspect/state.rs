@@ -77,6 +77,9 @@ pub fn describe(
         for agent in settings.read(cx).agents().read(cx).described(cx) {
             let _ = writeln!(told, "  Agent row {agent}");
         }
+        for line in settings.read(cx).described(cx) {
+            let _ = writeln!(told, "  {line}");
+        }
     }
     if let Some(card) = cx
         .try_global::<crate::ui::translation::Shown>()
