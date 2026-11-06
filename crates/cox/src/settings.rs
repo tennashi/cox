@@ -9,8 +9,10 @@
 //! `{"workflow": "~/dotfiles/cox"}` (see [`workflow`]), and where their
 //! wiki is, as `{"wiki": "~/notes/cox"}` (see [`wiki`]), and what language
 //! they read it, and what they select, in, as `{"translation":
-//! {"language": "Japanese"}}` (see [`translation`]), which the human
-//! writes in it themselves.
+//! {"language": "Japanese"}}` (see [`translation`]), and the agent a new
+//! chat talks to when the command line names none, by its name in
+//! `agents.json`, as `{"agent": "Claude"}` (see [`agent`]), which
+//! the human writes in it themselves.
 
 pub mod view;
 
@@ -35,6 +37,10 @@ pub struct Saved {
     /// How the human reads the wiki, and what they select, in a language
     /// of their own, if they named one.
     pub translation: Option<Translation>,
+    /// The agent a new chat talks to when the command line names none,
+    /// as when Cox is opened from the Finder, the Dock or a launcher, if
+    /// they named one.
+    pub agent: Option<String>,
 }
 
 /// How the human reads the wiki, which the agents write in English, and
@@ -152,13 +158,30 @@ impl Saved {
                 .inspect_err(|why| tracing::error!("\"translation\" cannot be read: {why}"))
                 .ok(),
         };
+        let agent = match value.get("agent") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(agent)) if !agent.trim().is_empty() => Some(agent.trim().to_owned()),
+            Some(_) => {
+                tracing::error!("\"agent\" is not the name of an agent");
+                None
+            }
+        };
         Ok(Self {
             home,
             workflow,
             wiki,
             translation,
+            agent,
         })
     }
+}
+
+/// The agent a new chat talks to when the command line names none, by
+/// the name `agents.json` lists it by: what `settings.json` names, as
+/// `{"agent": "Claude"}`, if it names one.
+#[must_use]
+pub fn agent() -> Option<String> {
+    Saved::read().agent
 }
 
 /// The folder where the human keeps how they work with Cox, whatever the
@@ -304,6 +327,20 @@ mod tests {
         assert_eq!(saved.home, Some(PathBuf::from("/work")));
         assert_eq!(saved.workflow, None);
         assert_eq!(Saved::parse(br#"{"workflow": 3}"#).unwrap().workflow, None);
+    }
+
+    #[test]
+    fn the_agent_is_named() {
+        let saved = Saved::parse(br#"{"agent": " Claude "}"#).unwrap();
+        assert_eq!(saved.agent.as_deref(), Some("Claude"));
+        for bytes in [
+            br#"{"home": "/work", "agent": " "}"#.as_slice(),
+            br#"{"home": "/work", "agent": ["npx", "agent"]}"#,
+        ] {
+            let saved = Saved::parse(bytes).unwrap();
+            assert_eq!(saved.agent, None);
+            assert_eq!(saved.home, Some(PathBuf::from("/work")));
+        }
     }
 
     #[test]

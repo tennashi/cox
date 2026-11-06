@@ -1,5 +1,7 @@
-//! `cox [--stage <url>] [--home <dir>] [--data <dir>] <agent command> [args...]`
-//! opens a window where the human opens chats with `<agent command>`, each
+//! `cox [--stage <url>] [--home <dir>] [--data <dir>] [<agent command> [args...]]`
+//! opens a window where the human opens chats with `<agent command>`, or
+//! the agent of `agents.json` the settings name when the system opens Cox
+//! with none, each
 //! in the project of a folder of the human's choice, working there, or in
 //! no project, working in the `--home` directory, `~/Cox` unless asked.
 //! Each chat has a stage of its own, showing `<url>` first, which its agent
@@ -23,6 +25,8 @@ use cox::app::{self, Mode};
 fn main() -> ExitCode {
     match Mode::parse(std::env::args().skip(1)) {
         Mode::App(settings) => {
+            // First, while Cox has no other thread.
+            let environment = cox::login::take_in();
             if let Some(data) = &settings.data {
                 cox::storage::keep_in(data);
             }
@@ -39,6 +43,16 @@ fn main() -> ExitCode {
             cox::logs::init(logs.as_deref());
             if !helper {
                 cox::scratch::sweep();
+            }
+            match environment {
+                cox::login::Taken::NotNeeded => {}
+                cox::login::Taken::From(shell, count) => tracing::info!(
+                    "took in {count} variables of the environment of {}",
+                    shell.display()
+                ),
+                cox::login::Taken::Failed(why) => tracing::warn!(
+                    "the agents get launchd's environment, not the login shell's: {why}"
+                ),
             }
             for moved in &settled.moved {
                 tracing::info!("{moved}");
@@ -76,8 +90,8 @@ fn main() -> ExitCode {
             }
         }
         Mode::Usage => {
-            eprintln!("{}", app::USAGE);
-            ExitCode::from(2)
+            println!("{}", app::USAGE);
+            ExitCode::SUCCESS
         }
     }
 }

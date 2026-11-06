@@ -57,7 +57,7 @@ pub struct Known {
 impl Known {
     /// The agent of `command`, as the command line gives it, named after
     /// what it runs: the package a runner such as `npx` runs, without its
-    /// version and scope, or else the program.
+    /// version and scope, or else the program, or "No agent" for none.
     #[must_use]
     pub fn of_command(command: Vec<String>) -> Self {
         let name = match package(&command) {
@@ -77,7 +77,12 @@ impl Known {
         };
         Self {
             id: name.clone(),
-            name,
+            // As when the system opens Cox and the settings name none.
+            name: if command.is_empty() {
+                "No agent".to_owned()
+            } else {
+                name
+            },
             command,
             listed: false,
             download: None,
@@ -102,7 +107,26 @@ impl Agents {
     /// registry.
     #[must_use]
     pub fn new(command: Vec<String>, own: Vec<Known>, listed: Vec<Known>) -> Self {
-        let mut all = vec![Known::of_command(command)];
+        Self::first(Known::of_command(command), own, listed)
+    }
+
+    /// The agents of `named`, the one of `own` a new chat talks to, then
+    /// the rest of `own`, then `listed`; or, when `own` has none of that
+    /// name, as [`Self::new`] has them with no command, which a chat says
+    /// it cannot start.
+    #[must_use]
+    pub fn named(named: &str, mut own: Vec<Known>, listed: Vec<Known>) -> Self {
+        let Some(at) = own.iter().position(|known| known.name == named) else {
+            tracing::error!("agents.json lists no agent named {named}, which settings.json names");
+            return Self::new(Vec::new(), own, listed);
+        };
+        let first = own.remove(at);
+        Self::first(first, own, listed)
+    }
+
+    /// The agents of `first`, then `own`, then `listed`.
+    fn first(first: Known, own: Vec<Known>, listed: Vec<Known>) -> Self {
+        let mut all = vec![first];
         for known in own {
             if all.iter().all(|other| other.id != known.id) {
                 all.push(known);
@@ -113,9 +137,11 @@ impl Agents {
 
     /// The agents of `command`, the agent of the command line, with those
     /// the human listed in `agents.json` and those of the registry as Cox
-    /// kept it last, where Cox keeps what lasts.
+    /// kept it last, where Cox keeps what lasts. With no command, as when
+    /// the system opens Cox, a new chat talks to the agent of `agents.json`
+    /// that `named` names, as `settings.json` names it.
     #[must_use]
-    pub fn read(command: Vec<String>) -> Self {
+    pub fn read(command: Vec<String>, named: Option<&str>) -> Self {
         let own = crate::storage::path(crate::storage::Kept::Agents)
             .filter(|path| path.exists())
             .map(|path| {
@@ -134,7 +160,10 @@ impl Agents {
                 })
             })
             .unwrap_or_default();
-        Self::new(command, own, listed)
+        match named {
+            Some(named) if command.is_empty() => Self::named(named, own, listed),
+            _ => Self::new(command, own, listed),
+        }
     }
 
     /// Fetches the registry on a thread of its own, and lists its agents
@@ -494,6 +523,28 @@ mod tests {
             ]
         );
         assert!(listed.iter().all(|known| known.listed));
+    }
+
+    #[test]
+    fn with_no_command_a_new_chat_talks_to_the_agent_the_settings_name() {
+        let own = |name: &str| Known {
+            id: name.to_owned(),
+            name: name.to_owned(),
+            command: args("my-agent --acp"),
+            listed: false,
+            download: None,
+        };
+        let ids = |agents: &Agents| -> Vec<String> {
+            agents.all().into_iter().map(|known| known.id).collect()
+        };
+        let agents = Agents::named("Claude", vec![own("Codex"), own("Claude")], Vec::new());
+        assert_eq!(ids(&agents), ["Claude", "Codex"]);
+        assert_eq!(agents.of(None).command, args("my-agent --acp"));
+
+        let agents = Agents::named("Gemini", vec![own("Codex")], Vec::new());
+        assert_eq!(ids(&agents), ["", "Codex"]);
+        assert_eq!(agents.of(None).name, "No agent");
+        assert_eq!(agents.of(None).command, Vec::<String>::new());
     }
 
     #[test]
