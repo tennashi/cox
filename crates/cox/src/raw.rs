@@ -53,9 +53,23 @@ pub struct Source<'a> {
     pub text: &'a str,
 }
 
+/// Who kept a source, and when.
+#[derive(Clone, Copy, Debug)]
+pub struct Kept<'a> {
+    /// The day, as `2026-11-06`.
+    pub day: &'a str,
+    /// The chat, by its name.
+    pub chat: &'a str,
+    /// The number the chat is kept by, if it is kept.
+    pub chat_id: Option<&'a str>,
+    /// The chat's project, by its name, if it is in one.
+    pub project: Option<&'a str>,
+}
+
 /// Keeps `source` in the folder at `root`, under `topic`, named after
-/// `day` and its title, its properties saying where it was read, the day,
-/// and `by`, the chat that kept it. One kept the same day under the same
+/// the day it is kept and its title, its properties saying where it was
+/// read, and, as `kept` says, the day, the chat that kept it, and its
+/// project, each apart, for a tool such as Obsidian's to sort them by. One kept the same day under the same
 /// title gets a name of its own, as `...-2`, since none is written again.
 /// Answers the source's name, as `rust-news/2026-11-06-rust-1-92`.
 ///
@@ -63,13 +77,7 @@ pub struct Source<'a> {
 ///
 /// When `topic` is no folder's name, `source` says nothing or nowhere
 /// where it was read, or it cannot be written.
-pub fn keep(
-    root: &Path,
-    topic: &str,
-    source: Source,
-    by: &str,
-    day: &str,
-) -> Result<String, String> {
+pub fn keep(root: &Path, topic: &str, source: Source, kept: Kept) -> Result<String, String> {
     let topic = topic.trim().trim_matches('/');
     wiki::file(root, topic)
         .map_err(|_| format!("`{topic}` is no topic: a topic is words and `/`, as `rust-news`"))?;
@@ -83,11 +91,25 @@ pub fn keep(
     }
     let title = source.title.trim();
     let title = if title.is_empty() { from } else { title };
-    let page = format!(
-        "---\nsource: {}\nkept: {day}\nby: {}\n---\n\n# {title}\n\n{text}\n",
+    let day = kept.day;
+    let mut properties = format!(
+        "source: {}\nkept: {day}\nchat: {}\n",
         quoted(from),
-        quoted(by)
+        quoted(kept.chat)
     );
+    if let Some(chat_id) = kept.chat_id {
+        // A number, as Obsidian sorts it, when it is one.
+        let chat_id = if !chat_id.is_empty() && chat_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            chat_id.to_owned()
+        } else {
+            quoted(chat_id)
+        };
+        let _ = writeln!(properties, "chat_id: {chat_id}");
+    }
+    if let Some(project) = kept.project {
+        let _ = writeln!(properties, "project: {}", quoted(project));
+    }
+    let page = format!("---\n{properties}---\n\n# {title}\n\n{text}\n");
     let folder = root.join(topic);
     fs::create_dir_all(&folder)
         .map_err(|error| format!("cannot make {}: {error}", folder.display()))?;
@@ -269,7 +291,14 @@ mod tests {
         directory
     }
 
-    const BY: &str = "in notes, chat \"rust-news 11/06 09:00\" (#12)";
+    fn by(day: &str) -> Kept<'_> {
+        Kept {
+            day,
+            chat: "rust-news 11/06 09:00",
+            chat_id: Some("12"),
+            project: Some("notes"),
+        }
+    }
 
     fn release(text: &str) -> Source<'_> {
         Source {
@@ -283,7 +312,7 @@ mod tests {
     fn a_source_is_kept_as_it_was_read_and_never_written_again() {
         let root = scratch("keep");
         let source = release("Rust 1.92.0 stabilizes never type fallback.\n");
-        let name = keep(&root, "rust-news", source, BY, "2026-11-06").unwrap();
+        let name = keep(&root, "rust-news", source, by("2026-11-06")).unwrap();
         assert_eq!(name, "rust-news/2026-11-06-announcing-rust-1-92-0");
         let kept = read(&root, &name).unwrap();
         assert_eq!(
@@ -291,16 +320,24 @@ mod tests {
             "---\n\
              source: \"https://blog.rust-lang.org/2026/11/06/Rust-1.92.0/\"\n\
              kept: 2026-11-06\n\
-             by: \"in notes, chat \\\"rust-news 11/06 09:00\\\" (#12)\"\n\
+             chat: \"rust-news 11/06 09:00\"\n\
+             chat_id: 12\n\
+             project: \"notes\"\n\
              ---\n\n\
              # Announcing Rust 1.92.0\n\n\
              Rust 1.92.0 stabilizes never type fallback.\n"
         );
-        let again = keep(&root, "rust-news", release("Updated.\n"), BY, "2026-11-06").unwrap();
+        // One kept in no project says none.
+        let home = Kept {
+            project: None,
+            ..by("2026-11-06")
+        };
+        let again = keep(&root, "rust-news", release("Updated.\n"), home).unwrap();
         assert_eq!(again, "rust-news/2026-11-06-announcing-rust-1-92-0-2");
         assert_eq!(read(&root, &name).unwrap(), kept);
-        assert!(keep(&root, "../out", source, BY, "2026-11-06").is_err());
-        assert!(keep(&root, "rust-news", release(" \n"), BY, "2026-11-06").is_err());
+        assert!(!read(&root, &again).unwrap().contains("project:"));
+        assert!(keep(&root, "../out", source, by("2026-11-06")).is_err());
+        assert!(keep(&root, "rust-news", release(" \n"), by("2026-11-06")).is_err());
         assert!(read(&root, "rust-news/none").is_err());
         let _ = fs::remove_dir_all(&root);
     }
@@ -314,7 +351,7 @@ mod tests {
                 title,
                 text,
             };
-            keep(&root, topic, source, BY, day).unwrap()
+            keep(&root, topic, source, by(day)).unwrap()
         };
         let old = day(
             "2026-11-05",

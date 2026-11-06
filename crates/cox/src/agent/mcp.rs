@@ -196,6 +196,8 @@ pub enum ChatRequest {
 pub struct Whereabouts {
     /// The chat's project, by its name.
     pub project: String,
+    /// Whether the chat is in a project, not in the home.
+    pub in_project: bool,
     /// The chat, by its name.
     pub chat: String,
     /// The number the chat is kept by, if it is kept.

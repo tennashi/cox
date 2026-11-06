@@ -1284,6 +1284,7 @@ async fn wiki_write(
         project,
         chat,
         kept,
+        ..
     } = whereabouts(chats).await?;
     let used = wiki::Used {
         day: wiki::today(),
@@ -1326,15 +1327,19 @@ async fn raw_keep(
     };
     let Whereabouts {
         project,
+        in_project,
         chat,
         kept,
     } = whereabouts(chats).await?;
-    let mut by = format!("in {project}, chat \"{chat}\"");
-    if let Some(kept) = kept {
-        let _ = write!(by, " (#{kept})");
-    }
     let root = crate::settings::raw();
-    let name = raw::keep(&root, topic, source, &by, &wiki::today())?;
+    let day = wiki::today();
+    let kept = raw::Kept {
+        day: &day,
+        chat: &chat,
+        chat_id: kept.as_deref(),
+        project: in_project.then_some(project.as_str()),
+    };
+    let name = raw::keep(&root, topic, source, kept)?;
     let file = wiki::file(&root, &name)?;
     Ok(format!(
         "The source is kept as {name}, in {}. Name it where you use it.",

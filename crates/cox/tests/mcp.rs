@@ -209,6 +209,7 @@ fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServ
             if let ChatRequest::Whereabouts { answer } = request {
                 let _ = answer.send(Whereabouts {
                     project: project.clone(),
+                    in_project: true,
                     chat: chat.clone(),
                     kept: Some("7".to_owned()),
                 });
@@ -354,7 +355,7 @@ fn sources_are_kept_apart_from_the_wiki(writer: &mut Agent, reader: &mut Agent, 
     let read = reader.hear();
     let read = read["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        read.contains("by: \"in one, chat \\\"Fix scroll\\\" (#7)\""),
+        read.contains("chat: \"Fix scroll\"\nchat_id: 7\nproject: \"one\"\n"),
         "{read}"
     );
     assert!(

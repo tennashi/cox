@@ -1093,7 +1093,10 @@ names, whole or from `~`, as `{"raw": "~/notes/raw"}`, or else `raw` in
 the home the settings set, as `~/cox/raw`, by topic, the research they
 are of, each named after the day it was kept and its title, as
 `rust-news/2026-11-06-announcing-rust-1-92-0.md`, with, in its
-properties, where it was read, the day, and the chat that kept it. A
+properties, each apart, for Obsidian to sort them by, where it was
+read (`source`), the day (`kept`), the chat that kept it, by its name
+and its number (`chat`, `chat_id`), and its project, if it is in one
+(`project`). A
 source is never written again: what changed is another source, kept
 beside it. `raw_read` reads a source, or lists those of a topic, the
 last kept first, and `raw_search` finds those that have every word it
