@@ -9,6 +9,8 @@
 //!   asks for, what the app depends on, the app's parts, and the window.
 //! - [`workspace`] is the window: the projects and the chats open in them,
 //!   and the chat shown.
+//! - [`daemon`] is what runs the chats and their agents, apart from the
+//!   window, which only shows them and tells it what the human does.
 //! - [`chat`] is one chat: what starts it, its conversation, and how the
 //!   conversation is drawn.
 //! - [`stage`] is a chat's stage, beside its conversation: tabs of pages,
@@ -46,6 +48,7 @@ pub mod agent;
 pub mod agents;
 pub mod app;
 pub mod chat;
+pub mod daemon;
 pub mod inspect;
 pub mod login;
 pub mod logs;

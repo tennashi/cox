@@ -7,7 +7,9 @@
 //! 2. What the app depends on starts: the browser, which is CEF (see
 //!    [`cox_browser`]), the signal handlers, and the store of the
 //!    chats.
-//! 3. The app's own parts are made: the [`Launcher`] that opens chats.
+//! 3. The app's own parts are made: the [`Launcher`] that starts the
+//!    chats' agents, and the daemon that runs the chats with it, on a
+//!    thread of its own (see [`crate::daemon`]).
 //! 4. GPUI runs the app: the keys are bound, the globals set, the loops
 //!    that keep the browser and the quit asks served start, and the
 //!    window opens, telling the human of its chats on macOS.
@@ -30,7 +32,7 @@ use gpui::{
 };
 
 use crate::agents::Agents;
-use crate::chat::launcher::Launcher;
+use crate::chat::launcher::{CefStages, Launcher};
 use crate::stage::servers::Servers;
 use crate::ui::icons::Icons;
 use crate::workspace::Workspace;
@@ -151,29 +153,18 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
     if let Err(error) = cox_browser::quit::on_signals() {
         tracing::error!("signals will end Cox without stopping the agents: {error}");
     }
-    let store = Rc::new(open_store());
-    if let Some((from, to)) = sketches
-        && let Err(error) = store.moved(&from, &to)
-    {
-        tracing::error!(
-            "the chats that worked in {} do not find their sketches: {error:#}",
-            from.display()
-        );
-    }
-
+    // What the chats that worked where things moved follow, once the
+    // daemon opens the store.
+    let mut moved: Vec<(PathBuf, PathBuf)> = sketches.into_iter().collect();
     let home_given = settings.home.is_some();
     let home = settings
         .home
         .or_else(|| crate::settings::Saved::read().home);
     if home.is_none()
         && let Some(user) = std::env::var_os("HOME")
-        && let Some((from, to)) = lowercase_home(Path::new(&user))
-        && let Err(error) = store.moved(&from, &to)
+        && let Some(renamed) = lowercase_home(Path::new(&user))
     {
-        tracing::error!(
-            "the chats that worked in {} do not find it: {error:#}",
-            from.display()
-        );
+        moved.push(renamed);
     }
     let home = crate::settings::home_for_chats(home);
     // The workflow and the wiki move after the home, which may have been
@@ -191,16 +182,28 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
     crate::translate::start(agents.clone());
     let followed = agents.clone();
     let launcher = Launcher {
-        agents,
-        stage: settings.stage,
+        agents: agents.clone(),
         path: std::env::var_os("PATH").unwrap_or_default(),
         exe: std::env::current_exe()
             .inspect_err(|error| {
                 tracing::error!("the agents get no tools of Cox's own: {error}");
             })
             .ok(),
+    };
+    let stages = CefStages {
+        stage: settings.stage,
         cef: cef.clone(),
     };
+    // 3. The daemon, which runs the chats, on a thread of its own.
+    let (to_window, from_daemon) = tokio::sync::mpsc::unbounded_channel();
+    let daemon = crate::daemon::start(
+        home.clone(),
+        home_given,
+        move || Rc::new(open_store(&moved)),
+        move || Rc::new(launcher),
+        to_window,
+    );
+    let link = daemon.link.clone();
 
     Application::new()
         .with_assets(Icons)
@@ -210,8 +213,16 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
             cx.set_global(followed.clone());
             serve_browser(&cef, cx);
             quit_when_asked(cx);
-            shut_down_on_quit(cef, cx);
-            let window = open_window(home, home_given, store, launcher, cx);
+            shut_down_on_quit(cef, daemon, cx);
+            let workspace = Opened {
+                link,
+                from_daemon,
+                home,
+                home_given,
+                stages: Rc::new(stages),
+                agents: followed.clone(),
+            };
+            let window = open_window(workspace, cx);
             crate::settings::follow(window, followed, cx);
             crate::inspect::start(window, devtools, cx);
         });
@@ -252,16 +263,27 @@ fn lowercase_home(user: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 /// The store of the chats this Cox keeps, or one for this run only when
-/// that cannot be opened.
-fn open_store() -> Store {
+/// that cannot be opened, the chats that worked where things `moved`
+/// following them, from the first of each to the second.
+fn open_store(moved: &[(PathBuf, PathBuf)]) -> Store {
     let kept = crate::storage::path(crate::storage::Kept::Chats)
         .ok_or_else(|| anyhow::anyhow!("there is no place to keep them"))
         .and_then(|path| Store::open(&path));
-    kept.or_else(|error| {
-        tracing::error!("the chats last for this run only: {error:#}");
-        Store::in_memory()
-    })
-    .expect("SQLite opens a database in memory")
+    let store = kept
+        .or_else(|error| {
+            tracing::error!("the chats last for this run only: {error:#}");
+            Store::in_memory()
+        })
+        .expect("SQLite opens a database in memory");
+    for (from, to) in moved {
+        if let Err(error) = store.moved(from, to) {
+            tracing::error!(
+                "the chats that worked in {} do not find it: {error:#}",
+                from.display()
+            );
+        }
+    }
+    store
 }
 
 /// Binds the keys of every part of the window, and of quitting.
@@ -329,9 +351,10 @@ fn quit_when_asked(cx: &mut App) {
 /// Shuts the browser down when the app quits, then takes away what this
 /// run kept only while it ran (see [`crate::scratch`]). Quitting ends the
 /// app's run loop, or on macOS the whole process, so the browsers go
-/// before either. The agents go with the window.
-fn shut_down_on_quit(cef: Cef, cx: &mut App) {
+/// before either, and the daemon, which stops the chats' agents.
+fn shut_down_on_quit(cef: Cef, mut daemon: crate::daemon::Running, cx: &mut App) {
     cx.on_app_quit(move |_| {
+        daemon.stop();
         cef.clone().shutdown();
         crate::scratch::take_away();
         async {}
@@ -339,18 +362,30 @@ fn shut_down_on_quit(cef: Cef, cx: &mut App) {
     .detach();
 }
 
-/// Opens the window, with no chat in it, listing the chats kept in
-/// `store`, where `launcher` opens chats, and chats in no project work in
-/// `home`, which `--home` gave when `home_given` says so. The app quits
-/// when the window closes.
-fn open_window(
+/// What the window is opened with: the daemon it shows the chats of, and
+/// what it makes their stages with.
+struct Opened {
+    link: crate::daemon::Link,
+    from_daemon: tokio::sync::mpsc::UnboundedReceiver<crate::daemon::wire::FromDaemon>,
+    /// Where chats in no project work, which `--home` gave when
+    /// `home_given` says so.
     home: PathBuf,
     home_given: bool,
-    store: Rc<Store>,
-    launcher: Launcher,
-    cx: &mut App,
-) -> WindowHandle<Workspace> {
-    let opens = Rc::new(launcher);
+    stages: Rc<CefStages>,
+    agents: Agents,
+}
+
+/// Opens the window, with no chat in it, showing the chats of the daemon
+/// `opened` says. The app quits when the window closes.
+fn open_window(opened: Opened, cx: &mut App) -> WindowHandle<Workspace> {
+    let Opened {
+        link,
+        from_daemon,
+        home,
+        home_given,
+        stages,
+        agents,
+    } = opened;
     let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
     let window = cx
         .open_window(
@@ -358,7 +393,20 @@ fn open_window(
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| Workspace::new(home, home_given, store, opens, cx)),
+            |window, cx| {
+                cx.new(|cx| {
+                    Workspace::new(
+                        link,
+                        from_daemon,
+                        home,
+                        home_given,
+                        stages,
+                        Some(agents),
+                        window,
+                        cx,
+                    )
+                })
+            },
         )
         .expect("the window opens");
     window

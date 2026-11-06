@@ -161,7 +161,7 @@ impl ChatView {
     /// The agent the chat talks to, as a setting whose choices are the
     /// agents it can talk to, when it can choose.
     fn agent_setting(&self) -> Option<Setting> {
-        let (agents, chosen) = self.agents.as_ref()?;
+        let agents = self.agents.as_ref()?;
         let choices = agents
             .all()
             .into_iter()
@@ -181,7 +181,7 @@ impl ChatView {
             name: "Agent".to_owned(),
             description: None,
             category: None,
-            value: chosen.clone(),
+            value: self.row.agent.clone(),
             choices,
         })
     }

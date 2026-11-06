@@ -1,243 +1,79 @@
-//! What opening a chat starts, in the order things start:
+//! What starts a chat, in two halves: what the daemon starts, which draws
+//! nothing, and what the window starts beside it.
 //!
-//! 1. The chat's own stage, on the page every chat starts on (see
-//!    [`crate::stage`]).
-//! 2. The relay the agent's browser tools go through, which keeps the
-//!    agent to the stage's pages ([`Launcher::relay`]).
-//! 3. The server of Cox's own tools, on a socket of the chat's own
-//!    ([`Launcher::server`]).
-//! 4. The stage works with them: it tells the relay of its pages, carries
-//!    out what the tools ask, and keeps its tabs as they change
-//!    ([`Stage::work`]).
-//! 5. The agent, working in the chat's directory, told of the two MCP
-//!    servers it starts to reach the relay and the server
-//!    ([`Launcher::spawn`], [`Launcher::tools`]).
-//! 6. The view of the conversation, talking to the agent, with the stage
-//!    beside it ([`ChatView`]).
+//! The daemon starts the chat's agent ([`Launcher`], the daemon's
+//! [`Spawns`]), in the order things start:
 //!
-//! Steps 2, 3 and 5 are each a thread of its own, with a tokio runtime;
-//! the stage and the view are GPUI entities on its thread, which talk to
-//! the threads over channels. The agent is a process, started by step 5,
-//! which starts the two MCP servers as processes of its own: `cox --mcp`
-//! (see [`crate::agent::mcp`]) and the Chrome `DevTools` MCP server (see
+//! 1. The server of Cox's own tools, on a socket of the chat's own
+//!    ([`Launcher::server`]), whose asks of the chat's stage the daemon
+//!    passes on to the window.
+//! 2. The agent, working in the chat's directory, told of the two MCP
+//!    servers it starts to reach the stage's relay and the server
+//!    ([`spawn`], [`Launcher::tools`]).
+//!
+//! The window starts the chat's stage ([`CefStages`], the window's
+//! [`Stages`]): the stage itself, on the page every chat starts on, or on
+//! the pages and files the chat had (see [`crate::stage`]); and, before
+//! the daemon starts an agent that drives it, the relay the agent's
+//! browser tools go through, which keeps the agent to the stage's pages
+//! ([`Stages::relay`]), whose port the window tells the daemon.
+//!
+//! The relay and the server are each a thread of its own, with a tokio
+//! runtime, and so is the agent's connection; the stage is a GPUI entity
+//! on the window's thread. The agent is a process, which starts the two
+//! MCP servers as processes of its own: `cox --mcp` (see
+//! [`crate::agent::mcp`]) and the Chrome `DevTools` MCP server (see
 //! [`crate::agent::tools`]).
-//!
-//! A closed chat, opened to read, starts only its stage (1), on the pages
-//! and files it had, and its view (6). The rest starts when the human
-//! sends to it: then its agent starts again, going on with its session
-//! if it can, and the stage works with it.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use cox_acp::McpServer;
-use cox_core::store::Record;
-use gpui::{App, Entity, Window, prelude::*};
+use cox_core::tabs::KeptTabs;
+use gpui::{App, Window, prelude::*};
 
-use crate::agent::instructions::Instructions;
 use crate::agent::mcp::ToolServer;
-use crate::agent::setup::{Setup, StageUse};
 use crate::agent::{Agent, Start};
 use crate::agents::{Agents, Known, download};
-use crate::chat::conversation::Conversation;
+use crate::chat::Stages;
 use crate::chat::judge::Starts;
-use crate::chat::view::{Again, ChatView, OpenLink, StageView};
-use crate::chat::{Closed, Opens};
+use crate::chat::view::{OpenLink, StageView};
+use crate::daemon::{Spawned, Spawns};
 use crate::stage::Stage;
 use crate::ui::Panel;
 use cox_browser::relay::Relay;
 
-/// Opens chats, each with the agent it talks to: the [`Opens`] of the
-/// window when Cox runs.
+/// Starts the agents of the chats, each with the agent it talks to: the
+/// daemon's [`Spawns`] when Cox runs.
 #[derive(Clone)]
 pub struct Launcher {
     /// The agents a chat can talk to, the first being the one it starts
     /// with.
     pub agents: Agents,
-    /// The page each chat's stage shows first.
-    pub stage: String,
     /// The `PATH` the agent's tools are found on.
     pub path: OsString,
     /// The `cox` that runs, which the agent runs to reach Cox's own tools,
     /// if it is known.
     pub exe: Option<PathBuf>,
-    pub cef: cox_browser::Cef,
 }
 
-impl Opens for Launcher {
-    /// Starts a chat working in `cwd`, an absolute path, whose agent gets
-    /// `instructions`, set up as `setup` says if given, kept in `record`,
-    /// and returns its view.
-    fn open(
-        &self,
-        cwd: PathBuf,
-        instructions: Option<Instructions>,
-        setup: Option<Setup>,
-        record: Option<Record>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<ChatView> {
-        // 1. The stage, on the page every chat starts on.
-        let panel = cx.new(|_| Panel::default());
-        let stage = cx.new(|cx| {
-            Stage::new(
-                self.cef.clone(),
-                cwd.clone(),
-                &self.stage,
-                panel.clone(),
-                window,
-                cx,
-            )
-        });
-        // 2 to 5. What reaches the stage, and the agent.
-        let agent = self.start(
-            &stage,
-            cwd,
-            record.clone(),
-            Start::New {
-                instructions,
-                setup,
-            },
-            window,
-            cx,
-        );
-        // 6. The view, talking to the agent, with the stage beside it.
-        let chosen = self.agent_of(record.as_ref());
-        let starts = self.starts(record.clone());
-        cx.new(|cx| {
-            ChatView::new(
-                agent,
-                Some(shown(&stage, panel)),
-                open_link(&stage),
-                record,
-                Some(starts),
-                Some((self.agents.clone(), chosen)),
-                cx,
-            )
-        })
+impl Spawns for Launcher {
+    fn agents(&self) -> Agents {
+        self.agents.clone()
     }
 
-    /// The view of `closed`, a chat that has closed, with a stage on the
-    /// pages and files it had. When the human sends to it, its agent
-    /// starts again, going on with its session if it can.
-    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<ChatView> {
-        let Closed {
-            cwd,
-            entries,
-            tabs,
-            session,
-            goal,
-            settings,
-            setup,
-            record,
-        } = closed;
-        // 1. The stage, on the pages and files the chat had.
-        let panel = cx.new(|_| Panel::default());
-        let stage = cx.new(|cx| {
-            Stage::reading(
-                self.cef.clone(),
-                cwd.clone(),
-                tabs,
-                &self.stage,
-                panel.clone(),
-                window,
-                cx,
-            )
-        });
-        // 2 to 5, once the human sends to the chat; but not to a chat of a
-        // sketch whose folder is gone from under it.
-        let gone = setup.as_ref().is_some_and(|setup| setup.folder.is_some()) && !cwd.exists();
-        let keeps = crate::agent::setup::keeps_in_wiki(setup.as_ref());
-        let launcher = self.clone();
-        let works = stage.clone();
-        let kept = record.clone();
-        let again: Option<Again> = (!gone).then(|| -> Again {
-            Box::new(move |entries, window, cx| {
-                let start = Start::again(&cwd, session, entries, setup);
-                launcher.start(&works, cwd, kept, start, window, cx)
-            })
-        });
-        // 6. The view, with the stage beside it, and no agent yet.
-        let chosen = self.agent_of(record.as_ref());
-        let starts = self.starts(record.clone());
-        cx.new(|cx| {
-            ChatView::closed(
-                Conversation::closed(entries)
-                    .with_goal(goal)
-                    .with_settings(settings)
-                    .with_keeping(keeps),
-                Some(shown(&stage, panel)),
-                open_link(&stage),
-                record,
-                again,
-                Some(starts),
-                Some((self.agents.clone(), chosen)),
-                window,
-                cx,
-            )
-        })
-    }
-}
-
-impl Launcher {
-    /// What starts an agent with no chat, such as the judge of a goal: the
-    /// agent of the chat kept in `record`, as it is when the judge
-    /// starts, with no tools of Cox's own and none for the stage.
-    fn starts(&self, record: Option<Record>) -> Starts {
-        let launcher = self.clone();
-        Rc::new(move |cwd, start| {
-            let span = tracing::info_span!("judge", cwd = %cwd.display());
-            let _entered = span.enter();
-            let agent = launcher.agent_of(record.as_ref());
-            launcher.spawn(cwd, Vec::new(), start, &agent)
-        })
-    }
-
-    /// The id of the agent the chat kept in `record` talks to: the one the
-    /// human chose, while Cox knows it, or else the one a chat starts
-    /// with.
-    fn agent_of(&self, record: Option<&Record>) -> String {
-        let chosen = record.and_then(|record| {
-            record
-                .agent()
-                .inspect_err(|error| tracing::error!("the chat's agent cannot be read: {error:#}"))
-                .ok()
-                .flatten()
-        });
-        self.agents.of(chosen.as_deref()).id
-    }
-
-    /// Steps 2 to 5: starts the agent of a chat working in `cwd`, as
-    /// `start` says, with what it reaches `stage` through, which from then
-    /// on works with the agent, keeping its tabs in `record`. The chat's
-    /// setup, if it has one, says which tools the agent gets.
-    fn start(
-        &self,
-        stage: &Entity<Stage>,
-        cwd: PathBuf,
-        record: Option<Record>,
-        start: Start,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Agent {
-        // What the chat's agent and its tools say is said in its chat's span.
-        let span = tracing::info_span!("chat", id = tracing::field::Empty, cwd = %cwd.display());
-        if let Some(record) = &record {
-            span.record("id", tracing::field::display(record.chat()));
-        }
-        let _entered = span.enter();
-        let setup = start.setup();
-        // 2. The relay the agent's browser tools go through, unless the
-        // setup keeps the agent from driving the stage.
-        let drives = setup.is_none_or(|setup| setup.stage == StageUse::Drive);
-        let relay = drives.then(|| self.relay()).flatten();
-        // 3. The server of Cox's own tools, with the `cox` that reaches it.
-        let server = self.server(&cwd, setup.and_then(|setup| setup.tools.clone()));
+    /// Starts the agent kept as `agent` working in `cwd`, as `start`
+    /// says, with Cox's own tools, and the stage's through the relay on
+    /// `relay`, when given. The chat's setup, if it has one, says which of
+    /// Cox's tools the agent gets.
+    fn chat(&self, cwd: PathBuf, start: Start, agent: &str, relay: Option<u16>) -> Spawned {
+        // 1. The server of Cox's own tools, with the `cox` that reaches it.
+        let only = start.setup().and_then(|setup| setup.tools.clone());
+        let server = self.server(&cwd, only);
         // What the agent gets: the MCP servers it starts to reach both.
-        let tools = self.tools(&cwd, relay.as_ref(), server.as_ref());
-        // 4. The stage works with the relay and the tools, and keeps its tabs.
-        let (requests, asks, chat_requests) = match server {
+        let tools = self.tools(&cwd, relay, server.as_ref());
+        let (stage, asks, chat_requests) = match server {
             Some((_, server)) => (
                 Some(server.requests),
                 Some(server.asks),
@@ -245,39 +81,29 @@ impl Launcher {
             ),
             None => (None, None, None),
         };
-        let chosen = self.agent_of(record.as_ref());
-        stage.update(cx, |stage, cx| {
-            stage.work(relay, requests, record, window, cx);
-        });
-        // 5. The agent, on a thread of its own, which the chat asks of the
-        // stage through what its tools ask, and hears ask of the window.
-        let mut agent = self.spawn(cwd, tools, start, &chosen);
+        // 2. The agent, on a thread of its own, which the chat asks of the
+        // stage through what its tools ask, and hears ask of the daemon.
+        let mut agent = self.spawn(cwd, tools, start, agent);
         agent.tools = asks;
         agent.chat_requests = chat_requests;
-        agent
+        Spawned { agent, stage }
     }
 
-    /// Starts the relay that the agent's browser tools go through, kept to
-    /// the chat's pages, which tells the stage where the agent points,
-    /// clicks and types, and opens and closes its tabs for the agent.
-    /// Answers `None` when it did not start.
-    fn relay(&self) -> Option<Relay> {
-        match self
-            .cef
-            .devtools_port()
-            .ok_or_else(|| anyhow::anyhow!("the browser has no DevTools port"))
-            .and_then(cox_browser::relay::start)
-        {
-            Ok(relay) => Some(relay),
-            Err(error) => {
-                tracing::error!(
-                    "no relay to the stage, so the agent gets no tools for it: {error:#}"
-                );
-                None
-            }
-        }
+    /// What starts an agent with no chat, such as the judge of a goal: the
+    /// agent kept as `agent`, with no tools of Cox's own and none for the
+    /// stage.
+    fn starts(&self, agent: &str) -> Starts {
+        let launcher = self.clone();
+        let agent = agent.to_owned();
+        Rc::new(move |cwd, start| {
+            let span = tracing::info_span!("judge", cwd = %cwd.display());
+            let _entered = span.enter();
+            launcher.spawn(cwd, Vec::new(), start, &agent)
+        })
     }
+}
 
+impl Launcher {
     /// Starts the server of Cox's own tools for a chat working in `cwd`,
     /// serving the tools named in `only`, or all of them, and answers it
     /// with the `cox` the agent runs to reach it, or `None` when it did not
@@ -298,16 +124,16 @@ impl Launcher {
     }
 
     /// The MCP servers the agent of a chat working in `cwd` starts: one
-    /// for the pages the human sees, through `relay`, and one for Cox's own
-    /// tools, through `server`, each when it started.
+    /// for the pages the human sees, through the relay on `relay`, and one
+    /// for Cox's own tools, through `server`, each when it started.
     fn tools(
         &self,
         cwd: &std::path::Path,
-        relay: Option<&Relay>,
+        relay: Option<u16>,
         server: Option<&(PathBuf, ToolServer)>,
     ) -> Vec<McpServer> {
         relay
-            .and_then(|relay| crate::agent::tools::stage(relay.port, cwd, &self.path))
+            .and_then(|port| crate::agent::tools::stage(port, cwd, &self.path))
             .into_iter()
             .chain(
                 server.map(|(exe, server)| crate::agent::tools::cox(exe.clone(), &server.socket)),
@@ -360,18 +186,63 @@ pub(crate) fn spawn(known: Known, cwd: PathBuf, tools: Vec<McpServer>, start: St
     crate::agent::spawn(connect, cwd, tools, start)
 }
 
-/// `stage`, as its chat's conversation shows it: open when `panel` is.
-fn shown(stage: &Entity<Stage>, panel: Entity<Panel>) -> StageView {
-    StageView {
-        view: stage.clone().into(),
-        panel,
-    }
+/// Makes the chats' stages in CEF: the window's [`Stages`] when Cox runs.
+#[derive(Clone)]
+pub struct CefStages {
+    /// The page each chat's stage shows first.
+    pub stage: String,
+    pub cef: cox_browser::Cef,
 }
 
-/// What opens the links of the conversation: `stage`.
-fn open_link(stage: &Entity<Stage>) -> OpenLink {
-    let stage = stage.clone();
-    Rc::new(move |url, window, cx| {
-        stage.update(cx, |stage, cx| stage.open(url, window, cx));
-    })
+impl Stages for CefStages {
+    fn stage(
+        &self,
+        cwd: PathBuf,
+        tabs: Option<KeptTabs>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<(StageView, OpenLink)> {
+        let panel = cx.new(|_| Panel::default());
+        let stage = cx.new(|cx| {
+            Stage::reading(
+                self.cef.clone(),
+                cwd,
+                tabs,
+                &self.stage,
+                panel.clone(),
+                window,
+                cx,
+            )
+        });
+        let opens = stage.clone();
+        let open_link: OpenLink = Rc::new(move |url, window, cx| {
+            opens.update(cx, |stage, cx| stage.open(url, window, cx));
+        });
+        let view = StageView {
+            view: stage.into(),
+            panel,
+        };
+        Some((view, open_link))
+    }
+
+    /// Starts the relay that the agent's browser tools go through, kept to
+    /// the chat's pages, which tells the stage where the agent points,
+    /// clicks and types, and opens and closes its tabs for the agent.
+    /// Answers `None` when it did not start.
+    fn relay(&self) -> Option<Relay> {
+        match self
+            .cef
+            .devtools_port()
+            .ok_or_else(|| anyhow::anyhow!("the browser has no DevTools port"))
+            .and_then(cox_browser::relay::start)
+        {
+            Ok(relay) => Some(relay),
+            Err(error) => {
+                tracing::error!(
+                    "no relay to the stage, so the agent gets no tools for it: {error:#}"
+                );
+                None
+            }
+        }
+    }
 }

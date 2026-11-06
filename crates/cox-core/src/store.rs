@@ -113,7 +113,8 @@ const UPGRADES: &[&str] = &[
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A project kept: a folder the human opened.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct ProjectId(i64);
 
 /// A chat kept, which an entry of another chat's conversation can name,
@@ -158,7 +159,18 @@ pub struct KeptChat {
 /// readily to the one that lasts most: a chat is named by a number when
 /// it opens, then after the first line the human sends, then by the title
 /// its agent gives it, until the human names it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum Named {
     #[default]
     Numbered,

@@ -1,11 +1,13 @@
 //! One chat: a human and an agent working in a folder, with a stage of
-//! their own. What the window shows of it, and what starts it: the window
-//! opens chats through [`Opens`], and reads a [`Closed`] one again.
+//! their own. The daemon runs it (see [`crate::daemon`]); this is what
+//! starts it, what it is, and how the window shows it: the window makes
+//! each chat's stage through [`Stages`].
 //!
-//! - [`launcher`] starts a chat: its stage, the relay and the tools
-//!   between them, and its agent; and starts a closed chat again.
+//! - [`launcher`] starts a chat: its agent, with the tools between it and
+//!   its stage, for the daemon; and its stage and the relay to it, for
+//!   the window.
 //! - [`view`] draws a chat's conversation with GPUI, its stage beside it,
-//!   and turns keystrokes and clicks into input.
+//!   and turns keystrokes and clicks into what the human does.
 //! - [`conversation`] holds what the view shows and decides what the
 //!   human's input means, in plain Rust, so it is tested without GPUI.
 //!   `cox-core` keeps what it shows.
@@ -19,52 +21,38 @@ pub mod view;
 
 use std::path::PathBuf;
 
-use cox_core::store::Record;
 use cox_core::tabs::KeptTabs;
-use gpui::{App, Entity, Window};
+use gpui::{App, Window};
 
-use crate::agent::instructions::Instructions;
-use crate::agent::setup::Setup;
-use crate::chat::conversation::Entry;
-use crate::chat::view::ChatView;
+use crate::agent::mcp::ToolRequest;
+use crate::chat::view::{OpenLink, StageView};
+#[cfg(doc)]
+use crate::stage::Stage;
+use cox_browser::relay::Relay;
 
-/// What opens chats for the window: the [`Launcher`](launcher::Launcher)
-/// of the agents, or a fake one in tests.
-pub trait Opens {
-    /// Starts a chat's agent working in `cwd`, an absolute path, with
-    /// `instructions`, set up as `setup` says if given, keeping the chat
-    /// in `record` if given, and returns the chat's view.
-    fn open(
+/// What makes the chats' stages for the window: the
+/// [`CefStages`](launcher::CefStages) of the browser, or none in tests.
+pub trait Stages {
+    /// The stage of a chat working in `cwd`, an absolute path, on the
+    /// tabs it had, if it had any, with what opens the links of its
+    /// conversation there, or `None` for a chat with no stage. A
+    /// [`Stage`] works with the chat's agent; any other view only shows.
+    fn stage(
         &self,
         cwd: PathBuf,
-        instructions: Option<Instructions>,
-        setup: Option<Setup>,
-        record: Option<Record>,
+        tabs: Option<KeptTabs>,
         window: &mut Window,
         cx: &mut App,
-    ) -> Entity<ChatView>;
+    ) -> Option<(StageView, OpenLink)>;
 
-    /// Returns the view of `closed`, a chat that has closed, from what is
-    /// kept of it, for the human to read, and to send to again.
-    fn read(&self, closed: Closed, window: &mut Window, cx: &mut App) -> Entity<ChatView>;
-}
+    /// Starts a relay for the browser tools of an agent that drives a
+    /// stage, or answers `None` when there is none.
+    fn relay(&self) -> Option<Relay>;
 
-/// What is kept of a closed chat.
-pub struct Closed {
-    /// The directory it worked in.
-    pub cwd: PathBuf,
-    /// What it showed.
-    pub entries: Vec<Entry>,
-    /// The tabs its stage had, if it had a stage.
-    pub tabs: Option<KeptTabs>,
-    /// The id its agent gave its session, to go on with, if it had one.
-    pub session: Option<String>,
-    /// What it works until, if the human set a goal.
-    pub goal: Option<cox_core::goal::Goal>,
-    /// The settings of its session, as they were set.
-    pub settings: Vec<cox_core::settings::Setting>,
-    /// How its agent is set up, if the chat that opened it said.
-    pub setup: Option<Setup>,
-    /// Where it is kept, to go on keeping it once the human sends to it.
-    pub record: Option<Record>,
+    /// Carries out `request`, which the agent of a chat with no stage
+    /// asks of it, as a test's terminal does; let go, by default, which
+    /// answers that it cannot.
+    fn unstaged(&self, request: ToolRequest) {
+        drop(request);
+    }
 }

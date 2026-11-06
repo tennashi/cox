@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 agent-client-protocol = { workspace = true, features = ["process"] }
 anyhow.workspace = true
+# The commands an agent runs, which a daemon tells its window of.
+serde = { version = "1.0.229", features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "sync"] }
 # The files a prompt points to, by their `file:` URIs.
 url = "2.5.8"

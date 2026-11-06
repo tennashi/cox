@@ -4,7 +4,7 @@
 //! is a command, as at a shell's prompt, and any other line is words.
 
 /// What a chat works until, as the human set it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Goal {
     /// A command, met when it exits with 0.
     Command(String),

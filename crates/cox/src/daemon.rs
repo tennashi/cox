@@ -1,0 +1,1893 @@
+//! The daemon: what runs the chats, apart from the window that shows them,
+//! so that a chat's agent goes on while no window shows it. It holds the
+//! projects and their chats, keeps them as they go (see
+//! [`cox_core::store`]), starts each chat's agent, and goes on with its
+//! turns: the check of its goal, its judge, the chats its agent opens, and
+//! its sketches (see [`crate::chat::sketch`]).
+//!
+//! A window tells it what the human does, as [`ToDaemon`], and hears from
+//! it, as [`FromDaemon`], the projects and chats, how the conversations it
+//! shows change, and what the agents' tools ask of a chat's stage, which
+//! only a window has: the daemon draws nothing, and runs no browser.
+//!
+//! It runs on a thread of its own, with a tokio runtime and `LocalSet` of
+//! its own, where everything it does happens in one loop ([`Daemon::serve`]):
+//! a message from the window, or an [`Internal`] event its chats' tasks
+//! heard, changes it, and what changed goes to the window.
+//!
+//! - [`chat`] runs one chat: its conversation, its agent, the check of its
+//!   goal and its judge.
+//! - [`wire`] says what the window and the daemon say to each other.
+
+pub mod chat;
+pub mod wire;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+use cox_core::goal::Goal;
+use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
+
+use crate::agent::instructions::Instructions;
+use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, ToolRequest, Waited, Whereabouts};
+use crate::agent::setup::{Policy, Setup, StageUse, keeps_in_wiki};
+use crate::agent::{self, Agent, AgentEvent, Start};
+use crate::agents::Agents;
+use crate::chat::conversation::{Conversation, Entry, State};
+use crate::chat::judge::{Heard, Starts};
+use crate::chat::sketch::{self, Sketch};
+use crate::storage;
+use crate::workflow;
+use chat::{Again, Chat, Task, spawn};
+use wire::{ChatRow, FromDaemon, Listing, ProjectRow, StageAsk, ToDaemon};
+
+/// What the project of chats with no folder is called.
+const NO_PROJECT: &str = "No project";
+
+/// How long a chat's name grows, in characters, when the agent or the
+/// first line names it.
+pub const NAME_LENGTH: usize = 80;
+
+/// Why a command an agent asks to run does not run while no window is
+/// open.
+const NO_WINDOW: &str = "Cox's window is not open, so there is no terminal to run it in";
+
+/// What starts the agents of the chats: the agents Cox knows, or fake ones
+/// in tests.
+pub trait Spawns {
+    /// The agents a chat can talk to, the first being the one a new chat
+    /// starts with.
+    fn agents(&self) -> Agents;
+
+    /// Starts the agent kept as `agent`, of a chat working in `cwd`, an
+    /// absolute path, as `start` says, its browser tools reaching the
+    /// chat's stage through the relay on `relay`, when given, and gives it
+    /// Cox's own tools, unless the chat's setup says otherwise.
+    fn chat(&self, cwd: PathBuf, start: Start, agent: &str, relay: Option<u16>) -> Spawned;
+
+    /// What starts an agent with no chat, as the judge of a goal, of the
+    /// agent kept as `agent`.
+    fn starts(&self, agent: &str) -> Starts;
+}
+
+/// A chat's agent, started, with what its tools ask of the chat's stage,
+/// when it has Cox's tools.
+pub struct Spawned {
+    pub agent: Agent,
+    pub stage: Option<UnboundedReceiver<ToolRequest>>,
+}
+
+/// What the daemon's chats' tasks heard, marked with the chat's key and
+/// the generation of its agent.
+pub enum Internal {
+    /// The agent told this.
+    Agent {
+        key: u64,
+        generation: u64,
+        event: AgentEvent,
+    },
+    /// The agent's tools ask this of the daemon.
+    Asked {
+        key: u64,
+        generation: u64,
+        request: ChatRequest,
+    },
+    /// The agent's tools, or the chat, ask this of the chat's stage.
+    Stage { key: u64, request: ToolRequest },
+    /// The command of the chat's goal ran.
+    Checked {
+        key: u64,
+        generation: u64,
+        ran: Result<Ran, String>,
+    },
+    /// The command that logs the agent in ran.
+    LoggedIn {
+        key: u64,
+        generation: u64,
+        ran: Result<Ran, String>,
+    },
+    /// The judge of the chat's goal said this.
+    Judge {
+        key: u64,
+        generation: u64,
+        heard: Heard,
+    },
+    /// The command `id`, which the window runs, is not waited for any more.
+    Cancel { id: u64 },
+}
+
+/// A project: a folder the human opened, whose chats work there.
+struct Project {
+    /// How it is kept, or `None` for no project.
+    id: Option<ProjectId>,
+    name: String,
+    folder: PathBuf,
+    /// How many chats were opened in it, which numbers the next.
+    opened: usize,
+}
+
+/// How far a sketch the human ends is on its way to its end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ends {
+    /// Its turn goes on; its agent is asked to sum it up once the turn
+    /// ends.
+    Waiting,
+    /// Its agent sums it up; it ends once that turn ends.
+    Summing,
+}
+
+/// A chat in the list, and, once it is read or opened, the chat itself.
+struct Slot {
+    key: u64,
+    /// Its project, by its place in the projects.
+    project: usize,
+    kept: Option<ChatId>,
+    name: String,
+    named: Named,
+    /// How it stood when last looked at.
+    state: State,
+    unread: bool,
+    goal: Option<Goal>,
+    parent: Option<u64>,
+    setup: Option<Setup>,
+    ending: Option<(Ends, workflow::Ending)>,
+    /// The chat, once it was read or opened in this run.
+    chat: Option<Chat>,
+}
+
+impl Slot {
+    /// The chat named `name` as `named` says, keeping it in `store`.
+    fn name_as(&mut self, name: &str, named: Named, store: &Store) {
+        name.clone_into(&mut self.name);
+        self.named = named;
+        if let Some(kept) = self.kept
+            && let Err(error) = store.name_chat(kept, name, named)
+        {
+            tracing::error!("the chat's name is not kept: {error:#}");
+        }
+    }
+
+    fn row(&self, agents: &Agents, store: &Store) -> ChatRow {
+        let agent = match &self.chat {
+            Some(chat) => chat.agent_id().to_owned(),
+            None => agent_of(agents, self.kept, store),
+        };
+        // A chat not read yet starts again, unless it is of a sketch whose
+        // folder is gone from under it.
+        let again = match &self.chat {
+            Some(chat) => chat.starts_again(),
+            None => {
+                self.kept.is_some()
+                    && self
+                        .setup
+                        .as_ref()
+                        .and_then(|setup| setup.folder.as_ref())
+                        .is_none_or(|folder| folder.exists())
+            }
+        };
+        ChatRow {
+            key: self.key,
+            project: self.project,
+            kept: self.kept,
+            name: self.name.clone(),
+            named: self.named,
+            open: self.chat.as_ref().is_some_and(Chat::is_open),
+            again,
+            state: self.state,
+            unread: self.unread,
+            goal: self.goal.clone(),
+            parent: self.parent,
+            setup: self.setup.clone(),
+            ending: self.ending.is_some(),
+            agent,
+        }
+    }
+}
+
+/// An agent on its way to start, once the window gives its stage a relay.
+struct Preparing {
+    key: u64,
+    generation: u64,
+    cwd: PathBuf,
+    start: Start,
+}
+
+pub struct Daemon {
+    /// No project's first, then the human's.
+    projects: Vec<Project>,
+    /// The chats in the order of the tabs.
+    chats: Vec<Slot>,
+    archived: Vec<Slot>,
+    last_key: u64,
+    /// Whether `--home` gave the home for this run, so that the settings
+    /// do not move it.
+    home_given: bool,
+    /// The chat the window shows, if it shows one.
+    shown: Option<u64>,
+    /// The agents that wait for a chat, by its key.
+    waiting: Vec<(u64, oneshot::Sender<Result<Waited, String>>)>,
+    store: Rc<Store>,
+    spawns: Rc<dyn Spawns>,
+    internal: UnboundedSender<Internal>,
+    /// The window, while one is there.
+    window: Option<UnboundedSender<FromDaemon>>,
+    /// What the window was last told of the projects and chats.
+    listed: Option<Listing>,
+    /// The commands the window runs, by their numbers, with where their
+    /// answers go.
+    running: HashMap<u64, oneshot::Sender<Result<Ran, String>>>,
+    /// What waits for the commands' answers, and stops them once nothing
+    /// waits.
+    stops: HashMap<u64, Task>,
+    /// The agents on their way to start, by the number the window answers
+    /// their relay with.
+    preparing: HashMap<u64, Preparing>,
+    last_id: u64,
+    /// The chats the window is to show, once it is told of them.
+    reveals: Vec<u64>,
+}
+
+/// How the daemon is reached: what to tell it.
+#[derive(Clone)]
+pub struct Link {
+    pub to: UnboundedSender<ToDaemon>,
+}
+
+/// The daemon, running on its thread, until it is stopped.
+pub struct Running {
+    pub link: Link,
+    stop: Option<oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Running {
+    /// Stops the daemon, and its chats' agents with it, and waits until
+    /// they have.
+    pub fn stop(&mut self) {
+        self.stop.take();
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            tracing::error!("the daemon panicked as it stopped");
+        }
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl Link {
+    pub fn send(&self, message: ToDaemon) {
+        if self.to.send(message).is_err() {
+            tracing::error!("the daemon is gone");
+        }
+    }
+}
+
+/// Starts the daemon on a thread of its own, keeping what lasts in
+/// `store`, its chats in no project working in `home`, given by
+/// `--home` when `home_given`, and its agents started by `spawns`, which
+/// it makes on its thread. It tells `window` what it does, and answers
+/// how to tell it what the human does, and to stop.
+///
+/// # Panics
+///
+/// If the system cannot start a thread for it.
+pub fn start(
+    home: PathBuf,
+    home_given: bool,
+    store: impl FnOnce() -> Rc<Store> + Send + 'static,
+    spawns: impl FnOnce() -> Rc<dyn Spawns> + Send + 'static,
+    window: UnboundedSender<FromDaemon>,
+) -> Running {
+    let (to, from_window) = unbounded_channel();
+    let (stop, stopped) = oneshot::channel();
+    let thread = std::thread::Builder::new()
+        .name("daemon".to_owned())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    tracing::error!("the daemon cannot start: {error}");
+                    return;
+                }
+            };
+            let local = tokio::task::LocalSet::new();
+            local.block_on(&runtime, async move {
+                let (internal, heard) = unbounded_channel();
+                let daemon = Daemon::new(home, home_given, store(), spawns(), internal);
+                daemon
+                    .serve(Some(window), from_window, heard, stopped)
+                    .await;
+            });
+        })
+        .expect("the daemon's thread starts");
+    Running {
+        link: Link { to },
+        stop: Some(stop),
+        thread: Some(thread),
+    }
+}
+
+impl Daemon {
+    /// The daemon of the projects and chats kept in `store`, its chats in
+    /// no project working in `home`.
+    fn new(
+        home: PathBuf,
+        home_given: bool,
+        store: Rc<Store>,
+        spawns: Rc<dyn Spawns>,
+        internal: UnboundedSender<Internal>,
+    ) -> Self {
+        let mut daemon = Self {
+            projects: vec![Project {
+                id: None,
+                name: NO_PROJECT.to_owned(),
+                folder: home,
+                opened: 0,
+            }],
+            chats: Vec::new(),
+            archived: Vec::new(),
+            last_key: 0,
+            home_given,
+            shown: None,
+            waiting: Vec::new(),
+            store,
+            spawns,
+            internal,
+            window: None,
+            listed: None,
+            running: HashMap::new(),
+            stops: HashMap::new(),
+            preparing: HashMap::new(),
+            last_id: 0,
+            reveals: Vec::new(),
+        };
+        daemon.read_kept();
+        daemon
+    }
+
+    /// Lists the projects and chats kept, closed.
+    fn read_kept(&mut self) {
+        let kept = self
+            .store
+            .projects()
+            .and_then(|kept| Ok((kept, self.store.chats()?)));
+        let (projects, chats) = match kept {
+            Ok(kept) => kept,
+            Err(error) => {
+                tracing::error!("the chats kept cannot be listed: {error:#}");
+                return;
+            }
+        };
+        self.projects
+            .extend(projects.into_iter().map(|project| Project {
+                id: Some(project.id),
+                name: project.name,
+                folder: project.folder,
+                opened: 0,
+            }));
+        for chat in chats {
+            let Some(index) = self
+                .projects
+                .iter()
+                .position(|project| project.id == chat.project)
+            else {
+                continue;
+            };
+            self.projects[index].opened += 1;
+            let key = self.next_key();
+            // The chats come in the order they were opened, so the parent
+            // is listed before its children.
+            let parent = chat.parent.and_then(|parent| {
+                self.chats
+                    .iter()
+                    .chain(&self.archived)
+                    .find(|other| other.kept == Some(parent))
+                    .map(|other| other.key)
+            });
+            let setup = chat.setup.as_deref().and_then(|setup| {
+                Setup::from_json(setup)
+                    .inspect_err(|error| {
+                        tracing::error!("the chat's setup cannot be read: {error:#}");
+                    })
+                    .ok()
+            });
+            let slot = Slot {
+                key,
+                project: index,
+                kept: Some(chat.id),
+                name: chat.name,
+                named: chat.named,
+                state: State::Closed,
+                unread: false,
+                goal: chat.goal,
+                parent,
+                setup,
+                ending: None,
+                chat: None,
+            };
+            if chat.archived {
+                self.archived.push(slot);
+            } else {
+                self.add(slot);
+            }
+        }
+    }
+
+    /// Goes on until the window that started it is gone: hears what the
+    /// window says, `from_window`, and what the chats' tasks heard,
+    /// `heard`, and tells `window` what changed.
+    async fn serve(
+        mut self,
+        window: Option<UnboundedSender<FromDaemon>>,
+        mut from_window: UnboundedReceiver<ToDaemon>,
+        mut heard: UnboundedReceiver<Internal>,
+        mut stop: oneshot::Receiver<()>,
+    ) {
+        self.window = window;
+        self.tell_listing();
+        loop {
+            tokio::select! {
+                message = from_window.recv() => match message {
+                    Some(message) => self.act(message),
+                    None => break,
+                },
+                Some(event) = heard.recv() => self.hear(event),
+                _ = &mut stop => break,
+            }
+            self.settle();
+        }
+        // The chats' agents stop with them.
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            slot.chat = None;
+        }
+    }
+
+    fn next_key(&mut self) -> u64 {
+        self.last_key += 1;
+        self.last_key
+    }
+
+    fn next_id(&mut self) -> u64 {
+        self.last_id += 1;
+        self.last_id
+    }
+
+    fn tell(&self, message: FromDaemon) {
+        if let Some(window) = &self.window {
+            let _ = window.send(message);
+        }
+    }
+
+    /// Adds `slot` to the list, after the chat that opened it and those it
+    /// opened before, or at the end of its project's, and answers where.
+    fn add(&mut self, slot: Slot) -> usize {
+        let parent = slot
+            .parent
+            .and_then(|parent| self.chats.iter().position(|other| other.key == parent));
+        let after = match parent {
+            Some(parent) => {
+                let depth = self.depth(&self.chats[parent]);
+                self.chats
+                    .iter()
+                    .enumerate()
+                    .skip(parent + 1)
+                    .find(|(_, other)| self.depth(other) <= depth)
+                    .map_or(self.chats.len(), |(index, _)| index)
+            }
+            None => self
+                .chats
+                .iter()
+                .rposition(|other| other.project <= slot.project)
+                .map_or(0, |index| index + 1),
+        };
+        self.chats.insert(after, slot);
+        after
+    }
+
+    /// How many chats opened `slot`, one under another.
+    fn depth(&self, slot: &Slot) -> u8 {
+        let mut depth = 0_u8;
+        let mut parent = slot.parent;
+        while let Some(key) = parent {
+            let Some(found) = self.chats.iter().find(|other| other.key == key) else {
+                break;
+            };
+            depth = depth.saturating_add(1);
+            parent = found.parent;
+        }
+        depth
+    }
+
+    fn slot(&self, key: u64) -> Option<&Slot> {
+        self.chats
+            .iter()
+            .chain(&self.archived)
+            .find(|slot| slot.key == key)
+    }
+
+    fn slot_mut(&mut self, key: u64) -> Option<&mut Slot> {
+        self.chats
+            .iter_mut()
+            .chain(&mut self.archived)
+            .find(|slot| slot.key == key)
+    }
+
+    /// The chat `key`, read from what is kept of it if it was not yet.
+    fn chat(&mut self, key: u64) -> Option<&mut Chat> {
+        self.read(key);
+        self.slot_mut(key)?.chat.as_mut()
+    }
+
+    /// Where the chat of `slot` works: the folder of its sketch, or its
+    /// project's.
+    fn cwd(&self, slot: &Slot) -> PathBuf {
+        slot.setup
+            .as_ref()
+            .and_then(|setup| setup.folder.clone())
+            .unwrap_or_else(|| self.projects[slot.project].folder.clone())
+    }
+
+    /// Reads the closed chat `key` from what is kept of it, unless it was
+    /// read or opened in this run. Once the human sends to it, its agent
+    /// starts again, going on with its session if it can.
+    fn read(&mut self, key: u64) {
+        let Some(slot) = self.slot(key) else {
+            return;
+        };
+        let (Some(kept), None) = (slot.kept, &slot.chat) else {
+            return;
+        };
+        let cwd = self.cwd(slot);
+        let setup = slot.setup.clone();
+        let goal = slot.goal.clone();
+        let entries = self.store.entries(kept).unwrap_or_else(|error| {
+            tracing::error!("the chat cannot be read: {error:#}");
+            vec![Entry::Note(format!("Cox cannot read this chat: {error:#}"))]
+        });
+        let session = self
+            .store
+            .session(kept)
+            .inspect_err(|error| tracing::error!("the chat's session cannot be read: {error:#}"))
+            .ok()
+            .flatten();
+        let settings = self.store.settings(kept).unwrap_or_else(|error| {
+            tracing::error!("the chat's settings cannot be read: {error:#}");
+            Vec::new()
+        });
+        // A chat of a sketch whose folder is gone from under it does not
+        // start again.
+        let gone = setup.as_ref().is_some_and(|setup| setup.folder.is_some()) && !cwd.exists();
+        let keeps = keeps_in_wiki(setup.as_ref());
+        let again = (!gone).then_some(Again {
+            cwd,
+            session,
+            setup,
+        });
+        let conversation = Conversation::closed(entries)
+            .with_goal(goal)
+            .with_settings(settings)
+            .with_keeping(keeps);
+        let record = Record::new(Rc::clone(&self.store), kept);
+        let agents = self.spawns.agents();
+        let chosen = agent_of(&agents, Some(kept), &self.store);
+        let starts = self.spawns.starts(&chosen);
+        let chat = Chat::new(
+            key,
+            conversation,
+            Some(record),
+            again,
+            Some(starts),
+            Some((agents, chosen)),
+            self.internal.clone(),
+        );
+        if let Some(slot) = self.slot_mut(key) {
+            slot.chat = Some(chat);
+            slot.state = State::Closed;
+        }
+    }
+
+    /// Reads the chat `key` again from what is kept of it, as when it
+    /// moves out of a sketch, telling the window that watches it all of
+    /// it again.
+    fn read_again(&mut self, key: u64) {
+        let Some(slot) = self.slot_mut(key) else {
+            return;
+        };
+        let watched = slot.chat.as_ref().is_some_and(|chat| chat.watched);
+        if let Some(mut chat) = slot.chat.take() {
+            chat.flush();
+        }
+        if watched {
+            self.watch(key);
+        }
+    }
+
+    /// Has the window watch the chat `key`: tells it all of its
+    /// conversation, and its stage's tabs as they were kept.
+    fn watch(&mut self, key: u64) {
+        let Some(chat) = self.chat(key) else {
+            return;
+        };
+        let patch = chat.watch();
+        let kept = chat.record().map(Record::chat);
+        let tabs = kept.and_then(|kept| {
+            self.store
+                .tabs(kept)
+                .inspect_err(|error| tracing::error!("the chat's tabs cannot be read: {error:#}"))
+                .ok()
+                .flatten()
+        });
+        self.tell(FromDaemon::Tabs { key, tabs });
+        self.tell(FromDaemon::Patch { key, patch });
+    }
+
+    /// The project of `folder`, by its place in the projects, made and
+    /// kept if there is none yet.
+    fn project(&mut self, folder: PathBuf) -> usize {
+        if let Some(index) = self
+            .projects
+            .iter()
+            .position(|project| project.folder == folder)
+        {
+            return index;
+        }
+        let name = folder.file_name().map_or_else(
+            || folder.to_string_lossy().into_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let id = self
+            .store
+            .project(&folder, &name)
+            .inspect_err(|error| tracing::error!("the project is not kept: {error:#}"))
+            .ok();
+        self.projects.push(Project {
+            id,
+            name,
+            folder,
+            opened: 0,
+        });
+        self.projects.len() - 1
+    }
+
+    /// Opens a chat in the project of `folder`, or in no project, and has
+    /// the window show it.
+    fn open(&mut self, folder: Option<PathBuf>) -> u64 {
+        let index = folder.map_or(0, |folder| self.project(folder));
+        let key = self.open_in(index, None, None);
+        self.reveals.push(key);
+        key
+    }
+
+    /// Opens a chat in the project at `index`, under the chat `from` names
+    /// by its key, and how it is kept, when an agent opens it, set up as
+    /// `setup` says; and answers its key.
+    fn open_in(
+        &mut self,
+        index: usize,
+        from: Option<(u64, Option<ChatId>)>,
+        setup: Option<Setup>,
+    ) -> u64 {
+        let project = &mut self.projects[index];
+        if index == 0 {
+            // The agent's session fails to open, and says so, if the home
+            // cannot be made.
+            if let Err(error) = std::fs::create_dir_all(&project.folder) {
+                tracing::error!("cannot make {}: {error}", project.folder.display());
+            }
+        }
+        let instructions = Instructions::read(&project.folder);
+        project.opened += 1;
+        let name = format!("Chat {}", project.opened);
+        let project_id = project.id;
+        let kept = match from {
+            Some((_, Some(parent))) => self.store.add_chat_under(
+                parent,
+                project_id,
+                &name,
+                setup.as_ref().map(Setup::to_json).as_deref(),
+            ),
+            _ => self.store.add_chat(project_id, &name),
+        }
+        .inspect_err(|error| tracing::error!("the chat is not kept: {error:#}"))
+        .ok();
+        let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
+        let key = self.next_key();
+        let agents = self.spawns.agents();
+        let chosen = agent_of(&agents, kept, &self.store);
+        let starts = self.spawns.starts(&chosen);
+        let conversation = Chat::opening(&instructions.paths(), setup.as_ref());
+        let chat = Chat::new(
+            key,
+            conversation,
+            record,
+            None,
+            Some(starts),
+            Some((agents, chosen)),
+            self.internal.clone(),
+        );
+        self.add(Slot {
+            key,
+            project: index,
+            kept,
+            name,
+            named: Named::Numbered,
+            state: State::Idle,
+            unread: false,
+            goal: None,
+            parent: from.map(|(parent, _)| parent),
+            setup: setup.clone(),
+            ending: None,
+            chat: Some(chat),
+        });
+        self.start_agent(
+            key,
+            Start::New {
+                instructions: Some(instructions),
+                setup,
+            },
+        );
+        key
+    }
+
+    /// Starts the agent of the chat `key` as `start` says: at once, or,
+    /// for an agent that drives the stage while a window is there, once
+    /// the window gives the stage a relay.
+    fn start_agent(&mut self, key: u64, start: Start) {
+        let Some(slot) = self.slot(key) else {
+            return;
+        };
+        let cwd = start_cwd(&start).unwrap_or_else(|| self.cwd(slot));
+        let drives = start
+            .setup()
+            .is_none_or(|setup| setup.stage == StageUse::Drive);
+        let Some(chat) = self.slot_mut(key).and_then(|slot| slot.chat.as_mut()) else {
+            return;
+        };
+        let generation = chat.next_generation();
+        if drives && self.window.is_some() {
+            let id = self.next_id();
+            self.tell(FromDaemon::Prepare {
+                key,
+                cwd: cwd.clone(),
+                id,
+            });
+            self.preparing.insert(
+                id,
+                Preparing {
+                    key,
+                    generation,
+                    cwd,
+                    start,
+                },
+            );
+        } else {
+            self.spawn_agent(key, generation, cwd, start, None);
+        }
+    }
+
+    /// Starts the agent of `generation` of the chat `key`, working in
+    /// `cwd`, as `start` says, its browser tools reaching the stage through
+    /// the relay on `relay`, when given.
+    fn spawn_agent(
+        &mut self,
+        key: u64,
+        generation: u64,
+        cwd: PathBuf,
+        start: Start,
+        relay: Option<u16>,
+    ) {
+        let span = tracing::info_span!("chat", id = tracing::field::Empty, cwd = %cwd.display());
+        let Some(slot) = self.slot(key) else {
+            return;
+        };
+        if let Some(kept) = slot.kept {
+            span.record("id", tracing::field::display(kept));
+        }
+        let _entered = span.enter();
+        let Some(chat) = &slot.chat else {
+            return;
+        };
+        let agent = chat.agent_id().to_owned();
+        let Spawned { agent, stage } = self.spawns.chat(cwd, start, &agent, relay);
+        let also = stage
+            .map(|mut stage| {
+                let internal = self.internal.clone();
+                vec![spawn(async move {
+                    while let Some(request) = stage.recv().await {
+                        if internal.send(Internal::Stage { key, request }).is_err() {
+                            break;
+                        }
+                    }
+                })]
+            })
+            .unwrap_or_default();
+        if let Some(chat) = self.slot_mut(key).and_then(|slot| slot.chat.as_mut()) {
+            chat.attach(agent, generation, also);
+        }
+    }
+
+    /// Does what the window says the human did.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm for each thing the human does"
+    )]
+    fn act(&mut self, message: ToDaemon) {
+        match message {
+            ToDaemon::Open { folder } => {
+                self.open(folder);
+            }
+            ToDaemon::Shown { key } => {
+                self.shown = key;
+                if let Some(slot) = key.and_then(|key| self.slot_mut(key)) {
+                    slot.unread = false;
+                }
+            }
+            ToDaemon::Watch { key } => self.watch(key),
+            ToDaemon::Submit { key, text } => self.submit(key, &text),
+            ToDaemon::Choose { key, index } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.choose(index);
+                }
+            }
+            ToDaemon::Stop { key } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.stop();
+                }
+            }
+            ToDaemon::SetGoal { key, goal } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.set_goal(goal);
+                }
+            }
+            ToDaemon::AnswerProposal { key, index, answer } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.answer_proposal(index, answer);
+                }
+            }
+            ToDaemon::ChangeProposal { key, index, goal } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.change_proposal(index, goal);
+                }
+            }
+            ToDaemon::AnswerKeep { key, index, keep } => {
+                let keeps = self
+                    .chat(key)
+                    .and_then(|chat| chat.answer_keep(index, keep));
+                if let Some(chat) = keeps {
+                    self.save_to_wiki_of(key, chat);
+                }
+            }
+            ToDaemon::StartSketch { key, sketch, what } => {
+                match self.start_sketch(key, sketch, &what) {
+                    Ok(opened) => self.reveals.push(opened.number),
+                    Err(why) => {
+                        if let Some(chat) = self.chat(key) {
+                            chat.note(format!("The sketch cannot start: {why}"));
+                        }
+                    }
+                }
+            }
+            ToDaemon::Set { key, id, value } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.set(&id, &value);
+                }
+            }
+            ToDaemon::SwitchAgent { key, agent } => self.switch_agent(key, &agent),
+            ToDaemon::Rename { key, name } => {
+                let store = Rc::clone(&self.store);
+                if let Some(slot) = self.slot_mut(key) {
+                    slot.name_as(&name, Named::Human, &store);
+                }
+            }
+            ToDaemon::Archive { key, archived } => self.archive(key, archived),
+            ToDaemon::SaveToWiki { key } => {
+                if self.save_to_wiki(key) {
+                    self.reveals.push(key);
+                }
+            }
+            ToDaemon::EndSketch { key, ending } => {
+                self.end_sketch_as(key, ending);
+            }
+            ToDaemon::Tabs { key, tabs } => {
+                if let Some(kept) = self.slot(key).and_then(|slot| slot.kept)
+                    && let Err(error) = self.store.keep_tabs(kept, &tabs)
+                {
+                    tracing::error!("the stage's tabs are not kept: {error:#}");
+                }
+            }
+            ToDaemon::Ran { id, ran } => {
+                self.stops.remove(&id);
+                if let Some(answer) = self.running.remove(&id) {
+                    answer.send(ran).ok();
+                }
+            }
+            ToDaemon::Prepared { id, port } => {
+                if let Some(Preparing {
+                    key,
+                    generation,
+                    cwd,
+                    start,
+                }) = self.preparing.remove(&id)
+                {
+                    self.spawn_agent(key, generation, cwd, start, port);
+                }
+            }
+            ToDaemon::Home { home, set } => {
+                if set {
+                    self.home_given = false;
+                    self.projects[0].folder = home;
+                } else if !self.home_given {
+                    self.projects[0].folder = home;
+                }
+            }
+            ToDaemon::Sync { id } => {
+                // What came before is done, but for what it changed, which
+                // is told before this.
+                self.settle();
+                self.tell(FromDaemon::Settled { id });
+            }
+        }
+    }
+
+    /// The human sent `text` in the chat `key`: a closed chat's agent
+    /// starts again first, if it can.
+    fn submit(&mut self, key: u64, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let Some(chat) = self.chat(key) else {
+            return;
+        };
+        let earlier = chat.conversation().entries().to_vec();
+        if let Some(again) = chat.take_again() {
+            let Again {
+                cwd,
+                session,
+                setup,
+            } = again;
+            let start = Start::again(&cwd, session, &earlier, setup);
+            self.start_agent(key, start);
+        }
+        if let Some(chat) = self.chat(key) {
+            chat.submit(text);
+        }
+    }
+
+    /// Sends `text` to the agent of the chat `key` in the human's place,
+    /// starting it again first if it is closed and can be.
+    fn go_on(&mut self, key: u64, text: &str) {
+        let Some(chat) = self.chat(key) else {
+            return;
+        };
+        let earlier = chat.conversation().entries().to_vec();
+        if let Some(again) = chat.take_again() {
+            let Again {
+                cwd,
+                session,
+                setup,
+            } = again;
+            self.start_agent(key, Start::again(&cwd, session, &earlier, setup));
+        }
+        if let Some(chat) = self.chat(key) {
+            chat.told(text);
+        }
+    }
+
+    /// Does what the daemon's chats' tasks heard.
+    fn hear(&mut self, event: Internal) {
+        match event {
+            Internal::Agent {
+                key,
+                generation,
+                event,
+            } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.hear(generation, event);
+                }
+            }
+            Internal::Asked {
+                key,
+                generation: _,
+                request,
+            } => self.asked(key, request),
+            Internal::Stage { key, request } => self.ask_stage(key, request),
+            Internal::Checked {
+                key,
+                generation,
+                ran,
+            } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.heard_check(generation, ran);
+                }
+            }
+            Internal::LoggedIn {
+                key,
+                generation,
+                ran,
+            } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.logged_in(generation, ran);
+                }
+            }
+            Internal::Judge {
+                key,
+                generation,
+                heard,
+            } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.heard_judge(generation, heard);
+                }
+            }
+            Internal::Cancel { id } => {
+                self.stops.remove(&id);
+                if self.running.remove(&id).is_some() {
+                    self.tell(FromDaemon::Cancel { id });
+                }
+            }
+        }
+    }
+
+    /// Passes on to the window what the agent of the chat `key`, or the
+    /// chat, asks of its stage: a command answered once it ends, or, with
+    /// no window, at once that it cannot run.
+    fn ask_stage(&mut self, key: u64, request: ToolRequest) {
+        let ask = match request {
+            ToolRequest::ShowMarkdown { path, text } => StageAsk::ShowMarkdown { path, text },
+            ToolRequest::ShowFile { path, text, lines } => StageAsk::ShowFile { path, text, lines },
+            ToolRequest::ShowChanges { folder } => StageAsk::ShowChanges { folder },
+            ToolRequest::ShowMap { map, at } => StageAsk::ShowMap { map, at },
+            ToolRequest::RunCommand {
+                command,
+                cwd,
+                answer,
+            } => {
+                if self.window.is_none() {
+                    answer.send(Err(NO_WINDOW.to_owned())).ok();
+                    return;
+                }
+                let id = self.next_id();
+                let (ran, heard) = oneshot::channel();
+                let internal = self.internal.clone();
+                let waits = spawn(async move {
+                    let mut answer = answer;
+                    tokio::select! {
+                        ran = heard => {
+                            let ran = ran.unwrap_or_else(|_| Err(NO_WINDOW.to_owned()));
+                            answer.send(ran).ok();
+                        }
+                        () = answer.closed() => {
+                            let _ = internal.send(Internal::Cancel { id });
+                        }
+                    }
+                });
+                self.running.insert(id, ran);
+                self.stops.insert(id, waits);
+                StageAsk::RunCommand { id, command, cwd }
+            }
+        };
+        self.tell(FromDaemon::Stage { key, ask });
+    }
+
+    /// Answers `request`, which the agent of the chat `key` asks: opens a
+    /// sketch beside the chat, shows a goal it proposes, opens a chat under
+    /// it, as the agent says, or waits for one.
+    fn asked(&mut self, key: u64, request: ChatRequest) {
+        match request {
+            ChatRequest::StartSketch {
+                sketch,
+                what,
+                show,
+                answer,
+            } => {
+                let opened = self.start_sketch(key, sketch, &what);
+                if show && let Ok(opened) = &opened {
+                    self.reveals.push(opened.number);
+                }
+                answer.send(opened).ok();
+            }
+            ChatRequest::ProposeGoal { goal, why, answer } => {
+                let now = self
+                    .chat(key)
+                    .and_then(|chat| chat.propose_goal(&goal, why));
+                answer.send(now).ok();
+            }
+            ChatRequest::OpenChat {
+                text,
+                setup,
+                goal,
+                sketch,
+                answer,
+            } => {
+                let setup = Setup { sketch, ..setup };
+                let opened = self.open_chat(key, &text, setup, goal);
+                answer.send(opened).ok();
+            }
+            ChatRequest::WaitChat { chat, answer } => self.wait_chat(chat, answer),
+            ChatRequest::SaveToWiki { chat } => self.save_to_wiki_of(key, chat),
+            ChatRequest::Whereabouts { answer } => {
+                let whereabouts = self
+                    .slot(key)
+                    .map(|slot| Whereabouts {
+                        project: self.projects[slot.project].name.clone(),
+                        chat: slot.name.clone(),
+                        kept: slot.kept.map(|kept| kept.to_string()),
+                    })
+                    .unwrap_or_default();
+                answer.send(whereabouts).ok();
+            }
+        }
+    }
+
+    /// Asks the agent of the chat kept as `chat`, or of the chat `key`, to
+    /// keep what it learned in the wiki, or notes in the chat `key` why it
+    /// cannot.
+    fn save_to_wiki_of(&mut self, key: u64, chat: Option<ChatId>) {
+        let which = match chat {
+            Some(kept) => self
+                .chats
+                .iter()
+                .find(|slot| slot.kept == Some(kept))
+                .map(|slot| slot.key),
+            None => self
+                .chats
+                .iter()
+                .find(|slot| slot.key == key)
+                .map(|slot| slot.key),
+        };
+        let why = match which {
+            None => Some("the chat that learned it is not among the tabs"),
+            Some(which) if !self.saves_to_wiki(which) => {
+                Some("its agent is at work, or has no wiki_write: ask once it waits")
+            }
+            Some(which) => {
+                self.save_to_wiki(which);
+                None
+            }
+        };
+        if let Some(why) = why
+            && let Some(chat) = self.chat(key)
+        {
+            chat.note(format!("Nothing is kept in the wiki: {why}."));
+        }
+    }
+
+    /// Asks the agent of the chat `key`, in the human's place, to keep what
+    /// the chat learned in the human's wiki, as their workflow says to
+    /// (see [`workflow::WIKI_SAVE`]), when it can; answers whether it did.
+    fn save_to_wiki(&mut self, key: u64) -> bool {
+        if !self.saves_to_wiki(key) {
+            return false;
+        }
+        let line = workflow::WIKI_SAVE.say(&[]);
+        self.go_on(key, &line);
+        true
+    }
+
+    /// Whether the human can ask the agent of the chat `key` to keep what
+    /// it learned in the wiki: it is not at work, and has the tool.
+    fn saves_to_wiki(&self, key: u64) -> bool {
+        self.chats
+            .iter()
+            .find(|slot| slot.key == key)
+            .is_some_and(|slot| !working(slot.state) && keeps_in_wiki(slot.setup.as_ref()))
+    }
+
+    /// Answers `answer` with how the chat that goes by `key` stands once it
+    /// is not at work, or at once when it is not.
+    fn wait_chat(&mut self, key: u64, answer: oneshot::Sender<Result<Waited, String>>) {
+        if self.slot(key).is_none() {
+            answer.send(Err(format!("no chat {key}"))).ok();
+            return;
+        }
+        let Some(chat) = self.chat(key) else {
+            answer.send(Ok(Waited::default())).ok();
+            return;
+        };
+        if at_work(chat.conversation().state()) {
+            self.waiting.retain(|(_, answer)| !answer.is_closed());
+            self.waiting.push((key, answer));
+        } else {
+            answer.send(Ok(chat.stands())).ok();
+        }
+    }
+
+    /// Opens a chat under the chat `key`, in its project, set up as
+    /// `setup` says, which works until `goal` is met if given, and gets
+    /// `text` as its first line, and answers how it goes by. A sketch, as
+    /// the setup's `sketch` makes it, works in a folder of its own; any
+    /// other chat works where the chat that opened it does.
+    fn open_chat(
+        &mut self,
+        key: u64,
+        text: &str,
+        mut setup: Setup,
+        goal: Option<Goal>,
+    ) -> Result<OpenedChat, String> {
+        let slot = self.slot(key).ok_or("the chat is gone")?;
+        let folder = slot.setup.as_ref().and_then(|setup| setup.folder.clone());
+        let project = slot.project;
+        setup.folder = match setup.sketch {
+            Some(sketch) => {
+                let from = folder.unwrap_or_else(|| self.projects[project].folder.clone());
+                let made = make_sketch(sketch, &from)?;
+                setup.policy = sketch::allow(setup.policy, &made, &workflow::sketch().allow);
+                Some(made)
+            }
+            None => folder,
+        };
+        self.open_under(key, text, setup, goal)
+    }
+
+    /// Opens a chat under the chat `key`, set up as `setup` says, on
+    /// `text`, toward `goal`, and answers how it goes by.
+    fn open_under(
+        &mut self,
+        key: u64,
+        text: &str,
+        setup: Setup,
+        goal: Option<Goal>,
+    ) -> Result<OpenedChat, String> {
+        let slot = self.slot(key).ok_or("the chat is gone")?;
+        let (project, kept, opened_by) = (slot.project, slot.kept, slot.name.clone());
+        let sketch = setup.sketch;
+        let opened = self.open_in(project, Some((key, kept)), Some(setup));
+        let slot = self.slot(opened).ok_or("the chat did not open")?;
+        let told = OpenedChat {
+            number: opened,
+            name: slot.name.clone(),
+            folder: sketch
+                .and(slot.setup.as_ref())
+                .and_then(|setup| setup.folder.clone()),
+        };
+        if let Some(chat) = self.chat(opened) {
+            chat.tell(&opened_by, text, goal);
+        }
+        Ok(told)
+    }
+
+    /// Opens a sketch beside the chat `key`, under it in the list, that
+    /// starts from `started`, to try out `what`, and answers how it goes
+    /// by, or why it cannot open. The sketch's agent is set up as the
+    /// chat's is, and told what the chat talked through so far, and what
+    /// it tries; the chat goes on in the project, apart from it, and hears
+    /// how it ends (see [`Self::finish_sketch`]).
+    fn start_sketch(
+        &mut self,
+        key: u64,
+        started: Sketch,
+        what: &str,
+    ) -> Result<OpenedChat, String> {
+        let slot = self
+            .chats
+            .iter()
+            .find(|slot| slot.key == key)
+            .ok_or("the chat is not in the list")?;
+        let setup = slot.setup.clone().unwrap_or_default();
+        if let (Some(_), Some(folder)) = (setup.sketch, &setup.folder) {
+            return Err(format!(
+                "the chat is a sketch already, working in {}",
+                folder.display()
+            ));
+        }
+        let from = setup
+            .folder
+            .clone()
+            .unwrap_or_else(|| self.projects[slot.project].folder.clone());
+        let talked = self
+            .chat(key)
+            .map(|chat| agent::talked_through(chat.conversation().entries()))
+            .unwrap_or_default();
+        let folder = make_sketch(started, &from)?;
+        let context = [setup.context.clone(), talked]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let setup = Setup {
+            context: (!context.is_empty()).then_some(context),
+            folder: Some(folder.clone()),
+            sketch: Some(started),
+            policy: sketch::allow(setup.policy, &folder, &workflow::sketch().allow),
+            ..setup
+        };
+        let line = workflow::SKETCH_START.say(&[
+            ("folder", &folder.display().to_string()),
+            ("from", started.what()),
+            ("what", what),
+        ]);
+        let opened = self.open_under(key, &line, setup, None)?;
+        // Named after what it tries, not after the line Cox sends it.
+        let name: String = what.chars().take(NAME_LENGTH).collect();
+        let store = Rc::clone(&self.store);
+        if let Some(slot) = self.slot_mut(opened.number) {
+            slot.name_as(&name, Named::FirstLine, &store);
+        }
+        if let Some(chat) = self.chat(key) {
+            chat.note(format!(
+                "Sketch: chat {} opens beside this chat, in {}, to try: {what}",
+                opened.number,
+                folder.display()
+            ));
+        }
+        Ok(OpenedChat { name, ..opened })
+    }
+
+    /// Switches the chat `key` to the agent kept as `id`, unless a turn
+    /// runs: closes it, its agent stopped, keeps the agent as the chat's,
+    /// and starts the agent at once, which goes on from the conversation
+    /// so far, told it as a session that cannot be resumed is.
+    fn switch_agent(&mut self, key: u64, id: &str) {
+        let Some(slot) = self.slot(key) else {
+            return;
+        };
+        let Some(kept) = slot.kept.filter(|_| !working(slot.state)) else {
+            return;
+        };
+        let cwd = self.cwd(slot);
+        let setup = slot.setup.clone();
+        if self.chat(key).is_none_or(|chat| chat.agent_id() == id) {
+            return;
+        }
+        if let Err(error) = self.store.keep_agent(kept, id) {
+            tracing::error!("the chat goes on with the agent it had: {error:#}");
+            return;
+        }
+        let agents = self.spawns.agents();
+        let starts = self.spawns.starts(id);
+        let to = agents.of(Some(id)).name;
+        let Some(chat) = self.chat(key) else {
+            return;
+        };
+        let from = chat
+            .agents()
+            .map(|agents| agents.of(Some(chat.agent_id())).name)
+            .unwrap_or_default();
+        tracing::info!(agent = %to, "the chat switches to another agent");
+        let again = Again {
+            cwd,
+            session: None,
+            setup,
+        };
+        chat.switch_agent(&from, &to, (agents, id.to_owned()), starts, again);
+        if let Some(slot) = self.slot_mut(key) {
+            slot.state = State::Closed;
+        }
+        // The new agent starts at once, told the conversation so far.
+        let Some(chat) = self.chat(key) else {
+            return;
+        };
+        let earlier = chat.conversation().entries().to_vec();
+        if let Some(again) = chat.take_again() {
+            let Again {
+                cwd,
+                session,
+                setup,
+            } = again;
+            self.start_agent(key, Start::again(&cwd, session, &earlier, setup));
+        }
+    }
+
+    /// Takes the chat `key` out of the list, to "Archived" at its foot, or
+    /// brings it back. Its agent, if it runs, goes on.
+    fn archive(&mut self, key: u64, archived: bool) {
+        let slot = if archived {
+            let Some(index) = self.chats.iter().position(|slot| slot.key == key) else {
+                return;
+            };
+            self.chats.remove(index)
+        } else {
+            let Some(index) = self.archived.iter().position(|slot| slot.key == key) else {
+                return;
+            };
+            self.archived.remove(index)
+        };
+        if let Some(kept) = slot.kept
+            && let Err(error) = self.store.archive_chat(kept, archived)
+        {
+            tracing::error!("whether the chat is archived is not kept: {error:#}");
+        }
+        if archived {
+            self.archived.push(slot);
+        } else {
+            // Brought back, it is shown.
+            self.add(slot);
+            self.reveals.push(key);
+        }
+    }
+
+    /// The sketch the chat `key` is, what it started from and the folder
+    /// it works in, while the folder is there.
+    fn sketch_of(&self, key: u64) -> Option<(Sketch, PathBuf)> {
+        let setup = self.slot(key)?.setup.as_ref()?;
+        let folder = setup.folder.clone().filter(|folder| folder.exists())?;
+        Some((setup.sketch?, folder))
+    }
+
+    /// Whether the sketch `key` can end: its folder is there, and was not
+    /// opened as a project, which the human goes on with, and it is not on
+    /// its way to an end already.
+    fn ends_sketch(&self, key: u64) -> bool {
+        self.slot(key).is_some_and(|slot| slot.ending.is_none())
+            && self.sketch_of(key).is_some_and(|(_, folder)| {
+                !self.projects.iter().any(|project| project.folder == folder)
+            })
+    }
+
+    /// Ends the sketch `key` as `ending` says: asks its agent to sum it up
+    /// in the conversation first, if the ending says to, once its turn
+    /// ends if one goes on, and ends it once that is done (see
+    /// [`Self::finish_sketch`]).
+    fn end_sketch_as(&mut self, key: u64, ending: workflow::Ending) {
+        let ends = self.ends_sketch(key)
+            && self
+                .sketch_of(key)
+                .is_some_and(|(from, _)| ending.ends(from));
+        if !ends {
+            return;
+        }
+        self.reveals.push(key);
+        self.read(key);
+        let Some(slot) = self.slot_mut(key) else {
+            return;
+        };
+        let waits = ending.sum_up.is_some() && working(slot.state);
+        let name = ending.name.clone();
+        slot.ending = Some((Ends::Waiting, ending));
+        if waits {
+            if let Some(chat) = self.chat(key) {
+                chat.note(format!(
+                    "The sketch ends as \"{name}\" once this turn ends, and its agent has \
+                     summed it up."
+                ));
+            }
+        } else {
+            self.sum_up(key);
+        }
+    }
+
+    /// Asks the agent of the sketch `key`, which the human ends, to sum it
+    /// up in the conversation, as its ending says, starting it again if it
+    /// is closed; the sketch ends once it is done, or at once if the ending
+    /// asks for none, or the agent cannot be asked.
+    fn sum_up(&mut self, key: u64) {
+        let Some((_, ending)) = self.slot(key).and_then(|slot| slot.ending.clone()) else {
+            return;
+        };
+        let Some(text) = ending.sum_up.clone() else {
+            self.finish_sketch(key);
+            return;
+        };
+        let Some((_, folder)) = self.sketch_of(key) else {
+            if let Some(slot) = self.slot_mut(key) {
+                slot.ending = None;
+            }
+            return;
+        };
+        let left_out = sketch::left_out(&folder).unwrap_or_else(|error| {
+            tracing::warn!("cannot tell what the sketch changed: {error}");
+            Vec::new()
+        });
+        let Some(line) = workflow::say(&text, &[("left_out", &sketch::left_out_lines(&left_out))])
+        else {
+            if let Some(chat) = self.chat(key) {
+                chat.note(format!(
+                    "The sketch is not summed up: the workflow has no {text}."
+                ));
+            }
+            self.finish_sketch(key);
+            return;
+        };
+        if let Some(slot) = self.slot_mut(key) {
+            slot.ending = Some((Ends::Summing, ending));
+        }
+        self.go_on(key, &line);
+        let asked = self
+            .chat(key)
+            .is_some_and(|chat| working(chat.conversation().state()));
+        if !asked {
+            self.finish_sketch(key);
+        }
+    }
+
+    /// Ends the sketch `key`, whose agent has summed it up if its ending
+    /// asked, as the ending says. Its folder is opened as a project of its
+    /// own, to go on with what the sketch made, for an ending that opens
+    /// it; or else it goes, what the sketch changed kept apart first if
+    /// the ending says to (see [`sketch::discard`]), and the sketch ends,
+    /// its chat going on in the project toward the ending's goal, if it
+    /// has one, its agent told what the ending says then.
+    fn finish_sketch(&mut self, key: u64) {
+        let Some((_, ending)) = self.slot_mut(key).and_then(|slot| slot.ending.take()) else {
+            return;
+        };
+        let Some((started, folder)) = self.sketch_of(key).filter(|_| self.ends_sketch(key)) else {
+            return;
+        };
+        if ending.open {
+            // A project now, what changed in it is what changed since its
+            // last commit.
+            if let Err(error) = cox_editor::changes::forget(&folder) {
+                tracing::warn!(
+                    "{} still counts changes from nothing: {error}",
+                    folder.display()
+                );
+            }
+            self.open(Some(folder));
+            return;
+        }
+        let Some(slot) = self.slot(key) else {
+            return;
+        };
+        let title = slot.name.clone();
+        let sketch_kept = slot.kept;
+        let sketch_keeps = keeps_in_wiki(slot.setup.as_ref());
+        let parent = slot.parent;
+        // What the sketch's agent said last, as its summing up.
+        let summary = self
+            .chat(key)
+            .and_then(|chat| chat.last_reply())
+            .unwrap_or_default();
+        let discarded = storage::path(storage::Kept::Sketches)
+            .map(|sketches| sketches.join(sketch::DISCARDED))
+            .ok_or_else(|| "Cox cannot tell where to keep discarded sketches".to_owned())
+            .and_then(|bundles| sketch::discard(started, &folder, &title, &bundles, ending.keep));
+        let kept = discarded
+            .as_ref()
+            .ok()
+            .and_then(|discarded| discarded.kept.as_ref())
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let note = discarded.as_ref().map(sketch::Discarded::note).ok();
+        let ended = self.end_sketch(key, &folder, discarded.map(|discarded| discarded.note()));
+        if !ended {
+            return;
+        }
+        // The chat the sketch was opened beside goes on with it, in the
+        // project; a sketch opened beside none goes on itself.
+        let goes_on = parent
+            .filter(|parent| self.chats.iter().any(|slot| slot.key == *parent))
+            .unwrap_or(key);
+        if goes_on != key {
+            // The human goes on there.
+            self.reveals.push(goes_on);
+            if let (Some(chat), Some(note)) = (self.chat(goes_on), note) {
+                chat.note(format!("The sketch \"{title}\" (chat {key}) ended: {note}"));
+            }
+        }
+        // What the sketch found, and why it ended, is the sketch's agent's
+        // to keep, as the human chooses where they go on.
+        let keeps = (goes_on != key).then_some(sketch_kept);
+        if sketch_keeps
+            && keeps.is_none_or(|kept| kept.is_some())
+            && let Some(chat) = self.chat(goes_on)
+        {
+            chat.ask_to_keep(format!("The sketch \"{title}\" ended."), keeps.flatten());
+        }
+        if let Some(goal) = &ending.goal
+            && let Some(chat) = self.chat(goes_on)
+        {
+            chat.set_goal(Goal::parse(goal));
+        }
+        if let Some(text) = &ending.then {
+            match workflow::say(text, &[("kept", &kept), ("summary", &summary)]) {
+                Some(line) => self.go_on(goes_on, &line),
+                None => {
+                    if let Some(chat) = self.chat(goes_on) {
+                        chat.note(format!(
+                            "The agent is told nothing: the workflow has no {text}."
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ends the sketch `key`, which worked in `folder`, as `ended` says, or
+    /// says why it could not, and answers whether it ended. Ended, the
+    /// sketch's chat goes on in the project, as do the chats it opened,
+    /// which worked in its folder too: each is closed, its agent stopped,
+    /// and set up to work in the project, asking the human as any chat
+    /// does, so that a line sent starts its agent again there, with the
+    /// conversation so far.
+    fn end_sketch(&mut self, key: u64, folder: &Path, ended: Result<String, String>) -> bool {
+        self.reveals.push(key);
+        let note = match ended {
+            Ok(note) => note,
+            Err(error) => {
+                if let Some(chat) = self.chat(key) {
+                    chat.note(format!("The sketch could not end: {error}"));
+                }
+                return false;
+            }
+        };
+        let goes_on = "The chat goes on in the project: a line sent starts its agent again \
+                       there, with the conversation so far.";
+        let mut ended = Vec::new();
+        let store = Rc::clone(&self.store);
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            let worked_there = slot.setup.as_ref().is_some_and(|setup| {
+                setup
+                    .folder
+                    .as_ref()
+                    .is_some_and(|works| works.starts_with(folder))
+            });
+            if !worked_there {
+                continue;
+            }
+            let told = if slot.key == key {
+                format!("{note} {goes_on}")
+            } else {
+                format!(
+                    "The sketch this chat worked in has ended, and its folder is gone. {goes_on}"
+                )
+            };
+            if let Some(chat) = &mut slot.chat {
+                chat.close(told.clone());
+            } else {
+                // Read once it is shown, it says so.
+                if let Some(kept) = slot.kept {
+                    let entries = store.entries(kept).map(|entries| entries.len());
+                    if let Ok(number) = entries
+                        && let Err(error) =
+                            store.keep_entry(kept, number, &Entry::Note(told.clone()))
+                    {
+                        tracing::error!("the chat is not kept as it goes: {error:#}");
+                    }
+                }
+            }
+            slot.state = State::Closed;
+            slot.setup = slot.setup.take().map(|setup| Setup {
+                folder: None,
+                sketch: None,
+                policy: Policy::default(),
+                ..setup
+            });
+            if let Some(kept) = slot.kept
+                && let Err(error) =
+                    store.keep_setup(kept, slot.setup.as_ref().map(Setup::to_json).as_deref())
+            {
+                tracing::error!("the chat's setup is not kept: {error:#}");
+            }
+            ended.push((slot.key, told));
+        }
+        // What waits for them hears how they ended.
+        for (ended, told) in &ended {
+            for (_, answer) in self.waiting.extract_if(.., |(waited, _)| waited == ended) {
+                let stands = Waited {
+                    asking: None,
+                    said: Some(told.clone()),
+                };
+                answer.send(Ok(stands)).ok();
+            }
+        }
+        // Each is read again, closed, to go on with in the project.
+        for (ended, _) in ended {
+            self.read_again(ended);
+        }
+        true
+    }
+
+    /// Keeps and tells what changed: each chat's conversation, how each
+    /// chat stands, and the list.
+    fn settle(&mut self) {
+        // What one chat's change does can change another, as a sketch that
+        // ends; each pass looks again, until nothing does.
+        for _ in 0..4 {
+            if !self.review() {
+                break;
+            }
+        }
+        let keys: Vec<u64> = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .filter(|slot| slot.chat.is_some())
+            .map(|slot| slot.key)
+            .collect();
+        for key in keys {
+            let patch = self
+                .slot_mut(key)
+                .and_then(|slot| slot.chat.as_mut())
+                .and_then(Chat::flush);
+            if let Some(patch) = patch {
+                self.tell(FromDaemon::Patch { key, patch });
+            }
+        }
+        self.tell_listing();
+        for key in std::mem::take(&mut self.reveals) {
+            self.tell(FromDaemon::Reveal { key });
+        }
+    }
+
+    /// Tells the window the projects and chats, if they changed since it
+    /// was last told.
+    fn tell_listing(&mut self) {
+        let agents = self.spawns.agents();
+        let listing = Listing {
+            projects: self
+                .projects
+                .iter()
+                .map(|project| ProjectRow {
+                    id: project.id,
+                    name: project.name.clone(),
+                    folder: project.folder.clone(),
+                })
+                .collect(),
+            chats: self
+                .chats
+                .iter()
+                .map(|slot| slot.row(&agents, &self.store))
+                .collect(),
+            archived: self
+                .archived
+                .iter()
+                .map(|slot| slot.row(&agents, &self.store))
+                .collect(),
+        };
+        if self.listed.as_ref() != Some(&listing) {
+            self.tell(FromDaemon::Listing(listing.clone()));
+            self.listed = Some(listing);
+        }
+    }
+
+    /// Follows how each chat stands now: a turn that ends while it is not
+    /// shown leaves it unread, and what it is about names it, unless a name
+    /// that lasts more has. A chat that comes to wait for the human, or
+    /// ends a turn, tells the window, for it to tell the human unless they
+    /// look at it. What waits for a chat that is not at work hears how it
+    /// stands, and a sketch the human ends goes on to its end. Answers
+    /// whether a sketch went on, which may change other chats.
+    fn review(&mut self) -> bool {
+        let mut news = Vec::new();
+        let mut stands = Vec::new();
+        let mut ends = Vec::new();
+        let store = Rc::clone(&self.store);
+        let shown = self.shown;
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            let Some(chat) = &slot.chat else {
+                continue;
+            };
+            let conversation = chat.conversation();
+            let state = conversation.state();
+            let ended = working(slot.state) && !working(state);
+            if ended && shown != Some(slot.key) {
+                slot.unread = true;
+            }
+            let told = if state == State::Asking && slot.state != state {
+                let asked = conversation.asking_for().unwrap_or("permission");
+                Some(format!("Asks you: {asked}"))
+            } else if ended {
+                Some(
+                    conversation
+                        .last_said()
+                        .unwrap_or("The turn ended.")
+                        .to_owned(),
+                )
+            } else {
+                None
+            };
+            slot.state = state;
+            slot.goal = conversation.goal().map(|goal| goal.what().clone());
+            let about = match (conversation.title(), conversation.first_line()) {
+                (Some(title), _) => Some((title.to_owned(), Named::Agent)),
+                (None, Some(line)) => Some((line.to_owned(), Named::FirstLine)),
+                (None, None) => None,
+            };
+            if !at_work(state) {
+                stands.push((slot.key, chat.stands()));
+            }
+            if let Some((name, named)) = about {
+                let name: String = name.chars().take(NAME_LENGTH).collect();
+                // The agent may title its session anew.
+                let lasts = named > slot.named || (named == Named::Agent && slot.named == named);
+                if lasts && name != slot.name {
+                    slot.name_as(&name, named, &store);
+                }
+            }
+            if let Some(body) = told {
+                news.push(FromDaemon::News {
+                    key: slot.key,
+                    name: slot.name.clone(),
+                    body,
+                });
+            }
+            if let Some((sketch_ends, _)) = &slot.ending
+                && !working(state)
+            {
+                ends.push((slot.key, *sketch_ends));
+            }
+        }
+        for message in news {
+            self.tell(message);
+        }
+        for (key, stands) in stands {
+            for (_, answer) in self.waiting.extract_if(.., |(waited, _)| *waited == key) {
+                answer.send(Ok(stands.clone())).ok();
+            }
+        }
+        // A sketch the human ends is summed up once its turn ends, and
+        // ends once that is done.
+        let went_on = !ends.is_empty();
+        for (key, sketch_ends) in ends {
+            match sketch_ends {
+                Ends::Waiting => self.sum_up(key),
+                Ends::Summing => self.finish_sketch(key),
+            }
+        }
+        went_on
+    }
+}
+
+/// The folder an agent that starts as `start` says works in, when its
+/// setup names one.
+fn start_cwd(start: &Start) -> Option<PathBuf> {
+    start.setup().and_then(|setup| setup.folder.clone())
+}
+
+/// The id of the agent the chat kept as `kept` talks to: the one the
+/// human chose, while Cox knows it, or else the one a chat starts with.
+fn agent_of(agents: &Agents, kept: Option<ChatId>, store: &Store) -> String {
+    let chosen = kept.and_then(|kept| {
+        store
+            .agent(kept)
+            .inspect_err(|error| tracing::error!("the chat's agent cannot be read: {error:#}"))
+            .ok()
+            .flatten()
+    });
+    agents.of(chosen.as_deref()).id
+}
+
+/// Makes the folder of a sketch that starts from `sketch`, of the folder
+/// `from`, and answers it.
+fn make_sketch(sketch: Sketch, from: &Path) -> Result<PathBuf, String> {
+    let sketches =
+        storage::path(storage::Kept::Sketches).ok_or("Cox cannot tell where to keep sketches")?;
+    sketch::make(sketch, from, &sketches)
+}
+
+/// Whether an agent that stands as `state` is at work.
+#[must_use]
+pub fn working(state: State) -> bool {
+    matches!(
+        state,
+        State::Busy | State::Asking | State::Stopping | State::Checking
+    )
+}
+
+/// Whether a chat in `state` is at work, so that an agent waiting for it
+/// waits on: not when it waits for the human.
+#[must_use]
+pub fn at_work(state: State) -> bool {
+    matches!(state, State::Busy | State::Stopping | State::Checking)
+}

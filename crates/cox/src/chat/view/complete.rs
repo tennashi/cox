@@ -81,7 +81,7 @@ impl Completion {
                     // A path just started: the files are listed again, as
                     // they are now.
                     if completion.found.is_none()
-                        && let Some(folder) = view.cwd.clone()
+                        && let Some(folder) = view.cwd()
                     {
                         view.completion.listing = Some(list_files(folder, cx));
                     }

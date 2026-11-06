@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::chat::sketch::Sketch as From;
 
@@ -106,7 +106,7 @@ pub struct Sketch {
 }
 
 /// A way a sketch ends, as the menu of the right button offers it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ending {
     /// What the menu calls it.
     pub name: String,

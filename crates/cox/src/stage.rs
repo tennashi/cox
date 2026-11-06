@@ -76,7 +76,6 @@ mod typed;
 use std::path::PathBuf;
 
 use cox_core::list::List;
-use cox_core::store::Record;
 use cox_core::tabs::{KeptTab, KeptTabs};
 use gpui::{App, Context, Entity, Focusable, Subscription, Task, Window, actions, div, prelude::*};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -117,6 +116,9 @@ pub fn bind_keys(cx: &mut App) {
     )]);
 }
 
+/// What keeps a stage's tabs as they change.
+pub type Keep = std::rc::Rc<dyn Fn(&KeptTabs)>;
+
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";
 
@@ -137,8 +139,8 @@ pub struct Stage {
     pages: Option<Pages>,
     /// Whether the stage is open beside the conversation.
     panel: Entity<Panel>,
-    /// Where the tabs are kept as they change, if they are.
-    record: Option<Record>,
+    /// What keeps the tabs as they change, if they are kept.
+    keep: Option<Keep>,
     /// The tabs as they were last kept.
     kept: Option<KeptTabs>,
     /// What carries out what the relay and the agent's tools ask, once
@@ -192,7 +194,7 @@ impl Stage {
             tabs: List::new(),
             pages: None,
             panel,
-            record: None,
+            keep: None,
             kept: None,
             heard: vec![answering, answering_calls],
         }
@@ -201,12 +203,12 @@ impl Stage {
     /// The chat's agent starts: from now on, the stage
     /// tells `relay` of its pages, those open and those it opens, carries
     /// out what the agent's tools ask in `from_tools`, and keeps its tabs
-    /// in `record`.
+    /// with `keep`, each when given.
     pub fn work(
         &mut self,
         relay: Option<Relay>,
         from_tools: Option<UnboundedReceiver<ToolRequest>>,
-        record: Option<Record>,
+        keep: Option<Keep>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -222,7 +224,9 @@ impl Stage {
         if let Some(from_tools) = from_tools {
             self.heard.push(Self::hear_tools(from_tools, window, cx));
         }
-        self.record = record;
+        if keep.is_some() {
+            self.keep = keep;
+        }
         self.changed(cx);
     }
 
@@ -297,12 +301,10 @@ impl Stage {
     /// The tabs, or what one of them shows, changed: keep them, if they are
     /// kept, and draw them again.
     fn changed(&mut self, cx: &mut Context<Self>) {
-        if let Some(record) = &self.record {
+        if let Some(keep) = &self.keep {
             let tabs = self.tabs(cx);
             if self.kept.as_ref() != Some(&tabs) {
-                if let Err(error) = record.tabs(&tabs) {
-                    tracing::error!("the stage's tabs are not kept: {error:#}");
-                }
+                keep(&tabs);
                 self.kept = Some(tabs);
             }
         }
