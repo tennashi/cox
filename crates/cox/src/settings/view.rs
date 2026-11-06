@@ -125,7 +125,7 @@ impl SettingsView {
                     "The folder of how you work with Cox, whatever the project: its COX.md, \
                      which every chat's agent is told first, and its sketch/ and wiki/, what Cox \
                      tells the agent in your place.",
-                    crate::storage::path(crate::storage::Kept::Workflow),
+                    Some(crate::settings::Folder::Workflow.in_home()),
                     words.clone(),
                     cx,
                 )
@@ -136,7 +136,7 @@ impl SettingsView {
                     "WIKI",
                     "The folder of your wiki, one for all your projects, where the agents keep \
                      what they learned, as an Obsidian vault or a Git repository of yours.",
-                    Some(crate::settings::home_wiki()),
+                    Some(crate::settings::Folder::Wiki.in_home()),
                     words.clone(),
                     cx,
                 )
@@ -222,9 +222,12 @@ impl SettingsView {
             .update(cx, |input, cx| input.set_text(&shown, cx));
         self.home.clone_from(&folder);
         self.given = false;
-        // The wiki the settings name none of is the new home's.
-        self.wiki.update(cx, |wiki, cx| {
-            wiki.set_fallback(crate::settings::home_wiki(), cx);
+        // The folders the settings name none of are the new home's.
+        self.workflow.update(cx, |field, cx| {
+            field.set_fallback(super::Folder::Workflow.in_home(), cx);
+        });
+        self.wiki.update(cx, |field, cx| {
+            field.set_fallback(super::Folder::Wiki.in_home(), cx);
         });
         self.tell(Told::Set, cx);
         cx.emit(HomeChanged(folder));

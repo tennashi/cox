@@ -63,7 +63,7 @@ const OWN: [&Text; 4] = [&SKETCH_START, &SKETCH_OPENED, &SKETCH_DISCARD, &WIKI_S
 /// `None` when neither has it.
 #[must_use]
 pub fn say(name: &str, values: &[(&str, &str)]) -> Option<String> {
-    say_in(crate::settings::workflow().as_deref(), name, values)
+    say_in(Some(crate::settings::workflow().as_path()), name, values)
 }
 
 /// As [`say`], with the human's workflow in `workflow`.
@@ -179,7 +179,7 @@ const OWN_SKETCH: &str = include_str!("workflow/sketch.json");
 /// else as Cox's own does.
 #[must_use]
 pub fn sketch() -> Sketch {
-    sketch_in(crate::settings::workflow().as_deref())
+    sketch_in(Some(crate::settings::workflow().as_path()))
 }
 
 /// As [`sketch`], with the human's workflow in `workflow`. What cannot be
@@ -228,7 +228,7 @@ impl Text {
     /// names they stand for.
     #[must_use]
     pub fn say(&self, values: &[(&str, &str)]) -> String {
-        self.say_in(crate::settings::workflow().as_deref(), values)
+        self.say_in(Some(crate::settings::workflow().as_path()), values)
     }
 
     /// As [`Self::say`], with the human's workflow in `workflow`.
