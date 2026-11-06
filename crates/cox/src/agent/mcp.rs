@@ -196,6 +196,8 @@ pub enum ChatRequest {
 pub struct Whereabouts {
     /// The chat's project, by its name.
     pub project: String,
+    /// Whether the chat is in a project, not in the home.
+    pub in_project: bool,
     /// The chat, by its name.
     pub chat: String,
     /// The number the chat is kept by, if it is kept.
@@ -655,7 +657,7 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 12);
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 15);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);

@@ -1326,6 +1326,8 @@ impl Daemon {
                     .slot(key)
                     .map(|slot| Whereabouts {
                         project: self.projects[slot.project].name.clone(),
+                        // The home is the first, and no project.
+                        in_project: slot.project != 0,
                         chat: slot.name.clone(),
                         kept: slot.kept.map(|kept| kept.to_string()),
                     })

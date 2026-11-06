@@ -2,7 +2,7 @@
 //! the MCP server Cox hands it.
 
 use std::io::{BufRead as _, BufReader, Lines, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -209,6 +209,7 @@ fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServ
             if let ChatRequest::Whereabouts { answer } = request {
                 let _ = answer.send(Whereabouts {
                     project: project.clone(),
+                    in_project: true,
                     chat: chat.clone(),
                     kept: Some("7".to_owned()),
                 });
@@ -306,8 +307,59 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     let found = writer.hear();
     let found = found["result"]["content"][0]["text"].as_str().unwrap();
     assert!(found.contains("customers: Customers"), "{found}");
+
+    sources_are_kept_apart_from_the_wiki(&mut writer, &mut reader, &home);
     drop((writer, reader));
     for folder in [data, one, other] {
         std::fs::remove_dir_all(folder).unwrap();
     }
+}
+
+/// What a chat reads is kept apart from the wiki, in the home's `raw`,
+/// for any chat to find again.
+fn sources_are_kept_apart_from_the_wiki(writer: &mut Agent, reader: &mut Agent, home: &Path) {
+    writer.call(
+        11,
+        "raw_keep",
+        &json!({
+            "topic": "gpui-news",
+            "from": "https://docs.rs/gpui/latest/gpui/",
+            "title": "gpui docs",
+            "text": "Overflow scrolls only inside a bounded height.\n",
+        }),
+    );
+    let kept = writer.hear();
+    let kept = kept["result"]["content"][0]["text"].as_str().unwrap();
+    let name = kept
+        .strip_prefix("The source is kept as ")
+        .and_then(|rest| rest.split(", in ").next())
+        .unwrap_or_else(|| panic!("{kept}"));
+    assert!(
+        name.starts_with("gpui-news/") && name.ends_with("-gpui-docs"),
+        "{kept}"
+    );
+    assert!(home.join(format!("raw/{name}.md")).is_file(), "{kept}");
+    reader.call(12, "wiki_search", &json!({ "query": "bounded height" }));
+    let found = reader.hear();
+    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(found.starts_with("No page of the wiki"), "{found}");
+    reader.call(13, "raw_search", &json!({ "query": "bounded height" }));
+    let found = reader.hear();
+    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(found.contains(&format!("{name}: gpui docs")), "{found}");
+    reader.call(14, "raw_read", &json!({ "topic": "gpui-news" }));
+    let listed = reader.hear();
+    let listed = listed["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(listed.ends_with(&format!("first:\n{name}")), "{listed}");
+    reader.call(15, "raw_read", &json!({ "source": name }));
+    let read = reader.hear();
+    let read = read["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        read.contains("chat: \"Fix scroll\"\nchat_id: 7\nproject: \"one\"\n"),
+        "{read}"
+    );
+    assert!(
+        read.ends_with("# gpui docs\n\nOverflow scrolls only inside a bounded height.\n"),
+        "{read}"
+    );
 }

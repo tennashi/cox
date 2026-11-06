@@ -8,6 +8,8 @@
 //! where the human keeps how they work with Cox, whatever the project, as
 //! `{"workflow": "~/dotfiles/cox"}`, and where their wiki is, as
 //! `{"wiki": "~/notes/cox"}`, or else each in the home (see [`Folder`]),
+//! and where what the agents read is kept, as `{"raw": "~/notes/raw"}`,
+//! or else `raw` in the home (see [`raw`]),
 //! and what language
 //! they read it, and what they select, in, as `{"translation":
 //! {"language": "Japanese"}}` (see [`translation`]), and the agent a new
@@ -51,6 +53,8 @@ pub struct Saved {
     pub workflow: Option<PathBuf>,
     /// The folder of the human's wiki, if they named one.
     pub wiki: Option<PathBuf>,
+    /// The folder what the agents read is kept in, if they named one.
+    pub raw: Option<PathBuf>,
     /// How the human reads the wiki, and what they select, in a language
     /// of their own, if they named one.
     pub translation: Option<Translation>,
@@ -169,6 +173,7 @@ impl Saved {
         };
         let workflow = folder("workflow");
         let wiki = folder("wiki");
+        let raw = folder("raw");
         let translation = match value.get("translation") {
             None | Some(Value::Null) => None,
             Some(translation) => Translation::of(translation)
@@ -187,6 +192,7 @@ impl Saved {
             home,
             workflow,
             wiki,
+            raw,
             translation,
             agent,
         })
@@ -343,6 +349,16 @@ pub fn workflow() -> PathBuf {
 #[must_use]
 pub fn wiki() -> PathBuf {
     Folder::Wiki.path()
+}
+
+/// The folder what the agents read is kept in (see [`crate::raw`]): the
+/// one the settings name, or else `raw` in the home.
+#[must_use]
+pub fn raw() -> PathBuf {
+    let saved = Saved::read();
+    saved
+        .raw
+        .unwrap_or_else(|| home_for_chats(saved.home).join(crate::raw::RAW))
 }
 
 /// The folder `name` in `home`, unless there is none, and `earlier` is
@@ -627,6 +643,8 @@ mod tests {
         assert_eq!(saved.wiki, Some(PathBuf::from("/srv/notes")));
         assert_eq!(saved.workflow, Some(PathBuf::from("/srv/cox")));
         assert_eq!(Saved::parse(br#"{"wiki": "notes"}"#).unwrap().wiki, None);
+        let saved = Saved::parse(br#"{"raw": "/srv/raw"}"#).unwrap();
+        assert_eq!(saved.raw, Some(PathBuf::from("/srv/raw")));
     }
 
     #[test]
