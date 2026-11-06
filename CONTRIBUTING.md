@@ -60,7 +60,12 @@ own, showing `<url>` first. Cox opened with no `<agent command>`, as the
 Finder, the Dock or a launcher such as Raycast opens an app, starts the
 agent `settings.json` names, by its name in `agents.json` (see below),
 as `{"agent": "Claude"}`; with none named, or one `agents.json` does not
-list, a chat says so as its agent fails to start. On macOS, such a Cox
+list, a chat says so as its agent fails to start. Cox reads
+`settings.json` and `agents.json` again as they change, as when the
+human edits them while it runs: a chat opened from then on, or an agent
+chosen, is of the agents they list and name then, and a chat in no
+project opened then works in the home they set, while a chat open goes on with its
+agent as it was. On macOS, such a Cox
 takes in the environment of the human's login shell first, `$SHELL -l
 -i`, as their terminal has it, since launchd gives an app only
 `/usr/bin:/bin:/usr/sbin:/sbin` as its `PATH`, where `npx` is not. Ahead of the first line sent in the chat, the

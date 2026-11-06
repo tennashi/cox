@@ -869,6 +869,16 @@ impl Workspace {
         &self.projects[0].folder
     }
 
+    /// Has the chats in no project opened from now on work in `home`, as
+    /// `settings.json` names it now, unless `--home` gave the home for
+    /// this run.
+    pub fn follow_home(&mut self, home: PathBuf, cx: &mut Context<Self>) {
+        if !self.home_given && self.projects[0].folder != home {
+            self.projects[0].folder = home;
+            cx.notify();
+        }
+    }
+
     /// The settings screen, while it is open.
     #[must_use]
     pub fn settings(&self) -> Option<&Entity<SettingsView>> {

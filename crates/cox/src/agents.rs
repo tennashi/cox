@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use anyhow::Context as _;
 use serde::Deserialize;
 
 pub use download::Download;
@@ -97,6 +98,8 @@ pub struct Agents(Arc<Mutex<Lists>>);
 
 /// The human's agents, and the registry's.
 struct Lists {
+    /// The agent of the command line, if it gives one.
+    command: Vec<String>,
     own: Vec<Known>,
     listed: Vec<Known>,
 }
@@ -107,7 +110,7 @@ impl Agents {
     /// registry.
     #[must_use]
     pub fn new(command: Vec<String>, own: Vec<Known>, listed: Vec<Known>) -> Self {
-        Self::first(Known::of_command(command), own, listed)
+        Self::arranged(command, None, own, listed)
     }
 
     /// The agents of `named`, the one of `own` a new chat talks to, then
@@ -115,24 +118,24 @@ impl Agents {
     /// name, as [`Self::new`] has them with no command, which a chat says
     /// it cannot start.
     #[must_use]
-    pub fn named(named: &str, mut own: Vec<Known>, listed: Vec<Known>) -> Self {
-        let Some(at) = own.iter().position(|known| known.name == named) else {
-            tracing::error!("agents.json lists no agent named {named}, which settings.json names");
-            return Self::new(Vec::new(), own, listed);
-        };
-        let first = own.remove(at);
-        Self::first(first, own, listed)
+    pub fn named(named: &str, own: Vec<Known>, listed: Vec<Known>) -> Self {
+        Self::arranged(Vec::new(), Some(named), own, listed)
     }
 
-    /// The agents of `first`, then `own`, then `listed`.
-    fn first(first: Known, own: Vec<Known>, listed: Vec<Known>) -> Self {
-        let mut all = vec![first];
-        for known in own {
-            if all.iter().all(|other| other.id != known.id) {
-                all.push(known);
-            }
-        }
-        Self(Arc::new(Mutex::new(Lists { own: all, listed })))
+    /// The agents of `command`, or of `named` with none, then `own`, then
+    /// `listed`.
+    fn arranged(
+        command: Vec<String>,
+        named: Option<&str>,
+        own: Vec<Known>,
+        listed: Vec<Known>,
+    ) -> Self {
+        let own = first(&command, named, own);
+        Self(Arc::new(Mutex::new(Lists {
+            command,
+            own,
+            listed,
+        })))
     }
 
     /// The agents of `command`, the agent of the command line, with those
@@ -142,15 +145,10 @@ impl Agents {
     /// that `named` names, as `settings.json` names it.
     #[must_use]
     pub fn read(command: Vec<String>, named: Option<&str>) -> Self {
-        let own = crate::storage::path(crate::storage::Kept::Agents)
-            .filter(|path| path.exists())
-            .map(|path| {
-                read_own(&path).unwrap_or_else(|error| {
-                    tracing::error!("the agents of {} are left out: {error:#}", path.display());
-                    Vec::new()
-                })
-            })
-            .unwrap_or_default();
+        let own = own().unwrap_or_else(|error| {
+            tracing::error!("the agents the human lists are left out: {error:#}");
+            Vec::new()
+        });
         let listed = registry_path()
             .and_then(|path| std::fs::read_to_string(path).ok())
             .map(|text| {
@@ -160,10 +158,25 @@ impl Agents {
                 })
             })
             .unwrap_or_default();
-        match named {
-            Some(named) if command.is_empty() => Self::named(named, own, listed),
-            _ => Self::new(command, own, listed),
+        Self::arranged(command, named, own, listed)
+    }
+
+    /// Reads `agents.json` again, as the human changed it, the agent a
+    /// new chat talks to being, with no command, the one `named` names now,
+    /// as `settings.json` names it. When it cannot be read, as while it is
+    /// written, the agents stay as they were.
+    pub fn reload(&self, named: Option<&str>) {
+        match own() {
+            Ok(own) => self.relist(named, own),
+            Err(error) => tracing::warn!("the agents stay as they were: {error:#}"),
         }
+    }
+
+    /// Lists `own` as the human's agents from now on, after the agent of
+    /// the command line, or with none, the one of them `named` names.
+    fn relist(&self, named: Option<&str>, own: Vec<Known>) {
+        let mut lists = self.lock();
+        lists.own = first(&lists.command, named, own);
     }
 
     /// Fetches the registry on a thread of its own, and lists its agents
@@ -262,6 +275,41 @@ fn read_own(path: &Path) -> anyhow::Result<Vec<Known>> {
             download: None,
         })
         .collect())
+}
+
+/// The agents of `command`, the agent of the command line, or with none,
+/// of the one of `own` that `named` names, then the rest of `own`.
+fn first(command: &[String], named: Option<&str>, mut own: Vec<Known>) -> Vec<Known> {
+    let at = named.filter(|_| command.is_empty()).and_then(|named| {
+        let at = own.iter().position(|known| known.name == named);
+        if at.is_none() {
+            tracing::error!("agents.json lists no agent named {named}, which settings.json names");
+        }
+        at
+    });
+    let first = match at {
+        Some(at) => own.remove(at),
+        None => Known::of_command(command.to_vec()),
+    };
+    let mut all = vec![first];
+    for known in own {
+        if all.iter().all(|other| other.id != known.id) {
+            all.push(known);
+        }
+    }
+    all
+}
+
+/// The agents the human lists in `agents.json`, none when there is no
+/// such file.
+fn own() -> anyhow::Result<Vec<Known>> {
+    let Some(path) = crate::storage::path(crate::storage::Kept::Agents) else {
+        return Ok(Vec::new());
+    };
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    read_own(&path).with_context(|| format!("{} cannot be read", path.display()))
 }
 
 /// Where Cox keeps the registry as it fetched it last.
@@ -545,6 +593,31 @@ mod tests {
         assert_eq!(ids(&agents), ["", "Codex"]);
         assert_eq!(agents.of(None).name, "No agent");
         assert_eq!(agents.of(None).command, Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_humans_agents_are_listed_again_as_they_change_them() {
+        let own = |name: &str| Known {
+            id: name.to_owned(),
+            name: name.to_owned(),
+            command: args("my-agent --acp"),
+            listed: false,
+            download: None,
+        };
+        let ids = |agents: &Agents| -> Vec<String> {
+            agents.all().into_iter().map(|known| known.id).collect()
+        };
+        let agents = Agents::named("Claude", vec![own("Claude")], Vec::new());
+        agents.relist(Some("Codex"), vec![own("Claude"), own("Codex")]);
+        assert_eq!(ids(&agents), ["Codex", "Claude"]);
+        agents.relist(None, vec![own("Claude")]);
+        assert_eq!(ids(&agents), ["", "Claude"]);
+
+        // The agent of the command line stays first, whatever the
+        // settings name.
+        let agents = Agents::new(args("cox-fake-agent tour"), Vec::new(), Vec::new());
+        agents.relist(Some("Claude"), vec![own("Claude")]);
+        assert_eq!(ids(&agents), ["cox-fake-agent", "Claude"]);
     }
 
     #[test]

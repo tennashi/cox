@@ -18,7 +18,12 @@ pub struct Stamp {
 }
 
 impl Stamp {
-    fn of(path: &Path) -> std::io::Result<Self> {
+    /// When the file at `path` last changed, and how long it is.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be looked at, as when there is none.
+    pub fn of(path: &Path) -> std::io::Result<Self> {
         let metadata = std::fs::metadata(path)?;
         Ok(Self {
             modified: metadata.modified()?,

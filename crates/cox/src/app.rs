@@ -175,7 +175,7 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
             from.display()
         );
     }
-    let home = home_for_chats(home);
+    let home = crate::settings::home_for_chats(home);
     // Opened from the Finder, the Dock or a launcher, Cox is given no
     // command, and starts the agent the settings name.
     let named = settings
@@ -186,6 +186,7 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
     let agents = Agents::read(settings.command, named.as_deref());
     agents.fetch();
     crate::translate::start(agents.clone());
+    let followed = agents.clone();
     let launcher = Launcher {
         agents,
         stage: settings.stage,
@@ -207,28 +208,14 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
             quit_when_asked(cx);
             shut_down_on_quit(cef, cx);
             let window = open_window(home, home_given, store, launcher, cx);
+            crate::settings::follow(window, followed, cx);
             crate::inspect::start(window, devtools, cx);
         });
     ExitCode::SUCCESS
 }
 
-/// The folder chats in no project work in, in the home directory, unless
-/// the human chose another.
-const HOME: &str = "cox";
-
-/// The name an earlier Cox gave [`HOME`].
+/// The name an earlier Cox gave the home, `~/cox` now.
 const EARLIER_HOME: &str = "Cox";
-
-/// Where chats in no project work: `home`, or `~/cox`, as an absolute
-/// path, which the agent needs.
-fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
-    let home = home.unwrap_or_else(|| {
-        std::env::var_os("HOME")
-            .map_or_else(std::env::temp_dir, PathBuf::from)
-            .join(HOME)
-    });
-    std::path::absolute(&home).unwrap_or(home)
-}
 
 /// Renames the home an earlier Cox made in `user`, the home directory,
 /// `Cox`, to what Cox names it now, `cox`, unless there is a `cox` there
@@ -239,10 +226,12 @@ fn lowercase_home(user: &Path) -> Option<(PathBuf, PathBuf)> {
         .ok()?
         .filter_map(|entry| Some(entry.ok()?.file_name()))
         .collect();
-    if !names.iter().any(|name| name == EARLIER_HOME) || names.iter().any(|name| name == HOME) {
+    if !names.iter().any(|name| name == EARLIER_HOME)
+        || names.iter().any(|name| name == crate::settings::HOME)
+    {
         return None;
     }
-    let (from, to) = (user.join(EARLIER_HOME), user.join(HOME));
+    let (from, to) = (user.join(EARLIER_HOME), user.join(crate::settings::HOME));
     if !std::fs::symlink_metadata(&from).is_ok_and(|metadata| metadata.is_dir()) {
         return None;
     }
@@ -495,8 +484,11 @@ mod tests {
         let Some(home) = std::env::var_os("HOME") else {
             return;
         };
-        assert_eq!(super::home_for_chats(None), PathBuf::from(home).join("cox"));
-        assert!(super::home_for_chats(Some("relative".into())).is_absolute());
+        assert_eq!(
+            crate::settings::home_for_chats(None),
+            PathBuf::from(home).join("cox")
+        );
+        assert!(crate::settings::home_for_chats(Some("relative".into())).is_absolute());
     }
 
     #[test]
