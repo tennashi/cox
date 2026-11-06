@@ -5,7 +5,8 @@
 - `cargo xtask setup` installs the pinned development tools.
 - `cargo xtask ci` runs every check. A change is ready only when it passes.
 - `cargo xtask install` builds Cox for release and installs it apart from
-  `target/` (see [Using Cox to build Cox](#using-cox-to-build-cox)).
+  `target/`, with coxd started at login (see
+  [Using Cox to build Cox](#using-cox-to-build-cox) and [coxd](#coxd)).
 - `cargo xtask run` builds Cox and runs it with a fake agent, apart from
   what it kept before (see [A fake agent](#a-fake-agent)).
 
@@ -1047,6 +1048,20 @@ same program and the same data folder, in a process group of its own,
 so that a Control-C in the terminal the window started from leaves it.
 `--home` and the `<agent command>` of the window go to coxd as it comes,
 for the chats it opens from then on.
+
+So that the chats, and the schedules (see [Schedules](#schedules)), run
+from the time the human logs in, without a window opening first,
+`cargo xtask install` has the installed Cox's coxd start at login: on
+macOS, a launch agent, `~/Library/LaunchAgents/com.github.tennashi.cox.coxd.plist`,
+which launchd loads at once too, starting coxd unless one runs already;
+on Linux, a unit of systemd's user manager,
+`~/.config/systemd/user/coxd.service`, which starts at the next login.
+Neither starts coxd again once it stops: a window that finds none
+starts one, as it does without them. A coxd launchd starts takes in the
+environment of the human's login shell, as a Cox the Finder opens does
+(see [The stage](#the-stage)). To have it start at login no more,
+`launchctl bootout gui/$(id -u)/com.github.tennashi.cox.coxd` and take
+the file away, or `systemctl --user disable coxd.service`.
 
 coxd takes one window at a time: a second Cox from the same place says
 another window has the chats, and stops. The window closing leaves
