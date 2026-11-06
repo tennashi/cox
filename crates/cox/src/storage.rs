@@ -74,11 +74,14 @@ pub enum Kept {
     /// The socket the window reaches coxd on, which runs the chats (see
     /// [`crate::daemon::process`]).
     Daemon,
+    /// When each of the human's schedules last ran (see
+    /// [`crate::schedule`]).
+    Schedules,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Settings,
         Self::Agents,
         Self::Workflow,
@@ -92,6 +95,7 @@ impl Kept {
         Self::Logs,
         Self::Inspect,
         Self::Daemon,
+        Self::Schedules,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -111,6 +115,7 @@ impl Kept {
             Self::Logs => "logs",
             Self::Inspect => "run/inspect.sock",
             Self::Daemon => "run/coxd.sock",
+            Self::Schedules => "state/schedules.json",
         }
     }
 

@@ -32,7 +32,7 @@ gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 image = "0.25.10"
 # The time each run's file of what Cox says is named after: see
 # `src/logs.rs`.
-jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 # Reading the agent's replies as Markdown: see `src/ui/markdown.rs`; and
 # the wiki's pages as HTML, for the stage's Wiki plugin: see
 # `src/wiki/told.rs`.

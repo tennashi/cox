@@ -197,7 +197,8 @@ pub fn pages(root: &Path) -> Vec<String> {
 
 /// `page` as its properties, the lines of the front matter between the
 /// `---` lines at its top, as Obsidian keeps them, and the rest of it.
-fn front(page: &str) -> (Vec<&str>, &str) {
+#[must_use]
+pub fn front(page: &str) -> (Vec<&str>, &str) {
     let Some(rest) = page
         .strip_prefix("---\n")
         .or_else(|| page.strip_prefix("---\r\n"))
@@ -215,7 +216,8 @@ fn front(page: &str) -> (Vec<&str>, &str) {
 }
 
 /// The value of the property `line` sets, if it sets `key`.
-fn property<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+#[must_use]
+pub fn property<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let (named, value) = line.split_once(':')?;
     (named.trim() == key).then(|| value.trim())
 }

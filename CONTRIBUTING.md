@@ -962,7 +962,8 @@ kind is kept apart
   move into the home); beside them `sketches`, the folders the sketches
   work in, and `logs`;
 - in `state`, what Cox would lose: the chats, in a SQLite database,
-  `chats.sqlite`, and the stage's profile, `stage`;
+  `chats.sqlite`, the stage's profile, `stage`, and when each schedule
+  last ran, `schedules.json`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it
   downloads, in `agents`, and `translations`;
 - in `run`, what is there only while Cox runs: `coxd.sock` and
@@ -1033,6 +1034,50 @@ replaced since it started, as `cargo xtask install` replaces it, and
 no chat is at work, the next window to come has it stop, and starts the
 new one; while a chat is at work, it goes on as it was, until a window
 comes once none is.
+
+## Schedules
+
+The human has an agent run on a schedule, with no human there: a chat
+that opens at the times they say and goes on its first line, as to find
+out every morning what changed in what they follow. Each is a file of
+their workflow (see [The stage](#the-stage)), in `schedules`, named
+after it, as `schedules/rust-news.md`, whose properties, the front
+matter between `---` lines at its top, say when it runs, where its chat
+works and what its agent does unasked, and whose rest is the chat's
+first line:
+
+```markdown
+---
+every: daily 09:00
+folder: ~/notes
+allow:
+  - fetch:*
+  - search:*
+---
+
+Find out what changed in Rust since {last}.
+```
+
+`every` is `daily` and a time, `weekly`, a day, as `mon`, and a time,
+or `every` and a number of hours, as `every 6h`, in the time of the
+place Cox runs in. `folder`, whole or from `~`, is where the chat works,
+in the project of that folder, which Cox makes if it is not there; with
+none, the chat works in the home, in no project. `allow` lists the
+patterns of the permission requests Cox answers in the human's place,
+as `open_chat`'s `allow` takes them (see [The stage](#the-stage)); the
+rest the agent asks the human, as any chat does. In the first line,
+`{name}` stands for the schedule's name, `{now}` for when it runs, and
+`{last}` for when it ran last, or `never`.
+
+Every minute, coxd (see [coxd](#coxd)) runs each schedule that is due,
+whether a window is there or not: one that never ran at once, and one a
+run of which Cox missed, as while the machine slept, once, however many
+it missed; while the chat of its last run is at work, it waits. A run
+is a chat named after the schedule and when it ran, as
+`rust-news 11/06 09:00`, whose first line goes in the human's place.
+When each schedule last ran is kept in `state/schedules.json` in Cox's
+data folder. A schedule whose `every` or `folder` Cox cannot read is
+said in coxd's log, and does not run.
 
 ## What Cox keeps of each run
 

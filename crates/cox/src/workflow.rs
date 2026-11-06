@@ -243,7 +243,8 @@ impl Text {
 
 /// `text` with each `{name}` of `values` in place, in one pass, so that a
 /// value that holds a name in braces stays as it is.
-fn fill(text: &str, values: &[(&str, &str)]) -> String {
+#[must_use]
+pub fn fill(text: &str, values: &[(&str, &str)]) -> String {
     let mut filled = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(open) = rest.find('{') {
