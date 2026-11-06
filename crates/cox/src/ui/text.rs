@@ -166,7 +166,7 @@ impl Reading {
 
     /// Writes entry `entry` of the text, showing what of it is selected.
     #[must_use]
-    pub fn writer(&self, entry: usize) -> Writer<'_> {
+    pub fn writer(&self, entry: usize) -> Writer {
         Writer::new(&self.painted, self.selection, entry)
     }
 
@@ -215,6 +215,16 @@ impl Reading {
     /// The button came up away from the text.
     pub fn stop(&mut self) {
         self.selecting = false;
+    }
+
+    /// Whether `position` is on the text that shows, not beside it.
+    #[must_use]
+    pub fn is_on_text(&self, position: Point<Pixels>) -> bool {
+        self.painted
+            .0
+            .borrow()
+            .iter()
+            .any(|text| text.visible.contains(&position))
     }
 
     /// Lets go of what is selected: answers whether something was.
@@ -401,19 +411,19 @@ impl IntoElement for SelectableText {
 
 /// Makes the pieces of text of one entry of a view's text, such as one of
 /// the conversation, numbering them in order.
-pub struct Writer<'a> {
-    painted: &'a Painted,
+pub struct Writer {
+    painted: Painted,
     selection: Option<Selection>,
     entry: usize,
     part: usize,
 }
 
-impl<'a> Writer<'a> {
+impl Writer {
     /// Writes entry `entry`, showing what of it `selection` selects.
     #[must_use]
-    pub fn new(painted: &'a Painted, selection: Option<Selection>, entry: usize) -> Self {
+    pub fn new(painted: &Painted, selection: Option<Selection>, entry: usize) -> Self {
         Self {
-            painted,
+            painted: painted.clone(),
             selection,
             entry,
             part: 0,

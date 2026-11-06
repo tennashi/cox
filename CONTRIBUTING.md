@@ -70,7 +70,8 @@ set, the folders of the human's workflow and wiki (see below), kept from
 translation (see below): the language, which, emptied, turns it off, and
 what translates, the agent a new chat talks to, one of the human's, or
 a command on one line, as an agent's. What else the files hold stays as
-it is. Escape, the ×, or a click beside the card closes it. Each chat starts its own
+it is. What the card says is selected and copied as the conversation's
+text is. Escape, the ×, or a click beside the card closes it. Each chat starts its own
 `<agent command>` working in its project's folder, and has a stage of its
 own, showing `<url>` first. Cox opened with no `<agent command>`, as the
 Finder, the Dock or a launcher such as Raycast opens an app, starts the
@@ -449,8 +450,8 @@ and a chip "As written" over it to read it as the agent wrote it. It
 is translated a block at a time, its paragraphs, headings, lists,
 quotes and tables, as it is opened, and not its code or the HTML it
 holds. Text selected anywhere in the window, in the conversation, an
-input, a tab of code or Markdown, a terminal, or a page of the stage,
-is translated with "Translate" in the menu the right button opens on
+input, the settings, a tab of code or Markdown, a terminal, or a page
+of the stage, is translated with "Translate" in the menu the right button opens on
 it, with "Copy", a tab of code's own menu having "Translate", and Cox's
 menu showing on a page in place of the browser's; or, but on a page,
 with Command-Shift-T (Control-Shift-T off macOS). A card by the mouse

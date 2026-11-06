@@ -7,11 +7,12 @@
 use std::path::PathBuf;
 
 use gpui::{
-    Context, Entity, FontWeight, PathPromptOptions, SharedString, Subscription, Window, div,
-    prelude::*, px, rgb,
+    Context, Entity, PathPromptOptions, SharedString, Subscription, Window, div, prelude::*, px,
+    rgb,
 };
 use serde_json::Value;
 
+use super::words::Words;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
@@ -31,17 +32,20 @@ pub struct FolderField {
     kept: Option<Value>,
     /// What the line under the input says, and in which color.
     told: Option<(String, u32)>,
+    words: Words,
     _submitted: Subscription,
 }
 
 impl FolderField {
     /// The field of `key`, headed `title`, saying `about`, which goes by
-    /// `fallback` when the settings name no folder.
+    /// `fallback` when the settings name no folder, writing what it says
+    /// in `words`.
     pub fn new(
         key: &'static str,
         title: &'static str,
         about: &'static str,
         fallback: Option<PathBuf>,
+        words: Words,
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| {
@@ -60,6 +64,7 @@ impl FolderField {
             input,
             kept: None,
             told: None,
+            words,
             _submitted: submitted,
         };
         field.reread(cx);
@@ -163,23 +168,13 @@ impl Render for FolderField {
             )
         });
         let choose: SharedString = format!("choose-{key}").into();
+        let mut words = self.words.part();
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(FAINT))
-                    .child(self.title),
-            )
-            .child(
-                div()
-                    .text_size(px(13.))
-                    .text_color(rgb(DIM))
-                    .child(self.about),
-            )
+            .child(words.heading(self.title))
+            .child(words.about(self.about))
             .child(
                 div()
                     .mt_1()
@@ -222,6 +217,6 @@ impl Render for FolderField {
                             .on_click(cx.listener(|_, _, window, cx| Self::choose(window, cx))),
                     ),
             )
-            .child(div().text_size(px(12.)).text_color(rgb(color)).child(told))
+            .child(words.note(&told, color))
     }
 }
