@@ -329,6 +329,8 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
             KeptTab::Flow { call } => format!("flow of tool call {call}"),
             KeptTab::Android { device } => format!("android emulator {device}"),
             KeptTab::AndroidDevices => "android devices".to_owned(),
+            KeptTab::MacWindow { app, title } => format!("mac window {app} {title:?}"),
+            KeptTab::MacWindows => "mac windows".to_owned(),
             KeptTab::Parts => "parts the chat ran with".to_owned(),
             KeptTab::Terminal { title } => format!("terminal {title:?}"),
         };

@@ -8,24 +8,17 @@
 //! The emulator Cox started stops as its tab closes, or as Cox quits,
 //! saving its state for its next start; one that ran already goes on.
 
-use std::sync::Arc;
-
-use cox_android::device::{Boot, Device, Event, Frame, Input, Status};
+use cox_android::device::{Boot, Device, Event, Input, Status};
 use cox_core::tabs::KeptTab;
 use gpui::{
-    App, Bounds, Context, Corners, DispatchPhase, Element, ElementId, Entity, FocusHandle,
-    Focusable, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, RenderImage, ScrollDelta, ScrollWheelEvent, Style, Subscription, Task, Window, div,
-    fill, point, prelude::*, px, relative, rgb, size,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, Subscription, Task,
+    Window, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::stage::mirror::{Button, Display, Mirrored, Press, Screen};
 use crate::stage::tab::Shows;
 use crate::ui::theme::{BORDER, BUTTON, DIM, FAILED, FOREGROUND, RAISED, SELECTED};
-
-/// How many logical pixels one line of a wheel scroll is.
-const LINE_HEIGHT: f32 = 40.;
 
 /// How far one click of a mouse's wheel turns it, as the emulator counts.
 const WHEEL_CLICK: f32 = 120.;
@@ -36,16 +29,8 @@ pub struct Android {
     /// The emulator, while the tab talks to one.
     device: Option<Device>,
     status: Status,
-    /// The display as last uploaded to the GPU.
-    image: Option<Arc<RenderImage>>,
-    /// A frame that came, waiting to be uploaded as the tab is drawn.
-    frame: Option<Frame>,
-    /// The size the emulator was last asked to draw at, in pixels.
-    asked: Option<(u32, u32)>,
-    /// Where the display was drawn last, in the window.
-    drawn: Option<Bounds<Pixels>>,
-    /// Whether the mouse's button touches the display.
-    touching: bool,
+    /// The display, as it came last.
+    screen: Screen,
     focus_handle: FocusHandle,
     /// Hears the emulator, while the tab talks to one.
     hearing: Option<Task<()>>,
@@ -67,11 +52,7 @@ impl Android {
             name,
             device: None,
             status: Status::Ended("Not running".to_owned()),
-            image: None,
-            frame: None,
-            asked: None,
-            drawn: None,
-            touching: false,
+            screen: Screen::default(),
             focus_handle: cx.focus_handle(),
             hearing: None,
             _quit: quit,
@@ -99,7 +80,7 @@ impl Android {
     pub fn open(&mut self, boot: Boot, cx: &mut Context<Self>) {
         let (device, events) = Device::open(cox_android::sdk::emulator(), &self.name, boot);
         self.device = Some(device);
-        self.asked = None;
+        self.screen.ask_again();
         self.hearing = Some(Self::hear(events, cx));
         cx.notify();
     }
@@ -123,7 +104,7 @@ impl Android {
                             if let Some(frame) =
                                 android.device.as_ref().and_then(Device::take_frame)
                             {
-                                android.frame = Some(frame);
+                                android.screen.put(frame.width, frame.height, frame.bgra);
                             }
                         }
                     }
@@ -139,21 +120,6 @@ impl Android {
     fn send(&self, input: Input) {
         if let Some(device) = &self.device {
             device.send(input);
-        }
-    }
-
-    /// Where `position` is across the display, from 0 to 1 each way, as
-    /// it was drawn last.
-    fn across(&self, position: Point<Pixels>) -> Option<(f32, f32)> {
-        let drawn = self.drawn?;
-        let x = (position.x - drawn.origin.x) / drawn.size.width;
-        let y = (position.y - drawn.origin.y) / drawn.size.height;
-        Some((x.clamp(0., 1.), y.clamp(0., 1.)))
-    }
-
-    fn touch(&mut self, position: Point<Pixels>, down: bool) {
-        if let Some((x, y)) = self.across(position) {
-            self.send(Input::Touch { x, y, down });
         }
     }
 
@@ -180,29 +146,6 @@ impl Android {
         };
         self.send(input);
         cx.stop_propagation();
-    }
-
-    /// Called from paint: asks the emulator for frames the size of
-    /// `bounds`, and uploads the newest.
-    fn prepare(&mut self, bounds: Bounds<Pixels>, window: &mut Window) -> Option<Arc<RenderImage>> {
-        let scale = window.scale_factor();
-        let wanted = (
-            pixels(bounds.size.width, scale),
-            pixels(bounds.size.height, scale),
-        );
-        if self.asked != Some(wanted) && wanted.0 > 0 && wanted.1 > 0 && self.device.is_some() {
-            self.send(Input::Size {
-                width: wanted.0,
-                height: wanted.1,
-            });
-            self.asked = Some(wanted);
-        }
-        if let Some(image) = self.frame.take().and_then(upload)
-            && let Some(old) = self.image.replace(image)
-        {
-            window.drop_image(old).ok();
-        }
-        self.image.clone()
     }
 
     fn render_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -274,23 +217,6 @@ impl Android {
     }
 }
 
-/// `length` in whole pixels at `scale`.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "a stage's pixels fit in u32; rounding is the point"
-)]
-fn pixels(length: Pixels, scale: f32) -> u32 {
-    (f32::from(length) * scale).round().max(0.) as u32
-}
-
-/// A frame of the emulator's as a GPUI image, which keeps BGRA as the
-/// frame does.
-fn upload(frame: Frame) -> Option<Arc<RenderImage>> {
-    let buffer = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)?;
-    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
-}
-
 impl Shows for Android {
     fn title(&self) -> String {
         self.name.clone()
@@ -330,7 +256,7 @@ impl Render for Android {
                     .track_focus(&self.focus_handle)
                     .on_key_down(cx.listener(Self::key_down))
                     .child(Display {
-                        android: cx.entity(),
+                        mirrored: cx.entity(),
                     })
                     .children(ended.map(|why| {
                         div()
@@ -352,152 +278,36 @@ impl Render for Android {
     }
 }
 
-/// Paints the emulator's display, as big as fits, in the middle of the
-/// tab, and sends the mouse over it to the emulator as touches and the
-/// wheel.
-struct Display {
-    android: Entity<Android>,
-}
-
-impl IntoElement for Display {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
-impl Element for Display {
-    type RequestLayoutState = ();
-    type PrepaintState = Hitbox;
-
-    fn id(&self) -> Option<ElementId> {
-        None
+impl Mirrored for Android {
+    fn screen(&mut self) -> &mut Screen {
+        &mut self.screen
     }
 
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
+    fn focus_handle(&self) -> &FocusHandle {
+        &self.focus_handle
     }
 
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        let mut style = Style::default();
-        style.size.width = relative(1.).into();
-        style.size.height = relative(1.).into();
-        (window.request_layout(style, [], cx), ())
+    fn is_live(&self) -> bool {
+        self.device.is_some()
     }
 
-    fn prepaint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        _cx: &mut App,
-    ) -> Self::PrepaintState {
-        window.insert_hitbox(bounds, HitboxBehavior::Normal)
+    fn resize(&mut self, width: u32, height: u32) {
+        self.send(Input::Size { width, height });
     }
 
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a frame's pixels are far below what f32 keeps exactly"
-    )]
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        hitbox: &mut Hitbox,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        window.paint_quad(fill(bounds, rgb(RAISED)));
-        let image = self
-            .android
-            .update(cx, |android, _| android.prepare(bounds, window));
-        let drawn = image.map(|image| {
-            let scale = window.scale_factor();
-            let painted = image.size(0);
-            let shown = size(
-                px(painted.width.0 as f32 / scale),
-                px(painted.height.0 as f32 / scale),
-            );
-            let at = Bounds {
-                origin: bounds.origin
-                    + point(
-                        (bounds.size.width - shown.width) / 2.,
-                        (bounds.size.height - shown.height) / 2.,
-                    ),
-                size: shown,
-            };
-            window
-                .paint_image(at, Corners::default(), image, 0, false)
-                .ok();
-            at
-        });
-        self.android.update(cx, |android, _| android.drawn = drawn);
+    /// The left button is a finger; the right has no part on a phone.
+    fn press(&mut self, x: f32, y: f32, button: Button, press: Press) {
+        if button != Button::Left {
+            return;
+        }
+        let down = press != Press::Up;
+        self.send(Input::Touch { x, y, down });
+    }
 
-        let android = self.android.clone();
-        let over = hitbox.clone();
-        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble
-                && event.button == MouseButton::Left
-                && over.is_hovered(window)
-            {
-                android.update(cx, |android, cx| {
-                    window.focus(&android.focus_handle);
-                    android.touching = true;
-                    android.touch(event.position, true);
-                    cx.stop_propagation();
-                });
-            }
-        });
-        let android = self.android.clone();
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-            if phase == DispatchPhase::Bubble {
-                android.update(cx, |android, _| {
-                    if android.touching {
-                        android.touch(event.position, true);
-                    }
-                });
-            }
-        });
-        let android = self.android.clone();
-        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-            if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                android.update(cx, |android, _| {
-                    if android.touching {
-                        android.touching = false;
-                        android.touch(event.position, false);
-                    }
-                });
-            }
-        });
-        let android = self.android.clone();
-        let over = hitbox.clone();
-        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble && over.is_hovered(window) {
-                let (dx, dy) = match event.delta {
-                    ScrollDelta::Lines(lines) => (lines.x, lines.y),
-                    ScrollDelta::Pixels(pixels) => (
-                        f32::from(pixels.x) / LINE_HEIGHT,
-                        f32::from(pixels.y) / LINE_HEIGHT,
-                    ),
-                };
-                android.update(cx, |android, _| {
-                    android.send(Input::Wheel {
-                        dx: clicks(dx),
-                        dy: clicks(dy),
-                    });
-                });
-            }
+    fn scroll(&mut self, _x: f32, _y: f32, (dx, dy): (f32, f32)) {
+        self.send(Input::Wheel {
+            dx: clicks(dx),
+            dy: clicks(dy),
         });
     }
 }

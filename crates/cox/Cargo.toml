@@ -22,6 +22,7 @@ path = "src/bin/helper.rs"
 anyhow.workspace = true
 cox-acp.workspace = true
 cox-android.workspace = true
+cox-mac.workspace = true
 cox-browser.workspace = true
 cox-core.workspace = true
 cox-editor.workspace = true
