@@ -484,6 +484,8 @@ impl Workspace {
                     let _ = settled.send(());
                 }
             }
+            // The greeting is over before the window hears the daemon.
+            FromDaemon::Welcome | FromDaemon::Taken | FromDaemon::Outdated => {}
         }
     }
 

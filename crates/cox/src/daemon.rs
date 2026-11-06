@@ -18,8 +18,12 @@
 //! - [`chat`] runs one chat: its conversation, its agent, the check of its
 //!   goal and its judge.
 //! - [`wire`] says what the window and the daemon say to each other.
+//! - [`process`] runs the daemon as a process of its own, coxd, which a
+//!   window reaches on a socket, and [`client`] is how the window does.
 
 pub mod chat;
+pub mod client;
+pub mod process;
 pub mod wire;
 
 use std::collections::HashMap;
@@ -42,7 +46,7 @@ use crate::chat::sketch::{self, Sketch};
 use crate::storage;
 use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
-use wire::{ChatRow, FromDaemon, Listing, ProjectRow, StageAsk, ToDaemon};
+use wire::{ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
 /// What the project of chats with no folder is called.
 const NO_PROJECT: &str = "No project";
@@ -117,6 +121,21 @@ pub enum Internal {
     },
     /// The command `id`, which the window runs, is not waited for any more.
     Cancel { id: u64 },
+    /// A window came, as the connection `id`, saying `hello`, to hear
+    /// what the daemon says on `window`, when the daemon's own program
+    /// was `replaced` since it started, or not. `answer` hears how the
+    /// daemon took it.
+    Attach {
+        id: u64,
+        hello: Hello,
+        window: UnboundedSender<FromDaemon>,
+        replaced: bool,
+        answer: oneshot::Sender<FromDaemon>,
+    },
+    /// The window of the connection `id` went.
+    Detach { id: u64 },
+    /// The daemon is to stop, with its chats' agents.
+    Quit,
 }
 
 /// A project: a folder the human opened, whose chats work there.
@@ -248,6 +267,10 @@ pub struct Daemon {
     last_id: u64,
     /// The chats the window is to show, once it is told of them.
     reveals: Vec<u64>,
+    /// The connection of the window there, when it came over a socket.
+    window_id: Option<u64>,
+    /// Whether the daemon is to stop.
+    done: bool,
 }
 
 /// How the daemon is reached: what to tell it.
@@ -371,6 +394,8 @@ impl Daemon {
             preparing: HashMap::new(),
             last_id: 0,
             reveals: Vec::new(),
+            window_id: None,
+            done: false,
         };
         daemon.read_kept();
         daemon
@@ -464,6 +489,9 @@ impl Daemon {
                 },
                 Some(event) = heard.recv() => self.hear(event),
                 _ = &mut stop => break,
+            }
+            if self.done {
+                break;
             }
             self.settle();
         }
@@ -1055,6 +1083,89 @@ impl Daemon {
                     self.tell(FromDaemon::Cancel { id });
                 }
             }
+            Internal::Attach {
+                id,
+                hello,
+                window,
+                replaced,
+                answer,
+            } => {
+                let taken = self.attach(id, hello, window, replaced);
+                answer.send(taken).ok();
+            }
+            Internal::Detach { id } => {
+                if self.window_id == Some(id) {
+                    self.detach();
+                }
+            }
+            Internal::Quit => self.done = true,
+        }
+    }
+
+    /// Takes the window of the connection `id`, which says `hello`, to
+    /// tell what it does on `window` from now on, unless another window
+    /// is there, or the daemon's own program was `replaced` and no chat
+    /// is at work, when the daemon is to stop for the new one. Answers
+    /// which of those it is.
+    fn attach(
+        &mut self,
+        id: u64,
+        hello: Hello,
+        window: UnboundedSender<FromDaemon>,
+        replaced: bool,
+    ) -> FromDaemon {
+        if self.window.is_some() {
+            return FromDaemon::Taken;
+        }
+        let at_work = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .any(|slot| working(slot.state));
+        if replaced && !at_work {
+            return FromDaemon::Outdated;
+        }
+        if replaced {
+            tracing::warn!("the daemon goes on as it was, since a chat is at work");
+        }
+        let Hello { home, command } = hello;
+        // A window not given a home leaves the chats in no project where
+        // the settings say now, which may have changed while none was
+        // there.
+        self.home_given = home.is_some();
+        self.projects[0].folder = home.unwrap_or_else(|| {
+            crate::settings::home_for_chats(crate::settings::Saved::read().home)
+        });
+        self.spawns
+            .agents()
+            .command(command, crate::settings::agent().as_deref());
+        self.window = Some(window);
+        self.window_id = Some(id);
+        self.listed = None;
+        self.shown = None;
+        FromDaemon::Welcome
+    }
+
+    /// Lets the window go: what it was asked to run it does not, and the
+    /// agents that waited for its relay start without one.
+    fn detach(&mut self) {
+        tracing::info!("the window went; the chats go on");
+        self.window = None;
+        self.window_id = None;
+        self.listed = None;
+        self.shown = None;
+        for (_, ran) in self.running.drain() {
+            ran.send(Err(NO_WINDOW.to_owned())).ok();
+        }
+        let preparing: Vec<Preparing> = self.preparing.drain().map(|(_, p)| p).collect();
+        for Preparing {
+            key,
+            generation,
+            cwd,
+            start,
+        } in preparing
+        {
+            self.spawn_agent(key, generation, cwd, start, None);
         }
     }
 

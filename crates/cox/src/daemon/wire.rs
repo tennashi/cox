@@ -102,9 +102,29 @@ pub enum StageAsk {
     },
 }
 
+/// What a window says first, as it comes to coxd, of the command line
+/// it was started with.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hello {
+    /// Where chats in no project work for this window's run, as `--home`
+    /// gave it, ahead of the settings.
+    pub home: Option<PathBuf>,
+    /// The agent a new chat talks to, and its arguments, as the command
+    /// line gave it, or none for the one the settings name.
+    pub command: Vec<String>,
+}
+
 /// What the daemon tells a window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FromDaemon {
+    /// The window's [`Hello`] was heard: what follows is the daemon's.
+    Welcome,
+    /// Another window is there already, which the daemon goes on with.
+    Taken,
+    /// The daemon's own program was replaced, as by `cargo xtask
+    /// install`, and no chat is at work: it stops, for the window to
+    /// start the new one.
+    Outdated,
     /// The projects and chats, as they are now.
     Listing(Listing),
     /// How the conversation of the chat `key` changed, for a window that

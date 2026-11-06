@@ -1433,9 +1433,11 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
     // An archived chat, revealed, is back in the list.
     right_click(cx, "chat-1");
     click(cx, "archive-chat");
+    settle_on(cx, &workspace).await;
     cx.update(|window, cx| {
         workspace.update(cx, |workspace, cx| workspace.reveal(first_key, window, cx));
     });
+    settle_on(cx, &workspace).await;
     assert_eq!(shown(cx, &workspace), first);
 }
 
