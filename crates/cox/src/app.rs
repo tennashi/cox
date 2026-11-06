@@ -204,6 +204,7 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
         .run(move |cx: &mut App| {
             bind_keys(cx);
             cx.set_global(Servers::default());
+            cx.set_global(followed.clone());
             serve_browser(&cef, cx);
             quit_when_asked(cx);
             shut_down_on_quit(cef, cx);

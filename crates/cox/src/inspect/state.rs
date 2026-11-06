@@ -74,6 +74,9 @@ pub fn describe(
             "The settings are open, the home's input holding {:?}",
             settings.read(cx).input().read(cx).text()
         );
+        for agent in settings.read(cx).agents().read(cx).described(cx) {
+            let _ = writeln!(told, "  Agent row {agent}");
+        }
     }
     if let Some(card) = cx
         .try_global::<crate::ui::translation::Shown>()

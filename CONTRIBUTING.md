@@ -53,8 +53,19 @@ Enter sets, or a folder "Choose…" asks for. The settings are kept in
 `settings.json`, in Cox's data folder (see [The stage](#the-stage)), as
 `agents.json` is, and the
 chats in no project that open from then on work there; `--home` still
-goes ahead of them for its run, until the human sets the home. Escape,
-the ×, or a click beside the card closes it. Each chat starts its own
+goes ahead of them for its run, until the human sets the home. Under
+the home, the card lists the agents of `agents.json` (see below), a row
+each, with its name and its command on one line, as a shell takes it,
+as `CLAUDE_CODE_ENABLE_TODO_TOOLS=1 npx -y
+@agentclientprotocol/claude-agent-acp`, which Enter keeps, as the card
+does when it closes; a dot marks the agent `settings.json` names, and a
+click on another's names that one; "Test" starts the agent and asks it
+to open a session, in a folder of its own, saying whether it works,
+asks the human to log in first, or is not found on Cox's `PATH`; ×
+takes it out of the list; and "Add agent" adds one of the human's own,
+or one of the ACP Registry, as the registry runs it but for the version
+it pins, for the human to change. What else the files hold stays as it
+is. Escape, the ×, or a click beside the card closes it. Each chat starts its own
 `<agent command>` working in its project's folder, and has a stage of its
 own, showing `<url>` first. Cox opened with no `<agent command>`, as the
 Finder, the Dock or a launcher such as Raycast opens an app, starts the
