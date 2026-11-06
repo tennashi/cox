@@ -268,6 +268,13 @@ impl Element for Picture {
 
         self.paint_page(bounds, window, cx);
         window.set_cursor_style(cursor_style(browser.cursor()), hitbox);
+        // The page draws its next picture as the window draws this frame,
+        // and, while it is lively, at every frame after (see
+        // `cox_browser`'s `frames`).
+        browser.begin_frame();
+        if browser.is_lively() {
+            window.request_animation_frame();
+        }
 
         let hovered = hitbox.clone();
         let target = browser.clone();
@@ -343,8 +350,8 @@ impl Element for Picture {
                 browser.wheel(
                     x,
                     y,
-                    whole_pixels(delta.x),
-                    whole_pixels(delta.y),
+                    f32::from(delta.x),
+                    f32::from(delta.y),
                     modifiers(event.modifiers),
                 );
             },

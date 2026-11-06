@@ -11,6 +11,31 @@ pub(super) fn mouse_event(x: i32, y: i32, modifiers: u32) -> MouseEvent {
     MouseEvent { x, y, modifiers }
 }
 
+/// What is left of the wheel's scrolling under a whole pixel, which CEF
+/// takes in whole pixels: a trackpad scrolls by fractions of one, which
+/// rounded on their own would move the page by none, then by two.
+#[derive(Debug, Default)]
+pub(super) struct Wheel {
+    rest_x: f32,
+    rest_y: f32,
+}
+
+impl Wheel {
+    /// The whole pixels to scroll by, of `dx` and `dy` with what was left
+    /// before, keeping what is left now.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a wheel's scroll is far from i32's limits, and is truncated on purpose"
+    )]
+    pub(super) fn scroll(&mut self, dx: f32, dy: f32) -> (i32, i32) {
+        let x = self.rest_x + dx;
+        let y = self.rest_y + dy;
+        self.rest_x = x.fract();
+        self.rest_y = y.fract();
+        (x.trunc() as i32, y.trunc() as i32)
+    }
+}
+
 /// Modifier bits CEF expects on mouse and key events.
 pub(super) fn event_flags(modifiers: Modifiers) -> u32 {
     let mut flags = 0;
@@ -265,7 +290,17 @@ pub(super) fn key_event(kind: KeyKind, key: &str, modifiers: u32, character: u16
 
 #[cfg(test)]
 mod tests {
-    use super::virtual_key;
+    use super::{Wheel, virtual_key};
+
+    #[test]
+    fn the_wheel_keeps_what_is_left_under_a_pixel() {
+        let mut wheel = Wheel::default();
+        assert_eq!(wheel.scroll(0.4, -0.6), (0, 0));
+        assert_eq!(wheel.scroll(0.4, -0.6), (0, -1));
+        assert_eq!(wheel.scroll(0.4, 2.5), (1, 2));
+        // Back the other way, what was left counts against it.
+        assert_eq!(wheel.scroll(-0.2, -0.2), (0, 0));
+    }
 
     #[test]
     fn keys_have_their_windows_codes() {

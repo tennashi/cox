@@ -29,6 +29,7 @@
 
 mod cursor;
 mod events;
+mod frames;
 mod handlers;
 mod links;
 #[cfg(target_os = "macos")]
@@ -203,6 +204,11 @@ struct Shared {
     /// The cursor the page asks for where the mouse is.
     cursor: Cursor,
     navigation: Navigation,
+    /// When CEF was last asked for a picture, and until when the page is
+    /// lively (see [`crate::frames`]).
+    pacing: frames::Pacing,
+    /// What is left of the wheel's scrolling under a pixel.
+    wheel: events::Wheel,
 }
 
 impl Shared {
@@ -229,6 +235,8 @@ impl Shared {
                 url: url.to_owned(),
                 ..Default::default()
             },
+            pacing: frames::Pacing::default(),
+            wheel: events::Wheel::default(),
         }
     }
 }
@@ -259,6 +267,9 @@ struct Browsers {
     /// Every browser that is still around, to close them all when Cox
     /// quits.
     all: Vec<Weak<Mutex<Shared>>>,
+    /// Whether CEF is shutting down, after which nothing may ask it for
+    /// pictures.
+    stopped: bool,
 }
 
 type BrowsersRef = Arc<Mutex<Browsers>>;
@@ -440,6 +451,11 @@ pub fn start(profile: Option<PathBuf>) -> Cef {
         std::ptr::null_mut(),
     );
     assert_eq!(initialized, 1, "CEF initializes");
+    let ticked = Arc::clone(&browsers);
+    std::thread::Builder::new()
+        .name("cox-stage-frames".to_owned())
+        .spawn(move || frames::tick(&ticked))
+        .expect("the thread that asks the pages for pictures starts");
 
     Cef {
         browsers,
@@ -515,11 +531,11 @@ impl Cef {
     /// Closes every browser, waits for CEF to let go of them, and shuts
     /// CEF down. Call once GPUI is done, on the main thread.
     pub fn shutdown(self) {
-        let open: Vec<SharedRef> = lock(&self.browsers)
-            .all
-            .iter()
-            .filter_map(Weak::upgrade)
-            .collect();
+        let open: Vec<SharedRef> = {
+            let mut browsers = lock(&self.browsers);
+            browsers.stopped = true;
+            browsers.all.iter().filter_map(Weak::upgrade).collect()
+        };
         let host = |shared: &SharedRef| lock(shared).host.clone();
         for host in open.iter().filter_map(host) {
             host.close_browser(1);
@@ -547,6 +563,35 @@ impl Browser {
 
     fn host(&self) -> Option<BrowserHost> {
         self.shared().host.clone()
+    }
+
+    /// The browser, for input from the human, which may change the page:
+    /// it is lively for a while.
+    fn host_stirred(&self) -> Option<BrowserHost> {
+        let mut shared = self.shared();
+        shared.pacing.stirred(Instant::now());
+        shared.host.clone()
+    }
+
+    /// Asks CEF for a picture of the page, as the window draws a frame
+    /// with it (see [`crate::frames`]).
+    pub fn begin_frame(&self) {
+        let host = {
+            let mut shared = self.shared();
+            shared.pacing.asked(Instant::now());
+            shared.host.clone()
+        };
+        if let Some(host) = host {
+            host.send_external_begin_frame();
+        }
+    }
+
+    /// Whether the page changed, or the human worked on it, a moment ago:
+    /// while it is, the window draws every frame, asking for a picture at
+    /// each.
+    #[must_use]
+    pub fn is_lively(&self) -> bool {
+        self.shared().pacing.is_lively(Instant::now())
     }
 
     /// The id `DevTools` knows the page by, once CEF has told it.
@@ -671,29 +716,38 @@ impl Browser {
         clicks: i32,
         modifiers: Modifiers,
     ) {
-        if let Some(host) = self.host() {
+        if let Some(host) = self.host_stirred() {
             let event = mouse_event(x, y, event_flags(modifiers) | button_flag(button));
             host.send_mouse_click_event(Some(&event), button_type(button), 0, clicks);
         }
     }
 
     pub fn mouse_up(&self, x: i32, y: i32, button: MouseButton, clicks: i32, modifiers: Modifiers) {
-        if let Some(host) = self.host() {
+        if let Some(host) = self.host_stirred() {
             let event = mouse_event(x, y, event_flags(modifiers));
             host.send_mouse_click_event(Some(&event), button_type(button), 1, clicks);
         }
     }
 
     pub fn mouse_move(&self, x: i32, y: i32, pressed: Option<MouseButton>, modifiers: Modifiers) {
-        if let Some(host) = self.host() {
+        if let Some(host) = self.host_stirred() {
             let flags = event_flags(modifiers) | pressed.map_or(0, button_flag);
             host.send_mouse_move_event(Some(&mouse_event(x, y, flags)), 0);
         }
     }
 
-    /// Scrolls by `dx` and `dy` logical pixels at (`x`, `y`).
-    pub fn wheel(&self, x: i32, y: i32, dx: i32, dy: i32, modifiers: Modifiers) {
-        if let Some(host) = self.host() {
+    /// Scrolls by `dx` and `dy` logical pixels at (`x`, `y`), in whole
+    /// pixels, keeping what is left under one for the next.
+    pub fn wheel(&self, x: i32, y: i32, dx: f32, dy: f32, modifiers: Modifiers) {
+        let (host, (dx, dy)) = {
+            let mut shared = self.shared();
+            shared.pacing.stirred(Instant::now());
+            let whole = shared.wheel.scroll(dx, dy);
+            (shared.host.clone(), whole)
+        };
+        if let Some(host) = host
+            && (dx, dy) != (0, 0)
+        {
             let event = mouse_event(x, y, event_flags(modifiers));
             host.send_mouse_wheel_event(Some(&event), dx, dy);
         }
@@ -701,7 +755,7 @@ impl Browser {
 
     /// A key went down. `key` is GPUI's name for it ("a", "enter", ...).
     pub fn key_down(&self, key: &str, modifiers: Modifiers) {
-        if let Some(host) = self.host() {
+        if let Some(host) = self.host_stirred() {
             let flags = event_flags(modifiers);
             let event = key_event(KeyKind::Down, key, flags, key_character(key));
             host.send_key_event(Some(&event));
@@ -720,7 +774,7 @@ impl Browser {
     }
 
     pub fn key_up(&self, key: &str, modifiers: Modifiers) {
-        if let Some(host) = self.host() {
+        if let Some(host) = self.host_stirred() {
             let event = key_event(KeyKind::Up, key, event_flags(modifiers), key_character(key));
             host.send_key_event(Some(&event));
         }
@@ -730,7 +784,9 @@ impl Browser {
     /// committed. A single character goes in as a key event, so the page
     /// sees `keypress` as it would in a browser.
     pub fn commit(&self, text: &str) {
-        let Some(host) = self.host() else { return };
+        let Some(host) = self.host_stirred() else {
+            return;
+        };
         let mut units = text.encode_utf16();
         match (units.next(), units.next()) {
             (Some(unit), None) if !text.chars().all(char::is_control) => {

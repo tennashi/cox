@@ -13,6 +13,11 @@
 //! over CDP. So a quit during CEF's turn (see [`cef_turn`]) is only asked
 //! for, and done once the turn is over, much as CEF's own examples take
 //! `terminate:` over.
+//!
+//! CEF's UI thread is the main thread here, which GPUI gives CEF a turn
+//! of now and then. CEF also says when it has work right away, as a
+//! picture asked for, and [`pump_wanted`] wakes the turn for it, so the
+//! picture is not late by a turn's wait.
 
 use std::ffi::CString;
 use std::fmt::Write as _;
@@ -29,6 +34,9 @@ static HANDLING_SEND_EVENT: AtomicBool = AtomicBool::new(false);
 
 /// Whether CEF has the main thread right now.
 static IN_CEF_TURN: AtomicBool = AtomicBool::new(false);
+
+/// Whether CEF has work to do on the main thread now.
+static PUMP_WANTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 /// Teaches the application's class the protocol. Call it once, after GPUI
 /// made the application and CEF's framework is loaded, and before the
@@ -86,6 +94,18 @@ pub fn cef_turn(turn: impl FnOnce()) {
     let was = IN_CEF_TURN.swap(true, Ordering::SeqCst);
     turn();
     IN_CEF_TURN.store(was, Ordering::SeqCst);
+}
+
+/// Tells the main thread that CEF has work for it now. Called from any
+/// of CEF's threads.
+pub(crate) fn want_pump() {
+    PUMP_WANTED.notify_one();
+}
+
+/// Waits until CEF has work for the main thread now, for its turn to come
+/// sooner than it would.
+pub async fn pump_wanted() {
+    PUMP_WANTED.notified().await;
 }
 
 /// Adds a method to `class`, unless it already has one of that name.
