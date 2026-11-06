@@ -89,7 +89,8 @@ takes in the environment of the human's login shell first, `$SHELL -l
 agent gets how the human works with Cox, whatever the project: the
 `COX.md` of their workflow's folder, which `settings.json` names, whole
 or from `~`, as `{"workflow": "~/dotfiles/cox"}`, or else `workflow`
-beside it, or, when there is none, Cox's own
+in the home the settings set, as the wiki is (see below), or, when there
+is none, Cox's own
 ([`cox.md`](crates/cox/src/agent/instructions/cox.md)), which says when
 to use Cox's tools, as when to try work out in a sketch, since the tools
 only say what they do. After it, when the folder has a `COX.md`, the agent
@@ -392,7 +393,7 @@ of theirs, or else `wiki` in the home the settings set, as
 `~/cox/wiki`, where the human sees it and every Cox of theirs finds it
 (`--home` is for its run, and does not move it); a wiki an earlier Cox
 kept in its data folder moves there as Cox starts, unless the home has
-one already. A chat's agent
+one already, and so does a workflow. A chat's agent
 searches it with Cox's `wiki_search`, for the pages that have every word
 it looks for, reads a page with `wiki_read`, or the index without one,
 and writes a page whole with `wiki_write`, through Cox, which adds,
@@ -899,9 +900,9 @@ kind is kept apart
 ([`storage.rs`](crates/cox/src/storage.rs) lists them):
 
 - at its top, what the human writes or chooses: `settings.json`,
-  `agents.json`, and the `workflow` folder when the settings name none
-  (the `wiki` an earlier Cox kept here moves into the home); beside them `sketches`, the folders the sketches work in,
-  and `logs`;
+  `agents.json` (the `workflow` and `wiki` an earlier Cox kept here
+  move into the home); beside them `sketches`, the folders the sketches
+  work in, and `logs`;
 - in `state`, what Cox would lose: the chats, in a SQLite database,
   `chats.sqlite`, and the stage's profile, `stage`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it

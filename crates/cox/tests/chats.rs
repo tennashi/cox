@@ -2411,7 +2411,10 @@ async fn a_sketch_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
         })
         .unwrap();
     let then = format!("sketch/rewrite-{}.md", std::process::id());
-    let then_file = cox::settings::workflow().unwrap().join(&then);
+    // The workflow is the one this Cox kept where it keeps what lasts, as
+    // an earlier Cox did, while its home has none.
+    std::fs::create_dir_all(cox::storage::path(cox::storage::Kept::Workflow).unwrap()).unwrap();
+    let then_file = cox::settings::workflow().join(&then);
     std::fs::create_dir_all(then_file.parent().unwrap()).unwrap();
     std::fs::write(&then_file, "Rewrite what {kept} shows, from: {summary}\n").unwrap();
     std::fs::write(folder.join("main.rs"), "fn main() { sketch() }\n").unwrap();

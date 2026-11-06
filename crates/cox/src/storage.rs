@@ -45,12 +45,13 @@ pub enum Kept {
     Settings,
     /// The agents the human lists (see [`crate::agents`]).
     Agents,
-    /// The human's workflow, when the settings name none (see
-    /// [`crate::workflow`]).
+    /// The human's workflow, as an earlier Cox kept it when the settings
+    /// named none, which moves into the home now (see
+    /// [`crate::settings::Folder`]).
     Workflow,
     /// The human's wiki, as an earlier Cox kept it when the settings named
     /// none, which moves into the home now (see
-    /// [`crate::settings::settle_wiki`]).
+    /// [`crate::settings::Folder`]).
     Wiki,
     /// The folders the sketches work in, and what is kept of those
     /// discarded (see [`crate::chat::sketch`]).

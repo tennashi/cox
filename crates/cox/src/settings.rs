@@ -6,9 +6,9 @@
 //! rail shows as `~`. `--home` on the command line goes ahead of it for
 //! the run, and without either, the home is `~/cox`. The file also says
 //! where the human keeps how they work with Cox, whatever the project, as
-//! `{"workflow": "~/dotfiles/cox"}` (see [`workflow`]), and where their
-//! wiki is, as `{"wiki": "~/notes/cox"}`, or else `wiki` in the home (see
-//! [`wiki`]), and what language
+//! `{"workflow": "~/dotfiles/cox"}`, and where their wiki is, as
+//! `{"wiki": "~/notes/cox"}`, or else each in the home (see [`Folder`]),
+//! and what language
 //! they read it, and what they select, in, as `{"translation":
 //! {"language": "Japanese"}}` (see [`translation`]), and the agent a new
 //! chat talks to when the command line names none, by its name in
@@ -38,10 +38,6 @@ use crate::workspace::Workspace;
 /// The folder chats in no project work in, in the home directory, unless
 /// the human chose another.
 pub const HOME: &str = "cox";
-
-/// The folder of the human's wiki in the home, when the settings name
-/// none.
-const WIKI: &str = "wiki";
 
 /// How often Cox looks whether `settings.json` or `agents.json` changed.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
@@ -265,83 +261,135 @@ pub fn agent() -> Option<String> {
     Saved::read().agent
 }
 
-/// The folder where the human keeps how they work with Cox, whatever the
-/// project: what `settings.json` names, as a folder of their dotfiles, or
-/// else `workflow` where Cox keeps what lasts. Its `COX.md` is what every
-/// chat's agent is told first (see [`crate::agent::instructions`]).
-#[must_use]
-pub fn workflow() -> Option<PathBuf> {
-    Saved::read()
-        .workflow
-        .or_else(|| crate::storage::path(Kept::Workflow))
+/// A folder the human keeps their own in, which `settings.json` names,
+/// as a folder of their dotfiles or a vault of their notes, or else Cox
+/// keeps in the home the settings set, as `~/cox/workflow`, where the
+/// human sees it, and every Cox of theirs finds it, wherever it keeps
+/// what lasts; but `--home` is for its run, and does not move it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Folder {
+    /// How the human works with Cox, whatever the project: its `COX.md`
+    /// is what every chat's agent is told first (see
+    /// [`crate::agent::instructions`]), and the rest what Cox says in
+    /// their place (see [`crate::workflow`]).
+    Workflow,
+    /// The human's wiki, where the agents keep what they learned (see
+    /// [`crate::wiki`]).
+    Wiki,
 }
 
-/// The folder of the human's wiki, where the agents keep what they
-/// learned (see [`crate::wiki`]): what `settings.json` names, as a vault
-/// of their notes, or else the wiki of the home (see [`home_wiki`]).
+impl Folder {
+    /// The folders, in the order the settings screen shows them.
+    pub const ALL: [Self; 2] = [Self::Workflow, Self::Wiki];
+
+    /// Its key in `settings.json`, and its name in the home.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Workflow => "workflow",
+            Self::Wiki => "wiki",
+        }
+    }
+
+    /// Where an earlier Cox kept it when the settings named none.
+    const fn earlier(self) -> Kept {
+        match self {
+            Self::Workflow => Kept::Workflow,
+            Self::Wiki => Kept::Wiki,
+        }
+    }
+
+    fn named(self, saved: &Saved) -> Option<PathBuf> {
+        match self {
+            Self::Workflow => saved.workflow.clone(),
+            Self::Wiki => saved.wiki.clone(),
+        }
+    }
+
+    /// Where it is: what the settings name, or else the home's (see
+    /// [`Self::in_home`]).
+    #[must_use]
+    pub fn path(self) -> PathBuf {
+        let saved = Saved::read();
+        self.named(&saved)
+            .unwrap_or_else(|| self.in_home_of(saved.home))
+    }
+
+    /// Where it is when the settings name none: in the home, unless the
+    /// one an earlier Cox kept where it keeps what lasts could not move
+    /// there (see [`settle_folders`]), which goes on being used.
+    #[must_use]
+    pub fn in_home(self) -> PathBuf {
+        self.in_home_of(Saved::read().home)
+    }
+
+    fn in_home_of(self, home: Option<PathBuf>) -> PathBuf {
+        folder_in(
+            &home_for_chats(home),
+            self.key(),
+            crate::storage::path(self.earlier()),
+        )
+    }
+}
+
+/// The folder where the human keeps how they work with Cox, whatever the
+/// project (see [`Folder::Workflow`]).
+#[must_use]
+pub fn workflow() -> PathBuf {
+    Folder::Workflow.path()
+}
+
+/// The folder of the human's wiki (see [`Folder::Wiki`]).
 #[must_use]
 pub fn wiki() -> PathBuf {
-    let saved = Saved::read();
-    saved.wiki.unwrap_or_else(|| home_wiki_of(saved.home))
+    Folder::Wiki.path()
 }
 
-/// The wiki when the settings name none: `wiki` in the home they set, as
-/// `~/cox/wiki`, where the human sees it, and every Cox of theirs finds
-/// it, wherever it keeps what lasts; but `--home` is for its run, and
-/// does not move the wiki. A wiki an earlier Cox kept where it keeps what
-/// lasts, which it could not move there (see [`settle_wiki`]), goes on
-/// being used.
-#[must_use]
-pub fn home_wiki() -> PathBuf {
-    home_wiki_of(Saved::read().home)
-}
-
-fn home_wiki_of(home: Option<PathBuf>) -> PathBuf {
-    wiki_in(&home_for_chats(home), crate::storage::path(Kept::Wiki))
-}
-
-/// The wiki in `home`, unless there is none, and `earlier` is one.
-fn wiki_in(home: &Path, earlier: Option<PathBuf>) -> PathBuf {
-    let wiki = home.join(WIKI);
+/// The folder `name` in `home`, unless there is none, and `earlier` is
+/// one.
+fn folder_in(home: &Path, name: &str, earlier: Option<PathBuf>) -> PathBuf {
+    let folder = home.join(name);
     match earlier {
-        Some(earlier) if fs::symlink_metadata(&wiki).is_err() && earlier.is_dir() => earlier,
-        _ => wiki,
+        Some(earlier) if fs::symlink_metadata(&folder).is_err() && earlier.is_dir() => earlier,
+        _ => folder,
     }
 }
 
-/// Moves the wiki an earlier Cox kept where it keeps what lasts, when the
-/// settings named none, into the home the settings set, unless the home
-/// has a `wiki` already: says where it was and where it is now.
-#[must_use]
-pub fn settle_wiki() -> Option<(PathBuf, PathBuf)> {
+/// Moves each folder an earlier Cox kept where it keeps what lasts, when
+/// the settings named none, into the home the settings set, unless the
+/// home has one of its name already.
+pub fn settle_folders() {
     let saved = Saved::read();
-    if saved.wiki.is_some() {
-        return None;
+    let home = home_for_chats(saved.home.clone());
+    for folder in Folder::ALL {
+        if folder.named(&saved).is_none()
+            && let Some(earlier) = crate::storage::path(folder.earlier())
+        {
+            move_folder(&earlier, &home, folder.key());
+        }
     }
-    move_wiki(
-        &crate::storage::path(Kept::Wiki)?,
-        &home_for_chats(saved.home),
-    )
 }
 
-fn move_wiki(earlier: &Path, home: &Path) -> Option<(PathBuf, PathBuf)> {
-    let wiki = home.join(WIKI);
+/// Moves `earlier` into `home`, as `name`: says where it is now, if it
+/// moved.
+fn move_folder(earlier: &Path, home: &Path, name: &str) -> Option<PathBuf> {
+    let folder = home.join(name);
     if !fs::symlink_metadata(earlier).is_ok_and(|metadata| metadata.is_dir())
-        || fs::symlink_metadata(&wiki).is_ok()
+        || fs::symlink_metadata(&folder).is_ok()
     {
         return None;
     }
-    match fs::create_dir_all(home).and_then(|()| fs::rename(earlier, &wiki)) {
+    match fs::create_dir_all(home).and_then(|()| fs::rename(earlier, &folder)) {
         Ok(()) => {
             tracing::info!(
-                "moved the wiki from {} to {}",
+                "moved the {name} from {} to {}",
                 earlier.display(),
-                wiki.display()
+                folder.display()
             );
-            Some((earlier.to_owned(), wiki))
+            Some(folder)
         }
         Err(error) => {
-            tracing::warn!("the wiki stays in {}: {error}", earlier.display());
+            tracing::warn!("the {name} stays in {}: {error}", earlier.display());
             None
         }
     }
@@ -475,34 +523,33 @@ pub fn folder_of(text: &str, user: Option<&Path>) -> Result<PathBuf, &'static st
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Saved, Translation, folder_of, keep_home_in, keep_in, move_wiki, wiki_in};
+    use super::{Saved, Translation, folder_in, folder_of, keep_home_in, keep_in, move_folder};
 
     #[test]
-    fn the_wiki_an_earlier_cox_kept_moves_into_the_home() {
-        let dir = std::env::temp_dir().join(format!("cox-wiki-{}", std::process::id()));
+    fn a_folder_an_earlier_cox_kept_moves_into_the_home() {
+        let dir = std::env::temp_dir().join(format!("cox-folders-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (earlier, home) = (dir.join("data/wiki"), dir.join("home"));
-        // With no earlier wiki, the wiki is the home's, and nothing moves.
-        assert_eq!(wiki_in(&home, Some(earlier.clone())), home.join("wiki"));
-        assert_eq!(move_wiki(&earlier, &home), None);
+        let wiki = home.join("wiki");
+        // With no earlier folder, the folder is the home's, and nothing
+        // moves.
+        assert_eq!(folder_in(&home, "wiki", Some(earlier.clone())), wiki);
+        assert_eq!(move_folder(&earlier, &home, "wiki"), None);
 
         std::fs::create_dir_all(&earlier).unwrap();
         std::fs::write(earlier.join("page.md"), "# Page\n").unwrap();
-        // Until it moves, the earlier wiki is the one used.
-        assert_eq!(wiki_in(&home, Some(earlier.clone())), earlier);
-        assert_eq!(
-            move_wiki(&earlier, &home),
-            Some((earlier.clone(), home.join("wiki")))
-        );
-        assert!(home.join("wiki/page.md").is_file());
+        // Until it moves, the earlier folder is the one used.
+        assert_eq!(folder_in(&home, "wiki", Some(earlier.clone())), earlier);
+        assert_eq!(move_folder(&earlier, &home, "wiki"), Some(wiki.clone()));
+        assert!(wiki.join("page.md").is_file());
         assert!(!earlier.exists());
-        assert_eq!(wiki_in(&home, Some(earlier.clone())), home.join("wiki"));
+        assert_eq!(folder_in(&home, "wiki", Some(earlier.clone())), wiki);
 
-        // A wiki in the home already stays, and the earlier one with it.
+        // A folder in the home already stays, and the earlier one with it.
         std::fs::create_dir_all(&earlier).unwrap();
-        assert_eq!(move_wiki(&earlier, &home), None);
+        assert_eq!(move_folder(&earlier, &home, "wiki"), None);
         assert!(earlier.is_dir());
-        assert_eq!(wiki_in(&home, Some(earlier)), home.join("wiki"));
+        assert_eq!(folder_in(&home, "wiki", Some(earlier)), wiki);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

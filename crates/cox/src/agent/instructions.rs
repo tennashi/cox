@@ -52,7 +52,7 @@ impl Instructions {
     /// Cox's, then those of the project, in `folder`.
     #[must_use]
     pub fn read(folder: &Path) -> Self {
-        Self::read_with(folder, crate::settings::workflow().as_deref())
+        Self::read_with(folder, Some(crate::settings::workflow().as_path()))
     }
 
     /// What an agent that is not a chat's, as a goal's judge, is told
