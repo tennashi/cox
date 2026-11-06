@@ -35,7 +35,7 @@ its own, through the [cef](https://crates.io/crates/cef) crate. The crate's
 build downloads the matching CEF distribution from the official builds
 (about 200 MB, once per target directory).
 
-`cox [--stage <url>] [--home <dir>] [--data <dir>] <agent command>` opens a window with
+`cox [--stage <url>] [--home <dir>] [--data <dir>] [<agent command>]` opens a window with
 no chat in it. The rail on the left of the window shows the projects,
 each as a folder with its name under it, and its folder's path where
 the mouse rests, and the tabs along the top show the chats of the project chosen
@@ -56,7 +56,14 @@ chats in no project that open from then on work there; `--home` still
 goes ahead of them for its run, until the human sets the home. Escape,
 the ×, or a click beside the card closes it. Each chat starts its own
 `<agent command>` working in its project's folder, and has a stage of its
-own, showing `<url>` first. Ahead of the first line sent in the chat, the
+own, showing `<url>` first. Cox opened with no `<agent command>`, as the
+Finder, the Dock or a launcher such as Raycast opens an app, starts the
+agent `settings.json` names, by its name in `agents.json` (see below),
+as `{"agent": "Claude"}`; with none named, or one `agents.json` does not
+list, a chat says so as its agent fails to start. On macOS, such a Cox
+takes in the environment of the human's login shell first, `$SHELL -l
+-i`, as their terminal has it, since launchd gives an app only
+`/usr/bin:/bin:/usr/sbin:/sbin` as its `PATH`, where `npx` is not. Ahead of the first line sent in the chat, the
 agent gets how the human works with Cox, whatever the project: the
 `COX.md` of their workflow's folder, which `settings.json` names, whole
 or from `~`, as `{"workflow": "~/dotfiles/cox"}`, or else `workflow`
@@ -125,7 +132,8 @@ as the human chose last in any chat; its mode is its own.
 
 The list starts with the agent the chat talks to, which a click on its
 row chooses among the agents Cox knows, while no turn runs: first the
-`<agent command>`, which a new chat talks to, then those the human lists
+`<agent command>`, which a new chat talks to, or, with none, the agent
+`settings.json` names, then those the human lists
 in `agents.json`, in Cox's data folder (see
 [The stage](#the-stage)), as `[{"name": "Codex", "command": ["npx", "-y",
 "@agentclientprotocol/codex-acp"]}]`, with `NAME=value` ahead of the
@@ -1057,7 +1065,9 @@ The Cox in use runs from where `cargo xtask install` puts it, so that
 building and trying a change in `target/` leaves it be:
 
 - On macOS, `~/Applications/Cox.app`: run
-  `~/Applications/Cox.app/Contents/MacOS/Cox <agent command>`.
+  `~/Applications/Cox.app/Contents/MacOS/Cox <agent command>`, or open
+  it as any app once `settings.json` names an agent of `agents.json`
+  (see [The stage](#the-stage)).
 - On Linux, `~/.local/bin/cox`, with what it needs of CEF in
   `~/.local/lib/cox`.
 

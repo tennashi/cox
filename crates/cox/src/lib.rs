@@ -34,6 +34,8 @@
 //!   a terminal's.
 //! - [`storage`] says where this Cox keeps what lasts across its runs,
 //!   and [`scratch`] what it keeps only while it runs.
+//! - [`login`] takes in the login shell's environment, for a Cox the
+//!   system opened, as from the Finder.
 //! - [`logs`] is what Cox says of itself as it runs.
 //!
 //! Below them all is [`cox_browser`]: CEF, which renders the stages'
@@ -45,6 +47,7 @@ pub mod agents;
 pub mod app;
 pub mod chat;
 pub mod inspect;
+pub mod login;
 pub mod logs;
 pub mod notices;
 pub mod process;

@@ -39,7 +39,7 @@ use cox_browser::Cef;
 actions!(cox, [Quit]);
 
 pub const USAGE: &str = "\
-Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] <agent command> [args...]
+Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] [<agent command> [args...]]
        cox [--data <dir>] --inspect [<tool> [<arguments>...]]";
 
 /// What the command line asks `cox` to be.
@@ -59,7 +59,7 @@ pub enum Mode {
         data: Option<PathBuf>,
         args: Vec<String>,
     },
-    /// None of these: the usage is to be shown.
+    /// The usage, as `cox --help`.
     Usage,
 }
 
@@ -74,7 +74,10 @@ pub struct Settings {
     /// Where Cox keeps what lasts across its runs, if not where it keeps
     /// it from the place it runs from (see [`crate::storage`]).
     pub data: Option<PathBuf>,
-    /// The agent each chat starts with, and its arguments.
+    /// The agent each chat starts with, and its arguments, or none when
+    /// the system opens Cox, as from the Finder, which then starts the
+    /// agent of `agents.json` the settings name (see
+    /// [`crate::settings::agent`]).
     pub command: Vec<String>,
 }
 
@@ -93,7 +96,10 @@ impl Mode {
                 args: settings.command[1..].to_vec(),
             };
         }
-        if settings.command.is_empty() {
+        if matches!(
+            settings.command.first().map(String::as_str),
+            Some("--help" | "-h")
+        ) {
             return Self::Usage;
         }
         Self::App(settings)
@@ -161,7 +167,14 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
             .home
             .or_else(|| crate::settings::Saved::read().home),
     );
-    let agents = Agents::read(settings.command);
+    // Opened from the Finder, the Dock or a launcher, Cox is given no
+    // command, and starts the agent the settings name.
+    let named = settings
+        .command
+        .is_empty()
+        .then(crate::settings::agent)
+        .flatten();
+    let agents = Agents::read(settings.command, named.as_deref());
     agents.fetch();
     crate::translate::start(agents.clone());
     let launcher = Launcher {
@@ -389,9 +402,22 @@ mod tests {
     }
 
     #[test]
-    fn without_a_command_the_usage_is_asked_for() {
-        assert_eq!(parse(&[]), Mode::Usage);
-        assert_eq!(parse(&["--stage", "about:blank"]), Mode::Usage);
+    fn without_a_command_the_app_starts_the_agent_the_settings_name() {
+        assert_eq!(
+            parse(&[]),
+            Mode::App(Settings {
+                stage: "about:blank".to_owned(),
+                home: None,
+                data: None,
+                command: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn the_usage_is_asked_for_with_help() {
+        assert_eq!(parse(&["--help"]), Mode::Usage);
+        assert_eq!(parse(&["--stage", "about:blank", "-h"]), Mode::Usage);
     }
 
     #[test]

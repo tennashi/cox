@@ -322,6 +322,13 @@ impl Launcher {
     }
 }
 
+/// Why no agent starts when Cox was opened without an agent command, as
+/// from the Finder, and the settings name none.
+const NO_AGENT: &str = "Cox was opened without an agent command, and settings.json, \
+    where Cox keeps what lasts, names none of the agents agents.json lists beside it, \
+    as {\"agent\": \"Claude\"} for [{\"name\": \"Claude\", \"command\": [\"npx\", \"-y\", \
+    \"@agentclientprotocol/claude-agent-acp\"]}]";
+
 /// Starts `known`, working in `cwd`, an absolute path, with the tools of
 /// `tools`, as `start` says: a chat's agent, or one with no chat, such as
 /// the judge of a goal, or the agent that translates the wiki (see
@@ -336,6 +343,7 @@ pub(crate) fn spawn(known: Known, cwd: PathBuf, tools: Vec<McpServer>, start: St
         ..
     } = known;
     let connect = move |told: &dyn Fn(String)| {
+        anyhow::ensure!(!command.is_empty(), NO_AGENT);
         // The program of an agent of the registry that Cox downloads
         // is downloaded the first time it starts.
         let command = match download {
