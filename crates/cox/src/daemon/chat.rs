@@ -9,7 +9,7 @@
 //! chat's key and the generation of its agent, so that what an agent
 //! stopped since says is let be.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cox_core::goal;
 use cox_core::store::{ChatId, Record};
@@ -152,7 +152,7 @@ impl Chat {
                 setup
                     .iter()
                     .filter_map(|setup| setup.folder.as_deref())
-                    .map(conversation::sketch_note),
+                    .map(folder_note),
             )
             .chain(
                 setup
@@ -848,6 +848,17 @@ fn quoted(word: &str) -> String {
         return word.to_owned();
     }
     format!("'{}'", word.replace('\'', "'\\''"))
+}
+
+/// The note that tells the human where a chat set up to work in `folder`
+/// works: a sketch's, apart from the project, or another folder.
+fn folder_note(folder: &Path) -> String {
+    let sketches = crate::storage::path(crate::storage::Kept::Sketches);
+    if sketches.is_some_and(|sketches| folder.starts_with(sketches)) {
+        conversation::sketch_note(folder)
+    } else {
+        conversation::folder_note(folder)
+    }
 }
 
 #[cfg(test)]

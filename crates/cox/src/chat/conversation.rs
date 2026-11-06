@@ -1162,6 +1162,13 @@ pub fn sketch_note(folder: &Path) -> String {
     )
 }
 
+/// The note that tells the human a chat works in `folder`, in place of
+/// its project's, as the chat of a schedule works where it says.
+#[must_use]
+pub fn folder_note(folder: &Path) -> String {
+    format!("Works in: {}", crate::ui::paths::shortened(folder))
+}
+
 /// Whether `entry` starts a turn: a line sent to the agent, by the human
 /// or by Cox in their place.
 fn is_turn_start(entry: &Entry) -> bool {

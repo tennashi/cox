@@ -136,6 +136,9 @@ pub enum Internal {
     Detach { id: u64 },
     /// The daemon is to stop, with its chats' agents.
     Quit,
+    /// It is time to look which of the human's schedules are due, and
+    /// run them (see [`crate::schedule`]).
+    Schedules,
 }
 
 /// A project: a folder the human opened, whose chats work there.
@@ -271,6 +274,11 @@ pub struct Daemon {
     window_id: Option<u64>,
     /// Whether the daemon is to stop.
     done: bool,
+    /// When each of the human's schedules last ran (see
+    /// [`crate::schedule`]), read as the daemon first looks.
+    ran: Option<crate::schedule::Ran>,
+    /// The chat of the last run of each schedule, by its name.
+    scheduled: HashMap<String, u64>,
 }
 
 /// How the daemon is reached: what to tell it.
@@ -396,6 +404,8 @@ impl Daemon {
             reveals: Vec::new(),
             window_id: None,
             done: false,
+            ran: None,
+            scheduled: HashMap::new(),
         };
         daemon.read_kept();
         daemon
@@ -1099,7 +1109,72 @@ impl Daemon {
                 }
             }
             Internal::Quit => self.done = true,
+            Internal::Schedules => {
+                let user = std::env::var_os("HOME").map(PathBuf::from);
+                self.run_schedules(
+                    &crate::settings::workflow(),
+                    user.as_deref(),
+                    &jiff::Zoned::now(),
+                );
+            }
         }
+    }
+
+    /// Runs each of the schedules of the human's `workflow` that is due
+    /// `now`, from the home directory `user`, unless the chat of its last
+    /// run is still at work: a chat for each run, in the project of the
+    /// schedule's folder, or in no project, on the schedule's first line,
+    /// sent in the human's place, its agent going on unasked with what the
+    /// schedule allows (see [`crate::schedule`]).
+    fn run_schedules(&mut self, workflow: &Path, user: Option<&Path>, now: &jiff::Zoned) {
+        let schedules = crate::schedule::schedules(workflow, user);
+        if schedules.is_empty() {
+            return;
+        }
+        let mut ran = self
+            .ran
+            .take()
+            .unwrap_or_else(|| crate::schedule::Ran::read(storage::path(storage::Kept::Schedules)));
+        for schedule in schedules {
+            let at_work = self
+                .scheduled
+                .get(&schedule.name)
+                .and_then(|&key| self.slot(key))
+                .is_some_and(|slot| working(slot.state));
+            let last = ran.last(&schedule.name);
+            if at_work || !schedule.every.due(last, now) {
+                continue;
+            }
+            tracing::info!(schedule = schedule.name, "a schedule runs");
+            ran.ran(&schedule.name, now.timestamp());
+            if let Some(folder) = &schedule.folder
+                && let Err(error) = std::fs::create_dir_all(folder)
+            {
+                tracing::error!("cannot make {}: {error}", folder.display());
+            }
+            let project = schedule
+                .folder
+                .clone()
+                .map_or(0, |folder| self.project(folder));
+            let setup = (!schedule.allow.is_empty()).then(|| Setup {
+                policy: Policy {
+                    allow: schedule.allow.clone(),
+                    ..Policy::default()
+                },
+                ..Setup::default()
+            });
+            let key = self.open_in(project, None, setup);
+            let store = Rc::clone(&self.store);
+            if let Some(slot) = self.slot_mut(key) {
+                slot.name_as(&schedule.chat_name(now), Named::Human, &store);
+            }
+            let line = schedule.line(now, last);
+            if let Some(chat) = self.chat(key) {
+                chat.told(&line);
+            }
+            self.scheduled.insert(schedule.name, key);
+        }
+        self.ran = Some(ran);
     }
 
     /// Takes the window of the connection `id`, which says `hello`, to

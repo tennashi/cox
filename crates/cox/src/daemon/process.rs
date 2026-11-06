@@ -13,6 +13,9 @@
 //! it started, as `cargo xtask install` replaces it, and no chat is at
 //! work, the next window is answered [`FromDaemon::Outdated`], and coxd
 //! stops, for the window to start the new one (see [`super::client`]).
+//!
+//! Every minute, coxd runs the human's schedules that are due (see
+//! [`crate::schedule`]), whether a window is there or not.
 
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
@@ -60,6 +63,7 @@ pub fn run(
         let (stop, stopped) = oneshot::channel();
         tokio::task::spawn_local(accept(listener, to, internal.clone()));
         tokio::task::spawn_local(stop_when_asked(socket.to_owned(), bound, stop));
+        tokio::task::spawn_local(schedules(internal.clone()));
         tracing::info!(socket = %socket.display(), "coxd runs");
         let daemon = Daemon::new(home, false, store(), spawns(), internal);
         daemon.serve(None, from_window, heard, stopped).await;
@@ -116,6 +120,23 @@ async fn stop_when_asked(socket: PathBuf, bound: u64, stop: oneshot::Sender<()>)
         }
     }
     let _ = stop.send(());
+}
+
+/// How long after it starts coxd first looks which of the human's
+/// schedules are due, and how often it looks after.
+const SCHEDULES_FIRST: Duration = Duration::from_secs(5);
+const SCHEDULES_EVERY: Duration = Duration::from_mins(1);
+
+/// Has the daemon run the schedules that are due, now and then, as
+/// `internal` tells it (see [`crate::schedule`]).
+async fn schedules(internal: UnboundedSender<Internal>) {
+    tokio::time::sleep(SCHEDULES_FIRST).await;
+    loop {
+        if internal.send(Internal::Schedules).is_err() {
+            return;
+        }
+        tokio::time::sleep(SCHEDULES_EVERY).await;
+    }
 }
 
 /// Takes each window that comes to `listener`, passing on what it says to

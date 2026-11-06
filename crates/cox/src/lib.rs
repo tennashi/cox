@@ -23,6 +23,8 @@
 //!   screen: the folder chats in no project work in.
 //! - [`wiki`] is the human's wiki, where the agents keep what they
 //!   learned, for those of every project to find again.
+//! - [`schedule`] is the agents the human has run on a schedule, a chat
+//!   that coxd opens at the times they say.
 //! - [`workflow`] is what Cox tells a chat's agent in the human's place
 //!   at the turns of a sketch, which the human's workflow can say instead.
 //! - [`notices`] tells the human of chats that need them while they look
@@ -54,6 +56,7 @@ pub mod login;
 pub mod logs;
 pub mod notices;
 pub mod process;
+pub mod schedule;
 pub mod scratch;
 pub mod settings;
 pub mod stage;
