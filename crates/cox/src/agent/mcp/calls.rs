@@ -19,7 +19,7 @@ use crate::agent::mcp::{
 };
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::chat::sketch::Sketch;
-use crate::wiki;
+use crate::{raw, wiki};
 
 const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
@@ -33,6 +33,9 @@ const START_SKETCH: &str = "start_sketch";
 const WIKI_SEARCH: &str = "wiki_search";
 const WIKI_READ: &str = "wiki_read";
 const WIKI_WRITE: &str = "wiki_write";
+const RAW_KEEP: &str = "raw_keep";
+const RAW_SEARCH: &str = "raw_search";
+const RAW_READ: &str = "raw_read";
 
 /// How the map's file is written, as the agent is told it when it is to
 /// write one: the form the Map tab draws, not what to put in it, which is
@@ -189,8 +192,98 @@ fn all_tools() -> Value {
     ]);
     if let Some(all) = tools.as_array_mut() {
         all.extend(wiki_tools());
+        all.extend(raw_tools());
     }
     tools
+}
+
+/// The tools that keep what the agent reads, and find it again, as the
+/// agent learns of them.
+fn raw_tools() -> [Value; 3] {
+    [
+        json!({
+            "name": RAW_KEEP,
+            "description": "Keeps a source you read, as it was: a web page, a paper, a \
+                release note or a command's output, as the material of research the \
+                human has you do, apart from what is made of it, as a report or a page \
+                of the wiki, which then names the sources it was made from, so that it \
+                can be checked against them, or made again. Give the text as you read \
+                it, as Markdown, not a summary of it, and leave out what is not the \
+                source's own, as a site's menus. Sources are kept by topic, as the \
+                research they are of; Cox notes where each was read, the day and this \
+                chat, and names it after the day and its title. A source is never \
+                written again: keep a newer one beside it. Answers the source's name, \
+                for raw_read, and its file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "What the research is of, as words and `/`, as \
+                            `rust-news`: the folder the source is kept in.",
+                    },
+                    "from": {
+                        "type": "string",
+                        "description": "Where it was read: its URL, or the command or \
+                            the file it came from.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Its title, as the source names itself.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "What it says, as Markdown, without its title.",
+                    },
+                },
+                "required": ["topic", "from", "title", "text"],
+            },
+        }),
+        json!({
+            "name": RAW_SEARCH,
+            "description": "Searches the sources kept with raw_keep, of a topic or of all: \
+                answers those that have every word of the query, whatever the case, \
+                those that have them most first, each by its name and title with the \
+                first lines that have them. Read one with raw_read.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The words to look for, as `never type`.",
+                    },
+                    "topic": {
+                        "type": "string",
+                        "description": "The topic to search, as `rust-news`; all unless \
+                            given.",
+                    },
+                },
+                "required": ["query"],
+            },
+        }),
+        json!({
+            "name": RAW_READ,
+            "description": "Reads a source kept with raw_keep, whole, with where it was \
+                read, the day and the chat that kept it in its properties. Without a \
+                source, lists those of the topic, or of all, the last kept first, as \
+                to see what research has found since a day.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "The source's name, as raw_keep or raw_search \
+                            gives it, as `rust-news/2026-11-06-announcing-rust-1-92-0`.",
+                    },
+                    "topic": {
+                        "type": "string",
+                        "description": "Without a source, the topic to list, as \
+                            `rust-news`; all unless given.",
+                    },
+                },
+            },
+        }),
+    ]
 }
 
 /// The tools that read and write the human's wiki, as the agent learns
@@ -525,6 +618,9 @@ pub(super) async fn call(
         WIKI_SEARCH => wiki_search(arguments, chats).await,
         WIKI_READ => wiki_read(arguments, chats).await,
         WIKI_WRITE => wiki_write(arguments, cwd, chats).await,
+        RAW_KEEP => raw_keep(arguments, chats).await,
+        RAW_SEARCH => raw_search(arguments),
+        RAW_READ => raw_read(arguments),
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
     Ok(match done {
@@ -1209,6 +1305,98 @@ async fn wiki_write(
         file.display(),
         used.line().trim_start_matches("- ")
     ))
+}
+
+/// Keeps the source `arguments` give, noting the chat that kept it.
+async fn raw_keep(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let given = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("no {key}: give the source's {key} as `{key}`"))
+    };
+    let topic = given("topic")?;
+    let source = raw::Source {
+        from: given("from")?,
+        title: given("title")?,
+        text: given("text")?,
+    };
+    let Whereabouts {
+        project,
+        chat,
+        kept,
+    } = whereabouts(chats).await?;
+    let mut by = format!("in {project}, chat \"{chat}\"");
+    if let Some(kept) = kept {
+        let _ = write!(by, " (#{kept})");
+    }
+    let root = crate::settings::raw();
+    let name = raw::keep(&root, topic, source, &by, &wiki::today())?;
+    let file = wiki::file(&root, &name)?;
+    Ok(format!(
+        "The source is kept as {name}, in {}. Name it where you use it.",
+        file.display()
+    ))
+}
+
+/// The topic `arguments` give, if they give one.
+fn topic(arguments: &Value) -> Result<Option<&str>, String> {
+    match arguments.get("topic") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(topic)) => Ok(Some(topic.as_str())),
+        Some(_) => Err("`topic` is not a string".to_owned()),
+    }
+}
+
+/// Searches the sources for what `arguments` ask, and tells what it
+/// found.
+fn raw_search(arguments: &Value) -> Result<String, String> {
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .filter(|query| !query.trim().is_empty())
+        .ok_or("no query: give the words to look for as `query`")?;
+    let topic = topic(arguments)?;
+    let found = raw::search(&crate::settings::raw(), query, topic);
+    if found.is_empty() {
+        return Ok(format!("No source kept has every word of `{query}`."));
+    }
+    let mut told = format!("The sources kept that have every word of `{query}`:");
+    for source in found {
+        let _ = write!(told, "\n\n{}: {}", source.name, source.title);
+        for line in source.lines {
+            let _ = write!(told, "\n  {line}");
+        }
+    }
+    Ok(told)
+}
+
+/// Reads the source `arguments` name, or lists the sources.
+fn raw_read(arguments: &Value) -> Result<String, String> {
+    let root = crate::settings::raw();
+    match arguments.get("source") {
+        None | Some(Value::Null) => {
+            let topic = topic(arguments)?;
+            let sources = raw::list(&root, topic);
+            let of = topic
+                .map(|topic| format!(" of {topic}"))
+                .unwrap_or_default();
+            if sources.is_empty() {
+                Ok(format!("No source{of} is kept."))
+            } else {
+                Ok(format!(
+                    "The sources{of}, the last kept first:\n{}",
+                    sources.join("\n")
+                ))
+            }
+        }
+        Some(Value::String(source)) => raw::read(&root, source)
+            .map_err(|error| format!("{error}: find its name with raw_read or raw_search")),
+        Some(_) => Err("`source` is not a string".to_owned()),
+    }
 }
 
 /// What the agent is told of a command that ran: its output, or the end

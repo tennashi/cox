@@ -23,6 +23,8 @@
 //!   screen: the folder chats in no project work in.
 //! - [`wiki`] is the human's wiki, where the agents keep what they
 //!   learned, for those of every project to find again.
+//! - [`raw`] is what the agents read, kept as they read it, as the
+//!   sources of research, apart from what is made of it.
 //! - [`schedule`] is the agents the human has run on a schedule, a chat
 //!   that coxd opens at the times they say.
 //! - [`workflow`] is what Cox tells a chat's agent in the human's place
@@ -56,6 +58,7 @@ pub mod login;
 pub mod logs;
 pub mod notices;
 pub mod process;
+pub mod raw;
 pub mod schedule;
 pub mod scratch;
 pub mod settings;

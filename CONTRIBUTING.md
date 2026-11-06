@@ -265,7 +265,8 @@ which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `run_command`,
-`open_chat`, `wait_chat`, `propose_goal`, `start_sketch`, `wiki_search`, `wiki_read`, `wiki_write`), all of them unless given; `stage`, `drive` for the tools
+`open_chat`, `wait_chat`, `propose_goal`, `start_sketch`, `wiki_search`, `wiki_read`, `wiki_write`,
+`raw_keep`, `raw_search`, `raw_read`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the permission requests Cox answers
 in the human's place, a request both match being rejected, and the
@@ -1078,6 +1079,41 @@ is a chat named after the schedule and when it ran, as
 When each schedule last ran is kept in `state/schedules.json` in Cox's
 data folder. A schedule whose `every` or `folder` Cox cannot read is
 said in coxd's log, and does not run.
+
+## Research
+
+What a chat's agent reads, as a web page, a paper, a release note or a
+command's output, it keeps as it read it, with Cox's `raw_keep` tool,
+as the material of research the human has it do, apart from what is
+made of it, as a report or a page of the wiki, which names the sources
+it was made from, so that it can be checked against them, or made
+again; whether it becomes a page of the wiki is for whoever writes the
+page. The sources are Markdown files in the folder `settings.json`
+names, whole or from `~`, as `{"raw": "~/notes/raw"}`, or else `raw` in
+the home the settings set, as `~/cox/raw`, by topic, the research they
+are of, each named after the day it was kept and its title, as
+`rust-news/2026-11-06-announcing-rust-1-92-0.md`, with, in its
+properties, where it was read, the day, and the chat that kept it. A
+source is never written again: what changed is another source, kept
+beside it. `raw_read` reads a source, or lists those of a topic, the
+last kept first, and `raw_search` finds those that have every word it
+looks for.
+
+So research on a schedule is a schedule (see [Schedules](#schedules))
+whose first line asks for it:
+
+```markdown
+---
+every: daily 09:00
+allow:
+  - fetch:*
+  - search:*
+---
+
+Find out what changed in Rust since {last}. Keep each source you read
+with raw_keep, under the topic `{name}`, then write what changed, with
+the sources it comes from, to a page of the wiki, `research/{name}`.
+```
 
 ## What Cox keeps of each run
 

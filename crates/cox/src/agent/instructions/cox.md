@@ -15,3 +15,8 @@ met, search it with wiki_search, and read what it finds with wiki_read;
 say which pages you used. Write to it with wiki_write only when the
 human asks you to keep something there, in English, keeping in the
 project, with keep_in_project, what holds only of it.
+
+When the human has you research something, keep each source you read
+with raw_keep, as you read it, under the research's topic, before you
+make anything of it, and name the sources what you make was made from.
+Find what earlier research kept with raw_read and raw_search.
