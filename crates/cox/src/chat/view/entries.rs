@@ -73,10 +73,32 @@ impl Speaker {
 /// What the timeline marks beside an entry: a speaker, by name, where
 /// they start, in their color, or, where the entry names them itself, by
 /// the dot alone, or what asks the human.
+#[derive(Clone, Debug)]
 enum Mark {
     Named(SharedString, u32),
     Starts(u32),
     Asking,
+}
+
+/// One place of the conversation: what shows there, what the timeline
+/// marks beside it, and, for the work of an agent where it starts with
+/// it, the agent's name, on the work's own line.
+#[derive(Clone, Debug)]
+pub(super) struct Place {
+    shown: Shown,
+    mark: Option<Mark>,
+    name: Option<SharedString>,
+}
+
+impl Place {
+    /// The first entry the place shows, which stays the same as the
+    /// place grows, as work does with each step.
+    pub(super) fn first(&self) -> usize {
+        match &self.shown {
+            Shown::Entry(index) => *index,
+            Shown::Work(work) => work.start,
+        }
+    }
 }
 
 /// The name of the agent, along the conversation: the agent the chat
@@ -221,13 +243,16 @@ impl Folds {
 }
 
 impl ChatView {
-    /// The conversation's entries, folded as the human left them.
-    pub(super) fn render_entries(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// The places of the conversation, in order: what each shows, and
+    /// what the timeline marks beside it. Working them out reads the
+    /// entries alone, so it is cheap; drawing them is not, and the list
+    /// draws only the places in sight (see [`Self::render_place`]).
+    pub(super) fn places(&self) -> Vec<Place> {
         let entries = self.conversation.entries();
         let mut agents = AgentNames::new(entries, self.agent_name());
         let mut speaking = None;
-        let mut rendered = Vec::new();
-        for (place, shown) in shown(entries).into_iter().enumerate() {
+        let mut places = Vec::new();
+        for shown in shown(entries) {
             let first = match &shown {
                 Shown::Entry(index) => *index,
                 Shown::Work(work) => work.start,
@@ -257,27 +282,46 @@ impl ChatView {
             } else {
                 None
             };
-            let element = match shown {
-                Shown::Entry(index) => self.render_entry(index, entry, cx),
-                Shown::Work(work) => {
-                    // The work names who did it on its own line, ahead of
-                    // its steps.
-                    let name = match mark.take() {
-                        Some(Mark::Named(name, color)) => {
-                            mark = Some(Mark::Starts(color));
-                            Some(name)
-                        }
-                        other => {
-                            mark = other;
-                            None
-                        }
-                    };
-                    self.render_work(work, name, cx)
+            // The work names who did it on its own line, ahead of its
+            // steps.
+            let name = match (&shown, mark.take()) {
+                (Shown::Work(_), Some(Mark::Named(name, color))) => {
+                    mark = Some(Mark::Starts(color));
+                    Some(name)
+                }
+                (_, other) => {
+                    mark = other;
+                    None
                 }
             };
-            rendered.push(on_timeline(place == 0, mark, element));
+            places.push(Place { shown, mark, name });
         }
-        rendered
+        places
+    }
+
+    /// Place `place` of the conversation, as [`Self::places`] last worked
+    /// them out, on the timeline.
+    pub(super) fn render_place(&self, place: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(Place { shown, mark, name }) = self.places.get(place).cloned() else {
+            return div().into_any_element();
+        };
+        let element = match shown {
+            Shown::Entry(index) => {
+                let entries = self.conversation.entries();
+                match entries.get(index) {
+                    Some(entry) => self.render_entry(index, entry, cx),
+                    None => div().into_any_element(),
+                }
+            }
+            Shown::Work(work) => self.render_work(work, name, cx),
+        };
+        // The list lays each place out on its own, so each keeps the
+        // conversation's margins itself.
+        div()
+            .px(px(14.))
+            .when(place == 0, |first| first.pt(px(16.)))
+            .child(on_timeline(place == 0, mark, element))
+            .into_any_element()
     }
 
     /// Whether the entry at `index` is still arriving: the last of a turn

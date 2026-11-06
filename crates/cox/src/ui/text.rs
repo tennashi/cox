@@ -6,10 +6,13 @@
 //! notes in [`Painted`] what it says and where it went, which is how the
 //! view finds the text under the mouse and what a selection copies. Every
 //! frame draws the pieces again, so `Painted` holds those of the last
-//! frame. [`Reading`] turns the human's mouse into what they select of
-//! it, and the links they click.
+//! frame, or, for a view that lays out only the text in sight, as the
+//! conversation does, those of the last frame with what the frames before
+//! laid out of the rest, so that a selection copies what scrolled out of
+//! sight too. [`Reading`] turns the human's mouse into what they select
+//! of it, and the links they click.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -39,19 +42,71 @@ struct PaintedText {
     joined: &'static str,
     layout: TextLayout,
     /// The part of the text that shows: a piece in a box that scrolls on
-    /// its own can be partly hidden.
+    /// its own can be partly hidden, and one an earlier frame laid out,
+    /// out of sight now, shows none.
     visible: Bounds<Pixels>,
     links: Rc<[(Range<usize>, SharedString)]>,
+    /// Whether this frame laid the piece out, or an earlier one did.
+    current: bool,
 }
 
-/// The pieces of text the last frame laid out, in order.
+impl PaintedText {
+    /// Whether the piece shows at `position`.
+    fn shows_at(&self, position: Point<Pixels>) -> bool {
+        !self.visible.is_empty() && self.visible.contains(&position)
+    }
+}
+
+/// The pieces of text the last frame laid out, in order, with, once
+/// [aged](Painted::age), those earlier frames laid out that it did not,
+/// all in the order of their ids.
 #[derive(Clone, Default)]
-pub struct Painted(Rc<RefCell<Vec<PaintedText>>>);
+pub struct Painted(Rc<RefCell<Vec<PaintedText>>>, Rc<Cell<bool>>);
 
 impl Painted {
     /// Forgets the pieces, before a frame lays them out again.
     pub fn clear(&self) {
         self.0.borrow_mut().clear();
+        self.1.set(false);
+    }
+
+    /// Keeps the pieces of the entries before `entries`, out of sight,
+    /// before a frame lays out again those it shows: an entry the frame
+    /// lays out replaces what it was.
+    pub fn age(&self, entries: usize) {
+        let mut texts = self.0.borrow_mut();
+        texts.retain(|text| text.id.entry < entries);
+        texts.sort_by_key(|text| text.id);
+        for text in texts.iter_mut() {
+            text.visible = Bounds::default();
+            text.current = false;
+        }
+        self.1.set(true);
+    }
+
+    /// Notes `text`, which this frame laid out, in its place among the
+    /// pieces.
+    fn push(&self, text: PaintedText) {
+        let mut texts = self.0.borrow_mut();
+        if !self.1.get() {
+            texts.push(text);
+            return;
+        }
+        // What an earlier frame laid out of the entry goes, once this one
+        // lays it out.
+        let entry = text.id.entry;
+        let start = texts.partition_point(|kept| kept.id.entry < entry);
+        let end = texts.partition_point(|kept| kept.id.entry <= entry);
+        let mut index = start;
+        for _ in start..end {
+            if texts[index].current {
+                index += 1;
+            } else {
+                texts.remove(index);
+            }
+        }
+        let at = texts.partition_point(|kept| kept.id < text.id);
+        texts.insert(at, text);
     }
 
     /// The spot nearest `position` in the text that shows: in the piece
@@ -131,7 +186,7 @@ impl Painted {
     #[must_use]
     pub fn link_at(&self, position: Point<Pixels>) -> Option<SharedString> {
         let texts = self.0.borrow();
-        let text = texts.iter().find(|text| text.visible.contains(&position))?;
+        let text = texts.iter().find(|text| text.shows_at(position))?;
         link_at(&text.layout, &text.links, position)
     }
 
@@ -162,6 +217,13 @@ impl Reading {
     /// again.
     pub fn clear(&self) {
         self.painted.clear();
+    }
+
+    /// Keeps how the text of the entries before `entries` was laid out,
+    /// before a frame lays out again only the text in sight: what scrolled
+    /// out of it can still be selected and copied.
+    pub fn age(&self, entries: usize) {
+        self.painted.age(entries);
     }
 
     /// Writes entry `entry` of the text, showing what of it is selected.
@@ -224,7 +286,7 @@ impl Reading {
             .0
             .borrow()
             .iter()
-            .any(|text| text.visible.contains(&position))
+            .any(|text| text.shows_at(position))
     }
 
     /// Lets go of what is selected: answers whether something was.
@@ -337,13 +399,14 @@ impl Element for SelectableText {
     ) -> Self::PrepaintState {
         self.styled
             .prepaint(id, inspector_id, bounds, request_layout, window, cx);
-        self.painted.0.borrow_mut().push(PaintedText {
+        self.painted.push(PaintedText {
             id: self.id,
             text: self.text.clone(),
             joined: self.joined,
             layout: self.styled.layout().clone(),
             visible: bounds.intersect(&window.content_mask().bounds),
             links: Rc::clone(&self.links),
+            current: true,
         });
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
@@ -656,4 +719,95 @@ fn highlights(
 
 fn color(hex: u32) -> Hsla {
     rgb(hex).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{point, size};
+
+    use super::*;
+
+    fn piece(entry: usize, part: usize, text: &str) -> PaintedText {
+        PaintedText {
+            id: TextId { entry, part },
+            text: SharedString::from(text.to_owned()),
+            joined: "\n",
+            layout: TextLayout::default(),
+            visible: Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
+            links: Rc::new([]),
+            current: true,
+        }
+    }
+
+    fn texts(painted: &Painted) -> Vec<(TextId, String, bool)> {
+        painted
+            .0
+            .borrow()
+            .iter()
+            .map(|text| (text.id, text.text.to_string(), text.current))
+            .collect()
+    }
+
+    #[test]
+    fn aged_pieces_stay_until_their_entry_is_laid_out_again() {
+        let painted = Painted::default();
+        for (entry, text) in [(0, "a"), (1, "b"), (2, "c")] {
+            painted.push(piece(entry, 0, text));
+        }
+        painted.age(3);
+        // The frame lays out entry 1 alone, now in two pieces.
+        painted.push(piece(1, 0, "b1"));
+        painted.push(piece(1, 1, "b2"));
+        let id = |entry, part| TextId { entry, part };
+        assert_eq!(
+            texts(&painted),
+            [
+                (id(0, 0), "a".to_owned(), false),
+                (id(1, 0), "b1".to_owned(), true),
+                (id(1, 1), "b2".to_owned(), true),
+                (id(2, 0), "c".to_owned(), false),
+            ]
+        );
+        // What is out of sight shows nowhere, but is copied.
+        assert!(!painted.0.borrow()[0].shows_at(point(px(0.), px(0.))));
+        let all = Selection {
+            anchor: Spot {
+                text: id(0, 0),
+                offset: 0,
+            },
+            head: Spot {
+                text: id(2, 0),
+                offset: 1,
+            },
+        };
+        assert_eq!(painted.copy(&all), "a\nb1\nb2\nc");
+    }
+
+    #[test]
+    fn aging_forgets_the_entries_gone() {
+        let painted = Painted::default();
+        painted.push(piece(0, 0, "a"));
+        painted.push(piece(1, 0, "b"));
+        painted.age(1);
+        assert_eq!(texts(&painted).len(), 1);
+    }
+
+    #[test]
+    fn clearing_forgets_every_piece() {
+        let painted = Painted::default();
+        painted.push(piece(0, 0, "a"));
+        painted.age(1);
+        painted.clear();
+        painted.push(piece(1, 0, "b"));
+        painted.push(piece(0, 0, "a"));
+        // In the order laid out, as a view that does not age its text
+        // has them.
+        assert_eq!(
+            texts(&painted)
+                .into_iter()
+                .map(|(_, text, _)| text)
+                .collect::<Vec<_>>(),
+            ["b", "a"]
+        );
+    }
 }

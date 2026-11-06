@@ -215,11 +215,49 @@ async fn keeps_the_newest_entries_in_view(cx: &mut TestAppContext) {
     }
     cx.run_until_parked();
 
-    let (offset, max) = view.read_with(cx, |view, _| {
-        (view.scroll().offset().y, view.scroll().max_offset().height)
-    });
+    let (offset, max) = scrolled(cx, &view);
     assert!(max > gpui::px(0.), "the conversation overflows");
     assert_eq!(offset, -max);
+}
+
+#[gpui::test]
+async fn stays_where_the_human_scrolled_back_to(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+    for _ in 0..40 {
+        cx.simulate_input("hello");
+        cx.simulate_keystrokes("enter");
+        wait_for(cx, &view, State::Idle).await;
+    }
+    cx.run_until_parked();
+
+    view.update(cx, |view, cx| {
+        view.scroll().scroll_by(gpui::px(-200.));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let (back, max) = scrolled(cx, &view);
+    assert!(back > -max, "scrolled back from the end");
+
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, State::Idle).await;
+    cx.run_until_parked();
+
+    let (offset, max) = scrolled(cx, &view);
+    assert_eq!(offset, back);
+    assert!(offset > -max, "the end went on out of view");
+}
+
+/// How far the conversation is scrolled down, as a negative number, and
+/// how far it scrolls at most.
+fn scrolled(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> (gpui::Pixels, gpui::Pixels) {
+    view.read_with(cx, |view, _| {
+        let list = view.scroll();
+        (
+            list.scroll_px_offset_for_scrollbar().y,
+            list.max_offset_for_scrollbar().height,
+        )
+    })
 }
 
 #[gpui::test]
