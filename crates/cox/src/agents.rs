@@ -17,7 +17,10 @@
 //! agents runs is left out, the human's being the one they set up, and
 //! the human's takes its name from the registry.
 
+pub mod check;
 pub mod download;
+pub mod line;
+pub mod listing;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -95,6 +98,9 @@ impl Known {
 /// with, shared by every chat, as the registry arrives.
 #[derive(Clone)]
 pub struct Agents(Arc<Mutex<Lists>>);
+
+/// The agents of the app, for the settings screen to list.
+impl gpui::Global for Agents {}
 
 /// The human's agents, and the registry's.
 struct Lists {
@@ -177,6 +183,13 @@ impl Agents {
     fn relist(&self, named: Option<&str>, own: Vec<Known>) {
         let mut lists = self.lock();
         lists.own = first(&lists.command, named, own);
+    }
+
+    /// Whether the command line gave the agent a new chat talks to, ahead
+    /// of the one `settings.json` names.
+    #[must_use]
+    pub fn commanded(&self) -> bool {
+        !self.lock().command.is_empty()
     }
 
     /// Fetches the registry on a thread of its own, and lists its agents
@@ -454,6 +467,29 @@ pub fn located(command: &[String], folder: &Path) -> Vec<String> {
     command
 }
 
+/// `command` running the package its runner runs, such as `npx`,
+/// without the version the registry pins, so that it runs the package's
+/// latest, as the human's own agents do.
+#[must_use]
+pub fn unpinned(command: &[String]) -> Vec<String> {
+    let mut command = command.to_vec();
+    let package = command
+        .iter()
+        .position(|word| !is_assignment(word))
+        .filter(|&at| {
+            Path::new(&command[at])
+                .file_name()
+                .and_then(|runner| runner.to_str())
+                .is_some_and(|runner| RUNNERS.contains(&runner))
+        })
+        .and_then(|runner| (runner + 1..command.len()).find(|&at| !command[at].starts_with('-')));
+    if let Some(at) = package {
+        let unpinned = without_version(&command[at]).to_owned();
+        command[at] = unpinned;
+    }
+    command
+}
+
 /// The package `known` runs, without its version, when a runner runs
 /// one.
 fn runs(known: &Known) -> Option<&str> {
@@ -593,6 +629,21 @@ mod tests {
         assert_eq!(ids(&agents), ["", "Codex"]);
         assert_eq!(agents.of(None).name, "No agent");
         assert_eq!(agents.of(None).command, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_package_the_registry_pins_runs_unpinned() {
+        assert_eq!(
+            unpinned(&args(
+                "A=1 npx -y @agentclientprotocol/claude-agent-acp@0.101.0 --x"
+            )),
+            args("A=1 npx -y @agentclientprotocol/claude-agent-acp --x")
+        );
+        assert_eq!(
+            unpinned(&args("uvx fast-agent-acp==0.10.1")),
+            args("uvx fast-agent-acp")
+        );
+        assert_eq!(unpinned(&args("./amp --acp")), args("./amp --acp"));
     }
 
     #[test]

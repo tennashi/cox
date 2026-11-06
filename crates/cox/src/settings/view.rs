@@ -5,8 +5,12 @@
 //! input, where Enter sets what the human typed, a whole path or one from
 //! `~`, and "Choose…" asks for a folder and sets it. Set, the home is
 //! kept (see [`super::keep_home`]), and the window opens the chats in no
-//! project there from then on. Escape, the ×, or a click beside the card
-//! closes it, leaving the home as it was last set.
+//! project there from then on. Under it are the agents the human runs
+//! (see [`agents`]). Escape, the ×, or a click beside the card closes it,
+//! keeping the rows of agents changed, and leaving the home as it was
+//! last set.
+
+mod agents;
 
 use std::path::PathBuf;
 
@@ -15,6 +19,7 @@ use gpui::{
     MouseButton, PathPromptOptions, Subscription, Window, actions, div, prelude::*, px, rgb,
 };
 
+use self::agents::AgentsSection;
 use crate::ui::card;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
@@ -37,7 +42,7 @@ actions!(
 const KEY_CONTEXT: &str = "Settings";
 
 /// How wide the card is.
-const WIDTH: f32 = 560.;
+const WIDTH: f32 = 680.;
 
 /// Binds the key that closes the screen. The window binds the one that
 /// opens it.
@@ -70,6 +75,7 @@ pub struct SettingsView {
     given: bool,
     input: Entity<LineInput>,
     told: Told,
+    agents: Entity<AgentsSection>,
     _submitted: Subscription,
 }
 
@@ -91,8 +97,25 @@ impl SettingsView {
             given,
             input,
             told: Told::Hint,
+            agents: cx.new(AgentsSection::new),
             _submitted: submitted,
         }
+    }
+
+    /// The agents the screen lists.
+    #[must_use]
+    pub fn agents(&self) -> &Entity<AgentsSection> {
+        &self.agents
+    }
+
+    /// Reads the settings again, as another program changed them.
+    pub fn reread(&mut self, cx: &mut Context<Self>) {
+        self.agents.update(cx, AgentsSection::reread);
+    }
+
+    /// Keeps what the screen holds that is not kept yet, as it closes.
+    pub fn save_all(&mut self, cx: &mut Context<Self>) {
+        self.agents.update(cx, AgentsSection::save_all);
     }
 
     /// The input of the home's folder.
@@ -220,6 +243,7 @@ impl Render for SettingsView {
             .occlude()
             .w(px(WIDTH))
             .max_w_full()
+            .max_h_full()
             .flex()
             .flex_col()
             .shadow_lg()
@@ -258,6 +282,10 @@ impl Render for SettingsView {
             )
             .child(
                 div()
+                    .id("settings-body")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .px(px(22.))
                     .pt(px(18.))
                     .pb(px(22.))
@@ -305,7 +333,8 @@ impl Render for SettingsView {
                             .text_size(px(12.))
                             .text_color(rgb(color))
                             .child(told),
-                    ),
+                    )
+                    .child(div().mt_4().child(self.agents.clone())),
             )
     }
 }

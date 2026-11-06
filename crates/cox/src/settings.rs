@@ -238,7 +238,12 @@ pub fn follow(window: WindowHandle<Workspace>, agents: Agents, cx: &mut App) {
                     home_for_chats(saved.home)
                 })
                 .await;
-            let followed = window.update(cx, |workspace, _, cx| workspace.follow_home(home, cx));
+            let followed = window.update(cx, |workspace, _, cx| {
+                workspace.follow_home(home, cx);
+                if let Some(view) = workspace.settings().cloned() {
+                    view.update(cx, view::SettingsView::reread);
+                }
+            });
             if followed.is_err() {
                 break;
             }
@@ -298,19 +303,49 @@ pub fn keep_home(home: &Path) -> anyhow::Result<()> {
 
 /// Keeps `home` in `file`, leaving the rest of what it holds as it was.
 fn keep_home_in(file: &Path, home: &Path) -> anyhow::Result<()> {
+    let home = home
+        .to_str()
+        .context("the folder's path is not UTF-8, which settings.json holds")?;
+    keep_in(file, "home", Some(Value::String(home.to_owned())))
+}
+
+/// Keeps `agent`, by its name in `agents.json`, as the agent a new chat
+/// talks to when the command line names none, or, with none, names none,
+/// in this Cox's `settings.json`.
+///
+/// # Errors
+///
+/// When Cox has no place to keep it, or the file cannot be written.
+pub fn keep_agent(agent: Option<&str>) -> anyhow::Result<()> {
+    let file =
+        crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
+    keep_in(
+        &file,
+        "agent",
+        agent.map(|agent| Value::String(agent.to_owned())),
+    )
+}
+
+/// Keeps `value` as `key` of `file`, or takes `key` out with none,
+/// leaving the rest of what it holds as it was.
+fn keep_in(file: &Path, key: &str, value: Option<Value>) -> anyhow::Result<()> {
     let mut settings = match fs::read(file) {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(Value::Object(settings)) => settings,
-            // What cannot be read goes, in place of losing the home too.
+            // What cannot be read goes, in place of losing what is set too.
             _ => Map::new(),
         },
         Err(error) if error.kind() == io::ErrorKind::NotFound => Map::new(),
         Err(error) => return Err(error).with_context(|| format!("reading {}", file.display())),
     };
-    let home = home
-        .to_str()
-        .context("the folder's path is not UTF-8, which settings.json holds")?;
-    settings.insert("home".to_owned(), Value::String(home.to_owned()));
+    match value {
+        Some(value) => {
+            settings.insert(key.to_owned(), value);
+        }
+        None => {
+            settings.remove(key);
+        }
+    }
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).with_context(|| format!("making {}", parent.display()))?;
     }
@@ -353,7 +388,7 @@ pub fn folder_of(text: &str, user: Option<&Path>) -> Result<PathBuf, &'static st
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Saved, Translation, folder_of, keep_home_in};
+    use super::{Saved, Translation, folder_of, keep_home_in, keep_in};
 
     #[test]
     fn the_home_is_read_and_kept_beside_what_else_the_file_holds() {
@@ -374,6 +409,15 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         assert_eq!(kept["home"], "/work/two");
         assert_eq!(kept["later"], 1);
+
+        keep_in(&file, "agent", Some("Claude".into())).unwrap();
+        assert_eq!(Saved::read_from(&file).agent.as_deref(), Some("Claude"));
+        keep_in(&file, "agent", None).unwrap();
+        assert_eq!(Saved::read_from(&file).agent, None);
+        assert_eq!(
+            Saved::read_from(&file).home,
+            Some(PathBuf::from("/work/two"))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
