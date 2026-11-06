@@ -281,8 +281,8 @@ fn bind_keys(cx: &mut App) {
     cx.bind_keys([gpui::KeyBinding::new("cmd-q", Quit, None)]);
 }
 
-/// How often GPUI gives CEF's UI thread a turn on macOS: a little above
-/// the stage's frame rate, so a frame never waits for the next turn.
+/// How often GPUI gives CEF's UI thread a turn on macOS, when CEF does not
+/// ask for one sooner (see [`cox_browser::macos::pump_wanted`]).
 #[cfg(target_os = "macos")]
 const PUMP_INTERVAL: Duration = Duration::from_millis(8);
 
@@ -300,7 +300,10 @@ fn serve_browser(cef: &Cef, cx: &mut App) {
     let pumped = cef.clone();
     cx.spawn(async move |cx| {
         loop {
-            cx.background_executor().timer(PUMP_INTERVAL).await;
+            tokio::select! {
+                () = cx.background_executor().timer(PUMP_INTERVAL) => {}
+                () = cox_browser::macos::pump_wanted() => {}
+            }
             pumped.pump();
         }
     })

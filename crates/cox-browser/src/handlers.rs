@@ -72,6 +72,19 @@ wrap_browser_process_handler! {
                 create(new);
             }
         }
+
+        /// CEF has work for its UI thread in `delay_ms`. On macOS, where
+        /// that is the main thread, work wanted now wakes its turn; the
+        /// turns GPUI gives it anyway come soon enough for the rest. On
+        /// Linux, CEF's thread runs its own loop.
+        fn on_schedule_message_pump_work(&self, delay_ms: i64) {
+            #[cfg(target_os = "macos")]
+            if delay_ms <= 0 {
+                crate::macos::want_pump();
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = delay_ms;
+        }
     }
 }
 
@@ -106,6 +119,8 @@ fn create(new: NewBrowser) {
     };
     let window_info = WindowInfo {
         windowless_rendering_enabled: 1,
+        // CEF draws a picture when it is asked for one (see `frames`).
+        external_begin_frame_enabled: 1,
         bounds: cef::Rect {
             x: 0,
             y: 0,
@@ -123,7 +138,10 @@ fn create(new: NewBrowser) {
         StageContextMenuHandler::new(events),
     );
     let settings = BrowserSettings {
-        windowless_frame_rate: 60,
+        // CEF hands over at most this many pictures a second, whatever
+        // asks for them: above any display's rate, so that the window's
+        // frames alone pace them (see `frames`).
+        windowless_frame_rate: 240,
         ..Default::default()
     };
     let url = CefString::from(url.as_str());
@@ -529,6 +547,9 @@ wrap_render_handler! {
             match *type_.as_ref() {
                 cef_paint_element_type_t::PET_VIEW => {
                     shared.painted = Some((width, height));
+                    // The page changed: the window asks for its pictures
+                    // at each frame for a while (see `frames`).
+                    shared.pacing.stirred(Instant::now());
                     if shared.resizing.is_some()
                         && shared.reported.device_size() == (width, height)
                     {
