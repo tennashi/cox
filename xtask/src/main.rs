@@ -20,7 +20,8 @@ Tasks:
     ci      Run every check that CI runs: format, lint, test and dependencies
     install
             Build Cox for release and install it apart from target/:
-            ~/Applications/Cox.app on macOS, ~/.local/bin/cox on Linux
+            ~/Applications/Cox.app on macOS, ~/.local/bin/cox on Linux,
+            with coxd started at login, by launchd or systemd
     run [--headless] [--data <dir>] [<scenario> | -- <agent command>...]
             Build Cox and run it with cox-fake-agent playing <scenario>,
             the fake agent's tour unless given, or with <agent command>.
@@ -79,6 +80,10 @@ fn setup(sh: &Shell) -> anyhow::Result<()> {
 /// helpers from the executable's name, so the three agree.
 const APP: &str = "Cox";
 const BUNDLE_ID: &str = "com.github.tennashi.cox";
+/// What launchd knows coxd by, as `launchctl print gui/$UID/<label>`.
+const COXD_LABEL: &str = "com.github.tennashi.cox.coxd";
+/// What systemd knows coxd by, as `systemctl --user status <unit>`.
+const COXD_UNIT: &str = "coxd.service";
 /// What CEF appends to the app's name for each kind of helper process,
 /// paired with what the bundle identifier gets.
 const HELPERS: &[(&str, &str)] = &[
@@ -234,8 +239,103 @@ fn install(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
         })?;
         installed
     };
+    start_at_login(sh, &home, &installed)?;
     println!("Run Cox as {}", installed.display());
     Ok(())
+}
+
+/// Has coxd, as the Cox at `installed` runs it, start as the human logs
+/// in, so that the chats and the schedules run without a window having
+/// opened first: a launch agent on macOS, which launchd loads now too,
+/// starting coxd unless one runs already, and a user unit of systemd on
+/// Linux, which starts at the next login. Neither starts coxd again when
+/// it stops, as when a window has an outdated one stop, since the window
+/// starts the new one itself.
+fn start_at_login(sh: &Shell, home: &Path, installed: &Path) -> anyhow::Result<()> {
+    if cfg!(target_os = "macos") {
+        let agents = home.join("Library/LaunchAgents");
+        sh.create_dir(&agents)?;
+        let plist = agents.join(format!("{COXD_LABEL}.plist"));
+        sh.write_file(&plist, launch_agent(installed))?;
+        let uid = cmd!(sh, "id -u").read()?;
+        let loaded = cmd!(sh, "launchctl print gui/{uid}/{COXD_LABEL}")
+            .quiet()
+            .ignore_stdout()
+            .ignore_stderr()
+            .run()
+            .is_ok();
+        if !loaded {
+            cmd!(sh, "launchctl bootstrap gui/{uid} {plist}").run()?;
+        }
+        println!("coxd starts at login, as {}", plist.display());
+    } else {
+        let units = home.join(".config/systemd/user");
+        sh.create_dir(&units)?;
+        let unit = units.join(COXD_UNIT);
+        sh.write_file(&unit, user_unit(installed))?;
+        let enabled = cmd!(sh, "systemctl --user daemon-reload")
+            .run()
+            .and_then(|()| cmd!(sh, "systemctl --user enable {COXD_UNIT}").run());
+        match enabled {
+            Ok(()) => println!("coxd starts at login, as {}", unit.display()),
+            Err(error) => println!(
+                "coxd does not start at login, as systemd's user manager did not take {}: {error}",
+                unit.display()
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// The launch agent that starts coxd, of the Cox at `cox`, as the human
+/// logs in.
+fn launch_agent(cox: &Path) -> String {
+    let cox = escape_xml(&cox.display().to_string());
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{COXD_LABEL}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{cox}</string>
+		<string>--daemon</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+</dict>
+</plist>
+"#
+    )
+}
+
+/// The unit of systemd's user manager that starts coxd, of the Cox at
+/// `cox`, as the human logs in.
+fn user_unit(cox: &Path) -> String {
+    let cox = cox
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    format!(
+        "[Unit]\n\
+         Description=coxd, which runs Cox's chats\n\
+         \n\
+         [Service]\n\
+         ExecStart=\"{cox}\" --daemon\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n"
+    )
+}
+
+/// `text` as XML holds it.
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// What `run` is asked for.
@@ -574,7 +674,25 @@ fn info_plist(name: &str, identifier: &str, helper: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Build, ICNS_IMAGES, ICON, Run, icns};
+    use std::path::Path;
+
+    use super::{Build, ICNS_IMAGES, ICON, Run, icns, launch_agent, user_unit};
+
+    #[test]
+    fn coxd_starts_at_login_as_the_installed_cox() {
+        let agent = launch_agent(Path::new(
+            "/Users/me/Applications/Cox.app/Contents/MacOS/Cox",
+        ));
+        assert!(agent.contains(
+            "<array>\n\t\t<string>/Users/me/Applications/Cox.app/Contents/MacOS/Cox</string>\n\
+             \t\t<string>--daemon</string>\n\t</array>"
+        ));
+        assert!(agent.contains("<key>RunAtLoad</key>\n\t<true/>"));
+        assert!(!agent.contains("KeepAlive"));
+        let unit = user_unit(Path::new("/home/me/.local/bin/cox"));
+        assert!(unit.contains("\nExecStart=\"/home/me/.local/bin/cox\" --daemon\n"));
+        assert!(unit.ends_with("[Install]\nWantedBy=default.target\n"));
+    }
 
     #[test]
     fn the_icon_is_an_icns_of_every_size() {
