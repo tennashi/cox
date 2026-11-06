@@ -11,12 +11,15 @@
 //! The human selects with the mouse or with Shift and the arrows, and cuts,
 //! copies and pastes with the usual keys. Enter submits. In an input that
 //! wraps, Shift+Enter starts a new line; in one that holds one line, a
-//! pasted line break becomes a space.
+//! pasted line break becomes a space. On macOS, a key with Control that no
+//! binding takes goes to the input method, as macSKK's Control-J.
 //!
 //! [`draft`] is the text as it is typed, with its selection and
 //! composition, apart from drawing it.
 
 pub mod draft;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use std::ops::Range;
 
@@ -456,6 +459,25 @@ impl LineInput {
         crate::ui::translation::show(&text, window, cx);
     }
 
+    /// A key with Control that no binding took, while nothing is being
+    /// composed: the input method's to take, as macSKK's Control-J (see
+    /// [`macos`]). While it composes, GPUI hands it every key first.
+    #[cfg(target_os = "macos")]
+    fn control_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = &event.keystroke.modifiers;
+        if !modifiers.control || modifiers.platform || modifiers.function {
+            return;
+        }
+        if self.draft.marked().is_none() && macos::hand_on_key(cx) {
+            cx.stop_propagation();
+        }
+    }
+
     fn paste(&mut self, _: &Paste, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let text = if self.wraps {
@@ -690,7 +712,13 @@ impl EntityInputHandler for LineInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit(cx, |draft| draft.commit(range_utf16.as_ref(), text));
+        // A key with Control the input method does not take comes back as
+        // its control character, which is no text.
+        let typed = typed(text);
+        if typed.is_empty() && !text.is_empty() {
+            return;
+        }
+        self.edit(cx, |draft| draft.commit(range_utf16.as_ref(), &typed));
     }
 
     /// Text the input method is still composing.
@@ -783,6 +811,11 @@ impl Render for LineInput {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::translate))
             .on_action(cx.listener(Self::paste))
+            .map(|input| {
+                #[cfg(target_os = "macos")]
+                let input = input.on_key_down(cx.listener(Self::control_key));
+                input
+            })
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(
                 MouseButton::Right,
@@ -800,6 +833,14 @@ impl Render for LineInput {
             .w_full()
             .child(LineElement { input: cx.entity() })
     }
+}
+
+/// What of `text`, as the platform hands it in place of a key, is typed:
+/// all but its control characters, apart from tabs.
+fn typed(text: &str) -> String {
+    text.chars()
+        .filter(|&character| character == '\t' || !character.is_control())
+        .collect()
 }
 
 /// How far to scroll a view `view` long over content `content` long, so
@@ -1171,7 +1212,18 @@ impl Element for LineElement {
 mod tests {
     use gpui::px;
 
-    use super::scroll_to_show;
+    use super::{scroll_to_show, typed};
+
+    #[test]
+    fn a_control_key_handed_back_types_nothing() {
+        assert_eq!(typed("\n"), "");
+        assert_eq!(typed("\u{18}"), "");
+    }
+
+    #[test]
+    fn typed_text_and_tabs_stay() {
+        assert_eq!(typed("かな\tkana"), "かな\tkana");
+    }
 
     #[test]
     fn content_that_fits_does_not_scroll() {
