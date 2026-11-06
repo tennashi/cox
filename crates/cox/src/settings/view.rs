@@ -5,12 +5,16 @@
 //! input, where Enter sets what the human typed, a whole path or one from
 //! `~`, and "Choose…" asks for a folder and sets it. Set, the home is
 //! kept (see [`super::keep_home`]), and the window opens the chats in no
-//! project there from then on. Under it are the agents the human runs
-//! (see [`agents`]). Escape, the ×, or a click beside the card closes it,
+//! project there from then on. Under it are the folders of the human's
+//! workflow and wiki (see [`folder`]), the agents they run (see
+//! [`agents`]), and the language they read in (see [`translation`]).
+//! Escape, the ×, or a click beside the card closes it,
 //! keeping the rows of agents changed, and leaving the home as it was
 //! last set.
 
 mod agents;
+mod folder;
+mod translation;
 
 use std::path::PathBuf;
 
@@ -20,6 +24,8 @@ use gpui::{
 };
 
 use self::agents::AgentsSection;
+use self::folder::FolderField;
+use self::translation::TranslationSection;
 use crate::ui::card;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
@@ -75,7 +81,10 @@ pub struct SettingsView {
     given: bool,
     input: Entity<LineInput>,
     told: Told,
+    workflow: Entity<FolderField>,
+    wiki: Entity<FolderField>,
     agents: Entity<AgentsSection>,
+    translation: Entity<TranslationSection>,
     _submitted: Subscription,
 }
 
@@ -97,7 +106,29 @@ impl SettingsView {
             given,
             input,
             told: Told::Hint,
+            workflow: cx.new(|cx| {
+                FolderField::new(
+                    "workflow",
+                    "WORKFLOW",
+                    "The folder of how you work with Cox, whatever the project: its COX.md, \
+                     which every chat's agent is told first, and its sketch/ and wiki/, what Cox \
+                     tells the agent in your place.",
+                    crate::storage::path(crate::storage::Kept::Workflow),
+                    cx,
+                )
+            }),
+            wiki: cx.new(|cx| {
+                FolderField::new(
+                    "wiki",
+                    "WIKI",
+                    "The folder of your wiki, one for all your projects, where the agents keep \
+                     what they learned, as an Obsidian vault or a Git repository of yours.",
+                    crate::storage::path(crate::storage::Kept::Wiki),
+                    cx,
+                )
+            }),
             agents: cx.new(AgentsSection::new),
+            translation: cx.new(TranslationSection::new),
             _submitted: submitted,
         }
     }
@@ -110,7 +141,24 @@ impl SettingsView {
 
     /// Reads the settings again, as another program changed them.
     pub fn reread(&mut self, cx: &mut Context<Self>) {
+        self.workflow.update(cx, FolderField::reread);
+        self.wiki.update(cx, FolderField::reread);
         self.agents.update(cx, AgentsSection::reread);
+        self.translation.update(cx, TranslationSection::reread);
+    }
+
+    /// What the screen shows past the home and the agents, a line each, for
+    /// `cox --inspect state`.
+    #[must_use]
+    pub fn described(&self, cx: &App) -> Vec<String> {
+        vec![
+            format!(
+                "Workflow input holding {:?}",
+                self.workflow.read(cx).text(cx)
+            ),
+            format!("Wiki input holding {:?}", self.wiki.read(cx).text(cx)),
+            self.translation.read(cx).described(cx),
+        ]
     }
 
     /// Keeps what the screen holds that is not kept yet, as it closes.
@@ -201,6 +249,38 @@ impl SettingsView {
         }
     }
 
+    /// The card's heading, with the × that closes it.
+    fn render_header(cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .px(px(22.))
+            .py(px(16.))
+            .flex()
+            .items_center()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Settings"),
+            )
+            .child(
+                div()
+                    .id("close-settings")
+                    .debug_selector(|| "close-settings".to_owned())
+                    .size(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(HOVER)))
+                    .child(icon(Icon::Close, 14., FAINT))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))),
+            )
+    }
+
     /// The button that asks for a folder.
     fn render_choose(cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
@@ -250,36 +330,7 @@ impl Render for SettingsView {
             // A click on the card stays there, not closing it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(|_, _: &CloseSettings, _, cx| cx.emit(Dismissed)))
-            .child(
-                div()
-                    .px(px(22.))
-                    .py(px(16.))
-                    .flex()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Settings"),
-                    )
-                    .child(
-                        div()
-                            .id("close-settings")
-                            .debug_selector(|| "close-settings".to_owned())
-                            .size(px(26.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(8.))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(HOVER)))
-                            .child(icon(Icon::Close, 14., FAINT))
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))),
-                    ),
-            )
+            .child(Self::render_header(cx))
             .child(
                 div()
                     .id("settings-body")
@@ -334,7 +385,10 @@ impl Render for SettingsView {
                             .text_color(rgb(color))
                             .child(told),
                     )
-                    .child(div().mt_4().child(self.agents.clone())),
+                    .child(div().mt_4().child(self.workflow.clone()))
+                    .child(div().mt_4().child(self.wiki.clone()))
+                    .child(div().mt_4().child(self.agents.clone()))
+                    .child(div().mt_4().child(self.translation.clone())),
             )
     }
 }
