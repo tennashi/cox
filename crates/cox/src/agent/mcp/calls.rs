@@ -38,8 +38,11 @@ const WIKI_WRITE: &str = "wiki_write";
 /// write one: the form the Map tab draws, not what to put in it, which is
 /// the project's to decide.
 const MAP_FORMAT: &str = "\
-The map is `.cox/map.json` in the project's folder, a JSON object with `tiers`, `parts` and \
-`edges`. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
+A project has a map for each picture of it from a top of its own, as one of what it is made \
+of and one of how it is deployed, each a file in `.cox/maps` in the project's folder, named \
+after the map, as `.cox/maps/parts.json` for the map `parts` (`.cox/map.json`, as an earlier \
+Cox read it, is the map `map`). A map is a JSON object with `says`, one line on what it shows \
+as against the project's other maps, `tiers`, `parts`, `edges` and `flows`. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
 \"frame\"}`: `says` is one line on what the tier shows; `rows` are the lines of boxes, from the \
 top, each `{\"name\", \"parts\": [ids], \"under\": id}`, where `under` hangs the row under a \
 box of a row above, as what that box holds; `frame` is `{\"above\": [ids], \"below\": [ids]}`, \
@@ -315,13 +318,19 @@ fn show_map_tool() -> Value {
             inside it, or the code it holds. Use it to show the human where what you talk \
             of is in the project, before you talk it through or show the diff: open it at \
             the tier or box you talk of, and the human sees the boxes around it. Answers \
-            what the map shows there, box by box. The map is a file of the project, \
-            `.cox/map.json`, which you write when the project has none, deciding with the \
-            human what it is to show, and keep as you change the code it holds; shown with \
-            none, the tool says how the file is written.",
+            what the map shows there, box by box, and names the project's other maps. A \
+            map is a file of the project, in `.cox/maps`, which you write when the project \
+            has none, or when the human wants another picture of it from another top, \
+            deciding with the human what it is to show, and keep as you change the code it \
+            holds; shown with none, the tool says how the file is written.",
         "inputSchema": {
             "type": "object",
             "properties": {
+                "map": {
+                    "type": "string",
+                    "description": "Which map to open, by its name, its file's in \
+                        `.cox/maps` without `.json`; the project's first when not given.",
+                },
                 "at": {
                     "type": "array",
                     "items": { "type": "string" },
@@ -644,8 +653,21 @@ fn show_map(
             })
             .collect::<Result<_, _>>()?,
     };
-    let Some(map) = map::read(cwd)? else {
-        ask(requests, ToolRequest::ShowMap { at: Vec::new() })?;
+    let name = match arguments.get("map") {
+        None | Some(Value::Null) => None,
+        Some(name) => Some(
+            name.as_str()
+                .ok_or("map is to be a map's name, as a string")?,
+        ),
+    };
+    let Some((named, map)) = map::read(cwd, name)? else {
+        ask(
+            requests,
+            ToolRequest::ShowMap {
+                map: None,
+                at: Vec::new(),
+            },
+        )?;
         return Ok(format!(
             "The project has no map yet: the Map tab on the stage says so. Write one, and \
              show it again. What the tiers are, and what goes in each, is for you and the \
@@ -685,23 +707,47 @@ fn show_map(
         .unwrap_or_default();
     let all = map::all_facts(cwd, &map, &changed);
     let facts = |id: &str| all.get(id).cloned();
-    ask(requests, ToolRequest::ShowMap { at: at.clone() })?;
-    Ok(told_map(&map, tier, part.as_deref(), &facts))
+    ask(
+        requests,
+        ToolRequest::ShowMap {
+            map: name.map(str::to_owned),
+            at: at.clone(),
+        },
+    )?;
+    let others: Vec<map::Named> = map::list(cwd)
+        .into_iter()
+        .filter(|other| other.name != named.name)
+        .collect();
+    Ok(told_map(
+        &map,
+        &named,
+        &others,
+        tier,
+        part.as_deref(),
+        &facts,
+    ))
 }
 
-/// What the map shows at `tier`, or at the box `part` of it, as the
-/// agent is told it: a line for each box, with how many there are, what
-/// it says of itself, what it holds, what changed in it, and what of it
-/// is gone.
+/// What the map `named` shows at `tier`, or at the box `part` of it, as
+/// the agent is told it: a line for each box, with how many there are,
+/// what it says of itself, what it holds, what changed in it, and what
+/// of it is gone; then the project's `others` maps, if it has others.
 fn told_map(
     map: &Map,
+    named: &map::Named,
+    others: &[map::Named],
     tier: &Tier,
     part: Option<&str>,
     facts: &dyn Fn(&str) -> Option<Facts>,
 ) -> String {
+    let which = if others.is_empty() {
+        "The map of the project".to_owned()
+    } else {
+        format!("The map `{}` of the project", named.name)
+    };
     let mut told = format!(
-        "The map of the project is on the stage, open at the tier `{}`{}, for the human to see \
-         where things are:",
+        "{which} is on the stage, open at the tier `{}`{}, for the human to see where things \
+         are:",
         tier.id,
         part.map_or_else(String::new, |part| format!(", at the box `{part}`"))
     );
@@ -747,6 +793,15 @@ fn told_map(
         }
         if let Some(note) = &part.note {
             let _ = write!(told, "; note: {note}");
+        }
+    }
+    if !others.is_empty() {
+        let _ = write!(told, "\nThe project's other maps, which `map` shows:");
+        for other in others {
+            let _ = write!(told, "\n`{}`", other.name);
+            if !other.says.is_empty() {
+                let _ = write!(told, ": {}", other.says);
+            }
         }
     }
     told
@@ -1256,7 +1311,10 @@ mod tests {
              App: The program.; opens the tier `app`; holds src"
         );
         match requests.try_recv() {
-            Ok(ToolRequest::ShowMap { at }) => assert_eq!(at, Vec::<String>::new()),
+            Ok(ToolRequest::ShowMap { map, at }) => {
+                assert_eq!(map, None);
+                assert_eq!(at, Vec::<String>::new());
+            }
             _ => panic!("the stage was not asked to show the map"),
         }
 
@@ -1269,7 +1327,10 @@ mod tests {
              stale, gone: src/gone.rs; note: moved"
         );
         match requests.try_recv() {
-            Ok(ToolRequest::ShowMap { at }) => assert_eq!(at, ["app", "gone"]),
+            Ok(ToolRequest::ShowMap { map, at }) => {
+                assert_eq!(map, None);
+                assert_eq!(at, ["app", "gone"]);
+            }
             _ => panic!("the stage was not asked to show the map"),
         }
 
@@ -1281,6 +1342,40 @@ mod tests {
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert_eq!(told, "the tier `app` has no box `nope`; it has: main, gone");
         assert!(requests.try_recv().is_err());
+
+        // With another map, each names the other, and is shown by its
+        // name.
+        fs::create_dir_all(cwd.join(map::MAPS_FOLDER)).unwrap();
+        fs::write(
+            cwd.join(map::MAPS_FOLDER).join("deploy.json"),
+            r#"{ "says": "Where it runs.",
+                 "tiers": [{ "id": "hosts", "name": "Hosts", "rows": [{ "parts": ["box"] }] }],
+                 "parts": { "box": { "name": "A box" } } }"#,
+        )
+        .unwrap();
+        let shown = call_now(SHOW_MAP, &json!({ "map": "deploy" }), &cwd, &sent);
+        let told = shown["content"][0]["text"].as_str().unwrap();
+        assert_eq!(
+            told,
+            "The map `deploy` of the project is on the stage, open at the tier `hosts`, for \
+             the human to see where things are:\n`box` A box\nThe project's other maps, \
+             which `map` shows:\n`map`"
+        );
+        match requests.try_recv() {
+            Ok(ToolRequest::ShowMap { map, at }) => {
+                assert_eq!(map.as_deref(), Some("deploy"));
+                assert_eq!(at, Vec::<String>::new());
+            }
+            _ => panic!("the stage was not asked to show the map"),
+        }
+        let shown = call_now(SHOW_MAP, &json!({}), &cwd, &sent);
+        let told = shown["content"][0]["text"].as_str().unwrap();
+        assert!(told.starts_with("The map `map` of the project"), "{told}");
+        assert!(told.ends_with("\n`deploy`: Where it runs."), "{told}");
+        let shown = call_now(SHOW_MAP, &json!({ "map": "gone" }), &cwd, &sent);
+        assert_eq!(shown["isError"], true);
+        let told = shown["content"][0]["text"].as_str().unwrap();
+        assert_eq!(told, "the project has no map `gone`; it has: map, deploy");
     }
 
     #[test]
@@ -1292,9 +1387,12 @@ mod tests {
         assert_eq!(shown["isError"], false, "{shown}");
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert!(told.starts_with("The project has no map yet"), "{told}");
-        assert!(told.contains("`.cox/map.json`"), "{told}");
+        assert!(told.contains("`.cox/maps/parts.json`"), "{told}");
         match requests.try_recv() {
-            Ok(ToolRequest::ShowMap { at }) => assert_eq!(at, Vec::<String>::new()),
+            Ok(ToolRequest::ShowMap { map, at }) => {
+                assert_eq!(map, None);
+                assert_eq!(at, Vec::<String>::new());
+            }
             _ => panic!("the stage was not asked to show the map"),
         }
     }

@@ -76,8 +76,8 @@ impl Stage {
                         stage.show_changes(folder, window, cx);
                         stage.show_panel(cx);
                     }
-                    ToolRequest::ShowMap { at } => {
-                        stage.show_map_at(&at, window, cx);
+                    ToolRequest::ShowMap { map, at } => {
+                        stage.show_map_at(map.as_deref(), &at, window, cx);
                         stage.show_panel(cx);
                     }
                     ToolRequest::RunCommand {

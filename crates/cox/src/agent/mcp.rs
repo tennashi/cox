@@ -85,10 +85,13 @@ pub enum ToolRequest {
     /// Show the human what changed in the files of the Git repository of
     /// `folder`, an absolute path, on a tab of the stage.
     ShowChanges { folder: PathBuf },
-    /// Show the human the map of the project on a tab of the stage, open
-    /// `at`: the crate, and the modules in it from the crate down, or the
-    /// crates when empty.
-    ShowMap { at: Vec<String> },
+    /// Show the human a map of the project on a tab of the stage: the
+    /// map named `map`, or its first unless named, open `at`, a tier and
+    /// a box in it by their ids, or at its top when empty.
+    ShowMap {
+        map: Option<String>,
+        at: Vec<String>,
+    },
     /// Run `command` in a terminal on the stage, working in `cwd`, and
     /// answer how it went, or why it could not start, once it ends. The
     /// agent no longer waits for the answer once `answer` is closed: the
@@ -117,8 +120,16 @@ impl ToolRequest {
                 None => format!("show {}", path.display()),
             },
             Self::ShowChanges { folder } => format!("show what changed in {}", folder.display()),
-            Self::ShowMap { at } if at.is_empty() => "show the map at its top".to_owned(),
-            Self::ShowMap { at } => format!("show the map at {}", at.join(" › ")),
+            Self::ShowMap { map, at } => {
+                let which = map
+                    .as_ref()
+                    .map_or_else(|| "the map".to_owned(), |map| format!("the map `{map}`"));
+                if at.is_empty() {
+                    format!("show {which} at its top")
+                } else {
+                    format!("show {which} at {}", at.join(" › "))
+                }
+            }
             Self::RunCommand { command, cwd, .. } => {
                 format!("run `{command}` in {}", cwd.display())
             }

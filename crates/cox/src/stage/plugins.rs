@@ -9,9 +9,10 @@
 //!
 //! What Cox knows, a plugin reads as JSON from `cox://api/<what>`:
 //!
-//! - `cox://api/map`: the map of the project, as its `.cox/map.json`
-//!   has it, with what changed and what is stale laid over its boxes (see
-//!   [`crate::stage::map`]).
+//! - `cox://api/map/<name>`: the map of the project named `<name>`, as
+//!   its file in `.cox/maps` has it, with what changed and what is stale
+//!   laid over its boxes, and the names of the project's other maps (see
+//!   [`crate::stage::map`]); `cox://api/map`, its first map.
 //! - `cox://api/file/<path>`: what the project's language server says of
 //!   the file at `<path>`, an absolute path in the project: the symbols
 //!   it defines and what uses them, once the server has answered, which
@@ -187,7 +188,8 @@ impl Plugins {
     fn api(&self, what: &str) -> Option<Resource> {
         let (what, rest) = what.split_once('/').unwrap_or((what, ""));
         let json = match what {
-            "map" if rest.is_empty() => map::told(&self.root),
+            "map" if rest.is_empty() => map::told(&self.root, None),
+            "map" if !rest.contains('/') => map::told(&self.root, Some(&percent_decoded(rest))),
             "wiki" => {
                 let root = crate::settings::wiki();
                 if rest.is_empty() {
@@ -342,6 +344,13 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
         assert_eq!(json["map"]["tiers"][0]["id"], "whole");
         assert_eq!(json["facts"]["one"]["stale"], serde_json::json!(["src"]));
+        let answer = plugins.resource("cox://api/map/map").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["name"], "map");
+        assert_eq!(json["map"]["tiers"][0]["id"], "whole");
+        let answer = plugins.resource("cox://api/map/no%20such").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("no map `no such`"));
         assert_eq!(plugins.resource("cox://api/map/one/"), None);
     }
 

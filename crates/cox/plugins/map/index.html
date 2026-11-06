@@ -48,6 +48,42 @@
       button {
         all: unset;
       }
+      /* The project's maps, each a picture of it from a top of its own,
+         the one shown lit, as tabs over the page. */
+      .maps {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+      .mapsname {
+        font-size: 10.5px;
+        color: var(--faint);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-right: 2px;
+      }
+      .mapchip {
+        font: 12.5px var(--sans);
+        color: var(--dim);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 2px 10px;
+        cursor: pointer;
+      }
+      .mapchip:hover,
+      .mapchip:focus-visible {
+        color: var(--foreground);
+        background: var(--hover);
+      }
+      .mapchip.on {
+        color: var(--foreground);
+        font-weight: 600;
+        background: var(--card-hover);
+        border-color: var(--dim);
+      }
       .crumbs {
         display: flex;
         flex-wrap: wrap;
