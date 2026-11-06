@@ -1,0 +1,33 @@
+[package]
+name = "cox-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# The Android emulator's gRPC service, which streams its display and takes
+# touches and keys: see `src/emulator.rs`, and `cox-fake-emulator`, which
+# serves the same.
+prost = "0.14.4"
+tonic = { version = "0.14.9", default-features = false, features = ["codegen", "router", "transport"] }
+tonic-prost = "0.14.9"
+tokio = { workspace = true, features = ["macros", "net", "process", "rt", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1.19", default-features = false, features = ["net"] }
+tracing.workspace = true
+# Whether the process an emulator's file names is there still, and
+# stopping an emulator Cox started.
+libc = "0.2.188"
+# The letters `cox-fake-emulator` draws its screen with.
+font8x8 = { version = "0.3.1", default-features = false }
+
+[build-dependencies]
+# The Rust of `proto/emulator_controller.proto`, compiled with protox, in
+# Rust, so that no `protoc` has to be installed.
+protox = "0.10.0"
+tonic-prost-build = "0.14.9"

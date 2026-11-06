@@ -48,16 +48,21 @@
 //!   to open a file where it changed.
 //! - [`terminal`] is a terminal the human types into, and the agent runs
 //!   commands in.
+//! - [`android`] shows an Android emulator, which the human touches and
+//!   types into, and [`devices`] lists the emulator's virtual devices, for
+//!   the human to start one.
 //! - [`plugins`] are pages that draw what Cox knows, as a tab would, which
 //!   the stage serves its pages itself at `cox:` addresses: [`map`] tells
 //!   the project's map, as an agent wrote it, with what changed laid over
 //!   its boxes, for the human to see where things are.
 
+pub mod android;
 mod asked;
 mod bar;
 pub mod calls;
 pub mod changes;
 pub mod code;
+pub mod devices;
 pub mod document;
 pub mod flow;
 pub mod follow;
@@ -84,8 +89,12 @@ use crate::agent::mcp::ToolRequest;
 use cox_browser::relay::{Pages, Relay};
 use cox_browser::{Cef, TargetId};
 
+use cox_android::device::Boot;
+
+use crate::stage::android::Android;
 use crate::stage::calls::Calls;
 use crate::stage::code::Code;
+use crate::stage::devices::{Devices, OpenDevice};
 use crate::stage::document::Document;
 use crate::stage::outline::Outlines;
 use crate::stage::page::{Opens, Page};
@@ -272,6 +281,13 @@ impl Stage {
                 KeptTab::Flow { call } => {
                     stage.push_flow(call, show, window, cx);
                 }
+                KeptTab::Android { device } => {
+                    let android = android::reopened(device, cx);
+                    stage.push_android(android, show, cx);
+                }
+                KeptTab::AndroidDevices => {
+                    stage.push_devices(show, window, cx);
+                }
                 // The tabs Cox drew in earlier runs open as the pages that
                 // draw them now: the map at its top, since its tiers are
                 // not the crates the tab was open at.
@@ -332,6 +348,76 @@ impl Stage {
         self.focus_shown(window, cx);
     }
 
+    /// Shows the tab of the Android emulator's virtual devices, opening it
+    /// if there is none.
+    pub fn show_devices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let index = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab.content, TabContent::Devices(_)));
+        if let Some(index) = index {
+            self.show(index, window, cx);
+            self.focus_shown(window, cx);
+        } else {
+            self.push_devices(true, window, cx);
+            self.focus_shown(window, cx);
+        }
+    }
+
+    /// Puts the tab of the Android emulator's virtual devices after the
+    /// others, shown if `show` is.
+    fn push_devices(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let devices = cx.new(Devices::new);
+        let changes = cx.observe(&devices, |stage, _, cx| stage.changed(cx));
+        let opens = cx.subscribe_in(
+            &devices,
+            window,
+            |stage, _, open: &OpenDevice, window, cx| {
+                stage.open_android(&open.name, open.boot, window, cx);
+            },
+        );
+        self.push(TabContent::Devices(devices), changes, Some(opens), show, cx);
+    }
+
+    /// Shows the tab of the Android emulator of the virtual device `name`,
+    /// starting it as `boot` says, or reaching it if it runs, with the
+    /// keyboard in it: the tab it has, if it has one, or a new one.
+    pub fn open_android(
+        &mut self,
+        name: &str,
+        boot: Boot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let index = self.tabs.iter().position(|tab| match &tab.content {
+            TabContent::Android(android) => android.read(cx).name() == name,
+            _ => false,
+        });
+        if let Some(index) = index {
+            if let TabContent::Android(android) = &self.tabs[index].content {
+                android.update(cx, |android, cx| {
+                    if !android.is_running() {
+                        android.open(boot, cx);
+                    }
+                });
+            }
+            self.show(index, window, cx);
+            self.focus_shown(window, cx);
+            return;
+        }
+        let name = name.to_owned();
+        let android = cx.new(|cx| Android::new(name, Some(boot), cx));
+        self.push_android(android, true, cx);
+        self.focus_shown(window, cx);
+    }
+
+    /// Puts a tab of an Android emulator after the others, shown if `show`
+    /// is.
+    fn push_android(&mut self, android: Entity<Android>, show: bool, cx: &mut Context<Self>) {
+        let changes = cx.observe(&android, |stage, _, cx| stage.changed(cx));
+        self.push(TabContent::Android(android), changes, None, show, cx);
+    }
+
     fn show_panel(&self, cx: &mut Context<Self>) {
         self.panel.update(cx, Panel::open);
     }
@@ -345,7 +431,9 @@ impl Stage {
             | TabContent::Tree(_)
             | TabContent::Changes(_)
             | TabContent::Flow(_)
-            | TabContent::Terminal(_) => false,
+            | TabContent::Terminal(_)
+            | TabContent::Android(_)
+            | TabContent::Devices(_) => false,
         })
     }
 

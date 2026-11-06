@@ -2,7 +2,8 @@
 //! order, and which was shown. Not what runs in them: a page is kept by its
 //! address, a file by its path, the tree of the project's files by the
 //! folders open in it, what changed in them as such, the map of the
-//! project by where it is open, and a terminal only as having been there.
+//! project by where it is open, an Android emulator by the device it
+//! runs, the list of the devices as such, and a terminal only as having been there.
 
 use std::path::PathBuf;
 
@@ -43,6 +44,11 @@ pub enum KeptTab {
     /// The flow of one tool call through Cox, the call by the id the
     /// agent gave it.
     Flow { call: String },
+    /// An Android emulator, by the virtual device it runs, as `emulator
+    /// -avd` takes its name.
+    Android { device: String },
+    /// The Android emulator's virtual devices, listed.
+    AndroidDevices,
     /// The parts the chat ran with, and how they reached each other: a
     /// tab Cox drew in earlier runs, and no longer does, so it does not
     /// open again.

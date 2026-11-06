@@ -617,8 +617,9 @@ or else a page, when the line has no space and what comes before its
 first `/` has a scheme, or a dot or a port, as a host has, or else that
 file again, when the line has no space and a `/`, as `src/new.rs`, or
 else a command, which runs in a terminal; then "Web page", a
-new tab, "Terminal" (see below), and "File…", which asks for a file
-and opens it as a link to it does. Escape closes the menu. Their keys, Command-T, Control-` and
+new tab, "Terminal" (see below), "File…", which asks for a file
+and opens it as a link to it does, and "Android devices", the virtual
+devices of the Android emulator (see below). Escape closes the menu. Their keys, Command-T, Control-` and
 Command-P (Control-T and Control-P off macOS), open them from anywhere
 in the window, on the stage of the chat shown, which opens. The cursor over a page is the one
 the page asks for, as a pointing hand over a link, or an I-beam over
@@ -880,6 +881,45 @@ pasting in a terminal is Command-C and Command-V on macOS, and
 Control-Shift-C and Control-Shift-V elsewhere, where Control-N,
 Control-O, Control-T, Control-P and Control-\\ go to the terminal too.
 
+A tab can be an Android emulator too, as Android Studio's "Running
+Devices" shows one, for the human to try an app they make for Android
+on the stage, beside the chat. "Android devices", in the menu of the
+stage's +, opens a tab of the virtual devices, as Android Studio's
+Device Manager lists them: each with the name the human gave it, the
+phone it is made as, the Android API it runs, the size of its display,
+and whether it runs. Cox reads them from the folder the SDK's tools
+keep them in, `ANDROID_AVD_HOME`, or else `avd` in
+`ANDROID_EMULATOR_HOME` or `ANDROID_USER_HOME`, or else
+`~/.android/avd`, and reads it again every two seconds, so a device
+Android Studio makes shows as it is made. Making a device, changing
+it, deleting it, and the system images it runs, are Android Studio's.
+A device that runs has "Show", which shows its tab, and "Stop"; one
+that does not has "Start", "Cold boot", which starts it afresh rather
+than from the state it saved, and "Wipe data", which takes its apps
+and data away first, once the human says yes. Each opens the device on
+a tab of its own, or shows the tab it has. The tab starts the emulator
+of that device, with no window of its own (`emulator -avd <device>
+-grpc <port> -qt-hide-window`, with `-no-snapshot-load` for a cold
+boot, and `-wipe-data`), or reaches it if it runs already, by the file
+each emulator writes of itself as it starts
+(`avd/running/pid_<pid>.ini`, in `~/Library/Caches/TemporaryItems` on
+macOS and `$XDG_RUNTIME_DIR` on Linux, with the token its gRPC service
+asks for, if it asks for one). The tab draws the emulator's display,
+as big as fits, which the emulator's gRPC service streams at the size
+the tab draws it, and sends it, over the same service, the human's
+mouse as a finger, a click as a tap and a drag as a swipe, the wheel,
+and the keys typed, Escape as Back; the bar over the display has Back,
+Home and Overview, and Stop. Cox finds the emulator in the SDK that
+`ANDROID_HOME` names, or `ANDROID_SDK_ROOT`, or else where Android
+Studio puts it (`~/Library/Android/sdk` on macOS, `~/Android/Sdk` on
+Linux), as the human's shell, which Cox takes its environment from on
+macOS, sets them; with none, the devices' tab says so. The emulator
+Cox started stops as its tab closes, or Stop is clicked, or Cox quits,
+saving its state as it does when its window closes; one that ran
+already goes on. A closed chat's stage, or the next run's, opens the
+tab again, reaching the emulator if it runs, and else with "Start" to
+start it.
+
 Cox hands each chat's agent its own tools as an MCP server, which is
 `cox` itself run as `cox --mcp <socket>`: the agent starts it, and it
 carries what the agent says to the chat on a Unix socket of the chat's
@@ -1095,6 +1135,26 @@ its standard error, turn by turn, with the waits between them, so that
 what happened in the run happens again, as on another machine. The
 agent's calls of Cox's own tools do not go over ACP, so the scenario
 does not make them.
+
+`cox-fake-emulator` is an Android emulator for where none runs, as on a
+machine with no virtualization: it takes the arguments Cox starts
+`emulator` with, writes the file of itself an emulator writes, and
+serves the part of the emulator's gRPC service Cox uses, drawing a
+phone's screen of its own, which a tap, a drag, the wheel, the keys and
+Back, Home and Overview change. An SDK whose `emulator/emulator` is it
+is one Cox finds as any other, and `cox-fake-emulator --make-avd`
+writes a device for it, "Fake Phone", in the folder `ANDROID_AVD_HOME`
+names, as Android Studio would:
+
+```sh
+cargo build --bin cox-fake-emulator
+mkdir -p target/debug/fake-android-sdk/emulator
+ln -sf ../../cox-fake-emulator target/debug/fake-android-sdk/emulator/emulator
+export ANDROID_HOME=$PWD/target/debug/fake-android-sdk
+export ANDROID_AVD_HOME=$PWD/target/debug/fake-android-avd
+target/debug/cox-fake-emulator --make-avd
+cargo xtask run --headless
+```
 
 ## Asking Cox how it stands
 
