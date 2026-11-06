@@ -27,7 +27,7 @@ use crate::agent::{AgentEvent, Command, Opened};
 use crate::chat::judge::{self, Verdict};
 
 /// Whose move it is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum State {
     /// Waiting for the human to send a line.
     Idle,
@@ -59,7 +59,7 @@ const IDLE_TURNS: usize = 2;
 const OUTPUT_TAIL: usize = 4000;
 
 /// What a chat works until, and how far it has come.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Goal {
     /// The goal, as the human set it.
     what: goal::Goal,
@@ -116,6 +116,24 @@ pub fn line(goal: &goal::Goal) -> String {
         goal::Goal::Command(command) => format!("until `{command}` passes."),
         goal::Goal::Words(words) => words.clone(),
     }
+}
+
+/// How a conversation changed, as the daemon, where it goes on, tells the
+/// window that shows it (see [`Conversation::patch`]): the entries that
+/// changed, by their places, and all the rest it holds as it is now.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Patch {
+    /// How many entries it holds.
+    pub len: usize,
+    /// The entries that changed, with their places, in order.
+    pub entries: Vec<(usize, Entry)>,
+    pub state: State,
+    pub title: Option<String>,
+    pub goal: Option<Goal>,
+    pub settings: Vec<Setting>,
+    pub commands: Vec<SlashCommand>,
+    pub before_login: State,
+    pub keeps: bool,
 }
 
 /// The conversation the window shows.
@@ -327,6 +345,67 @@ impl Conversation {
     /// called, in order.
     pub fn take_changed(&mut self) -> Vec<usize> {
         std::mem::take(&mut self.changed).into_iter().collect()
+    }
+
+    /// What a window that shows the conversation needs to show it as it
+    /// is now, given that the entries at `changed` are all that changed
+    /// since it was last told: those entries, and the rest of what the
+    /// conversation holds, which is small.
+    #[must_use]
+    pub fn patch(&self, changed: &[usize]) -> Patch {
+        Patch {
+            len: self.entries.len(),
+            entries: changed
+                .iter()
+                .filter_map(|&index| Some((index, self.entries.get(index)?.clone())))
+                .collect(),
+            state: self.state,
+            title: self.title.clone(),
+            goal: self.goal.clone(),
+            settings: self.settings.clone(),
+            commands: self.commands.clone(),
+            before_login: self.before_login,
+            keeps: self.keeps,
+        }
+    }
+
+    /// What a window that shows the conversation needs to show all of it,
+    /// as when it first shows it.
+    #[must_use]
+    pub fn whole(&self) -> Patch {
+        let all: Vec<usize> = (0..self.entries.len()).collect();
+        self.patch(&all)
+    }
+
+    /// Changes the conversation as `patch` says, for a window that shows
+    /// a conversation that goes on elsewhere, in the daemon.
+    pub fn apply_patch(&mut self, patch: Patch) {
+        let Patch {
+            len,
+            entries,
+            state,
+            title,
+            goal,
+            settings,
+            commands,
+            before_login,
+            keeps,
+        } = patch;
+        self.entries.truncate(len);
+        for (index, entry) in entries {
+            if index < self.entries.len() {
+                self.entries[index] = entry;
+            } else if index == self.entries.len() {
+                self.entries.push(entry);
+            }
+        }
+        self.state = state;
+        self.title = title;
+        self.goal = goal;
+        self.settings = settings;
+        self.commands = commands;
+        self.before_login = before_login;
+        self.keeps = keeps;
     }
 
     fn push(&mut self, entry: Entry) {

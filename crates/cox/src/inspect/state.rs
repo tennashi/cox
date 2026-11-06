@@ -88,7 +88,7 @@ pub fn describe(
         let _ = writeln!(told, "A translation shows: {}", card.read(cx).said());
     }
     told.push('\n');
-    list(&mut told, workspace, cx);
+    list(&mut told, workspace);
     let about = match chat {
         Some(key) => workspace.chat(key),
         None => workspace.shown(),
@@ -151,7 +151,7 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
 
 /// The chats, in the order of the tabs, under their projects, and which
 /// project the rail has chosen.
-fn list(told: &mut String, workspace: &Workspace, cx: &App) {
+fn list(told: &mut String, workspace: &Workspace) {
     told.push_str("The chats, as listed:\n");
     let mut project = None;
     for (chat, depth) in workspace.listed() {
@@ -171,7 +171,7 @@ fn list(told: &mut String, workspace: &Workspace, cx: &App) {
             );
         }
         let indent = "  ".repeat(2 + usize::from(depth));
-        let _ = writeln!(told, "{indent}{}", row(chat, workspace, cx));
+        let _ = writeln!(told, "{indent}{}", row(chat, workspace));
     }
     if project.is_none() {
         told.push_str("  none\n");
@@ -179,19 +179,14 @@ fn list(told: &mut String, workspace: &Workspace, cx: &App) {
     if !workspace.archived().is_empty() {
         told.push_str("Archived:\n");
         for chat in workspace.archived() {
-            let _ = writeln!(told, "    {}", row(chat, workspace, cx));
+            let _ = writeln!(told, "    {}", row(chat, workspace));
         }
     }
 }
 
 /// A chat's row of the list, as the state tells it.
-fn row(chat: &Chat, workspace: &Workspace, cx: &App) -> String {
-    let mut row = format!(
-        "chat {} {:?}: {}",
-        chat.key(),
-        chat.name(),
-        stands(chat, cx)
-    );
+fn row(chat: &Chat, workspace: &Workspace) -> String {
+    let mut row = format!("chat {} {:?}: {}", chat.key(), chat.name(), stands(chat));
     if workspace
         .shown()
         .is_some_and(|shown| shown.key() == chat.key())
@@ -214,17 +209,17 @@ fn row(chat: &Chat, workspace: &Workspace, cx: &App) -> String {
 }
 
 /// How `chat` stands, as its row marks it.
-fn stands(chat: &Chat, cx: &App) -> &'static str {
+fn stands(chat: &Chat) -> &'static str {
     if !chat.is_open() {
         return "closed";
     }
-    match chat.view().map(|view| view.read(cx).conversation().state()) {
-        Some(State::Idle) | None => "idle",
-        Some(State::Busy) => "busy",
-        Some(State::Asking) => "asking",
-        Some(State::Stopping) => "stopping",
-        Some(State::Checking) => "checking",
-        Some(State::Closed) => "closed",
+    match chat.state() {
+        State::Idle => "idle",
+        State::Busy => "busy",
+        State::Asking => "asking",
+        State::Stopping => "stopping",
+        State::Checking => "checking",
+        State::Closed => "closed",
     }
 }
 
@@ -239,7 +234,7 @@ fn tell(told: &mut String, chat: &Chat, workspace: &Workspace, cx: &App) {
     let shown = workspace
         .shown()
         .is_some_and(|shown| shown.key() == chat.key());
-    let _ = writeln!(told, "  {}", stands(chat, cx));
+    let _ = writeln!(told, "  {}", stands(chat));
     if !shown {
         told.push_str("  Not shown: its input and stage are as they were left.\n");
     }

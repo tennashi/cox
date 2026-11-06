@@ -203,7 +203,7 @@ pub struct Whereabouts {
 }
 
 /// How a chat stands, as the agent that waited for it is told.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Waited {
     /// What it asks the human, when it waits for them to answer.
     pub asking: Option<String>,
@@ -224,7 +224,7 @@ pub struct OpenedChat {
 }
 
 /// How a command the agent ran went.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Ran {
     /// What its terminal shows, with what scrolled off.
     pub output: String,
@@ -232,7 +232,7 @@ pub struct Ran {
 }
 
 /// How a command ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Ended {
     /// It exited with this code.
     Exited(i32),

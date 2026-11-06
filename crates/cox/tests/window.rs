@@ -2,8 +2,9 @@
 
 #[expect(dead_code, reason = "these tests use only part of the fake agent")]
 mod fake_agent;
+#[expect(dead_code, reason = "these tests use only part of the fake daemon")]
+mod fake_daemon;
 
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,16 +14,15 @@ use agent_client_protocol::schema::v1::{
 };
 use cox::agent::setup::{Policy, Setup};
 use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
-use cox::chat::view::{ChatView, StageView};
-use cox::ui::Panel;
+use cox::chat::view::ChatView;
 use cox::ui::input::LineInput;
 use cox_acp::McpServer;
 use cox_core::diff::Line;
 use fake_agent::{FakeAgent, LogsIn};
+use fake_daemon::{FakeStages, Fakes, Kept, Opened, open_window, settle, settle_until, shown_view};
 use gpui::{
-    AppContext as _, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, Focusable,
-    IntoElement, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels,
-    Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+    Bounds, ClipboardItem, Entity, EntityInputHandler, Focusable, Modifiers, MouseButton,
+    MouseDownEvent, MouseUpEvent, Pixels, TestAppContext, VisualTestContext, point, px,
 };
 
 /// Opens the window, talking to a fake agent, with the input focused.
@@ -39,9 +39,6 @@ fn open_set_up(
     open_with(cx, Vec::new(), Opened::default(), Some(setup))
 }
 
-/// The links the human opened, in order.
-type Opened = Rc<RefCell<Vec<String>>>;
-
 /// Opens the window like [`open`], handing the agent `mcp_servers`, and
 /// noting in `opened` the links the human opens.
 fn open_with(
@@ -51,50 +48,6 @@ fn open_with(
     setup: Option<Setup>,
 ) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
     open_with_stage(cx, mcp_servers, opened, setup, false)
-}
-
-/// A stand-in for the stage, which needs CEF.
-struct FakeStage;
-
-impl Render for FakeStage {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child("stage")
-    }
-}
-
-/// A stand-in for the window around a chat: the pill of its agent and
-/// settings, which the window shows by the tabs, over the chat.
-struct Host {
-    chat: Entity<ChatView>,
-}
-
-impl Host {
-    fn new(cx: &mut Context<Self>, chat: impl FnOnce(&mut Context<ChatView>) -> ChatView) -> Self {
-        let chat = cx.new(chat);
-        cx.observe(&chat, |_, _, cx| cx.notify()).detach();
-        Self { chat }
-    }
-}
-
-impl Render for Host {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let settings = self.chat.update(cx, |chat, cx| chat.render_settings(cx));
-        let toggle = self
-            .chat
-            .update(cx, |chat, cx| chat.render_stage_toggle(cx));
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .children(settings)
-                    .children(toggle),
-            )
-            .child(div().flex_1().min_h_0().child(self.chat.clone()))
-    }
 }
 
 /// Opens the window like [`open_with`], with a stand-in for the stage
@@ -117,7 +70,9 @@ fn open_talking_to(
     open_agent(cx, agent, Vec::new(), Opened::default(), None, false)
 }
 
-/// Opens the window like [`open_with_stage`], talking to `agent`.
+/// Opens the window like [`open_with_stage`], on a chat in no project,
+/// which works in the system's folder of temporary files, talking to
+/// `agent`, which gets no instructions and no terminal.
 fn open_agent(
     cx: &mut TestAppContext,
     agent: FakeAgent,
@@ -126,41 +81,25 @@ fn open_agent(
     setup: Option<Setup>,
     stage: bool,
 ) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
-    // The agent side runs on a thread of its own, so the test waits for it
-    // in real time instead of only running GPUI's own tasks.
-    cx.executor().allow_parking();
-    cx.update(|cx| {
-        cox::ui::input::bind_keys(cx);
-        cox::chat::view::bind_keys(cx);
-    });
-    let agent = Arc::new(agent);
-    let fake = Arc::clone(&agent);
-    let (host, cx) = cx.add_window_view(|_, cx| {
-        let stage = stage.then(|| StageView {
-            view: cx.new(|_| FakeStage).into(),
-            panel: cx.new(|_| Panel::default()),
-        });
-        Host::new(cx, |cx| {
-            ChatView::new(
-                cox::agent::spawn(
-                    move |_| Ok(fake.connect()),
-                    std::env::temp_dir(),
-                    mcp_servers,
-                    cox::agent::Start::New {
-                        instructions: None,
-                        setup,
-                    },
-                ),
-                stage,
-                Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned())),
-                None,
-                None,
-                None,
-                cx,
-            )
-        })
-    });
-    let view = host.read_with(cx, |host, _| host.chat.clone());
+    let fakes = Fakes {
+        mcp_servers,
+        setup,
+        instructions: false,
+        terminal: false,
+        ..Fakes::default()
+    };
+    fakes.next.borrow_mut().push_back(agent);
+    let agents = fakes.agents.clone();
+    let stages = FakeStages {
+        opened: stage.then_some(opened),
+    };
+    let (workspace, cx) = open_window(cx, std::env::temp_dir(), Kept::Memory, fakes, stages);
+    cx.simulate_keystrokes("secondary-n");
+    let executor = cx.executor();
+    let view = executor.block_test(shown_view(cx, &workspace));
+    // The agent starts once the window gave the chat its stage.
+    executor.block_test(settle_until(cx, |_| !agents.borrow().is_empty()));
+    let agent = Arc::clone(&agents.borrow()[0]);
     cx.update(|window, cx| window.focus(&view.focus_handle(cx)));
     (agent, view, cx)
 }
@@ -169,6 +108,7 @@ fn open_agent(
 /// time, outside GPUI's clock, so a real timer ends the wait if it never
 /// comes.
 async fn wait_for(cx: &mut VisualTestContext, view: &Entity<ChatView>, state: State) {
+    settle(cx).await;
     let (timed_out, timeout) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(5));
@@ -771,15 +711,13 @@ async fn the_setups_policy_answers_a_permission_request_in_the_humans_place(
             SelectedPermissionOutcome::new("reject")
         )]
     );
+    // The note of the context, which the chat that opens one with a setup
+    // makes, is the chats' tests'.
     view.read_with(cx, |view, _| {
         let entries = view.conversation().entries();
         assert!(
-            matches!(&entries[0], Entry::Note(note) if note == "Context: Change nothing."),
-            "{entries:?}"
-        );
-        assert!(
             matches!(
-                &entries[3],
+                &entries[2],
                 Entry::Permission {
                     chosen: Some(1),
                     by_setup: true,
@@ -1120,7 +1058,7 @@ async fn selects_a_word_with_a_double_click(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn opens_a_link_the_human_clicks(cx: &mut TestAppContext) {
     let opened = Opened::default();
-    let (_agent, view, cx) = open_with(cx, Vec::new(), Rc::clone(&opened), None);
+    let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Rc::clone(&opened), None, true);
     say(cx, &view, "see https://example.com/x").await;
 
     let reply = first_reply(cx);

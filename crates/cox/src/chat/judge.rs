@@ -16,13 +16,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cox_acp::{PermissionAnswer, StopReason};
-use gpui::{Context, Task};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::agent::instructions::Instructions;
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{Agent, AgentEvent, AgentThread, Command, Start};
-use crate::chat::view::ChatView;
 
 /// What starts an agent with no chat, working in a directory, as a
 /// [`Start`] says: the judge of a goal.
@@ -213,18 +211,42 @@ pub fn question(goal: &str, said: Option<&str>) -> String {
     )
 }
 
+/// What the judge of a chat's goal said: a judgement, or that it closed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Heard {
+    /// The judge's reply to one question, or why it gave none.
+    Judged(Result<String, String>),
+    /// The judge's agent closed, as this says: the next judgement starts
+    /// a judge anew, and the one under way, if any, is not coming.
+    Closed(String),
+}
+
 /// The judge of a chat's goal: its agent, and what hears it.
 pub struct Judge {
     commands: UnboundedSender<Command>,
     _thread: AgentThread,
-    _hears: Task<()>,
+    _hears: AbortOnDrop,
+}
+
+/// A task that stops when this is dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 impl Judge {
-    /// Starts the judge of `goal` for the chat of `view`, working in `cwd`,
-    /// with `starts`. What it says of each judgement reaches the view as
-    /// [`ChatView::judged`].
-    pub fn start(starts: &Starts, cwd: PathBuf, goal: &str, cx: &mut Context<ChatView>) -> Self {
+    /// Starts the judge of `goal`, working in `cwd`, with `starts`, on the
+    /// tokio `LocalSet` of the thread that calls it. What it says of each
+    /// judgement goes to `heard`.
+    pub fn start(
+        starts: &Starts,
+        cwd: PathBuf,
+        goal: &str,
+        heard: impl Fn(Heard) + 'static,
+    ) -> Self {
         let start = Start::New {
             instructions: Instructions::project(&cwd),
             setup: Some(setup(goal, &stance(&cwd))),
@@ -236,7 +258,7 @@ impl Judge {
             ..
         } = starts(cwd, start);
         let answers = commands.clone();
-        let hears = cx.spawn(async move |this, cx| {
+        let listens = tokio::task::spawn_local(async move {
             let mut reply = String::new();
             while let Some(event) = events.recv().await {
                 let judged = match event {
@@ -268,20 +290,18 @@ impl Judge {
                             || "the judge closed".to_owned(),
                             |error| format!("the judge closed: {error}"),
                         );
-                        let _ = this.update(cx, |view, cx| view.judge_closed(error, cx));
+                        heard(Heard::Closed(error));
                         break;
                     }
                     _ => continue,
                 };
-                if this.update(cx, |view, cx| view.judged(judged, cx)).is_err() {
-                    break;
-                }
+                heard(Heard::Judged(judged));
             }
         });
         Self {
             commands,
             _thread: thread,
-            _hears: hears,
+            _hears: AbortOnDrop(listens),
         }
     }
 

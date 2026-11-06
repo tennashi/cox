@@ -587,7 +587,7 @@ pub enum News {
 /// A command the agent runs when the human's line starts with `/` and its
 /// name, as `/compact`, with what follows the name as its input: ACP's
 /// available command.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SlashCommand {
     /// Its name, without the `/`.
     pub name: String,
