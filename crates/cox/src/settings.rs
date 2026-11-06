@@ -21,16 +21,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use serde_json::{Map, Value};
 
-/// What the file is called, where Cox keeps what lasts.
-const FILE: &str = "settings.json";
-
-/// What the folder of the human's workflow is called, where Cox keeps
-/// what lasts, when `settings.json` names no other.
-const WORKFLOW: &str = "workflow";
-
-/// What the folder of the human's wiki is called, where Cox keeps what
-/// lasts, when `settings.json` names no other.
-const WIKI: &str = "wiki";
+use crate::storage::Kept;
 
 /// The settings as `settings.json` keeps them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -113,7 +104,8 @@ impl Saved {
     /// cannot be read, which is said.
     #[must_use]
     pub fn read() -> Self {
-        crate::storage::path(FILE).map_or_else(Self::default, |file| Self::read_from(&file))
+        crate::storage::path(Kept::Settings)
+            .map_or_else(Self::default, |file| Self::read_from(&file))
     }
 
     fn read_from(file: &Path) -> Self {
@@ -177,7 +169,7 @@ impl Saved {
 pub fn workflow() -> Option<PathBuf> {
     Saved::read()
         .workflow
-        .or_else(|| crate::storage::path(WORKFLOW))
+        .or_else(|| crate::storage::path(Kept::Workflow))
 }
 
 /// The folder of the human's wiki, where the agents keep what they
@@ -185,7 +177,9 @@ pub fn workflow() -> Option<PathBuf> {
 /// of their notes, or else `wiki` where Cox keeps what lasts.
 #[must_use]
 pub fn wiki() -> Option<PathBuf> {
-    Saved::read().wiki.or_else(|| crate::storage::path(WIKI))
+    Saved::read()
+        .wiki
+        .or_else(|| crate::storage::path(Kept::Wiki))
 }
 
 /// How the human reads the wiki, and what they select, in a language of
@@ -203,7 +197,8 @@ pub fn translation() -> Option<Translation> {
 /// When Cox has no place to keep it, the path is not UTF-8, or the file
 /// cannot be written.
 pub fn keep_home(home: &Path) -> anyhow::Result<()> {
-    let file = crate::storage::path(FILE).context("there is no place to keep the settings")?;
+    let file =
+        crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
     keep_home_in(&file, home)
 }
 

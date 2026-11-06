@@ -116,7 +116,7 @@ impl Agents {
     /// kept it last, where Cox keeps what lasts.
     #[must_use]
     pub fn read(command: Vec<String>) -> Self {
-        let own = crate::storage::path("agents.json")
+        let own = crate::storage::path(crate::storage::Kept::Agents)
             .filter(|path| path.exists())
             .map(|path| {
                 read_own(&path).unwrap_or_else(|error| {
@@ -237,7 +237,7 @@ fn read_own(path: &Path) -> anyhow::Result<Vec<Known>> {
 
 /// Where Cox keeps the registry as it fetched it last.
 fn registry_path() -> Option<PathBuf> {
-    crate::storage::path("registry.json")
+    crate::storage::path(crate::storage::Kept::Registry)
 }
 
 /// The registry, as its JSON: the ACP Registry, or the one

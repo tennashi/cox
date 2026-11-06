@@ -34,9 +34,6 @@ use cox_editor::changes;
 use crate::agent::setup::Policy;
 use crate::chat::judge;
 
-/// What Cox calls the folder that holds the sketches' folders.
-pub const FOLDER: &str = "sketches";
-
 /// What a sketch starts from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

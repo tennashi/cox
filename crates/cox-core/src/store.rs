@@ -459,6 +459,34 @@ impl Store {
         Ok(())
     }
 
+    /// Has the projects and the chats that were in the folder `from` be
+    /// in `to`, which it moved to: the projects' folders, the folders the
+    /// chats work in, and the paths of their stages' tabs.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn moved(&self, from: &Path, to: &Path) -> anyhow::Result<()> {
+        let (from, to) = (inside(from), inside(to));
+        // As JSON writes them, without the quotes.
+        let json = |path: &str| -> anyhow::Result<String> {
+            let quoted = serde_json::to_string(path)?;
+            Ok(quoted[1..quoted.len() - 1].to_owned())
+        };
+        let transaction = self.connection.unchecked_transaction()?;
+        transaction.execute(
+            "UPDATE projects SET folder = ?2 || substr(folder, length(?1) + 1)
+             WHERE substr(folder, 1, length(?1)) = ?1",
+            params![from, to],
+        )?;
+        transaction.execute(
+            "UPDATE chats SET setup = replace(setup, ?1, ?2), tabs = replace(tabs, ?1, ?2)",
+            params![json(&from)?, json(&to)?],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// The id the agent of `chat` gave its session, if it opened one.
     ///
     /// # Errors
@@ -709,6 +737,12 @@ fn now() -> i64 {
 /// Makes the file at `path` for the human alone, and the directories it is
 /// in, if they are not there. `SQLite` makes the files beside it the same.
 #[cfg(unix)]
+/// What the paths inside `folder` start with: the folder and a `/`.
+fn inside(folder: &Path) -> String {
+    let folder = folder.to_string_lossy();
+    format!("{}/", folder.trim_end_matches('/'))
+}
+
 fn make_private(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 
@@ -993,6 +1027,69 @@ mod tests {
         // A chat its agent opens talks to the same agent.
         let child = store.add_chat_under(chat, None, "Chat 2", None).unwrap();
         assert_eq!(store.agent(child).unwrap().as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn chats_follow_the_sketches_they_work_in_to_where_they_moved() {
+        let store = Store::in_memory().unwrap();
+        let project = store
+            .project(Path::new("/data/cox-sketches/greet-2"), "greet-2")
+            .unwrap();
+        let elsewhere = store
+            .project(Path::new("/data/cox-sketches-old"), "old")
+            .unwrap();
+        let parent = store.add_chat(Some(project), "Chat 1").unwrap();
+        let chat = store
+            .add_chat_under(
+                parent,
+                None,
+                "Chat 2",
+                Some(r#"{"folder":"/data/cox-sketches/greet-1"}"#),
+            )
+            .unwrap();
+        let tabs = KeptTabs {
+            tabs: vec![KeptTab::Markdown {
+                path: "/data/cox-sketches/greet-1/notes.md".into(),
+            }],
+            shown: 0,
+        };
+        store.keep_tabs(chat, &tabs).unwrap();
+
+        store
+            .moved(
+                Path::new("/data/cox-sketches"),
+                Path::new("/data/cox-data/sketches"),
+            )
+            .unwrap();
+
+        let kept = store.chats().unwrap();
+        let setup = kept
+            .iter()
+            .find(|kept| kept.id == chat)
+            .unwrap()
+            .setup
+            .clone();
+        assert_eq!(
+            setup.as_deref(),
+            Some(r#"{"folder":"/data/cox-data/sketches/greet-1"}"#)
+        );
+        let Some(KeptTabs { tabs, .. }) = store.tabs(chat).unwrap() else {
+            panic!("the tabs are kept");
+        };
+        assert_eq!(
+            tabs,
+            [KeptTab::Markdown {
+                path: "/data/cox-data/sketches/greet-1/notes.md".into()
+            }]
+        );
+        let folders: Vec<_> = store
+            .projects()
+            .unwrap()
+            .into_iter()
+            .map(|kept| (kept.id, kept.folder))
+            .collect();
+        assert!(folders.contains(&(project, "/data/cox-data/sketches/greet-2".into())));
+        assert!(folders.contains(&(elsewhere, "/data/cox-sketches-old".into())));
     }
 
     #[test]

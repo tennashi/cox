@@ -132,18 +132,28 @@ impl Settings {
     }
 }
 
-/// Runs the app as `settings` say, until the human quits it.
+/// Runs the app as `settings` say, until the human quits it. The chats
+/// that worked in the sketches follow them when they moved, from the
+/// first of `sketches` to the second.
 #[must_use]
-pub fn run(settings: Settings) -> ExitCode {
+pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode {
     // CEF first: on Linux, its helper processes run this same executable
     // with arguments of their own, and exit inside `start`.
-    let cef = cox_browser::start(crate::storage::path("stage"));
+    let cef = cox_browser::start(crate::storage::path(crate::storage::Kept::Stage));
     let devtools = cef.devtools_port();
     // In place of CEF's handlers, which quit without the app's quit handlers.
     if let Err(error) = cox_browser::quit::on_signals() {
         tracing::error!("signals will end Cox without stopping the agents: {error}");
     }
     let store = Rc::new(open_store());
+    if let Some((from, to)) = sketches
+        && let Err(error) = store.moved(&from, &to)
+    {
+        tracing::error!(
+            "the chats that worked in {} do not find their sketches: {error:#}",
+            from.display()
+        );
+    }
 
     let home_given = settings.home.is_some();
     let home = home_for_chats(
@@ -194,7 +204,7 @@ fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
 /// The store of the chats this Cox keeps, or one for this run only when
 /// that cannot be opened.
 fn open_store() -> Store {
-    let kept = crate::storage::path("chats.sqlite")
+    let kept = crate::storage::path(crate::storage::Kept::Chats)
         .ok_or_else(|| anyhow::anyhow!("there is no place to keep them"))
         .and_then(|path| Store::open(&path));
     kept.or_else(|error| {

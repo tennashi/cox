@@ -50,7 +50,8 @@ as `~`. The gear at the foot of the rail (Command-, on macOS, Control-,
 elsewhere) opens the settings, on a card over the window, where the
 human sets the home: a path typed in its input, whole or from `~`, which
 Enter sets, or a folder "Choose…" asks for. The settings are kept in
-`settings.json`, beside the chats' database, as `agents.json` is, and the
+`settings.json`, in Cox's data folder (see [The stage](#the-stage)), as
+`agents.json` is, and the
 chats in no project that open from then on work there; `--home` still
 goes ahead of them for its run, until the human sets the home. Escape,
 the ×, or a click beside the card closes it. Each chat starts its own
@@ -125,7 +126,7 @@ as the human chose last in any chat; its mode is its own.
 The list starts with the agent the chat talks to, which a click on its
 row chooses among the agents Cox knows, while no turn runs: first the
 `<agent command>`, which a new chat talks to, then those the human lists
-in `agents.json`, beside the chats' database (see
+in `agents.json`, in Cox's data folder (see
 [The stage](#the-stage)), as `[{"name": "Codex", "command": ["npx", "-y",
 "@agentclientprotocol/codex-acp"]}]`, with `NAME=value` ahead of the
 program setting its environment, as on the command line, then, under
@@ -136,10 +137,10 @@ registry lists for the platform Cox runs on, with the SHA-256 of its
 archive, since an archive Cox cannot check is not offered. Such an
 agent's program is downloaded the first time a chat starts it, which
 the chat notes, checked by its SHA-256, and unpacked in
-`agents/<id>/<version>` beside `agents.json`, from where every chat
+`cache/agents/<id>/<version>` in Cox's data folder, from where every chat
 starts it after; an archive of another SHA-256 is refused, and the
 agent does not start. Cox fetches the registry as it starts, and keeps
-it, as `registry.json` beside `agents.json`, for a run that cannot
+it, as `cache/registry.json` there, for a run that cannot
 fetch it; `COX_REGISTRY` names another registry to fetch, as a mirror
 of one's own.
 An agent of the registry that runs the package one of the human's runs
@@ -272,7 +273,7 @@ nothing" beside it chooses what it starts from (from the project at
 first, when the project is in a Git repository). Enter opens the sketch,
 as `start_sketch` does, and shows it, and Escape leaves the chat as it
 was. A sketch opens no sketch beside it. A sketch's agent works in a
-folder Cox makes for it in `sketches`, beside the chats' database (see
+folder Cox makes for it in `sketches`, in Cox's data folder (see
 [The stage](#the-stage)), and changes and tests the files there
 without asking the human, the policy allowing the calls the workflow's
 `allow` names (see below), as Cox's own those that edit, delete or move
@@ -357,7 +358,7 @@ The human keeps a wiki, one for all their projects, of what the agents
 learned: Markdown pages by topic, as `gpui-layout.md` or
 `rust/errors.md`, in the folder `settings.json` names, whole or from
 `~`, as `{"wiki": "~/notes/cox"}`, an Obsidian vault or a Git repository
-of theirs, or else `wiki` beside the chats' database. A chat's agent
+of theirs, or else `wiki` in Cox's data folder. A chat's agent
 searches it with Cox's `wiki_search`, for the pages that have every word
 it looks for, reads a page with `wiki_read`, or the index without one,
 and writes a page whole with `wiki_write`, through Cox, which adds,
@@ -429,8 +430,8 @@ agent has written it, which "Copy" copies once it is whole, and
 Escape, the ×, or a click beside it closes. Text in
 English goes into the human's language, and the rest, as text mostly
 of other letters, into English. Each translation is kept, by what it
-says, the way it goes and what translated it, in `translations` beside the chats'
-database, so that a page that changed is translated again only where
+says, the way it goes and what translated it, in `cache/translations` in Cox's
+data folder, so that a page that changed is translated again only where
 it changed, and the wiki's folder holds only what was written.
 What translates is the human's to choose: `command`, a command that
 reads the text on its standard input and writes its translation on its
@@ -848,20 +849,35 @@ saved to a file, may do so in the chat's folder and in `/tmp`, where
 Claude Code keeps its scratchpad, beside the system's folder of
 temporary files, which on macOS is elsewhere.
 
-The stage keeps its cookies, logins and storage in a profile that lasts
-across runs, one for each place Cox runs from. The Cox that
-`cargo xtask install` puts in place keeps it in
-`~/Library/Application Support/Cox/stage` on macOS and
-`~/.local/share/cox/stage` on Linux; any other, such as
-`target/debug/Cox.app`, keeps its own in `cox-stage` beside it, as in
-`target/debug/cox-stage`. Only one Cox at a time can use a profile; a
-second Cox from the same place gets a profile for that run only. The
-chats are kept the same way, in a SQLite database: `chats.sqlite` beside
-the installed Cox's `stage`, and `cox-chats.sqlite` beside any other, as
-in `target/debug/cox-chats.sqlite`. A Cox given `--data <dir>` keeps all
-of that, and the rest it keeps, in `<dir>` instead, without the `cox-`:
-`<dir>/stage`, `<dir>/chats.sqlite`, and so on, to run apart from what it
-kept before, or on a copy of what another Cox kept.
+Cox keeps what lasts across runs in a data folder, one for each place
+Cox runs from. The Cox that `cargo xtask install` puts in place keeps it
+in `~/Library/Application Support/Cox` on macOS and `~/.local/share/cox`
+on Linux; any other, such as `target/debug/Cox.app`, keeps its own in
+`cox-data` beside it, as `target/debug/cox-data`. A Cox given
+`--data <dir>` keeps it in `<dir>` instead, to run apart from what it
+kept before, or on a copy of what another Cox kept. In the folder, each
+kind is kept apart
+([`storage.rs`](crates/cox/src/storage.rs) lists them):
+
+- at its top, what the human writes or chooses: `settings.json`,
+  `agents.json`, and the `workflow` and `wiki` folders when the settings
+  name none; beside them `sketches`, the folders the sketches work in,
+  and `logs`;
+- in `state`, what Cox would lose: the chats, in a SQLite database,
+  `chats.sqlite`, and the stage's profile, `stage`;
+- in `cache`, what Cox can make again: `registry.json`, the agents it
+  downloads, in `agents`, and `translations`;
+- in `run`, what is there only while Cox runs: `inspect.sock`.
+
+A Cox from before kept them all at the top of the folder, and a Cox
+built in `target/` kept each beside it, as `cox-` and its name. Cox
+moves them where they go as it starts, and the chats that work in a
+sketch that moved follow it; while another Cox from the same place
+runs, it leaves them, and uses them where they are.
+
+The stage keeps its cookies, logins and storage in its profile, which
+lasts across runs. Only one Cox at a time can use a profile; a second
+Cox from the same place gets a profile for that run only.
 
 On Linux, `cargo run` is enough: CEF is linked into `cox`, and its helper
 processes run `cox` again.
@@ -900,9 +916,9 @@ server of Cox's own tools send each other over the chat's socket, under
 `cox::stage::asked`, and what the agent writes to its standard error,
 under `cox_acp::stderr`. Each line names the file and line of Cox's code
 it was said at. The files are in `logs`
-beside the chats' database (see [The stage](#the-stage)), as
+in Cox's data folder (see [The stage](#the-stage)), as
 `~/Library/Application Support/Cox/logs` for the installed Cox on macOS,
-and `cox-logs` beside any other, as `target/debug/cox-logs`, each named
+and `target/debug/cox-data/logs` for the Cox built there, each named
 after the time its run started and its process id, as
 `20261101T160000Z-4242.jsonl`. Cox keeps the files of the last twenty
 runs. A panic is kept there too, with its backtrace.
@@ -990,8 +1006,8 @@ does not make them.
 
 Cox answers for its window to an agent that debugs it: one in a
 terminal, one in a chat of another Cox, or one on a machine with no
-screen. It opens a Unix socket, `inspect.sock` beside the chats'
-database (see [The stage](#the-stage)), as its window opens, and
+screen. It opens a Unix socket, `run/inspect.sock` in Cox's data
+folder (see [The stage](#the-stage)), as its window opens, and
 answers on it how it stands, in words; with a screenshot; and to keys,
 text, clicks and GPUI's actions, which reach the window whether it has
 the screen's focus or not, as when the Cox under test runs behind the
