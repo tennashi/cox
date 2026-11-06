@@ -49,7 +49,7 @@ pub fn platform() -> String {
 /// When the archive cannot be downloaded, its SHA-256 is not the one
 /// the registry gives, or it cannot be unpacked.
 pub fn installed(id: &str, download: &Download, told: &dyn Fn(String)) -> anyhow::Result<PathBuf> {
-    let agents = crate::storage::path("agents")
+    let agents = crate::storage::path(crate::storage::Kept::Downloads)
         .ok_or_else(|| anyhow::anyhow!("Cox has nowhere to keep the agents it downloads"))?;
     let folder = agents.join(name(id)).join(name(&download.version));
     if folder.join(UNPACKED).exists() {

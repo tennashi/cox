@@ -1517,7 +1517,7 @@ impl Workspace {
                     })
             })
             .unwrap_or_default();
-        let discarded = storage::path(sketch::FOLDER)
+        let discarded = storage::path(storage::Kept::Sketches)
             .map(|sketches| sketches.join(sketch::DISCARDED))
             .ok_or_else(|| "Cox cannot tell where to keep discarded sketches".to_owned())
             .and_then(|bundles| sketch::discard(started, &folder, &title, &bundles, ending.keep));
@@ -2329,7 +2329,8 @@ enum Ends {
 /// Makes the folder of a sketch that starts from `sketch`, of the folder
 /// `from`, and answers it.
 fn make_sketch(sketch: Sketch, from: &Path) -> Result<PathBuf, String> {
-    let sketches = storage::path(sketch::FOLDER).ok_or("Cox cannot tell where to keep sketches")?;
+    let sketches =
+        storage::path(storage::Kept::Sketches).ok_or("Cox cannot tell where to keep sketches")?;
     sketch::make(sketch, from, &sketches)
 }
 

@@ -29,13 +29,21 @@ fn main() -> ExitCode {
             // On Linux, CEF runs `cox` again for its helper processes,
             // which end inside `app::run`, and keep no file of their own.
             let helper = std::env::args().any(|arg| arg.starts_with("--type="));
-            let logs = if helper {
-                None
+            let (logs, settled) = if helper {
+                (None, cox::storage::Settled::default())
             } else {
-                cox::storage::path("logs")
+                // Before what was kept is used, the log too.
+                let settled = cox::storage::settle();
+                (cox::storage::path(cox::storage::Kept::Logs), settled)
             };
             cox::logs::init(logs.as_deref());
-            app::run(settings)
+            for moved in &settled.moved {
+                tracing::info!("{moved}");
+            }
+            for left in &settled.left {
+                tracing::warn!("{left}");
+            }
+            app::run(settings, settled.sketches)
         }
         Mode::Bridge(socket) => {
             cox::logs::init(None);

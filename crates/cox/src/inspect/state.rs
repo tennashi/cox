@@ -3,7 +3,6 @@
 //! the screen does not say, such as the state a chat is in.
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 use cox_core::store::ChatId;
 use cox_core::tabs::KeptTab;
@@ -38,7 +37,7 @@ pub fn describe(
         std::process::id(),
         std::env::current_dir().map_or_else(|_| "?".to_owned(), |cwd| cwd.display().to_string())
     );
-    if let Some(data) = super::socket().as_deref().and_then(Path::parent) {
+    if let Some(data) = crate::storage::root() {
         let _ = writeln!(told, "It keeps what lasts in {}", data.display());
     }
     match crate::logs::file() {

@@ -7,7 +7,7 @@
 //! actions by name, which reach the window whether it has the focus of
 //! the screen or not.
 //!
-//! The agent asks on a Unix socket, `inspect.sock` where this Cox keeps
+//! The agent asks on a Unix socket, `run/inspect.sock` where this Cox keeps
 //! what lasts (see [`crate::storage`]), which Cox opens as its window
 //! does, and speaks MCP on, as the server of each chat's tools does (see
 //! [`crate::agent::mcp`]). So `cox --mcp <socket>` reaches it as an MCP
@@ -41,9 +41,6 @@ pub mod client;
 mod state;
 
 pub use state::describe;
-
-/// What the socket is called, where this Cox keeps what lasts.
-pub const SOCKET: &str = "inspect.sock";
 
 /// The option that runs `cox` as the client.
 pub const OPTION: &str = "--inspect";
@@ -95,7 +92,7 @@ struct Known {
 /// a place to keep what lasts, or with the socket in another Cox's use,
 /// Cox answers nowhere, and says so.
 pub fn start(window: WindowHandle<Workspace>, devtools: Option<u16>, cx: &mut App) {
-    let Some(socket) = crate::storage::path(SOCKET) else {
+    let Some(socket) = crate::storage::path(crate::storage::Kept::Inspect) else {
         tracing::error!("Cox cannot be asked how it stands: it has no place for the socket");
         return;
     };
@@ -561,7 +558,7 @@ fn tools() -> Value {
 /// Where the socket is, where this Cox keeps what lasts.
 #[must_use]
 pub fn socket() -> Option<PathBuf> {
-    crate::storage::path(SOCKET)
+    crate::storage::path(crate::storage::Kept::Inspect)
 }
 
 #[cfg(test)]

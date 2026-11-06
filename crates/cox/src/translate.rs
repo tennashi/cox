@@ -23,7 +23,7 @@
 //! the pages' blocks, its translation told as far as it has arrived, as
 //! the command or the agent writes it (see [`text`]). Each translation is
 //! kept, by what it says, its way and what translated it, in
-//! `translations` where Cox keeps what lasts, so
+//! `cache/translations` where Cox keeps what lasts, so
 //! that a page that changed is translated again only where it changed,
 //! and the wiki's own folder holds only what the agents and the human
 //! wrote.
@@ -48,9 +48,6 @@ use crate::agent::{Agent, AgentEvent, Command, Start};
 use crate::agents::Agents;
 use crate::settings::Translation;
 use crate::wiki::told::options;
-
-/// Where Cox keeps the translations, where it keeps what lasts.
-const FOLDER: &str = "translations";
 
 /// The language the agents write in, and that text not in it goes into.
 pub const ENGLISH: &str = "English";
@@ -134,7 +131,7 @@ pub enum Arriving {
 /// Starts the translator, which works on a thread of its own, its agent,
 /// when it needs one, being one of `agents`.
 pub fn start(agents: Agents) {
-    let Some(folder) = crate::storage::path(FOLDER) else {
+    let Some(folder) = crate::storage::path(crate::storage::Kept::Translations) else {
         tracing::error!("nothing is translated: there is no place to keep translations");
         return;
     };

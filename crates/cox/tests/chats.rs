@@ -2068,7 +2068,7 @@ async fn open_sketch(
         .unwrap()
         .folder
         .expect("a sketch's folder");
-    let sketches = cox::storage::path(cox::chat::sketch::FOLDER).unwrap();
+    let sketches = cox::storage::path(cox::storage::Kept::Sketches).unwrap();
     assert!(folder.starts_with(&sketches), "{}", folder.display());
     folder
 }
@@ -2149,7 +2149,7 @@ async fn a_chat_opens_a_sketch_beside_it(cx: &mut TestAppContext) {
     // what it tries.
     let opened = start(cx, 0).await.unwrap().unwrap();
     let folder = opened.folder.clone().expect("a sketch's folder");
-    let sketches = cox::storage::path(cox::chat::sketch::FOLDER).unwrap();
+    let sketches = cox::storage::path(cox::storage::Kept::Sketches).unwrap();
     assert!(folder.starts_with(&sketches), "{}", folder.display());
     assert_eq!(opened.name, "A warmer greeting.");
     cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 2)
