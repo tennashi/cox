@@ -116,10 +116,13 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
     {
         return "the translation's card".to_owned();
     }
-    if let Some(settings) = workspace.settings()
-        && focused == settings.read(cx).input().focus_handle(cx)
-    {
-        return "the settings' input".to_owned();
+    if let Some(settings) = workspace.settings().map(|settings| settings.read(cx)) {
+        if focused == settings.input().focus_handle(cx) {
+            return "the settings' input".to_owned();
+        }
+        if focused == *settings.words_focus() {
+            return format!("the settings' text, {:?} selected", settings.selected());
+        }
     }
     let Some(shown) = workspace.shown().and_then(Chat::view) else {
         return if focused == workspace.focus_handle(cx) {

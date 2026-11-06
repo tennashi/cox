@@ -8,6 +8,8 @@
 //! project there from then on. Under it are the folders of the human's
 //! workflow and wiki (see [`folder`]), the agents they run (see
 //! [`agents`]), and the language they read in (see [`translation`]).
+//! What the screen says the human selects, copies and translates (see
+//! [`words`]).
 //! Escape, the ×, or a click beside the card closes it,
 //! keeping the rows of agents changed, and leaving the home as it was
 //! last set.
@@ -15,6 +17,7 @@
 mod agents;
 mod folder;
 mod translation;
+mod words;
 
 use std::path::PathBuf;
 
@@ -26,13 +29,14 @@ use gpui::{
 use self::agents::AgentsSection;
 use self::folder::FolderField;
 use self::translation::TranslationSection;
-use crate::ui::card;
+use self::words::Words;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
     ACCENT, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK,
 };
+use crate::ui::{Copy, card};
 
 actions!(
     cox,
@@ -50,10 +54,13 @@ const KEY_CONTEXT: &str = "Settings";
 /// How wide the card is.
 const WIDTH: f32 = 680.;
 
-/// Binds the key that closes the screen. The window binds the one that
-/// opens it.
+/// Binds the keys that close the screen and copy what is selected of it.
+/// The window binds the one that opens it.
 pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", CloseSettings, Some(KEY_CONTEXT))]);
+    cx.bind_keys([
+        KeyBinding::new("escape", CloseSettings, Some(KEY_CONTEXT)),
+        KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT)),
+    ]);
 }
 
 /// The human set the home to this folder, which is kept.
@@ -85,6 +92,10 @@ pub struct SettingsView {
     wiki: Entity<FolderField>,
     agents: Entity<AgentsSection>,
     translation: Entity<TranslationSection>,
+    /// What the screen says, as the human selects it.
+    words: Words,
+    /// What has the keyboard while the human selects the words.
+    focus: FocusHandle,
     _submitted: Subscription,
 }
 
@@ -101,6 +112,7 @@ impl SettingsView {
         let submitted = cx.subscribe_in(&input, window, |view, _, Submitted, _, cx| {
             view.submit(cx);
         });
+        let words = Words::default();
         Self {
             home,
             given,
@@ -114,6 +126,7 @@ impl SettingsView {
                      which every chat's agent is told first, and its sketch/ and wiki/, what Cox \
                      tells the agent in your place.",
                     crate::storage::path(crate::storage::Kept::Workflow),
+                    words.clone(),
                     cx,
                 )
             }),
@@ -124,11 +137,14 @@ impl SettingsView {
                     "The folder of your wiki, one for all your projects, where the agents keep \
                      what they learned, as an Obsidian vault or a Git repository of yours.",
                     crate::storage::path(crate::storage::Kept::Wiki),
+                    words.clone(),
                     cx,
                 )
             }),
-            agents: cx.new(AgentsSection::new),
-            translation: cx.new(TranslationSection::new),
+            agents: cx.new(|cx| AgentsSection::new(words.clone(), cx)),
+            translation: cx.new(|cx| TranslationSection::new(words.clone(), cx)),
+            words,
+            focus: cx.focus_handle(),
             _submitted: submitted,
         }
     }
@@ -170,6 +186,18 @@ impl SettingsView {
     #[must_use]
     pub fn input(&self) -> &Entity<LineInput> {
         &self.input
+    }
+
+    /// What has the keyboard while the human selects what the screen says.
+    #[must_use]
+    pub fn words_focus(&self) -> &FocusHandle {
+        &self.focus
+    }
+
+    /// What the human selected of what the screen says.
+    #[must_use]
+    pub fn selected(&self) -> String {
+        self.words.selected()
     }
 
     /// Sets the home to the folder the input names, if it names one.
@@ -316,6 +344,24 @@ impl Focusable for SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (told, color) = self.told();
+        // The sections write their words after the home's, as they render
+        // after the screen.
+        self.words.start();
+        let mut words = self.words.part();
+        let body = self.words.selectable(
+            div()
+                .id("settings-body")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .px(px(22.))
+                .pt(px(18.))
+                .pb(px(22.))
+                .flex()
+                .flex_col()
+                .gap_2(),
+            &self.focus,
+        );
         card()
             .id("settings")
             .debug_selector(|| "settings".to_owned())
@@ -332,25 +378,8 @@ impl Render for SettingsView {
             .on_action(cx.listener(|_, _: &CloseSettings, _, cx| cx.emit(Dismissed)))
             .child(Self::render_header(cx))
             .child(
-                div()
-                    .id("settings-body")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px(px(22.))
-                    .pt(px(18.))
-                    .pb(px(22.))
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(FAINT))
-                            .child("HOME"),
-                    )
-                    .child(div().text_size(px(13.)).text_color(rgb(DIM)).child(
+                body.child(words.heading("HOME"))
+                    .child(words.about(
                         "The folder Cox starts chats in when they are in no project, \
                          as New chat opens them; the rail shows it as ~.",
                     ))
@@ -379,11 +408,9 @@ impl Render for SettingsView {
                             .child(Self::render_choose(cx)),
                     )
                     .child(
-                        div()
-                            .debug_selector(|| "home-told".to_owned())
-                            .text_size(px(12.))
-                            .text_color(rgb(color))
-                            .child(told),
+                        words
+                            .note(&told, color)
+                            .debug_selector(|| "home-told".to_owned()),
                     )
                     .child(div().mt_4().child(self.workflow.clone()))
                     .child(div().mt_4().child(self.wiki.clone()))

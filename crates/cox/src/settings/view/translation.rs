@@ -6,15 +6,14 @@
 //! translates; emptied, the language takes the translation out, so that
 //! Cox translates nothing. What else the file holds of it stays.
 
-use gpui::{
-    App, Context, Entity, Focusable, FontWeight, Subscription, Window, div, prelude::*, px, rgb,
-};
+use gpui::{App, Context, Entity, Focusable, Subscription, Window, div, prelude::*, px, rgb};
 use serde_json::{Map, Value};
 
+use super::words::Words;
 use crate::agents::{Agents, line};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{
-    ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND,
+    ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, FAILED, FAINT, FOREGROUND,
 };
 
 /// What translates.
@@ -36,12 +35,14 @@ pub struct TranslationSection {
     kept: Option<Value>,
     /// What the line under the section says, and in which color.
     told: Option<(String, u32)>,
+    words: Words,
     _submitted: [Subscription; 2],
 }
 
 impl TranslationSection {
-    /// The section, as `settings.json` holds the translation now.
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    /// The section, as `settings.json` holds the translation now, writing
+    /// what it says in `words`.
+    pub fn new(words: Words, cx: &mut Context<Self>) -> Self {
         let language = cx.new(|cx| {
             let mut input = LineInput::new(cx);
             input.set_placeholder("Japanese", cx);
@@ -60,6 +61,7 @@ impl TranslationSection {
             by: By::Agent(None),
             kept: Some(Value::Null),
             told: None,
+            words,
             _submitted: submitted,
         };
         section.reread(cx);
@@ -284,18 +286,13 @@ impl Render for TranslationSection {
                 FAINT,
             )
         });
+        let mut words = self.words.part();
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(FAINT))
-                    .child("TRANSLATION"),
-            )
-            .child(div().text_size(px(13.)).text_color(rgb(DIM)).child(
+            .child(words.heading("TRANSLATION"))
+            .child(words.about(
                 "The language you read the wiki, and what you select, in: English goes into \
                  it, and the rest into English, by an agent, or by a command that reads the \
                  text on its input, with {from} and {to} standing for the languages.",
@@ -310,6 +307,6 @@ impl Render for TranslationSection {
                 section
                     .child(input(&self.command).debug_selector(|| "translation-command".to_owned()))
             })
-            .child(div().text_size(px(12.)).text_color(rgb(color)).child(told))
+            .child(words.note(&told, color))
     }
 }

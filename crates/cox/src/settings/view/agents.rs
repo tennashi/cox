@@ -17,6 +17,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
+use super::words::{Part, Words};
 use crate::agents::check::{self, Checked};
 use crate::agents::line;
 use crate::agents::listing::Listing;
@@ -43,6 +44,7 @@ pub struct AgentsSection {
     adding: bool,
     /// What tells the next row from the others.
     next_key: u64,
+    words: Words,
 }
 
 /// An agent `agents.json` lists, or one the human adds, not kept yet.
@@ -77,8 +79,9 @@ impl Row {
 }
 
 impl AgentsSection {
-    /// The section, with the agents `agents.json` lists now.
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    /// The section, with the agents `agents.json` lists now, writing what
+    /// it says in `words`.
+    pub fn new(words: Words, cx: &mut Context<Self>) -> Self {
         let mut section = Self {
             rows: Vec::new(),
             listed: None,
@@ -86,6 +89,7 @@ impl AgentsSection {
             default: None,
             adding: false,
             next_key: 0,
+            words,
         };
         section.reread(cx);
         section
@@ -377,7 +381,12 @@ impl AgentsSection {
         lines
     }
 
-    fn render_row(&self, row: &Row, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_row(
+        &self,
+        row: &Row,
+        words: &mut Part,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let key = row.key;
         let default = row.kept.is_some() && row.kept == self.default;
         let mark = div()
@@ -463,13 +472,11 @@ impl AgentsSection {
                     .child(test)
                     .child(remove),
             )
-            .children(row.told.clone().map(|(told, color)| {
-                div()
-                    .pl(px(22.))
-                    .text_size(px(12.))
-                    .text_color(rgb(color))
-                    .child(told)
-            }))
+            .children(
+                row.told
+                    .as_ref()
+                    .map(|(told, color)| words.note(told, *color).pl(px(22.))),
+            )
     }
 
     /// The list of agents to add, under "Add agent" while it is open: one
@@ -559,43 +566,43 @@ fn is_assignment(word: &str) -> bool {
 impl Render for AgentsSection {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let commanded = cx.try_global::<Agents>().is_some_and(Agents::commanded);
+        let mut words = self.words.part();
+        // The words are numbered as they are written, so the heading and
+        // the lines over the rows go first.
+        let heading = words.heading("AGENTS");
+        let about = words.about(
+            "The agents you run, beside those of the ACP Registry, each with the command \
+                 that runs it, NAME=value ahead of the program setting its environment. \
+                 The dot marks the one a new chat talks to when Cox opens with no agent \
+                 command, as from the Finder or a launcher.",
+        );
+        let commanded = commanded.then(|| {
+            words.note(
+                "Cox was started with an agent command, which a new chat talks to in this run.",
+                ASKING,
+            )
+        });
+        let unreadable = self.unreadable.as_ref().map(|why| {
+            words.note(
+                &format!("agents.json cannot be read, so it is left as it is: {why}"),
+                FAILED,
+            )
+        });
         let rows: Vec<_> = self
             .rows
             .iter()
-            .map(|row| self.render_row(row, cx))
+            .map(|row| self.render_row(row, &mut words, cx))
             .collect();
+        let hint = words.note("Enter keeps a row; Test tries it out.", FAINT);
         let adding = self.adding;
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(FAINT))
-                    .child("AGENTS"),
-            )
-            .child(div().text_size(px(13.)).text_color(rgb(DIM)).child(
-                "The agents you run, beside those of the ACP Registry, each with the command \
-                 that runs it, NAME=value ahead of the program setting its environment. \
-                 The dot marks the one a new chat talks to when Cox opens with no agent \
-                 command, as from the Finder or a launcher.",
-            ))
-            .when(commanded, |section| {
-                section.child(div().text_size(px(12.)).text_color(rgb(ASKING)).child(
-                    "Cox was started with an agent command, which a new chat talks to \
-                             in this run.",
-                ))
-            })
-            .children(self.unreadable.clone().map(|why| {
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(FAILED))
-                    .child(format!(
-                        "agents.json cannot be read, so it is left as it is: {why}"
-                    ))
-            }))
+            .child(heading)
+            .child(about)
+            .children(commanded)
+            .children(unreadable)
             .child(div().mt_1().flex().flex_col().gap_2().children(rows))
             .when(self.unreadable.is_none(), |section| {
                 section
@@ -626,12 +633,7 @@ impl Render for AgentsSection {
                                         cx.notify();
                                     })),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(FAINT))
-                                    .child("Enter keeps a row; Test tries it out."),
-                            ),
+                            .child(hint),
                     )
                     .when(adding, |section| section.child(self.render_adding(cx)))
             })
