@@ -807,7 +807,9 @@ impl ShowsFile for Code {
             | tab::TabContent::Tree(_)
             | tab::TabContent::Changes(_)
             | tab::TabContent::Flow(_)
-            | tab::TabContent::Terminal(_) => None,
+            | tab::TabContent::Terminal(_)
+            | tab::TabContent::Android(_)
+            | tab::TabContent::Devices(_) => None,
         }
     }
 }

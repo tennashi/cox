@@ -205,7 +205,9 @@ impl ShowsFile for Document {
             | TabContent::Tree(_)
             | TabContent::Changes(_)
             | TabContent::Flow(_)
-            | TabContent::Terminal(_) => None,
+            | TabContent::Terminal(_)
+            | TabContent::Android(_)
+            | TabContent::Devices(_) => None,
         }
     }
 }

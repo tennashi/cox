@@ -1,7 +1,8 @@
 //! The bar along the top of the stage: the views of the project it keeps
 //! in sight, the project's files, what changed in them, and the pages of
 //! the plugins, such as the map; then the tabs of the rest, each with an
-//! icon of what it shows; and, at its end, the menu that opens another.
+//! icon of what it shows; and, at its end, the menu that opens another,
+//! among them an Android emulator of each virtual device the SDK has.
 //! The button of what changed counts the files that did, while the stage
 //! is open.
 
@@ -307,6 +308,7 @@ impl Stage {
             TabContent::Changes(_) => Icon::Changes,
             TabContent::Flow(_) => Icon::Flow,
             TabContent::Terminal(_) => Icon::Terminal,
+            TabContent::Android(_) | TabContent::Devices(_) => Icon::Phone,
         };
         let shown = self.tabs.shown_index() == Some(index);
         div()
@@ -439,7 +441,8 @@ impl Stage {
     }
 
     /// The menu of what the human opens on the stage: the line where they
-    /// type a URL, a file or a command, then a page, a terminal, or a file.
+    /// type a URL, a file or a command, then a page, a terminal, a file, or
+    /// the Android emulator's devices.
     fn render_menu(input: &Entity<LineInput>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let line = Self::render_menu_line(input, cx);
         let item = |id: &'static str, label: &'static str, glyph: Icon, key: &'static str| {
@@ -507,6 +510,14 @@ impl Stage {
                             Self::choose_file(window, cx);
                         },
                     )),
+                )
+                .child(
+                    item("android-devices", "Android devices", Icon::Phone, "").on_click(
+                        cx.listener(move |stage, _, window, cx| {
+                            close(stage, cx);
+                            stage.show_devices(window, cx);
+                        }),
+                    ),
                 ),
         )
         .with_priority(2)

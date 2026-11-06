@@ -327,6 +327,8 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
             KeptTab::Changes { folder } => format!("changes in {}", folder.display()),
             KeptTab::Map { .. } => "map".to_owned(),
             KeptTab::Flow { call } => format!("flow of tool call {call}"),
+            KeptTab::Android { device } => format!("android emulator {device}"),
+            KeptTab::AndroidDevices => "android devices".to_owned(),
             KeptTab::Parts => "parts the chat ran with".to_owned(),
             KeptTab::Terminal { title } => format!("terminal {title:?}"),
         };

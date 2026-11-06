@@ -26,6 +26,7 @@ allow_attributes_without_reason = "warn"
 agent-client-protocol = "3.4.0"
 anyhow = "1.0.104"
 cox-acp = { path = "crates/cox-acp", version = "0.0.0" }
+cox-android = { path = "crates/cox-android", version = "0.0.0" }
 cox-browser = { path = "crates/cox-browser", version = "0.0.0" }
 cox-core = { path = "crates/cox-core", version = "0.0.0" }
 cox-editor = { path = "crates/cox-editor", version = "0.0.0" }
