@@ -388,7 +388,11 @@ The human keeps a wiki, one for all their projects, of what the agents
 learned: Markdown pages by topic, as `gpui-layout.md` or
 `rust/errors.md`, in the folder `settings.json` names, whole or from
 `~`, as `{"wiki": "~/notes/cox"}`, an Obsidian vault or a Git repository
-of theirs, or else `wiki` in Cox's data folder. A chat's agent
+of theirs, or else `wiki` in the home the settings set, as
+`~/cox/wiki`, where the human sees it and every Cox of theirs finds it
+(`--home` is for its run, and does not move it); a wiki an earlier Cox
+kept in its data folder moves there as Cox starts, unless the home has
+one already. A chat's agent
 searches it with Cox's `wiki_search`, for the pages that have every word
 it looks for, reads a page with `wiki_read`, or the index without one,
 and writes a page whole with `wiki_write`, through Cox, which adds,
@@ -895,8 +899,8 @@ kind is kept apart
 ([`storage.rs`](crates/cox/src/storage.rs) lists them):
 
 - at its top, what the human writes or chooses: `settings.json`,
-  `agents.json`, and the `workflow` and `wiki` folders when the settings
-  name none; beside them `sketches`, the folders the sketches work in,
+  `agents.json`, and the `workflow` folder when the settings name none
+  (the `wiki` an earlier Cox kept here moves into the home); beside them `sketches`, the folders the sketches work in,
   and `logs`;
 - in `state`, what Cox would lose: the chats, in a SQLite database,
   `chats.sqlite`, and the stage's profile, `stage`;

@@ -71,6 +71,16 @@ impl FolderField {
         field
     }
 
+    /// Goes by `fallback` when the settings name no folder, as when the
+    /// home it is in changed.
+    pub fn set_fallback(&mut self, fallback: PathBuf, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(shortened(&fallback), cx);
+        });
+        self.fallback = Some(fallback);
+        cx.notify();
+    }
+
     /// What the input holds.
     #[must_use]
     pub fn text(&self, cx: &gpui::App) -> String {

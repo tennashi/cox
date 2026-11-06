@@ -176,6 +176,8 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
         );
     }
     let home = crate::settings::home_for_chats(home);
+    // The wiki moves after the home, which may have been renamed.
+    let _ = crate::settings::settle_wiki();
     // Opened from the Finder, the Dock or a launcher, Cox is given no
     // command, and starts the agent the settings name.
     let named = settings

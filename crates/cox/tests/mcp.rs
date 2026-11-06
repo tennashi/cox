@@ -222,6 +222,13 @@ fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServ
 fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     let data = scratch("wiki-data");
     cox::storage::keep_in(&data);
+    // The wiki is in the home the settings set.
+    let home = data.join("home");
+    std::fs::write(
+        data.join("settings.json"),
+        json!({ "home": home }).to_string(),
+    )
+    .unwrap();
     let one = scratch("wiki-one");
     let other = scratch("wiki-other");
     let (mut writer, _one) = chat_in(&one, "one", "Fix scroll");
@@ -238,7 +245,7 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     );
     let written = writer.hear();
     assert_eq!(written["result"]["isError"], false, "{written}");
-    let page = data.join("wiki/gpui/scroll.md");
+    let page = home.join("wiki/gpui/scroll.md");
     assert!(
         written["result"]["content"][0]["text"]
             .as_str()

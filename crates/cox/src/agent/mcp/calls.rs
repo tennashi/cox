@@ -1034,11 +1034,6 @@ async fn start_sketch(
     Ok(told)
 }
 
-/// The folder of the human's wiki.
-fn wiki_root() -> Result<std::path::PathBuf, String> {
-    crate::settings::wiki().ok_or_else(|| "Cox cannot tell where the wiki is".to_owned())
-}
-
 /// Where the chat is, as its workspace tells it.
 async fn whereabouts(chats: &UnboundedSender<ChatRequest>) -> Result<Whereabouts, String> {
     let (answer, heard) = oneshot::channel();
@@ -1059,7 +1054,7 @@ async fn wiki_search(
         .filter(|query| !query.trim().is_empty())
         .ok_or("no query: give the words to look for as `query`")?;
     let project = whereabouts(chats).await?.project;
-    let found = wiki::search(&wiki_root()?, query, &project);
+    let found = wiki::search(&crate::settings::wiki(), query, &project);
     if found.is_empty() {
         return Ok(format!("No page of the wiki has every word of `{query}`."));
     }
@@ -1083,7 +1078,7 @@ async fn wiki_read(
         Some(Value::String(page)) => page,
         Some(_) => return Err("`page` is not a string".to_owned()),
     };
-    let root = wiki_root()?;
+    let root = crate::settings::wiki();
     let project = whereabouts(chats).await?.project;
     match wiki::read(&root, page, &project) {
         Ok(text) => Ok(text),
@@ -1147,7 +1142,7 @@ async fn wiki_write(
         commit: wiki::commit_of(cwd),
         paths,
     };
-    let root = wiki_root()?;
+    let root = crate::settings::wiki();
     let file = wiki::write(&root, page, text, &used, keep)?;
     let kept_in = fs::read_to_string(&file)
         .ok()
