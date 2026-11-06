@@ -546,7 +546,9 @@ and Option-Delete take out a word, and Command-Backspace the row up to
 the cursor, with Shift selecting as they go, and Control-A, Control-E
 and Control-K as in Emacs; off macOS, Control does what Option does,
 and Control-Home and Control-End go to the start and the end of the
-text.
+text. On macOS, a key with Control that is none of these, nor any of
+Cox's, goes to the input method, as macSKK's Control-J, which turns its
+kana on from its ASCII mode.
 
 An agent can run commands of its own, as `claude-agent-acp` runs Claude
 Code's `/compact` and `/review`, when a line starts with `/` and the
