@@ -938,7 +938,9 @@ target/debug/Cox.app/Contents/MacOS/Cox <agent command>
 `Cox.app` next to them: `cox` as `Contents/MacOS/Cox`, the framework and
 five copies of `cox-helper` (`Cox Helper.app`, `Cox Helper (GPU).app`,
 ...) under `Contents/Frameworks`. CEF fixes that layout and those names,
-starting from the executable's. It then signs the app as a whole, ad
+starting from the executable's. The app's icon,
+[`app-icon.svg`](crates/cox/assets/app-icon.svg), it renders into
+`Contents/Resources/Cox.icns`, at each size macOS asks for. It then signs the app as a whole, ad
 hoc, which macOS asks of an app before it shows the app's
 notifications. `cargo run` on macOS stops at once,
 saying where the framework was expected.

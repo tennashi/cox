@@ -89,6 +89,23 @@ const HELPERS: &[(&str, &str)] = &[
     (" (Alerts)", "helper.alerts"),
 ];
 const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
+/// The app's icon, drawn as an SVG, which `assemble` renders into
+/// `Contents/Resources/Cox.icns`.
+const ICON: &str = include_str!("../../crates/cox/assets/app-icon.svg");
+/// The images an `.icns` holds, each a PNG: the type macOS knows it by,
+/// and its width in pixels, for 16 to 512 points at 1x and 2x.
+const ICNS_IMAGES: &[(&[u8; 4], u16)] = &[
+    (b"icp4", 16),
+    (b"ic11", 32),
+    (b"icp5", 32),
+    (b"ic12", 64),
+    (b"ic07", 128),
+    (b"ic13", 256),
+    (b"ic08", 256),
+    (b"ic14", 512),
+    (b"ic09", 512),
+    (b"ic10", 1024),
+];
 
 /// Builds `cox` and `cox-helper`, then lays them out with CEF the way
 /// macOS and CEF expect: the framework under `Contents/Frameworks`, and
@@ -128,6 +145,11 @@ fn assemble(sh: &Shell, build: &Build) -> anyhow::Result<PathBuf> {
     )?;
     sh.create_dir(contents.join("MacOS"))?;
     sh.copy_file(&build.cox, contents.join("MacOS").join(APP))?;
+    sh.create_dir(contents.join("Resources"))?;
+    fs::write(
+        contents.join("Resources").join(format!("{APP}.icns")),
+        icns(ICON)?,
+    )?;
 
     let framework = build.cef_dir.join(FRAMEWORK);
     // cp keeps what the framework is made of (links, modes) as it is.
@@ -470,8 +492,35 @@ impl Build {
     }
 }
 
-/// The `Info.plist` of the app, or of a helper, which also stays out of
-/// the Dock. `MallocNanoZone` is what Chromium's own bundle sets: its
+/// Renders `svg` at each size of `ICNS_IMAGES`, and answers the `.icns`
+/// that holds them: `icns` and its length, then each image as its type,
+/// its length and the PNG, every length counting its own header.
+fn icns(svg: &str) -> anyhow::Result<Vec<u8>> {
+    use resvg::{tiny_skia, usvg};
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default())?;
+    let mut images = Vec::new();
+    for (kind, size) in ICNS_IMAGES {
+        let mut pixmap = tiny_skia::Pixmap::new(u32::from(*size), u32::from(*size))
+            .context("an icon's size is not zero")?;
+        let scale = f32::from(*size) / tree.size().width();
+        resvg::render(
+            &tree,
+            tiny_skia::Transform::from_scale(scale, scale),
+            &mut pixmap.as_mut(),
+        );
+        let png = pixmap.encode_png()?;
+        images.extend_from_slice(*kind);
+        images.extend_from_slice(&u32::try_from(png.len() + 8)?.to_be_bytes());
+        images.extend_from_slice(&png);
+    }
+    let mut icns = b"icns".to_vec();
+    icns.extend_from_slice(&u32::try_from(images.len() + 8)?.to_be_bytes());
+    icns.extend_from_slice(&images);
+    Ok(icns)
+}
+
+/// The `Info.plist` of the app, with its icon, or of a helper, which
+/// stays out of the Dock instead. `MallocNanoZone` is what Chromium's own bundle sets: its
 /// allocator does not get on with macOS's nano zone.
 fn info_plist(name: &str, identifier: &str, helper: bool) -> String {
     let version = env!("CARGO_PKG_VERSION");
@@ -479,6 +528,11 @@ fn info_plist(name: &str, identifier: &str, helper: bool) -> String {
         "\n\t<key>LSUIElement</key>\n\t<true/>"
     } else {
         ""
+    };
+    let icon = if helper {
+        String::new()
+    } else {
+        format!("\n\t<key>CFBundleIconFile</key>\n\t<string>{APP}</string>")
     };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -488,7 +542,7 @@ fn info_plist(name: &str, identifier: &str, helper: bool) -> String {
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>{name}</string>
+	<string>{name}</string>{icon}
 	<key>CFBundleIdentifier</key>
 	<string>{identifier}</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -520,7 +574,28 @@ fn info_plist(name: &str, identifier: &str, helper: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Build, Run};
+    use super::{Build, ICNS_IMAGES, ICON, Run, icns};
+
+    #[test]
+    fn the_icon_is_an_icns_of_every_size() {
+        let icns = icns(ICON).unwrap();
+        assert_eq!(&icns[..4], b"icns");
+        let length = |at: usize| u32::from_be_bytes(icns[at..at + 4].try_into().unwrap()) as usize;
+        assert_eq!(length(4), icns.len());
+        let mut at = 8;
+        for (kind, size) in ICNS_IMAGES {
+            assert_eq!(&icns[at..at + 4], *kind);
+            let png = &icns[at + 8..at + length(at + 4)];
+            assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+            // The width and the height, in the PNG's IHDR chunk.
+            assert_eq!(
+                png[16..24],
+                [[0, 0], size.to_be_bytes(), [0, 0], size.to_be_bytes()].concat()
+            );
+            at += length(at + 4);
+        }
+        assert_eq!(at, icns.len());
+    }
 
     #[test]
     fn the_build_is_read_from_cargo_messages() {
