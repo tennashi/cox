@@ -71,11 +71,14 @@ pub enum Kept {
     /// The socket an agent asks Cox how it stands on (see
     /// [`crate::inspect`]).
     Inspect,
+    /// The socket the window reaches coxd on, which runs the chats (see
+    /// [`crate::daemon::process`]).
+    Daemon,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Settings,
         Self::Agents,
         Self::Workflow,
@@ -88,6 +91,7 @@ impl Kept {
         Self::Translations,
         Self::Logs,
         Self::Inspect,
+        Self::Daemon,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -106,6 +110,7 @@ impl Kept {
             Self::Translations => "cache/translations",
             Self::Logs => "logs",
             Self::Inspect => "run/inspect.sock",
+            Self::Daemon => "run/coxd.sock",
         }
     }
 
@@ -295,7 +300,7 @@ fn settle_in(places: &Places) -> Settled {
         if from == to || !from.exists() {
             continue;
         }
-        if kept == Kept::Inspect {
+        if matches!(kept, Kept::Inspect | Kept::Daemon) {
             // A socket no Cox answers at is left from a Cox that ended.
             if UnixStream::connect(&from).is_err() {
                 let _ = fs::remove_file(&from);

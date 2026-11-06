@@ -185,6 +185,19 @@ impl Agents {
         lists.own = first(&lists.command, named, own);
     }
 
+    /// Talks first to `command` from now on, the agent of the command line
+    /// of the window that came last, or, with none, to the agent of
+    /// `agents.json` that `named` names.
+    pub fn command(&self, command: Vec<String>, named: Option<&str>) {
+        let own = own().unwrap_or_else(|error| {
+            tracing::error!("the agents the human lists are left out: {error:#}");
+            Vec::new()
+        });
+        let mut lists = self.lock();
+        lists.command = command;
+        lists.own = first(&lists.command, named, own);
+    }
+
     /// Whether the command line gave the agent a new chat talks to, ahead
     /// of the one `settings.json` names.
     #[must_use]

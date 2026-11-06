@@ -12,6 +12,10 @@
 //! On macOS, run it from inside the bundle `cargo xtask bundle` makes, as
 //! `Cox.app/Contents/MacOS/Cox`: that is where CEF and its helpers are.
 //!
+//! The chats run in coxd, `cox [--data <dir>] --daemon`, which the window
+//! starts when it does not run, and which goes on after the window closes
+//! (see `cox::daemon::process`).
+//!
 //! The agents run `cox` too, as `cox --mcp <socket>`, the MCP server of
 //! Cox's own tools that `cox::agent::mcp` hands them. An agent that debugs
 //! Cox runs `cox [--data <dir>] --inspect <tool>` to ask a running Cox how
@@ -61,6 +65,28 @@ fn main() -> ExitCode {
                 tracing::warn!("{left}");
             }
             app::run(settings, settled.sketches)
+        }
+        Mode::Daemon { data } => {
+            // First, while coxd has no other thread.
+            let environment = cox::login::take_in();
+            if let Some(data) = &data {
+                cox::storage::keep_in(data);
+            }
+            let settled = cox::storage::settle();
+            cox::logs::init(cox::storage::path(cox::storage::Kept::Logs).as_deref());
+            cox::scratch::sweep();
+            if let cox::login::Taken::Failed(why) = environment {
+                tracing::warn!(
+                    "the agents get launchd's environment, not the login shell's: {why}"
+                );
+            }
+            for moved in &settled.moved {
+                tracing::info!("{moved}");
+            }
+            for left in &settled.left {
+                tracing::warn!("{left}");
+            }
+            app::daemon(settled.sketches)
         }
         Mode::Bridge(socket) => {
             cox::logs::init(None);

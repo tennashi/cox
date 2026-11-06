@@ -2,23 +2,22 @@
 //! open, in the order things start:
 //!
 //! 1. The command line says what to be ([`Mode::parse`]): the app, with
-//!    its [`Settings`], or the bridge to a chat's tools, which `main`
-//!    runs instead.
+//!    its [`Settings`], coxd, which runs the chats, or the bridge to a
+//!    chat's tools, which `main` runs instead.
 //! 2. What the app depends on starts: the browser, which is CEF (see
-//!    [`cox_browser`]), the signal handlers, and the store of the
-//!    chats.
-//! 3. The app's own parts are made: the [`Launcher`] that starts the
-//!    chats' agents, and the daemon that runs the chats with it, on a
-//!    thread of its own (see [`crate::daemon`]).
+//!    [`cox_browser`]), and the signal handlers.
+//! 3. The window reaches coxd, which runs the chats, starting it when it
+//!    does not run (see [`crate::daemon::client`]).
 //! 4. GPUI runs the app: the keys are bound, the globals set, the loops
 //!    that keep the browser and the quit asks served start, and the
 //!    window opens, telling the human of its chats on macOS.
 //! 5. Quitting runs what was registered for it: the browser shuts down
-//!    before GPUI ends. On macOS, quitting ends the process there, so
-//!    nothing runs after `run`.
+//!    before GPUI ends, and coxd goes on. On macOS, quitting ends the
+//!    process there, so nothing runs after `run`.
 //!
 //! [`run`] is steps 2 to 5, each a function of its own, called in that
-//! order.
+//! order. [`daemon`] runs coxd, with the [`Launcher`] that starts the
+//! chats' agents (see [`crate::daemon::process`]).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -42,7 +41,11 @@ actions!(cox, [Quit]);
 
 pub const USAGE: &str = "\
 Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] [<agent command> [args...]]
+       cox [--data <dir>] --daemon
        cox [--data <dir>] --inspect [<tool> [<arguments>...]]";
+
+/// What the command line says to be coxd, after `--data <dir>`.
+pub const DAEMON: &str = "--daemon";
 
 /// What the command line asks `cox` to be.
 #[derive(Debug, PartialEq, Eq)]
@@ -50,6 +53,9 @@ pub enum Mode {
     /// The app, as `cox [--stage <url>] [--home <dir>] [--data <dir>]
     /// <agent command>`.
     App(Settings),
+    /// coxd, which runs the chats, as `cox [--data <dir>] --daemon`, as
+    /// the window starts it (see [`crate::daemon::process`]).
+    Daemon { data: Option<PathBuf> },
     /// The bridge between an agent and the server of its chat's tools on
     /// the socket given, as `cox --mcp <socket>` (see [`crate::agent::mcp`]).
     Bridge(PathBuf),
@@ -96,6 +102,11 @@ impl Mode {
             return Self::Inspect {
                 data: settings.data,
                 args: settings.command[1..].to_vec(),
+            };
+        }
+        if settings.command.first().map(String::as_str) == Some(DAEMON) {
+            return Self::Daemon {
+                data: settings.data,
             };
         }
         if matches!(
@@ -145,20 +156,20 @@ impl Settings {
 /// first of `sketches` to the second.
 #[must_use]
 pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode {
-    // CEF first: on Linux, its helper processes run this same executable
-    // with arguments of their own, and exit inside `start`.
-    let cef = cox_browser::start(crate::storage::path(crate::storage::Kept::Stage));
-    let devtools = cef.devtools_port();
-    // In place of CEF's handlers, which quit without the app's quit handlers.
-    if let Err(error) = cox_browser::quit::on_signals() {
-        tracing::error!("signals will end Cox without stopping the agents: {error}");
+    let profile = crate::storage::path(crate::storage::Kept::Stage);
+    // On Linux, CEF's helper processes run this same executable with
+    // arguments of their own, and exit inside `start`, before they reach
+    // coxd.
+    if std::env::args().any(|arg| arg.starts_with("--type=")) {
+        let _ = cox_browser::start(profile.clone());
     }
-    // What the chats that worked where things moved follow, once the
-    // daemon opens the store.
+    // What the chats that worked where things moved follow, kept before
+    // coxd reads them.
     let mut moved: Vec<(PathBuf, PathBuf)> = sketches.into_iter().collect();
     let home_given = settings.home.is_some();
     let home = settings
         .home
+        .clone()
         .or_else(|| crate::settings::Saved::read().home);
     if home.is_none()
         && let Some(user) = std::env::var_os("HOME")
@@ -167,6 +178,9 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
         moved.push(renamed);
     }
     let home = crate::settings::home_for_chats(home);
+    if !moved.is_empty() {
+        open_store(&moved);
+    }
     // The workflow and the wiki move after the home, which may have been
     // renamed.
     crate::settings::settle_folders();
@@ -177,12 +191,111 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
         .is_empty()
         .then(crate::settings::agent)
         .flatten();
-    let agents = Agents::read(settings.command, named.as_deref());
+    let agents = Agents::read(settings.command.clone(), named.as_deref());
     agents.fetch();
     crate::translate::start(agents.clone());
-    let followed = agents.clone();
+    // 3. coxd, which runs the chats, in a process of its own.
+    let hello = crate::daemon::wire::Hello {
+        home: settings.home,
+        command: settings.command,
+    };
+    let data = settings.data;
+    let connected = crate::storage::path(crate::storage::Kept::Daemon)
+        .ok_or_else(|| anyhow::anyhow!("there is no place for coxd's socket"))
+        .and_then(|socket| {
+            crate::daemon::client::connect(
+                &socket,
+                &hello,
+                &|| start_daemon(data.as_deref()),
+                // The window shows nothing once coxd is gone.
+                cox_browser::quit::ask,
+            )
+        });
+    let crate::daemon::client::Connected { link, from_daemon } = match connected {
+        Ok(connected) => connected,
+        Err(error) => {
+            tracing::error!("{error:#}");
+            eprintln!("cox: {error:#}");
+            return ExitCode::from(1);
+        }
+    };
+    // CEF after coxd is started, which would hold what CEF opens
+    // otherwise.
+    let cef = cox_browser::start(profile);
+    let devtools = cef.devtools_port();
+    // In place of CEF's handlers, which quit without the app's quit handlers.
+    if let Err(error) = cox_browser::quit::on_signals() {
+        tracing::error!("signals will end Cox without stopping the agents: {error}");
+    }
+    let stages = CefStages {
+        stage: settings.stage,
+        cef: cef.clone(),
+    };
+
+    Application::new()
+        .with_assets(Icons)
+        .run(move |cx: &mut App| {
+            bind_keys(cx);
+            cx.set_global(Servers::default());
+            cx.set_global(agents.clone());
+            serve_browser(&cef, cx);
+            quit_when_asked(cx);
+            shut_down_on_quit(cef, cx);
+            let workspace = Opened {
+                link,
+                from_daemon,
+                home,
+                home_given,
+                stages: Rc::new(stages),
+                agents: agents.clone(),
+            };
+            let window = open_window(workspace, cx);
+            crate::settings::follow(window, agents, cx);
+            crate::inspect::start(window, devtools, cx);
+        });
+    ExitCode::SUCCESS
+}
+
+/// Starts coxd, as this program run as `cox [--data <dir>] --daemon`,
+/// apart from the window: in a process group of its own, so that a
+/// Control-C in the terminal the window started from leaves it, with
+/// nothing to read or write but its log.
+fn start_daemon(data: Option<&Path>) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt as _;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(std::env::current_exe()?);
+    if let Some(data) = data {
+        command.arg("--data").arg(data);
+    }
+    command
+        .arg(DAEMON)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()?;
+    tracing::info!("started coxd");
+    Ok(())
+}
+
+/// Runs coxd until it is stopped: the chats, kept where this Cox keeps
+/// what lasts, their agents started as `agents.json` and `settings.json`
+/// say, following them as they change. The chats that worked in the
+/// sketches follow them when they moved, from the first of `sketches` to
+/// the second.
+#[must_use]
+pub fn daemon(sketches: Option<(PathBuf, PathBuf)>) -> ExitCode {
+    let Some(socket) = crate::storage::path(crate::storage::Kept::Daemon) else {
+        eprintln!("cox: there is no place for coxd's socket");
+        return ExitCode::from(1);
+    };
+    let saved = crate::settings::Saved::read();
+    let home = crate::settings::home_for_chats(saved.home);
+    let agents = Agents::read(Vec::new(), saved.agent.as_deref());
+    agents.fetch();
+    follow_agents(agents.clone());
     let launcher = Launcher {
-        agents: agents.clone(),
+        agents,
         path: std::env::var_os("PATH").unwrap_or_default(),
         exe: std::env::current_exe()
             .inspect_err(|error| {
@@ -190,43 +303,56 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
             })
             .ok(),
     };
-    let stages = CefStages {
-        stage: settings.stage,
-        cef: cef.clone(),
-    };
-    // 3. The daemon, which runs the chats, on a thread of its own.
-    let (to_window, from_daemon) = tokio::sync::mpsc::unbounded_channel();
-    let daemon = crate::daemon::start(
-        home.clone(),
-        home_given,
-        move || Rc::new(open_store(&moved)),
+    let ran = crate::daemon::process::run(
+        &socket,
+        home,
+        move || Rc::new(open_store(&Vec::from_iter(sketches))),
         move || Rc::new(launcher),
-        to_window,
     );
-    let link = daemon.link.clone();
+    crate::scratch::take_away();
+    match ran {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!("{error:#}");
+            eprintln!("cox: {error:#}");
+            ExitCode::from(1)
+        }
+    }
+}
 
-    Application::new()
-        .with_assets(Icons)
-        .run(move |cx: &mut App| {
-            bind_keys(cx);
-            cx.set_global(Servers::default());
-            cx.set_global(followed.clone());
-            serve_browser(&cef, cx);
-            quit_when_asked(cx);
-            shut_down_on_quit(cef, daemon, cx);
-            let workspace = Opened {
-                link,
-                from_daemon,
-                home,
-                home_given,
-                stages: Rc::new(stages),
-                agents: followed.clone(),
-            };
-            let window = open_window(workspace, cx);
-            crate::settings::follow(window, followed, cx);
-            crate::inspect::start(window, devtools, cx);
+/// How often coxd looks whether `settings.json` or `agents.json` changed.
+const FOLLOW_EVERY: Duration = Duration::from_secs(1);
+
+/// Follows `settings.json` and `agents.json` for coxd, on a thread of its
+/// own, as the window does for itself (see [`crate::settings::follow`]):
+/// a chat opened from then on talks to the agents they list and name.
+fn follow_agents(agents: Agents) {
+    let files: Vec<PathBuf> = [crate::storage::Kept::Settings, crate::storage::Kept::Agents]
+        .into_iter()
+        .filter_map(crate::storage::path)
+        .collect();
+    let stamps = move || {
+        files
+            .iter()
+            .map(|file| crate::stage::follow::Stamp::of(file).ok())
+            .collect::<Vec<_>>()
+    };
+    let spawned = std::thread::Builder::new()
+        .name("coxd's settings".to_owned())
+        .spawn(move || {
+            let mut seen = stamps();
+            loop {
+                std::thread::sleep(FOLLOW_EVERY);
+                let now = stamps();
+                if now != seen {
+                    seen = now;
+                    agents.reload(crate::settings::agent().as_deref());
+                }
+            }
         });
-    ExitCode::SUCCESS
+    if let Err(error) = spawned {
+        tracing::error!("coxd does not follow the settings: {error}");
+    }
 }
 
 /// The name an earlier Cox gave the home, `~/cox` now.
@@ -351,10 +477,9 @@ fn quit_when_asked(cx: &mut App) {
 /// Shuts the browser down when the app quits, then takes away what this
 /// run kept only while it ran (see [`crate::scratch`]). Quitting ends the
 /// app's run loop, or on macOS the whole process, so the browsers go
-/// before either, and the daemon, which stops the chats' agents.
-fn shut_down_on_quit(cef: Cef, mut daemon: crate::daemon::Running, cx: &mut App) {
+/// before either. coxd, and the chats' agents, go on.
+fn shut_down_on_quit(cef: Cef, cx: &mut App) {
     cx.on_app_quit(move |_| {
-        daemon.stop();
         cef.clone().shutdown();
         crate::scratch::take_away();
         async {}
@@ -514,6 +639,17 @@ mod tests {
             parse(&["--mcp", "/tmp/cox-1-0/mcp"]),
             Mode::Bridge(PathBuf::from("/tmp/cox-1-0/mcp"))
         );
+    }
+
+    #[test]
+    fn coxd_is_asked_for_with_its_data() {
+        assert_eq!(
+            parse(&["--data", "/tmp/d", "--daemon"]),
+            Mode::Daemon {
+                data: Some(PathBuf::from("/tmp/d")),
+            }
+        );
+        assert_eq!(parse(&["--daemon"]), Mode::Daemon { data: None });
     }
 
     #[test]

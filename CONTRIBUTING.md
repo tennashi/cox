@@ -118,7 +118,9 @@ when it comes to wait for them, and when its turn ends; a click on the
 notification shows the chat. The Dock's icon counts the chats that
 wait for the human or that they have not seen since a turn ended.
 "Archive" in the menu takes a chat out of the tabs, to "Archived" at
-their end, from where a click brings it back; its agent, if it runs, goes on. A chat's agent runs until Cox quits. Cox
+their end, from where a click brings it back; its agent, if it runs, goes on. A chat's agent runs in coxd (see
+[coxd](#coxd)), which goes on after the window closes, until coxd is
+stopped. Cox
 keeps each chat's conversation, and its stage's tabs, as they change,
 and shows the chats of earlier runs as tabs too, greyed and closed, for the
 human to read what they showed. A closed chat's stage opens again on
@@ -882,11 +884,11 @@ Cox hands each chat's agent its own tools as an MCP server, which is
 `cox` itself run as `cox --mcp <socket>`: the agent starts it, and it
 carries what the agent says to the chat on a Unix socket of the chat's
 own, which Cox answers. An agent reaches only its own chat that way.
-The sockets are in a folder of the run's own among the system's
-temporary files, `cox-` and Cox's process id, which only the human may
-enter, beside what else Cox keeps only while it runs, as a throwaway
-profile of the stage; a Cox that crashes leaves its folder, which the
-next Cox to start takes away.
+The sockets are in a folder of coxd's run among the system's temporary
+files, `cox-` and its process id, which only the human may enter; the
+window keeps one of its own so, for what else it keeps only while it
+runs, as a throwaway profile of the stage. A Cox that crashes leaves
+its folder, which the next Cox to start takes away.
 
 CEF opens the Chrome DevTools Protocol on a port that is free when Cox
 starts, so two Cox can run side by side, and Cox hands each chat's
@@ -923,7 +925,8 @@ kind is kept apart
   `chats.sqlite`, and the stage's profile, `stage`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it
   downloads, in `agents`, and `translations`;
-- in `run`, what is there only while Cox runs: `inspect.sock`.
+- in `run`, what is there only while Cox runs: `coxd.sock` and
+  `inspect.sock`.
 
 A Cox from before kept them all at the top of the folder, and a Cox
 built in `target/` kept each beside it, as `cox-` and its name. Cox
@@ -958,6 +961,38 @@ starting from the executable's. The app's icon,
 hoc, which macOS asks of an app before it shows the app's
 notifications. `cargo run` on macOS stops at once,
 saying where the framework was expected.
+
+## coxd
+
+The chats run in coxd, `cox [--data <dir>] --daemon`, a process of
+their own apart from the window: it opens the chats kept, starts their
+agents, and runs them, whether a window shows them or not. The window
+reaches it on a Unix socket, `run/coxd.sock` in Cox's data folder (see
+[The stage](#the-stage)), one message a line, each a JSON object, as
+[`wire.rs`](crates/cox/src/daemon/wire.rs) says them, and shows what
+coxd tells it. A window that finds no coxd there starts one, of the
+same program and the same data folder, in a process group of its own,
+so that a Control-C in the terminal the window started from leaves it.
+`--home` and the `<agent command>` of the window go to coxd as it comes,
+for the chats it opens from then on.
+
+coxd takes one window at a time: a second Cox from the same place says
+another window has the chats, and stops. The window closing leaves
+coxd, and the agents at work, running; the next window to open shows
+the chats as they are then. While no window is there, what a chat asks
+of its stage, as a command to run, fails, and an agent that starts gets
+no tools for the stage. coxd follows `settings.json` and `agents.json`
+as the window does (see [The stage](#the-stage)), and keeps a log of
+its own run beside the window's (see
+[What Cox keeps of each run](#what-cox-keeps-of-each-run)).
+
+coxd runs until it is stopped, with SIGTERM, SIGINT or SIGHUP, as
+`pkill -f 'cox --daemon'`, which stops the chats' agents, or until its
+socket is taken away, as with its data folder. When its program was
+replaced since it started, as `cargo xtask install` replaces it, and
+no chat is at work, the next window to come has it stop, and starts the
+new one; while a chat is at work, it goes on as it was, until a window
+comes once none is.
 
 ## What Cox keeps of each run
 
@@ -1119,8 +1154,9 @@ building and trying a change in `target/` leaves it be:
 A Cox started from it, such as `target/debug/Cox.app`, runs beside it
 with a DevTools port and a stage profile of its own (see
 [The stage](#the-stage)), so each agent drives its own stage. Installing
-again while the Cox in use runs is fine: it runs the new version once it
-is started again.
+again while the Cox in use runs is fine: the window runs the new
+version once it is started again, and coxd too, once no chat is at work
+as the window comes (see [coxd](#coxd)).
 
 ## Pull requests
 
