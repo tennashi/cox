@@ -189,7 +189,7 @@ impl Plugins {
         let json = match what {
             "map" if rest.is_empty() => map::told(&self.root),
             "wiki" => {
-                let root = crate::settings::wiki()?;
+                let root = crate::settings::wiki();
                 if rest.is_empty() {
                     wiki::told(&root)
                 } else {

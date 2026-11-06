@@ -136,7 +136,7 @@ impl SettingsView {
                     "WIKI",
                     "The folder of your wiki, one for all your projects, where the agents keep \
                      what they learned, as an Obsidian vault or a Git repository of yours.",
-                    crate::storage::path(crate::storage::Kept::Wiki),
+                    Some(crate::settings::home_wiki()),
                     words.clone(),
                     cx,
                 )
@@ -222,6 +222,10 @@ impl SettingsView {
             .update(cx, |input, cx| input.set_text(&shown, cx));
         self.home.clone_from(&folder);
         self.given = false;
+        // The wiki the settings name none of is the new home's.
+        self.wiki.update(cx, |wiki, cx| {
+            wiki.set_fallback(crate::settings::home_wiki(), cx);
+        });
         self.tell(Told::Set, cx);
         cx.emit(HomeChanged(folder));
     }
