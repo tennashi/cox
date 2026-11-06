@@ -46,8 +46,9 @@ use cox_core::store::{ChatId, Record};
 use cox_core::tabs::KeptTabs;
 use gpui::{
     AnyElement, AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    ScrollHandle, Subscription, Task, Window, actions, div, prelude::*, px, relative, rgb,
+    KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Task, Window, actions, div, list,
+    prelude::*, px, relative, rgb,
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -157,6 +158,10 @@ const CONVERSATION_WIDTH: f32 = 420.;
 const PLAN_WIDTH: f32 = 240.;
 const PLAN_HEIGHT: f32 = 200.;
 
+/// How far past the conversation in sight the list measures the places
+/// it has not laid out yet, so that they are ready as it scrolls.
+const OVERDRAW: f32 = 400.;
+
 /// How wide the conversation grows, at most, while the stage is closed.
 const CONVERSATION_MAX_WIDTH: f32 = 800.;
 
@@ -169,8 +174,15 @@ pub struct StageView {
 
 pub struct ChatView {
     conversation: Conversation,
-    /// Where the conversation is scrolled to.
-    scroll: ScrollHandle,
+    /// The conversation's places as the list draws them: where it is
+    /// scrolled to, and how tall each place was when it last showed, so
+    /// that only the places in sight are laid out again as it scrolls.
+    list: ListState,
+    /// The places of the conversation, as the last frame worked them out.
+    places: Vec<entries::Place>,
+    /// Whether the next frame scrolls the conversation to its end, to
+    /// keep it in view as entries arrive.
+    to_end: bool,
     /// The line the human is typing.
     input: Entity<LineInput>,
     /// The list over the input of the agent's commands the line can go on
@@ -298,15 +310,13 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let view = Self {
+        Self {
             record,
             again,
             starts,
             agents,
             ..Self::with(conversation, stage, open_link, Some(window), cx)
-        };
-        view.scroll.scroll_to_bottom();
-        view
+        }
     }
 
     /// The view of `conversation`, with no agent. Given the `window`, the
@@ -343,7 +353,9 @@ impl ChatView {
         let (commands, _) = tokio::sync::mpsc::unbounded_channel();
         Self {
             conversation,
-            scroll: ScrollHandle::new(),
+            list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
+            places: Vec::new(),
+            to_end: true,
             input,
             completion,
             stage,
@@ -976,8 +988,8 @@ impl ChatView {
 
     /// Where the conversation is scrolled to.
     #[must_use]
-    pub fn scroll(&self) -> &ScrollHandle {
-        &self.scroll
+    pub fn scroll(&self) -> &ListState {
+        &self.list
     }
 
     /// The text the human selected in the conversation.
@@ -1059,11 +1071,15 @@ impl ChatView {
     /// it was: the human reads along as entries arrive, unless they have
     /// scrolled back to read something earlier.
     fn follow<T>(&mut self, change: impl FnOnce(&mut Conversation) -> T) -> T {
-        // The offset grows downward as negative numbers.
-        let at_end = self.scroll.offset().y <= -self.scroll.max_offset().height + px(1.);
+        // The offset grows downward as negative numbers. A conversation
+        // not laid out yet, as a chat not shown, is at its end.
+        let laid_out = self.list.viewport_bounds().size.height > px(0.);
+        let at_end = !laid_out
+            || -self.list.scroll_px_offset_for_scrollbar().y
+                >= self.list.max_offset_for_scrollbar().height - px(1.);
         let changed = change(&mut self.conversation);
         if at_end {
-            self.scroll.scroll_to_bottom();
+            self.to_end = true;
         }
         changed
     }
@@ -1333,9 +1349,10 @@ impl ChatView {
             self.conversation.state(),
             State::Busy | State::Asking | State::Checking
         );
-        // The frame lays the text out again.
-        self.reading.clear();
-        let entries = self.render_entries(cx);
+        // The frame lays the text in sight out again, and keeps what the
+        // frames before laid out of the rest, for a selection to copy.
+        self.reading.age(self.conversation.entries().len());
+        self.lay_out_places();
         // What the chat waits for shows in the input, while it is empty.
         let placeholder = self.waiting().unwrap_or_else(|| "Reply".to_owned());
         self.input
@@ -1394,8 +1411,6 @@ impl ChatView {
                         div()
                             .id("conversation")
                             .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.scroll)
                             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
                             .on_mouse_down(
                                 MouseButton::Right,
@@ -1415,11 +1430,13 @@ impl ChatView {
                                 MouseButton::Left,
                                 cx.listener(|view, _, _, _| view.reading.stop()),
                             )
-                            .pt(px(16.))
-                            .px(px(14.))
-                            .flex()
-                            .flex_col()
-                            .children(entries),
+                            .child(
+                                list(
+                                    self.list.clone(),
+                                    cx.processor(|view, place, _, cx| view.render_place(place, cx)),
+                                )
+                                .size_full(),
+                            ),
                     )
                     // Drawn after the conversation, over it.
                     .children(plan),
@@ -1440,6 +1457,32 @@ impl ChatView {
 }
 
 impl ChatView {
+    /// Works out the conversation's places again, telling the list which
+    /// changed: the places from the first that starts at another entry
+    /// on are new to it, and the rest keep the heights they were laid out
+    /// at, the list laying out again those in sight. Scrolls to the end,
+    /// when it is to.
+    fn lay_out_places(&mut self) {
+        let places = self.places();
+        let kept = self
+            .places
+            .iter()
+            .zip(&places)
+            .take_while(|(was, is)| was.first() == is.first())
+            .count();
+        if kept < self.places.len() || kept < places.len() {
+            self.list
+                .splice(kept..self.places.len(), places.len() - kept);
+        }
+        self.places = places;
+        if std::mem::take(&mut self.to_end) {
+            self.list.scroll_to(ListOffset {
+                item_ix: self.places.len(),
+                offset_in_item: px(0.),
+            });
+        }
+    }
+
     /// The box the human types the line in: the input, and under it the
     /// chips that start a command or a file's path, and the button that
     /// stops the turn while it runs.
