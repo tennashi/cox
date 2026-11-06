@@ -207,7 +207,9 @@ impl ShowsFile for Document {
             | TabContent::Flow(_)
             | TabContent::Terminal(_)
             | TabContent::Android(_)
-            | TabContent::Devices(_) => None,
+            | TabContent::Devices(_)
+            | TabContent::MacWindow(_)
+            | TabContent::Windows(_) => None,
         }
     }
 }

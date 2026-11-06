@@ -51,6 +51,9 @@
 //! - [`android`] shows an Android emulator, which the human touches and
 //!   types into, and [`devices`] lists the emulator's virtual devices, for
 //!   the human to start one.
+//! - [`mac_window`] shows a window of another app on the Mac, which the
+//!   human clicks and types into, and [`windows`] lists those windows, for
+//!   the human to show one.
 //! - [`plugins`] are pages that draw what Cox knows, as a tab would, which
 //!   the stage serves its pages itself at `cox:` addresses: [`map`] tells
 //!   the project's map, as an agent wrote it, with what changed laid over
@@ -68,7 +71,9 @@ pub mod flow;
 pub mod follow;
 pub mod lines;
 mod links;
+pub mod mac_window;
 pub mod map;
+mod mirror;
 pub mod outline;
 pub mod page;
 pub mod plugins;
@@ -77,6 +82,7 @@ pub mod tab;
 pub mod terminal;
 pub mod tree;
 mod typed;
+pub mod windows;
 
 use std::path::PathBuf;
 
@@ -96,11 +102,13 @@ use crate::stage::calls::Calls;
 use crate::stage::code::Code;
 use crate::stage::devices::{Devices, OpenDevice};
 use crate::stage::document::Document;
+use crate::stage::mac_window::MacWindow;
 use crate::stage::outline::Outlines;
 use crate::stage::page::{Opens, Page};
 use crate::stage::plugins::Plugins;
-use crate::stage::tab::{Tab, TabContent};
+use crate::stage::tab::{Shows, Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
+use crate::stage::windows::{ShowWindow, Windows};
 use crate::ui::Panel;
 use crate::ui::input::LineInput;
 
@@ -288,6 +296,13 @@ impl Stage {
                 KeptTab::AndroidDevices => {
                     stage.push_devices(show, window, cx);
                 }
+                KeptTab::MacWindow { app, title } => {
+                    let tab = mac_window::reopened(app, title, cx);
+                    stage.push_mac_window(tab, show, cx);
+                }
+                KeptTab::MacWindows => {
+                    stage.push_windows(show, window, cx);
+                }
                 // The tabs Cox drew in earlier runs open as the pages that
                 // draw them now: the map at its top, since its tiers are
                 // not the crates the tab was open at.
@@ -379,6 +394,84 @@ impl Stage {
         self.push(TabContent::Devices(devices), changes, Some(opens), show, cx);
     }
 
+    /// Shows the tab of the windows of the Mac's other apps, opening it if
+    /// there is none.
+    pub fn show_windows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let index = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab.content, TabContent::Windows(_)));
+        if let Some(index) = index {
+            self.show(index, window, cx);
+        } else {
+            self.push_windows(true, window, cx);
+        }
+        self.focus_shown(window, cx);
+    }
+
+    /// Puts the tab of the windows of the Mac's other apps after the
+    /// others, shown if `show` is.
+    fn push_windows(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let windows = cx.new(Windows::new);
+        let changes = cx.observe(&windows, |stage, _, cx| stage.changed(cx));
+        let opens = cx.subscribe_in(
+            &windows,
+            window,
+            |stage, _, shown: &ShowWindow, window, cx| {
+                stage.open_mac_window(shown.0.clone(), window, cx);
+            },
+        );
+        self.push(TabContent::Windows(windows), changes, Some(opens), show, cx);
+    }
+
+    /// Shows the tab of `app_window`, a window of another app on the Mac,
+    /// with the keyboard in it: the tab showing it, or one kept of its app
+    /// and title, which shows it again, or a new one.
+    pub fn open_mac_window(
+        &mut self,
+        app_window: cox_mac::Window,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let index = self.tabs.iter().position(|tab| match &tab.content {
+            TabContent::MacWindow(tab) => {
+                let tab = tab.read(cx);
+                match tab.window() {
+                    Some(shown) => shown.id == app_window.id,
+                    None => {
+                        tab.kept()
+                            == KeptTab::MacWindow {
+                                app: app_window.app.clone(),
+                                title: app_window.title.clone(),
+                            }
+                    }
+                }
+            }
+            _ => false,
+        });
+        if let Some(index) = index {
+            if let TabContent::MacWindow(tab) = &self.tabs[index].content {
+                tab.update(cx, |tab, cx| {
+                    if !tab.is_showing() {
+                        tab.show(app_window, cx);
+                    }
+                });
+            }
+            self.show(index, window, cx);
+        } else {
+            let tab = cx.new(|cx| MacWindow::new(app_window, cx));
+            self.push_mac_window(tab, true, cx);
+        }
+        self.focus_shown(window, cx);
+    }
+
+    /// Puts a tab of a window of another app after the others, shown if
+    /// `show` is.
+    fn push_mac_window(&mut self, tab: Entity<MacWindow>, show: bool, cx: &mut Context<Self>) {
+        let changes = cx.observe(&tab, |stage, _, cx| stage.changed(cx));
+        self.push(TabContent::MacWindow(tab), changes, None, show, cx);
+    }
+
     /// Shows the tab of the Android emulator of the virtual device `name`,
     /// starting it as `boot` says, or reaching it if it runs, with the
     /// keyboard in it: the tab it has, if it has one, or a new one.
@@ -433,7 +526,9 @@ impl Stage {
             | TabContent::Flow(_)
             | TabContent::Terminal(_)
             | TabContent::Android(_)
-            | TabContent::Devices(_) => false,
+            | TabContent::Devices(_)
+            | TabContent::MacWindow(_)
+            | TabContent::Windows(_) => false,
         })
     }
 

@@ -809,7 +809,9 @@ impl ShowsFile for Code {
             | tab::TabContent::Flow(_)
             | tab::TabContent::Terminal(_)
             | tab::TabContent::Android(_)
-            | tab::TabContent::Devices(_) => None,
+            | tab::TabContent::Devices(_)
+            | tab::TabContent::MacWindow(_)
+            | tab::TabContent::Windows(_) => None,
         }
     }
 }

@@ -27,10 +27,11 @@ pub enum Icon {
     Stage,
     Target,
     Terminal,
+    Window,
 }
 
 impl Icon {
-    const ALL: [Self; 18] = [
+    const ALL: [Self; 19] = [
         Self::Book,
         Self::Changes,
         Self::Close,
@@ -49,6 +50,7 @@ impl Icon {
         Self::Stage,
         Self::Target,
         Self::Terminal,
+        Self::Window,
     ];
 
     /// Where GPUI finds it among the assets.
@@ -72,6 +74,7 @@ impl Icon {
             Self::Stage => "icons/stage.svg",
             Self::Target => "icons/target.svg",
             Self::Terminal => "icons/terminal.svg",
+            Self::Window => "icons/window.svg",
         }
     }
 
@@ -96,6 +99,7 @@ impl Icon {
             Self::Stage => include_bytes!("../../assets/icons/stage.svg"),
             Self::Target => include_bytes!("../../assets/icons/target.svg"),
             Self::Terminal => include_bytes!("../../assets/icons/terminal.svg"),
+            Self::Window => include_bytes!("../../assets/icons/window.svg"),
         }
     }
 }

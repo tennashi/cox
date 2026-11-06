@@ -3,7 +3,9 @@
 //! address, a file by its path, the tree of the project's files by the
 //! folders open in it, what changed in them as such, the map of the
 //! project by where it is open, an Android emulator by the device it
-//! runs, the list of the devices as such, and a terminal only as having been there.
+//! runs, a window of another app on the Mac by its app and title, the
+//! lists of the devices and of the windows as such, and a terminal only as
+//! having been there.
 
 use std::path::PathBuf;
 
@@ -49,6 +51,11 @@ pub enum KeptTab {
     Android { device: String },
     /// The Android emulator's virtual devices, listed.
     AndroidDevices,
+    /// A window of another app on the Mac, by its app's name and its
+    /// title, as it had them.
+    MacWindow { app: String, title: String },
+    /// The windows of the Mac's other apps, listed.
+    MacWindows,
     /// The parts the chat ran with, and how they reached each other: a
     /// tab Cox drew in earlier runs, and no longer does, so it does not
     /// open again.

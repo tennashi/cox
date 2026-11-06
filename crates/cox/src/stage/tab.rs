@@ -21,9 +21,11 @@ use super::code::Code;
 use super::devices::Devices;
 use super::document::Document;
 use super::flow::Flow;
+use super::mac_window::MacWindow;
 use super::page::Page;
 use super::terminal::{Program, Terminal};
 use super::tree::Tree;
+use super::windows::Windows;
 use crate::ui::LinkClicked;
 use cox_browser::TargetId;
 
@@ -87,6 +89,8 @@ pub(super) enum TabContent {
     Terminal(Entity<Terminal>),
     Android(Entity<Android>),
     Devices(Entity<Devices>),
+    MacWindow(Entity<MacWindow>),
+    Windows(Entity<Windows>),
 }
 
 /// An entity that [`Shows`], asked as the stage asks of every kind alike.
@@ -128,6 +132,8 @@ impl TabContent {
             Self::Terminal(terminal) => terminal,
             Self::Android(android) => android,
             Self::Devices(devices) => devices,
+            Self::MacWindow(window) => window,
+            Self::Windows(windows) => windows,
         }
     }
 
@@ -162,7 +168,9 @@ impl TabContent {
             | Self::Flow(_)
             | Self::Terminal(_)
             | Self::Android(_)
-            | Self::Devices(_) => None,
+            | Self::Devices(_)
+            | Self::MacWindow(_)
+            | Self::Windows(_) => None,
         }
     }
 
@@ -180,7 +188,9 @@ impl TabContent {
             | Self::Changes(_)
             | Self::Flow(_)
             | Self::Android(_)
-            | Self::Devices(_) => false,
+            | Self::Devices(_)
+            | Self::MacWindow(_)
+            | Self::Windows(_) => false,
         }
     }
 }

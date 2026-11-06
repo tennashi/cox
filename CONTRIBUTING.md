@@ -619,8 +619,9 @@ first `/` has a scheme, or a dot or a port, as a host has, or else that
 file again, when the line has no space and a `/`, as `src/new.rs`, or
 else a command, which runs in a terminal; then "Web page", a
 new tab, "Terminal" (see below), "File…", which asks for a file
-and opens it as a link to it does, and "Android devices", the virtual
-devices of the Android emulator (see below). Escape closes the menu. Their keys, Command-T, Control-` and
+and opens it as a link to it does, "Android devices", the virtual
+devices of the Android emulator, and, on macOS, "Mac windows", the
+windows of the Mac's other apps (see below). Escape closes the menu. Their keys, Command-T, Control-` and
 Command-P (Control-T and Control-P off macOS), open them from anywhere
 in the window, on the stage of the chat shown, which opens. The cursor over a page is the one
 the page asks for, as a pointing hand over a link, or an I-beam over
@@ -920,6 +921,35 @@ saving its state as it does when its window closes; one that ran
 already goes on. A closed chat's stage, or the next run's, opens the
 tab again, reaching the emulator if it runs, and else with "Start" to
 start it.
+
+On macOS, a tab can show a window of another app too, for the human to
+see and use, beside the chat, the app the agent makes and tries out,
+rather than have it tried behind their back. "Mac windows", in the menu
+of the stage's +, opens a tab of the other apps' windows on screen,
+each by its app and its title, which ScreenCaptureKit lists: "Show"
+shows the window on a tab of its own, or the tab that shows it, and
+"Bring to front" brings the window itself up. The tab draws the window
+as big as fits, as ScreenCaptureKit streams it at the size the tab
+draws it, and posts the human's mouse and keys over it to the window's
+app (`CGEventPostToPid`), so that the window is used without coming to
+the front. The mouse's events, the wheel's too, need where in the
+window they fall, which only a function macOS keeps private sets
+(`CGEventSetWindowLocation`, in SkyLight): on a macOS without it, they
+do not reach the window, and the keys alone do. Many apps take no
+click while they are behind another, as TextEdit's text, or a page in
+Chrome, where only the tabs and the toolbar answer: those take a click
+once the window is brought to the front. The mouse's right button, as a
+trackpad's two-finger tap, opens the app's menu where the window itself
+is, or as near as the screen has room, not on the tab: the arrow keys,
+Enter and Escape over the tab choose from it. The window itself stays where it is, so the tab shows it a
+frame behind: to feel how the app answers, its lag included, the human
+uses the window itself, which the tab's "Bring to front" brings up.
+macOS asks the human to allow Cox both, which the tabs ask for with
+"Allow…": to record the screen, for the pictures and the windows'
+titles, and to control the computer, for the mouse and keys. A closed
+chat's stage, or the next run's, opens the tab again on the window of
+the same app and title, if one is open, and else with "Show" to look
+for it again.
 
 Cox hands each chat's agent its own tools as an MCP server, which is
 `cox` itself run as `cox --mcp <socket>`: the agent starts it, and it
