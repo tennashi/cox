@@ -703,7 +703,7 @@ where it starts with a ref of its worktree's own,
 for a sketch from nothing, which then counts all it made; a sketch opened
 as a project forgets it.
 
-"Map" opens a tab of the project's map, for the human to see
+"Map" opens a tab of the project's maps, for the human to see
 where things are before they read them: not the files, which "Files"
 lists, but what the parts of the project mean, in tiers, which an agent
 writes. A tier is rows of boxes; each box of a tier opens a tier of its
@@ -793,12 +793,20 @@ instead, its steps numbered on the lines between the boxes, with the
 step chosen lit and the other lines dimmed. Either way the ← and →
 keys go from step to step, and the step chosen stays chosen through a
 drill down and back up.
-The map is a file in the project's folder, `.cox/map.json`, written by
+A project can have several maps, each a picture of it from a top of
+its own, as one of what it is made of and one of how it is deployed:
+each is a file in the project's folder, in `.cox/maps`, named after the
+map, as `.cox/maps/parts.json` for the map `parts`, with, at its top, a
+line on what it shows as against the others (`says`); `.cox/map.json`,
+as an earlier Cox read it, is the map `map`, first of them, and the rest
+follow by name. A map is written by
 an agent once and kept up to date by the agents that change the code,
 so that it is there whenever the tab is opened, the same whatever
-changed; a project tracks it or not as it likes, and Cox's own
-repository does not, so a clone of Cox gets its map written where it
-is. Over it Cox lays what it knows: what changed, as
+changed; a project tracks them or not as it likes, and Cox's own
+repository does not, so a clone of Cox gets its maps written where it
+is. With more than one, the tab names them over the map shown, a click
+on a name opening that map at its top, and the line on what it shows
+where the mouse rests. Over a map Cox lays what it knows: what changed, as
 "Changes" shows it, falls on the boxes that hold the files, and up on
 the boxes that open their tiers, with how many lines changed in how
 many files, so that the human sees where a change falls in the project
@@ -806,13 +814,17 @@ before they read it; and a box whose paths
 the project no longer has is marked stale, for an agent to bring the
 map up to date. A project with no map gets a tab that says so, and an
 agent asked to show the map is told how the file is written. The agent opens
-the map with Cox's `show_map` tool, at a tier, or a box in it, to show
+a map with Cox's `show_map` tool, by its name, or the first unless it
+names one, at a tier, or a box in it, to show
 the human where what it talks of is before it talks it through, and
-hears what the map shows there, box by box. The tab follows the file
+hears what the map shows there, box by box, and the names of the
+project's other maps. The tab follows the files
 and the project as they change, and a closed chat's stage opens it
 again where it was open. The map is a page of the stage, one of its
 plugins (see below), at `cox://map/`, where the map is open being the
-page's hash, as `cox://map/#cox/stage`.
+page's hash, as `cox://map/#cox/stage`, after the map's name and `:` for
+another than the first, as `cox://map/#deploy:hosts`, so that the
+page's ‹ goes back from one map to the one before.
 
 A tab can show a plugin: a page, in HTML and JavaScript, that draws
 what Cox knows as a tab Cox draws would, for whoever wants a view of
@@ -827,8 +839,10 @@ the plugin's files, or shows the tab that has it, wherever the page has
 gone; the agent opens it as any page. A page at a `cox:` address is
 drawn as a tab Cox draws, without the toolbar a page of the web has,
 since the page is the tab. A plugin reads what Cox knows as JSON from
-`cox://api/<what>`: `cox://api/map` is the map of the project, as its `.cox/map.json` has
-it, with what Cox knows of each box laid over: the files it holds, as
+`cox://api/<what>`: `cox://api/map/<name>` is the map of the project
+named `<name>`, as its file in `.cox/maps` has it, and `cox://api/map`
+its first, with the names of all its maps, and what Cox knows of each
+box laid over: the files it holds, as
 the project has them now, what changed in them, and which are gone; and
 `cox://api/file/<path>` is what the project's language server says of
 the file at `<path>`, an absolute path in the project, once it has

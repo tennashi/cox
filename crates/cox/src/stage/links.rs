@@ -260,26 +260,48 @@ impl Stage {
         }
     }
 
-    /// Shows the map of the project open `at`, a tier and a box in it
-    /// by their ids, or at its top, as the agent asks: on the Map page's
-    /// tab, or a new one, with the keyboard in it.
+    /// Shows the map of the project named `map`, or its first unless
+    /// named, open `at`, a tier and a box in it by their ids, or at its
+    /// top, as the agent asks: on the Map page's tab, or a new one, with
+    /// the keyboard in it.
     pub(super) fn show_map_at(
         &mut self,
+        map: Option<&str>,
         at: &[String],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.show_plugin("map", &map_fragment(at), window, cx);
+        self.show_plugin("map", &map_fragment(map, at), window, cx);
     }
 }
 
 /// The address of the Map page, at its top.
 pub(super) const MAP_URL: &str = "cox://map/";
 
-/// The hash of the Map page open `at`, a tier and a box in it by their
-/// ids, as `#cox/stage`: `#` alone at the top.
-fn map_fragment(at: &[String]) -> String {
-    format!("#{}", at.join("/"))
+/// The hash of the Map page open at the map `map`, or the project's
+/// first, `at`, a tier and a box in it by their ids: `#cox/stage`, or
+/// `#deploy:cox/stage` for the map `deploy`, and `#` alone at the top of
+/// the first.
+fn map_fragment(map: Option<&str>, at: &[String]) -> String {
+    let at = at.join("/");
+    match map {
+        Some(map) => format!("#{}:{at}", percent_encoded(map)),
+        None => format!("#{at}"),
+    }
+}
+
+/// `name` as a hash has it, its characters past ASCII's letters, digits
+/// and `-_.` written as `%` and their bytes, as the page decodes them.
+fn percent_encoded(name: &str) -> String {
+    name.bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || b"-_.".contains(&byte) {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
 }
 
 impl Stage {
@@ -374,7 +396,16 @@ mod tests {
 
     use cox_core::tabs::Lines;
 
-    use super::{FileTab, linked};
+    use super::{FileTab, linked, map_fragment};
+
+    #[test]
+    fn the_map_page_is_opened_at_a_map_by_its_name() {
+        let at = ["cox".to_owned(), "stage".to_owned()];
+        assert_eq!(map_fragment(None, &[]), "#");
+        assert_eq!(map_fragment(None, &at), "#cox/stage");
+        assert_eq!(map_fragment(Some("deploy"), &at), "#deploy:cox/stage");
+        assert_eq!(map_fragment(Some("my map"), &[]), "#my%20map:");
+    }
 
     #[test]
     fn a_link_to_a_file_is_from_where_the_link_is() {

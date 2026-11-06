@@ -1,6 +1,7 @@
-// The map of the project, drawn by a page of the stage: the picture of the
-// project in tiers that an agent wrote in its `.cox/map.json`, read as
-// JSON from `cox://api/map` with what Cox knows laid over it, and read
+// A map of the project, drawn by a page of the stage: a picture of the
+// project in tiers that an agent wrote in a file of its `.cox/maps`, one
+// of the project's maps, each from a top of its own, read as JSON from
+// `cox://api/map/<name>` with what Cox knows laid over it, and read
 // again every two seconds, as Cox's own tabs follow what they show. A
 // tier is rows of cards, with the cards of the tiers above that stay
 // around it as a frame, the user's side above and the code's side below,
@@ -10,8 +11,9 @@
 // `cox://open/` address, with what the project's language server says
 // of each file, read from `cox://api/file/<path>`: the symbols it
 // defines, how many places use each, and which files use them. Where
-// the page is open is its hash: a tier's id, and after it the id of a
-// card open on its own, as `#cox/stage`, and after `@` the flow
+// the page is open is its hash: the map's name and `:`, unless it is the
+// project's first, then a tier's id, and after it the id of a card open
+// on its own, as `#cox/stage` or `#deploy:hosts`, and after `@` the flow
 // chosen, drawn as a sequence diagram of the tier's boxes, or, with
 // `+map`, numbered on the lines of the tier, or, for a card open on
 // its own, of the functions of its code that the flow runs. Drawn
@@ -87,24 +89,46 @@ function above(tierId) {
 
 // --- Where the page is open.
 
-// The hash is `tier`, or `tier/part` for a card open on its own, and
-// after `@` the flow chosen, with `:` and the number of its step chosen,
-// and `+map` when the flow is drawn on the map instead of in order.
+// The hash is `tier`, or `tier/part` for a card open on its own, after
+// the map's name and `:` when it names the map, and after `@` the flow
+// chosen, with `:` and the number of its step chosen, and `+map` when
+// the flow is drawn on the map instead of in order.
+function parsed(hash) {
+  const [place, chosen = ""] = (hash || "").replace(/^#/, "").split("@");
+  const colon = place.indexOf(":");
+  const map = colon < 0 ? null : decodeURIComponent(place.slice(0, colon));
+  const [tierId, partId] = decodeURIComponent(place.slice(colon + 1)).split("/");
+  return { map, tierId, partId, chosen: decodeURIComponent(chosen) };
+}
+/// The map the page is to show, by its name: the one the hash names, or
+/// else the project's first, once the page knows it.
+function mapShown() {
+  const { map } = parsed(location.hash);
+  if (map !== null) return map;
+  const first = data && data.maps && data.maps[0];
+  return first ? first.name : null;
+}
 function where() {
-  const hash = decodeURIComponent(location.hash.replace(/^#/, ""));
-  const [place, chosen = ""] = hash.split("@");
-  const [tierId, partId] = place.split("/");
+  const { map, tierId, partId, chosen } = parsed(location.hash);
   const onMap = chosen.endsWith("+map");
   const [flowId, stepNo] = (onMap ? chosen.slice(0, -4) : chosen).split(":");
   const first = tiers()[0];
   const flow = flowId && flows().some((f) => f.id === flowId) ? flowId : null;
   const step = flow && /^\d+$/.test(stepNo || "") ? Number(stepNo) : null;
-  return { tier: (tierId && tier(tierId) ? tierId : first && first.id) || null, part: partId || null, flow, step, onMap: Boolean(flow) && onMap };
+  return { map, tier: (tierId && tier(tierId) ? tierId : first && first.id) || null, part: partId || null, flow, step, onMap: Boolean(flow) && onMap };
 }
+/// Opens the page at the tier `tierId` of the map shown, or the card
+/// `partId` of it on its own, as the hash names them.
 function go(tierId, partId, { flow, step, onMap } = {}) {
+  const { map } = where();
   let hash = partId ? `${tierId}/${partId}` : tierId;
+  if (map !== null) hash = `${encodeURIComponent(map)}:${hash}`;
   if (flow) hash += `@${flow}${step ? `:${step}` : ""}${onMap ? "+map" : ""}`;
   location.hash = hash;
+}
+/// Opens the page at the top of the map named `name`.
+function goMap(name) {
+  location.hash = `${encodeURIComponent(name)}:`;
 }
 
 // Where the page has been, as its hashes, and where in them it is, so
@@ -132,8 +156,10 @@ function forward() {
 /// A place the page went to, as its hash names it, in words: the tier,
 /// or the box open on its own, and the step chosen there.
 function placeName(hash) {
-  const [place, chosen = ""] = (hash || "").replace(/^#/, "").split("@");
-  const [tierId, partId] = place.split("/");
+  const { map, tierId, partId, chosen } = parsed(hash);
+  const first = data && data.maps && data.maps[0];
+  const other = (map === null ? first && first.name : map) !== (data && data.name);
+  if (other) return `the map ${map === null ? (first ? first.name : "") : map}`;
   const t = tier(tierId) || tiers()[0];
   const name = partId && parts()[partId] ? nameOf(partId) : t ? t.name : "the map";
   const step = chosen.replace(/\+map$/, "").split(":")[1];
@@ -332,6 +358,17 @@ function crumbs(items) {
   return `<nav class="crumbs"><span class="depth">${items.length}</span>${html}</nav>`;
 }
 
+/// The project's maps, as chips, the one shown lit, for the page to go
+/// to another; nothing while the project has one map.
+function mapsEl() {
+  const maps = (data && data.maps) || [];
+  if (maps.length < 2) return "";
+  const chips = maps
+    .map((m) => `<button class="mapchip ${m.name === data.name ? "on" : ""}" data-map="${esc(m.name)}" title="${esc(m.says ? `${m.says} (${m.file})` : m.file)}">${esc(m.name)}</button>`)
+    .join("");
+  return `<nav class="maps"><span class="mapsname">maps</span>${chips}</nav>`;
+}
+
 function sourceLine() {
   const n = Object.keys(parts()).length;
   const since = data.since ? `<span class="since">${esc(data.since)} · ${data.changed_files} file${data.changed_files === 1 ? "" : "s"} changed</span>` : "";
@@ -490,7 +527,7 @@ function renderTier(tierId) {
     ? `<div class="foot"><span>a column opens the tier inside it, or the code it holds</span><span>·</span><span>a row is a step of the flow; a loop is a step inside a box, and opens where the step is drawn apart</span><span>·</span><span>← → go from step to step, ↑ up a tier, Backspace back</span></div>`
     : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>teal is what changed, as Changes shows it</span><span>·</span><span>↑ goes up a tier, Backspace back</span></div>`;
   const chain = [...above(tierId), tierId].map((id) => ({ text: tier(id).name, tier: id }));
-  app.innerHTML = `${crumbs(chain)}${sourceLine()}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${waysEl()}${body}${foot}`;
+  app.innerHTML = `${mapsEl()}${crumbs(chain)}${sourceLine()}${data.map.says ? `<div class="says mapsays">${esc(data.map.says)}</div>` : ""}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${waysEl()}${body}${foot}`;
   if (seq) seqScrolled();
   wired();
 }
@@ -872,7 +909,7 @@ function renderLeaf(tierId, id) {
     .join("");
   const chain = [...above(tierId), tierId].map((tid) => ({ text: tier(tid).name, tier: tid }));
   chain.push({ text: p.name });
-  app.innerHTML = `${crumbs(chain)}${sourceLine()}
+  app.innerHTML = `${mapsEl()}${crumbs(chain)}${sourceLine()}
     <div class="says"><b style="color:var(--foreground);font-weight:500">${esc(p.name)}.</b> ${esc(p.says)}${p.each ? ` <span class="each" style="font-size:10.5px;border:1px solid var(--border);border-radius:999px;padding:0 7px">${esc(p.each)}</span>` : ""}</div>
     ${p.kinds && p.kinds.length ? `<div class="says" style="font-family:var(--mono);font-size:11.5px">${p.kinds.map(esc).join(" · ")}</div>` : ""}
     ${p.note ? `<div class="says" style="color:var(--note)"><b>note</b> ${esc(p.note)}</div>` : ""}
@@ -930,10 +967,15 @@ function symEl(path, line, depth) {
 
 function renderEmpty() {
   if (data.error) {
-    app.innerHTML = `<div class="says failed">${esc(data.error)}</div><div class="says">The map is <code>${esc(data.file)}</code>. An agent fixes it; ask it to.</div>`;
+    const fix = data.file ? `<div class="says">The map is <code>${esc(data.file)}</code>. An agent fixes it; ask it to.</div>` : "";
+    app.innerHTML = `${mapsEl()}<div class="says failed">${esc(data.error)}</div>${fix}`;
     return;
   }
-  app.innerHTML = `<div class="says empty">This project has no map yet. An agent writes one at <code>.cox/map.json</code>: ask it, in the chat, to map the project.</div>`;
+  if (data.map) {
+    app.innerHTML = `${mapsEl()}<div class="says empty">The map <code>${esc(data.name)}</code> has no tier yet. An agent writes them in <code>${esc(data.file)}</code>: ask it, in the chat.</div>`;
+    return;
+  }
+  app.innerHTML = `<div class="says empty">This project has no map yet. An agent writes one in <code>.cox/maps/</code>, a file for each map, as <code>.cox/maps/parts.json</code>: ask it, in the chat, to map the project.</div>`;
 }
 
 function render() {
@@ -1463,8 +1505,9 @@ document.addEventListener("scroll", peekHide, true);
 // --- Going places.
 
 app.addEventListener("click", (event) => {
-  const t = event.target.closest("[data-goes],[data-tier],[data-flow],[data-step],[data-drill],[data-view],[data-seq],[data-back],[data-forward],[data-up]");
+  const t = event.target.closest("[data-map],[data-goes],[data-tier],[data-flow],[data-step],[data-drill],[data-view],[data-seq],[data-back],[data-forward],[data-up]");
   if (!t) return;
+  if ("map" in t.dataset) return goMap(t.dataset.map);
   if ("back" in t.dataset) return back();
   if ("forward" in t.dataset) return forward();
   if ("up" in t.dataset) return up();
@@ -1527,7 +1570,9 @@ window.addEventListener("keydown", (event) => {
 });
 window.addEventListener("hashchange", () => {
   track();
-  render();
+  // Another map is read before it is drawn.
+  if (data && mapShown() !== data.name) load();
+  else render();
 });
 track();
 // The sequence diagram shares the page's width among its columns, so it
@@ -1542,11 +1587,19 @@ window.addEventListener("resize", () => {
 
 // --- Following what Cox knows.
 
+/// The address of the map the hash names, or the project's first.
+function apiOf(hash) {
+  const { map } = parsed(hash);
+  return map === null ? API : `${API}/${encodeURIComponent(map)}`;
+}
 async function load() {
+  const url = apiOf(location.hash);
   try {
-    const response = await fetch(API);
-    if (!response.ok) throw new Error(`${API} answered ${response.status}`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`${url} answered ${response.status}`);
     const text = await response.text();
+    // A map the page went away from while it was read is not drawn.
+    if (url !== apiOf(location.hash)) return;
     if (text !== lastText) {
       lastText = text;
       data = JSON.parse(text);
