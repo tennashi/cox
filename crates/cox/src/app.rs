@@ -18,7 +18,7 @@
 //! [`run`] is steps 2 to 5, each a function of its own, called in that
 //! order.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::Duration;
@@ -69,7 +69,7 @@ pub struct Settings {
     /// The page each chat's stage shows first.
     pub stage: String,
     /// Where chats in no project work for this run, if not where the
-    /// settings say, or `~/Cox` (see [`crate::settings`]).
+    /// settings say, or `~/cox` (see [`crate::settings`]).
     pub home: Option<PathBuf>,
     /// Where Cox keeps what lasts across its runs, if not where it keeps
     /// it from the place it runs from (see [`crate::storage`]).
@@ -162,11 +162,20 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
     }
 
     let home_given = settings.home.is_some();
-    let home = home_for_chats(
-        settings
-            .home
-            .or_else(|| crate::settings::Saved::read().home),
-    );
+    let home = settings
+        .home
+        .or_else(|| crate::settings::Saved::read().home);
+    if home.is_none()
+        && let Some(user) = std::env::var_os("HOME")
+        && let Some((from, to)) = lowercase_home(Path::new(&user))
+        && let Err(error) = store.moved(&from, &to)
+    {
+        tracing::error!(
+            "the chats that worked in {} do not find it: {error:#}",
+            from.display()
+        );
+    }
+    let home = home_for_chats(home);
     // Opened from the Finder, the Dock or a launcher, Cox is given no
     // command, and starts the agent the settings name.
     let named = settings
@@ -203,15 +212,50 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
     ExitCode::SUCCESS
 }
 
-/// Where chats in no project work: `home`, or `~/Cox`, as an absolute
+/// The folder chats in no project work in, in the home directory, unless
+/// the human chose another.
+const HOME: &str = "cox";
+
+/// The name an earlier Cox gave [`HOME`].
+const EARLIER_HOME: &str = "Cox";
+
+/// Where chats in no project work: `home`, or `~/cox`, as an absolute
 /// path, which the agent needs.
 fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
     let home = home.unwrap_or_else(|| {
         std::env::var_os("HOME")
             .map_or_else(std::env::temp_dir, PathBuf::from)
-            .join("Cox")
+            .join(HOME)
     });
     std::path::absolute(&home).unwrap_or(home)
+}
+
+/// Renames the home an earlier Cox made in `user`, the home directory,
+/// `Cox`, to what Cox names it now, `cox`, unless there is a `cox` there
+/// too, saying where it was and where it is now. The names are compared
+/// as the folder lists them, since on macOS `cox` finds `Cox` too.
+fn lowercase_home(user: &Path) -> Option<(PathBuf, PathBuf)> {
+    let names: Vec<_> = std::fs::read_dir(user)
+        .ok()?
+        .filter_map(|entry| Some(entry.ok()?.file_name()))
+        .collect();
+    if !names.iter().any(|name| name == EARLIER_HOME) || names.iter().any(|name| name == HOME) {
+        return None;
+    }
+    let (from, to) = (user.join(EARLIER_HOME), user.join(HOME));
+    if !std::fs::symlink_metadata(&from).is_ok_and(|metadata| metadata.is_dir()) {
+        return None;
+    }
+    match std::fs::rename(&from, &to) {
+        Ok(()) => {
+            tracing::info!("renamed {} to {}", from.display(), to.display());
+            Some((from, to))
+        }
+        Err(error) => {
+            tracing::warn!("{} stays as it was: {error}", from.display());
+            None
+        }
+    }
 }
 
 /// The store of the chats this Cox keeps, or one for this run only when
@@ -451,7 +495,27 @@ mod tests {
         let Some(home) = std::env::var_os("HOME") else {
             return;
         };
-        assert_eq!(super::home_for_chats(None), PathBuf::from(home).join("Cox"));
+        assert_eq!(super::home_for_chats(None), PathBuf::from(home).join("cox"));
         assert!(super::home_for_chats(Some("relative".into())).is_absolute());
+    }
+
+    #[test]
+    fn the_home_an_earlier_cox_made_is_renamed_unless_there_is_one_now() {
+        let user = std::env::temp_dir().join(format!("cox-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&user);
+        std::fs::create_dir_all(user.join("Cox")).unwrap();
+        std::fs::write(user.join("Cox").join("notes.md"), "kept").unwrap();
+
+        assert_eq!(
+            super::lowercase_home(&user),
+            Some((user.join("Cox"), user.join("cox")))
+        );
+        assert_eq!(
+            std::fs::read_to_string(user.join("cox").join("notes.md")).unwrap(),
+            "kept"
+        );
+        // Once renamed, it is not again.
+        assert_eq!(super::lowercase_home(&user), None);
+        let _ = std::fs::remove_dir_all(&user);
     }
 }

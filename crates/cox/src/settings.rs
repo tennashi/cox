@@ -4,7 +4,7 @@
 //!
 //! That is Cox's home: the folder chats in no project work in, which the
 //! rail shows as `~`. `--home` on the command line goes ahead of it for
-//! the run, and without either, the home is `~/Cox`. The file also says
+//! the run, and without either, the home is `~/cox`. The file also says
 //! where the human keeps how they work with Cox, whatever the project, as
 //! `{"workflow": "~/dotfiles/cox"}` (see [`workflow`]), and where their
 //! wiki is, as `{"wiki": "~/notes/cox"}` (see [`wiki`]), and what language
