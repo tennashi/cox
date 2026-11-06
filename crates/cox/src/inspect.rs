@@ -373,7 +373,9 @@ fn capture(placed: &Placed) -> Result<Vec<u8>, String> {
         f32::from(bounds.size.width),
         f32::from(bounds.size.height)
     );
-    let file = std::env::temp_dir().join(format!("cox-{}-screenshot.png", std::process::id()));
+    let file = crate::scratch::folder()
+        .map_err(|error| format!("cannot make the folder of this run: {error}"))?
+        .join("screenshot.png");
     let ran = std::process::Command::new("screencapture")
         .args(["-x", "-R", &area])
         .arg(&file)

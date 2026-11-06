@@ -55,8 +55,15 @@ impl Profile {
         }
     }
 
+    /// A profile in the folder of this run among the system's temporary
+    /// files, `cox-<pid>`, which only the human may enter, and which the
+    /// next Cox takes away if this one leaves it.
     fn throwaway() -> Self {
-        Self::Throwaway(std::env::temp_dir().join(format!("cox-cef-{}", std::process::id())))
+        let run = std::env::temp_dir().join(format!("cox-{}", std::process::id()));
+        if let Err(error) = DirBuilder::new().recursive(true).mode(0o700).create(&run) {
+            tracing::warn!("cannot make {}: {error}", run.display());
+        }
+        Self::Throwaway(run.join("stage"))
     }
 
     /// The profile's directory.

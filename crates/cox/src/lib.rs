@@ -32,7 +32,8 @@
 //!   looks.
 //! - [`process`] is what Cox does as it starts a program, the agent's or
 //!   a terminal's.
-//! - [`storage`] says where this Cox keeps what lasts across its runs.
+//! - [`storage`] says where this Cox keeps what lasts across its runs,
+//!   and [`scratch`] what it keeps only while it runs.
 //! - [`logs`] is what Cox says of itself as it runs.
 //!
 //! Below them all is [`cox_browser`]: CEF, which renders the stages'
@@ -47,6 +48,7 @@ pub mod inspect;
 pub mod logs;
 pub mod notices;
 pub mod process;
+pub mod scratch;
 pub mod settings;
 pub mod stage;
 pub mod storage;

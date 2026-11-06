@@ -37,6 +37,9 @@ fn main() -> ExitCode {
                 (cox::storage::path(cox::storage::Kept::Logs), settled)
             };
             cox::logs::init(logs.as_deref());
+            if !helper {
+                cox::scratch::sweep();
+            }
             for moved in &settled.moved {
                 tracing::info!("{moved}");
             }

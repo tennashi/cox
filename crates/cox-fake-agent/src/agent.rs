@@ -67,12 +67,19 @@ pub struct Agent<W: Write> {
 }
 
 /// The file that says the agent of the scenario at `scenario` is logged
-/// in, there once `--log-in` has run.
+/// in, there once `--log-in` has run: among the system's temporary files,
+/// in `cox-fake-agent-logins`, named after the scenario's whole path, its
+/// `/`s as `%`s, so that logging in writes nothing beside the scenario,
+/// which may be in Cox's own source.
 pub fn logged_in(scenario: &Path) -> PathBuf {
-    let mut file = scenario.as_os_str().to_owned();
-    file.push(".logged-in");
-    file.into()
+    let scenario = std::path::absolute(scenario).unwrap_or_else(|_| scenario.to_owned());
+    std::env::temp_dir()
+        .join(LOGINS)
+        .join(scenario.to_string_lossy().replace('/', "%"))
 }
+
+/// The folder of the files that say a scenario's agent is logged in.
+const LOGINS: &str = "cox-fake-agent-logins";
 
 /// Plays `scenario` on standard input and output until Cox goes, logged
 /// in once `login` is there.
