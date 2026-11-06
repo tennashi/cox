@@ -45,7 +45,7 @@ the rail (Command-O on macOS, Control-O elsewhere), opens a chat in the
 project of a folder of your choice, and the + after the tabs opens
 another chat in the project chosen. "New chat" (Command-N, Control-N)
 opens one in no project, which works in Cox's home: `<dir>` when given,
-or else the folder the settings set, or else `~/Cox`; the rail shows it
+or else the folder the settings set, or else `~/cox`; the rail shows it
 as `~`. The gear at the foot of the rail (Command-, on macOS, Control-,
 elsewhere) opens the settings, on a card over the window, where the
 human sets the home: a path typed in its input, whole or from `~`, which

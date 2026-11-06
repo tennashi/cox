@@ -80,7 +80,7 @@ impl SettingsView {
         let input = cx.new(|cx| {
             let mut input = LineInput::new(cx);
             input.set_text(&shortened(&home), cx);
-            input.set_placeholder("~/Cox", cx);
+            input.set_placeholder("~/cox", cx);
             input
         });
         let submitted = cx.subscribe_in(&input, window, |view, _, Submitted, _, cx| {
