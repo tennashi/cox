@@ -342,7 +342,11 @@ fn logging_in_in_a_terminal_logs_in_the_agent_of_the_scenario() {
         .unwrap();
     assert!(logged_in.status.success());
     let (sent, answer) = agent.turn("hi");
-    let _ = std::fs::remove_file(path.with_extension("json.logged-in"));
+    let _ = std::fs::remove_file(
+        std::env::temp_dir()
+            .join("cox-fake-agent-logins")
+            .join(path.to_string_lossy().replace('/', "%")),
+    );
     assert_eq!(answer["result"]["stopReason"], "end_turn");
     assert_eq!(replied(&sent), "Hello.");
 }

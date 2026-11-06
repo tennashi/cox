@@ -214,8 +214,8 @@ of tool ACP says the call is, and those that run the usual tests
 (`execute:git diff*`, `execute:cargo test*`, and so on), and cancels
 the rest, since no human answers for it. The judge
 keeps one session while the goal lasts, so it remembers what it looked
-at, until the goal changes or Cox quits. A `COX.goal.md` in the
-project's folder replaces what the judge is told it is, for a project
+at, until the goal changes or Cox quits. A `.cox/goal.md` in the
+project's folder (or, as an earlier Cox read it, a `COX.goal.md`) replaces what the judge is told it is, for a project
 that wants its goals judged in a way of its own; Cox still adds how to
 end the reply, and the goal. When the judge finds that one command
 decides the goal, passing just when it is met, it names the command on
@@ -831,6 +831,11 @@ Cox hands each chat's agent its own tools as an MCP server, which is
 `cox` itself run as `cox --mcp <socket>`: the agent starts it, and it
 carries what the agent says to the chat on a Unix socket of the chat's
 own, which Cox answers. An agent reaches only its own chat that way.
+The sockets are in a folder of the run's own among the system's
+temporary files, `cox-` and Cox's process id, which only the human may
+enter, beside what else Cox keeps only while it runs, as a throwaway
+profile of the stage; a Cox that crashes leaves its folder, which the
+next Cox to start takes away.
 
 CEF opens the Chrome DevTools Protocol on a port that is free when Cox
 starts, so two Cox can run side by side, and Cox hands each chat's
@@ -972,8 +977,9 @@ it opens a session, or, with `"authRequired": "prompt"`, as it takes a
 turn, until Cox logs in with a way the agent carries out, or the human
 runs `cox-fake-agent <scenario> --log-in`, as a way of `"type":
 "terminal"` with `"args": ["--log-in"]` has Cox run in a terminal, which
-logs it in for the runs to come, until `<scenario>.logged-in` is taken
-away.
+logs it in for the runs to come, until the file it writes among the
+system's temporary files, in `cox-fake-agent-logins`, named after the
+scenario's path, is taken away.
 
 Each line takes the first turn not taken yet whose `when`, if it has one,
 is in what the line says, as a goal's judge is told, and the turn takes

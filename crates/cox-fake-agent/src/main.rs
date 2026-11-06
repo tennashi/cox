@@ -63,7 +63,11 @@ fn from_log(run: &str, chat: Option<&str>) -> ExitCode {
 /// Logs the agent of the scenario at `path` in, for the runs to come.
 fn log_in(path: &str) -> ExitCode {
     let file = agent::logged_in(path.as_ref());
-    match std::fs::write(&file, "") {
+    let written = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&file, ""));
+    match written {
         Ok(()) => {
             println!("Logged in to the fake agent.");
             ExitCode::SUCCESS

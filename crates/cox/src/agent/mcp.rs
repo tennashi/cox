@@ -339,11 +339,13 @@ pub fn start(cwd: PathBuf, only: Option<Vec<String>>) -> anyhow::Result<ToolServ
     })
 }
 
-/// Makes a new directory for a socket that only this user can enter.
+/// Makes a new directory for a socket that only this user can enter, in
+/// the folder of this run (see [`crate::scratch`]).
 fn private_directory() -> anyhow::Result<PathBuf> {
+    let scratch = crate::scratch::folder().context("cannot make the folder of this run")?;
     loop {
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
-        let directory = std::env::temp_dir().join(format!("cox-{}-{number}", std::process::id()));
+        let directory = scratch.join(number.to_string());
         match fs::DirBuilder::new().mode(0o700).create(&directory) {
             Ok(()) => return Ok(directory),
             // Left by an earlier Cox that had the same process id.

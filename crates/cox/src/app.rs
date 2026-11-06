@@ -273,12 +273,14 @@ fn quit_when_asked(cx: &mut App) {
     .detach();
 }
 
-/// Shuts the browser down when the app quits. Quitting ends the app's run
-/// loop, or on macOS the whole process, so the browsers go before either.
-/// The agents go with the window.
+/// Shuts the browser down when the app quits, then takes away what this
+/// run kept only while it ran (see [`crate::scratch`]). Quitting ends the
+/// app's run loop, or on macOS the whole process, so the browsers go
+/// before either. The agents go with the window.
 fn shut_down_on_quit(cef: Cef, cx: &mut App) {
     cx.on_app_quit(move |_| {
         cef.clone().shutdown();
+        crate::scratch::take_away();
         async {}
     })
     .detach();

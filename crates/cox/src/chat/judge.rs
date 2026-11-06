@@ -30,7 +30,11 @@ pub type Starts = Rc<dyn Fn(PathBuf, Start) -> Agent>;
 
 /// The file in a project's folder that replaces [`STANCE`] for the
 /// project's judges, when there is one.
-pub const STANCE_FILE: &str = "COX.goal.md";
+pub const STANCE_FILE: &str = ".cox/goal.md";
+
+/// Where an earlier Cox read [`STANCE_FILE`] from, which counts while the
+/// project has no [`STANCE_FILE`].
+const EARLIER_STANCE_FILE: &str = "COX.goal.md";
 
 /// What the judge is told it is, ahead of the goal, unless the project's
 /// [`STANCE_FILE`] says otherwise.
@@ -151,10 +155,16 @@ fn strip_word<'a>(line: &'a str, word: &str) -> Option<&'a str> {
 }
 
 /// What the judges of the project in `folder` are told they are: what
-/// its [`STANCE_FILE`] says, or [`STANCE`] when there is none.
+/// its [`STANCE_FILE`] says, or its [`EARLIER_STANCE_FILE`], or
+/// [`STANCE`] when there is neither.
 #[must_use]
 pub fn stance(folder: &Path) -> String {
     let path = folder.join(STANCE_FILE);
+    let path = if !path.exists() && folder.join(EARLIER_STANCE_FILE).exists() {
+        folder.join(EARLIER_STANCE_FILE)
+    } else {
+        path
+    };
     match std::fs::read_to_string(&path) {
         Ok(text) if !text.trim().is_empty() => text.trim().to_owned(),
         Ok(_) => STANCE.to_owned(),
@@ -383,8 +393,12 @@ mod tests {
     fn the_projects_own_stance_replaces_the_default() {
         let folder = std::env::temp_dir().join(format!("cox-judge-stance-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::create_dir_all(folder.join(".cox")).unwrap();
         assert_eq!(stance(&folder), STANCE);
+
+        // Where an earlier Cox read it, until the project moves it.
+        std::fs::write(folder.join(EARLIER_STANCE_FILE), "You judge as before.\n").unwrap();
+        assert_eq!(stance(&folder), "You judge as before.");
 
         std::fs::write(folder.join(STANCE_FILE), " \n").unwrap();
         assert_eq!(stance(&folder), STANCE);
