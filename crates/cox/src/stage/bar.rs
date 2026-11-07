@@ -103,6 +103,7 @@ enum View {
     Files,
     Changes,
     Plugin(String),
+    Workflow,
 }
 
 /// The plugin that draws the project's maps.
@@ -125,6 +126,7 @@ impl Stage {
     fn view_of(&self, tab: &Tab, plugins: &[Plugin], cx: &App) -> Option<View> {
         match &tab.content {
             TabContent::Tree(_) => Some(View::Files),
+            TabContent::Workflow(_) => Some(View::Workflow),
             TabContent::Changes(changes) if changes.read(cx).folder() == self.cwd => {
                 Some(View::Changes)
             }
@@ -237,7 +239,8 @@ impl Stage {
     /// The buttons of the views of the project, side by side in one
     /// ground, the one shown marked: "Activity", counting the chats of
     /// the folder that wait for the human, "Map" when the project has one,
-    /// then "Files", "Changes" in a Git repository, then the other plugins.
+    /// then "Files", "Changes" in a Git repository, then the other
+    /// plugins, and last "Workflow".
     fn render_views(
         shown: Option<&View>,
         plugins: Vec<Plugin>,
@@ -247,30 +250,7 @@ impl Stage {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let button = |id: SharedString, view: View, label: SharedString, glyph: Icon| {
-            let chosen = shown == Some(&view);
-            div()
-                .id(id.clone())
-                .debug_selector(move || id.to_string())
-                .flex_shrink_0()
-                .h(px(VIEW_HEIGHT))
-                .px(px(11.))
-                .flex()
-                .items_center()
-                .gap(px(7.))
-                .rounded(px(VIEW_RADIUS))
-                .text_size(px(13.))
-                .cursor_pointer()
-                .map(|button| {
-                    if chosen {
-                        button.bg(rgb(SELECTED)).text_color(rgb(FOREGROUND))
-                    } else {
-                        button
-                            .text_color(rgb(DIM))
-                            .hover(|style| style.text_color(rgb(FOREGROUND)))
-                    }
-                })
-                .child(icon(glyph, 14., if chosen { FOREGROUND } else { DIM }))
-                .child(label)
+            view_button(shown == Some(&view), id, label, glyph)
         };
         let mut plugin = |plugin: Plugin| {
             let glyph = match plugin.name.as_str() {
@@ -309,6 +289,15 @@ impl Stage {
             .map(&mut plugin)
             .collect();
         let rest: Vec<_> = rest.into_iter().map(&mut plugin).collect();
+        let workflow = button(
+            "show-workflow".into(),
+            View::Workflow,
+            "Workflow".into(),
+            Icon::Settings,
+        )
+        .on_click(cx.listener(|stage, _, window, cx| {
+            stage.show_workflow(None, window, cx);
+        }));
         div()
             .flex_shrink_0()
             .flex()
@@ -344,6 +333,7 @@ impl Stage {
                 )
             })
             .children(rest)
+            .child(workflow)
     }
 
     /// The tab at `index`: an icon of what it shows, its title, a dot if
@@ -363,6 +353,7 @@ impl Stage {
             TabContent::Terminal(_) => Icon::Terminal,
             TabContent::Android(_) | TabContent::Devices(_) => Icon::Phone,
             TabContent::MacWindow(_) | TabContent::Windows(_) => Icon::Window,
+            TabContent::Workflow(_) => Icon::Settings,
         };
         let shown = self.tabs.shown_index() == Some(index);
         // The tabs of the chats not shown are drawn dimmer.
@@ -676,4 +667,37 @@ pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
             cx.background_executor().timer(COUNT_EVERY).await;
         }
     })
+}
+
+/// A button of a view of the bar, `id`, with its icon and its `label`,
+/// marked when `chosen`.
+fn view_button(
+    chosen: bool,
+    id: SharedString,
+    label: SharedString,
+    glyph: Icon,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id.clone())
+        .debug_selector(move || id.to_string())
+        .flex_shrink_0()
+        .h(px(VIEW_HEIGHT))
+        .px(px(11.))
+        .flex()
+        .items_center()
+        .gap(px(7.))
+        .rounded(px(VIEW_RADIUS))
+        .text_size(px(13.))
+        .cursor_pointer()
+        .map(|button| {
+            if chosen {
+                button.bg(rgb(SELECTED)).text_color(rgb(FOREGROUND))
+            } else {
+                button
+                    .text_color(rgb(DIM))
+                    .hover(|style| style.text_color(rgb(FOREGROUND)))
+            }
+        })
+        .child(icon(glyph, 14., if chosen { FOREGROUND } else { DIM }))
+        .child(label)
 }

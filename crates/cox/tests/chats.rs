@@ -431,8 +431,11 @@ async fn the_settings_set_where_chats_in_no_project_work(cx: &mut TestAppContext
 
     // The gear opens the settings, with the keyboard in the home's input.
     click(cx, "open-settings");
-    let settings = workspace.read_with(cx, |workspace, _| {
-        workspace.settings().expect("the settings are open").clone()
+    let settings = workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .settings(cx)
+            .expect("the settings are open")
+            .clone()
     });
     let typed = |cx: &mut VisualTestContext| {
         settings.read_with(cx, |settings, cx| {
@@ -461,7 +464,7 @@ async fn the_settings_set_where_chats_in_no_project_work(cx: &mut TestAppContext
 
     // Escape closes them, and the next chat in no project works there.
     cx.simulate_keystrokes("escape");
-    let open = workspace.read_with(cx, |workspace, _| workspace.settings().is_some());
+    let open = workspace.read_with(cx, |workspace, cx| workspace.settings(cx).is_some());
     assert!(!open);
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "after").await;
