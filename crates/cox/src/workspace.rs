@@ -1058,8 +1058,30 @@ impl Workspace {
     }
 
     /// Counts on the app's icon the chats that wait for the human, or that
-    /// they have not seen since a turn ended.
+    /// they have not seen since a turn ended, and tells the stages' pages
+    /// how the chats stand (see [`crate::stage::activity`]).
     fn badge(&mut self, cx: &App) {
+        crate::stage::activity::tell(crate::stage::activity::Told {
+            chats: self
+                .chats
+                .iter()
+                .chain(&self.archived)
+                .map(|chat| crate::stage::activity::Chat {
+                    key: chat.key,
+                    name: chat.name.to_string(),
+                    cwd: self.cwd_of(chat),
+                    project: self.projects[chat.project].folder.clone(),
+                    asking: chat.state == State::Asking,
+                    unread: chat.unread,
+                    goal: chat.goal.as_ref().map(Goal::input),
+                })
+                .collect(),
+            projects: self
+                .projects
+                .iter()
+                .map(|project| (project.folder.clone(), project.name.to_string()))
+                .collect(),
+        });
         let count = self
             .chats
             .iter()

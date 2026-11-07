@@ -1,0 +1,312 @@
+//! What goes on in a folder, as the stage's Activity page shows it, at
+//! `cox://api/activity` (see [`crate::stage::plugins`]), in two tiers:
+//! what waits for the human, the chats of the folder that ask them
+//! something, or whose turn ended while they were not looking; and what
+//! happened without them, the schedules that ran there, the pages of the
+//! wiki written from there, and the sources kept there, the last first.
+//!
+//! The window tells this module how its chats stand as they change (see
+//! [`tell`]), since the stage's pages are served apart from it; the bar
+//! counts what waits on the Activity's button (see [`waiting`]).
+
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use serde_json::{Value, json};
+
+/// How many of what happened the page is told of, the last first.
+const HAPPENED: usize = 50;
+
+/// A chat as the Activity page is told of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Chat {
+    /// The number the window goes by for it this run, which a click on
+    /// it, as `cox://chat/<key>`, shows.
+    pub key: u64,
+    pub name: String,
+    /// Where it works.
+    pub cwd: PathBuf,
+    /// The folder of its project, which a sketch's differs from.
+    pub project: PathBuf,
+    /// Whether it asks the human something.
+    pub asking: bool,
+    /// Whether its turn ended while the human was not looking.
+    pub unread: bool,
+    /// Its goal, as the human set it, if it has one.
+    pub goal: Option<String>,
+}
+
+/// How the window's chats stand, and its projects, by folder and name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Told {
+    pub chats: Vec<Chat>,
+    pub projects: Vec<(PathBuf, String)>,
+}
+
+/// How the chats stood when the window last told.
+static TOLD: Mutex<Option<Told>> = Mutex::new(None);
+
+/// Keeps how the window's chats stand now, for the pages to read.
+pub fn tell(told: Told) {
+    if let Ok(mut now) = TOLD.lock() {
+        *now = Some(told);
+    }
+}
+
+/// How the chats stood when the window last told, or none of them.
+fn now() -> Told {
+    TOLD.lock()
+        .ok()
+        .and_then(|now| now.clone())
+        .unwrap_or_default()
+}
+
+/// Whether `chat` waits for the human and is of the folder `root`.
+fn waits_in(chat: &Chat, root: &Path) -> bool {
+    (chat.asking || chat.unread) && (chat.cwd == root || chat.project == root)
+}
+
+/// How many chats of the folder `root` wait for the human, for the bar.
+#[must_use]
+pub fn waiting(root: &Path) -> usize {
+    now()
+        .chats
+        .iter()
+        .filter(|chat| waits_in(chat, root))
+        .count()
+}
+
+/// What goes on in the folder `root`, as JSON, from how the chats stand
+/// now, the human's `wiki`, the folder's own, the sources at `raw`, and
+/// `schedules`, as [`crate::schedule::told`] tells them.
+#[must_use]
+pub fn told(root: &Path, wiki: &Path, raw: &Path, schedules: &Value) -> Value {
+    told_of(&now(), root, wiki, raw, schedules)
+}
+
+/// What goes on in the folder `root`, as [`told`] tells it, the chats
+/// standing as `told` says.
+fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, schedules: &Value) -> Value {
+    let waiting: Vec<Value> = told
+        .chats
+        .iter()
+        .filter(|chat| waits_in(chat, root))
+        .map(|chat| {
+            json!({
+                "key": chat.key,
+                "name": chat.name,
+                "why": if chat.asking { "asks you" } else { "finished a turn" },
+                "goal": chat.goal,
+                "sketch": chat.cwd != chat.project,
+            })
+        })
+        .collect();
+    let name = told
+        .projects
+        .iter()
+        .find(|(folder, _)| folder == root)
+        .map(|(_, name)| name.clone());
+    let home = schedules["home"].as_bool().unwrap_or(false);
+    let mut happened = Vec::new();
+    for schedule in schedules["schedules"].as_array().into_iter().flatten() {
+        if let Some(last) = schedule["last"].as_str() {
+            happened.push(json!({
+                "when": last,
+                "kind": "schedule",
+                "title": schedule["name"],
+                "says": format!("ran, {}", schedule["every"].as_str().unwrap_or_default()),
+                "href": "cox://schedules/",
+            }));
+        }
+    }
+    let written =
+        |root: &Path, shelf: &str, of: &dyn Fn(&str) -> bool, happened: &mut Vec<Value>| {
+            let told = crate::wiki::told::told(root);
+            for page in told["pages"].as_array().into_iter().flatten() {
+                let name = page["name"].as_str().unwrap_or_default();
+                for used in page["used"].as_array().into_iter().flatten() {
+                    let what = used["what"].as_str().unwrap_or_default();
+                    if of(what) {
+                        happened.push(json!({
+                            "when": used["day"],
+                            "kind": "wiki",
+                            "title": page["title"],
+                            "says": what,
+                            "href": format!("cox://wiki/#{shelf}{name}"),
+                        }));
+                    }
+                }
+            }
+        };
+    if let Some(name) = &name {
+        let ours = format!("in {name}, chat ");
+        written(
+            wiki,
+            "",
+            &|what: &str| what.starts_with(&ours),
+            &mut happened,
+        );
+    }
+    if !home {
+        written(
+            &root.join(crate::wiki::PROJECT_WIKI),
+            "project:",
+            &|_: &str| true,
+            &mut happened,
+        );
+    }
+    let sources = crate::raw::told(raw);
+    for source in sources["sources"].as_array().into_iter().flatten() {
+        let kept_here = match source["project"].as_str() {
+            Some(project) => !home && name.as_deref() == Some(project),
+            None => home,
+        };
+        if kept_here {
+            happened.push(json!({
+                "when": source["kept"],
+                "kind": "source",
+                "title": source["title"],
+                "says": format!(
+                    "kept in {}{}",
+                    source["topic"].as_str().unwrap_or_default(),
+                    source["chat"].as_str().map(|chat| format!(" by {chat}")).unwrap_or_default()
+                ),
+                "href": format!("cox://wiki/#raw:{}", source["name"].as_str().unwrap_or_default()),
+            }));
+        }
+    }
+    happened.sort_by(|a, b| {
+        let when = |event: &Value| event["when"].as_str().unwrap_or_default().to_owned();
+        when(b).cmp(&when(a))
+    });
+    happened.truncate(HAPPENED);
+    json!({
+        "folder": root,
+        "home": home,
+        "waiting": waiting,
+        "happened": happened,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("cox-activity-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    fn chat(key: u64, cwd: &Path, project: &Path, asking: bool, unread: bool) -> Chat {
+        Chat {
+            key,
+            name: format!("chat {key}"),
+            cwd: cwd.to_owned(),
+            project: project.to_owned(),
+            asking,
+            unread,
+            goal: None,
+        }
+    }
+
+    #[test]
+    fn what_waits_is_of_the_folder_and_its_sketches() {
+        let root = scratch("waits");
+        let other = root.join("other");
+        let sketch = root.join("sketch");
+        let told = Told {
+            chats: vec![
+                chat(1, &root, &root, true, false),
+                chat(2, &root, &root, false, false),
+                chat(3, &sketch, &root, false, true),
+                chat(4, &other, &other, true, false),
+            ],
+            projects: vec![(root.clone(), "app".to_owned())],
+        };
+        let json = told_of(
+            &told,
+            &root,
+            &root.join("wiki"),
+            &root.join("raw"),
+            &json!({}),
+        );
+        let waiting = json["waiting"].as_array().unwrap();
+        assert_eq!(waiting.len(), 2);
+        assert_eq!(waiting[0]["key"], 1);
+        assert_eq!(waiting[0]["why"], "asks you");
+        assert_eq!(waiting[1]["key"], 3);
+        assert_eq!(waiting[1]["why"], "finished a turn");
+        assert_eq!(waiting[1]["sketch"], true);
+    }
+
+    #[test]
+    fn what_happened_there_comes_the_last_first() {
+        let root = scratch("happened");
+        let wiki = root.join("wiki");
+        std::fs::create_dir_all(&wiki).unwrap();
+        std::fs::write(
+            wiki.join("errors.md"),
+            "# Errors\n\nUse anyhow.\n\n## Used in\n\n\
+             - 2026-11-05 in app, chat \"one\"\n\
+             - 2026-11-06 in other, chat \"two\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".cox/wiki")).unwrap();
+        std::fs::write(
+            root.join(".cox/wiki/people.md"),
+            "# People\n\nAsk Ann.\n\n## Used in\n\n- 2026-11-04 in app, chat \"three\"\n",
+        )
+        .unwrap();
+        let raw = root.join("raw");
+        let source = crate::raw::Source {
+            from: "https://example.com/",
+            title: "News",
+            text: "What changed.",
+        };
+        let kept = |project| crate::raw::Kept {
+            day: "2026-11-07",
+            chat: "news",
+            chat_id: None,
+            project,
+        };
+        crate::raw::keep(&raw, "news", source, kept(Some("app"))).unwrap();
+        crate::raw::keep(&raw, "elsewhere", source, kept(Some("other"))).unwrap();
+        let schedules = json!({
+            "home": false,
+            "schedules": [
+                {"name": "triage", "every": "every 6h", "last": "2026-11-07 09:00"},
+                {"name": "never", "every": "daily 09:00", "last": null},
+            ],
+        });
+        let told = Told {
+            chats: Vec::new(),
+            projects: vec![(root.clone(), "app".to_owned())],
+        };
+        let json = told_of(&told, &root, &wiki, &raw, &schedules);
+        let kinds: Vec<(&str, &str)> = json["happened"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| {
+                (
+                    event["kind"].as_str().unwrap(),
+                    event["when"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("schedule", "2026-11-07 09:00"),
+                ("source", "2026-11-07"),
+                ("wiki", "2026-11-05"),
+                ("wiki", "2026-11-04"),
+            ]
+        );
+        assert_eq!(json["happened"][2]["href"], "cox://wiki/#errors");
+        assert_eq!(json["happened"][3]["href"], "cox://wiki/#project:people");
+    }
+}

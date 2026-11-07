@@ -27,8 +27,8 @@ use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{
-    ACCENT, BORDER, BORDER_STRONG, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED,
-    SURFACE,
+    ACCENT, ASKING, BORDER, BORDER_STRONG, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, RAISED,
+    SELECTED, SURFACE,
 };
 
 /// Where the tabs scroll along the bar, when there are more than it has
@@ -108,6 +108,9 @@ enum View {
 /// The plugin that draws the project's maps.
 const MAP: &str = "map";
 
+/// The plugin that shows what goes on in the folder.
+const ACTIVITY: &str = "activity";
+
 /// Which of the views a project may not have it has: a map, or a Git
 /// repository to show what changed in, or a tab of it open already.
 #[derive(Clone, Copy)]
@@ -181,6 +184,7 @@ impl Stage {
                     changes: self.changed.is_some() || views.contains(&View::Changes),
                 },
                 self.changed,
+                self.waiting,
                 cx,
             ))
             .child(
@@ -231,13 +235,15 @@ impl Stage {
     }
 
     /// The buttons of the views of the project, side by side in one
-    /// ground, the one shown marked: "Map" when the project has one, then
-    /// "Files", "Changes" in a Git repository, then the other plugins.
+    /// ground, the one shown marked: "Activity", counting the chats of
+    /// the folder that wait for the human, "Map" when the project has one,
+    /// then "Files", "Changes" in a Git repository, then the other plugins.
     fn render_views(
         shown: Option<&View>,
         plugins: Vec<Plugin>,
         present: Present,
         changed: Option<usize>,
+        waiting: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let button = |id: SharedString, view: View, label: SharedString, glyph: Icon| {
@@ -268,27 +274,38 @@ impl Stage {
         };
         let mut plugin = |plugin: Plugin| {
             let glyph = match plugin.name.as_str() {
+                ACTIVITY => Icon::Inbox,
                 MAP => Icon::Map,
                 "wiki" => Icon::Book,
                 "schedules" => Icon::Clock,
                 _ => Icon::Plug,
             };
             let name = plugin.name.clone();
+            let counted = (plugin.name == ACTIVITY && waiting > 0).then(|| {
+                div()
+                    .debug_selector(|| "waiting-count".to_owned())
+                    .text_size(px(11.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(ASKING))
+                    .child(waiting.to_string())
+            });
             button(
                 format!("plugin-{}", plugin.name).into(),
                 View::Plugin(plugin.name),
                 plugin.title.into(),
                 glyph,
             )
+            .children(counted)
             .on_click(cx.listener(move |stage, _, window, cx| {
                 stage.show_plugin(&name, "", window, cx);
             }))
         };
-        let (map, rest): (Vec<Plugin>, Vec<Plugin>) =
-            plugins.into_iter().partition(|plugin| plugin.name == MAP);
-        let map: Vec<_> = map
+        let (ahead, rest): (Vec<Plugin>, Vec<Plugin>) = plugins
             .into_iter()
-            .filter(|_| present.map)
+            .partition(|plugin| plugin.name == ACTIVITY || plugin.name == MAP);
+        let ahead: Vec<_> = ahead
+            .into_iter()
+            .filter(|plugin| plugin.name != MAP || present.map)
             .map(&mut plugin)
             .collect();
         let rest: Vec<_> = rest.into_iter().map(&mut plugin).collect();
@@ -299,7 +316,7 @@ impl Stage {
             .p(px(3.))
             .rounded(px(12.))
             .bg(rgb(RAISED))
-            .children(map)
+            .children(ahead)
             .child(
                 button("show-tree".into(), View::Files, "Files".into(), Icon::Files)
                     .on_click(cx.listener(|stage, _, window, cx| stage.show_tree(window, cx))),
@@ -622,10 +639,11 @@ impl Stage {
     }
 }
 
-/// Counts the files that changed in the project of `cx`'s stage, and
-/// looks whether it has a map, now and then, while the stage is open, for
-/// the bar to show "Changes" in a Git repository only, with the count,
-/// and "Map" only for a project with a map.
+/// Counts the files that changed in the project of `cx`'s stage, looks
+/// whether it has a map, and counts the chats of the folder that wait for
+/// the human, now and then, while the stage is open, for the bar to show
+/// "Changes" in a Git repository only, with the count, "Map" only for a
+/// project with a map, and the count on "Activity".
 pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
     cx.spawn(async move |this, cx| {
         loop {
@@ -635,17 +653,19 @@ pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
                 break;
             };
             if let Some(cwd) = open {
-                let (changed, mapped) = cx
+                let (changed, mapped, waiting) = cx
                     .background_executor()
                     .spawn(async move {
                         let mapped = !cox_editor::map::list(&cwd).is_empty();
-                        (changes::count(&cwd).ok(), mapped)
+                        let waiting = super::activity::waiting(&cwd);
+                        (changes::count(&cwd).ok(), mapped, waiting)
                     })
                     .await;
                 let counted = this.update(cx, |stage, cx| {
-                    if (stage.changed, stage.mapped) != (changed, mapped) {
+                    if (stage.changed, stage.mapped, stage.waiting) != (changed, mapped, waiting) {
                         stage.changed = changed;
                         stage.mapped = mapped;
+                        stage.waiting = waiting;
                         cx.notify();
                     }
                 });

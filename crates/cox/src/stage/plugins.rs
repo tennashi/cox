@@ -42,10 +42,16 @@
 //!   `cox://api/raw/<name>`, a source, as a page of the wiki is told,
 //!   with where it was read.
 //!
+//! - `cox://api/activity`: what goes on in the folder, what waits for
+//!   the human and what happened without them (see
+//!   [`crate::stage::activity`]).
 //! - `cox://api/schedules`: the schedules that run in the project's
 //!   folder, its own and those of the human's workflow whose chats work
 //!   there, each with when it ran last and runs next (see
 //!   [`crate::schedule::told`]).
+//!
+//! A plugin shows a chat of the window by going to `cox://chat/<key>`,
+//! the number the Activity page is told it by.
 //!
 //! A plugin opens a file on a tab of the stage by going to
 //! `cox://open/<path>#L<line>`, as the Map plugin does for a box's code.
@@ -68,9 +74,23 @@ const PROJECT_PLUGINS: &str = ".cox/plugins";
 /// The files of a plugin, by their paths within it.
 type Files = &'static [(&'static str, &'static [u8])];
 
-/// What is built into Cox at `cox://<name>/`: the Map, Knowledge and
-/// Schedules plugins, with their files.
+/// What is built into Cox at `cox://<name>/`: the Activity, Map,
+/// Knowledge and Schedules plugins, with their files.
 const BUILT_IN: &[(&str, Files)] = &[
+    (
+        "activity",
+        &[
+            (
+                "plugin.json",
+                include_bytes!("../../plugins/activity/plugin.json"),
+            ),
+            (
+                "index.html",
+                include_bytes!("../../plugins/activity/index.html"),
+            ),
+            ("app.js", include_bytes!("../../plugins/activity/app.js")),
+        ],
+    ),
     (
         "map",
         &[
@@ -224,13 +244,12 @@ impl Plugins {
                     wiki::page_in(&root, &percent_decoded(rest), translate::page)?
                 }
             }
-            "schedules" if rest.is_empty() => crate::schedule::told(
+            "schedules" if rest.is_empty() => self.schedules(),
+            "activity" if rest.is_empty() => crate::stage::activity::told(
                 &self.root,
-                &crate::settings::workflow(),
-                std::env::var_os("HOME").map(PathBuf::from).as_deref(),
-                &crate::settings::home_for_chats(crate::settings::Saved::read().home),
-                &crate::schedule::Ran::read(crate::storage::path(crate::storage::Kept::Schedules)),
-                &jiff::Zoned::now(),
+                &crate::settings::wiki(),
+                &crate::settings::raw(),
+                &self.schedules(),
             ),
             "project-wiki" => {
                 let root = self.root.join(crate::wiki::PROJECT_WIKI);
@@ -273,6 +292,19 @@ impl Plugins {
             mime: "application/json".to_owned(),
             body: serde_json::to_vec(&json).ok()?,
         })
+    }
+
+    /// The schedules that run in the folder, as `cox://api/schedules`
+    /// tells them.
+    fn schedules(&self) -> serde_json::Value {
+        crate::schedule::told(
+            &self.root,
+            &crate::settings::workflow(),
+            std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+            &crate::settings::home_for_chats(crate::settings::Saved::read().home),
+            &crate::schedule::Ran::read(crate::storage::path(crate::storage::Kept::Schedules)),
+            &jiff::Zoned::now(),
+        )
     }
 
     /// The file `path` of the built-in plugin `name`, if there is one.
@@ -504,12 +536,13 @@ mod tests {
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
-        assert_eq!(names, ["map", "wiki", "schedules", "tour"]);
-        assert_eq!(listed[0].title, "Map");
-        assert_eq!(listed[1].title, "Knowledge");
-        assert_eq!(listed[2].title, "Schedules");
-        assert_eq!(listed[3].title, "A tour");
-        assert_eq!(listed[3].url(), "cox://tour/");
+        assert_eq!(names, ["activity", "map", "wiki", "schedules", "tour"]);
+        assert_eq!(listed[0].title, "Activity");
+        assert_eq!(listed[1].title, "Map");
+        assert_eq!(listed[2].title, "Knowledge");
+        assert_eq!(listed[3].title, "Schedules");
+        assert_eq!(listed[4].title, "A tour");
+        assert_eq!(listed[4].url(), "cox://tour/");
         assert_eq!(
             plugins.resource("cox://tour/").unwrap().body,
             b"<h1>Tour</h1>"
