@@ -22,6 +22,7 @@ use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::chat::sketch::Sketch;
 use crate::{raw, wiki};
 
+mod android;
 mod mac;
 
 const SHOW_MARKDOWN: &str = "show_markdown";
@@ -90,11 +91,12 @@ const OUTPUT_LENGTH: usize = 30_000;
 /// of them.
 pub(super) fn tools(only: Option<&[String]>) -> Value {
     let mut tools = all_tools();
-    // Only a Mac has the windows of other apps to show.
-    if cfg!(target_os = "macos")
-        && let Some(tools) = tools.as_array_mut()
-    {
-        tools.extend(mac::tools());
+    if let Some(tools) = tools.as_array_mut() {
+        tools.extend(android::tools());
+        // Only a Mac has the windows of other apps to show.
+        if cfg!(target_os = "macos") {
+            tools.extend(mac::tools());
+        }
     }
     if let Some(only) = only
         && let Some(tools) = tools.as_array_mut()
@@ -628,8 +630,15 @@ pub(super) async fn call(
     if only.is_some_and(|only| !only.iter().any(|only| only == name)) {
         return Err((INVALID_PARAMS, format!("no tool {name}")));
     }
-    if mac::NAMES.contains(&name) {
-        return Ok(match mac::call(name, arguments, requests).await {
+    let seen = if mac::NAMES.contains(&name) {
+        Some(mac::call(name, arguments, requests).await)
+    } else if android::NAMES.contains(&name) {
+        Some(android::call(name, arguments, requests).await)
+    } else {
+        None
+    };
+    if let Some(seen) = seen {
+        return Ok(match seen {
             Ok(seen) => answered_with_picture(&seen.text, seen.png.as_deref()),
             Err(text) => answered(&text, true),
         });

@@ -5,10 +5,18 @@
 //! into, scrolls with the wheel, and presses Back, Home and Overview of
 //! on the bar above it (see [`cox_android::device`]).
 //!
+//! The agent taps, swipes, types and presses keys on it through its tools,
+//! which the tab passes on to the emulator, drawing the agent's pointer
+//! where it touches, so that the human sees what the agent sees and does.
+//!
 //! The emulator Cox started stops as its tab closes, or as Cox quits,
 //! saving its state for its next start; one that ran already goes on.
 
+use std::time::Instant;
+
 use cox_android::device::{Boot, Device, Event, Input, Status};
+use cox_browser::pointer::{AgentPointer, Look};
+use cox_browser::relay::AgentInput;
 use cox_core::tabs::KeptTab;
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, Hitbox, IntoElement, KeyDownEvent, Subscription,
@@ -16,12 +24,24 @@ use gpui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::stage::mirror::{Display, Mirrored, Press, Screen, Touched, pass_on};
+use crate::agent::mcp::AndroidAct;
+use crate::stage::mirror::{Display, Mirrored, Press, Screen, Touched, pass_on, scaled};
+use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::theme::{BORDER, BUTTON, DIM, FAILED, FOREGROUND, RAISED, SELECTED};
 
 /// How far one click of a mouse's wheel turns it, as the emulator counts.
 const WHEEL_CLICK: f32 = 120.;
+
+/// How many pixels the longer side of the picture the agent gets is,
+/// whatever size the tab draws the display at, so that where the agent
+/// points stays where it was as the tab changes size.
+const PICTURE_SIDE: f64 = 1280.;
+
+/// A display as the agent sees it: its picture, its width and height and
+/// pixels as BGRA, and the size the agent gets it at, in pixels, where it
+/// points.
+pub type Picture = ((u32, u32, Vec<u8>), (u32, u32));
 
 pub struct Android {
     /// The device, by its name as `emulator -avd` takes it.
@@ -34,6 +54,13 @@ pub struct Android {
     focus_handle: FocusHandle,
     /// Hears the emulator, while the tab talks to one.
     hearing: Option<Task<()>>,
+    /// Whether the agent's finger is on the display.
+    finger_down: bool,
+    /// The agent's pointer, and how it looks as of the last render.
+    pointer: AgentPointer,
+    look: Option<Look>,
+    /// Renders the tab again when the pointer's look next changes.
+    _pointer_changes: Option<Task<()>>,
     _quit: Subscription,
 }
 
@@ -55,6 +82,10 @@ impl Android {
             screen: Screen::default(),
             focus_handle: cx.focus_handle(),
             hearing: None,
+            finger_down: false,
+            pointer: AgentPointer::default(),
+            look: None,
+            _pointer_changes: None,
             _quit: quit,
         };
         if let Some(boot) = boot {
@@ -75,6 +106,13 @@ impl Android {
         self.device.is_some() && !matches!(self.status, Status::Ended(_))
     }
 
+    /// Whether the device's emulator is starting, or being reached, so
+    /// that its display has yet to come.
+    #[must_use]
+    pub fn is_booting(&self) -> bool {
+        self.device.is_some() && matches!(self.status, Status::Starting | Status::Reaching)
+    }
+
     /// Starts the device's emulator as `boot` says, or reaches it if it
     /// runs.
     pub fn open(&mut self, boot: Boot, cx: &mut Context<Self>) {
@@ -82,6 +120,109 @@ impl Android {
         self.device = Some(device);
         self.screen.ask_again();
         self.hearing = Some(Self::hear(events, cx));
+        cx.notify();
+    }
+
+    /// The size the agent gets the display's picture at, in pixels, once a
+    /// picture came: its longer side [`PICTURE_SIDE`].
+    #[must_use]
+    pub fn picture_size(&self) -> Option<(u32, u32)> {
+        let (width, height) = self.screen.size()?;
+        let scale = PICTURE_SIDE / f64::from(width.max(height).max(1));
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a picture's size fits in u32"
+        )]
+        let side = |length: u32| (f64::from(length) * scale).round().max(1.) as u32;
+        Some((side(width), side(height)))
+    }
+
+    /// The display as the agent sees it now, once a picture came.
+    #[must_use]
+    pub fn picture(&self) -> Option<Picture> {
+        Some((self.screen.picture()?, self.picture_size()?))
+    }
+
+    /// Does `act`, which the agent asks, on the device: where it falls is
+    /// in the pixels of the agent's picture of the display (see
+    /// [`Android::picture`]). A swipe only lands; [`Android::touch`]
+    /// moves the finger on.
+    ///
+    /// # Errors
+    ///
+    /// When the emulator does not run, or shows no display yet.
+    pub fn act(&mut self, act: &AndroidAct, cx: &mut Context<Self>) -> Result<(), String> {
+        if matches!(act, AndroidAct::List | AndroidAct::Look { .. }) {
+            return Ok(());
+        }
+        if !self.is_running() {
+            return Err(format!("{} does not run yet: look at it first.", self.name));
+        }
+        match act {
+            AndroidAct::List | AndroidAct::Look { .. } => {}
+            AndroidAct::Tap { x, y, .. } => {
+                self.touch(*x, *y, true, cx)?;
+                self.touch(*x, *y, false, cx)?;
+            }
+            AndroidAct::Swipe { x, y, .. } => self.touch(*x, *y, true, cx)?,
+            AndroidAct::Type { text, .. } => {
+                self.send(Input::Text(text.clone()));
+                self.agent_input(AgentInput::Type, cx);
+            }
+            AndroidAct::Key { key, .. } => {
+                self.send(Input::Key(key.clone()));
+                self.agent_input(AgentInput::Type, cx);
+            }
+        }
+        Ok(())
+    }
+
+    /// The agent's finger at `x` and `y`, in the pixels of its picture of
+    /// the display, touching while `down` is, and lifting as it is not.
+    ///
+    /// # Errors
+    ///
+    /// When the display shows no picture yet.
+    pub fn touch(
+        &mut self,
+        x: u32,
+        y: u32,
+        down: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let (width, height) = self
+            .picture_size()
+            .ok_or_else(|| format!("{} shows no display yet: look again.", self.name))?;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a picture's pixels are far below what f32 keeps exactly"
+        )]
+        let (x, y) = (x.min(width) as f32, y.min(height) as f32);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a picture's pixels are far below what f32 keeps exactly"
+        )]
+        let across = (x / width as f32, y / height as f32);
+        let landing = down && !self.finger_down;
+        self.finger_down = down;
+        self.send(Input::Touch {
+            x: across.0,
+            y: across.1,
+            down,
+        });
+        let seen = if landing {
+            AgentInput::Press { x, y }
+        } else {
+            AgentInput::Move { x, y }
+        };
+        self.agent_input(seen, cx);
+        Ok(())
+    }
+
+    /// Has the agent's pointer show `input`.
+    fn agent_input(&mut self, input: AgentInput, cx: &mut Context<Self>) {
+        self.pointer.see(input, Instant::now());
         cx.notify();
     }
 
@@ -236,7 +377,17 @@ impl Focusable for Android {
 }
 
 impl Render for Android {
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the timer is only held: dropping it cancels it"
+    )]
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        (self.look, self._pointer_changes) = pointer::look_now(&self.pointer, cx);
+        let label = Mirrored::agent(self).and_then(|(look, (width, _))| {
+            let drawn = self.screen.drawn_within()?;
+            let look = scaled(look, f32::from(drawn.size.width) / width);
+            Some(pointer::label(&look, drawn.origin))
+        });
         let ended = match &self.status {
             Status::Ended(why) if self.device.is_some() => Some(why.clone()),
             _ => None,
@@ -258,6 +409,7 @@ impl Render for Android {
                     .child(Display {
                         mirrored: cx.entity(),
                     })
+                    .children(label)
                     .children(ended.map(|why| {
                         div()
                             .debug_selector(|| "android-ended".to_owned())
@@ -293,6 +445,15 @@ impl Mirrored for Android {
 
     fn listen(mirrored: &Entity<Self>, over: &Hitbox, window: &mut Window) {
         pass_on(mirrored, over, window);
+    }
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a picture's pixels are far below what f32 keeps exactly"
+    )]
+    fn agent(&self) -> Option<(&Look, (f32, f32))> {
+        let (width, height) = self.picture_size()?;
+        Some((self.look.as_ref()?, (width as f32, height as f32)))
     }
 }
 

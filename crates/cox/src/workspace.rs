@@ -128,8 +128,8 @@ const RENAMING: &str = "Renaming";
 /// stage.
 const NO_TERMINAL: &str = "its terminal went away";
 
-/// Why the agent sees nothing of a Mac window whose stage went before it
-/// answered.
+/// Why the agent sees nothing of a Mac window, or an Android device,
+/// whose stage went before it answered.
 const NO_TAB: &str = "the stage went away before it answered";
 
 /// Binds the keys that open chats and move between them.
@@ -939,18 +939,33 @@ impl Workspace {
                     asks_human: false,
                 }
             }
-            StageAsk::MacWindow { id, act } => {
-                let (answer, seen) = tokio::sync::oneshot::channel();
-                let link = self.link.clone();
-                let waits = cx.spawn(async move |this, cx| {
-                    let seen = seen.await.unwrap_or_else(|_| Err(NO_TAB.to_owned()));
-                    link.send(ToDaemon::Seen { id, seen });
-                    let _ = this.update(cx, |workspace, _| workspace.running.remove(&id));
-                });
-                self.running.insert(id, waits);
-                ToolRequest::MacWindow { act, answer }
-            }
+            StageAsk::MacWindow { id, act } => ToolRequest::MacWindow {
+                act,
+                answer: self.awaiting_sight(id, cx),
+            },
+            StageAsk::Android { id, act } => ToolRequest::Android {
+                act,
+                answer: self.awaiting_sight(id, cx),
+            },
         }
+    }
+
+    /// Where what the agent sees goes, for the daemon's ask `id`: back to
+    /// the daemon once the stage answers.
+    fn awaiting_sight(
+        &mut self,
+        id: u64,
+        cx: &mut Context<Self>,
+    ) -> tokio::sync::oneshot::Sender<Result<crate::agent::mcp::Seen, String>> {
+        let (answer, seen) = tokio::sync::oneshot::channel();
+        let link = self.link.clone();
+        let waits = cx.spawn(async move |this, cx| {
+            let seen = seen.await.unwrap_or_else(|_| Err(NO_TAB.to_owned()));
+            link.send(ToDaemon::Seen { id, seen });
+            let _ = this.update(cx, |workspace, _| workspace.running.remove(&id));
+        });
+        self.running.insert(id, waits);
+        answer
     }
 
     /// How many chats `chat` is under, in the list: none for a chat the
