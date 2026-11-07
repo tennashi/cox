@@ -34,7 +34,7 @@ use tokio::sync::oneshot;
 use tracing::Instrument as _;
 
 use cox_core::entry::{
-    Answer, Content, Entry, LoginOption, Step, StepState, TerminalLogin, ToolCallResult,
+    Answer, Attachment, Content, Entry, LoginOption, Step, StepState, TerminalLogin, ToolCallResult,
 };
 use cox_core::settings::{Choice, Setting};
 
@@ -144,7 +144,7 @@ pub enum Opened {
 /// What the window asks of the agent side.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    Prompt(String),
+    Prompt(Prompt),
     Answer(PermissionAnswer),
     /// Asks the agent to stop the turn it is taking.
     Cancel,
@@ -158,6 +158,24 @@ pub enum Command {
     },
     /// Tells the agent how the human logged in, as it asked.
     LogIn(Login),
+}
+
+/// A line for the agent, with what the human handed the chat with it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Prompt {
+    pub text: String,
+    /// What goes after the line, in its order: text selected elsewhere
+    /// on the screen, as a tab of code.
+    pub attached: Vec<Attachment>,
+}
+
+impl From<String> for Prompt {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            attached: Vec::new(),
+        }
+    }
 }
 
 /// The window's ends of the channels to the agent side.
@@ -399,7 +417,7 @@ async fn run<T: Transport + 'static>(
                 // An answer with no permission request waiting has nothing to
                 // answer, and a cancel with no turn running nothing to stop.
                 match command {
-                    Command::Prompt(text) => {
+                    Command::Prompt(Prompt { text, attached }) => {
                         // What goes ahead of the first prompt goes once,
                         // and not ahead of a command, which the agent
                         // knows by the prompt's first block: it waits for
@@ -419,6 +437,10 @@ async fn run<T: Transport + 'static>(
                             .into_iter()
                             .chain([text])
                             .map(Block::Text)
+                            .chain(attached.into_iter().map(|attachment| Block::Quote {
+                                uri: attachment.uri,
+                                text: attachment.text,
+                            }))
                             .chain(files.into_iter().map(Block::File));
                         take_turn(
                             &mut session,
@@ -819,6 +841,18 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
         .iter()
         .filter_map(|entry| match entry {
             Entry::Human(text) => Some(format!("[human]\n{text}")),
+            Entry::Attached(attached) => Some(
+                attached
+                    .iter()
+                    .map(|attachment| {
+                        format!(
+                            "[the human handed you, from {}]\n{}",
+                            attachment.uri, attachment.text
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
             Entry::Cox(text) => Some(format!("[cox]\n{text}")),
             Entry::Reply(text) => Some(format!("[you]\n{text}")),
             Entry::ToolCall { title, result, .. } => {

@@ -10,10 +10,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use cox_core::entry::Attachment;
 use gpui::{
     Div, FocusHandle, FontWeight, MouseButton, MouseDownEvent, Stateful, div, prelude::*, px, rgb,
 };
 
+use crate::chat::hand::AddToChat;
 use crate::ui::Copy;
 use crate::ui::text::{Reading, Writer};
 use crate::ui::theme::{DIM, FAINT};
@@ -83,10 +85,13 @@ impl Words {
         let offered = self.clone();
         let copied = self.clone();
         let translated = self.clone();
+        let handed = self.clone();
         body.track_focus(focus)
             .on_mouse_down(MouseButton::Left, pressed)
             .on_mouse_down(MouseButton::Right, move |_, window, cx| {
-                if crate::ui::translation::offer(&offered.selected(), window, cx) {
+                let text = offered.selected();
+                let handed = Some(of_settings(text.clone()));
+                if crate::ui::translation::offer(&text, handed, window, cx) {
                     cx.stop_propagation();
                 }
             })
@@ -115,6 +120,21 @@ impl Words {
                     crate::ui::translation::show(&text, window, cx);
                 }
             })
+            .on_action(move |_: &AddToChat, _, cx| {
+                if !crate::chat::hand::hand(of_settings(handed.selected()), cx) {
+                    cx.propagate();
+                }
+            })
+    }
+}
+
+/// `text`, selected in the settings, as it goes to the agent when handed
+/// to the chat.
+fn of_settings(text: String) -> Attachment {
+    Attachment {
+        label: "Settings".to_owned(),
+        uri: "cox://settings".to_owned(),
+        text,
     }
 }
 

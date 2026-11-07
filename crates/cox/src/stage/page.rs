@@ -21,6 +21,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use cox_core::entry::Attachment;
 use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Div, Entity, EntityInputHandler, EventEmitter,
@@ -490,6 +491,11 @@ impl Page {
                 .child(label)
         };
         let copied = text.clone();
+        let handed = Attachment {
+            label: self.title(),
+            uri: self.navigation.url.clone(),
+            text: text.clone(),
+        };
         let menu = div()
             .occlude()
             .min_w(px(140.))
@@ -512,6 +518,13 @@ impl Page {
                     },
                 )),
             )
+            .child(item("add-to-chat", "Add to chat").on_click(cx.listener(
+                move |page, _, _, cx| {
+                    page.menu = None;
+                    crate::chat::hand::hand(handed.clone(), cx);
+                    cx.notify();
+                },
+            )))
             .child(
                 item("copy-selection", "Copy").on_click(cx.listener(move |page, _, _, cx| {
                     page.menu = None;

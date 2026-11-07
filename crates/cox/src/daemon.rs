@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use cox_core::entry::Attachment;
 use cox_core::goal::Goal;
 use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
 use cox_core::tabs::KeptTabs;
@@ -937,7 +938,11 @@ impl Daemon {
                 }
             }
             ToDaemon::Watch { key } => self.watch(key),
-            ToDaemon::Submit { key, text } => self.submit(key, &text),
+            ToDaemon::Submit {
+                key,
+                text,
+                attached,
+            } => self.submit(key, &text, attached),
             ToDaemon::Choose { key, index } => {
                 if let Some(chat) = self.chat(key) {
                     chat.choose(index);
@@ -1057,7 +1062,7 @@ impl Daemon {
 
     /// The human sent `text` in the chat `key`: a closed chat's agent
     /// starts again first, if it can.
-    fn submit(&mut self, key: u64, text: &str) {
+    fn submit(&mut self, key: u64, text: &str, attached: Vec<Attachment>) {
         if text.trim().is_empty() {
             return;
         }
@@ -1075,7 +1080,7 @@ impl Daemon {
             self.start_agent(key, start);
         }
         if let Some(chat) = self.chat(key) {
-            chat.submit(text);
+            chat.submit(text, attached);
         }
     }
 

@@ -434,6 +434,11 @@ impl Workspace {
         // The translation of what the human selects shows over the window.
         cx.observe_global::<crate::ui::translation::Shown>(|_, cx| cx.notify())
             .detach();
+        // What the human hands the chat shown from elsewhere on the screen.
+        cx.observe_global_in::<crate::chat::hand::Handed>(window, |workspace, window, cx| {
+            workspace.take_handed(window, cx);
+        })
+        .detach();
         let mut from_daemon = from_daemon;
         let heard = cx.spawn_in(window, async move |this, cx| {
             while let Some(message) = from_daemon.recv().await {
@@ -988,6 +993,26 @@ impl Workspace {
     #[must_use]
     pub fn shown(&self) -> Option<&Chat> {
         self.chats.shown()
+    }
+
+    /// Gives what the human handed to the chat shown, unfolding its panel
+    /// for them to see it there; with no chat shown, it goes nowhere.
+    fn take_handed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handed = crate::chat::hand::take(cx);
+        if handed.is_empty() {
+            return;
+        }
+        let Some(view) = self.shown().and_then(Chat::view).cloned() else {
+            return;
+        };
+        self.folded = false;
+        self.switching = false;
+        view.update(cx, |view, cx| {
+            for attachment in handed {
+                view.attach(attachment, window, cx);
+            }
+        });
+        cx.notify();
     }
 
     /// Whether the list of chats is open, at the head of the panel.

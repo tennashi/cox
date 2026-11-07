@@ -626,6 +626,26 @@ file's text, when the agent takes files whole (ACP's
 256 KB or less, or else a link to the file (ACP's `resource_link`), for
 the agent to read.
 
+The human hands the chat shown what they selected elsewhere on the
+screen, in its conversation, a tab of code or Markdown, a terminal, a
+page of the stage or the settings, with "Add to chat" in the menu the
+right button opens on it, beside "Translate", or, but on a page, with
+Command-L (Control-Shift-L off macOS, where Control-L is the
+terminal's). It shows as a chip over the input, named by where it is
+from, as `main.rs:5-7` for the lines of a file, a page's title, what a
+terminal runs, or the start of what was selected in the conversation,
+with where it is from and the start of it where the mouse rests; a
+click on a chip of a file or a page opens it, and its × takes it out.
+The chips go with the next line sent, and stay under it in the
+conversation; while the agent takes a turn, they wait, as the line
+does. Each goes to the agent after the line, as text with where it is
+from, as a URI: the file's, with the lines, as
+`file:///work/src/main.rs#L5-7`, the page's address, `cox://terminal`,
+`cox://settings`, or `cox://chat/` and the chat's number: when the
+agent takes files whole, as a resource of that URI (ACP's
+`embeddedContext`), and else as text after a line that says where it is
+from.
+
 The plan and the thoughts are ACP's `plan` and `agent_thought_chunk`
 updates, which Cox shows from any agent that sends them. How an agent
 is to be run to send them is the agent's: `claude-agent-acp` sends, as

@@ -13,6 +13,7 @@ use cox::chat::judge::Starts;
 use cox::daemon::client::{self, Connected};
 use cox::daemon::wire::{FromDaemon, Hello, ToDaemon};
 use cox::daemon::{Spawned, Spawns};
+use cox_core::entry::Attachment;
 use cox_core::store::Store;
 use cox_core::tabs::{KeptTab, KeptTabs};
 
@@ -308,6 +309,11 @@ fn what_the_window_and_coxd_say_reads_back_as_it_was() {
     let told = ToDaemon::Submit {
         key: 1,
         text: "two\nlines".to_owned(),
+        attached: vec![Attachment {
+            label: "main.rs:2-3".to_owned(),
+            uri: "file:///work/src/main.rs#L2-3".to_owned(),
+            text: "a\nb".to_owned(),
+        }],
     };
     let line = serde_json::to_string(&told).unwrap();
     assert!(!line.contains('\n'), "a message is one line");

@@ -724,6 +724,7 @@ impl Session {
                 .map(|block| match block {
                     Block::Text(text) => ContentBlock::Text(TextContent::new(text)),
                     Block::File(path) => file_block(&path, self.embeds),
+                    Block::Quote { uri, text } => quote_block(uri, text, self.embeds),
                 })
                 .collect(),
         );
@@ -745,6 +746,13 @@ pub enum Block {
     Text(String),
     /// A file the human points the agent to, by its absolute path.
     File(PathBuf),
+    /// Text the human hands the agent from elsewhere, with where it is
+    /// from, as a URI: the lines of a file, as `file:///src/main.rs#L3-5`,
+    /// a page's address, or what in Cox shows it.
+    Quote {
+        uri: String,
+        text: String,
+    },
 }
 
 impl From<String> for Block {
@@ -779,8 +787,33 @@ fn file_block(path: &Path, embeds: bool) -> ContentBlock {
     ContentBlock::ResourceLink(ResourceLink::new(name, uri))
 }
 
+/// `text`, from `uri`, as a block of a prompt: a resource of that URI with
+/// that text, when the agent `embeds` resources, or else the text after a
+/// line that says where it is from, fenced so that what it says stays
+/// apart from the line.
+fn quote_block(uri: String, text: String, embeds: bool) -> ContentBlock {
+    if embeds {
+        return ContentBlock::Resource(EmbeddedResource::new(
+            EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(text, uri)),
+        ));
+    }
+    let fence = "`".repeat(longest_run(&text, '`').max(2) + 1);
+    ContentBlock::Text(TextContent::new(format!(
+        "From {uri}:\n\n{fence}\n{text}\n{fence}"
+    )))
+}
+
+/// How many of `letter` the longest run of it in `text` has.
+fn longest_run(text: &str, letter: char) -> usize {
+    text.split(|other| other != letter)
+        .map(str::len)
+        .max()
+        .unwrap_or(0)
+}
+
 /// The `file:` URI of the absolute path `path`.
-fn file_uri(path: &Path) -> String {
+#[must_use]
+pub fn file_uri(path: &Path) -> String {
     url::Url::from_file_path(path)
         .map_or_else(|()| format!("file://{}", path.display()), String::from)
 }
@@ -1308,5 +1341,32 @@ impl From<AcpStopReason> for StopReason {
             AcpStopReason::Cancelled => Self::Cancelled,
             _ => Self::Other,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_quote_goes_as_a_resource_to_an_agent_that_embeds() {
+        let block = quote_block("file:///a.rs#L2-3".to_owned(), "b\nc".to_owned(), true);
+        let ContentBlock::Resource(resource) = block else {
+            panic!("a resource: {block:?}");
+        };
+        let EmbeddedResourceResource::TextResourceContents(text) = resource.resource else {
+            panic!("text");
+        };
+        assert_eq!(text.uri, "file:///a.rs#L2-3");
+        assert_eq!(text.text, "b\nc");
+    }
+
+    #[test]
+    fn a_quote_goes_as_fenced_text_to_an_agent_that_does_not_embed() {
+        let block = quote_block("cox://terminal".to_owned(), "a ```b```".to_owned(), false);
+        let ContentBlock::Text(text) = block else {
+            panic!("text: {block:?}");
+        };
+        assert_eq!(text.text, "From cox://terminal:\n\n````\na ```b```\n````");
     }
 }

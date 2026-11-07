@@ -44,6 +44,7 @@ use alacritty_terminal::index::{Column, Line, Point as Cell, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Term, TermMode};
+use cox_core::entry::Attachment;
 use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, IntoElement,
@@ -60,6 +61,7 @@ use self::pty::{Listener, START_SIZE, Size};
 pub use self::pty::{Program, Running};
 pub use self::unseen::run_unseen;
 use crate::agent::mcp::{Ended, Ran};
+use crate::chat::hand::AddToChat;
 use crate::stage::tab::Shows;
 use crate::ui::Copy;
 use crate::ui::ellipsis::ellipsis;
@@ -337,6 +339,24 @@ impl Terminal {
             return;
         }
         crate::ui::translation::show(&text, window, cx);
+    }
+
+    /// The text selected, with the terminal it is from, by what it runs,
+    /// as it goes to the agent when handed to the chat.
+    fn selected_attachment(&self) -> Attachment {
+        Attachment {
+            label: self.title(),
+            uri: "cox://terminal".to_owned(),
+            text: self.selected_text().unwrap_or_default(),
+        }
+    }
+
+    /// Hands the text selected to the chat shown, or with nothing
+    /// selected leaves the keys to what holds the part.
+    fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
+        if !crate::chat::hand::hand(self.selected_attachment(), cx) {
+            cx.propagate();
+        }
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
@@ -649,13 +669,15 @@ impl Render for Terminal {
                     .on_key_down(cx.listener(Self::key_down))
                     .on_action(cx.listener(Self::copy))
                     .on_action(cx.listener(Self::translate))
+                    .on_action(cx.listener(Self::add_to_chat))
                     .on_action(cx.listener(Self::paste))
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(|terminal, _, window, cx| {
                             let text = terminal.selected_text().unwrap_or_default();
-                            if crate::ui::translation::offer(&text, window, cx) {
+                            let handed = Some(terminal.selected_attachment());
+                            if crate::ui::translation::offer(&text, handed, window, cx) {
                                 cx.stop_propagation();
                             }
                         }),

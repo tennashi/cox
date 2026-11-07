@@ -308,7 +308,9 @@ impl Judge {
     /// Asks the judge whether `goal` is met now, given what the chat last
     /// `said`.
     pub fn ask(&self, goal: &str, said: Option<&str>) {
-        let _ = self.commands.send(Command::Prompt(question(goal, said)));
+        let _ = self
+            .commands
+            .send(Command::Prompt(question(goal, said).into()));
     }
 
     /// Stops the judgement under way, if one is.

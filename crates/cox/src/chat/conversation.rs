@@ -16,7 +16,7 @@ use std::path::Path;
 
 use cox_acp::{PermissionAnswer, SlashCommand, StopReason};
 pub use cox_core::entry::{
-    Answer, Content, Entry, LoginOption, Step, StepState, TerminalLogin, ToolCallResult,
+    Answer, Attachment, Content, Entry, LoginOption, Step, StepState, TerminalLogin, ToolCallResult,
 };
 use cox_core::goal;
 use cox_core::settings::Setting;
@@ -439,7 +439,21 @@ impl Conversation {
     /// Takes what the human entered, and returns the prompt to send the
     /// agent, when it waits for one.
     pub fn submit(&mut self, input: &str) -> Option<Command> {
-        self.start_turn(input, Entry::Human)
+        self.submit_with(input, Vec::new())
+    }
+
+    /// Takes what the human entered, with what they handed the chat with
+    /// it, and returns the prompt to send the agent, when it waits for
+    /// one.
+    pub fn submit_with(&mut self, input: &str, attached: Vec<Attachment>) -> Option<Command> {
+        let Command::Prompt(mut prompt) = self.start_turn(input, Entry::Human)? else {
+            return None;
+        };
+        if !attached.is_empty() {
+            self.push(Entry::Attached(attached.clone()));
+        }
+        prompt.attached = attached;
+        Some(Command::Prompt(prompt))
     }
 
     /// Takes `text`, a line Cox sends in the human's place, such as the
@@ -460,7 +474,7 @@ impl Conversation {
         if let Some(goal) = &mut self.goal {
             goal.turns = 1;
         }
-        Some(Command::Prompt(text.to_owned()))
+        Some(Command::Prompt(text.to_owned().into()))
     }
 
     /// What the chat works until, if the human set a goal.
@@ -668,7 +682,7 @@ impl Conversation {
         }
         self.push(Entry::Cox(prompt.clone()));
         self.state = State::Busy;
-        Some(Command::Prompt(prompt))
+        Some(Command::Prompt(prompt.into()))
     }
 
     /// How many of the last turns made no tool call, counting back from
@@ -1207,6 +1221,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::agent::Prompt;
 
     fn asks_to_log_in() -> AgentEvent {
         AgentEvent::LoginNeeded {
@@ -1269,8 +1284,36 @@ mod tests {
         assert_eq!(conversation.state(), State::Idle);
         assert_eq!(
             conversation.submit("hello"),
-            Some(Command::Prompt("hello".to_owned()))
+            Some(Command::Prompt("hello".to_owned().into()))
         );
+    }
+
+    #[test]
+    fn what_the_human_handed_goes_with_the_line_and_shows_after_it() {
+        let mut conversation = Conversation::new();
+        let attached = vec![Attachment {
+            label: "main.rs:2".to_owned(),
+            uri: "file:///work/src/main.rs#L2".to_owned(),
+            text: "println!(\"hello\");".to_owned(),
+        }];
+
+        assert_eq!(
+            conversation.submit_with("why hello?", attached.clone()),
+            Some(Command::Prompt(Prompt {
+                text: "why hello?".to_owned(),
+                attached: attached.clone(),
+            }))
+        );
+        assert_eq!(
+            conversation.entries(),
+            [
+                Entry::Human("why hello?".to_owned()),
+                Entry::Attached(attached.clone()),
+            ]
+        );
+        // Not while a turn runs: the human sends it again after.
+        assert_eq!(conversation.submit_with("and?", attached), None);
+        assert_eq!(conversation.entries().len(), 2);
     }
 
     #[test]
@@ -1298,7 +1341,7 @@ mod tests {
         conversation.reopen();
         assert_eq!(
             conversation.submit("again"),
-            Some(Command::Prompt("again".to_owned()))
+            Some(Command::Prompt("again".to_owned().into()))
         );
         conversation.apply(AgentEvent::Opened {
             id: "session-1".to_owned(),
@@ -1320,7 +1363,7 @@ mod tests {
 
         assert_eq!(
             conversation.submit("hello"),
-            Some(Command::Prompt("hello".to_owned()))
+            Some(Command::Prompt("hello".to_owned().into()))
         );
         assert_eq!(conversation.state(), State::Busy);
         assert_eq!(conversation.submit("again"), None);
@@ -1630,7 +1673,7 @@ mod tests {
         assert_eq!(conversation.state(), State::Idle);
         assert_eq!(
             conversation.submit("again"),
-            Some(Command::Prompt("again".to_owned()))
+            Some(Command::Prompt("again".to_owned().into()))
         );
         assert_eq!(
             conversation.entries(),
@@ -1778,7 +1821,7 @@ mod tests {
                       It printed, at the end:\n\nerror: x is not defined";
         assert_eq!(
             conversation.checked(ran(2, "error: x is not defined\n\n")),
-            Some(Command::Prompt(prompt.to_owned()))
+            Some(Command::Prompt(prompt.to_owned().into()))
         );
         assert_eq!(conversation.state(), State::Busy);
         assert_eq!(conversation.checking(), None);
@@ -1842,7 +1885,9 @@ mod tests {
         let mut conversation = toward_make(true);
         let output = format!("{}{}", "x".repeat(100), "y".repeat(OUTPUT_TAIL));
 
-        let Some(Command::Prompt(prompt)) = conversation.checked(ran(1, &output)) else {
+        let Some(Command::Prompt(Prompt { text: prompt, .. })) =
+            conversation.checked(ran(1, &output))
+        else {
             panic!("the agent goes on");
         };
         assert!(prompt.ends_with(&format!("[…]{}", "y".repeat(OUTPUT_TAIL))));
@@ -1922,7 +1967,7 @@ mod tests {
         assert_eq!(conversation.entries().len(), entries);
         assert_eq!(
             conversation.submit("again"),
-            Some(Command::Prompt("again".to_owned()))
+            Some(Command::Prompt("again".to_owned().into()))
         );
     }
 
@@ -2004,7 +2049,7 @@ mod tests {
                       I read src/main.rs.\nFAIL: the greeting still says hello";
         assert_eq!(
             conversation.judged(Ok(said.to_owned())),
-            Some(Command::Prompt(prompt.to_owned()))
+            Some(Command::Prompt(prompt.to_owned().into()))
         );
         assert_eq!(conversation.state(), State::Busy);
         assert_eq!(conversation.judging(), None);
@@ -2087,7 +2132,7 @@ mod tests {
         let prompt = conversation
             .judged(Ok("I am not sure what you mean.".to_owned()))
             .expect("the chat goes on");
-        let Command::Prompt(prompt) = prompt else {
+        let Command::Prompt(Prompt { text: prompt, .. }) = prompt else {
             panic!("a prompt");
         };
         assert!(
@@ -2125,6 +2170,7 @@ mod tests {
             Some(Command::Prompt(
                 "Goal not met, as judged: not yet Go on until it is met. The judge said:\n\nFAIL: not yet"
                     .to_owned()
+                    .into()
             ))
         );
         take_turn(&mut conversation, false);

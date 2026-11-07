@@ -9,7 +9,7 @@ use cox_core::tabs::KeptTab;
 use gpui::{App, Focusable as _, Window};
 
 use crate::chat::conversation::{
-    Answer, Content, Entry, GOAL_TURNS, State, StepState, ToolCallResult,
+    Answer, Attachment, Content, Entry, GOAL_TURNS, State, StepState, ToolCallResult,
 };
 use crate::chat::view::ChatView;
 use crate::ui::translation::Shown;
@@ -250,6 +250,13 @@ fn tell(told: &mut String, chat: &Chat, workspace: &Workspace, cx: &App) {
         let _ = writeln!(told, "  Waiting: {waiting}");
     }
     let _ = writeln!(told, "  Input: {:?}", view.input().read(cx).text());
+    if !view.attached().is_empty() {
+        let _ = writeln!(
+            told,
+            "  Attached to the next line: {}",
+            describe_attached(view.attached())
+        );
+    }
     if let Some(input) = view.goal_input() {
         let _ = writeln!(told, "  Goal input, open: {:?}", input.read(cx).text());
     }
@@ -360,11 +367,22 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
     told.push('\n');
 }
 
+/// What the human handed a chat, each by its chip's name and where it
+/// is from.
+fn describe_attached(attached: &[Attachment]) -> String {
+    attached
+        .iter()
+        .map(|attachment| format!("{} ({})", attachment.label, attachment.uri))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// One entry of a conversation, on a line, or on more where its text
 /// has them.
 fn describe_entry(entry: &Entry) -> String {
     match entry {
         Entry::Human(text) => format!("human: {}", text_of(text)),
+        Entry::Attached(attached) => format!("attached: {}", describe_attached(attached)),
         Entry::Cox(text) => format!("cox, in the human's place: {}", text_of(text)),
         Entry::Reply(text) => format!("reply: {}", text_of(text)),
         Entry::Thought(text) => format!("thought: {}", text_of(text)),

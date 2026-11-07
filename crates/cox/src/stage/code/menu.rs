@@ -25,6 +25,7 @@ impl Code {
             "Ctrl-Shift-T"
         };
         let selected = self.chosen_text();
+        let handed = self.selected_attachment();
         let item = |id: &'static str, label: &'static str, key: &'static str| {
             div()
                 .id(id)
@@ -79,6 +80,17 @@ impl Code {
                             cx.notify();
                         },
                     )),
+                )
+            })
+            .when(!handed.text.trim().is_empty(), |menu| {
+                menu.child(
+                    item("add-to-chat", "Add to chat", crate::chat::hand::keys()).on_click(
+                        cx.listener(move |code, _, _, cx| {
+                            code.menu = None;
+                            crate::chat::hand::hand(handed.clone(), cx);
+                            cx.notify();
+                        }),
+                    ),
                 )
             });
         Some(deferred(anchored().position(at).child(menu)).with_priority(2))
