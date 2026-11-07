@@ -1,173 +1,305 @@
 //! Agents run on a schedule: a chat that opens at the times the human
 //! says, and goes on its first line with no human there, as to research
-//! a topic every morning. Each is a file of the human's workflow (see
-//! [`crate::settings::workflow`]), in `schedules`, named after it, as
-//! `schedules/rust-news.md`, whose properties, the front matter between
-//! `---` lines at its top, say when it runs (`every`), where its chat
-//! works (`folder`), and what its agent does unasked (`allow`), and whose
-//! rest is the chat's first line:
+//! a topic every morning. Each is a trigger (see [`crate::trigger`]) that
+//! runs on `schedule`, at the times its `cron` says, in the time of the
+//! place Cox runs in, `by: new`, a new chat, whose first line is the
+//! trigger's text:
 //!
 //! ```markdown
 //! ---
-//! every: daily 09:00
+//! on:
+//!   schedule:
+//!     cron: "0 9 * * *"
+//! by: new
 //! folder: ~/notes
-//! allow:
-//!   - fetch:*
-//!   - search:*
+//! allow: [fetch:*, search:*]
 //! ---
 //!
 //! Find out what changed in Rust since {last}.
 //! ```
 //!
-//! A project has schedules of its own too, in `.cox/schedules` in its
-//! folder, which its chats run in, as to look every few hours at what
-//! changed in it: they are written as the workflow's are, with no
-//! `folder`, since they work in the project.
+//! An earlier Cox kept them apart, in `schedules`, saying when they run
+//! with `every`, as `daily 09:00`: Cox reads those as triggers too, as
+//! the cron that means (see [`Cron::from_every`]).
 //!
 //! coxd looks every minute which are due, and opens a chat for each (see
 //! [`crate::daemon`]). When each last ran is kept where Cox keeps what
 //! lasts (see [`crate::storage::Kept::Schedules`]), so that a run Cox
 //! missed, as while the machine slept, runs once as Cox finds it due,
 //! however many were missed.
-//!
-//! The stage shows the schedules that run in its folder, with when each
-//! ran and runs next (see [`told`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use jiff::civil::{Time, Weekday};
+use jiff::civil::{Date, Time, Weekday};
+use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp, Zoned};
 
-/// The folder of the human's workflow that holds the schedules.
+/// The folder of the human's workflow where an earlier Cox kept the
+/// schedules, which Cox reads as triggers.
 pub const SCHEDULES: &str = "schedules";
 
-/// The folder of a project that holds its own schedules.
+/// The folder of a project where an earlier Cox kept its schedules.
 pub const PROJECT_SCHEDULES: &str = ".cox/schedules";
 
-/// When a schedule runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Every {
-    /// Each day, at that time, as `daily 09:00`.
-    Day(Time),
-    /// Each week, on that day, at that time, as `weekly mon 09:00`.
-    Week(Weekday, Time),
-    /// So many hours after it last ran, as `every 6h`.
-    Hours(i64),
+/// How far ahead Cox looks for the next time a cron says, in days: far
+/// enough for the 29th of February on a day of the week.
+const AHEAD: i64 = 366 * 8;
+
+/// The months, as a cron may name them.
+const MONTHS: [&str; 12] = [
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+];
+
+/// The days of the week, from Sunday, as a cron may name them.
+const DAYS: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+/// The times a schedule runs, as cron writes them: the minutes, hours,
+/// days of the month, months and days of the week, as `0 9 * * 1-5` for
+/// nine on each weekday. Each field is `*`, a number, a range `a-b`, any
+/// of them `/` a step, or a list of those, `,` between them; months and
+/// days of the week may be named by their first three letters, and a day
+/// of the week is 0 or 7 for Sunday. When both days are given, a day
+/// either names runs it, as cron has it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cron {
+    text: String,
+    minutes: u64,
+    hours: u32,
+    days: u32,
+    months: u16,
+    weekdays: u8,
+    any_day: bool,
+    any_weekday: bool,
 }
 
-impl Every {
-    /// What `text` says, as a schedule's `every` writes it, or why it
-    /// says nothing Cox knows.
+impl Cron {
+    /// The times `text` says.
     ///
     /// # Errors
     ///
-    /// When `text` is none of `daily HH:MM`, `weekly <day> HH:MM` and
-    /// `every <n>h`.
+    /// When `text` is not five fields cron knows.
     pub fn parse(text: &str) -> Result<Self, String> {
+        let fields: Vec<&str> = text.split_whitespace().collect();
+        let [minutes, hours, days, months, weekdays] = fields.as_slice() else {
+            return Err(format!(
+                "{text:?} is no cron: five fields, minute, hour, day, month and day of \
+                 the week, as \"0 9 * * *\""
+            ));
+        };
+        let said = |why: String| format!("{text:?}: {why}");
+        let weekday_bits = field(weekdays, 0, 7, &DAYS, 0).map_err(said)?;
+        Ok(Self {
+            text: fields.join(" "),
+            minutes: field(minutes, 0, 59, &[], 0).map_err(said)?,
+            hours: u32::try_from(field(hours, 0, 23, &[], 0).map_err(said)?).unwrap_or(0),
+            days: u32::try_from(field(days, 1, 31, &[], 0).map_err(said)?).unwrap_or(0),
+            months: u16::try_from(field(months, 1, 12, &MONTHS, 1).map_err(said)?).unwrap_or(0),
+            // Sunday is 0, and 7 too.
+            weekdays: u8::try_from((weekday_bits | (weekday_bits >> 7)) & 0x7f).unwrap_or(0),
+            any_day: days.starts_with('*'),
+            any_weekday: weekdays.starts_with('*'),
+        })
+    }
+
+    /// The cron of what an earlier Cox's schedule said with `every`:
+    /// `daily HH:MM`, `weekly <day> HH:MM`, or `every <n>h`, which runs
+    /// on the hours a multiple of `n` from midnight, as the clock has
+    /// them, rather than `n` hours after it last ran.
+    ///
+    /// # Errors
+    ///
+    /// When `text` is none of those.
+    pub fn from_every(text: &str) -> Result<Self, String> {
         let words: Vec<&str> = text.split_whitespace().collect();
         let time = |text: &str| {
             Time::strptime("%H:%M", text).map_err(|_| format!("{text:?} is no time, as 09:00"))
         };
-        match words.as_slice() {
-            ["daily", at] => Ok(Self::Day(time(at)?)),
-            ["weekly", day, at] => Ok(Self::Week(weekday(day)?, time(at)?)),
-            ["every", hours] => hours
-                .strip_suffix('h')
-                .and_then(|hours| hours.parse().ok())
-                .filter(|&hours: &i64| hours > 0)
-                .map(Self::Hours)
-                .ok_or_else(|| format!("{hours:?} is no number of hours, as 6h")),
-            _ => Err(format!(
-                "{text:?} says no time Cox knows: daily 09:00, weekly mon 09:00 or every 6h"
-            )),
+        let cron = match words.as_slice() {
+            ["daily", at] => {
+                let at = time(at)?;
+                format!("{} {} * * *", at.minute(), at.hour())
+            }
+            ["weekly", day, at] => {
+                let at = time(at)?;
+                let day = weekday(day)?.to_sunday_zero_offset();
+                format!("{} {} * * {day}", at.minute(), at.hour())
+            }
+            ["every", hours] => {
+                let hours = hours
+                    .strip_suffix('h')
+                    .and_then(|hours| hours.parse::<u32>().ok())
+                    .filter(|&hours| hours > 0)
+                    .ok_or_else(|| format!("{hours:?} is no number of hours, as 6h"))?;
+                match hours {
+                    1 => "0 * * * *".to_owned(),
+                    2..24 => format!("0 */{hours} * * *"),
+                    _ if hours % 24 == 0 => format!("0 0 */{} * *", hours / 24),
+                    _ => return Err(format!("every {hours}h is neither under a day nor days")),
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "{text:?} says no time Cox knows: daily 09:00, weekly mon 09:00 or every 6h"
+                ));
+            }
+        };
+        Self::parse(&cron)
+    }
+
+    /// Whether it runs on `date`.
+    fn on(&self, date: Date) -> bool {
+        let month = self.months & (1 << date.month()) != 0;
+        let day = self.days & (1 << date.day()) != 0;
+        let weekday = self.weekdays & (1 << date.weekday().to_sunday_zero_offset()) != 0;
+        month
+            && match (self.any_day, self.any_weekday) {
+                (true, true) => true,
+                (true, false) => weekday,
+                (false, true) => day,
+                (false, false) => day || weekday,
+            }
+    }
+
+    /// The first time it says after `after`, in `zone`.
+    #[must_use]
+    pub fn after(&self, after: Timestamp, zone: &TimeZone) -> Option<Zoned> {
+        let first = after.to_zoned(zone.clone()).date();
+        for ahead in 0..=AHEAD {
+            let date = first.checked_add(Span::new().days(ahead)).ok()?;
+            if !self.on(date) {
+                continue;
+            }
+            for hour in (0..24i8).filter(|&hour| self.hours & (1 << hour) != 0) {
+                for minute in (0..60i8).filter(|&minute| self.minutes & (1 << minute) != 0) {
+                    let then = date.at(hour, minute, 0, 0).to_zoned(zone.clone()).ok()?;
+                    if then.timestamp() > after {
+                        return Some(then);
+                    }
+                }
+            }
         }
+        None
     }
 
     /// Whether a schedule that ran `last`, if it did, is due `now`: when
-    /// the last time it was to run since is past, or, run every so many
-    /// hours, so many have gone by. One that never ran is due at once,
+    /// a time it says is past since. One that never ran is due at once,
     /// for the human to see what it does.
     #[must_use]
-    pub fn due(self, last: Option<Timestamp>, now: &Zoned) -> bool {
+    pub fn due(&self, last: Option<Timestamp>, now: &Zoned) -> bool {
         let Some(last) = last else {
             return true;
         };
-        match self {
-            Self::Hours(hours) => last
-                .checked_add(Span::new().hours(hours))
-                .is_ok_and(|next| next <= now.timestamp()),
-            Self::Day(_) | Self::Week(..) => self
-                .last_before(now)
-                .is_some_and(|was| last < was.timestamp()),
-        }
+        self.after(last, now.time_zone())
+            .is_some_and(|next| next.timestamp() <= now.timestamp())
     }
 
     /// When a schedule that ran `last`, if it did, runs next: `now`,
     /// when it is due.
     #[must_use]
-    pub fn next(self, last: Option<Timestamp>, now: &Zoned) -> Option<Zoned> {
+    pub fn next(&self, last: Option<Timestamp>, now: &Zoned) -> Option<Zoned> {
         if self.due(last, now) {
             return Some(now.clone());
         }
-        let (day, at) = match self {
-            Self::Hours(hours) => {
-                let next = last?.checked_add(Span::new().hours(hours)).ok()?;
-                return Some(next.to_zoned(now.time_zone().clone()));
-            }
-            Self::Day(at) => (None, at),
-            Self::Week(day, at) => (Some(day), at),
-        };
-        let today = now.date();
-        (0..8).find_map(|ahead| {
-            let date = today.checked_add(Span::new().days(ahead)).ok()?;
-            if day.is_some_and(|day| date.weekday() != day) {
-                return None;
-            }
-            let then = date
-                .to_datetime(at)
-                .to_zoned(now.time_zone().clone())
-                .ok()?;
-            (then.timestamp() > now.timestamp()).then_some(then)
-        })
+        self.after(last?, now.time_zone())
     }
 
-    /// The last time, up to `now`, that a schedule run each day or week
-    /// was to run.
-    fn last_before(self, now: &Zoned) -> Option<Zoned> {
-        let (day, at) = match self {
-            Self::Day(at) => (None, at),
-            Self::Week(day, at) => (Some(day), at),
-            Self::Hours(_) => return None,
+    /// It in words, as the stage shows it, as `Daily 09:00`, or else as
+    /// cron writes it.
+    #[must_use]
+    pub fn words(&self) -> String {
+        let fields: Vec<&str> = self.text.split(' ').collect();
+        let [minute, hour, day, month, weekday] = fields.as_slice() else {
+            return self.text.clone();
         };
-        let today = now.date();
-        (0..8).find_map(|back| {
-            let date = today.checked_sub(Span::new().days(back)).ok()?;
-            if day.is_some_and(|day| date.weekday() != day) {
-                return None;
-            }
-            let then = date
-                .to_datetime(at)
-                .to_zoned(now.time_zone().clone())
-                .ok()?;
-            (then.timestamp() <= now.timestamp()).then_some(then)
-        })
+        let number = |field: &str| field.parse::<u8>().ok();
+        let every = |field: &str| field.strip_prefix("*/").and_then(number);
+        let any = |field: &&str| *field == "*";
+        let at = number(hour)
+            .zip(number(minute))
+            .map(|(hour, minute)| format!("{hour:02}:{minute:02}"));
+        let days = || {
+            const NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+            (0..7)
+                .filter(|day| self.weekdays & (1 << day) != 0)
+                .map(|day| NAMES[day])
+                .collect::<Vec<_>>()
+        };
+        match (at, any(day), any(month), any(weekday)) {
+            (Some(at), true, true, true) => format!("Daily {at}"),
+            (Some(at), true, true, false) => match days().as_slice() {
+                ["Mon", "Tue", "Wed", "Thu", "Fri"] => format!("Weekdays {at}"),
+                [one] => format!("Weekly {one} {at}"),
+                many => format!("{} {at}", many.join(", ")),
+            },
+            (None, true, true, true) => match (every(hour), number(minute), every(minute)) {
+                (Some(hours), Some(0), _) => format!("Every {hours} hours"),
+                (Some(hours), Some(minute), _) => format!("Every {hours} hours at :{minute:02}"),
+                (None, Some(minute), _) if any(hour) => format!("Hourly at :{minute:02}"),
+                (None, None, Some(minutes)) if any(hour) => format!("Every {minutes} minutes"),
+                _ => self.text.clone(),
+            },
+            _ => self.text.clone(),
+        }
     }
 }
 
-impl std::fmt::Display for Every {
-    /// As a schedule's `every` writes it.
+impl std::fmt::Display for Cron {
+    /// As cron writes it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let at = |at: &Time| at.strftime("%H:%M").to_string();
-        match self {
-            Self::Day(time) => write!(f, "daily {}", at(time)),
-            Self::Week(day, time) => {
-                let day = format!("{day:?}").to_ascii_lowercase();
-                write!(f, "weekly {} {}", &day[..3], at(time))
+        f.write_str(&self.text)
+    }
+}
+
+impl serde::Serialize for Cron {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text)
+    }
+}
+
+/// The values a field of a cron says, from `min` to `max`, as bits:
+/// names, if it has them, standing for `offset` and those after it.
+fn field(text: &str, min: u32, max: u32, names: &[&str], offset: u32) -> Result<u64, String> {
+    let value = |text: &str| {
+        names
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(text))
+            .and_then(|at| u32::try_from(at).ok())
+            .map(|at| at + offset)
+            .or_else(|| text.parse().ok())
+            .filter(|value| (min..=max).contains(value))
+            .ok_or_else(|| format!("{text:?} is not from {min} to {max}"))
+    };
+    let mut bits = 0u64;
+    for item in text.split(',') {
+        let (range, step) = match item.split_once('/') {
+            Some((range, step)) => (
+                range,
+                step.parse::<u32>()
+                    .ok()
+                    .filter(|&step| step > 0)
+                    .ok_or_else(|| format!("{step:?} is no step"))?,
+            ),
+            None => (item, 1),
+        };
+        let (from, to) = match range.split_once('-') {
+            _ if range == "*" => (min, max),
+            Some((from, to)) => (value(from)?, value(to)?),
+            // `5/15` goes from 5 on.
+            None if step > 1 => (value(range)?, max),
+            None => {
+                let at = value(range)?;
+                (at, at)
             }
-            Self::Hours(hours) => write!(f, "every {hours}h"),
+        };
+        if from > to {
+            return Err(format!("{range:?} goes backwards"));
+        }
+        for at in (from..=to).step_by(usize::try_from(step).unwrap_or(1)) {
+            bits |= 1 << at;
         }
     }
+    Ok(bits)
 }
 
 /// The day `text` names, by its first three letters, as `mon`.
@@ -185,287 +317,40 @@ fn weekday(text: &str) -> Result<Weekday, String> {
     Ok(day)
 }
 
-/// A schedule, as its file has it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Schedule {
-    /// What it goes by: its file's name, less `.md`.
-    pub name: String,
-    /// What it is kept by, apart from every other: its name for one of
-    /// the workflow's, and its file's path for a project's, whose names
-    /// another project may have too.
-    pub id: String,
-    /// Its file.
-    pub file: PathBuf,
-    /// When it runs.
-    pub every: Every,
-    /// Where its chat works, or, when `None`, Cox's home, as Cox's own.
-    pub folder: Option<PathBuf>,
-    /// The patterns of the permission requests its agent goes on with
-    /// unasked, as `open_chat`'s `allow` takes them.
-    pub allow: Vec<String>,
-    /// Its chat's first line, with `{name}`, `{now}` and `{last}` standing
-    /// for its name, when it runs and when it ran last.
-    pub line: String,
-}
-
-impl Schedule {
-    /// The schedule of the file at `path`, from the home directory
-    /// `user` for a folder from `~`, or, for a schedule of the project
-    /// whose folder is `project`, working there, unless it is no Markdown
-    /// file or says nothing of when it runs.
-    ///
-    /// # Errors
-    ///
-    /// When it says when it runs, or where, in a way Cox does not know.
-    pub fn read(
-        path: &Path,
-        user: Option<&Path>,
-        project: Option<&Path>,
-    ) -> Result<Option<Self>, String> {
-        if path.extension().is_none_or(|extension| extension != "md") {
-            return Ok(None);
-        }
-        let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
-            return Ok(None);
-        };
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Ok(None);
-        };
-        let (properties, line) = crate::wiki::front(&text);
-        let value = |key| {
-            properties
-                .iter()
-                .find_map(|line| crate::wiki::property(line, key))
-                .map(unquoted)
-                .filter(|value| !value.is_empty())
-        };
-        let Some(every) = value("every") else {
-            return Ok(None);
-        };
-        let said = |why: String| format!("{}: {why}", path.display());
-        let every = Every::parse(every).map_err(said)?;
-        let folder = match project {
-            Some(project) => Some(project.to_owned()),
-            None => value("folder")
-                .map(|folder| crate::settings::folder_of(folder, user))
-                .transpose()
-                .map_err(|why| said(why.to_owned()))?,
-        };
-        let id = match project {
-            Some(_) => path.display().to_string(),
-            None => name.to_owned(),
-        };
-        Ok(Some(Self {
-            name: name.to_owned(),
-            id,
-            file: path.to_owned(),
-            every,
-            folder,
-            allow: list(&properties, "allow"),
-            line: line.trim().to_owned(),
-        }))
-    }
-
-    /// The first line of its run `now`, which ran last `last`, if it did.
-    #[must_use]
-    pub fn line(&self, now: &Zoned, last: Option<Timestamp>) -> String {
-        let at = |when: &Zoned| when.strftime("%Y-%m-%d %H:%M").to_string();
-        let last = last.map_or_else(
-            || "never".to_owned(),
-            |last| at(&last.to_zoned(now.time_zone().clone())),
-        );
-        crate::workflow::fill(
-            &self.line,
-            &[("name", &self.name), ("now", &at(now)), ("last", &last)],
-        )
-    }
-
-    /// What its chat is named, as it runs `now`.
-    #[must_use]
-    pub fn chat_name(&self, now: &Zoned) -> String {
-        format!("{} {}", self.name, now.strftime("%m/%d %H:%M"))
-    }
-}
-
-/// `value` without the quotes around it, if it has them.
-fn unquoted(value: &str) -> &str {
-    let value = value.trim();
-    ['"', '\'']
-        .iter()
-        .find_map(|&quote| value.strip_prefix(quote)?.strip_suffix(quote))
-        .unwrap_or(value)
-}
-
-/// The list the property `key` of `properties` sets, as YAML writes one:
-/// on its line, as `[read:*, fetch:*]`, or a line each after it, as `-
-/// read:*`.
-fn list(properties: &[&str], key: &str) -> Vec<String> {
-    let Some(at) = properties
-        .iter()
-        .position(|line| crate::wiki::property(line, key).is_some())
-    else {
-        return Vec::new();
-    };
-    let inline = crate::wiki::property(properties[at], key).unwrap_or_default();
-    if let Some(items) = inline
-        .strip_prefix('[')
-        .and_then(|items| items.strip_suffix(']'))
-    {
-        return items
-            .split(',')
-            .map(unquoted)
-            .filter(|item| !item.is_empty())
-            .map(str::to_owned)
-            .collect();
-    }
-    properties[at + 1..]
-        .iter()
-        .map_while(|line| line.trim_start().strip_prefix("- "))
-        .map(|item| unquoted(item).to_owned())
-        .filter(|item| !item.is_empty())
-        .collect()
-}
-
-/// The schedules in `workflow`, the folder of the human's workflow, by
-/// name, from the home directory `user`, saying in the log those Cox
-/// cannot read.
+/// What the schedule of `file`, named `name`, is kept by apart from
+/// every other: its name, for one an earlier Cox kept in the `schedules`
+/// of the human's `workflow`, as it kept them, and else its file's path.
 #[must_use]
-pub fn schedules(workflow: &Path, user: Option<&Path>) -> Vec<Schedule> {
-    read_all(&workflow.join(SCHEDULES), user, None)
+pub fn id(name: &str, file: &Path, workflow: &Path) -> String {
+    if file.parent() == Some(&workflow.join(SCHEDULES)) {
+        name.to_owned()
+    } else {
+        file.display().to_string()
+    }
 }
 
-/// The schedules of the project whose folder is `project`, by name, each
-/// working there, saying in the log those Cox cannot read.
+/// The first line of the run `now` of the schedule `name`, whose text is
+/// `text`, which ran last `last`, if it did: `{name}`, `{now}` and
+/// `{last}` standing for its name, when it runs and when it ran last, or
+/// `never`.
 #[must_use]
-pub fn of_project(project: &Path) -> Vec<Schedule> {
-    read_all(&project.join(PROJECT_SCHEDULES), None, Some(project))
+pub fn line(text: &str, name: &str, now: &Zoned, last: Option<Timestamp>) -> String {
+    let at = |when: &Zoned| when.strftime("%Y-%m-%d %H:%M").to_string();
+    let last = last.map_or_else(
+        || "never".to_owned(),
+        |last| at(&last.to_zoned(now.time_zone().clone())),
+    );
+    crate::workflow::fill(text, &[("name", name), ("now", &at(now)), ("last", &last)])
 }
 
-/// The schedules in `folder`, by name, as [`Schedule::read`] reads each,
-/// saying in the log those Cox cannot read.
-fn read_all(folder: &Path, user: Option<&Path>, project: Option<&Path>) -> Vec<Schedule> {
-    let (schedules, unread) = read_said(folder, user, project);
-    for why in unread {
-        tracing::warn!("a schedule does not run: {why}");
-    }
-    schedules
-}
-
-/// The schedules in `folder`, by name, as [`Schedule::read`] reads each,
-/// and why each of those Cox cannot read does not run.
-fn read_said(
-    folder: &Path,
-    user: Option<&Path>,
-    project: Option<&Path>,
-) -> (Vec<Schedule>, Vec<String>) {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return (Vec::new(), Vec::new());
-    };
-    let mut schedules = Vec::new();
-    let mut unread = Vec::new();
-    for entry in entries.filter_map(Result::ok) {
-        match Schedule::read(&entry.path(), user, project) {
-            Ok(schedule) => schedules.extend(schedule),
-            Err(why) => unread.push(why),
-        }
-    }
-    schedules.sort_by(|one, other| one.name.cmp(&other.name));
-    unread.sort();
-    (schedules, unread)
-}
-
-/// The schedules that run in `folder`, as the stage's Schedules page
-/// shows them, as JSON: the project's own, in `.cox/schedules` there,
-/// then those of the human's `workflow` whose chats work there, from the
-/// home directory `user`, which, naming no folder, work in `home`. The
-/// home shows every schedule: the workflow's, wherever they work, and
-/// the own of each of `projects`, by folder and name. Each says when it
-/// runs, where, what its agent does unasked, its first line, and its
-/// file, and, as `ran` keeps it, when it ran last and runs next, `now`;
-/// and why each schedule there Cox cannot read does not run.
+/// What the chat of the schedule `name` is named, as it runs `now`.
 #[must_use]
-pub fn told(
-    folder: &Path,
-    workflow: &Path,
-    user: Option<&Path>,
-    home: &Path,
-    projects: &[(PathBuf, String)],
-    ran: &Ran,
-    now: &Zoned,
-) -> serde_json::Value {
-    let (own, mut unread) = read_said(&folder.join(PROJECT_SCHEDULES), None, Some(folder));
-    let (theirs, unread_theirs) = read_said(&workflow.join(SCHEDULES), user, None);
-    let is_home = folder == home;
-    // The projects' own, each under its name, which only the home shows.
-    let mut others = Vec::new();
-    if is_home {
-        unread.extend(unread_theirs);
-        for (project, name) in projects {
-            if project == home {
-                continue;
-            }
-            let (schedules, unread_there) =
-                read_said(&project.join(PROJECT_SCHEDULES), None, Some(project));
-            unread.extend(unread_there);
-            others.extend(schedules.into_iter().map(|schedule| (schedule, name)));
-        }
-    }
-    let at = |when: Zoned| when.strftime("%Y-%m-%d %H:%M").to_string();
-    // Where a schedule's chat works: `~` for the home, or the name of the
-    // project of its folder, or else the folder.
-    let where_of = |schedule: &Schedule| {
-        let works = schedule.folder.as_deref().unwrap_or(home);
-        if works == home {
-            return "~".to_owned();
-        }
-        projects
-            .iter()
-            .find(|(project, _)| project == works)
-            .map_or_else(|| works.display().to_string(), |(_, name)| name.clone())
-    };
-    let row = |schedule: &Schedule, of: &str, project: Option<&String>| {
-        let last = ran.last(&schedule.id);
-        serde_json::json!({
-            "name": schedule.name,
-            "of": of,
-            "project": project,
-            "where": where_of(schedule),
-            "file": schedule.file,
-            "every": schedule.every.to_string(),
-            "allow": schedule.allow,
-            "line": schedule.line,
-            "last": last.map(|last| at(last.to_zoned(now.time_zone().clone()))),
-            "next": schedule.every.next(last, now).map(at),
-            "due": schedule.every.due(last, now),
-        })
-    };
-    let rows: Vec<serde_json::Value> = own
-        .iter()
-        .map(|schedule| row(schedule, "project", None))
-        .chain(
-            theirs
-                .iter()
-                .filter(|schedule| is_home || schedule.folder.as_deref().unwrap_or(home) == folder)
-                .map(|schedule| row(schedule, "workflow", None)),
-        )
-        .chain(
-            others
-                .iter()
-                .map(|(schedule, name)| row(schedule, "project", Some(name))),
-        )
-        .collect();
-    serde_json::json!({
-        "folder": folder,
-        "project": folder.join(PROJECT_SCHEDULES),
-        "workflow": workflow.join(SCHEDULES),
-        "home": is_home,
-        "schedules": rows,
-        "unread": unread,
-    })
+pub fn chat_name(name: &str, now: &Zoned) -> String {
+    format!("{name} {}", now.strftime("%m/%d %H:%M"))
 }
 
-/// When each schedule last ran, by its name, as Cox keeps it in the file
-/// at `path`.
+/// When each schedule last ran, by what it is kept by (see [`id`]), as
+/// Cox keeps it in the file at `path`.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Ran {
     path: Option<PathBuf>,
@@ -492,22 +377,22 @@ impl Ran {
         Self { path, last }
     }
 
-    /// When the schedule `name` last ran.
+    /// When the schedule `id` last ran.
     #[must_use]
-    pub fn last(&self, name: &str) -> Option<Timestamp> {
-        self.last.get(name).copied()
+    pub fn last(&self, id: &str) -> Option<Timestamp> {
+        self.last.get(id).copied()
     }
 
-    /// Keeps that the schedule `name` ran `now`.
-    pub fn ran(&mut self, name: &str, now: Timestamp) {
-        self.last.insert(name.to_owned(), now);
+    /// Keeps that the schedule `id` ran `now`.
+    pub fn ran(&mut self, id: &str, now: Timestamp) {
+        self.last.insert(id.to_owned(), now);
         let Some(path) = &self.path else {
             return;
         };
         let kept: BTreeMap<&str, String> = self
             .last
             .iter()
-            .map(|(name, when)| (name.as_str(), when.to_string()))
+            .map(|(id, when)| (id.as_str(), when.to_string()))
             .collect();
         let written = path
             .parent()
@@ -530,10 +415,10 @@ mod tests {
     use std::path::Path;
 
     use jiff::Zoned;
-    use jiff::civil::{Time, Weekday, date};
+    use jiff::civil::date;
     use jiff::tz::TimeZone;
 
-    use super::{Every, Ran, Schedule};
+    use super::{Cron, Ran};
 
     fn at(day: i8, hour: i8, minute: i8) -> Zoned {
         // 2026-11-02 is a Monday.
@@ -548,25 +433,57 @@ mod tests {
         at(day, hour, minute).timestamp().into()
     }
 
-    #[test]
-    fn when_a_schedule_runs_is_said_in_a_few_ways() {
-        assert_eq!(
-            Every::parse("daily 09:00"),
-            Ok(Every::Day(Time::constant(9, 0, 0, 0)))
-        );
-        assert_eq!(
-            Every::parse("weekly Mon 18:30"),
-            Ok(Every::Week(Weekday::Monday, Time::constant(18, 30, 0, 0)))
-        );
-        assert_eq!(Every::parse("every 6h"), Ok(Every::Hours(6)));
-        assert!(Every::parse("every 0h").is_err());
-        assert!(Every::parse("daily 9am").is_err());
-        assert!(Every::parse("hourly").is_err());
+    fn cron(text: &str) -> Cron {
+        Cron::parse(text).unwrap()
     }
 
     #[test]
-    fn a_daily_schedule_runs_once_its_time_is_past_however_many_were_missed() {
-        let daily = Every::parse("daily 09:00").unwrap();
+    fn a_cron_says_when_in_five_fields() {
+        assert!(Cron::parse("0 9 * *").is_err());
+        assert!(Cron::parse("60 9 * * *").is_err());
+        assert!(Cron::parse("0 9 * * 8").is_err());
+        assert!(Cron::parse("0 9-5 * * *").is_err());
+        assert!(Cron::parse("*/0 * * * *").is_err());
+        assert_eq!(cron("0  9 * * *").to_string(), "0 9 * * *");
+        // Sunday is 0 and 7, and days and months go by their names too.
+        assert_eq!(
+            cron("0 9 * * 7"),
+            Cron {
+                text: "0 9 * * 7".to_owned(),
+                ..cron("0 9 * * 0")
+            }
+        );
+        assert_eq!(
+            cron("0 9 * jan sun").after(ran(2, 0, 0).unwrap(), at(2, 0, 0).time_zone()),
+            Some(
+                date(2027, 1, 3)
+                    .at(9, 0, 0, 0)
+                    .to_zoned(TimeZone::fixed(jiff::tz::offset(9)))
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn a_cron_runs_next_at_the_first_time_it_says() {
+        let zone = at(2, 0, 0).time_zone().clone();
+        let after = |text: &str, day, hour, minute| {
+            cron(text).after(ran(day, hour, minute).unwrap(), &zone)
+        };
+        assert_eq!(after("0 9 * * *", 3, 8, 0), Some(at(3, 9, 0)));
+        assert_eq!(after("0 9 * * *", 3, 9, 0), Some(at(4, 9, 0)));
+        assert_eq!(after("0 */6 * * *", 3, 7, 0), Some(at(3, 12, 0)));
+        assert_eq!(after("*/15 * * * *", 3, 7, 1), Some(at(3, 7, 15)));
+        // Weekdays: from Friday to Monday.
+        assert_eq!(after("30 8 * * 1-5", 6, 9, 0), Some(at(9, 8, 30)));
+        // Both days given: either runs it.
+        assert_eq!(after("0 0 15 * 3", 3, 1, 0), Some(at(4, 0, 0)));
+        assert_eq!(after("0 0 1,15 * *", 3, 1, 0), Some(at(15, 0, 0)));
+    }
+
+    #[test]
+    fn a_schedule_runs_once_its_time_is_past_however_many_were_missed() {
+        let daily = cron("0 9 * * *");
         // Never ran: at once.
         assert!(daily.due(None, &at(3, 8, 59)));
         // Ran at nine: not again until nine tomorrow.
@@ -575,111 +492,59 @@ mod tests {
         // Missed for days, it runs once, and then waits.
         assert!(daily.due(ran(1, 9, 0), &at(5, 7, 0)));
         assert!(!daily.due(ran(5, 7, 0), &at(5, 8, 0)));
+        assert_eq!(daily.next(None, &at(3, 8, 0)), Some(at(3, 8, 0)));
+        assert_eq!(daily.next(ran(3, 9, 0), &at(3, 10, 0)), Some(at(4, 9, 0)));
     }
 
     #[test]
-    fn a_weekly_schedule_runs_on_its_day() {
-        let weekly = Every::parse("weekly wed 10:00").unwrap();
-        assert!(!weekly.due(ran(2, 12, 0), &at(4, 9, 0)));
-        assert!(weekly.due(ran(2, 12, 0), &at(4, 10, 0)));
-        assert!(!weekly.due(ran(4, 10, 0), &at(10, 10, 0)));
-        assert!(weekly.due(ran(4, 10, 0), &at(11, 10, 0)));
+    fn what_an_earlier_cox_said_every_is_a_cron() {
+        let every = |text: &str| Cron::from_every(text).map(|cron| cron.to_string());
+        assert_eq!(every("daily 09:00").as_deref(), Ok("0 9 * * *"));
+        assert_eq!(every("weekly Mon 18:30").as_deref(), Ok("30 18 * * 1"));
+        assert_eq!(every("every 6h").as_deref(), Ok("0 */6 * * *"));
+        assert_eq!(every("every 1h").as_deref(), Ok("0 * * * *"));
+        assert_eq!(every("every 48h").as_deref(), Ok("0 0 */2 * *"));
+        assert!(every("every 0h").is_err());
+        assert!(every("every 30h").is_err());
+        assert!(every("daily 9am").is_err());
+        assert!(every("hourly").is_err());
     }
 
     #[test]
-    fn a_schedule_run_every_so_many_hours_runs_at_once_and_then_so_long_after() {
-        let hours = Every::parse("every 6h").unwrap();
-        assert!(hours.due(None, &at(3, 1, 0)));
-        assert!(!hours.due(ran(3, 1, 0), &at(3, 6, 59)));
-        assert!(hours.due(ran(3, 1, 0), &at(3, 7, 0)));
+    fn a_cron_is_shown_in_words_where_it_has_them() {
+        let words = |text: &str| cron(text).words();
+        assert_eq!(words("0 9 * * *"), "Daily 09:00");
+        assert_eq!(words("30 8 * * 1-5"), "Weekdays 08:30");
+        assert_eq!(words("0 9 * * mon"), "Weekly Mon 09:00");
+        assert_eq!(words("0 9 * * 1,3"), "Mon, Wed 09:00");
+        assert_eq!(words("0 */6 * * *"), "Every 6 hours");
+        assert_eq!(words("15 * * * *"), "Hourly at :15");
+        assert_eq!(words("*/10 * * * *"), "Every 10 minutes");
+        assert_eq!(words("0 9 1 * *"), "0 9 1 * *");
     }
 
     #[test]
-    fn a_schedule_is_a_file_of_the_workflow() {
-        let workflow = std::env::temp_dir().join(format!("cox-schedules-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&workflow);
-        let schedules = workflow.join("schedules");
-        std::fs::create_dir_all(&schedules).unwrap();
-        std::fs::write(
-            schedules.join("rust-news.md"),
-            "---\nevery: \"daily 09:00\"\nfolder: ~/notes\nallow:\n  - fetch:*\n  - 'search:*'\n---\n\nFind out what changed in Rust since {last}, as {name}.\n",
-        )
-        .unwrap();
-        std::fs::write(
-            schedules.join("tidy.md"),
-            "---\nevery: every 6h\nallow: [read:*, \"edit:*\"]\n---\nTidy up.\n",
-        )
-        .unwrap();
-        std::fs::write(schedules.join("broken.md"), "---\nevery: soon\n---\nNo.\n").unwrap();
-        std::fs::write(schedules.join("notes.md"), "Not a schedule.\n").unwrap();
-        std::fs::write(schedules.join("readme.txt"), "---\nevery: every 1h\n---\n").unwrap();
-
-        let found = super::schedules(&workflow, Some(Path::new("/home/me")));
+    fn a_schedule_of_an_earlier_cox_is_kept_by_its_name() {
+        let workflow = Path::new("/w");
         assert_eq!(
-            found,
-            [
-                Schedule {
-                    name: "rust-news".to_owned(),
-                    id: "rust-news".to_owned(),
-                    file: schedules.join("rust-news.md"),
-                    every: Every::Day(Time::constant(9, 0, 0, 0)),
-                    folder: Some("/home/me/notes".into()),
-                    allow: vec!["fetch:*".to_owned(), "search:*".to_owned()],
-                    line: "Find out what changed in Rust since {last}, as {name}.".to_owned(),
-                },
-                Schedule {
-                    name: "tidy".to_owned(),
-                    id: "tidy".to_owned(),
-                    file: schedules.join("tidy.md"),
-                    every: Every::Hours(6),
-                    folder: None,
-                    allow: vec!["read:*".to_owned(), "edit:*".to_owned()],
-                    line: "Tidy up.".to_owned(),
-                },
-            ]
-        );
-        let news = &found[0];
-        assert_eq!(
-            news.line(&at(3, 9, 30), None),
-            "Find out what changed in Rust since never, as rust-news."
+            super::id("news", Path::new("/w/schedules/news.md"), workflow),
+            "news"
         );
         assert_eq!(
-            news.line(&at(4, 9, 0), ran(3, 9, 30)),
-            "Find out what changed in Rust since 2026-11-03 09:30, as rust-news."
+            super::id("news", Path::new("/w/triggers/news.md"), workflow),
+            "/w/triggers/news.md"
         );
-        assert_eq!(news.chat_name(&at(3, 9, 30)), "rust-news 11/03 09:30");
-        let _ = std::fs::remove_dir_all(&workflow);
-    }
-
-    #[test]
-    fn a_project_has_schedules_of_its_own_which_work_in_it() {
-        let project =
-            std::env::temp_dir().join(format!("cox-project-schedules-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&project);
-        let schedules = project.join(".cox/schedules");
-        std::fs::create_dir_all(&schedules).unwrap();
-        // Where it works is the project, whatever it says.
-        std::fs::write(
-            schedules.join("tidy.md"),
-            "---\nevery: every 6h\nfolder: ~/elsewhere\n---\nTidy {name} up.\n",
-        )
-        .unwrap();
-
-        let tidy = schedules.join("tidy.md").display().to_string();
         assert_eq!(
-            super::of_project(&project),
-            [Schedule {
-                name: "tidy".to_owned(),
-                id: tidy,
-                file: schedules.join("tidy.md"),
-                every: Every::Hours(6),
-                folder: Some(project.clone()),
-                allow: Vec::new(),
-                line: "Tidy {name} up.".to_owned(),
-            }]
+            super::line(
+                "Since {last}, as {name}.",
+                "news",
+                &at(4, 9, 0),
+                ran(3, 9, 30)
+            ),
+            "Since 2026-11-03 09:30, as news."
         );
-        assert_eq!(super::schedules(&project, None), []);
-        let _ = std::fs::remove_dir_all(&project);
+        assert_eq!(super::line("{last}", "news", &at(4, 9, 0), None), "never");
+        assert_eq!(super::chat_name("news", &at(3, 9, 30)), "news 11/03 09:30");
     }
 
     #[test]
@@ -696,127 +561,5 @@ mod tests {
             ran(3, 9, 30)
         );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn a_schedule_runs_next_when_its_time_comes_again() {
-        let daily = Every::parse("daily 09:00").unwrap();
-        assert_eq!(daily.next(None, &at(3, 8, 0)), Some(at(3, 8, 0)));
-        assert_eq!(daily.next(ran(3, 9, 0), &at(3, 10, 0)), Some(at(4, 9, 0)));
-        let weekly = Every::parse("weekly wed 10:00").unwrap();
-        assert_eq!(
-            weekly.next(ran(4, 10, 0), &at(5, 9, 0)),
-            Some(at(11, 10, 0))
-        );
-        let hours = Every::parse("every 6h").unwrap();
-        assert_eq!(hours.next(ran(3, 1, 0), &at(3, 2, 0)), Some(at(3, 7, 0)));
-        assert_eq!(daily.to_string(), "daily 09:00");
-        assert_eq!(weekly.to_string(), "weekly wed 10:00");
-        assert_eq!(hours.to_string(), "every 6h");
-    }
-
-    #[test]
-    fn the_stage_is_told_the_schedules_that_run_in_its_folder() {
-        let root = std::env::temp_dir().join(format!("cox-told-schedules-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let project = root.join("project");
-        let home = root.join("home");
-        let workflow = root.join("workflow");
-        std::fs::create_dir_all(project.join(".cox/schedules")).unwrap();
-        std::fs::create_dir_all(workflow.join("schedules")).unwrap();
-        std::fs::write(
-            project.join(".cox/schedules/triage.md"),
-            "---\nevery: every 6h\n---\nTriage.\n",
-        )
-        .unwrap();
-        std::fs::write(
-            project.join(".cox/schedules/broken.md"),
-            "---\nevery: soon\n---\nNo.\n",
-        )
-        .unwrap();
-        std::fs::write(
-            workflow.join("schedules/news.md"),
-            format!(
-                "---\nevery: daily 09:00\nfolder: {}\nallow: [fetch:*]\n---\nNews.\n",
-                project.display()
-            ),
-        )
-        .unwrap();
-        std::fs::write(
-            workflow.join("schedules/tidy.md"),
-            "---\nevery: every 6h\n---\nTidy.\n",
-        )
-        .unwrap();
-        let mut kept = Ran::read(None);
-        kept.ran(
-            &project
-                .join(".cox/schedules/triage.md")
-                .display()
-                .to_string(),
-            at(3, 1, 0).timestamp(),
-        );
-
-        let projects = [(project.clone(), "app".to_owned())];
-        let told = super::told(
-            &project,
-            &workflow,
-            None,
-            &home,
-            &projects,
-            &kept,
-            &at(3, 2, 0),
-        );
-        let names: Vec<_> = told["schedules"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|row| (row["name"].as_str().unwrap(), row["of"].as_str().unwrap()))
-            .collect();
-        assert_eq!(names, [("triage", "project"), ("news", "workflow")]);
-        let triage = &told["schedules"][0];
-        assert_eq!(triage["every"], "every 6h");
-        assert_eq!(triage["last"], "2026-11-03 01:00");
-        assert_eq!(triage["next"], "2026-11-03 07:00");
-        assert_eq!(triage["due"], false);
-        assert_eq!(told["schedules"][1]["due"], true);
-        assert_eq!(told["schedules"][1]["allow"][0], "fetch:*");
-        assert_eq!(told["unread"].as_array().unwrap().len(), 1);
-
-        assert_eq!(told["schedules"][1]["where"], "app");
-
-        // The home shows every schedule: the workflow's, wherever they
-        // work, then each project's own.
-        let told = super::told(
-            &home,
-            &workflow,
-            None,
-            &home,
-            &projects,
-            &kept,
-            &at(3, 2, 0),
-        );
-        let rows: Vec<_> = told["schedules"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|row| {
-                (
-                    row["name"].as_str().unwrap(),
-                    row["where"].as_str().unwrap(),
-                    row["project"].as_str(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            rows,
-            [
-                ("news", "app", None),
-                ("tidy", "~", None),
-                ("triage", "app", Some("app")),
-            ]
-        );
-        assert_eq!(told["home"], true);
-        assert_eq!(told["unread"].as_array().unwrap().len(), 1);
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

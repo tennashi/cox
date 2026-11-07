@@ -207,7 +207,6 @@ impl Stage {
                 ACTIVITY => Icon::Inbox,
                 MAP => Icon::Map,
                 "wiki" => Icon::Book,
-                "schedules" => Icon::Clock,
                 "triggers" => Icon::Bolt,
                 _ => Icon::Plug,
             };

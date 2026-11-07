@@ -95,10 +95,11 @@ pub fn waiting(root: &Path) -> usize {
 
 /// What goes on in the folder `root`, as JSON, from how the chats stand
 /// now, the human's `wiki`, the folder's own, the sources at `raw`, and
-/// `schedules`, as [`crate::schedule::told`] tells them.
+/// `triggers`, as [`crate::trigger::told`] tells them, of which the
+/// schedules ran.
 #[must_use]
-pub fn told(root: &Path, wiki: &Path, raw: &Path, schedules: &Value) -> Value {
-    told_of(&now(), root, wiki, raw, schedules)
+pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
+    told_of(&now(), root, wiki, raw, triggers)
 }
 
 /// The project of `folder`, by its name, as `told` says it.
@@ -134,27 +135,29 @@ fn waiting_in(told: &Told, root: &Path) -> Vec<Value> {
 
 /// What goes on in the folder `root`, as [`told`] tells it, the chats
 /// standing as `told` says.
-fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, schedules: &Value) -> Value {
+fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {
     let home = root == told.home;
     let waiting = waiting_in(told, root);
     let name = name_of(told, root);
     let mut happened = Vec::new();
-    for schedule in schedules["schedules"].as_array().into_iter().flatten() {
-        if let Some(last) = schedule["last"].as_str() {
+    for folder in triggers["folders"].as_array().into_iter().flatten() {
+        let place = folder["name"].as_str().unwrap_or("~");
+        for trigger in folder["triggers"].as_array().into_iter().flatten() {
+            let schedule = &trigger["schedule"];
+            let Some(last) = schedule["last"].as_str() else {
+                continue;
+            };
+            let every = schedule["every"].as_str().unwrap_or_default();
             happened.push(json!({
                 "when": last,
                 "kind": "schedule",
-                "title": schedule["name"],
+                "title": trigger["name"],
                 "says": if home {
-                    format!(
-                        "ran in {}, {}",
-                        schedule["where"].as_str().unwrap_or_default(),
-                        schedule["every"].as_str().unwrap_or_default()
-                    )
+                    format!("ran in {place}, {every}")
                 } else {
-                    format!("ran, {}", schedule["every"].as_str().unwrap_or_default())
+                    format!("ran, {every}")
                 },
-                "href": "cox://schedules/",
+                "href": "cox://triggers/",
             }));
         }
     }
@@ -337,11 +340,11 @@ mod tests {
         crate::raw::keep(&raw, "news", source, kept(Some("app"))).unwrap();
         crate::raw::keep(&raw, "elsewhere", source, kept(Some("other"))).unwrap();
         let schedules = json!({
-            "home": false,
-            "schedules": [
-                {"name": "triage", "every": "every 6h", "last": "2026-11-07 09:00"},
-                {"name": "never", "every": "daily 09:00", "last": null},
-            ],
+            "folders": [{"folder": root, "name": null, "triggers": [
+                {"name": "triage", "schedule": {"every": "Every 6 hours", "last": "2026-11-07 09:00"}},
+                {"name": "never", "schedule": {"every": "Daily 09:00", "last": null}},
+                {"name": "ci"},
+            ]}],
         });
         let home = root.join("home");
         let told = Told {
@@ -380,9 +383,11 @@ mod tests {
         // pages written from any, and the sources kept in any, but not
         // the project's own wiki, which only the project shows.
         let schedules = json!({
-            "home": true,
-            "schedules": [
-                {"name": "triage", "every": "every 6h", "where": "app", "last": "2026-11-07 09:00"},
+            "folders": [
+                {"folder": home, "name": null, "triggers": []},
+                {"folder": root, "name": "app", "triggers": [
+                    {"name": "triage", "schedule": {"every": "Every 6 hours", "last": "2026-11-07 09:00"}},
+                ]},
             ],
         });
         let json = told_of(&told, &home, &wiki, &raw, &schedules);
@@ -400,7 +405,7 @@ mod tests {
         assert_eq!(
             said,
             [
-                ("schedule", "ran in app, every 6h"),
+                ("schedule", "ran in app, Every 6 hours"),
                 ("source", "kept in elsewhere by news in other"),
                 ("source", "kept in news by news in app"),
                 ("wiki", "in other, chat \"two\""),
