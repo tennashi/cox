@@ -655,7 +655,7 @@ time, from those of its chats not archived, that of the chat it is
 first shown for first, each tab of its chat but the terminals, and each
 page, file or view of the project once. The
 bar along its top keeps the views of the project in sight first, side
-by side: "Map" (see below), when the project has a map, "Files",
+by side: "Activity" (see below), "Map", when the project has a map, "Files",
 "Changes", when the project is in a Git repository, and the other
 plugins' pages, such as "Knowledge" and "Schedules", each a tab that the bar
 shows by its button, not among the others, and kept there while its tab
@@ -686,6 +686,18 @@ file on a tab as a link from the conversation does, at the lines it
 names, unless the file is an HTML page, which the page goes to as any
 other; so a page the agent makes, such as a diagram of the project, can
 lead to the code it draws.
+
+"Activity", a plugin (see below), at `cox://activity/`, shows the human
+what goes on in the stage's folder, in two tiers: first what waits for
+them, the chats of the folder, and of its sketches, that ask them
+something, or whose turn ended while they were not looking, with the
+goal each works to, a click on one showing the chat; then what
+happened without them, the last first: the schedules that ran there
+(see [Schedules](#schedules)), the pages of the wiki written from there,
+the human's from its chats and the project's own, and the sources kept
+there (see [Research](#research)), each of which a click opens on
+"Knowledge" or "Schedules". Its button on the bar counts the chats
+that wait, and the page reads it all again every two seconds.
 
 A tab can show a Markdown file too, drawn as the conversation draws the
 agent's replies, for the human to read: the agent opens it with Cox's
@@ -885,11 +897,11 @@ page's ‹ goes back from one map to the one before.
 A tab can show a plugin: a page, in HTML and JavaScript, that draws
 what Cox knows as a tab Cox draws would, for whoever wants a view of
 their own on the stage, the agent included, since it writes HTML and
-reads pages. "Map", "Knowledge" and "Schedules" are built in. A plugin is a
+reads pages. "Activity", "Map", "Knowledge" and "Schedules" are built in. A plugin is a
 folder with an `index.html`, and a `plugin.json` naming its `title` if
 it has one: those built into Cox, in `crates/cox/plugins`, and the
 project's, in `.cox/plugins/<name>` under its folder. The bar has a
-button for each, "Map" first and the rest after "Changes", which opens the plugin's page at
+button for each, "Activity" and "Map" first and the rest after "Changes", which opens the plugin's page at
 `cox://<name>/`, an address the stage serves itself, through CEF, from
 the plugin's files, or shows the tab that has it, wherever the page has
 gone; the agent opens it as any page. A page at a `cox:` address is
@@ -914,7 +926,9 @@ project's wiki, the same way, and whether the folder is the home;
 `cox://api/raw` is the sources, each with where it was read, when and
 by which chat, and `cox://api/raw/<name>` a source, as a page is told;
 `cox://api/schedules` is the schedules that run in the project's
-folder (see [Schedules](#schedules)); and
+folder (see [Schedules](#schedules));
+`cox://api/activity` is what goes on in it, what waits for the human
+and what happened, as "Activity" shows it; and
 `cox://api/lines/<path>:<line>` is the lines of the file around that
 line, each as its stretches with what the syntax says each is, and
 before them the lines that open what the line is within, as its
@@ -923,7 +937,8 @@ at, colored as the code tabs color it. It
 opens a file on a tab
 by going to `cox://open/<path>#L<line>`, which the stage takes as it
 takes a link to a file (a page that is not itself a file may not link
-to one). The Map plugin draws its own cards and lines, with no
+to one), and shows a chat by going to `cox://chat/<key>`, by the
+number `cox://api/activity` tells it by. The Map plugin draws its own cards and lines, with no
 library, and reads its JSON again every two seconds, as Cox's own tabs
 follow what they show.
 

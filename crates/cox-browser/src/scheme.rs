@@ -86,6 +86,17 @@ pub(crate) fn opened(url: &str) -> Option<String> {
     Some(format!("file:///{path}"))
 }
 
+/// The chat a `cox://chat/<key>` address asks the window to show, by the
+/// number the window goes by for it, or `None` when `url` is no such
+/// address.
+pub(crate) fn chat_shown(url: &str) -> Option<u64> {
+    url.strip_prefix(PREFIX)?
+        .strip_prefix("chat/")?
+        .trim_end_matches('/')
+        .parse()
+        .ok()
+}
+
 /// Answers the requests of one browser's pages at `cox:` addresses from
 /// its [`Serve`].
 pub(crate) fn handler(serve: Serve) -> ResourceRequestHandler {
@@ -211,7 +222,7 @@ wrap_resource_handler! {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_served, opened};
+    use super::{chat_shown, is_served, opened};
 
     #[test]
     fn cox_addresses_are_served() {
@@ -230,5 +241,14 @@ mod tests {
         assert_eq!(opened("cox://open/"), None);
         assert_eq!(opened("cox://map/open/x"), None);
         assert_eq!(opened("file:///home/me/open/x"), None);
+    }
+
+    #[test]
+    fn a_chat_address_names_a_chat() {
+        assert_eq!(chat_shown("cox://chat/12"), Some(12));
+        assert_eq!(chat_shown("cox://chat/12/"), Some(12));
+        assert_eq!(chat_shown("cox://chat/"), None);
+        assert_eq!(chat_shown("cox://chat/twelve"), None);
+        assert_eq!(chat_shown("cox://open/12"), None);
     }
 }

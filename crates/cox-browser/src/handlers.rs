@@ -268,7 +268,9 @@ wrap_request_handler! {
         /// The page is about to go somewhere. When that is a link to a
         /// file the human clicked (see [`crate::links`]), or a `cox://open/`
         /// address for a file (see [`crate::scheme`]), the page stays and
-        /// the stage opens the file on a tab of its own.
+        /// the stage opens the file on a tab of its own; when it is a
+        /// `cox://chat/` address, the page stays and the window shows the
+        /// chat.
         fn on_before_browse(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -279,6 +281,13 @@ wrap_request_handler! {
         ) -> c_int {
             let is_main = frame.is_some_and(|frame| frame.is_main() == 1);
             let url = request.map(|request| CefString::from(&request.url()).to_string());
+            if let Some(key) = url.as_deref().and_then(crate::scheme::chat_shown)
+                && is_main
+            {
+                let _ = self.events.send(Event::ShowChat(key));
+                // 1: do not go there.
+                return 1;
+            }
             let linked = url.and_then(|url| {
                 crate::scheme::opened(&url)
                     .or_else(|| crate::links::file_linked(&url, user_gesture == 1))

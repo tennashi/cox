@@ -80,6 +80,9 @@ pub enum Opens {
     /// the lines after it if any, on a tab of its own, as a link to it
     /// from the conversation opens.
     File(String),
+    /// The chat the window goes by this number for, which a plugin's page
+    /// asks the window to show (see [`crate::stage::activity`]).
+    Chat(u64),
 }
 
 impl EventEmitter<Opens> for Page {}
@@ -109,6 +112,7 @@ impl Page {
                         Event::Navigated => page.navigated(cx),
                         Event::Popup(url) => cx.emit(Opens::Tab(url)),
                         Event::FileLink(url) => cx.emit(Opens::File(url)),
+                        Event::ShowChat(key) => cx.emit(Opens::Chat(key)),
                         Event::Selected { x, y, text } => {
                             let at = page.origin + point(in_window(x), in_window(y));
                             page.menu = Some((at, text));

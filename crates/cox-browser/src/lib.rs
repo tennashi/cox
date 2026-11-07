@@ -111,6 +111,9 @@ pub enum Event {
     /// the page went to a `cox://open/` address for it (see [`scheme`]):
     /// the page stays, for the stage to open the file on a tab of its own.
     FileLink(String),
+    /// The page went to a `cox://chat/<key>` address (see [`scheme`]):
+    /// the page stays, for the window to show the chat it goes by.
+    ShowChat(u64),
     /// The page asks for another cursor: see [`Browser::cursor`].
     Cursor,
     /// The human pressed the right button over text selected in the page,

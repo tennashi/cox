@@ -66,6 +66,7 @@
 //!   the project's map, as an agent wrote it, with what changed laid over
 //!   its boxes, for the human to see where things are.
 
+pub mod activity;
 pub mod android;
 mod asked;
 mod bar;
@@ -195,6 +196,9 @@ pub struct Stage {
     /// Whether the project has a map, as the bar last looked while the
     /// stage was open.
     mapped: bool,
+    /// How many chats of the folder wait for the human, as the bar last
+    /// counted them while the stage was open.
+    waiting: usize,
     _counting: Task<()>,
     /// Where the tabs scroll along the bar.
     strip: bar::Strip,
@@ -230,6 +234,7 @@ impl Stage {
             menu: None,
             changed: None,
             mapped: false,
+            waiting: 0,
             _counting: bar::count_changes(cx),
             strip: bar::Strip::default(),
             cwd,
@@ -646,6 +651,7 @@ impl Stage {
                     stage.open_tab(url, true, window, cx);
                 }
                 Opens::File(url) => stage.open(url, window, cx),
+                Opens::Chat(key) => cx.emit(owners::ShowChat(*key)),
             });
         });
         let content = TabContent::Page {
