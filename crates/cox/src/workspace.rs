@@ -748,6 +748,7 @@ impl Workspace {
                     command,
                     cwd,
                     answer,
+                    asks_human: false,
                 }
             }
         }

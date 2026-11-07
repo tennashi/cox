@@ -119,6 +119,7 @@ fn the_agent_runs_a_command_on_its_chats_stage_and_can_cancel_it() {
         command,
         cwd: working,
         answer,
+        ..
     }) = requests.blocking_recv()
     else {
         panic!("asked to run no command");

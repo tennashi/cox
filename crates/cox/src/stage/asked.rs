@@ -84,6 +84,7 @@ impl Stage {
                         command,
                         cwd,
                         answer,
+                        ..
                     } => stage.run_command(command, &cwd, answer, window, cx),
                 });
                 if done.is_err() {

@@ -197,3 +197,60 @@ fn copies_the_line_the_human_selects(cx: &mut TestAppContext) {
     );
     std::fs::remove_dir_all(cwd).unwrap();
 }
+
+/// Runs `command` in `cwd` with no tab, as coxd does while no window is
+/// there, on a runtime of its own.
+fn run_unseen(command: &str, cwd: &std::path::Path, waits: bool) -> Option<Ran> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (answer, waiting) = oneshot::channel();
+    if !waits {
+        // The agent stops waiting once the command runs, and the command
+        // ends on the interrupt, before it would be hung up on.
+        let ran = cox::stage::terminal::run_unseen(command.to_owned(), cwd, answer);
+        let stops = async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            drop(waiting);
+        };
+        runtime
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(4), async { tokio::join!(ran, stops) })
+                    .await
+            })
+            .expect("the command ends as no one waits for it");
+        return None;
+    }
+    runtime.block_on(cox::stage::terminal::run_unseen(
+        command.to_owned(),
+        cwd,
+        answer,
+    ));
+    Some(
+        runtime
+            .block_on(waiting)
+            .unwrap()
+            .expect("the command started"),
+    )
+}
+
+#[test]
+fn a_command_no_window_shows_answers_as_one_on_a_tab() {
+    let cwd = scratch("unseen");
+    assert_eq!(
+        run_unseen("pwd; printf 'built\\n'; exit 3", &cwd, true),
+        Some(Ran {
+            output: format!("{}\nbuilt", cwd.display()),
+            ended: Ended::Exited(3),
+        })
+    );
+    std::fs::remove_dir_all(cwd).unwrap();
+}
+
+#[test]
+fn a_command_no_window_shows_is_interrupted_once_no_one_waits() {
+    let cwd = scratch("unseen-cancelled");
+    run_unseen("sleep 30", &cwd, false);
+    std::fs::remove_dir_all(cwd).unwrap();
+}

@@ -419,6 +419,7 @@ impl Chat {
             command,
             cwd,
             answer,
+            asks_human: false,
         };
         if tools.send(request).is_err() {
             self.checked(Err("the chat's terminals are gone".to_owned()));
@@ -656,6 +657,7 @@ impl Chat {
             command: login_command(&command, &terminal),
             cwd,
             answer,
+            asks_human: true,
         };
         if tools.send(request).is_err() {
             self.send(Command::LogIn(Login::Done));

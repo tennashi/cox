@@ -43,6 +43,7 @@ use crate::agents::Agents;
 use crate::chat::conversation::{Conversation, Entry, State};
 use crate::chat::judge::{Heard, Starts};
 use crate::chat::sketch::{self, Sketch};
+use crate::stage::terminal::run_unseen;
 use crate::storage;
 use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
@@ -1245,8 +1246,9 @@ impl Daemon {
     }
 
     /// Passes on to the window what the agent of the chat `key`, or the
-    /// chat, asks of its stage: a command answered once it ends, or, with
-    /// no window, at once that it cannot run.
+    /// chat, asks of its stage: a command answered once it ends. With no
+    /// window, coxd runs the command itself, on a terminal no one sees,
+    /// unless it asks the human, which then cannot run.
     fn ask_stage(&mut self, key: u64, request: ToolRequest) {
         let ask = match request {
             ToolRequest::ShowMarkdown { path, text } => StageAsk::ShowMarkdown { path, text },
@@ -1257,9 +1259,19 @@ impl Daemon {
                 command,
                 cwd,
                 answer,
+                asks_human,
             } => {
                 if self.window.is_none() {
-                    answer.send(Err(NO_WINDOW.to_owned())).ok();
+                    if asks_human {
+                        answer.send(Err(NO_WINDOW.to_owned())).ok();
+                    } else {
+                        tracing::info!(key, "no window is there, so coxd runs `{command}` itself");
+                        // It answers, or stops, as the agent waits or not,
+                        // so it goes on its own.
+                        tokio::task::spawn_local(async move {
+                            run_unseen(command, &cwd, answer).await;
+                        });
+                    }
                     return;
                 }
                 let id = self.next_id();
