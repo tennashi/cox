@@ -6,7 +6,8 @@
 // shows, by going to `cox://chat/<key>`; then what happened without them,
 // the last first: the schedules that ran there, the pages of the wiki
 // written from there, and the sources kept there, each opening where it
-// is shown.
+// is shown. The home, where Cox lands, tells of every folder, each chat
+// with the project it is of.
 
 const API = "cox://api/activity";
 const EVERY = 2000;
@@ -37,7 +38,8 @@ function waiting(chat) {
   return (
     `<a class="row" href="cox://chat/${chat.key}" title="shows the chat">` +
     `<span class="dot ${chat.why === "asks you" ? "asks" : "unread"}"></span>` +
-    `<span class="what"><span class="name">${chat.sketch ? "↳ " : ""}${esc(chat.name)}</span> <span class="why">${esc(chat.why)}</span>${goal}</span></a>`
+    `<span class="what"><span class="name">${chat.sketch ? "↳ " : ""}${esc(chat.name)}</span> <span class="why">${esc(chat.why)}</span>` +
+    `${told.home && chat.where ? ` <span class="in">in ${esc(chat.where)}</span>` : ""}${goal}</span></a>`
   );
 }
 
@@ -62,11 +64,11 @@ function draw() {
   app.innerHTML =
     `<div class="head"><h1>Activity</h1><span class="where">${esc(told.folder)}</span></div>` +
     `<div class="tier">Waiting for you${count ? `<b>${count}</b>` : ""}</div>` +
-    `<div class="waiting">${count ? told.waiting.map(waiting).join("") : '<div class="none">No chat here waits for you.</div>'}</div>` +
+    `<div class="waiting">${count ? told.waiting.map(waiting).join("") : `<div class="none">No chat ${told.home ? "" : "here "}waits for you.</div>`}</div>` +
     `<div class="tier">What happened</div>` +
     (told.happened.length
       ? told.happened.map(happened).join("")
-      : '<div class="none">Nothing yet: the schedules that run here, the pages of the wiki written from here, and the sources kept here show as they come.</div>');
+      : `<div class="none">Nothing yet: the schedules that run ${told.home ? "anywhere" : "here"}, the pages of the wiki written from ${told.home ? "any chat" : "here"}, and the sources kept ${told.home ? "" : "here "}show as they come.</div>`);
 }
 
 load();

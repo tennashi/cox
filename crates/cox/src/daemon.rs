@@ -680,29 +680,29 @@ impl Daemon {
             return;
         };
         let patch = chat.watch();
-        let tabs = self.slot(key).and_then(|slot| self.stage_of(slot));
+        let tabs = self
+            .slot(key)
+            .and_then(|slot| self.stage_in(&self.cwd(slot), Some(slot)));
         self.tell(FromDaemon::Tabs { key, tabs });
         self.tell(FromDaemon::Patch { key, patch });
     }
 
-    /// The tabs of the stage of the folder the chat of `slot` works in,
-    /// each of a chat by its key: as they were kept, or, for a folder with
-    /// none kept yet, the stages an earlier Cox kept for each of the chats
-    /// that work there, merged, the chat of `slot`'s first, then those of
-    /// the list.
-    fn stage_of(&self, slot: &Slot) -> Option<KeptTabs<u64>> {
-        let folder = self.cwd(slot);
+    /// The tabs of the stage of `folder`, each of a chat by its key: as
+    /// they were kept, or, for a folder with none kept yet, the stages an
+    /// earlier Cox kept for each of the chats that work there, merged,
+    /// those of `first` first, then those of the list.
+    fn stage_in(&self, folder: &Path, first: Option<&Slot>) -> Option<KeptTabs<u64>> {
         let kept = self
             .store
-            .stage(&folder)
+            .stage(folder)
             .inspect_err(|error| tracing::error!("the stage's tabs cannot be read: {error:#}"))
             .ok()?;
         let tabs = kept.unwrap_or_else(|| {
-            let others = self
-                .chats
-                .iter()
-                .filter(|other| other.key != slot.key && self.cwd(other) == folder);
-            let stages = std::iter::once(slot)
+            let others = self.chats.iter().filter(|other| {
+                first.is_none_or(|first| other.key != first.key) && self.cwd(other) == folder
+            });
+            let stages = first
+                .into_iter()
                 .chain(others)
                 .filter_map(|chat| {
                     let kept = chat.kept?;
@@ -993,6 +993,10 @@ impl Daemon {
             }
             ToDaemon::EndSketch { key, ending } => {
                 self.end_sketch_as(key, ending);
+            }
+            ToDaemon::StageOf { folder } => {
+                let tabs = self.stage_in(&folder, None);
+                self.tell(FromDaemon::StageOf { folder, tabs });
             }
             ToDaemon::Tabs { folder, tabs } => {
                 let tabs = tabs.owned(|key| self.slot(key).and_then(|slot| slot.kept));

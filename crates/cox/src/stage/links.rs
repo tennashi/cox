@@ -275,6 +275,10 @@ impl Stage {
     }
 }
 
+/// The address of the Activity page, which a stage shows first, unless
+/// `--stage` says another.
+pub const ACTIVITY_URL: &str = "cox://activity/";
+
 /// The address of the Map page, at its top.
 pub(super) const MAP_URL: &str = "cox://map/";
 

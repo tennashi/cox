@@ -38,7 +38,7 @@
 //! and the app's icon counts the chats that wait for them or that they
 //! have not seen since a turn ended. A click on what a chat told shows it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -390,6 +390,9 @@ pub struct Workspace {
     /// The stages made, by the folder whose chats work on each, with what
     /// opens the links of their conversations there.
     folders: HashMap<PathBuf, (StageView, OpenLink)>,
+    /// The folders whose stages the daemon was asked for, to show with no
+    /// chat, until they are made.
+    asked_stages: HashSet<PathBuf>,
     /// What the daemon asked of the stages of chats whose stages are not
     /// made yet, by their keys, to carry out once they are.
     waiting: HashMap<u64, Vec<FromDaemon>>,
@@ -461,6 +464,7 @@ impl Workspace {
             agents,
             staged: HashMap::new(),
             folders: HashMap::new(),
+            asked_stages: HashSet::new(),
             waiting: HashMap::new(),
             running: HashMap::new(),
             syncs: HashMap::new(),
@@ -496,6 +500,11 @@ impl Workspace {
                 }
             }
             FromDaemon::Tabs { key, tabs } => self.make_stage(key, tabs, window, cx),
+            FromDaemon::StageOf { folder, tabs } => {
+                self.new_stage(folder, tabs, window, cx);
+                self.sight(cx);
+                cx.notify();
+            }
             FromDaemon::Reveal { key } => self.reveal(key, window, cx),
             FromDaemon::News { key, name, body } => {
                 let shown = self.shown().map(Chat::key) == Some(key);
@@ -606,6 +615,7 @@ impl Workspace {
         for key in waiting {
             self.view(key, cx);
         }
+        self.stage_chosen();
         self.sight(cx);
         self.badge(cx);
         cx.notify();
@@ -690,63 +700,95 @@ impl Workspace {
             return;
         };
         let cwd = self.cwd_of(chat);
-        let made = match self.folders.get(&cwd) {
-            Some((shown, open_link)) => Some((shown.clone(), open_link.clone(), false)),
-            None => self
-                .stages
-                .stage(cwd.clone(), tabs, window, cx)
-                .map(|(shown, open_link)| {
-                    self.folders
-                        .insert(cwd.clone(), (shown.clone(), open_link.clone()));
-                    (shown, open_link, true)
-                }),
-        };
+        if !self.folders.contains_key(&cwd) {
+            self.new_stage(cwd.clone(), tabs, window, cx);
+        }
         let shown_key = self.shown().map(Chat::key);
-        let tools = made.and_then(|(shown, open_link, new)| {
-            let stage = shown.view.clone().downcast::<Stage>().ok();
-            view.update(cx, |view, cx| view.set_stage(shown, open_link, cx));
-            // A stage works with the chat's agent: it carries out what the
-            // agent's tools ask. A new one keeps its tabs, as those of its
-            // folder.
-            let stage = stage?;
-            let (tools, from_tools) = tokio::sync::mpsc::unbounded_channel();
-            let keep = new.then(|| {
-                let link = self.link.clone();
-                let keep: crate::stage::Keep = Rc::new(move |tabs: &KeptTabs<u64>| {
-                    link.send(ToDaemon::Tabs {
-                        folder: cwd.clone(),
-                        tabs: tabs.clone(),
-                    });
+        let tools = self
+            .folders
+            .get(&cwd)
+            .cloned()
+            .and_then(|(shown, open_link)| {
+                let stage = shown.view.clone().downcast::<Stage>().ok();
+                view.update(cx, |view, cx| view.set_stage(shown, open_link, cx));
+                // A stage works with the chat's agent: it carries out what the
+                // agent's tools ask.
+                let stage = stage?;
+                let (tools, from_tools) = tokio::sync::mpsc::unbounded_channel();
+                stage.update(cx, |stage, cx| {
+                    stage.work(key, None, Some(from_tools), window, cx);
+                    if shown_key == Some(key) {
+                        stage.showing(key, cx);
+                    }
                 });
-                keep
+                Some(tools)
             });
-            if new {
-                // The stage names the chats, to hand a tab to one, and
-                // shows the chat of a tab the human asks it to.
-                let workspace = cx.entity().downgrade();
-                let names: crate::stage::owners::Names = Rc::new(move |key, cx: &App| {
-                    Some(workspace.upgrade()?.read(cx).chat(key)?.name.clone())
-                });
-                stage.update(cx, |stage, _| stage.set_names(names));
-                let shows =
-                    cx.subscribe_in(&stage, window, |workspace, _, ShowChat(key), window, cx| {
-                        workspace.reveal(*key, window, cx);
-                    });
-                self.shows_chats.push(shows);
-            }
-            stage.update(cx, |stage, cx| {
-                stage.work(key, None, Some(from_tools), keep, window, cx);
-                if shown_key == Some(key) {
-                    stage.showing(key, cx);
-                }
-            });
-            Some(tools)
-        });
         self.staged.insert(key, Staged { tools });
         self.sight(cx);
         for asked in self.waiting.remove(&key).unwrap_or_default() {
             self.ask_stage(asked, window, cx);
         }
+    }
+
+    /// Makes the stage of `folder`, on `tabs`, as the stage had them,
+    /// which keeps its tabs, as those of its folder, names the chats, to
+    /// hand a tab to one, and shows the chat of a tab the human asks it
+    /// to.
+    fn new_stage(
+        &mut self,
+        folder: PathBuf,
+        tabs: Option<KeptTabs<u64>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.asked_stages.remove(&folder);
+        if self.folders.contains_key(&folder) {
+            return;
+        }
+        let Some((made, open_link)) = self.stages.stage(folder.clone(), tabs, window, cx) else {
+            return;
+        };
+        self.folders
+            .insert(folder.clone(), (made.clone(), open_link));
+        let Ok(stage) = made.view.downcast::<Stage>() else {
+            return;
+        };
+        let link = self.link.clone();
+        let keep: crate::stage::Keep = Rc::new(move |tabs: &KeptTabs<u64>| {
+            link.send(ToDaemon::Tabs {
+                folder: folder.clone(),
+                tabs: tabs.clone(),
+            });
+        });
+        let workspace = cx.entity().downgrade();
+        let names: crate::stage::owners::Names = Rc::new(move |key, cx: &App| {
+            Some(workspace.upgrade()?.read(cx).chat(key)?.name.clone())
+        });
+        stage.update(cx, |stage, cx| {
+            stage.set_names(names);
+            stage.keep_with(keep, cx);
+        });
+        let shows = cx.subscribe_in(&stage, window, |workspace, _, ShowChat(key), window, cx| {
+            workspace.reveal(*key, window, cx);
+        });
+        self.shows_chats.push(shows);
+    }
+
+    /// Asks the daemon for the stage of the project chosen, while no chat
+    /// is shown, unless it is made or asked for already: the stage shows
+    /// with no chat, as the home's does where Cox lands.
+    fn stage_chosen(&mut self) {
+        if self.shown().is_some() {
+            return;
+        }
+        let Some(project) = self.projects.get(self.chosen) else {
+            return;
+        };
+        let folder = project.folder.clone();
+        if self.folders.contains_key(&folder) || !self.asked_stages.insert(folder.clone()) {
+            return;
+        }
+        self.tell(ToDaemon::StageOf { folder });
     }
 
     /// The stage in the middle of the window: that of the folder the chat
@@ -804,7 +846,7 @@ impl Workspace {
                 let port = relay.as_ref().map(|relay| relay.port);
                 if let (Some(stage), Some(relay)) = (stage, relay) {
                     stage.update(cx, |stage, cx| {
-                        stage.work(key, Some(relay), None, None, window, cx);
+                        stage.work(key, Some(relay), None, window, cx);
                     });
                 }
                 self.tell(ToDaemon::Prepared { id, port });
@@ -906,15 +948,18 @@ impl Workspace {
         self.folded
     }
 
-    /// Does `act` on the stage of the chat shown, which opens.
+    /// Does `act` on the stage in the middle of the window, which opens.
     fn on_stage(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
         act: impl FnOnce(&mut Stage, &mut Window, &mut Context<Stage>),
     ) {
-        if let Some(view) = self.shown().and_then(|chat| chat.view.clone()) {
-            view.update(cx, |view, cx| view.on_stage(window, cx, act));
+        if let Some(stage) = self
+            .centered()
+            .and_then(|stage| stage.view.clone().downcast::<Stage>().ok())
+        {
+            stage.update(cx, |stage, cx| act(stage, window, cx));
         }
     }
 
@@ -1081,6 +1126,7 @@ impl Workspace {
                 .iter()
                 .map(|project| (project.folder.clone(), project.name.to_string()))
                 .collect(),
+            home: self.projects[0].folder.clone(),
         });
         let count = self
             .chats
@@ -1346,6 +1392,7 @@ impl Workspace {
             self.chosen = index;
             self.chats.hide();
             self.switching = false;
+            self.stage_chosen();
             self.sight(cx);
             self.tell(ToDaemon::Shown { key: None });
             window.focus(&self.focus_handle);

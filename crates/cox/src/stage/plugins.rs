@@ -255,9 +255,7 @@ impl Plugins {
                 let root = self.root.join(crate::wiki::PROJECT_WIKI);
                 if rest.is_empty() {
                     let mut told = wiki::told(&root);
-                    told["home"] = (self.root
-                        == crate::settings::home_for_chats(crate::settings::Saved::read().home))
-                    .into();
+                    told["home"] = (self.root == home()).into();
                     told
                 } else {
                     wiki::page_in(&root, &percent_decoded(rest), translate::page)?
@@ -301,7 +299,8 @@ impl Plugins {
             &self.root,
             &crate::settings::workflow(),
             std::env::var_os("HOME").map(PathBuf::from).as_deref(),
-            &crate::settings::home_for_chats(crate::settings::Saved::read().home),
+            &home(),
+            &crate::stage::activity::projects(),
             &crate::schedule::Ran::read(crate::storage::path(crate::storage::Kept::Schedules)),
             &jiff::Zoned::now(),
         )
@@ -329,6 +328,13 @@ impl Plugins {
         }
         std::fs::read(self.root.join(PROJECT_PLUGINS).join(name).join(path)).ok()
     }
+}
+
+/// The home, the folder of no project: as the window tells it, or else
+/// as the settings set it.
+fn home() -> PathBuf {
+    crate::stage::activity::home()
+        .unwrap_or_else(|| crate::settings::home_for_chats(crate::settings::Saved::read().home))
 }
 
 /// A plugin `name`, titled as its manifest says, when it has one that

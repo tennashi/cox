@@ -137,6 +137,13 @@ pub enum FromDaemon {
         key: u64,
         tabs: Option<KeptTabs<u64>>,
     },
+    /// What the stage of `folder` had, as it was kept, each tab of a chat
+    /// by its key, for a window that shows the stage with no chat of the
+    /// folder (see [`ToDaemon::StageOf`]).
+    StageOf {
+        folder: PathBuf,
+        tabs: Option<KeptTabs<u64>>,
+    },
     /// Show the chat `key`, which the human asked for, as when it opens.
     Reveal { key: u64 },
     /// The chat `key`, named `name`, comes to wait for the human, or ended
@@ -215,6 +222,9 @@ pub enum ToDaemon {
         key: u64,
         ending: crate::workflow::Ending,
     },
+    /// The window shows the stage of `folder` with no chat of it: tell it
+    /// the tabs the stage had (see [`FromDaemon::StageOf`]).
+    StageOf { folder: PathBuf },
     /// The stage of `folder`, where its chats work, has these tabs now,
     /// each of a chat by its key.
     Tabs {

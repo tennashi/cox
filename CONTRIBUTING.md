@@ -45,7 +45,8 @@ panel at the right. The head of the panel names the chat shown and
 counts the other chats of its project that wait for the human; a click
 on it opens a list of the chats of the project chosen on the rail, over
 the conversation, which a click on one shows. A click on a project
-chooses it, showing the chat of it shown last. A project is a folder:
+chooses it, showing the chat of it shown last, or, with none, the stage
+of its folder alone, as Cox shows the home's, `~`, as it opens. A project is a folder:
 "Open folder…", the + at the foot of the rail (Command-O on macOS,
 Control-O elsewhere), opens a chat in the project of a folder of your
 choice, and "New chat" in the list opens another chat in the project
@@ -80,7 +81,7 @@ it is. What the card says is selected and copied as the conversation's
 text is. Escape, the ×, or a click beside the card closes it. Each chat starts its own
 `<agent command>` working in its project's folder, and works on the
 stage of that folder, which the chats working there share (see below),
-showing `<url>` first. Cox opened with no `<agent command>`, as the
+showing `<url>` first, or else "Activity" (see below). Cox opened with no `<agent command>`, as the
 Finder, the Dock or a launcher such as Raycast opens an app, starts the
 agent `settings.json` names, by its name in `agents.json` (see below),
 as `{"agent": "Claude"}`; with none named, or one `agents.json` does not
@@ -696,7 +697,10 @@ happened without them, the last first: the schedules that ran there
 (see [Schedules](#schedules)), the pages of the wiki written from there,
 the human's from its chats and the project's own, and the sources kept
 there (see [Research](#research)), each of which a click opens on
-"Knowledge" or "Schedules". Its button on the bar counts the chats
+"Knowledge" or "Schedules". The home's tells of every folder: the
+chats that wait in any project, each with its project, the schedules
+that ran anywhere, the pages of the human's wiki written from any chat,
+and every source. Its button on the bar counts the chats
 that wait, and the page reads it all again every two seconds.
 
 A tab can show a Markdown file too, drawn as the conversation draws the
@@ -1215,8 +1219,9 @@ said in coxd's log, and does not run.
 "Schedules" on the stage's bar, a plugin (see [The stage](#the-stage)),
 at `cox://schedules/`, shows the human the schedules that run in the
 stage's folder: the project's own first, then those of their workflow
-whose chats work there, or, in the home, those that name no `folder`;
-each with when it runs, when it runs next, or that it is due, when it
+whose chats work there, or, in the home, every schedule: the
+workflow's, each with where its chat works, then each project's own,
+under its name; each with when it runs, when it runs next, or that it is due, when it
 ran last, or never, what its agent does unasked, and its first line,
 and its file, which a click opens on a tab. A schedule there Cox cannot
 read says why, over them, and with none, the page says how one is

@@ -78,7 +78,7 @@ pub mod document;
 pub mod flow;
 pub mod follow;
 pub mod lines;
-mod links;
+pub mod links;
 pub mod mac_window;
 pub mod map;
 mod mirror;
@@ -206,8 +206,8 @@ pub struct Stage {
 
 impl Stage {
     /// A stage of one tab showing `url`, for the chats working in `cwd`,
-    /// in sight while `panel` says so. Until it [works](Self::work) with
-    /// the chat's agent, nothing of it is kept.
+    /// in sight while `panel` says so. Until it is
+    /// [kept](Self::keep_with), nothing of it is kept.
     pub fn new(
         cef: Cef,
         cwd: PathBuf,
@@ -253,14 +253,13 @@ impl Stage {
 
     /// The stage works with the chat `chat`, or its agent starts: from
     /// now on, the stage tells `relay` of the chat's pages, those open and
-    /// those it opens, carries out what the agent's tools ask in
-    /// `from_tools`, and keeps its tabs with `keep`, each when given.
+    /// those it opens, and carries out what the agent's tools ask in
+    /// `from_tools`, each when given.
     pub fn work(
         &mut self,
         chat: u64,
         relay: Option<Relay>,
         from_tools: Option<UnboundedReceiver<ToolRequest>>,
-        keep: Option<Keep>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -280,16 +279,19 @@ impl Stage {
             self.heard
                 .push(Self::hear_tools(chat, from_tools, window, cx));
         }
-        if keep.is_some() {
-            self.keep = keep;
-        }
+        self.changed(cx);
+    }
+
+    /// Keeps the tabs with `keep` from now on, as they change.
+    pub fn keep_with(&mut self, keep: Keep, cx: &mut Context<Self>) {
+        self.keep = Some(keep);
         self.changed(cx);
     }
 
     /// The stage of the chats that work in `cwd`, on the pages and files
     /// of `kept`, each of the chat it was of, or of one tab showing `url`
-    /// when none of them is left. Nothing of it is kept, until it
-    /// [works](Self::work) with a chat.
+    /// when none of them is left. Nothing of it is kept, until it is
+    /// [kept](Self::keep_with).
     pub fn reading(
         cef: Cef,
         cwd: PathBuf,
