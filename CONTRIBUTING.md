@@ -332,13 +332,35 @@ there, each with the dot of how it last ran in a chat there, which says
 so and when where the mouse rests, its name, what it does, when it ran,
 whether it is the project's or the human's, and a switch that turns it
 on or off in that folder alone; a drag of its row orders them there,
-and a click opens its card, which says what its file does, how it last
-ran, with what it said, and opens the file. In the home, it lists those
+and a click opens its card, as "New trigger" at its top does for a
+trigger of the stage's folder that is not there yet. The card is what
+the file says, for the human to change: its name, whether it is the
+project's or the human's, which a click on it switches, the event it
+runs on, what narrows it, who runs it, the patterns its agent is
+allowed and refused, each with its × and a + for another, and what is
+done. The part the human works on is open, and the other folded to a
+line, a click on which opens it: what is done, for an agent's, and the
+rest, for a shell's or a new one. What the human changed is marked, in
+amber, until they save it, and the card's foot counts it, as "2 unsaved
+changes", with "Revert", which takes it back, "Try on the last turn",
+which runs the card as it stands on what a chat in the folder said
+last as its turn ended, as it would run then whatever changed, and
+shows how it went under it, and "Save", which writes the file, and
+moves it when its name or its place changed; nothing changes the file
+until then. "Open file", with nothing changed, opens the file on a tab.
+"Discuss" opens a talk beside the card with an agent, the one a new
+chat talks to, in the folder: not a chat, so not in the list, which
+reads the project and the trigger's file, and is told what the card
+says, how the trigger last ran and how the card went tried, with each
+line; it changes nothing, but proposes the card whole, which is laid on
+the card, its changes marked as the human's are, for the human to save
+or not. The card closing ends the talk. In the home, it lists those
 of each project too, under its name. Those on a schedule are listed
 there too (see [Schedules](#schedules)). Cox keeps which are off and their
 order apart from the files, in `state/triggers.json` in Cox's data
-folder, and how each last ran in `state/trigger-runs.json`, so that a
-file stays as it is written.
+folder, how each last ran in `state/trigger-runs.json`, and what a chat
+of each folder said last as its turn ended, for the card to be tried
+on, in `state/last-turns.json`, so that a file stays as it is written.
 
 A chat's agent can open a chat too, with Cox's `open_chat` tool, giving
 it its first line: the chat opens in the list after the agent's own,
@@ -1066,6 +1088,12 @@ run next, and `cox://api/triggers/set/` and a change, as JSON, turns one on
 or off, `{"folder": ..., "file": ..., "on": false}`, a schedule's in the folder
 where its chat works, or orders them,
 `{"folder": ..., "order": [...]}`, answering them so;
+`cox://api/triggers/save/` and a card, `{"folder": ..., "file": ...,
+"draft": {...}}`, writes the trigger as the card says, answering them
+with the file it `saved`, or the `error` why not; and
+`cox://api/triggers/discuss/` and a line, `try/` and a card,
+`discussion/` and `tried/` and the card's id, and `end/` and the id, talk
+a card through, try it, say how those stand, and end them;
 `cox://api/activity` is what goes on in it, what waits for the human
 and what happened, as "Activity" shows it; and
 `cox://api/lines/<path>:<line>` is the lines of the file around that
@@ -1231,7 +1259,8 @@ kind is kept apart
 - in `state`, what Cox would lose: the chats, in a SQLite database,
   `chats.sqlite`, the stage's profile, `stage`, when each schedule
   last ran, `schedules.json`, which triggers are off and their order,
-  `triggers.json`, and how each last ran, `trigger-runs.json`, and the
+  `triggers.json`, how each last ran, `trigger-runs.json`, what a chat
+  of each folder said last as its turn ended, `last-turns.json`, and the
   pictures of the regions handed to the chats, `pictures`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it
   downloads, in `agents`, and `translations`;

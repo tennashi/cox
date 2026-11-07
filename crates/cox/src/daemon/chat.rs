@@ -451,6 +451,12 @@ impl Chat {
         let Some(cwd) = self.running.as_ref().map(|running| running.cwd.clone()) else {
             return;
         };
+        // For the human to try a trigger on, from its card.
+        let said = self.conversation.turn_told().map(str::to_owned);
+        let last = crate::storage::path(crate::storage::Kept::LastTurns);
+        if let Err(error) = trigger::card::keep_last_turn(last.as_deref(), &cwd, said.as_deref()) {
+            tracing::error!("the turn is not kept to try triggers on: {error}");
+        }
         let (triggers, unread) = trigger::of(&cwd, &crate::settings::workflow());
         for why in unread {
             tracing::error!("a trigger does not run: {why}");

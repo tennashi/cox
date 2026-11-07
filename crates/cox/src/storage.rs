@@ -86,11 +86,14 @@ pub enum Kept {
     /// How each trigger last ran, folder by folder (see
     /// [`crate::trigger`]).
     TriggerRuns,
+    /// What a chat last said as its turn ended, folder by folder, for a
+    /// trigger to be tried on (see [`crate::trigger::card`]).
+    LastTurns,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Settings,
         Self::Agents,
         Self::Workflow,
@@ -108,6 +111,7 @@ impl Kept {
         Self::Pictures,
         Self::Triggers,
         Self::TriggerRuns,
+        Self::LastTurns,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -131,6 +135,7 @@ impl Kept {
             Self::Pictures => "state/pictures",
             Self::Triggers => "state/triggers.json",
             Self::TriggerRuns => "state/trigger-runs.json",
+            Self::LastTurns => "state/last-turns.json",
         }
     }
 

@@ -43,6 +43,9 @@ use cox_core::entry::CheckState;
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::schedule::Cron;
 
+pub mod card;
+pub mod discuss;
+
 /// The folder of the human's workflow that holds their triggers.
 pub const TRIGGERS: &str = "triggers";
 
@@ -50,7 +53,7 @@ pub const TRIGGERS: &str = "triggers";
 pub const PROJECT_TRIGGERS: &str = ".cox/triggers";
 
 /// Where a trigger is kept, and so where it runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     /// The project's own, in its folder.
@@ -116,7 +119,7 @@ impl On {
 }
 
 /// Whether a trigger runs in a sketch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InSketch {
     /// Not in a sketch.
@@ -857,6 +860,7 @@ pub fn told(
                         "enabled": on,
                         "at": folder,
                         "ran": ran.get(&trigger.file),
+                        "draft": card::Draft::of(&trigger),
                     });
                     if let Some(cron) = trigger.cron() {
                         let works = match trigger.scope {
