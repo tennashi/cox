@@ -350,7 +350,7 @@ impl Stage {
                     stage.push_devices(show, window, cx);
                 }
                 KeptTab::MacWindow { app, title } => {
-                    let tab = mac_window::reopened(app, title, cx);
+                    let tab = mac_window::reopened(app, title, window, cx);
                     stage.push_mac_window(tab, show, cx);
                 }
                 KeptTab::Workflow => {
@@ -562,7 +562,7 @@ impl Stage {
             }
             self.show(index, window, cx);
         } else {
-            let tab = cx.new(|cx| MacWindow::new(app_window, cx));
+            let tab = cx.new(|cx| MacWindow::new(app_window, window, cx));
             self.push_mac_window(tab, true, cx);
         }
         self.focus_shown(window, cx);

@@ -7,7 +7,7 @@ mod skylight;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Context as _;
 use block2::RcBlock;
@@ -51,10 +51,6 @@ const FIRST_SIZE: u32 = 2048;
 /// How long the app takes, once told it is the active one, to take a
 /// click so: Cua's driver waits as long.
 const SETTLE: Duration = Duration::from_millis(50);
-
-/// How long the app stays the active one, as it takes itself to be, after
-/// the mouse's left button comes up, for a double click to go on in.
-const LINGER: Duration = Duration::from_millis(500);
 
 /// The fewest points a window is wide and high to be listed: smaller ones
 /// are a menu's or a status item's.
@@ -383,14 +379,9 @@ fn show(
     let _ = events.send(Event::Showing);
     let mut focus = Focus::default();
     let ended = loop {
-        focus.lapse(&window);
-        let wait = focus.until.map_or(LOOK_EVERY, |until| {
-            until
-                .saturating_duration_since(Instant::now())
-                .min(LOOK_EVERY)
-        });
-        match inputs.recv_timeout(wait) {
+        match inputs.recv_timeout(LOOK_EVERY) {
             Ok(Input::Size { width, height }) => asked = (width, height),
+            Ok(Input::Away) => focus.end(&window),
             Ok(input) => {
                 focus.before(&window, &input);
                 post(&window, input);
@@ -420,15 +411,14 @@ fn show(
 }
 
 /// Whether the window's app takes itself for the active one, for the
-/// mouse's left button: told so as the button goes down, since many apps
-/// let a click go while they are behind another, and told otherwise a
-/// while after it comes up (see [`skylight::focus`]).
+/// mouse's left button: told so as the button first goes down, since many
+/// apps let a click go while they are behind another, and told otherwise
+/// once the human is away from the tab (see [`skylight::focus`]), so that
+/// its window looks active all the while they work in it, not by turns.
 #[derive(Default)]
 struct Focus {
     /// Whether the app was told so.
     focused: bool,
-    /// When to tell it otherwise, once the button is up.
-    until: Option<Instant>,
 }
 
 impl Focus {
@@ -442,23 +432,9 @@ impl Focus {
         else {
             return;
         };
-        match press {
-            Press::Down => {
-                self.until = None;
-                if !self.focused && skylight::focus(window.id, true) {
-                    self.focused = true;
-                    std::thread::sleep(SETTLE);
-                }
-            }
-            Press::Drag => {}
-            Press::Up => self.until = self.focused.then(|| Instant::now() + LINGER),
-        }
-    }
-
-    /// Tells the app otherwise, once it is time to.
-    fn lapse(&mut self, window: &Window) {
-        if self.until.is_some_and(|until| until <= Instant::now()) {
-            self.end(window);
+        if *press == Press::Down && !self.focused && skylight::focus(window.id, true) {
+            self.focused = true;
+            std::thread::sleep(SETTLE);
         }
     }
 
@@ -472,7 +448,6 @@ impl Focus {
             skylight::focus(window.id, false);
         }
         self.focused = false;
-        self.until = None;
     }
 }
 
@@ -492,7 +467,7 @@ fn post(window: &Window, input: Input) {
         _ => tracing::debug!(window = window.id, pid = window.pid, ?input, "posting"),
     }
     match input {
-        Input::Size { .. } => {}
+        Input::Size { .. } | Input::Away => {}
         Input::Mouse {
             x,
             y,

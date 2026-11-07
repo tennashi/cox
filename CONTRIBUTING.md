@@ -1030,8 +1030,10 @@ the tabs and the toolbar answer, so as the left button goes down Cox
 has the window's app take itself for the active app, as yabai does,
 with a record of the window server's own that SkyLight posts
 (`SLPSPostEventRecordTo`), while its windows stay where they are and
-the keyboard stays with Cox, and has it take itself so no longer half
-a second after the button comes up: then a page takes the click. Some
+the keyboard stays with Cox, and has it take itself so no longer once
+the human is away from the tab, as the tab loses the keyboard or Cox
+goes behind another app, so that the window looks active all the while
+they work in it, and not by turns: then a page takes the click. Some
 apps take none even so, as TextEdit's text, which takes a click once
 the window is brought to the front. The mouse's right button, as a
 trackpad's two-finger tap, opens the app's menu where the window itself

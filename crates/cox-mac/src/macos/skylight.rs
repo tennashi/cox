@@ -137,7 +137,9 @@ pub(super) fn focus(window: u32, focused: bool) -> bool {
             && (focusing.connection_psn)(owner, &raw mut psn) == 0
             && (focusing.post_event_record)(&raw const psn, record(window, focused).as_ptr()) == 0
     };
-    if !posted {
+    if posted {
+        tracing::debug!(window, focused, "posted a focus record");
+    } else {
         tracing::debug!(window, focused, "the window server took no focus record");
     }
     posted

@@ -152,6 +152,9 @@ pub enum Input {
     Key(String),
     /// Text typed.
     Text(String),
+    /// The human is away from the window: the tab lost the keyboard, or
+    /// Cox went behind another app.
+    Away,
 }
 
 /// What the mirror and its worker share.

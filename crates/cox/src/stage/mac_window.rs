@@ -11,8 +11,8 @@
 use cox_core::tabs::KeptTab;
 use cox_mac::{Event, Input, Mirror, Window as AppWindow};
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, Task, Window, div,
-    prelude::*, px, rgb,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, Subscription, Task,
+    Window, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -48,21 +48,34 @@ pub struct MacWindow {
     status: Status,
     screen: Screen,
     focus_handle: FocusHandle,
+    /// Tell the window's app when the human is away from the tab, as the
+    /// tab loses the keyboard or Cox goes behind another app, so that the
+    /// app takes itself for the active one no longer.
+    _away: [Subscription; 2],
     /// Looks for the window, or hears its mirror.
     working: Option<Task<()>>,
 }
 
 impl MacWindow {
     /// A tab showing `window`.
-    pub fn new(window: AppWindow, cx: &mut Context<Self>) -> Self {
-        let mut tab = Self::waiting(window.app.clone(), window.title.clone(), cx);
+    pub fn new(window: AppWindow, in_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut tab = Self::waiting(window.app.clone(), window.title.clone(), in_window, cx);
         tab.show(window, cx);
         tab
     }
 
     /// A tab of the window of `app` titled `title`, which it has yet to
     /// find.
-    fn waiting(app: String, title: String, cx: &mut Context<Self>) -> Self {
+    fn waiting(app: String, title: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle();
+        let away = [
+            cx.on_blur(&focus_handle, window, |tab, _, _| tab.away()),
+            cx.observe_window_activation(window, |tab, window, _| {
+                if !window.is_window_active() {
+                    tab.away();
+                }
+            }),
+        ];
         Self {
             app,
             title,
@@ -70,7 +83,8 @@ impl MacWindow {
             mirror: None,
             status: Status::Ended(NOT_SHOWN.to_owned()),
             screen: Screen::default(),
-            focus_handle: cx.focus_handle(),
+            focus_handle,
+            _away: away,
             working: None,
         }
     }
@@ -152,6 +166,13 @@ impl MacWindow {
                 }
             }
         })
+    }
+
+    /// Tells the window's app the human is away, if the tab shows it.
+    fn away(&self) {
+        if let Some(mirror) = &self.mirror {
+            mirror.send(Input::Away);
+        }
     }
 
     fn send(&self, input: Input) {
@@ -383,9 +404,14 @@ impl Render for MacWindow {
 
 /// The tab of the window of `app` titled `title`, kept for a closed chat's
 /// stage, which opens again on that window if it is open.
-pub(super) fn reopened(app: String, title: String, cx: &mut App) -> Entity<MacWindow> {
+pub(super) fn reopened(
+    app: String,
+    title: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<MacWindow> {
     cx.new(|cx| {
-        let mut tab = MacWindow::waiting(app, title, cx);
+        let mut tab = MacWindow::waiting(app, title, window, cx);
         tab.find(cx);
         tab
     })
