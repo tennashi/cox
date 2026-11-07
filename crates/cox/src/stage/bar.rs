@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use cox_editor::changes;
 use gpui::{
-    App, Context, Div, Entity, Focusable, FontWeight, PathPromptOptions, ScrollHandle,
-    SharedString, Stateful, Subscription, Task, Window, actions, deferred, div, prelude::*, px,
-    rgb,
+    App, Context, Div, Entity, Focusable, FontWeight, MouseButton, MouseDownEvent,
+    PathPromptOptions, ScrollHandle, SharedString, Stateful, Subscription, Task, Window, actions,
+    deferred, div, prelude::*, px, rgb,
 };
 
 use super::code::Code;
@@ -207,6 +207,7 @@ impl Stage {
                     .as_ref()
                     .map(|menu| Self::render_menu(&menu.input, cx)),
             )
+            .children(self.render_tab_menu(cx))
     }
 
     /// The buttons of the views of the project, side by side in one
@@ -294,8 +295,9 @@ impl Stage {
             .children(plugins)
     }
 
-    /// The tab at `index`: an icon of what it shows, its title, and the
-    /// button that closes it, unless it is the last.
+    /// The tab at `index`: an icon of what it shows, its title, a dot if
+    /// it is a chat's, in the accent if the chat is shown, and the button
+    /// that closes it, unless it is the last.
     fn render_tab(&self, index: usize, tab: &Tab, cx: &mut Context<Self>) -> Stateful<Div> {
         let number = index + 1;
         let title = tab.content.title(cx);
@@ -314,6 +316,7 @@ impl Stage {
         let shown = self.tabs.shown_index() == Some(index);
         // The tabs of the chats not shown are drawn dimmer.
         let others = tab.owner.is_some_and(|owner| Some(owner) != self.showing);
+        let of_chat = tab.owner.is_some();
         div()
             .id(("tab", number))
             .debug_selector(move || format!("tab-{number}"))
@@ -337,8 +340,24 @@ impl Stage {
             })
             .when(others, |tab| tab.opacity(0.5))
             .on_click(cx.listener(move |stage, _, window, cx| stage.show(index, window, cx)))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |stage, event: &MouseDownEvent, _, cx| {
+                    stage.open_tab_menu(index, event.position, cx);
+                }),
+            )
             .child(icon(glyph, 14., if shown { DIM } else { FAINT }))
             .child(div().min_w_0().overflow_hidden().child(ellipsis(title)))
+            .when(of_chat, |tab| {
+                tab.child(
+                    div()
+                        .debug_selector(move || format!("tab-{number}-of-chat"))
+                        .flex_shrink_0()
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(rgb(if others { FAINT } else { ACCENT })),
+                )
+            })
             .when(self.tabs.len() > 1, |tab| {
                 tab.child(
                     div()

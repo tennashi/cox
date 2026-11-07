@@ -335,8 +335,11 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
             KeptTab::Terminal { title } => format!("terminal {title:?}"),
         };
         let _ = write!(told, " {}. {what}", index + 1);
-        if let Some(owner) = tabs.owner(index) {
-            let _ = write!(told, " of chat {owner}");
+        match tabs.owner(index) {
+            Some(owner) => {
+                let _ = write!(told, " of chat {owner}");
+            }
+            None => told.push_str(" of the human"),
         }
         if index == tabs.shown {
             told.push_str(" (shown)");

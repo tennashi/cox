@@ -618,12 +618,20 @@ there (navigates it, clicks or types in it, or
 opens a tab), showing that page's tab. Closed, it keeps its tabs.
 The chats that work in one folder, as the chats of a project, or of a
 sketch (see below), share its stage, which shows beside whichever of
-them is shown, and opens and closes for all of them. Each tab is of one
-of the chats: the chat whose agent opened it, or the chat shown when the
-human opened it. The tabs of the chats not shown are dimmer, and what
-the agent of a chat not shown opens there opens behind the tab shown,
-the stage staying as it was, until that chat is shown, which shows its
-last tab. A stage is kept with the chat each tab is of; an earlier Cox
+them is shown, and opens and closes for all of them. Each tab is the
+human's, as every tab they open is, or of one of the chats, as every
+tab its agent opens is, which only that chat's agent sees and works on:
+a dot on the tab marks a chat's, in the accent for the chat shown. The
+menu of the right button on a tab of the human's hands it to the chat
+shown, "Hand to" and its name, for its agent to work on, as on the
+page the human has open; on a chat's, "Take back" makes it the
+human's again, and the agent hears that its page is gone; and on
+another chat's, "Show" and its name shows that chat. A chat archived
+gives its tabs back to the human. The tabs of the chats not shown are
+dimmer, and what the agent of a chat not shown opens there opens
+behind the tab shown, the stage staying as it was, until that chat is
+shown, which shows its last tab. A stage is kept with the chat each tab
+is of; an earlier Cox
 kept a stage for each chat, and the stage of a folder starts, the first
 time, from those of its chats not archived, that of the chat it is
 first shown for first, each tab of its chat but the terminals, and each
@@ -992,9 +1000,12 @@ in that chat. The server runs through `npx`, so Node has to be on
 `PATH`; without it, the agent gets no tools for the stage. The server
 connects through a relay in Cox, one for each chat, which passes
 everything on but keeps the agent to its chat's pages, the tabs of the
-stage that are its chat's: the agent hears nothing of other chats'
-pages, those on the same stage too, and the pages it opens are tabs of
-its chat, which it alone closes. The relay also tells the stage where the agent
+stage that are its chat's: the agent hears nothing of the human's pages
+or other chats', those on the same stage too, and the pages it opens are tabs of
+its chat, which it alone closes. A page handed to the chat the relay
+tells the agent of, as if it had just opened, and has the browser
+attach the agent to it, as the agent asked to be attached to its pages;
+a page taken back, it tells the agent is gone, and lets go of. The relay also tells the stage where the agent
 points, clicks and types, so the stage can draw the agent's pointer over
 the page. The server's tools that read or write files, as a screenshot
 saved to a file, may do so in the chat's folder and in `/tmp`, where
