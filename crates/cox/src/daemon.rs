@@ -32,6 +32,7 @@ use std::rc::Rc;
 
 use cox_core::goal::Goal;
 use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
+use cox_core::tabs::KeptTabs;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
@@ -673,22 +674,57 @@ impl Daemon {
     }
 
     /// Has the window watch the chat `key`: tells it all of its
-    /// conversation, and its stage's tabs as they were kept.
+    /// conversation, and the tabs of its folder's stage as they were kept.
     fn watch(&mut self, key: u64) {
         let Some(chat) = self.chat(key) else {
             return;
         };
         let patch = chat.watch();
-        let kept = chat.record().map(Record::chat);
-        let tabs = kept.and_then(|kept| {
-            self.store
-                .tabs(kept)
-                .inspect_err(|error| tracing::error!("the chat's tabs cannot be read: {error:#}"))
-                .ok()
-                .flatten()
-        });
+        let tabs = self.slot(key).and_then(|slot| self.stage_of(slot));
         self.tell(FromDaemon::Tabs { key, tabs });
         self.tell(FromDaemon::Patch { key, patch });
+    }
+
+    /// The tabs of the stage of the folder the chat of `slot` works in,
+    /// each of a chat by its key: as they were kept, or, for a folder with
+    /// none kept yet, the stages an earlier Cox kept for each of the chats
+    /// that work there, merged, the chat of `slot`'s first, then those of
+    /// the list.
+    fn stage_of(&self, slot: &Slot) -> Option<KeptTabs<u64>> {
+        let folder = self.cwd(slot);
+        let kept = self
+            .store
+            .stage(&folder)
+            .inspect_err(|error| tracing::error!("the stage's tabs cannot be read: {error:#}"))
+            .ok()?;
+        let tabs = kept.unwrap_or_else(|| {
+            let others = self
+                .chats
+                .iter()
+                .filter(|other| other.key != slot.key && self.cwd(other) == folder);
+            let stages = std::iter::once(slot)
+                .chain(others)
+                .filter_map(|chat| {
+                    let kept = chat.kept?;
+                    let tabs = self
+                        .store
+                        .tabs(kept)
+                        .inspect_err(|error| {
+                            tracing::error!("the chat's tabs cannot be read: {error:#}");
+                        })
+                        .ok()??;
+                    Some((kept, tabs))
+                })
+                .collect();
+            KeptTabs::merged(stages)
+        });
+        Some(tabs.owned(|owner| {
+            self.chats
+                .iter()
+                .chain(&self.archived)
+                .find(|chat| chat.kept == Some(owner))
+                .map(|chat| chat.key)
+        }))
     }
 
     /// The project of `folder`, by its place in the projects, made and
@@ -958,10 +994,9 @@ impl Daemon {
             ToDaemon::EndSketch { key, ending } => {
                 self.end_sketch_as(key, ending);
             }
-            ToDaemon::Tabs { key, tabs } => {
-                if let Some(kept) = self.slot(key).and_then(|slot| slot.kept)
-                    && let Err(error) = self.store.keep_tabs(kept, &tabs)
-                {
+            ToDaemon::Tabs { folder, tabs } => {
+                let tabs = tabs.owned(|key| self.slot(key).and_then(|slot| slot.kept));
+                if let Err(error) = self.store.keep_stage(&folder, &tabs) {
                     tracing::error!("the stage's tabs are not kept: {error:#}");
                 }
             }

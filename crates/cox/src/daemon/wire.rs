@@ -130,9 +130,13 @@ pub enum FromDaemon {
     /// How the conversation of the chat `key` changed, for a window that
     /// watches it (see [`ToDaemon::Watch`]): all of it, the first time.
     Patch { key: u64, patch: Patch },
-    /// What the stage of the chat `key` had, as it was kept, for a window
-    /// that starts to watch it.
-    Tabs { key: u64, tabs: Option<KeptTabs> },
+    /// What the stage of the folder the chat `key` works in had, as it
+    /// was kept, each tab of a chat by its key, for a window that starts
+    /// to watch the chat.
+    Tabs {
+        key: u64,
+        tabs: Option<KeptTabs<u64>>,
+    },
     /// Show the chat `key`, which the human asked for, as when it opens.
     Reveal { key: u64 },
     /// The chat `key`, named `name`, comes to wait for the human, or ended
@@ -211,8 +215,12 @@ pub enum ToDaemon {
         key: u64,
         ending: crate::workflow::Ending,
     },
-    /// The stage of the chat `key` has these tabs now.
-    Tabs { key: u64, tabs: KeptTabs },
+    /// The stage of `folder`, where its chats work, has these tabs now,
+    /// each of a chat by its key.
+    Tabs {
+        folder: PathBuf,
+        tabs: KeptTabs<u64>,
+    },
     /// The command `id` ran as `ran` says.
     Ran { id: u64, ran: Result<Ran, String> },
     /// The relay of the stage asked for as `id` listens on `port`, or did

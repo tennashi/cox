@@ -14,8 +14,10 @@ use cox::daemon::client::{self, Connected};
 use cox::daemon::wire::{FromDaemon, Hello, ToDaemon};
 use cox::daemon::{Spawned, Spawns};
 use cox_core::store::Store;
+use cox_core::tabs::{KeptTab, KeptTabs};
 
-/// Spawns no agent: the tests open no chat.
+/// Spawns no agent: the tests start no chat's agent, and judge no goal,
+/// though a chat read from what is kept is given what would judge it.
 struct NoAgents;
 
 impl Spawns for NoAgents {
@@ -28,7 +30,7 @@ impl Spawns for NoAgents {
     }
 
     fn starts(&self, _: &str) -> Starts {
-        unreachable!("no goal is judged")
+        Rc::new(|_, _| unreachable!("no goal is judged"))
     }
 }
 
@@ -42,12 +44,28 @@ fn folder(name: &str) -> PathBuf {
 
 /// Runs coxd on `socket`, on a thread of its own, until it stops.
 fn run(socket: &Path, home: &Path) -> std::thread::JoinHandle<anyhow::Result<()>> {
+    run_keeping(socket, home, None)
+}
+
+/// Runs coxd like [`run`], keeping the chats in the store at `kept`, or
+/// in memory.
+fn run_keeping(
+    socket: &Path,
+    home: &Path,
+    kept: Option<&Path>,
+) -> std::thread::JoinHandle<anyhow::Result<()>> {
     let (socket, home) = (socket.to_owned(), home.to_owned());
+    let kept = kept.map(Path::to_owned);
     std::thread::spawn(move || {
         cox::daemon::process::run(
             &socket,
             home,
-            || Rc::new(Store::in_memory().unwrap()),
+            move || {
+                Rc::new(match &kept {
+                    Some(path) => Store::open(path).unwrap(),
+                    None => Store::in_memory().unwrap(),
+                })
+            },
             || Rc::new(NoAgents),
         )
     })
@@ -141,6 +159,113 @@ fn a_window_reaches_coxd_one_at_a_time_and_hears_when_it_stops() {
     wait("the window hears coxd is gone", || {
         other.load(Ordering::SeqCst)
     });
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+fn page(url: &str) -> KeptTab {
+    KeptTab::Page {
+        url: url.to_owned(),
+        title: String::new(),
+    }
+}
+
+#[test]
+fn the_chats_of_a_folder_share_its_stage_which_starts_from_their_own() {
+    let folder = folder("stage");
+    let socket = folder.join("run").join("coxd.sock");
+    let home = folder.join("home");
+    let project = folder.join("project");
+    let path = folder.join("chats.sqlite");
+    // Two chats, each with a stage of its own, as an earlier Cox kept
+    // them.
+    let store = Store::open(&path).unwrap();
+    let kept_project = store.project(&project, "project").unwrap();
+    let first = store.add_chat(Some(kept_project), "Chat 1").unwrap();
+    let second = store.add_chat(Some(kept_project), "Chat 2").unwrap();
+    let own = |tabs, shown| KeptTabs {
+        tabs,
+        shown,
+        owners: Vec::new(),
+    };
+    store
+        .keep_tabs(
+            first,
+            &own(
+                vec![KeptTab::Files { open: Vec::new() }, page("https://a/")],
+                1,
+            ),
+        )
+        .unwrap();
+    store
+        .keep_tabs(
+            second,
+            &own(
+                vec![
+                    KeptTab::Files { open: Vec::new() },
+                    page("https://b/"),
+                    KeptTab::Terminal {
+                        title: "make".to_owned(),
+                    },
+                ],
+                2,
+            ),
+        )
+        .unwrap();
+    let coxd = run_keeping(&socket, &home, Some(&path));
+    wait("coxd listens", || socket.exists());
+    let gone = Arc::new(AtomicBool::new(false));
+    let mut window = reach(&socket, &home, &gone).expect("the window is welcome");
+    let heard = until_settled(&mut window, 1);
+    let Some(FromDaemon::Listing(listing)) = heard.first() else {
+        panic!("coxd lists the chats first: {heard:?}");
+    };
+    let keys: Vec<u64> = listing.chats.iter().map(|chat| chat.key).collect();
+    let [one, two] = keys[..] else {
+        panic!("the two chats are listed: {listing:?}");
+    };
+
+    // The stage of the project's folder is the two chats' stages, merged,
+    // each tab of the chat it was of, the chat watched first.
+    let _ = window.link.to.send(ToDaemon::Watch { key: two });
+    let told = until_settled(&mut window, 2)
+        .into_iter()
+        .find_map(|message| match message {
+            FromDaemon::Tabs { key, tabs } if key == two => Some(tabs),
+            _ => None,
+        })
+        .expect("coxd tells the stage's tabs");
+    let merged = KeptTabs {
+        tabs: vec![
+            KeptTab::Files { open: Vec::new() },
+            page("https://b/"),
+            page("https://a/"),
+        ],
+        shown: 0,
+        owners: vec![Some(two), Some(two), Some(one)],
+    };
+    assert_eq!(told, Some(merged.clone()));
+
+    // The window keeps the stage as it changes, by its folder, and the
+    // other chat of the folder gets it as it was kept.
+    let changed = KeptTabs { shown: 2, ..merged };
+    let _ = window.link.to.send(ToDaemon::Tabs {
+        folder: project.clone(),
+        tabs: changed.clone(),
+    });
+    let _ = window.link.to.send(ToDaemon::Watch { key: one });
+    let told = until_settled(&mut window, 3)
+        .into_iter()
+        .find_map(|message| match message {
+            FromDaemon::Tabs { key, tabs } if key == one => Some(tabs),
+            _ => None,
+        })
+        .expect("coxd tells the stage's tabs");
+    assert_eq!(told, Some(changed));
+    let kept = store.stage(&project).unwrap().expect("the stage is kept");
+    assert_eq!(kept.owners, vec![Some(second), Some(second), Some(first)]);
+
+    std::fs::remove_file(&socket).unwrap();
+    coxd.join().unwrap().unwrap();
     let _ = std::fs::remove_dir_all(&folder);
 }
 

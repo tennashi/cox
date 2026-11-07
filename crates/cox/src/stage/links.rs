@@ -40,7 +40,9 @@ impl Stage {
             if let Some(shown) = T::of(&self.tabs[index].content) {
                 shown.update(cx, |shown, cx| shown.show(text, lines, cx));
             }
-            self.tabs.show(index);
+            if self.in_sight() {
+                self.tabs.show(index);
+            }
             self.changed(cx);
         } else {
             self.push_file::<T>(path, text, lines, true, window, cx);

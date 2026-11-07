@@ -198,7 +198,7 @@ impl Stages for CefStages {
     fn stage(
         &self,
         cwd: PathBuf,
-        tabs: Option<KeptTabs>,
+        tabs: Option<KeptTabs<u64>>,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<(StageView, OpenLink)> {

@@ -68,6 +68,9 @@ pub(super) trait ShowsFile: Shows + EventEmitter<LinkClicked> {
 /// A tab, and what it shows.
 pub(super) struct Tab {
     pub(super) content: TabContent,
+    /// The chat it is of, by its key: the chat whose agent opened it, or
+    /// that the human opened it from; `None` for a tab of no chat.
+    pub(super) owner: Option<u64>,
     /// Redraws the tab as the title of what it shows changes.
     pub(super) _changes: Subscription,
     /// Opens the tabs that what it shows asks for, if it asks for any.

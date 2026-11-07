@@ -130,6 +130,7 @@ const CONVERSATION_MAX_WIDTH: f32 = 800.;
 
 /// A chat's stage, as its conversation shows it: the view, and whether it
 /// is open.
+#[derive(Clone)]
 pub struct StageView {
     pub view: AnyView,
     pub panel: Entity<Panel>,
@@ -546,9 +547,10 @@ impl ChatView {
             .map(|(input, sketch, _)| (input, *sketch))
     }
 
-    /// The stage's tabs, as they are kept, when the chat has a stage.
+    /// The stage's tabs, as they are kept, each of a chat by its key,
+    /// when the chat has a stage.
     #[must_use]
-    pub fn tabs(&self, cx: &App) -> Option<KeptTabs> {
+    pub fn tabs(&self, cx: &App) -> Option<KeptTabs<u64>> {
         let stage = self.stage.as_ref()?.view.clone().downcast::<Stage>().ok()?;
         Some(stage.read(cx).tabs(cx))
     }

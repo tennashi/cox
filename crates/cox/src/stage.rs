@@ -1,5 +1,6 @@
-//! The stage: where the human and the agent of one chat work together,
-//! beside the chat's conversation. It holds tabs, each showing a page of
+//! The stage: where the human and the agents of the chats that work in one
+//! folder, as a project's, work together, beside the conversation of the
+//! chat shown. It holds tabs, each showing a page of
 //! the browser (see [`crate::stage::page`]), a Markdown file (see
 //! [`crate::stage::document`]), a file as it is written, such as code (see
 //! [`crate::stage::code`]), the project's files as a tree (see [`crate::stage::tree`]),
@@ -8,8 +9,8 @@
 //! plugins (see [`crate::stage::plugins`]), such as the map of the
 //! project (see [`crate::stage::map`]), are pages of the browser. The first shows the page the
 //! stage starts on; the human opens more pages and terminals, and the
-//! tree, and closes tabs, and the agent opens and closes pages
-//! too, through the chat's relay. A page that asks for a window of its own
+//! tree, and closes tabs, and each agent opens and closes pages
+//! too, through its chat's relay. A page that asks for a window of its own
 //! gets a tab instead, and a link in a page to a file opens the file on a
 //! tab, as a link from the conversation does. With Cox's own tools (see [`crate::agent::mcp`]), the
 //! agent shows the human Markdown files and code, a tab for each file, and
@@ -19,15 +20,20 @@
 //! as it is written otherwise. A click on a file in the tree opens it the
 //! same way.
 //!
-//! The stage tells the relay of every page it opens, so that the agent sees
-//! each of its chat's pages, whoever opened it. When the agent works on a
-//! page, shows a file or runs a command, the stage shows that tab, and
-//! opens beside the conversation if it was closed.
+//! Each tab is of one of the chats: the chat whose agent opened it, or
+//! the chat shown when the human opened it. The stage tells each chat's
+//! relay of the pages of that chat, so that its agent sees those, whoever
+//! opened them, and none of the other chats'; an agent's command gets the
+//! tab of its own last one that ended. When an agent works on a page,
+//! shows a file or runs a command, the stage shows that tab, and opens
+//! beside the conversation if it was closed, if the agent's chat is the
+//! one shown, or else opens the tab behind the one shown; the tabs of the
+//! chats not shown are drawn dimmer.
 //!
-//! An open chat's stage keeps its tabs as they change. A closed chat's
+//! The stage keeps its tabs as they change, with the chat each is of. A
 //! stage opens again on the pages and files kept, for the human to look
-//! at; its terminals are not started again. Once the human sends to the
-//! chat again, its agent works on those pages.
+//! at; its terminals are not started again. Once the human sends to a
+//! chat again, its agent works on its own pages.
 //!
 //! - [`tab`] is a tab, and what it shows, whichever kind it is, and
 //!   [`bar`] the bar of the tabs, which keeps the views of the project,
@@ -84,6 +90,7 @@ pub mod tree;
 mod typed;
 pub mod windows;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cox_core::list::List;
@@ -133,8 +140,8 @@ pub fn bind_keys(cx: &mut App) {
     )]);
 }
 
-/// What keeps a stage's tabs as they change.
-pub type Keep = std::rc::Rc<dyn Fn(&KeptTabs)>;
+/// What keeps a stage's tabs as they change, each of a chat by its key.
+pub type Keep = std::rc::Rc<dyn Fn(&KeptTabs<u64>)>;
 
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";
@@ -147,24 +154,31 @@ const TITLE_LENGTH: usize = 40;
 
 pub struct Stage {
     cef: Cef,
-    /// Where the chat works, which its terminals start in.
+    /// Where its chats work, which its terminals start in.
     cwd: PathBuf,
     /// The tabs, and which is shown. There is always one once the stage
     /// has started: closing the last tab is refused.
     tabs: List<Tab>,
-    /// The chat's pages, as the relay knows them, if the relay started.
-    pages: Option<Pages>,
+    /// The pages of each chat whose relay started, as the relay knows
+    /// them, by the chat's key.
+    pages: HashMap<u64, Pages>,
+    /// The chat whose agent the stage carries out what it asks for, while
+    /// it does.
+    acting: Option<u64>,
+    /// The chat shown last of those that work on the stage, which the
+    /// tabs the human opens are of.
+    showing: Option<u64>,
     /// Whether the stage is open beside the conversation.
     panel: Entity<Panel>,
     /// What keeps the tabs as they change, if they are kept.
     keep: Option<Keep>,
     /// The tabs as they were last kept.
-    kept: Option<KeptTabs>,
+    kept: Option<KeptTabs<u64>>,
     /// What carries out what the relay and the agent's tools ask, once
     /// the stage works with the agent.
     heard: Vec<Task<()>>,
     /// The plugins the stage shows as pages, and what they read of the
-    /// chat.
+    /// folder.
     plugins: Plugins,
     /// The menu that opens a page, a terminal or a file, while it is open.
     menu: Option<bar::Menu>,
@@ -177,8 +191,8 @@ pub struct Stage {
 }
 
 impl Stage {
-    /// A stage of one tab showing `url`, for a chat working in `cwd`, which
-    /// opens `panel` when the agent works on it. Until it [works](Self::work)
+    /// A stage of one tab showing `url`, for the chats working in `cwd`,
+    /// which opens `panel` when an agent works on it. Until it [works](Self::work)
     /// with the chat's agent, nothing of it is kept.
     pub fn new(
         cef: Cef,
@@ -209,7 +223,9 @@ impl Stage {
             strip: bar::Strip::default(),
             cwd,
             tabs: List::new(),
-            pages: None,
+            pages: HashMap::new(),
+            acting: None,
+            showing: None,
             panel,
             keep: None,
             kept: None,
@@ -217,12 +233,13 @@ impl Stage {
         }
     }
 
-    /// The chat's agent starts: from now on, the stage
-    /// tells `relay` of its pages, those open and those it opens, carries
-    /// out what the agent's tools ask in `from_tools`, and keeps its tabs
-    /// with `keep`, each when given.
+    /// The stage works with the chat `chat`, or its agent starts: from
+    /// now on, the stage tells `relay` of the chat's pages, those open and
+    /// those it opens, carries out what the agent's tools ask in
+    /// `from_tools`, and keeps its tabs with `keep`, each when given.
     pub fn work(
         &mut self,
+        chat: u64,
         relay: Option<Relay>,
         from_tools: Option<UnboundedReceiver<ToolRequest>>,
         keep: Option<Keep>,
@@ -231,15 +248,19 @@ impl Stage {
     ) {
         if let Some(relay) = relay {
             for tab in &self.tabs {
-                if let TabContent::Page { target, .. } = &tab.content {
+                if let TabContent::Page { target, .. } = &tab.content
+                    && tab.owner == Some(chat)
+                {
                     relay.pages.opening().is(target.clone());
                 }
             }
-            self.pages = Some(relay.pages);
-            self.heard.push(Self::hear(relay.from_agent, window, cx));
+            self.pages.insert(chat, relay.pages);
+            self.heard
+                .push(Self::hear(chat, relay.from_agent, window, cx));
         }
         if let Some(from_tools) = from_tools {
-            self.heard.push(Self::hear_tools(from_tools, window, cx));
+            self.heard
+                .push(Self::hear_tools(chat, from_tools, window, cx));
         }
         if keep.is_some() {
             self.keep = keep;
@@ -247,22 +268,27 @@ impl Stage {
         self.changed(cx);
     }
 
-    /// The stage of a closed chat that worked in `cwd`, on the pages and
-    /// files of `kept`, or of one tab showing `url` when none of them is
-    /// left. Nothing of it is kept, until it [works](Self::work) with the
-    /// chat's agent started again.
+    /// The stage of the chats that work in `cwd`, on the pages and files
+    /// of `kept`, each of the chat it was of, or of one tab showing `url`
+    /// when none of them is left. Nothing of it is kept, until it
+    /// [works](Self::work) with a chat.
     pub fn reading(
         cef: Cef,
         cwd: PathBuf,
-        kept: Option<KeptTabs>,
+        kept: Option<KeptTabs<u64>>,
         url: &str,
         panel: Entity<Panel>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut stage = Self::empty(cef, cwd, panel, cx);
-        let KeptTabs { tabs, shown } = kept.unwrap_or_default();
-        for (index, tab) in tabs.into_iter().enumerate() {
+        let kept = kept.unwrap_or_default();
+        let owners: Vec<Option<u64>> = (0..kept.tabs.len())
+            .map(|index| kept.owner(index))
+            .collect();
+        let KeptTabs { tabs, shown, .. } = kept;
+        for ((index, tab), owner) in tabs.into_iter().enumerate().zip(owners) {
+            stage.acting = owner;
             // The tab shown is the one that was, or else the last before
             // it that opens again, or else the first after it.
             let show = index <= shown || stage.tabs.shown_index().is_none();
@@ -314,19 +340,65 @@ impl Stage {
                 KeptTab::Terminal { .. } | KeptTab::Parts => {}
             }
         }
+        stage.acting = None;
         if stage.tabs.is_empty() {
             stage.open_tab(url, true, window, cx);
         }
         stage
     }
 
-    /// The tabs, as they are kept.
+    /// The tabs, as they are kept, each of a chat by its key.
     #[must_use]
-    pub fn tabs(&self, cx: &App) -> KeptTabs {
+    pub fn tabs(&self, cx: &App) -> KeptTabs<u64> {
         KeptTabs {
             tabs: self.tabs.iter().map(|tab| tab.content.kept(cx)).collect(),
             shown: self.tabs.shown_index().unwrap_or(0),
+            owners: self.tabs.iter().map(|tab| tab.owner).collect(),
         }
+    }
+
+    /// The chat `chat` is shown, of those that work on the stage: the tabs
+    /// the human opens from now on are of it, and the stage shows its
+    /// last tab, unless the tab shown is of it or of no chat.
+    pub fn showing(&mut self, chat: u64, cx: &mut Context<Self>) {
+        if self.showing == Some(chat) {
+            return;
+        }
+        self.showing = Some(chat);
+        let shown_is_others = self
+            .tabs
+            .shown()
+            .is_some_and(|tab| tab.owner.is_some_and(|owner| owner != chat));
+        if shown_is_others
+            && let Some(index) = self.tabs.iter().rposition(|tab| tab.owner == Some(chat))
+        {
+            self.tabs.show(index);
+            self.changed(cx);
+        }
+        cx.notify();
+    }
+
+    /// The chat the tabs opened now are of: the chat whose agent the
+    /// stage carries out what it asks for, or else the chat shown.
+    fn owner(&self) -> Option<u64> {
+        self.acting.or(self.showing)
+    }
+
+    /// Does `act` for the chat `chat`, whose agent asked for it, or for
+    /// the human when `None`.
+    fn acting_for<R>(&mut self, chat: Option<u64>, act: impl FnOnce(&mut Self) -> R) -> R {
+        let was = std::mem::replace(&mut self.acting, chat);
+        let done = act(self);
+        self.acting = was;
+        done
+    }
+
+    /// Whether what is done now is in the human's sight: done by the human,
+    /// or by the agent of the chat shown, or of any chat while none of
+    /// those of the stage was shown yet. The tabs another chat's agent
+    /// opens open behind the one shown, and the stage stays as it is.
+    fn in_sight(&self) -> bool {
+        self.acting.is_none() || self.showing.is_none() || self.acting == self.showing
     }
 
     /// The tabs, or what one of them shows, changed: keep them, if they are
@@ -512,7 +584,9 @@ impl Stage {
     }
 
     fn show_panel(&self, cx: &mut Context<Self>) {
-        self.panel.update(cx, Panel::open);
+        if self.in_sight() {
+            self.panel.update(cx, Panel::open);
+        }
     }
 
     /// The index of the tab showing `page`.
@@ -541,8 +615,11 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TargetId {
-        // The relay hears of the page before CEF makes it.
-        let opening = self.pages.as_ref().map(Pages::opening);
+        // The relay of the page's chat hears of it before CEF makes it.
+        let opening = self
+            .owner()
+            .and_then(|owner| self.pages.get(&owner))
+            .map(Pages::opening);
         let (browser, events) = self.cef.open(url, Some(self.plugins.serve()));
         let target = browser.target_id();
         if let Some(opening) = opening {
@@ -550,11 +627,19 @@ impl Stage {
         }
         let page = cx.new(|cx| Page::new(browser, events, window, cx));
         let changes = cx.observe(&page, |stage, _, cx| stage.changed(cx));
-        let popups = cx.subscribe_in(&page, window, |stage, _, opens, window, cx| match opens {
-            Opens::Tab(url) => {
-                stage.open_tab(url, true, window, cx);
-            }
-            Opens::File(url) => stage.open(url, window, cx),
+        // What the page opens is of the page's chat.
+        let popups = cx.subscribe_in(&page, window, |stage, page, opens, window, cx| {
+            let owner = stage
+                .tabs
+                .iter()
+                .find(|tab| tab.content.page() == Some(page))
+                .and_then(|tab| tab.owner);
+            stage.acting_for(owner, |stage| match opens {
+                Opens::Tab(url) => {
+                    stage.open_tab(url, true, window, cx);
+                }
+                Opens::File(url) => stage.open(url, window, cx),
+            });
         });
         let content = TabContent::Page {
             page,
@@ -564,7 +649,9 @@ impl Stage {
         target
     }
 
-    /// Puts a tab after the others, shown if `show` is.
+    /// Puts a tab after the others, of the chat the tabs opened now are
+    /// of, shown if `show` is and it is in the human's sight, or if no tab
+    /// is shown.
     fn push(
         &mut self,
         content: TabContent,
@@ -573,9 +660,11 @@ impl Stage {
         show: bool,
         cx: &mut Context<Self>,
     ) {
+        let show = (show && self.in_sight()) || self.tabs.shown_index().is_none();
         self.tabs.push(
             Tab {
                 content,
+                owner: self.owner(),
                 _changes: changes,
                 _opens: opens,
             },
@@ -608,9 +697,10 @@ impl Stage {
         Ok(())
     }
 
-    /// Shows the tab at `index`, with the keyboard in its page.
+    /// Shows the tab at `index`, with the keyboard in its page, if it is
+    /// in the human's sight.
     fn show(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs.show(index) {
+        if self.in_sight() && self.tabs.show(index) {
             self.focus_shown(window, cx);
             self.changed(cx);
         }
@@ -624,6 +714,9 @@ impl Stage {
     }
 
     fn focus_shown(&self, window: &mut Window, cx: &App) {
+        if !self.in_sight() {
+            return;
+        }
         if let Some(tab) = self.tabs.shown() {
             window.focus(&tab.content.focus_handle(cx));
         }
