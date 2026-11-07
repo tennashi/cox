@@ -18,7 +18,7 @@ use gpui::{
 
 use super::Page;
 use super::keys::modifiers;
-use super::pointer::paint_agent;
+use crate::stage::pointer::paint_agent;
 use crate::ui::theme::{CARD_INNER_RADIUS, RAISED};
 use cox_browser::{Cursor, Frame, MouseButton};
 

@@ -14,8 +14,8 @@ anyhow.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 
-# The windows of the Mac's apps and their pictures, through
-# ScreenCaptureKit.
+# The windows of the Mac's apps, their pictures through ScreenCaptureKit,
+# and what the agent does posted to their apps through Core Graphics.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 dispatch2 = "0.3.1"

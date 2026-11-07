@@ -41,6 +41,22 @@ impl Stage {
         if self.working != working {
             self.working = working;
             self.relock(cx);
+            self.leave_mac_windows(cx);
+        }
+    }
+
+    /// Lets the Mac windows the agents acted in go, of the agents whose
+    /// turns ended.
+    fn leave_mac_windows(&self, cx: &mut Context<Self>) {
+        for tab in &self.tabs {
+            if let TabContent::MacWindow(tab) = &tab.content
+                && tab
+                    .read(cx)
+                    .agent()
+                    .is_some_and(|chat| !self.working.contains(&chat))
+            {
+                tab.update(cx, |tab, _| tab.leave());
+            }
         }
     }
 

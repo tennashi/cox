@@ -2,7 +2,7 @@
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{Event, Shared, Size, Window};
+use crate::{Event, Input, Shared, Window};
 
 pub(crate) fn windows() -> anyhow::Result<Vec<Window>> {
     anyhow::bail!("the windows of other apps are shown on macOS only")
@@ -14,12 +14,18 @@ pub(crate) fn may_record() -> bool {
 
 pub(crate) fn ask_to_record() {}
 
+pub(crate) fn may_control() -> bool {
+    false
+}
+
+pub(crate) fn ask_to_control() {}
+
 pub(crate) fn bring_to_front(_pid: i32) {}
 
 pub(crate) fn mirror(
     _id: u32,
     _shared: &std::sync::Arc<Shared>,
-    _sizes: &std::sync::mpsc::Receiver<Size>,
+    _inputs: &std::sync::mpsc::Receiver<Input>,
     events: &UnboundedSender<Event>,
 ) {
     let _ = events.send(Event::Ended(

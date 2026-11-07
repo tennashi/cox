@@ -1,63 +1,59 @@
-//! What the page draws for the agent: its pointer, as an arrow with a
-//! label saying whose it is, the ring of each click, and the outline of
-//! the field it types into, as the relay saw them (see
-//! [`cox_browser::pointer`]).
+//! What a tab draws for the agent, over a page or a Mac window: its
+//! pointer, as an arrow with a label saying whose it is, the ring of each
+//! click, and the outline of the field it types into, as the agent's
+//! input left them (see [`cox_browser::pointer`]).
 
 use std::time::Instant;
 
 use gpui::{
-    BorderStyle, Bounds, Context, Div, Hsla, PathBuilder, Pixels, Window, div, point, prelude::*,
-    px, quad, rgb, size, white,
+    BorderStyle, Bounds, Context, Div, Hsla, PathBuilder, Pixels, Point, Task, Window, div, point,
+    prelude::*, px, quad, rgb, size, white,
 };
 
-use super::Page;
 use crate::ui::theme::{ACCENT, GROUND};
-use cox_browser::pointer::{Look, Rect, Spot};
+use cox_browser::pointer::{AgentPointer, Look, Rect, Spot};
 
-impl Page {
-    /// Works out how the agent's pointer looks now, and arranges to render
-    /// again when that changes on its own: the stage's paint asks for the
-    /// next frame while it moves, and a timer wakes it for what comes
-    /// later.
-    #[expect(
-        clippy::used_underscore_binding,
-        reason = "the timer is only held: dropping it cancels it"
-    )]
-    pub(super) fn update_look(&mut self, cx: &mut Context<Self>) {
-        self.look = self.pointer.look(Instant::now());
-        self._pointer_changes = self
-            .look
-            .as_ref()
-            .map(|look| look.next_change)
-            .filter(|next| !next.is_zero())
-            .map(|next| {
-                cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(next).await;
-                    this.update(cx, |_, cx| cx.notify()).ok();
-                })
-            });
-    }
-
-    /// The label by the agent's pointer, which says whose it is, and that
-    /// the agent is typing.
-    pub(super) fn render_label(look: &Look) -> Div {
-        div()
-            .absolute()
-            .left(px(look.pointer.x + 14.))
-            .top(px(look.pointer.y + 18.))
-            .opacity(look.opacity)
-            .px_1p5()
-            .rounded_sm()
-            .bg(agent_color())
-            .text_color(rgb(GROUND))
-            .text_xs()
-            .whitespace_nowrap()
-            .child(if look.typing {
-                "Agent · typing"
-            } else {
-                "Agent"
+/// How `pointer` looks now, with what renders `T` again when that
+/// changes on its own: the paint asks for the next frame while it moves,
+/// and the timer wakes it for what comes later. Dropping the timer
+/// cancels it.
+pub(super) fn look_now<T: 'static>(
+    pointer: &AgentPointer,
+    cx: &mut Context<T>,
+) -> (Option<Look>, Option<Task<()>>) {
+    let look = pointer.look(Instant::now());
+    let changes = look
+        .as_ref()
+        .map(|look| look.next_change)
+        .filter(|next| !next.is_zero())
+        .map(|next| {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(next).await;
+                this.update(cx, |_, cx| cx.notify()).ok();
             })
-    }
+        });
+    (look, changes)
+}
+
+/// The label by the agent's pointer, which says whose it is, and that the
+/// agent is typing, `offset` from where the look has the pointer.
+pub(super) fn label(look: &Look, offset: Point<Pixels>) -> Div {
+    div()
+        .absolute()
+        .left(offset.x + px(look.pointer.x + 14.))
+        .top(offset.y + px(look.pointer.y + 18.))
+        .opacity(look.opacity)
+        .px_1p5()
+        .rounded_sm()
+        .bg(agent_color())
+        .text_color(rgb(GROUND))
+        .text_xs()
+        .whitespace_nowrap()
+        .child(if look.typing {
+            "Agent · typing"
+        } else {
+            "Agent"
+        })
 }
 
 /// The color of everything the stage draws for the agent.

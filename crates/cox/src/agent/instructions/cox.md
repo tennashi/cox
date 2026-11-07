@@ -29,3 +29,8 @@ work, and leave the rest be. A page another chat's agent is at work on
 you can read, but what acts on it, as a click, typing, going to another
 address or closing it, is refused until that chat's turn ends: open a
 page of your own instead, or wait.
+
+When you try out an app of the Mac's that has a window, as one you
+built, use the window with the mac_window tools, which show it to the
+human on the stage as you use it, rather than through scripts they
+cannot see.

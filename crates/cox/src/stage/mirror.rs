@@ -1,18 +1,21 @@
 //! What the tabs that show another program's screen share, as an Android
 //! emulator's display or a Mac app's window: the picture as it last came,
-//! drawn as big as fits in the middle of the tab, and, for a program that
-//! takes it, the mouse over it, passed on as presses of its left button,
-//! drags and the wheel, where they fall across the picture.
+//! drawn as big as fits in the middle of the tab, with the agent's pointer
+//! over it, for a program the agent uses; and, for a program that takes
+//! it, the mouse over it, passed on as presses of its left button, drags
+//! and the wheel, where they fall across the picture.
 
 use std::sync::Arc;
 
+use cox_browser::pointer::{Look, Spot};
 use gpui::{
-    App, Bounds, Corners, DispatchPhase, Element, ElementId, Entity, FocusHandle, GlobalElementId,
-    Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, ScrollDelta, ScrollWheelEvent, Style,
-    Window, fill, point, px, relative, rgb, size,
+    App, Bounds, ContentMask, Corners, DispatchPhase, Element, ElementId, Entity, FocusHandle,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage,
+    ScrollDelta, ScrollWheelEvent, Style, Window, fill, point, px, relative, rgb, size,
 };
 
+use crate::stage::pointer::paint_agent;
 use crate::ui::theme::RAISED;
 
 /// How many logical pixels one line of a wheel scroll is.
@@ -39,6 +42,8 @@ pub(super) struct Screen {
     asked: Option<(u32, u32)>,
     /// Where the picture was drawn last, in the window.
     drawn: Option<Bounds<Pixels>>,
+    /// Where the tab drew the picture in, in the window, as big as it is.
+    area: Option<Bounds<Pixels>>,
     /// Whether the mouse's left button is down on the picture.
     pressed: bool,
 }
@@ -53,6 +58,29 @@ impl Screen {
     /// program starts again.
     pub(super) fn ask_again(&mut self) {
         self.asked = None;
+    }
+
+    /// The picture as it is now, as BGRA: the one waiting to be drawn, or
+    /// else the one drawn last.
+    pub(super) fn picture(&self) -> Option<(u32, u32, Vec<u8>)> {
+        if let Some(waiting) = &self.waiting {
+            return Some(waiting.clone());
+        }
+        let image = self.image.as_ref()?;
+        let size = image.size(0);
+        let width = u32::try_from(size.width.0).ok()?;
+        let height = u32::try_from(size.height.0).ok()?;
+        Some((width, height, image.as_bytes(0)?.to_vec()))
+    }
+
+    /// Where the picture was drawn last, from the top left corner of the
+    /// tab's area for it.
+    pub(super) fn drawn_within(&self) -> Option<Bounds<Pixels>> {
+        let (drawn, area) = (self.drawn?, self.area?);
+        Some(Bounds {
+            origin: drawn.origin - area.origin,
+            size: drawn.size,
+        })
     }
 
     /// Where `position` is across the picture, from 0 to 1 each way, as it
@@ -72,6 +100,11 @@ pub(super) trait Mirrored: 'static {
     fn is_live(&self) -> bool;
     /// Asks the program for pictures `width` by `height` pixels.
     fn resize(&mut self, width: u32, height: u32);
+    /// How the agent's pointer looks over the picture, if it shows, and how
+    /// big the program's screen is, in the units the look has its spots.
+    fn agent(&self) -> Option<(&Look, (f32, f32))> {
+        None
+    }
     /// Has the mouse over the picture, `over`, go on to the program, if it
     /// takes it, as [`pass_on`] does.
     fn listen(_mirrored: &Entity<Self>, _over: &Hitbox, _window: &mut Window)
@@ -225,11 +258,48 @@ impl<T: Mirrored> Element for Display<T> {
                 .ok();
             at
         });
-        self.mirrored
-            .update(cx, |mirrored, _| mirrored.screen().drawn = drawn);
+        let agent = self.mirrored.update(cx, |mirrored, _| {
+            let screen = mirrored.screen();
+            screen.drawn = drawn;
+            screen.area = Some(bounds);
+            let (look, (width, _)) = mirrored.agent()?;
+            Some((scaled(look, f32::from(drawn?.size.width) / width), drawn?))
+        });
+        if let Some((look, drawn)) = agent {
+            window.with_content_mask(Some(ContentMask { bounds: drawn }), |window| {
+                paint_agent(&look, drawn, window);
+            });
+            if look.next_change.is_zero() {
+                window.request_animation_frame();
+            }
+        }
 
         T::listen(&self.mirrored, hitbox, window);
     }
+}
+
+/// `look` as big as the picture is drawn, `scale` times what it says.
+pub(super) fn scaled(look: &Look, scale: f32) -> Look {
+    let spot = |spot: Spot| Spot {
+        x: spot.x * scale,
+        y: spot.y * scale,
+    };
+    let mut look = look.clone();
+    look.pointer = spot(look.pointer);
+    for ripple in &mut look.ripples {
+        ripple.at = spot(ripple.at);
+    }
+    if let Some(field) = &mut look.field {
+        let corner = spot(Spot {
+            x: field.x,
+            y: field.y,
+        });
+        field.x = corner.x;
+        field.y = corner.y;
+        field.width *= scale;
+        field.height *= scale;
+    }
+    look
 }
 
 /// Passes the mouse over the picture, `over`, on to `mirrored`'s program:

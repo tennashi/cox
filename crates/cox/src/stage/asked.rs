@@ -2,7 +2,10 @@
 //! chat's relay, an agent works on its pages, which the stage shows, and
 //! opens and closes them. Through Cox's own tools, it shows the human
 //! files, as Markdown or as they are written, what changed in them, and
-//! the map of the project, and runs commands in terminals.
+//! the map of the project, runs commands in terminals, and looks at and
+//! uses the windows of the Mac's other apps (see [`mac`]).
+
+mod mac;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -109,6 +112,7 @@ impl Stage {
                 answer,
                 ..
             } => stage.run_command(command, &cwd, answer, window, cx),
+            ToolRequest::MacWindow { act, answer } => stage.mac_act(act, answer, window, cx),
         }
     }
 

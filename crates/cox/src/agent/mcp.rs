@@ -106,6 +106,13 @@ pub enum ToolRequest {
         /// terminal, so that it runs only where they see it.
         asks_human: bool,
     },
+    /// Do `act` with the windows of the Mac's other apps, on a tab of the
+    /// stage that shows the window, and answer what the agent sees then.
+    /// While no window is there, there is nothing to show them on.
+    MacWindow {
+        act: MacAct,
+        answer: oneshot::Sender<Result<Seen, String>>,
+    },
 }
 
 impl ToolRequest {
@@ -138,6 +145,7 @@ impl ToolRequest {
             Self::RunCommand { command, cwd, .. } => {
                 format!("run `{command}` in {}", cwd.display())
             }
+            Self::MacWindow { act, .. } => act.said(),
         }
     }
 }
@@ -239,6 +247,96 @@ pub struct Ran {
     pub ended: Ended,
 }
 
+/// What the agent does with the windows of the Mac's other apps. Where it
+/// does it is in the pixels of the window's picture, as the agent last saw
+/// it (see [`Seen`]), from its top left corner.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum MacAct {
+    /// Lists the windows.
+    List,
+    /// Looks at the window numbered `window`, as it is now.
+    Look { window: u32 },
+    /// Clicks there, with the right button if `right`, `count` times in a
+    /// row.
+    Click {
+        window: u32,
+        x: u32,
+        y: u32,
+        right: bool,
+        count: u8,
+    },
+    /// Types `text` into the window, where its app has the keyboard.
+    Type { window: u32, text: String },
+    /// Presses `key`, as `Enter` or `cmd+a`.
+    Key { window: u32, key: String },
+    /// Turns the wheel there, by `dx` and `dy` pixels.
+    Scroll {
+        window: u32,
+        x: u32,
+        y: u32,
+        dx: i32,
+        dy: i32,
+    },
+}
+
+impl MacAct {
+    /// The window acted on, unless the act lists them.
+    #[must_use]
+    pub fn window(&self) -> Option<u32> {
+        match self {
+            Self::List => None,
+            Self::Look { window }
+            | Self::Click { window, .. }
+            | Self::Type { window, .. }
+            | Self::Key { window, .. }
+            | Self::Scroll { window, .. } => Some(*window),
+        }
+    }
+
+    /// What is done, as the log says it. What is typed may be a password:
+    /// it says only how long it is.
+    #[must_use]
+    pub fn said(&self) -> String {
+        match self {
+            Self::List => "list the Mac's windows".to_owned(),
+            Self::Look { window } => format!("look at Mac window {window}"),
+            Self::Click {
+                window,
+                x,
+                y,
+                right,
+                count,
+            } => {
+                let button = if *right { "right-click" } else { "click" };
+                format!("{button} Mac window {window} at {x},{y} ×{count}")
+            }
+            Self::Type { window, text } => {
+                format!(
+                    "type {} characters in Mac window {window}",
+                    text.chars().count()
+                )
+            }
+            Self::Key { window, key } => format!("press {key} in Mac window {window}"),
+            Self::Scroll {
+                window,
+                x,
+                y,
+                dx,
+                dy,
+            } => format!("scroll Mac window {window} at {x},{y} by {dx},{dy}"),
+        }
+    }
+}
+
+/// What the agent sees of the Mac's windows: what is said of them, and a
+/// picture of the window acted on.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Seen {
+    pub text: String,
+    /// The window's picture, as PNG in base64.
+    pub png: Option<String>,
+}
+
 /// How a command ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Ended {
@@ -309,6 +407,16 @@ pub(crate) fn answered(text: &str, is_error: bool) -> Value {
         "content": [{ "type": "text", "text": text }],
         "isError": is_error,
     })
+}
+
+/// The result of a call that answers with `text`, and the picture `png`,
+/// PNG in base64, if there is one.
+pub(crate) fn answered_with_picture(text: &str, png: Option<&str>) -> Value {
+    let mut content = vec![json!({ "type": "text", "text": text })];
+    if let Some(png) = png {
+        content.push(json!({ "type": "image", "data": png, "mimeType": "image/png" }));
+    }
+    json!({ "content": content, "isError": false })
 }
 
 /// How many servers this Cox started, which numbers their directories.
