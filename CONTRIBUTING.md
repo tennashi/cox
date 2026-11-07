@@ -1025,7 +1025,9 @@ mouse and keys posted to it only in part, as a page in Chrome takes a
 click only while Chrome takes itself for the active app, and only
 through functions macOS keeps private, which it may change or drop.
 macOS asks the human to allow Cox to record the screen, for the pictures
-and the windows' titles, which the tabs ask for with "Allow…". A closed
+and the windows' titles, which the tabs ask for with "Allow…", and only
+then, since the system asks again each time Cox looks for the windows
+while it may not. A closed
 chat's stage, or the next run's, opens the tab again on the window of
 the same app and title, if one is open, and else with "Show" to look for
 it again.
@@ -1114,9 +1116,17 @@ five copies of `cox-helper` (`Cox Helper.app`, `Cox Helper (GPU).app`,
 ...) under `Contents/Frameworks`. CEF fixes that layout and those names,
 starting from the executable's. The app's icon,
 [`app-icon.svg`](crates/cox/assets/app-icon.svg), it renders into
-`Contents/Resources/Cox.icns`, at each size macOS asks for. It then signs the app as a whole, ad
-hoc, which macOS asks of an app before it shows the app's
-notifications. `cargo run` on macOS stops at once,
+`Contents/Resources/Cox.icns`, at each size macOS asks for. It then signs the app as a whole, which macOS asks of an app before it shows the app's
+notifications: with the certificate `COX_SIGNING_IDENTITY` names, or
+else "Cox Local Signing" when the keychain has it, or else ad hoc. macOS
+keeps what the human allowed Cox, as to record the screen, for the app
+it knows by its signature, which for an app signed ad hoc is the
+build's own hash: each build of it is another app to macOS, which asks
+again. Signed with a certificate, every build is the same app. A
+certificate of one's own is enough, made once in the login keychain
+with Keychain Access, "Certificate Assistant", "Create a Certificate…":
+named "Cox Local Signing", "Self Signed Root", of the type "Code
+Signing". `cargo run` on macOS stops at once,
 saying where the framework was expected.
 
 ## coxd

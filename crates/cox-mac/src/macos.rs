@@ -63,6 +63,12 @@ fn said(error: *mut NSError) -> String {
 /// What the system shares to capture now: the windows on screen, but the
 /// desktop's.
 fn shareable() -> anyhow::Result<Retained<SCShareableContent>> {
+    // Asked while Cox may not record the screen, the system shows its
+    // dialog again each time, as the list of windows asks every few
+    // seconds: only the human's "Allow…" asks.
+    if !may_record() {
+        anyhow::bail!("Cox may not record the screen yet");
+    }
     let (sent, answer) = std::sync::mpsc::channel();
     let handler = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
