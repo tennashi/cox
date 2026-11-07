@@ -71,7 +71,7 @@ fn open_talking_to(
     open_agent(cx, agent, Vec::new(), Opened::default(), None, false)
 }
 
-/// Opens the window like [`open_with_stage`], on a chat in no project,
+/// Opens the window like [`open_with_stage`], on a chat of Cox's own,
 /// which works in the system's folder of temporary files, talking to
 /// `agent`, which gets no instructions and no terminal.
 fn open_agent(

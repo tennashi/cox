@@ -37,7 +37,7 @@ use super::{Daemon, Internal, Spawns};
 const LOOK_EVERY: Duration = Duration::from_millis(500);
 
 /// Runs coxd on `socket` until it is stopped: the chats kept in `store`,
-/// those in no project working in `home`, their agents started by
+/// Cox's own working in `home`, their agents started by
 /// `spawns`, all made on this thread.
 ///
 /// # Errors

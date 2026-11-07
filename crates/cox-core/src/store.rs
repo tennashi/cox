@@ -31,7 +31,7 @@ CREATE TABLE projects (
 );
 CREATE TABLE chats (
     id INTEGER PRIMARY KEY,
-    -- NULL for a chat in no project.
+    -- NULL for a chat of Cox's own, in no project.
     project INTEGER REFERENCES projects (id),
     name TEXT NOT NULL,
     -- When the chat was opened, in milliseconds since the epoch.
@@ -148,7 +148,7 @@ pub struct KeptProject {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeptChat {
     pub id: ChatId,
-    /// Its project, or `None` for no project.
+    /// Its project, or `None` for Cox's own.
     pub project: Option<ProjectId>,
     pub name: String,
     pub named: Named,
@@ -333,7 +333,7 @@ impl Store {
         Ok(ProjectId(self.connection.last_insert_rowid()))
     }
 
-    /// Keeps a new chat named `name` in `project`, or in no project.
+    /// Keeps a new chat named `name` in `project`, or of Cox's own.
     ///
     /// # Errors
     ///
@@ -346,7 +346,7 @@ impl Store {
         Ok(ChatId(self.connection.last_insert_rowid()))
     }
 
-    /// Keeps a new chat named `name` in `project`, or in no project, which
+    /// Keeps a new chat named `name` in `project`, or of Cox's own, which
     /// the agent of `parent` opened, with its agent set up as `setup`
     /// says, if it said. The chat talks to the agent `parent` talks to.
     ///

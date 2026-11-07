@@ -65,7 +65,7 @@ pub fn describe(
     );
     let _ = writeln!(
         told,
-        "Chats in no project work in {}",
+        "Cox's own chats work in {}",
         workspace.home().display()
     );
     if workspace.is_folded() {

@@ -198,7 +198,7 @@ pub struct Schedule {
     pub file: PathBuf,
     /// When it runs.
     pub every: Every,
-    /// Where its chat works, or, when `None`, Cox's home, in no project.
+    /// Where its chat works, or, when `None`, Cox's home, as Cox's own.
     pub folder: Option<PathBuf>,
     /// The patterns of the permission requests its agent goes on with
     /// unasked, as `open_chat`'s `allow` takes them.

@@ -304,7 +304,7 @@ pub struct Daemon(#[expect(dead_code, reason = "it is held to run")] Running);
 
 /// Opens the window with no chat, over a daemon of its own, which keeps
 /// the chats as `kept` says, starts their agents as `fakes` says, and
-/// has chats in no project work in `home`. The chats' stages are made by
+/// has Cox's own chats work in `home`. The chats' stages are made by
 /// `stages`.
 pub fn open_window(
     cx: &mut TestAppContext,

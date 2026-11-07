@@ -60,7 +60,7 @@ fn kept_store(name: &str) -> KeptStore {
     KeptStore { path, store }
 }
 
-/// Opens the window with no chat, chats in no project working in `home`,
+/// Opens the window with no chat, Cox's own chats working in `home`,
 /// keeping them in memory.
 fn open_window(
     cx: &mut TestAppContext,
@@ -199,7 +199,7 @@ fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool {
     cx.debug_bounds(selector).is_some()
 }
 
-/// The view of the chat at `index` in no project, made for it unless
+/// The view of the chat at `index` of Cox's own, made for it unless
 /// it had one, once the daemon has told it the chat's conversation.
 fn view_at(
     cx: &mut VisualTestContext,
@@ -307,7 +307,7 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
         say(cx, &workspace, line).await;
     }
     // "New chat" in the list of chats opens a chat in the project chosen
-    // on the rail, and so does no project's, chosen.
+    // on the rail, and so does Cox's own, chosen.
     click(cx, "new-chat-in-2");
     click(cx, "project-1");
     click(cx, "new-chat-in-1");
@@ -328,7 +328,7 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
     assert_eq!(
         names(cx, &workspace),
         listed(&[
-            ("No project", &["hello", "Chat 2"]),
+            ("Cox", &["hello", "Chat 2"]),
             (&name, &["one", "two", "Chat 3"]),
         ])
     );
@@ -422,7 +422,7 @@ async fn the_rail_chooses_the_project_whose_chats_the_tabs_show(cx: &mut TestApp
 }
 
 #[gpui::test]
-async fn the_settings_set_where_chats_in_no_project_work(cx: &mut TestAppContext) {
+async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
     let home = scratch("settings-home");
     let other = scratch("settings-other");
     let (agents, workspace, cx) = open_window(cx, home.clone());
@@ -459,7 +459,7 @@ async fn the_settings_set_where_chats_in_no_project_work(cx: &mut TestAppContext
         "the home lasts across runs"
     );
 
-    // Escape closes them, and the next chat in no project works there.
+    // Escape closes them, and the next chat of Cox's own works there.
     cx.simulate_keystrokes("escape");
     let open = workspace.read_with(cx, |workspace, _| workspace.settings().is_some());
     assert!(!open);
@@ -472,7 +472,7 @@ async fn the_settings_set_where_chats_in_no_project_work(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn opening_the_home_as_a_folder_opens_a_chat_in_no_project(cx: &mut TestAppContext) {
+fn opening_the_home_as_a_folder_opens_a_chat_of_coxs_own(cx: &mut TestAppContext) {
     let home = scratch("home-folder");
     let (_agents, workspace, cx) = open_window(cx, home.clone());
 
@@ -480,10 +480,7 @@ fn opening_the_home_as_a_folder_opens_a_chat_in_no_project(cx: &mut TestAppConte
         workspace.open(Some(home.clone()), window, cx);
     });
 
-    assert_eq!(
-        names(cx, &workspace),
-        listed(&[("No project", &["Chat 1"])])
-    );
+    assert_eq!(names(cx, &workspace), listed(&[("Cox", &["Chat 1"])]));
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -672,7 +669,7 @@ async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
 
     let told = describe(cx, None);
     let listed = format!(
-        "The chats, as listed:\n  No project ({}), chosen\n    chat 1 \"first\": idle\n    chat 2 \"Chat 2\": idle, shown\n",
+        "The chats, as listed:\n  Cox ({}), chosen\n    chat 1 \"first\": idle\n    chat 2 \"Chat 2\": idle, shown\n",
         home.display()
     );
     assert!(told.contains(&listed), "{told}");
@@ -789,7 +786,7 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     let name = folder.file_name().unwrap().to_string_lossy().into_owned();
     assert_eq!(
         names(cx, &again),
-        listed(&[("No project", &["hello"]), (&name, &["permission"])])
+        listed(&[("Cox", &["hello"]), (&name, &["permission"])])
     );
     assert_eq!(opened(cx, &again), [vec![false], vec![false]]);
     let read = |cx: &mut VisualTestContext, place| {
@@ -816,10 +813,7 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
     });
     assert_eq!(
         names(cx, &again),
-        listed(&[
-            ("No project", &["hello"]),
-            (&name, &["permission", "Chat 2"])
-        ])
+        listed(&[("Cox", &["hello"]), (&name, &["permission", "Chat 2"])])
     );
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&folder);
@@ -872,7 +866,7 @@ fn kept_chat(
 }
 
 /// The chat kept, at the top of the list: the first project's only one,
-/// after no project, which has none.
+/// after Cox's own, which has none.
 const FIRST_KEPT: usize = 0;
 
 #[gpui::test]
@@ -1286,7 +1280,7 @@ async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppC
     let (_, workspace, cx) = open_window_keeping(cx, scratch("named"), store.clone());
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "a title, please").await;
-    assert_eq!(names(cx, &workspace), listed(&[("No project", &[TITLE])]));
+    assert_eq!(names(cx, &workspace), listed(&[("Cox", &[TITLE])]));
     assert_eq!(
         kept_names(&store),
         [(TITLE.to_owned(), Named::Agent, false)]
@@ -1298,7 +1292,7 @@ async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppC
     cx.simulate_input("Mine");
     cx.simulate_keystrokes("enter");
     say(cx, &workspace, "another title").await;
-    assert_eq!(names(cx, &workspace), listed(&[("No project", &["Mine"])]));
+    assert_eq!(names(cx, &workspace), listed(&[("Cox", &["Mine"])]));
     assert_eq!(
         kept_names(&store),
         [("Mine".to_owned(), Named::Human, false)]
@@ -1309,7 +1303,7 @@ async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppC
     click(cx, "rename-chat");
     cx.simulate_input("Not mine");
     cx.simulate_keystrokes("escape");
-    assert_eq!(names(cx, &workspace), listed(&[("No project", &["Mine"])]));
+    assert_eq!(names(cx, &workspace), listed(&[("Cox", &["Mine"])]));
 }
 
 #[gpui::test]
@@ -1347,7 +1341,7 @@ async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut Test
 
     right_click(cx, "chat-2");
     click(cx, "archive-chat");
-    assert_eq!(names(cx, &workspace), listed(&[("No project", &["first"])]));
+    assert_eq!(names(cx, &workspace), listed(&[("Cox", &["first"])]));
     // The chat after it in the list, or before it, is shown instead.
     let shown_name = |cx: &mut VisualTestContext, workspace: &Entity<Workspace>| {
         workspace.read_with(cx, |workspace, _| {
@@ -1365,7 +1359,7 @@ async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut Test
 
     // It stays archived once Cox starts again.
     let again = start_again(cx, home.clone(), &store, &agents);
-    assert_eq!(names(cx, &again), listed(&[("No project", &["first"])]));
+    assert_eq!(names(cx, &again), listed(&[("Cox", &["first"])]));
     let archived = again.read_with(cx, |workspace, _| {
         workspace
             .archived()
@@ -1379,7 +1373,7 @@ async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut Test
     click(cx, "archived-1");
     assert_eq!(
         names(cx, &workspace),
-        listed(&[("No project", &["first", "second"])])
+        listed(&[("Cox", &["first", "second"])])
     );
     assert_eq!(shown_name(cx, &workspace).as_deref(), Some("second"));
     assert!(!kept_names(&store)[1].2);
@@ -1819,7 +1813,7 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     assert_eq!(store.chats().unwrap()[0].goal, None);
 }
 
-/// The key of the chat at `index` in no project, and that of the chat
+/// The key of the chat at `index` of Cox's own, and that of the chat
 /// whose agent opened it, if an agent did.
 fn keys(
     cx: &mut VisualTestContext,
@@ -1874,7 +1868,7 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     // the first line of any chat does.
     assert_eq!(
         names(cx, &workspace),
-        listed(&[("No project", &["hello", "permission", "second"])])
+        listed(&[("Cox", &["hello", "permission", "second"])])
     );
     let (child, opened_by) = keys(cx, &workspace, 1);
     assert_eq!(opened_by, Some(parent));
@@ -1920,7 +1914,7 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     let again = start_again(cx, home.clone(), &store, &agents);
     assert_eq!(
         names(cx, &again),
-        listed(&[("No project", &["hello", "permission", "second"])])
+        listed(&[("Cox", &["hello", "permission", "second"])])
     );
     let (parent, _) = keys(cx, &again, 0);
     let (_, opened_by) = keys(cx, &again, 1);
@@ -2145,7 +2139,7 @@ async fn a_chat_opens_a_sketch_beside_it(cx: &mut TestAppContext) {
     );
     assert_eq!(
         names(cx, &workspace),
-        listed(&[("No project", &["hello", "A warmer greeting."])])
+        listed(&[("Cox", &["hello", "A warmer greeting."])])
     );
 
     // A sketch does not open a sketch beside it.
@@ -2207,10 +2201,7 @@ async fn the_human_starts_a_sketch_of_what_they_would_have_tried(cx: &mut TestAp
     assert_eq!(agents.borrow().last().unwrap().cwd(), Some(folder.clone()));
     assert_eq!(
         names(cx, &workspace),
-        listed(&[(
-            "No project",
-            &["hello", "Whether the greeting can name the user."]
-        )])
+        listed(&[("Cox", &["hello", "Whether the greeting can name the user."])])
     );
     let entries = entries(cx, &sketch);
     assert!(
@@ -2689,7 +2680,7 @@ async fn the_human_asks_a_chat_to_keep_what_it_learned_in_the_wiki(cx: &mut Test
         .unwrap();
     cx.run_until_parked();
     let whereabouts = heard.await.unwrap();
-    assert_eq!(whereabouts.project, "No project");
+    assert_eq!(whereabouts.project, "Cox");
     assert_eq!(whereabouts.chat, "hello");
     assert!(whereabouts.kept.is_some());
 

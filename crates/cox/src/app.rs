@@ -76,7 +76,7 @@ pub enum Mode {
 pub struct Settings {
     /// The page each chat's stage shows first.
     pub stage: String,
-    /// Where chats in no project work for this run, if not where the
+    /// Where Cox's own chats work for this run, if not where the
     /// settings say, or `~/cox` (see [`crate::settings`]).
     pub home: Option<PathBuf>,
     /// Where Cox keeps what lasts across its runs, if not where it keeps
@@ -493,7 +493,7 @@ fn shut_down_on_quit(cef: Cef, cx: &mut App) {
 struct Opened {
     link: crate::daemon::Link,
     from_daemon: tokio::sync::mpsc::UnboundedReceiver<crate::daemon::wire::FromDaemon>,
-    /// Where chats in no project work, which `--home` gave when
+    /// Where Cox's own chats work, which `--home` gave when
     /// `home_given` says so.
     home: PathBuf,
     home_given: bool,
@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn chats_in_no_project_work_in_cox_in_the_home_directory() {
+    fn coxs_own_chats_work_in_cox_in_the_home_directory() {
         let Some(home) = std::env::var_os("HOME") else {
             return;
         };

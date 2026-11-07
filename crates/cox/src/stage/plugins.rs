@@ -330,7 +330,7 @@ impl Plugins {
     }
 }
 
-/// The home, the folder of no project: as the window tells it, or else
+/// The home, the folder of Cox's own chats: as the window tells it, or else
 /// as the settings set it.
 fn home() -> PathBuf {
     crate::stage::activity::home()

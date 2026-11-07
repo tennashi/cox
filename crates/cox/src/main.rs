@@ -3,7 +3,8 @@
 //! the agent of `agents.json` the settings name when the system opens Cox
 //! with none, each
 //! in the project of a folder of the human's choice, working there, or in
-//! no project, working in the `--home` directory, `~/cox` unless asked.
+//! Cox's own, of no project, working in the `--home` directory, `~/cox`
+//! unless asked.
 //! Each chat has a stage of its own, showing `<url>` first, which its agent
 //! can read and drive too. The chats are kept as they go, to read after Cox
 //! starts again, and to go on with, where this Cox keeps what lasts, or in

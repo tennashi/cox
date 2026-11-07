@@ -46,20 +46,21 @@ counts the other chats of its project that wait for the human; a click
 on it opens a list of the chats of the project chosen on the rail, over
 the conversation, which a click on one shows. A click on a project
 chooses it, showing the chat of it shown last, or, with none, the stage
-of its folder alone, as Cox shows the home's, `~`, as it opens. A project is a folder:
+of its folder alone, as Cox shows its own, the home's, as it opens. A project is a folder:
 "Open folder…", the + at the foot of the rail (Command-O on macOS,
 Control-O elsewhere), opens a chat in the project of a folder of your
 choice, and "New chat" in the list opens another chat in the project
 chosen. "New chat" (Command-N, Control-N)
-opens one in no project, which works in Cox's home: `<dir>` when given,
-or else the folder the settings set, or else `~/cox`; the rail shows it
-as `~`. The gear at the foot of the rail (Command-, on macOS, Control-,
+opens one of Cox's own, in no project, which works in Cox's home: `<dir>`
+when given, or else the folder the settings set, or else `~/cox`. The
+rail shows Cox first, by its icon, with no name under it, as a place of
+its own, whose chats are Cox's own. The gear at the foot of the rail (Command-, on macOS, Control-,
 elsewhere) opens the settings, on a card over the window, where the
 human sets the home: a path typed in its input, whole or from `~`, which
 Enter sets, or a folder "Choose…" asks for. The settings are kept in
 `settings.json`, in Cox's data folder (see [The stage](#the-stage)), as
 `agents.json` is, and the
-chats in no project that open from then on work there; `--home` still
+Cox's own chats that open from then on work there; `--home` still
 goes ahead of them for its run, until the human sets the home. Under
 the home, the card lists the agents of `agents.json` (see below), a row
 each, with its name and its command on one line, as a shell takes it,
@@ -1268,7 +1269,7 @@ Find out what changed in Rust since {last}.
 or `every` and a number of hours, as `every 6h`, in the time of the
 place Cox runs in. `folder`, whole or from `~`, is where the chat works,
 in the project of that folder, which Cox makes if it is not there; with
-none, the chat works in the home, in no project. `allow` lists the
+none, the chat works in the home, as Cox's own. `allow` lists the
 patterns of the permission requests Cox answers in the human's place,
 as `open_chat`'s `allow` takes them (see [The stage](#the-stage)); the
 rest the agent asks the human, as any chat does. In the first line,
@@ -1376,8 +1377,8 @@ shows.
 builds Cox and runs it with the fake agent playing `<scenario>`, the tour
 unless given, or with `<agent command>`, keeping what lasts in `<dir>`,
 or afresh in `target/debug/cox-run` each time (see `--data` in
-[The stage](#the-stage)), and says where the files of its runs are. Its
-chats in no project work in `home` there, as its settings set it the
+[The stage](#the-stage)), and says where the files of its runs are. Cox's
+own chats work in `home` there, as its settings set it the
 first time, until the human sets another.
 `--headless`, on Linux, runs Cox on a display of its own, which Xvfb
 draws in memory, with no screen; `cox --inspect` (see

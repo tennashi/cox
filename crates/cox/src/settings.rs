@@ -2,8 +2,8 @@
 //! [`view`]), which lasts across runs in `settings.json`, where Cox keeps
 //! what lasts (see [`crate::storage`]), as `{"home": "/home/me/Cox"}`.
 //!
-//! That is Cox's home: the folder chats in no project work in, which the
-//! rail shows as `~`. `--home` on the command line goes ahead of it for
+//! That is Cox's home: the folder Cox's own chats work in, which the
+//! rail shows as Cox's icon. `--home` on the command line goes ahead of it for
 //! the run, and without either, the home is `~/cox`. The file also says
 //! where the human keeps how they work with Cox, whatever the project, as
 //! `{"workflow": "~/dotfiles/cox"}`, and where their wiki is, as
@@ -37,7 +37,7 @@ use crate::stage::follow::Stamp;
 use crate::storage::Kept;
 use crate::workspace::Workspace;
 
-/// The folder chats in no project work in, in the home directory, unless
+/// The folder Cox's own chats work in, in the home directory, unless
 /// the human chose another.
 pub const HOME: &str = "cox";
 
@@ -47,7 +47,7 @@ const LOOK_EVERY: Duration = Duration::from_millis(500);
 /// The settings as `settings.json` keeps them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Saved {
-    /// Where chats in no project work, if the human chose it.
+    /// Where Cox's own chats work, if the human chose it.
     pub home: Option<PathBuf>,
     /// The folder of the human's workflow, if they named one.
     pub workflow: Option<PathBuf>,
@@ -199,7 +199,7 @@ impl Saved {
     }
 }
 
-/// Where chats in no project work: `home`, or `~/cox`, as an absolute
+/// Where Cox's own chats work: `home`, or `~/cox`, as an absolute
 /// path, which the agent needs.
 #[must_use]
 pub fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
@@ -214,7 +214,7 @@ pub fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
 /// Follows `settings.json` and `agents.json` as they change, as when the
 /// human edits them, for as long as `window` is: the agents are those
 /// `agents.json` lists now, a new chat talking to the one `settings.json`
-/// names, and the chats in no project open from then on work in the home
+/// names, and Cox's own chats open from then on work in the home
 /// it names, unless `--home` gave another.
 pub fn follow(window: WindowHandle<Workspace>, agents: Agents, cx: &mut App) {
     let files: Vec<PathBuf> = [Kept::Settings, Kept::Agents]
@@ -418,7 +418,7 @@ pub fn translation() -> Option<Translation> {
     Saved::read().translation
 }
 
-/// Keeps `home` as where chats in no project work, in this Cox's
+/// Keeps `home` as where Cox's own chats work, in this Cox's
 /// `settings.json`.
 ///
 /// # Errors
