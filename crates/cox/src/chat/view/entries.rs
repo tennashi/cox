@@ -58,13 +58,27 @@ enum Speaker {
     Agent,
 }
 
+/// What happened, as the line of what ran on it names it: the event, as
+/// a trigger's `on` names it.
+fn event_label(on: &str) -> &'static str {
+    match on {
+        "goal.met" => "GOAL MET",
+        "wiki.written" => "WIKI WRITTEN",
+        "sketch.end" => "SKETCH ENDED",
+        "chat.open" => "CHAT OPENED",
+        _ => "TRIGGERS",
+    }
+}
+
 impl Speaker {
     /// Who says `entry`: none for Cox's notes, which go with whoever
     /// spoke last.
     fn of(entry: &Entry) -> Option<Self> {
         match entry {
             Entry::Human(_) | Entry::Attached(_) => Some(Self::Human),
-            Entry::Cox(_) | Entry::Keep { .. } | Entry::Checks(_) => Some(Self::Cox),
+            Entry::Cox(_) | Entry::Keep { .. } | Entry::Checks(_) | Entry::Event { .. } => {
+                Some(Self::Cox)
+            }
             Entry::Note(_) | Entry::Switched { .. } => None,
             _ => Some(Self::Agent),
         }
@@ -482,12 +496,14 @@ impl ChatView {
             .into_any_element()
     }
 
-    /// What runs as a turn ends, on one line: `TURN END`, then a chip for
-    /// the goal and each trigger, with a mark of how it went, which a
+    /// What runs as a turn ends, or as something else happens, on one
+    /// line: `TURN END`, or what happened, as `what` names it, then a chip
+    /// for the goal and each trigger, with a mark of how it went, which a
     /// click opens what it said under, once it ran.
     fn render_checks(
         &self,
         index: usize,
+        what: &'static str,
         checks: &[Check],
         writer: &mut Writer,
         cx: &mut Context<Self>,
@@ -562,7 +578,7 @@ impl ChatView {
                     .flex_wrap()
                     .items_center()
                     .gap(px(6.))
-                    .child(label().mr_1().child("TURN END"))
+                    .child(label().mr_1().child(what))
                     .children(chips),
             )
             .children(render_content(index, &said, writer))
@@ -683,7 +699,10 @@ impl ChatView {
                 render_proposal(index, goal, why.as_deref(), *answer, &mut writer, cx)
             }
             Entry::Keep { why, kept, .. } => render_keep(index, why, *kept, &mut writer, cx),
-            Entry::Checks(checks) => self.render_checks(index, checks, &mut writer, cx),
+            Entry::Checks(checks) => self.render_checks(index, "TURN END", checks, &mut writer, cx),
+            Entry::Event { on, checks } => {
+                self.render_checks(index, event_label(on), checks, &mut writer, cx)
+            }
             Entry::Note(text) => div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))

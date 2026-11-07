@@ -81,6 +81,11 @@ pub enum Entry {
     /// then the triggers of the folder it works in, in order, each with
     /// how it went.
     Checks(Vec<Check>),
+    /// What runs as something else happens in the chat, as its goal
+    /// being met: the triggers of the folder it works in that run on it,
+    /// `on`, as a trigger's `on` names it, as `goal.met`, each with how
+    /// it went.
+    Event { on: String, checks: Vec<Check> },
     /// A note from Cox: the instructions the agent gets, how a turn ended,
     /// an error, or the connection closing.
     Note(String),
@@ -152,7 +157,28 @@ pub enum Answer {
     Dismissed,
 }
 
-/// One of what runs as a turn ends: the chat's goal, or a trigger.
+impl Entry {
+    /// What ran, as a turn ended or as something else happened, if it is
+    /// that.
+    #[must_use]
+    pub fn checks(&self) -> Option<&[Check]> {
+        match self {
+            Self::Checks(checks) | Self::Event { checks, .. } => Some(checks),
+            _ => None,
+        }
+    }
+
+    /// What ran, to change how it went, if it is that.
+    pub fn checks_mut(&mut self) -> Option<&mut Vec<Check>> {
+        match self {
+            Self::Checks(checks) | Self::Event { checks, .. } => Some(checks),
+            _ => None,
+        }
+    }
+}
+
+/// One of what runs as a turn ends, or as something else happens: the
+/// chat's goal, or a trigger.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Check {
     /// What it goes by: `goal`, or the trigger's name.

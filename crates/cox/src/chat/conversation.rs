@@ -17,9 +17,17 @@
 //! the first that fails stops them, and the agent is told what it found.
 //! The conversation shows them, with the goal, on one line of chips (see
 //! [`Entry::Checks`]).
+//!
+//! The triggers that run as something else happens in the chat, as its
+//! goal being met, the host hands the conversation as it happens (see
+//! [`Conversation::run_event`]), and they run once the chat waits for the
+//! human, all of them, on a line of their own (see [`Entry::Event`]):
+//! what they find stays there, and the agent is not told it. A trigger
+//! `by: this` tells the chat's agent what it says, as the next turn, in
+//! the human's place, once those that run with it went.
 
 use std::collections::{BTreeSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cox_acp::{PermissionAnswer, SlashCommand, StopReason};
 pub use cox_core::entry::{
@@ -85,6 +93,19 @@ pub enum Does {
     /// Asks an agent of its own what the trigger says, which ends its
     /// reply with `PASS`, or `FAIL: ` and why, as a judge's.
     Ask(String),
+    /// Tells the chat's agent what the trigger says, as the next turn,
+    /// once what runs with it went: once for a line of the human's, as a
+    /// turn ends.
+    Tell(String),
+}
+
+/// What happened in a chat, besides a turn's end, whose triggers run:
+/// the event, as a trigger's `on` names it, as `goal.met`, and what the
+/// agent of a trigger is told of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Happened {
+    pub on: String,
+    pub about: String,
 }
 
 /// What runs now, as the turn ended.
@@ -144,6 +165,9 @@ impl Goal {
 /// The milestone of a chat whose goal is met, as the card that asks
 /// whether to keep what it learned says it.
 const GOAL_MET: &str = "The goal is met.";
+
+/// The event of the goal being met, as a trigger's `on` names it.
+const GOAL_MET_EVENT: &str = "goal.met";
 
 /// How `goal` reads, after "Goal:".
 #[must_use]
@@ -209,10 +233,37 @@ pub struct Conversation {
     /// in it of what runs now.
     marks: Option<(usize, usize)>,
     /// Whether the goal was met as the turn ended, which asks the human
-    /// whether to keep what was learned once the triggers pass too.
-    met: bool,
+    /// whether to keep what was learned once the triggers pass too, and
+    /// the host runs the triggers of.
+    met: Met,
     /// How many turns the chat took on the human's last line.
     turns: usize,
+    /// What happened whose triggers run now, while they do; `None` while
+    /// those of a turn's end do.
+    event: Option<Happened>,
+    /// What happened whose triggers wait for the chat to wait for the
+    /// human, the first first.
+    waiting: VecDeque<(Happened, Vec<Due>)>,
+    /// What the triggers `by: this` that went tell the agent once the
+    /// rest went, by their files.
+    tells: Vec<(PathBuf, String)>,
+    /// The triggers `by: this` that told the agent on the last line, by
+    /// their files, which a turn's end does not run again until the next.
+    told_line: BTreeSet<PathBuf>,
+    /// What happened on the last line whose triggers ran, as the goal
+    /// being met, which the turns after on the line meet again.
+    raised_line: BTreeSet<&'static str>,
+}
+
+/// Whether the goal was met as the turn ended.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Met {
+    #[default]
+    No,
+    /// It was, as what runs as the turn ended runs.
+    Now,
+    /// It was, once all ran, and the host has not run its triggers yet.
+    Untaken,
 }
 
 impl Default for Conversation {
@@ -239,8 +290,13 @@ impl Conversation {
             at: None,
             rest: VecDeque::new(),
             marks: None,
-            met: false,
+            met: Met::No,
             turns: 0,
+            event: None,
+            waiting: VecDeque::new(),
+            tells: Vec::new(),
+            told_line: BTreeSet::new(),
+            raised_line: BTreeSet::new(),
         }
     }
 
@@ -279,8 +335,13 @@ impl Conversation {
             at: None,
             rest: VecDeque::new(),
             marks: None,
-            met: false,
+            met: Met::No,
             turns: 0,
+            event: None,
+            waiting: VecDeque::new(),
+            tells: Vec::new(),
+            told_line: BTreeSet::new(),
+            raised_line: BTreeSet::new(),
         }
     }
 
@@ -534,6 +595,8 @@ impl Conversation {
         self.push(entry(text.to_owned()));
         self.state = State::Busy;
         self.turns = 1;
+        self.told_line.clear();
+        self.raised_line.clear();
         if let Some(goal) = &mut self.goal {
             goal.turns = 1;
         }
@@ -623,7 +686,7 @@ impl Conversation {
         self.push(Entry::Checks(marks));
         self.marks = Some((self.entries.len() - 1, 0));
         self.rest = due.into();
-        self.met = false;
+        self.met = Met::No;
         self.state = State::Checking;
         self.at = if self.goal.is_some() {
             Some(At::Goal)
@@ -633,12 +696,99 @@ impl Conversation {
         self.mark(CheckState::Running);
     }
 
+    /// Has `due`, the triggers that run on what `happened`, run as soon as
+    /// the chat waits for the human, which the host starts them with (see
+    /// [`Self::run_waiting`]).
+    pub fn run_event(&mut self, happened: Happened, due: Vec<Due>) {
+        if due.is_empty() {
+            return;
+        }
+        self.waiting.push_back((happened, due));
+    }
+
+    /// Starts the triggers of what happened first that wait, if any do
+    /// and the chat waits for the human; answers whether it did.
+    pub fn run_waiting(&mut self) -> bool {
+        if self.state != State::Idle {
+            return false;
+        }
+        let Some((happened, mut due)) = self.waiting.pop_front() else {
+            return false;
+        };
+        // A trigger by: this tells the agent once for a line.
+        due.retain(|due| !matches!(due.does, Does::Tell(_)) || !self.told_line.contains(&due.file));
+        if due.is_empty() {
+            return self.run_waiting();
+        }
+        let marks = due
+            .iter()
+            .map(|due| Check {
+                name: due.name.clone(),
+                state: CheckState::Waiting,
+                said: None,
+            })
+            .collect();
+        self.push(Entry::Event {
+            on: happened.on.clone(),
+            checks: marks,
+        });
+        self.marks = Some((self.entries.len() - 1, 0));
+        self.rest = due.into();
+        self.event = Some(happened);
+        self.state = State::Checking;
+        self.at = self.rest.pop_front().map(At::Trigger);
+        self.mark(CheckState::Running);
+        true
+    }
+
+    /// What happened whose triggers run now, while they do, as against
+    /// those of a turn's end.
+    #[must_use]
+    pub fn event(&self) -> Option<&Happened> {
+        self.event
+            .as_ref()
+            .filter(|_| self.state == State::Checking)
+    }
+
+    /// Whether the goal was met since this was last asked, for the host
+    /// to run the triggers of it.
+    pub fn take_goal_met(&mut self) -> bool {
+        let met = self.met == Met::Untaken;
+        if met {
+            self.met = Met::No;
+        }
+        met
+    }
+
+    /// What the trigger `by: this` that runs now tells the agent, while
+    /// one runs.
+    #[must_use]
+    pub fn telling(&self) -> Option<&str> {
+        match self.trigger()?.does {
+            Does::Tell(ref text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Takes what the trigger `by: this` that runs now tells the agent, to
+    /// tell it once the rest went, and returns the next turn to send, if
+    /// that was the last.
+    pub fn tell(&mut self) -> Option<Command> {
+        let due = self.trigger()?.clone();
+        let Does::Tell(text) = due.does else {
+            return None;
+        };
+        self.tells.push((due.file, text));
+        self.say("Told the chat's agent, once the rest went.");
+        self.next(CheckState::Passed)
+    }
+
     /// Marks what runs now as `state`, on the line of chips.
     fn mark(&mut self, state: CheckState) {
         let Some((entry, at)) = self.marks else {
             return;
         };
-        if let Some(Entry::Checks(marks)) = self.entries.get_mut(entry)
+        if let Some(marks) = self.entries.get_mut(entry).and_then(Entry::checks_mut)
             && let Some(mark) = marks.get_mut(at)
         {
             mark.state = state;
@@ -652,7 +802,7 @@ impl Conversation {
         let Some((entry, at)) = self.marks else {
             return;
         };
-        if let Some(Entry::Checks(marks)) = self.entries.get_mut(entry)
+        if let Some(marks) = self.entries.get_mut(entry).and_then(Entry::checks_mut)
             && let Some(mark) = marks.get_mut(at)
         {
             mark.said = Some(tail(said, OUTPUT_TAIL)).filter(|said| !said.is_empty());
@@ -661,23 +811,59 @@ impl Conversation {
     }
 
     /// What runs now passed: the next runs, or, when none is left, the
-    /// chat waits for the human, asking whether to keep what was learned
-    /// if the goal was met.
-    fn passed(&mut self) {
-        self.mark(CheckState::Passed);
+    /// chat waits for the human, as [`Self::next`] says.
+    fn passed(&mut self) -> Option<Command> {
+        self.next(CheckState::Passed)
+    }
+
+    /// What runs now went as `state` says, and what runs on: the next, or,
+    /// when none is left, the chat waits for the human, asking whether to
+    /// keep what was learned if the goal was met, unless the triggers `by:
+    /// this` that went tell the agent what they say, which returns the
+    /// turn to send.
+    fn next(&mut self, state: CheckState) -> Option<Command> {
+        self.mark(state);
         if let Some((_, at)) = &mut self.marks {
             *at += 1;
         }
         self.at = self.rest.pop_front().map(At::Trigger);
         if self.at.is_some() {
             self.mark(CheckState::Running);
-        } else {
-            self.state = State::Idle;
-            self.marks = None;
-            if self.met {
-                self.ask_to_keep_here(GOAL_MET);
-            }
+            return None;
         }
+        self.state = State::Idle;
+        self.marks = None;
+        let event = self.event.take();
+        if self.met == Met::Now {
+            self.ask_to_keep_here(GOAL_MET);
+            // Its triggers run once for a line, as the turns they start
+            // meet it again.
+            self.met = if self.raised_line.insert(GOAL_MET_EVENT) {
+                Met::Untaken
+            } else {
+                Met::No
+            };
+        }
+        let tells = std::mem::take(&mut self.tells);
+        if tells.is_empty() {
+            return None;
+        }
+        if event.is_none() && self.turns >= GOAL_TURNS {
+            self.push(Entry::Note(format!(
+                "The triggers by: this tell the agent nothing more: the chat took \
+                 {GOAL_TURNS} turns, as many as one line gets; send a line to go on."
+            )));
+            return None;
+        }
+        let (files, texts): (Vec<PathBuf>, Vec<String>) = tells.into_iter().unzip();
+        self.told_line.extend(files);
+        let prompt = texts.join("\n\n");
+        if event.is_none() {
+            self.turns += 1;
+        }
+        self.push(Entry::Cox(prompt.clone()));
+        self.state = State::Busy;
+        Some(Command::Prompt(prompt.into()))
     }
 
     /// Stops what runs as the turn ended, marking what runs now as
@@ -691,6 +877,19 @@ impl Conversation {
         self.rest.clear();
         self.marks = None;
         self.state = State::Idle;
+        self.event = None;
+        self.tells.clear();
+    }
+
+    /// What runs now could not run: as a turn ends, what was to run after
+    /// it does not, and the chat waits for the human; as something else
+    /// happened, the rest runs.
+    fn broken(&mut self) -> Option<Command> {
+        if self.event.is_some() {
+            return self.next(CheckState::Broken);
+        }
+        self.stop_checks(CheckState::Broken);
+        None
     }
 
     /// The name of what runs now as the turn ended, `goal` or a
@@ -700,12 +899,12 @@ impl Conversation {
         if self.state != State::Checking {
             return None;
         }
-        self.entries.iter().rev().find_map(|entry| match entry {
-            Entry::Checks(checks) => checks
+        self.entries.iter().rev().find_map(|entry| {
+            entry
+                .checks()?
                 .iter()
                 .find(|check| check.state == CheckState::Running)
-                .map(|check| check.name.as_str()),
-            _ => None,
+                .map(|check| check.name.as_str())
         })
     }
 
@@ -776,8 +975,7 @@ impl Conversation {
                     Some(name) => format!("The trigger `{name}` could not run: {error}"),
                     None => format!("The goal could not be checked: {error}"),
                 }));
-                self.stop_checks(CheckState::Broken);
-                return None;
+                return self.broken();
             }
         };
         self.say(&ran.output);
@@ -785,10 +983,9 @@ impl Conversation {
             Ended::Exited(0) => {
                 if trigger.is_none() {
                     self.push(Entry::Note(format!("Goal met: `{command}` passed.")));
-                    self.met = true;
+                    self.met = Met::Now;
                 }
-                self.passed();
-                return None;
+                return self.passed();
             }
             Ended::Closed => {
                 self.push(Entry::Note(match &trigger {
@@ -799,14 +996,16 @@ impl Conversation {
                         format!("The goal was not checked: the terminal of `{command}` was closed.")
                     }
                 }));
-                self.stop_checks(CheckState::Broken);
-                return None;
+                return self.broken();
             }
             ended => match &trigger {
                 Some(name) => format!("The trigger `{name}` did not pass: `{command}` {ended}."),
                 None => format!("Goal not met: `{command}` {ended}."),
             },
         };
+        if self.event.is_some() {
+            return self.next(CheckState::Failed);
+        }
         let output = tail(&ran.output, OUTPUT_TAIL);
         let go_on = if trigger.is_some() {
             "Fix what it found; the triggers run again as your turn ends."
@@ -849,9 +1048,8 @@ impl Conversation {
                 } else {
                     format!("Goal met, as judged: {said}")
                 }));
-                self.met = true;
-                self.passed();
-                return None;
+                self.met = Met::Now;
+                return self.passed();
             }
             Verdict::NotMet(why) => why,
         };
@@ -878,15 +1076,15 @@ impl Conversation {
                 self.push(Entry::Note(format!(
                     "The trigger `{name}` could not run: {error}"
                 )));
-                self.stop_checks(CheckState::Broken);
-                return None;
+                return self.broken();
             }
         };
         self.say(&said);
         let why = match Verdict::of(&said) {
-            Verdict::Met(_) => {
-                self.passed();
-                return None;
+            Verdict::Met(_) => return self.passed(),
+            // What happened besides a turn's end, the agent is not told.
+            Verdict::NotMet(_) if self.event.is_some() => {
+                return self.next(CheckState::Failed);
             }
             Verdict::NotMet(why) => why,
         };
@@ -1075,9 +1273,31 @@ impl Conversation {
             State::Checking => {
                 self.push(Entry::Note("Stopped.".to_owned()));
                 self.stop_checks(CheckState::Waiting);
+                self.waiting.clear();
                 None
             }
             State::Idle | State::Stopping | State::Closed => None,
+        }
+    }
+
+    /// The turn ended as `reason` says: a turn the agent ended as it
+    /// does, having done what it was asked, is when the goal is looked
+    /// at, and the triggers due run.
+    fn turn_ended(&mut self, reason: StopReason) {
+        if let Some(note) = ended(reason) {
+            self.push(Entry::Note(note.to_owned()));
+        }
+        // A trigger by: this tells the agent once for a line, so that the
+        // turn it starts does not tell it again.
+        let mut due = std::mem::take(&mut self.due);
+        due.retain(|due| !matches!(due.does, Does::Tell(_)) || !self.told_line.contains(&due.file));
+        let check = reason == StopReason::EndTurn
+            && self.state == State::Busy
+            && (self.goal.is_some() || !due.is_empty());
+        if check {
+            self.start_checks(due);
+        } else {
+            self.state = State::Idle;
         }
     }
 
@@ -1195,7 +1415,7 @@ impl Conversation {
             .collect();
         let after = turn
             .iter()
-            .position(|entry| matches!(entry, Entry::Checks(_)))
+            .position(|entry| entry.checks().is_some())
             .map_or(0, |at| at + 1);
         turn.into_iter().skip(after).find_map(|entry| match entry {
             Entry::Reply(text) | Entry::Note(text) => Some(text.as_str()),
@@ -1373,23 +1593,7 @@ impl Conversation {
                 options,
                 chosen,
             } => self.ask(id, title, content, options, Some(chosen)),
-            AgentEvent::TurnEnded(reason) => {
-                if let Some(note) = ended(reason) {
-                    self.push(Entry::Note(note.to_owned()));
-                }
-                // A turn the agent ended as it does, having done what it
-                // was asked, is when the goal is looked at, and the
-                // triggers due run.
-                let due = std::mem::take(&mut self.due);
-                let check = reason == StopReason::EndTurn
-                    && self.state == State::Busy
-                    && (self.goal.is_some() || !due.is_empty());
-                if check {
-                    self.start_checks(due);
-                } else {
-                    self.state = State::Idle;
-                }
-            }
+            AgentEvent::TurnEnded(reason) => self.turn_ended(reason),
             AgentEvent::LoginNeeded { options, failed } => self.ask_to_log_in(options, failed),
             AgentEvent::Note(note) => self.push(Entry::Note(note)),
             AgentEvent::TurnFailed(error) => {
@@ -2063,16 +2267,138 @@ mod tests {
             .entries()
             .iter()
             .rev()
-            .find_map(|entry| match entry {
-                Entry::Checks(checks) => Some(
-                    checks
+            .find_map(|entry| {
+                Some(
+                    entry
+                        .checks()?
                         .iter()
                         .map(|check| (check.name.clone(), check.state))
                         .collect(),
-                ),
-                _ => None,
+                )
             })
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_trigger_by_this_tells_the_agent_once_for_a_line() {
+        let commit = || Due {
+            name: "commit".to_owned(),
+            file: "/p/.cox/triggers/commit.md".into(),
+            does: Does::Tell("Write the commit message.".to_owned()),
+        };
+        let mut conversation = Conversation::new();
+        conversation.submit("fix");
+        conversation.set_due(vec![commit(), ci_and_simplify().remove(0)]);
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.telling(), Some("Write the commit message."));
+        // It tells once the rest went.
+        assert_eq!(conversation.tell(), None);
+        assert_eq!(conversation.checking(), Some("cargo test"));
+        assert_eq!(
+            conversation.checked(ran(0, "ok")),
+            Some(Command::Prompt(
+                "Write the commit message.".to_owned().into()
+            ))
+        );
+        assert_eq!(conversation.state(), State::Busy);
+        assert_eq!(
+            conversation.entries().last(),
+            Some(&Entry::Cox("Write the commit message.".to_owned()))
+        );
+        // The turn it starts does not tell it again.
+        conversation.set_due(vec![commit()]);
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.state(), State::Idle);
+        // The next line does.
+        conversation.submit("and the docs");
+        conversation.set_due(vec![commit()]);
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.telling(), Some("Write the commit message."));
+    }
+
+    #[test]
+    fn the_goal_met_again_on_a_line_runs_its_triggers_once() {
+        let commit = Due {
+            name: "commit".to_owned(),
+            file: "/p/.cox/triggers/commit.md".into(),
+            does: Does::Tell("Write the commit message.".to_owned()),
+        };
+        let happened = Happened {
+            on: "goal.met".to_owned(),
+            about: "The chat's goal is met.".to_owned(),
+        };
+        let mut conversation = Conversation::new();
+        conversation.set_goal(Some(goal::Goal::Command("make".to_owned())));
+        conversation.submit("fix");
+        take_turn(&mut conversation, true);
+        conversation.checked(ran(0, "ok"));
+        assert!(conversation.take_goal_met());
+        conversation.run_event(happened.clone(), vec![commit.clone()]);
+        assert!(conversation.run_waiting());
+        assert_eq!(
+            conversation.tell(),
+            Some(Command::Prompt(
+                "Write the commit message.".to_owned().into()
+            ))
+        );
+        // The turn it starts meets the goal again, which runs nothing.
+        take_turn(&mut conversation, true);
+        conversation.checked(ran(0, "ok"));
+        assert!(!conversation.take_goal_met());
+        conversation.run_event(happened, vec![commit]);
+        assert!(!conversation.run_waiting());
+        assert_eq!(conversation.state(), State::Idle);
+    }
+
+    #[test]
+    fn what_happened_runs_its_triggers_once_the_chat_waits_untold() {
+        let happened = || Happened {
+            on: "goal.met".to_owned(),
+            about: "The chat's goal is met.".to_owned(),
+        };
+        let mut conversation = Conversation::new();
+        conversation.set_goal(Some(goal::Goal::Command("make".to_owned())));
+        conversation.submit("fix");
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.checked(ran(0, "ok")), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert!(conversation.take_goal_met());
+        assert!(!conversation.take_goal_met());
+
+        conversation.run_event(happened(), ci_and_simplify());
+        assert!(conversation.run_waiting());
+        assert_eq!(conversation.state(), State::Checking);
+        assert_eq!(conversation.event(), Some(&happened()));
+        assert!(matches!(
+            conversation.entries().last(),
+            Some(Entry::Event { on, .. }) if on == "goal.met"
+        ));
+        // What a trigger finds stays on its chip, and the rest still run.
+        assert_eq!(conversation.checked(ran(1, "a test failed")), None);
+        assert_eq!(
+            conversation.asking().map(|due| due.name.as_str()),
+            Some("simplify")
+        );
+        assert_eq!(conversation.found(Ok("FAIL: it repeats".to_owned())), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(conversation.event(), None);
+        assert_eq!(
+            marks(&conversation),
+            [
+                ("ci".to_owned(), CheckState::Failed),
+                ("simplify".to_owned(), CheckState::Failed),
+            ]
+        );
+
+        // While the agent is at work, they wait for its turn to end.
+        conversation.submit("more");
+        conversation.run_event(happened(), ci_and_simplify());
+        assert!(!conversation.run_waiting());
+        take_turn(&mut conversation, true);
+        conversation.checked(ran(0, "ok"));
+        assert_eq!(conversation.state(), State::Idle);
+        assert!(conversation.run_waiting());
+        assert_eq!(conversation.state(), State::Checking);
     }
 
     #[test]

@@ -843,6 +843,11 @@ impl Daemon {
             ending: None,
             chat: Some(chat),
         });
+        // Its triggers run on its opening once its agent has started.
+        let in_sketch = self.sketch_of(key).is_some();
+        if let Some(chat) = self.chat(key) {
+            chat.opened(in_sketch);
+        }
         self.start_agent(
             key,
             Start::New {
@@ -1457,6 +1462,18 @@ impl Daemon {
             }
             ChatRequest::WaitChat { chat, answer } => self.wait_chat(chat, answer),
             ChatRequest::SaveToWiki { chat } => self.save_to_wiki_of(key, chat),
+            ChatRequest::WikiWritten { page } => {
+                let in_sketch = self.sketch_of(key).is_some();
+                if let Some(chat) = self.chat(key) {
+                    chat.fire(
+                        &crate::trigger::On::WikiWritten {
+                            pages: Some(vec![page.clone()]),
+                        },
+                        format!("The chat's agent wrote the page {page} of the wiki."),
+                        in_sketch,
+                    );
+                }
+            }
             ChatRequest::Whereabouts { answer } => {
                 let whereabouts = self
                     .slot(key)
@@ -1906,8 +1923,20 @@ impl Daemon {
         if goes_on != key {
             // The human goes on there.
             self.reveals.push(goes_on);
-            if let (Some(chat), Some(note)) = (self.chat(goes_on), note) {
+            if let (Some(chat), Some(note)) = (self.chat(goes_on), note.as_ref()) {
                 chat.note(format!("The sketch \"{title}\" (chat {key}) ended: {note}"));
+            }
+            // Its triggers run where the human goes on, in the project.
+            if let Some(chat) = self.chat(goes_on) {
+                chat.fire(
+                    &crate::trigger::On::SketchEnd,
+                    format!(
+                        "The sketch \"{title}\" ended{}",
+                        note.as_ref()
+                            .map_or(".".to_owned(), |note| format!(": {note}"))
+                    ),
+                    false,
+                );
             }
         }
         // What the sketch found, and why it ended, is the sketch's agent's

@@ -842,6 +842,7 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
                 | Entry::Login { .. }
                 | Entry::Keep { .. }
                 | Entry::Checks(_)
+                | Entry::Event { .. }
         )
     });
     if !said {
@@ -909,7 +910,8 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
             | Entry::Note(_)
             | Entry::Login { .. }
             | Entry::Keep { .. }
-            | Entry::Checks(_) => None,
+            | Entry::Checks(_)
+            | Entry::Event { .. } => None,
         })
         .collect();
     let mut told = told.join("\n\n");
