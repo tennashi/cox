@@ -49,9 +49,6 @@ impl Stage {
                 answer,
             } => {
                 let page = stage.open_tab(&url, !background, window, cx);
-                if !background {
-                    stage.show_panel(cx);
-                }
                 let _ = answer.send(Some(page));
             }
             FromAgent::Close { page, answer } => {
@@ -103,11 +100,9 @@ impl Stage {
             }
             ToolRequest::ShowChanges { folder } => {
                 stage.show_changes(folder, window, cx);
-                stage.show_panel(cx);
             }
             ToolRequest::ShowMap { map, at } => {
                 stage.show_map_at(map.as_deref(), &at, window, cx);
-                stage.show_panel(cx);
             }
             ToolRequest::RunCommand {
                 command,
@@ -120,8 +115,7 @@ impl Stage {
 
     /// Runs `command`, which the agent of the chat acting asked for, in
     /// `cwd`, and answers `answer` once it ends: on the tab of the agent's
-    /// last command if that ended, or a new one. The stage opens if it was
-    /// closed.
+    /// last command if that ended, or a new one.
     fn run_command(
         &mut self,
         command: String,
@@ -164,11 +158,10 @@ impl Stage {
         } else {
             self.push(TabContent::Terminal(terminal), changes, None, true, cx);
         }
-        self.show_panel(cx);
     }
 
     /// The agent of the chat acting worked on `page`, sending it `input` if
-    /// any: show its tab, and the stage, if they are in the human's sight.
+    /// any: show its tab, if it is in the human's sight.
     fn worked(
         &mut self,
         page: Option<String>,
@@ -182,7 +175,6 @@ impl Stage {
             self.tabs.show(index);
             self.changed(cx);
         }
-        self.show_panel(cx);
         if let Some(input) = input
             && self.in_sight()
             && let Some(page) = self.tabs.shown().and_then(|tab| tab.content.page())

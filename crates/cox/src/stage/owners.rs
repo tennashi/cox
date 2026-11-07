@@ -17,7 +17,7 @@ use super::tab::TabContent;
 use crate::ui::theme::{ACCENT_GROUND, BORDER_STRONG, RAISED};
 
 /// What names the chats the stage's tabs are of, by their keys, as the
-/// tabs along the top of the window name them.
+/// list of chats names them.
 pub type Names = Rc<dyn Fn(u64, &App) -> Option<SharedString>>;
 
 /// The human asks to show the chat whose key it holds, of a tab of it.

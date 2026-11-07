@@ -8,8 +8,8 @@
 //! - [`theme`] is how things look, [`icons`] the icons drawn, and
 //!   [`paths`] how paths are written.
 //! - The [`Copy`] action and the [`LinkClicked`] event are what the parts
-//!   tell the window alike, and a [`Panel`] is what the conversation and
-//!   the stage of a chat share: whether the stage is open.
+//!   tell the window alike, and a [`Panel`] is what the window and a
+//!   stage share: whether the stage is in sight.
 //! - A [`card`] is what the window's parts sit in, on its ground.
 //! - [`translation`] shows what the human selected in their language.
 
@@ -42,7 +42,7 @@ actions!(
 /// opens on the chat's stage.
 pub struct LinkClicked(pub String);
 
-/// Whether a chat's stage is open beside its conversation.
+/// Whether a stage is in sight, in the middle of the window.
 #[derive(Debug, Default)]
 pub struct Panel {
     open: bool,
@@ -52,10 +52,6 @@ impl Panel {
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.open
-    }
-
-    pub fn open(&mut self, cx: &mut Context<Self>) {
-        self.set(true, cx);
     }
 
     pub fn set(&mut self, open: bool, cx: &mut Context<Self>) {

@@ -39,12 +39,17 @@ build downloads the matching CEF distribution from the official builds
 `cox [--stage <url>] [--home <dir>] [--data <dir>] [<agent command>]` opens a window with
 no chat in it. The rail on the left of the window shows the projects,
 each as a folder with its name under it, and its folder's path where
-the mouse rests, and the tabs along the top show the chats of the project chosen
-on the rail. A click on a project chooses it, showing the chat of it
-shown last. A project is a folder: "Open folder…", the + at the foot of
-the rail (Command-O on macOS, Control-O elsewhere), opens a chat in the
-project of a folder of your choice, and the + after the tabs opens
-another chat in the project chosen. "New chat" (Command-N, Control-N)
+the mouse rests; the stage of the chat shown (see below) fills the
+middle of the window, and the chat itself, its conversation, is in a
+panel at the right. The head of the panel names the chat shown and
+counts the other chats of its project that wait for the human; a click
+on it opens a list of the chats of the project chosen on the rail, over
+the conversation, which a click on one shows. A click on a project
+chooses it, showing the chat of it shown last. A project is a folder:
+"Open folder…", the + at the foot of the rail (Command-O on macOS,
+Control-O elsewhere), opens a chat in the project of a folder of your
+choice, and "New chat" in the list opens another chat in the project
+chosen. "New chat" (Command-N, Control-N)
 opens one in no project, which works in Cox's home: `<dir>` when given,
 or else the folder the settings set, or else `~/cox`; the rail shows it
 as `~`. The gear at the foot of the rail (Command-, on macOS, Control-,
@@ -103,13 +108,19 @@ workflow's too, in `sketch/` there, or else Cox's own
 first line of a sketch opened beside a chat, in `{folder}`, which is `{from}`, to try `{what}`;
 `opened.md`, what the agent that opened a sketch with `open_chat` hears of
 it; and `discard.md`, what the sketch's agent is asked before the sketch
-is discarded, with `{left_out}`, the files too big to keep. The tabs switch between chats (Control-Tab and
-Control-Shift-Tab go along every project's). A chat is named by a number at first, then
+is discarded, with `{left_out}`, the files too big to keep. The list switches between chats (Control-Tab and
+Control-Shift-Tab go along every project's), the stage staying as it
+is while the chats work in one folder. The › at the head of the panel
+folds it to the window's right edge (Command-\\, Control-\\ off macOS),
+the stage taking its room, where a dot for each chat of the project
+stays, which shows the chat, and the ‹ over them unfolds it. A chat is named by a number at first, then
 after the first line sent in it, then by the title its agent gives its
 session, if it gives one (ACP's `session_info_update`, as
 `claude-agent-acp` sends), until the human renames it: a
-double click on its tab, or "Rename" in the menu of the right button.
-A dot on the tab marks how the chat stands: a ring while its agent is
+double click on the head of the panel, or "Rename" in the menu of the
+right button, on the head or on the chat's row in the list.
+A dot on its row marks how the chat stands, and on the head for the
+chat shown: a ring while its agent is
 at work, in the accent, or idle, in grey; filled when it waits for the
 human, in amber, or finished a turn the human has not seen yet, in the
 accent. A closed chat has none. The project's square on the rail counts
@@ -119,12 +130,12 @@ shown or Cox is behind other windows, tells them with a notification
 when it comes to wait for them, and when its turn ends; a click on the
 notification shows the chat. The Dock's icon counts the chats that
 wait for the human or that they have not seen since a turn ended.
-"Archive" in the menu takes a chat out of the tabs, to "Archived" at
-their end, from where a click brings it back; its agent, if it runs, goes on. A chat's agent runs in coxd (see
+"Archive" in the menu takes a chat out of the list, to "Archived" at
+its foot, from where a click brings it back; its agent, if it runs, goes on. A chat's agent runs in coxd (see
 [coxd](#coxd)), which goes on after the window closes, until coxd is
 stopped. Cox
 keeps each chat's conversation, and each stage's tabs, as they change,
-and shows the chats of earlier runs as tabs too, greyed and closed, for the
+and lists the chats of earlier runs too, greyed and closed, for the
 human to read what they showed. A stage opens again on
 the pages and Markdown files it had; its terminals do not start again.
 A line sent in a closed chat starts its agent again, which goes on with
@@ -140,7 +151,7 @@ conversation stays, and the next line can be sent once the agent has
 stopped. A click on a link in a chat's conversation opens it on that
 chat's stage.
 
-A pill at the right of the tabs, for the chat shown, shows what
+A pill under the head of the panel, for the chat shown, shows what
 its agent lets the human choose of its session, such as the model it
 uses, its mode, or how hard it thinks: ACP's session config options, of
 the kind that chooses one of a list, as the agent names them and in its
@@ -210,7 +221,7 @@ command, such as `cargo xtask ci`, which has to pass, or words, such as
 the menu of the right button opens an input above the chat's own for
 the goal (Enter sets it, Escape leaves it as it was, and emptied, it
 clears the goal), where `$ ` and a command is the command, and any
-other text is a goal in words; "Clear goal" clears it; the tab marks a
+other text is a goal in words; "Clear goal" clears it; its row in the list marks a
 chat with a goal (◎), and a bar at the top of the conversation names
 the goal, with, while the agent works toward it, a mark for each of the
 turns a line gets: those whose check failed, the one it takes, and the
@@ -236,7 +247,7 @@ goal the chat has then, and goes on with its turn.
 
 A goal in words is judged by an agent Cox starts for it, of the same
 command as the chat's, in the project's folder: not a chat, so not in
-the tabs, and the human does not talk to it. Each time a turn ends, Cox
+the list, and the human does not talk to it. Each time a turn ends, Cox
 asks it whether the goal is met now, telling it what the chat last
 said, and it ends its reply with `PASS`, or `FAIL: ` and why. While it
 fails, the chat's agent is told why, as the next turn, as with a
@@ -260,7 +271,7 @@ the command checks the goal from then on, the same way each time, and
 the judge goes.
 
 A chat's agent can open a chat too, with Cox's `open_chat` tool, giving
-it its first line: the chat opens in a tab after the agent's own,
+it its first line: the chat opens in the list after the agent's own,
 marked ↳, in the same project, and works on that line, which shows in its
 conversation in the human's place but dimmer, after a line that says
 which chat opened it. The agent says how the chat's agent is set up:
@@ -609,16 +620,12 @@ CLAUDE_CODE_ENABLE_TODO_TOOLS=1 CLAUDE_CODE_THINKING_DISPLAY=summarized \
   cox npx -y @agentclientprotocol/claude-agent-acp
 ```
 
-A chat's stage holds pages in tabs, and opens on the left of the
-conversation only when it is used: the round button at the right end
-of the tabs, after the pill, marked with a window split in two, opens
-and closes it (Command-\\, Control-\\ off macOS), and it opens on
-its own when a link opens on it, or when the agent works on a page
-there (navigates it, clicks or types in it, or
-opens a tab), showing that page's tab. Closed, it keeps its tabs.
-The chats that work in one folder, as the chats of a project, or of a
-sketch (see below), share its stage, which shows beside whichever of
-them is shown, and opens and closes for all of them. Each tab is the
+A chat's stage holds pages in tabs, in the middle of the window, beside
+the chat's panel: a link opens on it, and when the agent works on a
+page there (navigates it, clicks or types in it, or opens a tab), the
+stage shows that page's tab. The chats that work in one folder, as the
+chats of a project, or of a sketch (see below), share its stage, which
+shows beside whichever of them is shown. Each tab is the
 human's, as every tab they open is, or of one of the chats, as every
 tab its agent opens is, which only that chat's agent sees and works on:
 a dot on the tab marks a chat's, in the accent for the chat shown. The
@@ -653,7 +660,7 @@ and opens it as a link to it does, "Android devices", the virtual
 devices of the Android emulator, and, on macOS, "Mac windows", the
 windows of the Mac's other apps (see below). Escape closes the menu. Their keys, Command-T, Control-` and
 Command-P (Control-T and Control-P off macOS), open them from anywhere
-in the window, on the stage of the chat shown, which opens. The cursor over a page is the one
+in the window, on the stage of the chat shown. The cursor over a page is the one
 the page asks for, as a pointing hand over a link, or an I-beam over
 text and fields, and the page has the keyboard just while the stage
 has it, as after a click on the page, so that the field it is in shows
@@ -1354,7 +1361,7 @@ are:
 - `state [<chat>]`: where Cox keeps what lasts and this run's log (see
   [What Cox keeps of each run](#what-cox-keeps-of-each-run)), the
   stages' DevTools port, the window and where the keyboard is, the chats
-  in the order of the tabs, project by project, by the numbers they go
+  in the order of the list, project by project, by the numbers they go
   by to the agents' tools, and one chat in full, the chat shown or chat `<chat>`: what it
   waits for, as its input shows while empty, its input, its stage's tabs, each with the chat it is of, and its conversation, entry by
   entry.
