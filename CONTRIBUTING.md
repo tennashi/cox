@@ -54,33 +54,33 @@ chosen. "New chat" (Command-N, Control-N)
 opens one in no project, which works in Cox's home: `<dir>` when given,
 or else the folder the settings set, or else `~/cox`; the rail shows it
 as `~`. The gear at the foot of the rail (Command-, on macOS, Control-,
-elsewhere) shows the settings, under the files of the human's workflow,
-on "Workflow", a tab of the stage in sight (see below), where the human
-sets the home: a path typed in its input, whole or from `~`, which
+elsewhere) opens the settings, on a card over the window, where the
+human sets the home: a path typed in its input, whole or from `~`, which
 Enter sets, or a folder "Choose…" asks for. The settings are kept in
 `settings.json`, in Cox's data folder (see [The stage](#the-stage)), as
 `agents.json` is, and the
 chats in no project that open from then on work there; `--home` still
 goes ahead of them for its run, until the human sets the home. Under
-the home, the settings list the agents of `agents.json` (see below), a row
+the home, the card lists the agents of `agents.json` (see below), a row
 each, with its name and its command on one line, as a shell takes it,
 as `CLAUDE_CODE_ENABLE_TODO_TOOLS=1 npx -y
-@agentclientprotocol/claude-agent-acp`, which Enter keeps, as the
-keyboard leaving the settings does; a dot marks the agent `settings.json` names, and a
+@agentclientprotocol/claude-agent-acp`, which Enter keeps, as the card
+does when it closes; a dot marks the agent `settings.json` names, and a
 click on another's names that one; "Test" starts the agent and asks it
 to open a session, in a folder of its own, saying whether it works,
 asks the human to log in first, or is not found on Cox's `PATH`; ×
 takes it out of the list; and "Add agent" adds one of the human's own,
 or one of the ACP Registry, as the registry runs it but for the version
-it pins, for the human to change. The settings also set, as the home is
+it pins, for the human to change. The card also sets, as the home is
 set, the folders of the human's workflow and wiki (see below), kept from
 `~` when they are in the home directory, or, emptied, Cox's own; and the
 translation (see below): the language, which, emptied, turns it off, and
 what translates, the agent a new chat talks to, one of the human's, or
 a command on one line, as an agent's. What else the files hold stays as
-it is. What the settings say is selected and copied as the
-conversation's text is, and Escape gives the keyboard back to the chat.
-"Workflow" lists, above them, the files of the human's workflow, which
+it is. What the card says is selected and copied as the conversation's
+text is. Escape, the ×, or a click beside the card closes it.
+"Workflow", a tab of the stage (see below), lists the files of the
+human's workflow, which
 every chat goes by whatever the project, and those of the stage's
 folder, which its chats go by (see below), each with what it does and
 whether it is there, a folder with how many files it holds; a click on

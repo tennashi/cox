@@ -2,18 +2,16 @@
 //! "Workflow" on the stage's bar: the files of their workflow, which every
 //! chat goes by whatever the project, and those of the stage's folder,
 //! which its chats go by, each with what it does and whether it is there,
-//! a click opening one that is; and under them the settings (see
-//! [`crate::settings::view`]), which the window hands the tab through
-//! [`Settings`], the gear at the foot of the rail showing this tab.
+//! a click opening one that is. The settings are apart, on a card over
+//! the window (see [`crate::settings::view`]).
 
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::time::Duration;
 
 use cox_core::tabs::KeptTab;
 use gpui::{
-    AnyView, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Global, Task, Window,
-    div, prelude::*, px, rgb,
+    App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Task, Window, div, prelude::*,
+    px, rgb,
 };
 
 use crate::stage::tab::Shows;
@@ -25,16 +23,6 @@ const LOOK_EVERY: Duration = Duration::from_secs(2);
 
 /// How wide what the tab shows grows, at most.
 const WIDTH: f32 = 720.;
-
-/// What makes the settings for a Workflow tab, or tells of none.
-pub type MakeSettings = dyn Fn(&mut Window, &mut App) -> Option<AnyView>;
-
-/// What the window hands a Workflow tab as the settings, made for it once
-/// and shared by the tabs of every stage: none where the window has none.
-#[derive(Clone)]
-pub struct Settings(pub Rc<MakeSettings>);
-
-impl Global for Settings {}
 
 /// The human chose the file at this path, to open it.
 pub struct Chosen(pub PathBuf);
@@ -106,30 +94,13 @@ const THE_FOLDERS: &[Part] = &[
 pub struct Workflow {
     /// The stage's folder.
     cwd: PathBuf,
-    /// The settings, once the window handed them.
-    settings: Option<AnyView>,
     focus_handle: FocusHandle,
     _looking: Task<()>,
 }
 
 impl Workflow {
-    /// The tab of the stage of `cwd`, showing `settings`, or, unless
-    /// given, those the window hands it through [`Settings`].
-    pub fn new(
-        cwd: PathBuf,
-        settings: Option<AnyView>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        if settings.is_none() {
-            // Asked once the stage that makes the tab is done, which the
-            // window may be making.
-            cx.defer_in(window, |workflow, window, cx| {
-                let settings = cx.try_global::<Settings>().cloned();
-                workflow.settings = settings.and_then(|settings| (settings.0)(window, cx));
-                cx.notify();
-            });
-        }
+    /// The tab of the stage of `cwd`.
+    pub fn new(cwd: PathBuf, cx: &mut Context<Self>) -> Self {
         let looking = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(LOOK_EVERY).await;
@@ -140,7 +111,6 @@ impl Workflow {
         });
         Self {
             cwd,
-            settings,
             focus_handle: cx.focus_handle(),
             _looking: looking,
         }
@@ -287,8 +257,7 @@ impl Render for Workflow {
                             .child("Workflow"),
                     )
                     .child(yours)
-                    .child(the_folders)
-                    .children(self.settings.clone()),
+                    .child(the_folders),
             )
     }
 }

@@ -355,7 +355,7 @@ impl Stage {
                     stage.push_mac_window(tab, show, cx);
                 }
                 KeptTab::Workflow => {
-                    stage.push_workflow(None, show, window, cx);
+                    stage.push_workflow(show, window, cx);
                 }
                 KeptTab::MacWindows => {
                     stage.push_windows(show, window, cx);

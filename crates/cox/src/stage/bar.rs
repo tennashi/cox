@@ -296,7 +296,7 @@ impl Stage {
             Icon::Settings,
         )
         .on_click(cx.listener(|stage, _, window, cx| {
-            stage.show_workflow(None, window, cx);
+            stage.show_workflow(window, cx);
         }));
         div()
             .flex_shrink_0()
