@@ -1012,33 +1012,23 @@ tab again, reaching the emulator if it runs, and else with "Start" to
 start it.
 
 On macOS, a tab can show a window of another app too, for the human to
-see and use, beside the chat, the app the agent makes and tries out,
-rather than have it tried behind their back. "Mac windows", in the menu
-of the stage's +, opens a tab of the other apps' windows on screen,
-each by its app and its title, which ScreenCaptureKit lists: "Show"
-shows the window on a tab of its own, or the tab that shows it, and
-"Bring to front" brings the window itself up. The tab draws the window
-as big as fits, as ScreenCaptureKit streams it at the size the tab
-draws it, and posts the human's mouse and keys over it to the window's
-app (`CGEventPostToPid`), so that the window is used without coming to
-the front. The mouse's events, the wheel's too, need where in the
-window they fall, which only a function macOS keeps private sets
-(`CGEventSetWindowLocation`, in SkyLight): on a macOS without it, they
-do not reach the window, and the keys alone do. Many apps take no
-click while they are behind another, as TextEdit's text, or a page in
-Chrome, where only the tabs and the toolbar answer: those take a click
-once the window is brought to the front. The mouse's right button, as a
-trackpad's two-finger tap, opens the app's menu where the window itself
-is, or as near as the screen has room, not on the tab: the arrow keys,
-Enter and Escape over the tab choose from it. The window itself stays where it is, so the tab shows it a
-frame behind: to feel how the app answers, its lag included, the human
-uses the window itself, which the tab's "Bring to front" brings up.
-macOS asks the human to allow Cox both, which the tabs ask for with
-"Allow…": to record the screen, for the pictures and the windows'
-titles, and to control the computer, for the mouse and keys. A closed
+see, beside the chat, the app the agent makes and tries out, rather than
+have it tried behind their back. "Mac windows", in the menu of the
+stage's +, opens a tab of the other apps' windows on screen, each by its
+app and its title, which ScreenCaptureKit lists: "Show" shows the window
+on a tab of its own, or the tab that shows it, and "Bring to front"
+brings the window itself up. The tab draws the window as big as fits, as
+ScreenCaptureKit streams it at the size the tab draws it, and only draws
+it: to use the app, the human brings the window itself to the front,
+with the tab's "Bring to front" too. An app behind another takes the
+mouse and keys posted to it only in part, as a page in Chrome takes a
+click only while Chrome takes itself for the active app, and only
+through functions macOS keeps private, which it may change or drop.
+macOS asks the human to allow Cox to record the screen, for the pictures
+and the windows' titles, which the tabs ask for with "Allow…". A closed
 chat's stage, or the next run's, opens the tab again on the window of
-the same app and title, if one is open, and else with "Show" to look
-for it again.
+the same app and title, if one is open, and else with "Show" to look for
+it again.
 
 Cox hands each chat's agent its own tools as an MCP server, which is
 `cox` itself run as `cox --mcp <socket>`: the agent starts it, and it

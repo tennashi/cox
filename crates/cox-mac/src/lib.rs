@@ -1,17 +1,13 @@
 //! The windows of the Mac's other apps, for Cox to show one on its stage:
-//! what windows there are, a picture of one as it changes, taken through
-//! `ScreenCaptureKit`, and the human's mouse and keys, posted to the window's
-//! app through Core Graphics, so that the human uses the app from the
-//! stage, as the agent sees it, without it in front.
+//! what windows there are, and a picture of one as it changes, taken
+//! through `ScreenCaptureKit`, so that the human sees the app the agent
+//! tries out beside the chat. To use the app, the human brings the window
+//! itself to the front: an app behind another takes the mouse and keys
+//! posted to it only in part, and only through what macOS keeps private.
 //!
-//! The window itself stays where it is, so the stage shows it a frame
-//! behind: to feel how the app answers, the human brings the window itself
-//! to the front.
-//!
-//! macOS asks the human to allow Cox both: to record the screen, for the
-//! pictures and the windows' titles, and to control the computer, for the
-//! mouse and keys. On other systems there are no windows to show, and a
-//! window asked for ends at once, saying so.
+//! macOS asks the human to allow Cox to record the screen, for the
+//! pictures and the windows' titles. On other systems there are no windows
+//! to show, and a window asked for ends at once, saying so.
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -76,19 +72,6 @@ pub fn ask_to_record() {
     system::ask_to_record();
 }
 
-/// Whether the human allowed Cox to control the computer, which the mouse
-/// and keys posted to an app need.
-#[must_use]
-pub fn may_control() -> bool {
-    system::may_control()
-}
-
-/// Asks the human to allow Cox to control the computer, as
-/// [`ask_to_record`] asks to record.
-pub fn ask_to_control() {
-    system::ask_to_control();
-}
-
 /// Brings the app of the process `pid` to the front, with its windows, for
 /// the human to use a window itself.
 pub fn bring_to_front(pid: i32) {
@@ -115,45 +98,6 @@ pub enum Event {
     Ended(String),
 }
 
-/// Which of the mouse's buttons, as a trackpad's two-finger tap is its
-/// right.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Button {
-    Left,
-    Right,
-}
-
-/// What a mouse's button does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Press {
-    Down,
-    /// Moves while held down.
-    Drag,
-    Up,
-}
-
-/// What the human does to the window, as seen on the stage.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Input {
-    /// The stage draws the window this big, in pixels: the pictures come
-    /// as big as fits.
-    Size { width: u32, height: u32 },
-    /// A button of the mouse, where it is across the window, from 0 to 1
-    /// each way.
-    Mouse {
-        x: f32,
-        y: f32,
-        button: Button,
-        press: Press,
-    },
-    /// The wheel, in pixels, there.
-    Wheel { x: f32, y: f32, dx: i32, dy: i32 },
-    /// A key that types no text, by its name, as `Enter` or `ArrowLeft`.
-    Key(String),
-    /// Text typed.
-    Text(String),
-}
-
 /// What the mirror and its worker share.
 #[derive(Default)]
 struct Shared {
@@ -178,10 +122,13 @@ impl Shared {
     }
 }
 
-/// A window shown as it changes, with the human's input posted to its app,
-/// until it drops.
+/// How big the stage draws a window, in pixels: the pictures come as big
+/// as fits.
+type Size = (u32, u32);
+
+/// A window shown as it changes, until it drops.
 pub struct Mirror {
-    to: std::sync::mpsc::Sender<Input>,
+    to: std::sync::mpsc::Sender<Size>,
     shared: Arc<Shared>,
 }
 
@@ -190,21 +137,22 @@ impl Mirror {
     #[must_use]
     pub fn open(id: u32) -> (Self, UnboundedReceiver<Event>) {
         let (events, heard) = unbounded_channel();
-        let (to, inputs) = std::sync::mpsc::channel();
+        let (to, sizes) = std::sync::mpsc::channel();
         let shared = Arc::new(Shared::default());
         let worker = Arc::clone(&shared);
         let spawned = std::thread::Builder::new()
             .name(format!("cox-mac-window-{id}"))
-            .spawn(move || system::mirror(id, &worker, &inputs, &events));
+            .spawn(move || system::mirror(id, &worker, &sizes, &events));
         if let Err(error) = spawned {
             tracing::error!("cannot start showing window {id}: {error}");
         }
         (Self { to, shared }, heard)
     }
 
-    /// Passes the human's `input` on.
-    pub fn send(&self, input: Input) {
-        let _ = self.to.send(input);
+    /// Asks for pictures `width` by `height` pixels, or as near as the
+    /// window's shape lets them fit.
+    pub fn resize(&self, width: u32, height: u32) {
+        let _ = self.to.send((width, height));
     }
 
     /// The newest picture, if one came since the last taken.
@@ -217,18 +165,6 @@ impl Mirror {
             .unwrap_or_else(PoisonError::into_inner)
             .take()
     }
-}
-
-#[cfg_attr(
-    all(not(target_os = "macos"), not(test)),
-    expect(dead_code, reason = "only macOS shows windows")
-)]
-/// Where `x` and `y`, from 0 to 1 across `frame`, are on the screen.
-fn on_screen(frame: Rect, x: f32, y: f32) -> (f64, f64) {
-    (
-        frame.x + f64::from(x.clamp(0., 1.)) * frame.width,
-        frame.y + f64::from(y.clamp(0., 1.)) * frame.height,
-    )
 }
 
 #[cfg_attr(
@@ -262,12 +198,6 @@ mod tests {
         width: 800.,
         height: 600.,
     };
-
-    #[test]
-    fn finds_a_point_of_the_window_on_the_screen() {
-        assert_eq!(on_screen(FRAME, 0.5, 0.5), (500., 350.));
-        assert_eq!(on_screen(FRAME, 2., -1.), (900., 50.));
-    }
 
     #[test]
     fn fits_the_window_in_the_stage() {

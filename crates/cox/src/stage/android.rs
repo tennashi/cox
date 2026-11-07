@@ -11,12 +11,12 @@
 use cox_android::device::{Boot, Device, Event, Input, Status};
 use cox_core::tabs::KeptTab;
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, Subscription, Task,
-    Window, div, prelude::*, px, rgb,
+    App, Context, Entity, FocusHandle, Focusable, Hitbox, IntoElement, KeyDownEvent, Subscription,
+    Task, Window, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::stage::mirror::{Button, Display, Mirrored, Press, Screen};
+use crate::stage::mirror::{Display, Mirrored, Press, Screen, Touched, pass_on};
 use crate::stage::tab::Shows;
 use crate::ui::theme::{BORDER, BUTTON, DIM, FAILED, FOREGROUND, RAISED, SELECTED};
 
@@ -283,10 +283,6 @@ impl Mirrored for Android {
         &mut self.screen
     }
 
-    fn focus_handle(&self) -> &FocusHandle {
-        &self.focus_handle
-    }
-
     fn is_live(&self) -> bool {
         self.device.is_some()
     }
@@ -295,11 +291,18 @@ impl Mirrored for Android {
         self.send(Input::Size { width, height });
     }
 
-    /// The left button is a finger; the right has no part on a phone.
-    fn press(&mut self, x: f32, y: f32, button: Button, press: Press) {
-        if button != Button::Left {
-            return;
-        }
+    fn listen(mirrored: &Entity<Self>, over: &Hitbox, window: &mut Window) {
+        pass_on(mirrored, over, window);
+    }
+}
+
+impl Touched for Android {
+    fn focus_handle(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
+    /// The left button is a finger.
+    fn press(&mut self, x: f32, y: f32, press: Press) {
         let down = press != Press::Up;
         self.send(Input::Touch { x, y, down });
     }

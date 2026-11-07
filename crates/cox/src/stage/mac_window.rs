@@ -1,24 +1,22 @@
 //! A tab of the stage showing a window of another app on the Mac, as it
-//! changes, for the human to see and use what the agent tries out, beside
-//! the chat: the human's mouse and keys over it go on to the window's app
-//! (see [`cox_mac`]). The window itself stays where it is, so the tab
-//! shows it a frame behind; "Bring to front" brings the window itself up,
-//! to feel how the app answers.
+//! changes, for the human to see what the agent tries out, beside the chat
+//! (see [`cox_mac`]). The tab only shows the window: "Bring to front"
+//! brings the window itself up, for the human to use it.
 //!
 //! A tab kept for a closed chat's stage opens again on the window of the
 //! same app and title, if one is open.
 
 use cox_core::tabs::KeptTab;
-use cox_mac::{Event, Input, Mirror, Window as AppWindow};
+use cox_mac::{Event, Mirror, Window as AppWindow};
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, Task, Window, div,
-    prelude::*, px, rgb,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, Task, Window, div, prelude::*, px,
+    rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::stage::mirror::{Button, Display, LINE_HEIGHT, Mirrored, Press, Screen};
+use crate::stage::mirror::{Display, Mirrored, Screen};
 use crate::stage::tab::Shows;
-use crate::ui::theme::{ASKING, BORDER, BUTTON, DIM, FAILED, FOREGROUND, RAISED, SELECTED};
+use crate::ui::theme::{BORDER, BUTTON, DIM, FAILED, FOREGROUND, RAISED, SELECTED};
 
 /// Why a tab that was not shown its window ended, as it opens.
 const NOT_SHOWN: &str = "Not shown";
@@ -154,40 +152,6 @@ impl MacWindow {
         })
     }
 
-    fn send(&self, input: Input) {
-        if let Some(mirror) = &self.mirror {
-            mirror.send(input);
-        } else {
-            tracing::debug!(app = self.app, "not showing the window: input dropped");
-        }
-    }
-
-    fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        // Cox's own shortcuts go on to Cox.
-        if keystroke.modifiers.platform || keystroke.modifiers.control || keystroke.modifiers.alt {
-            return;
-        }
-        let key = |name: &str| Input::Key(name.to_owned());
-        let input = match keystroke.key.as_str() {
-            "enter" => key("Enter"),
-            "backspace" => key("Backspace"),
-            "delete" => key("Delete"),
-            "tab" => key("Tab"),
-            "escape" => key("Escape"),
-            "left" => key("ArrowLeft"),
-            "right" => key("ArrowRight"),
-            "up" => key("ArrowUp"),
-            "down" => key("ArrowDown"),
-            _ => match &keystroke.key_char {
-                Some(text) if !text.is_empty() => Input::Text(text.clone()),
-                _ => return,
-            },
-        };
-        self.send(input);
-        cx.stop_propagation();
-    }
-
     fn render_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let button = |id: &'static str, label: &'static str| {
             div()
@@ -202,10 +166,6 @@ impl MacWindow {
         };
         let state = match &self.status {
             Status::Finding => Some(("Finding the window…", DIM)),
-            Status::Showing if !cox_mac::may_control() => Some((
-                "Clicks and keys need Cox allowed to control the computer",
-                ASKING,
-            )),
             Status::Showing => None,
             Status::Ended(_) => Some(("Not shown", DIM)),
         };
@@ -271,47 +231,14 @@ impl Mirrored for MacWindow {
         &mut self.screen
     }
 
-    fn focus_handle(&self) -> &FocusHandle {
-        &self.focus_handle
-    }
-
     fn is_live(&self) -> bool {
         self.mirror.is_some()
     }
 
     fn resize(&mut self, width: u32, height: u32) {
-        self.send(Input::Size { width, height });
-    }
-
-    fn press(&mut self, x: f32, y: f32, button: Button, press: Press) {
-        let button = match button {
-            Button::Left => cox_mac::Button::Left,
-            Button::Right => cox_mac::Button::Right,
-        };
-        let press = match press {
-            Press::Down => cox_mac::Press::Down,
-            Press::Drag => cox_mac::Press::Drag,
-            Press::Up => cox_mac::Press::Up,
-        };
-        self.send(Input::Mouse {
-            x,
-            y,
-            button,
-            press,
-        });
-    }
-
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "a wheel turns a few hundred pixels at a time"
-    )]
-    fn scroll(&mut self, x: f32, y: f32, (dx, dy): (f32, f32)) {
-        self.send(Input::Wheel {
-            x,
-            y,
-            dx: (dx * LINE_HEIGHT).round() as i32,
-            dy: (dy * LINE_HEIGHT).round() as i32,
-        });
+        if let Some(mirror) = &self.mirror {
+            mirror.resize(width, height);
+        }
     }
 }
 
@@ -357,7 +284,6 @@ impl Render for MacWindow {
                     .min_h_0()
                     .relative()
                     .track_focus(&self.focus_handle)
-                    .on_key_down(cx.listener(Self::key_down))
                     .child(Display {
                         mirrored: cx.entity(),
                     })
