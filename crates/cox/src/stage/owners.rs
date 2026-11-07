@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use super::Stage;
-use super::tab::TabContent;
+use super::tab::{Tab, TabContent};
 use crate::ui::theme::{ACCENT_GROUND, BORDER_STRONG, RAISED};
 
 /// What names the chats the stage's tabs are of, by their keys, as the
@@ -42,6 +42,7 @@ impl Stage {
             self.working = working;
             self.relock(cx);
             self.leave_mac_windows(cx);
+            cx.notify();
         }
     }
 
@@ -71,6 +72,20 @@ impl Stage {
         }
     }
 
+    /// The chat whose agent is at work on `tab`, if one is: the chat it
+    /// is of, or for a page, the chat whose agent last worked on it, while
+    /// that chat takes a turn.
+    pub(super) fn at_work_on(&self, tab: &Tab) -> Option<u64> {
+        let page = match &tab.content {
+            TabContent::Page { target, .. } => target.borrow().clone(),
+            _ => None,
+        };
+        let user = page
+            .and_then(|page| self.worked_on.get(&page).copied())
+            .or(tab.owner)?;
+        self.working.contains(&user).then_some(user)
+    }
+
     /// Tells each chat's relay of the pages another chat's agent is at
     /// work on: the pages of the chats that take a turn, those their
     /// agents last worked on, or else opened, or the human handed them.
@@ -84,9 +99,8 @@ impl Stage {
                         return None;
                     };
                     let page = target.borrow().clone()?;
-                    let user = self.worked_on.get(&page).copied().or(tab.owner)?;
-                    (user != chat && self.working.contains(&user))
-                        .then(|| (page, self.name_of(user, cx).to_string()))
+                    let user = self.at_work_on(tab)?;
+                    (user != chat).then(|| (page, self.name_of(user, cx).to_string()))
                 })
                 .collect::<HashMap<_, _>>();
             pages.lock(locked);
@@ -94,7 +108,7 @@ impl Stage {
     }
 
     /// The name of the chat `chat`, or else a name that says which.
-    fn name_of(&self, chat: u64, cx: &App) -> SharedString {
+    pub(super) fn name_of(&self, chat: u64, cx: &App) -> SharedString {
         self.names
             .as_ref()
             .and_then(|names| names(chat, cx))

@@ -74,6 +74,7 @@ mod bar;
 pub mod calls;
 pub mod changes;
 pub mod code;
+mod column;
 pub mod devices;
 pub mod document;
 pub mod flow;
@@ -152,9 +153,6 @@ pub type Keep = std::rc::Rc<dyn Fn(&KeptTabs<u64>)>;
 /// What a new tab shows when the human opens it.
 const BLANK: &str = "about:blank";
 
-/// How wide a tab grows, at most.
-const TAB_WIDTH: f32 = 200.;
-
 /// The most of a tab's title that its tab shows.
 const TITLE_LENGTH: usize = 40;
 
@@ -208,8 +206,8 @@ pub struct Stage {
     /// counted them while the stage was open.
     waiting: usize,
     _counting: Task<()>,
-    /// Where the tabs scroll along the bar.
-    strip: bar::Strip,
+    /// Where the tabs scroll down the column beside the stage.
+    strip: column::Strip,
 }
 
 impl Stage {
@@ -244,7 +242,7 @@ impl Stage {
             mapped: false,
             waiting: 0,
             _counting: bar::count_changes(cx),
-            strip: bar::Strip::default(),
+            strip: column::Strip::default(),
             cwd,
             tabs: List::new(),
             pages: HashMap::new(),
@@ -780,7 +778,15 @@ impl Render for Stage {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .children(self.tabs.shown().map(|tab| tab.content.view())),
+                    .flex()
+                    .child(self.render_column(cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .children(self.tabs.shown().map(|tab| tab.content.view())),
+                    ),
             )
     }
 }

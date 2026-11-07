@@ -66,6 +66,21 @@ pub const ACCENT: u32 = 0x6f_d3c5;
 pub const ACCENT_GROUND: u32 = 0x15_2c2a;
 /// A link.
 pub const LINK: u32 = 0xa6_ebe1;
+/// The colors that tell the chats apart, as on the tabs of the stage: of
+/// the accent's lightness and saturation, around the wheel but for the
+/// amber and the red of what asks and what went wrong, in an order that
+/// sets each far from the one before, the accent first.
+pub const CHAT_COLORS: [u32; 8] = [
+    0x6f_d3c6, 0xba_6fd3, 0xa1_d36f, 0x6f_88d3, 0xd3_6fba, 0x6f_d388, 0x88_6fd3, 0x6f_b2d3,
+];
+
+/// The color of the chat `chat`, by its key, the first chat's the accent.
+#[must_use]
+pub fn chat_color(chat: u64) -> u32 {
+    // The keys count from 1.
+    let place = chat.wrapping_sub(1) % CHAT_COLORS.len() as u64;
+    CHAT_COLORS[usize::try_from(place).unwrap_or_default()]
+}
 /// What waits for the human to answer.
 pub const ASKING: u32 = 0xe5_b46d;
 /// The ground of what asks the human, its edge, and its buttons but the
