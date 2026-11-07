@@ -1,10 +1,14 @@
 //! Whose each tab of the stage is: the human's, as every tab they open
-//! is, or a chat's, as every tab its agent opens is, which only that
-//! chat's agent sees and works on. The human hands a tab of theirs to the
-//! chat shown, for its agent to work on, and takes a chat's tab back,
-//! from the menu of the right button on the tab, which also shows the
-//! chat another chat's tab is of. A chat archived gives its tabs back.
+//! is, or a chat's, as every tab its agent opens is. Every chat's agent
+//! sees every page, and judges which are of its work; but a page another
+//! chat's agent is at work on, as one it opened or last worked on while
+//! that chat takes a turn, it reads and does not act on (see
+//! [`Stage::relock`]). The human hands a tab of theirs to the chat shown,
+//! and takes a chat's tab back, from the menu of the right button on the
+//! tab, which also shows the chat another chat's tab is of. A chat
+//! archived gives its tabs back.
 
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::{
@@ -31,6 +35,48 @@ impl Stage {
         self.names = Some(names);
     }
 
+    /// The chats whose agents are at work, taking a turn, are those of
+    /// `working` from now on.
+    pub fn set_working(&mut self, working: HashSet<u64>, cx: &mut Context<Self>) {
+        if self.working != working {
+            self.working = working;
+            self.relock(cx);
+        }
+    }
+
+    /// The agent of the chat acting worked on the page `page`: while that
+    /// chat takes a turn, the other agents do not act on it.
+    pub(super) fn worked_on(&mut self, page: &str, cx: &App) {
+        if let Some(chat) = self.acting
+            && self.worked_on.get(page) != Some(&chat)
+        {
+            self.worked_on.insert(page.to_owned(), chat);
+            self.relock(cx);
+        }
+    }
+
+    /// Tells each chat's relay of the pages another chat's agent is at
+    /// work on: the pages of the chats that take a turn, those their
+    /// agents last worked on, or else opened, or the human handed them.
+    pub(super) fn relock(&self, cx: &App) {
+        for (&chat, pages) in &self.pages {
+            let locked = self
+                .tabs
+                .iter()
+                .filter_map(|tab| {
+                    let TabContent::Page { target, .. } = &tab.content else {
+                        return None;
+                    };
+                    let page = target.borrow().clone()?;
+                    let user = self.worked_on.get(&page).copied().or(tab.owner)?;
+                    (user != chat && self.working.contains(&user))
+                        .then(|| (page, self.name_of(user, cx).to_string()))
+                })
+                .collect::<HashMap<_, _>>();
+            pages.lock(locked);
+        }
+    }
+
     /// The name of the chat `chat`, or else a name that says which.
     fn name_of(&self, chat: u64, cx: &App) -> SharedString {
         self.names
@@ -40,7 +86,7 @@ impl Stage {
     }
 
     /// Hands the tab at `index`, the human's, to the chat `chat`: from now
-    /// on, its agent sees the tab and works on it, as on those it opened.
+    /// on, it is that chat's, as those its agent opened are.
     pub(super) fn hand(&mut self, index: usize, chat: u64, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.iter_mut().nth(index) else {
             return;
@@ -49,30 +95,27 @@ impl Stage {
             return;
         }
         tab.owner = Some(chat);
-        // An agent that starts later is told of the chat's pages as it
-        // starts.
         if let TabContent::Page { target, .. } = &tab.content
-            && let Some(pages) = self.pages.get(&chat)
+            && let Some(page) = target.borrow().clone()
         {
-            pages.hand(target.clone());
+            self.worked_on.insert(page, chat);
         }
         self.changed(cx);
     }
 
     /// Takes the tab at `index` back from the chat it is of: from now on,
-    /// it is the human's, and its agent sees it no longer.
+    /// it is the human's, and no agent is at work on it.
     pub(super) fn take_back(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.iter_mut().nth(index) else {
             return;
         };
-        let Some(chat) = tab.owner.take() else {
+        if tab.owner.take().is_none() {
             return;
-        };
+        }
         if let TabContent::Page { target, .. } = &tab.content
             && let Some(page) = target.borrow().clone()
-            && let Some(pages) = self.pages.get(&chat)
         {
-            pages.forget(&page);
+            self.worked_on.remove(&page);
         }
         self.changed(cx);
     }

@@ -22,10 +22,11 @@
 //!
 //! Each tab is the human's, as every tab they open is, or of one of the
 //! chats, as every tab its agent opens is, or one the human handed to it
-//! (see [`owners`]). The stage tells each chat's relay of the pages of
-//! that chat, so that its agent sees those, and none of the human's or
-//! the other chats'; an agent's command gets the tab of its own last one
-//! that ended. When an agent works on a page, shows a file or runs a
+//! (see [`owners`]). The stage tells each chat's relay of every page on
+//! it, the human's and the other chats' too, so that its agent sees them
+//! all and judges which are of its work; a page another chat's agent is
+//! at work on, the agent reads but does not act on. An agent's command
+//! gets the tab of its own last one that ended. When an agent works on a page, shows a file or runs a
 //! command, the stage shows that tab, if the agent's chat is the one
 //! shown, or else opens the tab behind the one shown; the tabs of the
 //! chats not shown are drawn dimmer.
@@ -94,7 +95,7 @@ mod typed;
 pub mod windows;
 pub mod workflow;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use cox_core::list::List;
@@ -169,6 +170,11 @@ pub struct Stage {
     /// The chat whose agent the stage carries out what it asks for, while
     /// it does.
     acting: Option<u64>,
+    /// The chats whose agents are at work, taking a turn.
+    working: HashSet<u64>,
+    /// The chat whose agent last worked on each page, by the page's id,
+    /// for those an agent worked on since the stage opened.
+    worked_on: HashMap<String, u64>,
     /// The chat shown last of those that work on the stage, which the
     /// human hands their tabs to.
     showing: Option<u64>,
@@ -242,6 +248,8 @@ impl Stage {
             tabs: List::new(),
             pages: HashMap::new(),
             acting: None,
+            working: HashSet::new(),
+            worked_on: HashMap::new(),
             showing: None,
             names: None,
             tab_menu: None,
@@ -253,8 +261,8 @@ impl Stage {
     }
 
     /// The stage works with the chat `chat`, or its agent starts: from
-    /// now on, the stage tells `relay` of the chat's pages, those open and
-    /// those it opens, and carries out what the agent's tools ask in
+    /// now on, the stage tells `relay` of its pages, those open and those
+    /// that open, and carries out what the agent's tools ask in
     /// `from_tools`, each when given.
     pub fn work(
         &mut self,
@@ -266,9 +274,7 @@ impl Stage {
     ) {
         if let Some(relay) = relay {
             for tab in &self.tabs {
-                if let TabContent::Page { target, .. } = &tab.content
-                    && tab.owner == Some(chat)
-                {
+                if let TabContent::Page { target, .. } = &tab.content {
                     relay.pages.opening().is(target.clone());
                 }
             }
@@ -428,6 +434,7 @@ impl Stage {
     /// The tabs, or what one of them shows, changed: keep them, if they are
     /// kept, and draw them again.
     fn changed(&mut self, cx: &mut Context<Self>) {
+        self.relock(cx);
         if let Some(keep) = &self.keep {
             let tabs = self.tabs(cx);
             if self.kept.as_ref() != Some(&tabs) {
@@ -634,14 +641,11 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TargetId {
-        // The relay of the page's chat hears of it before CEF makes it.
-        let opening = self
-            .owner()
-            .and_then(|owner| self.pages.get(&owner))
-            .map(Pages::opening);
+        // Every chat's relay hears of it before CEF makes it.
+        let openings: Vec<_> = self.pages.values().map(Pages::opening).collect();
         let (browser, events) = self.cef.open(url, Some(self.plugins.serve()));
         let target = browser.target_id();
-        if let Some(opening) = opening {
+        for opening in openings {
             opening.is(target.clone());
         }
         let page = cx.new(|cx| Page::new(browser, events, window, cx));

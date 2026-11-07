@@ -3,7 +3,8 @@
 //! hold them, and the targets the agent attaches to within them, such as
 //! the pages' frames and workers. Other chats' pages, and the rest of the
 //! browser, stay hidden: the agent hears nothing of them, and what it
-//! asks of them is refused, as if they were not there.
+//! asks of them is refused, as if they were not there. Of a page another
+//! chat's agent is at work on, what acts on it is refused, saying so.
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -35,6 +36,9 @@ pub(super) struct Scope {
     /// The ids of the agent's requests for the list of targets, whose
     /// answers name every target.
     listings: HashSet<u64>,
+    /// The pages another chat's agent is at work on, each with that
+    /// chat's name.
+    locked: HashMap<String, String>,
 }
 
 /// A session the agent sees.
@@ -106,6 +110,7 @@ impl Scope {
     pub(super) fn learn(&mut self, known: &Known, mut own_id: impl FnMut() -> u64) -> Vec<Said> {
         let mut said = Vec::new();
         let mut handed = false;
+        self.locked.clone_from(&known.locked);
         for known in &known.pages {
             let page = &known.page;
             if !self.pages.insert(page.clone()) {
@@ -212,15 +217,51 @@ impl Scope {
             .and_then(|attached| attached.page.clone())
     }
 
+    /// The chat whose agent is at work on the page `request` goes to, if
+    /// it acts on the page and another chat's agent is at work on it.
+    fn locked_by(&self, request: &Value) -> Option<&String> {
+        let method = request["method"].as_str()?;
+        if !acts(method) {
+            return None;
+        }
+        let page = match request["sessionId"].as_str() {
+            Some(session) => self.page_of(session),
+            None => self
+                .targets
+                .get(request["params"]["targetId"].as_str()?)
+                .cloned()
+                .flatten(),
+        }?;
+        self.locked.get(&page)
+    }
+
     /// What becomes of `request`, from the agent.
     pub(super) fn request(&mut self, request: &Value) -> Request {
         let params = &request["params"];
         let session = request["sessionId"].as_str();
         let target = params["targetId"].as_str();
-        let refused = match request["method"].as_str().unwrap_or_default() {
+        let method = request["method"].as_str().unwrap_or_default();
+        let locked = self.locked_by(request).map(|chat| {
+            format!(
+                "This page is in use by the agent of the chat \"{chat}\", which is at work on it: \
+                 read it, but leave it be until that chat's turn ends"
+            )
+        });
+        let refused = match method {
             _ if session.is_some_and(|session| !self.sessions.contains_key(session)) => {
-                Some("No session with given id")
+                Some("No session with given id".to_owned())
             }
+            // Bringing the page to the front is how the agent's tools
+            // choose it, to read it too: it stays where it is, and the
+            // agent goes on as if it had come to the front.
+            "Page.bringToFront" if locked.is_some() => {
+                let mut answer = json!({ "id": request["id"], "result": {} });
+                if let Some(session) = session {
+                    answer["sessionId"] = session.into();
+                }
+                return Request::Refuse(answer.to_string());
+            }
+            _ if locked.is_some() => locked,
             "Target.createTarget" => {
                 let url = params["url"].as_str().filter(|url| !url.is_empty());
                 return Request::Ask(Ask::Open {
@@ -229,7 +270,7 @@ impl Scope {
                 });
             }
             "Browser.close" | "Browser.crash" | "Browser.crashGpuProcess" => {
-                Some("The browser is Cox's, and stays open")
+                Some("The browser is Cox's, and stays open".to_owned())
             }
             "Target.closeTarget"
                 if let Some(page) = target.and_then(|target| self.own.get(target)) =>
@@ -237,14 +278,14 @@ impl Scope {
                 return Request::Ask(Ask::Close { page: page.clone() });
             }
             _ if target.is_some_and(|target| !self.targets.contains_key(target)) => {
-                Some("No target with given id found")
+                Some("No target with given id found".to_owned())
             }
             "Target.detachFromTarget" | "Target.sendMessageToTarget"
                 if params["sessionId"]
                     .as_str()
                     .is_some_and(|session| !self.sessions.contains_key(session)) =>
             {
-                Some("No session with given id")
+                Some("No session with given id".to_owned())
             }
             "Target.setAutoAttach" if session.is_none() => {
                 self.auto_attach = (params["autoAttach"] == true).then(|| params.clone());
@@ -399,6 +440,29 @@ impl Scope {
     }
 }
 
+/// Whether `method` acts on the page it goes to, as the human would, rather
+/// than reads it: input, going to another address, a dialog's answer, a
+/// file chosen, coming to the front, or closing it. A script the agent
+/// runs on the page is not told apart from the scripts its tools read the
+/// page with, and is not refused.
+fn acts(method: &str) -> bool {
+    method.starts_with("Input.")
+        || matches!(
+            method,
+            "Page.navigate"
+                | "Page.navigateToHistoryEntry"
+                | "Page.reload"
+                | "Page.stopLoading"
+                | "Page.bringToFront"
+                | "Page.close"
+                | "Page.handleJavaScriptDialog"
+                | "Page.setDocumentContent"
+                | "DOM.setFileInputFiles"
+                | "Target.activateTarget"
+                | "Target.closeTarget"
+        )
+}
+
 /// The relay's requests that let go of the target attached in `session`,
 /// which the agent does not see: it may be waiting to start until someone
 /// lets it, as a new page does when the agent asked to attach to every
@@ -445,8 +509,8 @@ mod tests {
         let mut scope = Scope::default();
         let said = scope.learn(
             &Known {
-                opening: 0,
                 pages: vec![known("PAGE", "TAB", false)],
+                ..Known::default()
             },
             || 0,
         );
@@ -658,11 +722,67 @@ mod tests {
     }
 
     #[test]
+    fn a_page_another_chat_is_at_work_on_is_read_but_not_acted_on() {
+        let mut scope = page_scope();
+        assert_eq!(
+            scope.reply(
+                r#"{"method":"Target.attachedToTarget","params":{"sessionId":"P1","targetInfo":{"targetId":"PAGE","type":"page"},"waitingForDebugger":false}}"#
+            ),
+            Reply::Pass
+        );
+        let click = r#"{"id":4,"sessionId":"P1","method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2}}"#;
+        let read =
+            r#"{"id":5,"sessionId":"P1","method":"Accessibility.getFullAXTree","params":{}}"#;
+        let front = r#"{"id":6,"sessionId":"P1","method":"Page.bringToFront","params":{}}"#;
+        let close = r#"{"id":7,"method":"Target.closeTarget","params":{"targetId":"TAB"}}"#;
+        assert_eq!(request(&mut scope, click), Request::Pass);
+
+        let mut known = Known {
+            pages: vec![known("PAGE", "TAB", false)],
+            ..Known::default()
+        };
+        known
+            .locked
+            .insert("PAGE".to_owned(), "fix the build".to_owned());
+        assert_eq!(scope.learn(&known, || 0), []);
+        let Request::Refuse(refused) = request(&mut scope, click) else {
+            panic!("a click on the page is not refused");
+        };
+        let refused: Value = serde_json::from_str(&refused).unwrap();
+        assert_eq!(refused["id"], 4);
+        assert_eq!(refused["sessionId"], "P1");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("\"fix the build\""),
+            "{refused}"
+        );
+        assert!(matches!(
+            request(&mut scope, close),
+            Request::Refuse(refused) if refused.contains("in use")
+        ));
+        // The agent reads it, and its tools choose it as they would, the
+        // page staying where it is.
+        assert_eq!(request(&mut scope, read), Request::Pass);
+        assert_eq!(
+            request(&mut scope, front),
+            Request::Refuse(r#"{"id":6,"result":{},"sessionId":"P1"}"#.to_owned())
+        );
+
+        // Once that chat's turn ends, the page is the agent's to act on.
+        known.locked.clear();
+        assert_eq!(scope.learn(&known, || 0), []);
+        assert_eq!(request(&mut scope, click), Request::Pass);
+        assert_eq!(request(&mut scope, front), Request::Pass);
+    }
+
+    #[test]
     fn the_agent_sees_the_pages_its_chat_opens_later() {
         let mut scope = page_scope();
         let mut known = Known {
-            opening: 0,
             pages: vec![known("PAGE", "TAB", false)],
+            ..Known::default()
         };
         let created = r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"NEW-TAB","type":"tab"}}}"#;
         assert_eq!(scope.reply(created), Reply::Drop);
@@ -765,11 +885,11 @@ mod tests {
         let mut scope = scope_with_other_page();
         let said = scope.learn(
             &Known {
-                opening: 0,
                 pages: vec![
                     known("PAGE", "TAB", false),
                     known("OTHER", "OTHER-TAB", true),
                 ],
+                ..Known::default()
             },
             || 9,
         );
