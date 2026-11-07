@@ -105,6 +105,17 @@ enum View {
     Plugin(String),
 }
 
+/// The plugin that draws the project's maps.
+const MAP: &str = "map";
+
+/// Which of the views a project may not have it has: a map, or a Git
+/// repository to show what changed in, or a tab of it open already.
+#[derive(Clone, Copy)]
+struct Present {
+    map: bool,
+    changes: bool,
+}
+
 impl Stage {
     /// The view of the project `tab` shows, if it shows one: the tree of
     /// the project's files, what changed in them, or a plugin's page.
@@ -138,6 +149,11 @@ impl Stage {
             .filter(|(_, tab)| self.view_of(tab, &plugins, cx).is_none())
             .map(|(index, _)| index)
             .collect();
+        let views: Vec<View> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| self.view_of(tab, &plugins, cx))
+            .collect();
         let shown_index = self.tabs.shown_index();
         self.strip.follow(
             shown_index,
@@ -160,6 +176,10 @@ impl Stage {
             .child(Self::render_views(
                 shown.as_ref(),
                 plugins,
+                Present {
+                    map: self.mapped || views.contains(&View::Plugin(MAP.to_owned())),
+                    changes: self.changed.is_some() || views.contains(&View::Changes),
+                },
                 self.changed,
                 cx,
             ))
@@ -211,10 +231,12 @@ impl Stage {
     }
 
     /// The buttons of the views of the project, side by side in one
-    /// ground, the one shown marked.
+    /// ground, the one shown marked: "Map" when the project has one, then
+    /// "Files", "Changes" in a Git repository, then the other plugins.
     fn render_views(
         shown: Option<&View>,
         plugins: Vec<Plugin>,
+        present: Present,
         changed: Option<usize>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -244,10 +266,11 @@ impl Stage {
                 .child(icon(glyph, 14., if chosen { FOREGROUND } else { DIM }))
                 .child(label)
         };
-        let plugins = plugins.into_iter().map(|plugin| {
+        let mut plugin = |plugin: Plugin| {
             let glyph = match plugin.name.as_str() {
-                "map" => Icon::Map,
+                MAP => Icon::Map,
                 "wiki" => Icon::Book,
+                "schedules" => Icon::Clock,
                 _ => Icon::Plug,
             };
             let name = plugin.name.clone();
@@ -260,7 +283,15 @@ impl Stage {
             .on_click(cx.listener(move |stage, _, window, cx| {
                 stage.show_plugin(&name, "", window, cx);
             }))
-        });
+        };
+        let (map, rest): (Vec<Plugin>, Vec<Plugin>) =
+            plugins.into_iter().partition(|plugin| plugin.name == MAP);
+        let map: Vec<_> = map
+            .into_iter()
+            .filter(|_| present.map)
+            .map(&mut plugin)
+            .collect();
+        let rest: Vec<_> = rest.into_iter().map(&mut plugin).collect();
         div()
             .flex_shrink_0()
             .flex()
@@ -268,31 +299,34 @@ impl Stage {
             .p(px(3.))
             .rounded(px(12.))
             .bg(rgb(RAISED))
+            .children(map)
             .child(
                 button("show-tree".into(), View::Files, "Files".into(), Icon::Files)
                     .on_click(cx.listener(|stage, _, window, cx| stage.show_tree(window, cx))),
             )
-            .child(
-                button(
-                    "show-changes".into(),
-                    View::Changes,
-                    "Changes".into(),
-                    Icon::Changes,
+            .when(present.changes, |views| {
+                views.child(
+                    button(
+                        "show-changes".into(),
+                        View::Changes,
+                        "Changes".into(),
+                        Icon::Changes,
+                    )
+                    .children(changed.filter(|&count| count > 0).map(|count| {
+                        div()
+                            .debug_selector(|| "changed-count".to_owned())
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(ACCENT))
+                            .child(count.to_string())
+                    }))
+                    .on_click(cx.listener(|stage, _, window, cx| {
+                        let cwd = stage.cwd.clone();
+                        stage.show_changes(cwd, window, cx);
+                    })),
                 )
-                .children(changed.filter(|&count| count > 0).map(|count| {
-                    div()
-                        .debug_selector(|| "changed-count".to_owned())
-                        .text_size(px(11.5))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(ACCENT))
-                        .child(count.to_string())
-                }))
-                .on_click(cx.listener(|stage, _, window, cx| {
-                    let cwd = stage.cwd.clone();
-                    stage.show_changes(cwd, window, cx);
-                })),
-            )
-            .children(plugins)
+            })
+            .children(rest)
     }
 
     /// The tab at `index`: an icon of what it shows, its title, a dot if
@@ -588,8 +622,10 @@ impl Stage {
     }
 }
 
-/// Counts the files that changed in the project of `cx`'s stage, now and
-/// then, while the stage is open, for its button to show.
+/// Counts the files that changed in the project of `cx`'s stage, and
+/// looks whether it has a map, now and then, while the stage is open, for
+/// the bar to show "Changes" in a Git repository only, with the count,
+/// and "Map" only for a project with a map.
 pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
     cx.spawn(async move |this, cx| {
         loop {
@@ -599,13 +635,17 @@ pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
                 break;
             };
             if let Some(cwd) = open {
-                let changed = cx
+                let (changed, mapped) = cx
                     .background_executor()
-                    .spawn(async move { changes::count(&cwd).ok() })
+                    .spawn(async move {
+                        let mapped = !cox_editor::map::list(&cwd).is_empty();
+                        (changes::count(&cwd).ok(), mapped)
+                    })
                     .await;
                 let counted = this.update(cx, |stage, cx| {
-                    if stage.changed != changed {
+                    if (stage.changed, stage.mapped) != (changed, mapped) {
                         stage.changed = changed;
+                        stage.mapped = mapped;
                         cx.notify();
                     }
                 });

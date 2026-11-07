@@ -644,9 +644,11 @@ time, from those of its chats not archived, that of the chat it is
 first shown for first, each tab of its chat but the terminals, and each
 page, file or view of the project once. The
 bar along its top keeps the views of the project in sight first, side
-by side: "Files", "Changes" and the plugins' pages, such as "Map" (see
-below), each a tab that the bar shows by its button, not among the
-others; then the other tabs, each with an icon of what it shows: a
+by side: "Map" (see below), when the project has a map, "Files",
+"Changes", when the project is in a Git repository, and the other
+plugins' pages, such as "Wiki" and "Schedules", each a tab that the bar
+shows by its button, not among the others, and kept there while its tab
+is open; then the other tabs, each with an icon of what it shows: a
 page, a Markdown file, code, a terminal, the flow of a tool call. The +
 at the bar's end opens a menu of what the human opens there: a line at
 its top, where Enter opens what they typed, a file of that path, from
@@ -854,8 +856,9 @@ the boxes that open their tiers, with how many lines changed in how
 many files, so that the human sees where a change falls in the project
 before they read it; and a box whose paths
 the project no longer has is marked stale, for an agent to bring the
-map up to date. A project with no map gets a tab that says so, and an
-agent asked to show the map is told how the file is written. The agent opens
+map up to date. A project with no map has no "Map" on the bar, and an
+agent asked to show the map gets a tab that says so, and is told how
+the file is written. The agent opens
 a map with Cox's `show_map` tool, by its name, or the first unless it
 names one, at a tier, or a box in it, to show
 the human where what it talks of is before it talks it through, and
@@ -871,11 +874,11 @@ page's ‹ goes back from one map to the one before.
 A tab can show a plugin: a page, in HTML and JavaScript, that draws
 what Cox knows as a tab Cox draws would, for whoever wants a view of
 their own on the stage, the agent included, since it writes HTML and
-reads pages. "Map" and "Wiki" are built in. A plugin is a
+reads pages. "Map", "Wiki" and "Schedules" are built in. A plugin is a
 folder with an `index.html`, and a `plugin.json` naming its `title` if
 it has one: those built into Cox, in `crates/cox/plugins`, and the
 project's, in `.cox/plugins/<name>` under its folder. The bar has a
-button for each, after "Changes", which opens the plugin's page at
+button for each, "Map" first and the rest after "Changes", which opens the plugin's page at
 `cox://<name>/`, an address the stage serves itself, through CEF, from
 the plugin's files, or shows the tab that has it, wherever the page has
 gone; the agent opens it as any page. A page at a `cox:` address is
@@ -894,7 +897,9 @@ many places use each, and which files use them;
 file calls, for a step of a flow made there;
 `cox://api/wiki` is the human's wiki, its pages, each with what it
 links to, what links to it, where it was used and what Cox marks of it,
-and `cox://api/wiki/<page>` a page, with its text as HTML; and
+and `cox://api/wiki/<page>` a page, with its text as HTML;
+`cox://api/schedules` is the schedules that run in the project's
+folder (see [Schedules](#schedules)); and
 `cox://api/lines/<path>:<line>` is the lines of the file around that
 line, each as its stretches with what the syntax says each is, and
 before them the lines that open what the line is within, as its
@@ -1176,6 +1181,16 @@ is a chat named after the schedule and when it ran, as
 When each schedule last ran is kept in `state/schedules.json` in Cox's
 data folder, by its name, or, for a project's, by its file's path. A schedule whose `every` or `folder` Cox cannot read is
 said in coxd's log, and does not run.
+
+"Schedules" on the stage's bar, a plugin (see [The stage](#the-stage)),
+at `cox://schedules/`, shows the human the schedules that run in the
+stage's folder: the project's own first, then those of their workflow
+whose chats work there, or, in the home, those that name no `folder`;
+each with when it runs, when it runs next, or that it is due, when it
+ran last, or never, what its agent does unasked, and its first line,
+and its file, which a click opens on a tab. A schedule there Cox cannot
+read says why, over them, and with none, the page says how one is
+written. The page reads them again every two seconds.
 
 ## Research
 

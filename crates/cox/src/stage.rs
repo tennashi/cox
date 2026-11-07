@@ -192,6 +192,9 @@ pub struct Stage {
     /// How many files changed in the project, as the bar last counted
     /// them while the stage was open; none until then, or out of Git.
     changed: Option<usize>,
+    /// Whether the project has a map, as the bar last looked while the
+    /// stage was open.
+    mapped: bool,
     _counting: Task<()>,
     /// Where the tabs scroll along the bar.
     strip: bar::Strip,
@@ -226,6 +229,7 @@ impl Stage {
             plugins: Plugins::new(cwd.clone(), outlines, calls),
             menu: None,
             changed: None,
+            mapped: false,
             _counting: bar::count_changes(cx),
             strip: bar::Strip::default(),
             cwd,
