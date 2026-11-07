@@ -173,9 +173,44 @@ fn assemble(sh: &Shell, build: &Build) -> anyhow::Result<PathBuf> {
     }
     // The linker signs only the executables, each under a name of its own;
     // macOS lets an app post notifications only once it is signed as a
-    // bundle, under the bundle's identifier. Ad hoc is enough for that.
-    cmd!(sh, "codesign --force --deep --sign - {app}").run()?;
+    // bundle, under the bundle's identifier.
+    let identity = signing_identity(sh);
+    cmd!(sh, "codesign --force --deep --sign {identity} {app}").run()?;
     Ok(app)
+}
+
+/// The name of the certificate Cox is signed with when the human's
+/// keychain has it, so that macOS knows each build for the same app.
+const SIGNING: &str = "Cox Local Signing";
+
+/// What to sign Cox with: `COX_SIGNING_IDENTITY` if set, or else
+/// [`SIGNING`] if the keychain has it, or else `-`, ad hoc. macOS keeps
+/// what the human allowed an app, as to record the screen, for the app it
+/// knows by its signature: by the certificate and the bundle's identifier
+/// for an app signed with one, but by the build's very hash for one signed
+/// ad hoc, which each build changes, so that each asks again.
+fn signing_identity(sh: &Shell) -> String {
+    if let Ok(identity) = env::var("COX_SIGNING_IDENTITY")
+        && !identity.is_empty()
+    {
+        return identity;
+    }
+    // Without `-v`: a certificate of one's own is not one the system
+    // trusts, which codesign signs with all the same.
+    let found = cmd!(sh, "security find-identity -p codesigning")
+        .quiet()
+        .ignore_stderr()
+        .read()
+        .unwrap_or_default();
+    if found.contains(&format!("\"{SIGNING}\"")) {
+        SIGNING.to_owned()
+    } else {
+        println!(
+            "Signing ad hoc: macOS asks again for what it allowed the last build. \
+             See CONTRIBUTING.md for a certificate of {SIGNING:?}."
+        );
+        "-".to_owned()
+    }
 }
 
 /// What Cox needs of the CEF distribution on Linux when it runs: CEF and

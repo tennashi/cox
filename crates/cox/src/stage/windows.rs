@@ -207,6 +207,8 @@ impl Render for Windows {
                 .child(text)
         };
         match read.windows {
+            // The row above asks for what the system would not say.
+            Err(_) if !read.may_record => list,
             Err(why) => list.child(note(why.into(), FAILED)),
             Ok(windows) if windows.is_empty() => {
                 list.child(note("No other app's window is on screen.".into(), DIM))
