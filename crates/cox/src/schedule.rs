@@ -19,6 +19,11 @@
 //! Find out what changed in Rust since {last}.
 //! ```
 //!
+//! A project has schedules of its own too, in `.cox/schedules` in its
+//! folder, which its chats run in, as to look every few hours at what
+//! changed in it: they are written as the workflow's are, with no
+//! `folder`, since they work in the project.
+//!
 //! coxd looks every minute which are due, and opens a chat for each (see
 //! [`crate::daemon`]). When each last ran is kept where Cox keeps what
 //! lasts (see [`crate::storage::Kept::Schedules`]), so that a run Cox
@@ -33,6 +38,9 @@ use jiff::{Span, Timestamp, Zoned};
 
 /// The folder of the human's workflow that holds the schedules.
 pub const SCHEDULES: &str = "schedules";
+
+/// The folder of a project that holds its own schedules.
+pub const PROJECT_SCHEDULES: &str = ".cox/schedules";
 
 /// When a schedule runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +143,10 @@ fn weekday(text: &str) -> Result<Weekday, String> {
 pub struct Schedule {
     /// What it goes by: its file's name, less `.md`.
     pub name: String,
+    /// What it is kept by, apart from every other: its name for one of
+    /// the workflow's, and its file's path for a project's, whose names
+    /// another project may have too.
+    pub id: String,
     /// When it runs.
     pub every: Every,
     /// Where its chat works, or, when `None`, Cox's home, in no project.
@@ -149,13 +161,18 @@ pub struct Schedule {
 
 impl Schedule {
     /// The schedule of the file at `path`, from the home directory
-    /// `user` for a folder from `~`, unless it is no Markdown file or
-    /// says nothing of when it runs.
+    /// `user` for a folder from `~`, or, for a schedule of the project
+    /// whose folder is `project`, working there, unless it is no Markdown
+    /// file or says nothing of when it runs.
     ///
     /// # Errors
     ///
     /// When it says when it runs, or where, in a way Cox does not know.
-    pub fn read(path: &Path, user: Option<&Path>) -> Result<Option<Self>, String> {
+    pub fn read(
+        path: &Path,
+        user: Option<&Path>,
+        project: Option<&Path>,
+    ) -> Result<Option<Self>, String> {
         if path.extension().is_none_or(|extension| extension != "md") {
             return Ok(None);
         }
@@ -178,12 +195,20 @@ impl Schedule {
         };
         let said = |why: String| format!("{}: {why}", path.display());
         let every = Every::parse(every).map_err(said)?;
-        let folder = value("folder")
-            .map(|folder| crate::settings::folder_of(folder, user))
-            .transpose()
-            .map_err(|why| said(why.to_owned()))?;
+        let folder = match project {
+            Some(project) => Some(project.to_owned()),
+            None => value("folder")
+                .map(|folder| crate::settings::folder_of(folder, user))
+                .transpose()
+                .map_err(|why| said(why.to_owned()))?,
+        };
+        let id = match project {
+            Some(_) => path.display().to_string(),
+            None => name.to_owned(),
+        };
         Ok(Some(Self {
             name: name.to_owned(),
+            id,
             every,
             folder,
             allow: list(&properties, "allow"),
@@ -256,12 +281,24 @@ fn list(properties: &[&str], key: &str) -> Vec<String> {
 /// cannot read.
 #[must_use]
 pub fn schedules(workflow: &Path, user: Option<&Path>) -> Vec<Schedule> {
-    let Ok(entries) = std::fs::read_dir(workflow.join(SCHEDULES)) else {
+    read_all(&workflow.join(SCHEDULES), user, None)
+}
+
+/// The schedules of the project whose folder is `project`, by name, each
+/// working there, saying in the log those Cox cannot read.
+#[must_use]
+pub fn of_project(project: &Path) -> Vec<Schedule> {
+    read_all(&project.join(PROJECT_SCHEDULES), None, Some(project))
+}
+
+/// The schedules in `folder`, by name, as [`Schedule::read`] reads each.
+fn read_all(folder: &Path, user: Option<&Path>, project: Option<&Path>) -> Vec<Schedule> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
         return Vec::new();
     };
     let mut schedules: Vec<Schedule> = entries
         .filter_map(Result::ok)
-        .filter_map(|entry| match Schedule::read(&entry.path(), user) {
+        .filter_map(|entry| match Schedule::read(&entry.path(), user, project) {
             Ok(schedule) => schedule,
             Err(why) => {
                 tracing::warn!("a schedule does not run: {why}");
@@ -429,6 +466,7 @@ mod tests {
             [
                 Schedule {
                     name: "rust-news".to_owned(),
+                    id: "rust-news".to_owned(),
                     every: Every::Day(Time::constant(9, 0, 0, 0)),
                     folder: Some("/home/me/notes".into()),
                     allow: vec!["fetch:*".to_owned(), "search:*".to_owned()],
@@ -436,6 +474,7 @@ mod tests {
                 },
                 Schedule {
                     name: "tidy".to_owned(),
+                    id: "tidy".to_owned(),
                     every: Every::Hours(6),
                     folder: None,
                     allow: vec!["read:*".to_owned(), "edit:*".to_owned()],
@@ -454,6 +493,36 @@ mod tests {
         );
         assert_eq!(news.chat_name(&at(3, 9, 30)), "rust-news 11/03 09:30");
         let _ = std::fs::remove_dir_all(&workflow);
+    }
+
+    #[test]
+    fn a_project_has_schedules_of_its_own_which_work_in_it() {
+        let project =
+            std::env::temp_dir().join(format!("cox-project-schedules-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&project);
+        let schedules = project.join(".cox/schedules");
+        std::fs::create_dir_all(&schedules).unwrap();
+        // Where it works is the project, whatever it says.
+        std::fs::write(
+            schedules.join("tidy.md"),
+            "---\nevery: every 6h\nfolder: ~/elsewhere\n---\nTidy {name} up.\n",
+        )
+        .unwrap();
+
+        let tidy = schedules.join("tidy.md").display().to_string();
+        assert_eq!(
+            super::of_project(&project),
+            [Schedule {
+                name: "tidy".to_owned(),
+                id: tidy,
+                every: Every::Hours(6),
+                folder: Some(project.clone()),
+                allow: Vec::new(),
+                line: "Tidy {name} up.".to_owned(),
+            }]
+        );
+        assert_eq!(super::schedules(&project, None), []);
+        let _ = std::fs::remove_dir_all(&project);
     }
 
     #[test]

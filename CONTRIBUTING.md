@@ -1121,6 +1121,12 @@ rest the agent asks the human, as any chat does. In the first line,
 `{name}` stands for the schedule's name, `{now}` for when it runs, and
 `{last}` for when it ran last, or `never`.
 
+A project has schedules of its own too, for what is of it alone, as to
+look every few hours at what changed in it: files written the same way,
+in `.cox/schedules` in its folder, as `.cox/schedules/triage.md`, which
+the project's repository can keep. Their chats work in the project, so
+they say no `folder`. Cox runs those of each project it has opened.
+
 Every minute, coxd (see [coxd](#coxd)) runs each schedule that is due,
 whether a window is there or not: one that never ran at once, and one a
 run of which Cox missed, as while the machine slept, once, however many
@@ -1128,7 +1134,7 @@ it missed; while the chat of its last run is at work, it waits. A run
 is a chat named after the schedule and when it ran, as
 `rust-news 11/06 09:00`, whose first line goes in the human's place.
 When each schedule last ran is kept in `state/schedules.json` in Cox's
-data folder. A schedule whose `every` or `folder` Cox cannot read is
+data folder, by its name, or, for a project's, by its file's path. A schedule whose `every` or `folder` Cox cannot read is
 said in coxd's log, and does not run.
 
 ## Research

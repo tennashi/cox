@@ -278,7 +278,7 @@ pub struct Daemon {
     /// When each of the human's schedules last ran (see
     /// [`crate::schedule`]), read as the daemon first looks.
     ran: Option<crate::schedule::Ran>,
-    /// The chat of the last run of each schedule, by its name.
+    /// The chat of the last run of each schedule, by its id.
     scheduled: HashMap<String, u64>,
 }
 
@@ -1121,14 +1121,18 @@ impl Daemon {
         }
     }
 
-    /// Runs each of the schedules of the human's `workflow` that is due
-    /// `now`, from the home directory `user`, unless the chat of its last
-    /// run is still at work: a chat for each run, in the project of the
-    /// schedule's folder, or in no project, on the schedule's first line,
-    /// sent in the human's place, its agent going on unasked with what the
-    /// schedule allows (see [`crate::schedule`]).
+    /// Runs each of the schedules of the human's `workflow`, from the home
+    /// directory `user`, and of the projects, that is due `now`, unless
+    /// the chat of its last run is still at work: a chat for each run, in
+    /// the project of the schedule's folder, or in no project, on the
+    /// schedule's first line, sent in the human's place, its agent going
+    /// on unasked with what the schedule allows (see [`crate::schedule`]).
     fn run_schedules(&mut self, workflow: &Path, user: Option<&Path>, now: &jiff::Zoned) {
-        let schedules = crate::schedule::schedules(workflow, user);
+        let mut schedules = crate::schedule::schedules(workflow, user);
+        // The home is the first, and no project.
+        for project in &self.projects[1..] {
+            schedules.extend(crate::schedule::of_project(&project.folder));
+        }
         if schedules.is_empty() {
             return;
         }
@@ -1139,15 +1143,15 @@ impl Daemon {
         for schedule in schedules {
             let at_work = self
                 .scheduled
-                .get(&schedule.name)
+                .get(&schedule.id)
                 .and_then(|&key| self.slot(key))
                 .is_some_and(|slot| working(slot.state));
-            let last = ran.last(&schedule.name);
+            let last = ran.last(&schedule.id);
             if at_work || !schedule.every.due(last, now) {
                 continue;
             }
-            tracing::info!(schedule = schedule.name, "a schedule runs");
-            ran.ran(&schedule.name, now.timestamp());
+            tracing::info!(schedule = schedule.id, "a schedule runs");
+            ran.ran(&schedule.id, now.timestamp());
             if let Some(folder) = &schedule.folder
                 && let Err(error) = std::fs::create_dir_all(folder)
             {
@@ -1173,7 +1177,7 @@ impl Daemon {
             if let Some(chat) = self.chat(key) {
                 chat.told(&line);
             }
-            self.scheduled.insert(schedule.name, key);
+            self.scheduled.insert(schedule.id, key);
         }
         self.ran = Some(ran);
     }
