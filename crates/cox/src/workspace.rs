@@ -58,6 +58,7 @@ use crate::daemon::Link;
 use crate::daemon::wire::{ChatRow, FromDaemon, Listing, StageAsk, ToDaemon};
 use crate::notices::AppNotices;
 use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView};
+use crate::stage::owners::ShowChat;
 use crate::stage::{NewPage, NewTerminal, OpenFile, Stage};
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
@@ -380,6 +381,8 @@ pub struct Workspace {
     syncs: HashMap<u64, tokio::sync::oneshot::Sender<()>>,
     last_sync: u64,
     focus_handle: FocusHandle,
+    /// Show the chat of a stage's tab that the human asks a stage to.
+    shows_chats: Vec<Subscription>,
     _from_daemon: Task<()>,
 }
 
@@ -441,6 +444,7 @@ impl Workspace {
             syncs: HashMap::new(),
             last_sync: 0,
             focus_handle: cx.focus_handle(),
+            shows_chats: Vec::new(),
             _from_daemon: heard,
         }
     }
@@ -693,6 +697,20 @@ impl Workspace {
                 });
                 keep
             });
+            if new {
+                // The stage names the chats, to hand a tab to one, and
+                // shows the chat of a tab the human asks it to.
+                let workspace = cx.entity().downgrade();
+                let names: crate::stage::owners::Names = Rc::new(move |key, cx: &App| {
+                    Some(workspace.upgrade()?.read(cx).chat(key)?.name.clone())
+                });
+                stage.update(cx, |stage, _| stage.set_names(names));
+                let shows =
+                    cx.subscribe_in(&stage, window, |workspace, _, ShowChat(key), window, cx| {
+                        workspace.reveal(*key, window, cx);
+                    });
+                self.shows_chats.push(shows);
+            }
             stage.update(cx, |stage, cx| {
                 stage.work(key, None, Some(from_tools), keep, window, cx);
                 if shown_key == Some(key) {
@@ -1179,8 +1197,13 @@ impl Workspace {
         self.menu = None;
         self.renaming = None;
         if let Some(chat) = self.chats.get(index) {
+            let key = chat.key;
+            // Its tabs are the human's from now on.
+            if let Some(stage) = chat.view().and_then(|view| view.read(cx).stage()) {
+                stage.update(cx, |stage, cx| stage.release(key, cx));
+            }
             self.tell(ToDaemon::Archive {
-                key: chat.key,
+                key,
                 archived: true,
             });
         }

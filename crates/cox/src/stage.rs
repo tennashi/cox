@@ -20,24 +20,26 @@
 //! as it is written otherwise. A click on a file in the tree opens it the
 //! same way.
 //!
-//! Each tab is of one of the chats: the chat whose agent opened it, or
-//! the chat shown when the human opened it. The stage tells each chat's
-//! relay of the pages of that chat, so that its agent sees those, whoever
-//! opened them, and none of the other chats'; an agent's command gets the
-//! tab of its own last one that ended. When an agent works on a page,
-//! shows a file or runs a command, the stage shows that tab, and opens
-//! beside the conversation if it was closed, if the agent's chat is the
-//! one shown, or else opens the tab behind the one shown; the tabs of the
-//! chats not shown are drawn dimmer.
+//! Each tab is the human's, as every tab they open is, or of one of the
+//! chats, as every tab its agent opens is, or one the human handed to it
+//! (see [`owners`]). The stage tells each chat's relay of the pages of
+//! that chat, so that its agent sees those, and none of the human's or
+//! the other chats'; an agent's command gets the tab of its own last one
+//! that ended. When an agent works on a page, shows a file or runs a
+//! command, the stage shows that tab, and opens beside the conversation
+//! if it was closed, if the agent's chat is the one shown, or else opens
+//! the tab behind the one shown; the tabs of the chats not shown are
+//! drawn dimmer.
 //!
 //! The stage keeps its tabs as they change, with the chat each is of. A
 //! stage opens again on the pages and files kept, for the human to look
 //! at; its terminals are not started again. Once the human sends to a
 //! chat again, its agent works on its own pages.
 //!
-//! - [`tab`] is a tab, and what it shows, whichever kind it is, and
-//!   [`bar`] the bar of the tabs, which keeps the views of the project,
-//!   its files, what changed and the plugins' pages, apart from the rest.
+//! - [`tab`] is a tab, and what it shows, whichever kind it is, [`owners`]
+//!   whose it is, and [`bar`] the bar of the tabs, which keeps the views
+//!   of the project, its files, what changed and the plugins' pages,
+//!   apart from the rest.
 //! - [`links`] is what opens on a tab, and which: a link, a file, or the
 //!   tree of the project's files.
 //! - [`asked`] is what the agent asks of the stage, through the relay and
@@ -81,6 +83,7 @@ pub mod mac_window;
 pub mod map;
 mod mirror;
 pub mod outline;
+pub mod owners;
 pub mod page;
 pub mod plugins;
 pub mod servers;
@@ -166,8 +169,13 @@ pub struct Stage {
     /// it does.
     acting: Option<u64>,
     /// The chat shown last of those that work on the stage, which the
-    /// tabs the human opens are of.
+    /// human hands their tabs to.
     showing: Option<u64>,
+    /// What names the chats, for the human to hand a tab to one.
+    names: Option<owners::Names>,
+    /// The menu of the right button on a tab, while it is open: where the
+    /// mouse went down, and the tab's index.
+    tab_menu: Option<(gpui::Point<gpui::Pixels>, usize)>,
     /// Whether the stage is open beside the conversation.
     panel: Entity<Panel>,
     /// What keeps the tabs as they change, if they are kept.
@@ -226,6 +234,8 @@ impl Stage {
             pages: HashMap::new(),
             acting: None,
             showing: None,
+            names: None,
+            tab_menu: None,
             panel,
             keep: None,
             kept: None,
@@ -357,9 +367,9 @@ impl Stage {
         }
     }
 
-    /// The chat `chat` is shown, of those that work on the stage: the tabs
-    /// the human opens from now on are of it, and the stage shows its
-    /// last tab, unless the tab shown is of it or of no chat.
+    /// The chat `chat` is shown, of those that work on the stage: the human
+    /// hands their tabs to it from now on, and the stage shows its last
+    /// tab, unless the tab shown is of it or the human's.
     pub fn showing(&mut self, chat: u64, cx: &mut Context<Self>) {
         if self.showing == Some(chat) {
             return;
@@ -379,9 +389,9 @@ impl Stage {
     }
 
     /// The chat the tabs opened now are of: the chat whose agent the
-    /// stage carries out what it asks for, or else the chat shown.
+    /// stage carries out what it asks for, or else none, for the human.
     fn owner(&self) -> Option<u64> {
-        self.acting.or(self.showing)
+        self.acting
     }
 
     /// Does `act` for the chat `chat`, whose agent asked for it, or for
@@ -650,8 +660,8 @@ impl Stage {
     }
 
     /// Puts a tab after the others, of the chat the tabs opened now are
-    /// of, shown if `show` is and it is in the human's sight, or if no tab
-    /// is shown.
+    /// of, or the human's, shown if `show` is and it is in the human's
+    /// sight, or if no tab is shown.
     fn push(
         &mut self,
         content: TabContent,
@@ -689,6 +699,7 @@ impl Stage {
             return Err("The stage keeps its last tab open");
         }
         let had_focus = self.has_focus(window, cx);
+        self.tab_menu = None;
         self.tabs.remove(index);
         if had_focus {
             self.focus_shown(window, cx);

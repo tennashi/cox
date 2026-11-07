@@ -47,7 +47,7 @@ use tokio::sync::{oneshot, watch};
 use tokio_tungstenite::tungstenite::{self, Message};
 
 use self::devtools::{browser_endpoint, config, find_tab};
-use self::scope::{Ask, Reply, Request, Scope, let_go};
+use self::scope::{Ask, Reply, Request, Said, Scope, let_go};
 use self::seen::{Answer, OWN_IDS, answer, ask_focused, observe};
 use crate::TargetId;
 
@@ -103,26 +103,45 @@ pub enum FromAgent {
 pub struct Known {
     /// How many pages are opening that the relay does not know yet.
     pub(super) opening: usize,
-    /// Each page, with the tab that holds it, if the browser has tabs, in
-    /// the order the relay came to know them.
-    pub(super) pages: Vec<(String, Option<String>)>,
+    /// Each page, in the order the relay came to know it.
+    pub(super) pages: Vec<KnownPage>,
+}
+
+/// One of a chat's pages, as the relay knows it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct KnownPage {
+    pub(super) page: String,
+    /// The tab that holds the page, if the browser has tabs.
+    pub(super) tab: Option<String>,
+    /// Whether the page was open before it was the chat's, as one the
+    /// human hands to the chat: the browser told of it then, so the
+    /// relay tells the agent of it itself.
+    pub(super) handed: bool,
 }
 
 impl Known {
     fn has(&self, page: &str) -> bool {
-        self.pages.iter().any(|(known, _)| known == page)
+        self.pages.iter().any(|known| known.page == page)
     }
+}
+
+/// A page whose tab the relay is to find, once CEF names it.
+struct Find {
+    page: TargetId,
+    /// Whether it is handed to the chat, rather than opening.
+    handed: bool,
 }
 
 /// One chat's pages, which its agent sees. The stage says when it opens a
 /// page, before CEF makes it, and which page it is once CEF has made it;
-/// the relay finds the tab that holds it. Cloning it shares the same
+/// the relay finds the tab that holds it. The stage also hands the chat a
+/// page open already, and takes one back. Cloning it shares the same
 /// pages.
 #[derive(Clone)]
 pub struct Pages {
     known: Arc<watch::Sender<Known>>,
     /// Where the relay finds the tabs of new pages.
-    names: UnboundedSender<TargetId>,
+    names: UnboundedSender<Find>,
 }
 
 impl Pages {
@@ -137,10 +156,25 @@ impl Pages {
         }
     }
 
-    fn opened(&self, page: Option<(String, Option<String>)>) {
-        self.known.send_modify(|known| {
-            known.opening -= 1;
-            known.pages.extend(page);
+    fn opened(&self) {
+        self.known.send_modify(|known| known.opening -= 1);
+    }
+
+    /// The page `page`, open already, is the chat's from now on: the agent
+    /// hears of it, as if it had just opened, once the relay has found its
+    /// tab.
+    pub fn hand(&self, page: TargetId) {
+        // With the relay gone, no agent is there to hear of it.
+        let _ = self.names.send(Find { page, handed: true });
+    }
+
+    /// The page `page` is the chat's no longer: the agent hears that it is
+    /// gone, and lets go of it.
+    pub fn forget(&self, page: &str) {
+        self.known.send_if_modified(|known| {
+            let had = known.pages.len();
+            known.pages.retain(|known| known.page != page);
+            known.pages.len() != had
         });
     }
 }
@@ -155,11 +189,14 @@ impl Opening {
     /// The page that opened is `page`.
     pub fn is(mut self, page: TargetId) {
         if let Some(pages) = self.pages.take()
-            && let Err(unsent) = pages.names.send(page)
+            && let Err(unsent) = pages.names.send(Find {
+                page,
+                handed: false,
+            })
         {
             // The relay is gone, and no one is waiting for the page.
             drop(unsent);
-            pages.opened(None);
+            pages.opened();
         }
     }
 }
@@ -167,7 +204,7 @@ impl Opening {
 impl Drop for Opening {
     fn drop(&mut self) {
         if let Some(pages) = self.pages.take() {
-            pages.opened(None);
+            pages.opened();
         }
     }
 }
@@ -237,7 +274,7 @@ async fn serve(
     listener: StdTcpListener,
     devtools_port: u16,
     known: Arc<watch::Sender<Known>>,
-    mut to_find: UnboundedReceiver<TargetId>,
+    mut to_find: UnboundedReceiver<Find>,
     seen: UnboundedSender<FromAgent>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::from_std(listener)?;
@@ -253,13 +290,17 @@ async fn serve(
                     }
                 });
             }
-            Some(page) = to_find.recv() => {
+            Some(Find { page, handed }) = to_find.recv() => {
                 let known = Arc::clone(&known);
                 tokio::spawn(async move {
                     let found = find_page(devtools_port, page).await;
                     known.send_modify(|known| {
-                        known.opening -= 1;
-                        known.pages.extend(found);
+                        if !handed {
+                            known.opening -= 1;
+                        }
+                        known.pages.extend(
+                            found.map(|(page, tab)| KnownPage { page, tab, handed }),
+                        );
                     });
                 });
             }
@@ -294,6 +335,51 @@ async fn find_page(devtools_port: u16, mut page: TargetId) -> Option<(String, Op
         }
     };
     Some((page, tab))
+}
+
+/// The scope of one connection, and the chat's pages it learns from.
+struct Learning {
+    scope: Scope,
+    known: watch::Receiver<Known>,
+}
+
+impl Learning {
+    /// The scope of the pages `known` has now: nothing is said of them,
+    /// as the browser tells the agent of them as it asks.
+    fn new(mut known: watch::Receiver<Known>, ends: &Ends) -> Self {
+        let mut scope = Scope::default();
+        scope.learn(&known.borrow_and_update(), || ends.own_id());
+        Self { scope, known }
+    }
+
+    /// Learns what changed in the chat's pages since it last did, and says
+    /// so to either end.
+    fn catch_up(&mut self, ends: &Ends) {
+        if !self.known.has_changed().unwrap_or(false) {
+            return;
+        }
+        let Self { scope, known } = self;
+        for said in scope.learn(&known.borrow_and_update(), || ends.own_id()) {
+            match said {
+                Said::ToAgent(text) => ends.to_client(Message::text(text)),
+                Said::ToBrowser(text) => ends.to_browser(Message::text(text)),
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for Learning {
+    type Target = Scope;
+
+    fn deref(&self) -> &Scope {
+        &self.scope
+    }
+}
+
+impl std::ops::DerefMut for Learning {
+    fn deref_mut(&mut self) -> &mut Scope {
+        &mut self.scope
+    }
 }
 
 /// Where one connection of the relay's sends what it hears from either
@@ -342,14 +428,7 @@ async fn relay(
     {
         tracing::warn!("the stage's pages did not open in time, so its agent sees those that did");
     }
-    let learned = known.clone();
     let opened = known.clone();
-    let scope = Mutex::new(Scope::default());
-    let scope = || {
-        let mut scope = scope.lock().unwrap_or_else(PoisonError::into_inner);
-        scope.learn(&learned.borrow());
-        scope
-    };
     let (browser, _) =
         tokio_tungstenite::connect_async_with_config(endpoint, Some(config()), true).await?;
     let (mut to_client, mut from_client) = client.split();
@@ -365,6 +444,13 @@ async fn relay(
         browser: for_browser,
         stage,
         next_id: AtomicU64::new(OWN_IDS),
+    };
+    let followed = known.clone();
+    let scope = Mutex::new(Learning::new(known.clone(), &ends));
+    let scope = || {
+        let mut learning = scope.lock().unwrap_or_else(PoisonError::into_inner);
+        learning.catch_up(&ends);
+        learning
     };
     let upstream = async {
         let mut asked = None::<Instant>;
@@ -432,7 +518,19 @@ async fn relay(
         ended = ask_stage(stage_queue, &ends, opened) => ended,
         ended = to_client => ended,
         ended = to_browser => ended,
+        ended = follow(followed, || drop(scope())) => ended,
     }
+}
+
+/// Has `learn` learn of the chat's pages as `known` changes, so that the
+/// agent hears of the pages handed to its chat, and taken back, as they
+/// are, not when it next says something.
+async fn follow(mut known: watch::Receiver<Known>, learn: impl Fn()) -> anyhow::Result<()> {
+    while known.changed().await.is_ok() {
+        learn();
+    }
+    // Once the stage is gone, no page changes hands any more.
+    std::future::pending().await
 }
 
 /// Delivers what the browser says, from `browser`, in order, holding it
@@ -774,6 +872,64 @@ mod tests {
         );
     }
 
+    /// The stage hands the chat the page `OTHER`, open already, of which
+    /// the agent heard nothing: the agent hears of it now, and the browser
+    /// attaches it to its tab, as the agent asked to be attached to every
+    /// tab. Taken back, the page is gone, for the agent.
+    #[tokio::test]
+    async fn the_agent_hears_of_a_page_handed_to_its_chat_and_taken_back() {
+        let (mut agent, relay, _named) = connect().await;
+        assert_eq!(
+            ask(
+                &mut agent,
+                r#"{"id":0,"method":"Target.setDiscoverTargets","params":{"discover":true}}"#,
+                2
+            )
+            .await,
+            [
+                r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"PAGE","type":"page"}}}"#,
+                r#"{"id":0,"result":{}}"#,
+            ]
+        );
+        assert_eq!(
+            ask(
+                &mut agent,
+                r#"{"id":1,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}}"#,
+                2
+            )
+            .await,
+            [
+                r#"{"method":"Target.attachedToTarget","params":{"sessionId":"s-TAB","targetInfo":{"targetId":"TAB","type":"tab"},"waitingForDebugger":false}}"#,
+                r#"{"id":1,"result":{}}"#,
+            ]
+        );
+
+        let (_other_named, other) = watch::channel(Some("OTHER".to_owned()));
+        relay.pages.hand(other);
+        assert_eq!(
+            hear(&mut agent, 3).await,
+            [
+                r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"OTHER-TAB","type":"tab"}}}"#,
+                r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"OTHER","type":"page"}}}"#,
+                r#"{"method":"Target.attachedToTarget","params":{"sessionId":"s-OTHER-TAB","targetInfo":{"targetId":"OTHER-TAB","type":"tab"},"waitingForDebugger":false}}"#,
+            ]
+        );
+
+        relay.pages.forget("OTHER");
+        assert_eq!(
+            hear(&mut agent, 3).await,
+            [
+                r#"{"method":"Target.detachedFromTarget","params":{"sessionId":"s-OTHER-TAB"}}"#,
+                r#"{"method":"Target.targetDestroyed","params":{"targetId":"OTHER"}}"#,
+                r#"{"method":"Target.targetDestroyed","params":{"targetId":"OTHER-TAB"}}"#,
+            ]
+        );
+        assert_eq!(
+            ask(&mut agent, r#"{"id":2,"method":"Target.attachToTarget","params":{"targetId":"OTHER","flatten":true}}"#, 1).await,
+            [r#"{"id":2,"error":{"code":-32000,"message":"No target with given id found"}}"#]
+        );
+    }
+
     /// Answers each `/json/version`, keeping the connection open as the
     /// browser does, and serves each connection to the endpoint it named:
     /// the tabs `TAB`, `OTHER-TAB` and `NEW-TAB` hold the pages `PAGE`,
@@ -815,6 +971,8 @@ mod tests {
             };
             json!({ "targetId": target, "type": kind })
         };
+        // The tabs the browser attached to, on the browser's own session.
+        let mut attached = std::collections::HashSet::new();
         while let Some(Ok(message)) = socket.next().await {
             let Message::Text(text) = &message else {
                 continue;
@@ -848,6 +1006,31 @@ mod tests {
                         },
                     }));
                     sent.push(json!({ "id": request["id"], "result": { "sessionId": session } }));
+                }
+                // The browser attaches to the tabs it is not attached to.
+                "Target.setAutoAttach" if request["sessionId"].is_null() => {
+                    for tab in ["TAB", "OTHER-TAB"] {
+                        if attached.insert(tab) {
+                            sent.push(json!({
+                                "method": "Target.attachedToTarget",
+                                "params": {
+                                    "sessionId": format!("s-{tab}"),
+                                    "targetInfo": info(tab),
+                                    "waitingForDebugger": false,
+                                },
+                            }));
+                        }
+                    }
+                    sent.push(json!({ "id": request["id"], "result": {} }));
+                }
+                "Target.detachFromTarget" => {
+                    let session = params["sessionId"].as_str().unwrap();
+                    attached.retain(|tab| session.strip_prefix("s-") != Some(tab));
+                    sent.push(json!({ "id": request["id"], "result": {} }));
+                    sent.push(json!({
+                        "method": "Target.detachedFromTarget",
+                        "params": { "sessionId": session },
+                    }));
                 }
                 "Target.setAutoAttach" => {
                     let session = request["sessionId"].as_str().unwrap();
