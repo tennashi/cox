@@ -18,13 +18,13 @@ use crate::stage::tab::{Shows, TabContent};
 
 /// How long the app has to answer what the agent did, before the agent
 /// sees its window again.
-const SETTLE: Duration = Duration::from_millis(400);
+pub(super) const SETTLE: Duration = Duration::from_millis(400);
 
 /// How long a tab just opened has to get the window's first picture.
-const FIRST_PICTURE: Duration = Duration::from_secs(3);
+pub(super) const FIRST_PICTURE: Duration = Duration::from_secs(3);
 
 /// How often a tab with no picture yet is looked at again.
-const LOOK_AGAIN: Duration = Duration::from_millis(100);
+pub(super) const LOOK_AGAIN: Duration = Duration::from_millis(100);
 
 /// What the agent's answer goes to.
 type Answer = oneshot::Sender<Result<Seen, String>>;
@@ -197,7 +197,12 @@ async fn seen(tab: &WeakEntity<MacWindow>, cx: &mut gpui::AsyncApp) -> Result<Se
 
 /// The picture `width` by `height`, as BGRA, as PNG in base64, `size`
 /// big.
-fn png(width: u32, height: u32, mut bgra: Vec<u8>, size: (u32, u32)) -> Result<String, String> {
+pub(super) fn png(
+    width: u32,
+    height: u32,
+    mut bgra: Vec<u8>,
+    size: (u32, u32),
+) -> Result<String, String> {
     for pixel in bgra.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }

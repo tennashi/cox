@@ -73,6 +73,19 @@ impl Screen {
         Some((width, height, image.as_bytes(0)?.to_vec()))
     }
 
+    /// How big the picture is now, in pixels: the one waiting to be drawn,
+    /// or else the one drawn last.
+    pub(super) fn size(&self) -> Option<(u32, u32)> {
+        if let Some((width, height, _)) = &self.waiting {
+            return Some((*width, *height));
+        }
+        let size = self.image.as_ref()?.size(0);
+        Some((
+            u32::try_from(size.width.0).ok()?,
+            u32::try_from(size.height.0).ok()?,
+        ))
+    }
+
     /// Where the picture was drawn last, from the top left corner of the
     /// tab's area for it.
     pub(super) fn drawn_within(&self) -> Option<Bounds<Pixels>> {

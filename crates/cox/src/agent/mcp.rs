@@ -113,6 +113,13 @@ pub enum ToolRequest {
         act: MacAct,
         answer: oneshot::Sender<Result<Seen, String>>,
     },
+    /// Do `act` with the Android emulators, on a tab of the stage that
+    /// shows the device, and answer what the agent sees then. While no
+    /// window is there, there is nothing to show them on.
+    Android {
+        act: AndroidAct,
+        answer: oneshot::Sender<Result<Seen, String>>,
+    },
 }
 
 impl ToolRequest {
@@ -146,6 +153,7 @@ impl ToolRequest {
                 format!("run `{command}` in {}", cwd.display())
             }
             Self::MacWindow { act, .. } => act.said(),
+            Self::Android { act, .. } => act.said(),
         }
     }
 }
@@ -328,12 +336,77 @@ impl MacAct {
     }
 }
 
-/// What the agent sees of the Mac's windows: what is said of them, and a
-/// picture of the window acted on.
+/// What the agent does with the Android emulators' virtual devices, by
+/// their names. Where it does it is in the pixels of the device's
+/// picture, as the agent last saw it (see [`Seen`]), from its top left
+/// corner.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AndroidAct {
+    /// Lists the devices.
+    List,
+    /// Looks at the device's display, starting its emulator if it does
+    /// not run.
+    Look { device: String },
+    /// Taps there.
+    Tap { device: String, x: u32, y: u32 },
+    /// Swipes from there to `to_x` and `to_y`.
+    Swipe {
+        device: String,
+        x: u32,
+        y: u32,
+        to_x: u32,
+        to_y: u32,
+    },
+    /// Types `text`, where the device has the keyboard.
+    Type { device: String, text: String },
+    /// Presses `key`, as `Enter` or `GoBack`.
+    Key { device: String, key: String },
+}
+
+impl AndroidAct {
+    /// The device acted on, unless the act lists them.
+    #[must_use]
+    pub fn device(&self) -> Option<&str> {
+        match self {
+            Self::List => None,
+            Self::Look { device }
+            | Self::Tap { device, .. }
+            | Self::Swipe { device, .. }
+            | Self::Type { device, .. }
+            | Self::Key { device, .. } => Some(device),
+        }
+    }
+
+    /// What is done, as the log says it. What is typed may be a password:
+    /// it says only how long it is.
+    #[must_use]
+    pub fn said(&self) -> String {
+        match self {
+            Self::List => "list the Android devices".to_owned(),
+            Self::Look { device } => format!("look at Android device {device}"),
+            Self::Tap { device, x, y } => format!("tap Android device {device} at {x},{y}"),
+            Self::Swipe {
+                device,
+                x,
+                y,
+                to_x,
+                to_y,
+            } => format!("swipe Android device {device} from {x},{y} to {to_x},{to_y}"),
+            Self::Type { device, text } => format!(
+                "type {} characters on Android device {device}",
+                text.chars().count()
+            ),
+            Self::Key { device, key } => format!("press {key} on Android device {device}"),
+        }
+    }
+}
+
+/// What the agent sees of the Mac's windows, or of the Android devices:
+/// what is said of them, and a picture of the one acted on.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Seen {
     pub text: String,
-    /// The window's picture, as PNG in base64.
+    /// The picture, as PNG in base64.
     pub png: Option<String>,
 }
 
@@ -771,7 +844,9 @@ mod tests {
         let (sent, _requests) = unbounded_channel();
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 15);
+        // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
+        let tools = 15 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);

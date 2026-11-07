@@ -287,7 +287,8 @@ the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `run_command`,
 `open_chat`, `wait_chat`, `propose_goal`, `start_sketch`, `wiki_search`, `wiki_read`, `wiki_write`,
 `raw_keep`, `raw_search`, `raw_read`, and on macOS `mac_windows`, `mac_window_look`,
-`mac_window_click`, `mac_window_type`, `mac_window_key`, `mac_window_scroll`), all of them unless given; `stage`, `drive` for the tools
+`mac_window_click`, `mac_window_type`, `mac_window_key`, `mac_window_scroll`, and `android_devices`,
+`android_look`, `android_tap`, `android_swipe`, `android_type`, `android_key`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the permission requests Cox answers
 in the human's place, a request both match being rejected, and the
@@ -1011,6 +1012,20 @@ saving its state as it does when its window closes; one that ran
 already goes on. A closed chat's stage, or the next run's, opens the
 tab again, reaching the emulator if it runs, and else with "Start" to
 start it.
+
+The agent tries its app on a device from the tab too, as the human
+watches: Cox's tools list the devices (`android_devices`), show one on
+its tab, a new one of the chat's, starting its emulator if it does not
+run, and answer a picture of its display (`android_look`), and tap,
+swipe, type and press a key on it (`android_tap`, `android_swipe`,
+`android_type`, `android_key`), over the same gRPC service, answering a
+picture of the display after, 1280 pixels along its longer side, in
+whose pixels the agent says where it acts. A look waits for the display
+while the emulator starts, and the display comes, until the tab is
+drawn, at a size of its own, so that the agent sees it whether the tab
+is in sight or not. The tab draws the agent's pointer where it taps and
+swipes, as a page's does, so that the human sees what the agent does,
+as it does over a window of the Mac's (see below).
 
 On macOS, a tab can show a window of another app too, for the human to
 see, beside the chat, the app the agent makes and tries out, rather than

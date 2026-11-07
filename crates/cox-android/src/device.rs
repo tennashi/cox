@@ -31,6 +31,10 @@ const START_TIMEOUT: Duration = Duration::from_mins(3);
 /// How often Cox asks an emulator that has not answered yet.
 const RETRY: Duration = Duration::from_millis(500);
 
+/// The longer side of the display's pictures, in pixels, until the tab
+/// asks for pictures of its size.
+const UNDRAWN_SIDE: u32 = 1280;
+
 /// The most of what the emulator printed that Cox says when it ends.
 const KEPT_LINES: usize = 12;
 
@@ -237,7 +241,11 @@ impl Worker {
         };
         self.status(Status::Showing);
         let mut size = None;
-        let mut frames: Option<tonic::Streaming<crate::proto::Image>> = None;
+        // Until the tab asks for pictures of its size, as while it is not
+        // drawn, the display comes at a size of its own, for an agent to
+        // see it by.
+        let (width, height) = fitted(display, UNDRAWN_SIDE);
+        let mut frames = Some(stream(&mut client, width, height).await?);
         loop {
             tokio::select! {
                 input = from_tab.recv() => {
@@ -397,6 +405,20 @@ async fn display(client: &mut Client) -> Result<Option<(u32, u32)>, tonic::Statu
     let image = client.get_screenshot(format).await?.into_inner();
     let (width, height) = size_of(&image);
     Ok((width > 0 && height > 0).then_some((width, height)))
+}
+
+/// `size`, made smaller if need be, so that its longer side is `most_side`
+/// pixels at most.
+fn fitted(size: (u32, u32), most_side: u32) -> (u32, u32) {
+    let longer = size.0.max(size.1).max(1);
+    if longer <= most_side {
+        return size;
+    }
+    let scaled = |length: u32| {
+        let length = u64::from(length) * u64::from(most_side) / u64::from(longer);
+        u32::try_from(length).unwrap_or(most_side).max(1)
+    };
+    (scaled(size.0), scaled(size.1))
 }
 
 fn size_of(image: &crate::proto::Image) -> (u32, u32) {
@@ -563,6 +585,13 @@ fn said(printed: &Mutex<Vec<String>>, ended: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_undrawn_display_comes_no_bigger_than_its_side() {
+        assert_eq!(fitted((1080, 2424), 1280), (570, 1280));
+        assert_eq!(fitted((540, 1170), 1280), (540, 1170));
+        assert_eq!(fitted((2560, 1600), 1280), (1280, 800));
+    }
 
     #[test]
     fn a_touch_goes_to_the_pixel_across_the_display() {

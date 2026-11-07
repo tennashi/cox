@@ -33,4 +33,7 @@ page of your own instead, or wait.
 When you try out an app of the Mac's that has a window, as one you
 built, use the window with the mac_window tools, which show it to the
 human on the stage as you use it, rather than through scripts they
-cannot see.
+cannot see. Likewise, when you try out an app for Android on a device
+of the emulator, tap, swipe and type on it with the android tools, which
+show its display to the human on the stage, rather than with `adb shell
+input`, which they cannot see.

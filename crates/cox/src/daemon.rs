@@ -61,9 +61,9 @@ pub const NAME_LENGTH: usize = 80;
 /// open.
 const NO_WINDOW: &str = "Cox's window is not open, so there is no terminal to run it in";
 
-/// Why the agent sees no window of the Mac's other apps while Cox's own
-/// window is not there.
-const NO_STAGE: &str = "Cox's window is not open, so there is no stage to show a Mac window on";
+/// Why the agent sees no window of the Mac's other apps, nor an Android
+/// device, while Cox's own window is not there.
+const NO_STAGE: &str = "Cox's window is not open, so there is no stage to show it on";
 
 /// What starts the agents of the chats: the agents Cox knows, or fake ones
 /// in tests.
@@ -1357,16 +1357,31 @@ impl Daemon {
                 StageAsk::RunCommand { id, command, cwd }
             }
             ToolRequest::MacWindow { act, answer } => {
-                if self.window.is_none() {
-                    answer.send(Err(NO_STAGE.to_owned())).ok();
+                let Some(id) = self.awaiting_sight(answer) else {
                     return;
-                }
-                let id = self.next_id();
-                self.seeing.insert(id, answer);
+                };
                 StageAsk::MacWindow { id, act }
+            }
+            ToolRequest::Android { act, answer } => {
+                let Some(id) = self.awaiting_sight(answer) else {
+                    return;
+                };
+                StageAsk::Android { id, act }
             }
         };
         self.tell(FromDaemon::Stage { key, ask });
+    }
+
+    /// The number the window answers what an agent sees by, to `answer`:
+    /// none, with `answer` answered, while no window is there.
+    fn awaiting_sight(&mut self, answer: oneshot::Sender<Result<Seen, String>>) -> Option<u64> {
+        if self.window.is_none() {
+            answer.send(Err(NO_STAGE.to_owned())).ok();
+            return None;
+        }
+        let id = self.next_id();
+        self.seeing.insert(id, answer);
+        Some(id)
     }
 
     /// Answers `request`, which the agent of the chat `key` asks: opens a
