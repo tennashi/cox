@@ -16,6 +16,7 @@ use cox::agent::setup::{Policy, Setup};
 use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
 use cox::chat::view::ChatView;
 use cox::ui::input::LineInput;
+use cox::workspace::Workspace;
 use cox_acp::McpServer;
 use cox_core::diff::Line;
 use fake_agent::{FakeAgent, LogsIn};
@@ -1081,38 +1082,54 @@ async fn opens_a_link_the_human_clicks(cx: &mut TestAppContext) {
     assert_eq!(*opened.borrow(), ["https://example.com/x"]);
 }
 
-fn stage_is_open(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> bool {
-    view.read_with(cx, ChatView::stage_is_open)
+fn stage_in_sight(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> bool {
+    view.read_with(cx, ChatView::stage_in_sight)
+}
+
+/// Clicks what `selector` names.
+fn click_on(cx: &mut VisualTestContext, selector: &'static str) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"));
+    cx.simulate_click(bounds.center(), Modifiers::none());
 }
 
 #[gpui::test]
-fn opens_and_closes_the_stage_with_its_button(cx: &mut TestAppContext) {
+fn folds_the_chat_beside_the_stage_and_unfolds_it(cx: &mut TestAppContext) {
     let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Opened::default(), None, true);
-    // The bar settles once the agent's session opens, its settings
-    // taking their place beside the button.
     cx.run_until_parked();
 
-    assert!(!stage_is_open(cx, &view));
-    assert!(cx.debug_bounds("stage-panel").is_none());
-    let toggle = cx
-        .debug_bounds("toggle-stage")
-        .expect("the button is drawn");
-    cx.simulate_click(toggle.center(), Modifiers::none());
-    assert!(stage_is_open(cx, &view));
+    // The stage is in the middle of the window, the chat at its right.
+    assert!(stage_in_sight(cx, &view));
     assert!(cx.debug_bounds("stage-panel").is_some());
+    assert!(cx.debug_bounds("chat-panel").is_some());
 
-    let toggle = cx
-        .debug_bounds("toggle-stage")
-        .expect("the button is drawn");
-    cx.simulate_click(toggle.center(), Modifiers::none());
-    assert!(!stage_is_open(cx, &view));
+    let folded = |cx: &mut VisualTestContext| {
+        let workspace = cx.update(|window, _| window.root::<Workspace>().flatten());
+        workspace
+            .expect("the window shows the chats")
+            .read_with(cx, |workspace, _| workspace.is_folded())
+    };
+    click_on(cx, "fold-chat");
+    assert!(folded(cx));
+    assert!(cx.debug_bounds("chat-dot-1").is_some());
+    assert!(stage_in_sight(cx, &view));
+
+    click_on(cx, "unfold-chat");
+    assert!(!folded(cx));
     // The keyboard is back in the input.
     cx.simulate_input("x");
     assert_eq!(input_text(cx, &view), "x");
+
+    // The key folds it too, and a click on the chat's dot shows it.
+    cx.simulate_keystrokes("secondary-\\");
+    assert!(folded(cx));
+    click_on(cx, "chat-dot-1");
+    assert!(!folded(cx));
 }
 
 #[gpui::test]
-async fn opens_the_stage_for_a_link_the_human_clicks(cx: &mut TestAppContext) {
+async fn opens_a_link_the_human_clicks_on_the_stage(cx: &mut TestAppContext) {
     let opened = Opened::default();
     let (_agent, view, cx) = open_with_stage(cx, Vec::new(), Rc::clone(&opened), None, true);
     say(cx, &view, "see https://example.com/x").await;
@@ -1126,15 +1143,16 @@ async fn opens_the_stage_for_a_link_the_human_clicks(cx: &mut TestAppContext) {
         Modifiers::none(),
     );
 
-    assert!(stage_is_open(cx, &view));
+    assert!(stage_in_sight(cx, &view));
     assert_eq!(*opened.borrow(), ["https://example.com/x"]);
 }
 
 #[gpui::test]
-fn a_chat_with_no_stage_has_no_button_for_it(cx: &mut TestAppContext) {
-    let (_agent, _view, cx) = open(cx);
+fn a_chat_with_no_stage_shows_none(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
 
-    assert!(cx.debug_bounds("toggle-stage").is_none());
+    assert!(!stage_in_sight(cx, &view));
+    assert!(cx.debug_bounds("stage-panel").is_none());
 }
 
 /// Waits until the chat's session has the setting `id` set to `value`.

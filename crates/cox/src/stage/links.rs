@@ -22,8 +22,7 @@ use crate::ui::markdown::FileLink;
 
 impl Stage {
     /// Shows the file at `path`, which says `text`, as a `T` shows it, at
-    /// `lines` if any: on the tab that shows it already, or a new one. The
-    /// stage opens if it was closed.
+    /// `lines` if any: on the tab that shows it already, or a new one.
     pub(super) fn show_file<T: ShowsFile>(
         &mut self,
         path: PathBuf,
@@ -47,7 +46,6 @@ impl Stage {
         } else {
             self.push_file::<T>(path, text, lines, true, window, cx);
         }
-        self.show_panel(cx);
     }
 
     /// Puts a tab showing the file at `path`, which says `text`, as a `T`

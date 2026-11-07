@@ -1,6 +1,6 @@
-//! One chat in the window: draws its conversation, with its stage beside
-//! it while the stage is open, and turns keystrokes and clicks into what
-//! the human does, which it tells the daemon, which runs the chat (see
+//! One chat in the window: draws its conversation, in the panel at the
+//! window's right, and turns keystrokes and clicks into what the human
+//! does, which it tells the daemon, which runs the chat (see
 //! [`crate::daemon`]). Escape in the conversation, or its Stop button,
 //! stops the turn the agent is taking.
 //!
@@ -8,10 +8,9 @@
 //! the window how it changes (see [`ChatView::apply`]): the view changes
 //! none of it itself.
 //!
-//! The stage opens only when it is used: the human opens and closes it
-//! with the button above the conversation, and it opens on its own when a
-//! link opens on it, or the agent works on it. Closed, it keeps its tabs,
-//! and the conversation has the window to itself.
+//! The chat's stage, which the chats of its folder share, is the window's
+//! to draw, in its middle (see [`crate::workspace`]): the view keeps it
+//! for what the chat opens on it.
 //!
 //! The human selects the conversation's text with the mouse, a word with
 //! a double click and a whole paragraph or block with a triple click, and
@@ -30,8 +29,8 @@
 //! sets the goal in an input that opens above it (see
 //! [`ChatView::edit_goal`]).
 //!
-//! A pill at the right of the bar above the conversation shows the agent
-//! and what it lets the human choose of its session, such as its model,
+//! A pill above the conversation shows the agent and what it lets the
+//! human choose of its session, such as its model,
 //! each as it is set, and a click on it opens a list of them, from which
 //! each opens its choices (see [`settings`]).
 
@@ -41,10 +40,10 @@ use std::rc::Rc;
 use cox_core::goal;
 use cox_core::tabs::KeptTabs;
 use gpui::{
-    AnyElement, AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding,
-    KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Window, actions, div, list,
-    prelude::*, px, relative, rgb,
+    AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
+    ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Subscription, Window, actions, div, list, prelude::*, px,
+    relative, rgb,
 };
 
 use crate::agents::Agents;
@@ -57,11 +56,10 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{self, LineInput, Submitted};
 use crate::ui::text::Reading;
 use crate::ui::theme::{
-    ACCENT, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND, GAP, LINK, RAISED,
-    SURFACE, UI_FONT,
+    ACCENT, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND, LINK, RAISED, UI_FONT,
 };
 use crate::ui::translation::Translate;
-use crate::ui::{Copy, Panel, card, tip};
+use crate::ui::{Copy, Panel, tip};
 
 mod complete;
 mod entries;
@@ -89,10 +87,6 @@ const GOAL: &str = "Goal";
 /// The key context of the input that starts a sketch of the chat.
 const SKETCH: &str = "Sketch";
 
-/// How wide and tall the button that opens and closes the stage is: as
-/// tall as the pill of the settings.
-const TOGGLE_SIZE: f32 = 32.;
-
 /// Binds the keys of the conversation. Escape is the stage's while the
 /// stage has the keyboard, and the input method's while it composes.
 pub fn bind_keys(cx: &mut App) {
@@ -113,9 +107,6 @@ pub type OpenLink = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 /// what failed, dimmed, so that the turn the agent takes stands out.
 const FAILED_TURN: u32 = 0x8c_4a48;
 
-/// How wide the conversation is when the stage sits beside it.
-const CONVERSATION_WIDTH: f32 = 420.;
-
 /// How wide the card of the plan in sight is, and how tall its steps grow
 /// before they scroll on their own.
 const PLAN_WIDTH: f32 = 240.;
@@ -125,11 +116,8 @@ const PLAN_HEIGHT: f32 = 200.;
 /// it has not laid out yet, so that they are ready as it scrolls.
 const OVERDRAW: f32 = 400.;
 
-/// How wide the conversation grows, at most, while the stage is closed.
-const CONVERSATION_MAX_WIDTH: f32 = 800.;
-
-/// A chat's stage, as its conversation shows it: the view, and whether it
-/// is open.
+/// A chat's stage, as the window shows it: the view, and whether it is
+/// in sight.
 #[derive(Clone)]
 pub struct StageView {
     pub view: AnyView,
@@ -172,8 +160,8 @@ pub struct ChatView {
     /// The list over the input of the agent's commands the line can go on
     /// to run, and of the project's files it can point to.
     completion: complete::Completion,
-    /// Where the agent and the human work together, beside the
-    /// conversation.
+    /// Where the agent and the human work together, which the window
+    /// shows beside the conversation.
     stage: Option<StageView>,
     open_link: OpenLink,
     /// The conversation's text, and what the human selects of it.
@@ -198,8 +186,6 @@ pub struct ChatView {
     /// The agents the chat can talk to.
     agents: Option<Agents>,
     _submitted: Subscription,
-    /// Redraws the chat as its stage opens and closes.
-    panel_changes: Option<Subscription>,
 }
 
 impl ChatView {
@@ -241,7 +227,6 @@ impl ChatView {
             setting_closed_at: None,
             agents,
             _submitted: submitted,
-            panel_changes: None,
         }
     }
 
@@ -251,15 +236,9 @@ impl ChatView {
         self.key
     }
 
-    /// Puts `stage` beside the conversation, where `open_link` opens the
-    /// links the human clicks.
+    /// Gives the chat `stage`, where `open_link` opens the links the
+    /// human clicks.
     pub fn set_stage(&mut self, stage: StageView, open_link: OpenLink, cx: &mut Context<Self>) {
-        // The conversation's width changes, and its end stays in view if
-        // it was.
-        self.panel_changes = Some(cx.observe(&stage.panel, |view, _, cx| {
-            view.follow(|_| ());
-            cx.notify();
-        }));
         self.stage = Some(stage);
         self.open_link = open_link;
         cx.notify();
@@ -501,25 +480,12 @@ impl ChatView {
         self.row.open.then(|| self.row.cwd.clone())
     }
 
-    /// Whether the stage is open beside the conversation.
+    /// Whether the chat's stage is in sight, in the middle of the window.
     #[must_use]
-    pub fn stage_is_open(&self, cx: &App) -> bool {
+    pub fn stage_in_sight(&self, cx: &App) -> bool {
         self.stage
             .as_ref()
             .is_some_and(|stage| stage.panel.read(cx).is_open())
-    }
-
-    /// Opens the stage, or closes it and brings the keyboard back to the
-    /// input.
-    pub fn toggle_stage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(stage) = &self.stage else {
-            return;
-        };
-        let open = !stage.panel.read(cx).is_open();
-        stage.panel.update(cx, |panel, cx| panel.set(open, cx));
-        if !open {
-            window.focus(&self.input.focus_handle(cx));
-        }
     }
 
     #[must_use]
@@ -599,7 +565,7 @@ impl ChatView {
         }
     }
 
-    /// Does `act` on the stage, which opens, when the chat has one.
+    /// Does `act` on the stage, when the chat has one.
     pub fn on_stage(
         &mut self,
         window: &mut Window,
@@ -612,15 +578,11 @@ impl ChatView {
         let Ok(entity) = stage.view.clone().downcast::<Stage>() else {
             return;
         };
-        stage.panel.update(cx, Panel::open);
         entity.update(cx, |stage, cx| act(stage, window, cx));
     }
 
-    /// Opens `url`, a link the human clicked, on the stage, which opens.
+    /// Opens `url`, a link the human clicked, on the stage.
     pub(super) fn show_link(&self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(stage) = &self.stage {
-            stage.panel.update(cx, Panel::open);
-        }
         (self.open_link)(url, window, cx);
     }
 
@@ -1234,97 +1196,17 @@ impl ChatView {
                 ),
         )
     }
-
-    /// The button that opens and closes the stage, round as the pill of
-    /// the settings beside it, when the chat has a stage.
-    pub fn render_stage_toggle(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let stage = self.stage.as_ref()?;
-        let open = stage.panel.read(cx).is_open();
-        let key = if cfg!(target_os = "macos") {
-            "⌘\\"
-        } else {
-            "Ctrl+\\"
-        };
-        let label = if open { "Hide stage" } else { "Show stage" };
-        Some(
-            div()
-                .id("toggle-stage")
-                .debug_selector(|| "toggle-stage".to_owned())
-                .flex_shrink_0()
-                .size(px(TOGGLE_SIZE))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .border_1()
-                .border_color(rgb(BORDER))
-                .bg(rgb(if open { BUTTON } else { SURFACE }))
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(BUTTON)))
-                .tooltip(tip(format!("{label} ({key})")))
-                .child(icon(Icon::Stage, 16., if open { FOREGROUND } else { DIM }))
-                .on_click(cx.listener(|view, _, window, cx| view.toggle_stage(window, cx)))
-                .into_any_element(),
-        )
-    }
 }
 
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let conversation = div()
+        div()
             .size_full()
             .flex()
             .flex_col()
-            .child(div().flex_1().min_h_0().child(self.render_conversation(cx)));
-        let root = div()
-            .size_full()
-            .flex()
-            .gap(px(GAP))
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
-            .text_size(px(14.));
-        match &self.stage {
-            // The stage on the left, where the eye starts, as the larger
-            // of the two, and the conversation beside it on the right.
-            Some(stage) if stage.panel.read(cx).is_open() => root
-                .child(
-                    card()
-                        .debug_selector(|| "stage-panel".to_owned())
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .child(stage.view.clone()),
-                )
-                .child(
-                    card()
-                        .w(px(CONVERSATION_WIDTH))
-                        .h_full()
-                        .flex_shrink_0()
-                        .child(conversation),
-                ),
-            _ => root.child(
-                card()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .flex()
-                    .justify_center()
-                    .child(
-                        // Narrower than its text unwrapped, as a window can be,
-                        // the conversation wraps its text in place of growing
-                        // past it. Its width is a basis it shrinks from, not a
-                        // maximum: taffy sizes a node with a maximum by its
-                        // content unwrapped first, and where the card is just
-                        // as wide as the maximum, it takes the height of that
-                        // sizing from its cache, so the text did not wrap.
-                        div()
-                            .flex_basis(px(CONVERSATION_MAX_WIDTH))
-                            .flex_shrink()
-                            .min_w_0()
-                            .h_full()
-                            .child(conversation),
-                    ),
-            ),
-        }
+            .text_size(px(14.))
+            .child(div().flex_1().min_h_0().child(self.render_conversation(cx)))
     }
 }

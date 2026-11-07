@@ -68,6 +68,11 @@ pub fn describe(
         "Chats in no project work in {}",
         workspace.home().display()
     );
+    if workspace.is_folded() {
+        told.push_str("The chat's panel is folded to the window's right edge\n");
+    } else if workspace.is_switching() {
+        told.push_str("The list of chats is open, over the conversation\n");
+    }
     if let Some(settings) = workspace.settings() {
         let _ = writeln!(
             told,
@@ -124,6 +129,9 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
             return format!("the settings' text, {:?} selected", settings.selected());
         }
     }
+    if workspace.is_folded() && focused == workspace.focus_handle(cx) {
+        return "the window, the chat folded away".to_owned();
+    }
     let Some(shown) = workspace.shown().and_then(Chat::view) else {
         return if focused == workspace.focus_handle(cx) {
             "the window, which shows no chat".to_owned()
@@ -149,7 +157,7 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
     }
 }
 
-/// The chats, in the order of the tabs, under their projects, and which
+/// The chats, in the order of the list, under their projects, and which
 /// project the rail has chosen.
 fn list(told: &mut String, workspace: &Workspace) {
     told.push_str("The chats, as listed:\n");
@@ -301,10 +309,10 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
     let _ = write!(
         told,
         "  Stage: {}; tabs:",
-        if view.stage_is_open(cx) {
-            "open"
+        if view.stage_in_sight(cx) {
+            "in sight"
         } else {
-            "closed"
+            "out of sight"
         }
     );
     if tabs.tabs.is_empty() {

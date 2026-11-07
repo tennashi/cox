@@ -33,7 +33,8 @@ use fake_daemon::{
     open_again, settle, settle_on, settled,
 };
 use gpui::{
-    Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext, VisualTestContext,
+    Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, TestAppContext,
+    VisualTestContext,
 };
 
 /// Where a test keeps its chats, which it opens too, to keep chats there
@@ -167,12 +168,35 @@ fn scratch(name: &str) -> PathBuf {
 /// Clicks what `selector` names, once the daemon has settled, so that it
 /// is drawn as the daemon has it.
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    let position = at(cx, selector);
+    cx.simulate_click(position, Modifiers::none());
+}
+
+/// Where what `selector` names is drawn, once the daemon has settled,
+/// opening the list of chats for it when it is in the list.
+fn at(cx: &mut VisualTestContext, selector: &'static str) -> Point<Pixels> {
+    assert!(drawn(cx, selector), "{selector} is drawn");
+    cx.debug_bounds(selector).expect("it is drawn").center()
+}
+
+/// Whether what `selector` names is drawn, once the daemon has settled,
+/// opening the list of chats first when it is in the list. What a frame
+/// drew stays among the bounds the test reads, so the list is asked
+/// whether it is open, not whether it was drawn.
+fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool {
     let workspace = root(cx);
     settled(cx, &workspace);
-    let bounds = cx
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("{selector} is drawn"));
-    cx.simulate_click(bounds.center(), Modifiers::none());
+    let in_list = ["chat-", "new-chat-in-", "archived"]
+        .iter()
+        .any(|start| selector.starts_with(start))
+        && !selector.starts_with("chat-switcher");
+    if in_list && !workspace.read_with(cx, |workspace, _| workspace.is_switching()) {
+        let switcher = cx
+            .debug_bounds("chat-switcher")
+            .expect("the head of the panel is drawn");
+        cx.simulate_click(switcher.center(), Modifiers::none());
+    }
+    cx.debug_bounds(selector).is_some()
 }
 
 /// The view of the chat at `index` in no project, made for it unless
@@ -282,8 +306,8 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
         });
         say(cx, &workspace, line).await;
     }
-    // The + after the tabs opens a chat in the project chosen on the
-    // rail, and so does no project's, chosen.
+    // "New chat" in the list of chats opens a chat in the project chosen
+    // on the rail, and so does no project's, chosen.
     click(cx, "new-chat-in-2");
     click(cx, "project-1");
     click(cx, "new-chat-in-1");
@@ -337,7 +361,7 @@ async fn the_chats_of_a_folder_share_its_stage(cx: &mut TestAppContext) {
         });
     }
     settle(cx).await;
-    click(cx, "chat-1");
+    click(cx, "project-1");
     settle(cx).await;
 
     // A stage for each folder, which each of its chats shows.
@@ -347,10 +371,14 @@ async fn the_chats_of_a_folder_share_its_stage(cx: &mut TestAppContext) {
         .map(|(folder, _)| folder.clone())
         .collect();
     assert_eq!(folders, [home.clone(), folder.clone()]);
-    for chat in ["chat-1", "chat-2"] {
+    let view = shown(cx, &workspace);
+    assert!(view.read_with(cx, ChatView::stage_in_sight));
+    click(cx, "project-2");
+    for chat in ["chat-2", "chat-3"] {
         click(cx, chat);
+        let view = shown(cx, &workspace);
         assert!(
-            cx.debug_bounds("toggle-stage").is_some(),
+            view.read_with(cx, ChatView::stage_in_sight),
             "{chat} has the folder's stage"
         );
     }
@@ -1227,12 +1255,7 @@ fn kept_names(store: &Store) -> Vec<(String, Named, bool)> {
 
 /// Clicks what `selector` names twice, quickly.
 fn double_click(cx: &mut VisualTestContext, selector: &'static str) {
-    let workspace = root(cx);
-    settled(cx, &workspace);
-    let position = cx
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("{selector} is drawn"))
-        .center();
+    let position = at(cx, selector);
     for click_count in 1..=2 {
         cx.simulate_event(MouseDownEvent {
             button: MouseButton::Left,
@@ -1252,12 +1275,7 @@ fn double_click(cx: &mut VisualTestContext, selector: &'static str) {
 
 /// Opens the menu of the right button on what `selector` names.
 fn right_click(cx: &mut VisualTestContext, selector: &'static str) {
-    let workspace = root(cx);
-    settled(cx, &workspace);
-    let position = cx
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("{selector} is drawn"))
-        .center();
+    let position = at(cx, selector);
     cx.simulate_mouse_down(position, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(position, MouseButton::Right, Modifiers::none());
 }
@@ -1274,7 +1292,9 @@ async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppC
         [(TITLE.to_owned(), Named::Agent, false)]
     );
 
-    double_click(cx, "chat-1");
+    // A double click on the chat shown, at the head of the panel,
+    // renames it.
+    double_click(cx, "chat-switcher");
     cx.simulate_input("Mine");
     cx.simulate_keystrokes("enter");
     say(cx, &workspace, "another title").await;
@@ -1757,7 +1777,7 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     let store = kept_store("chats-10");
     let (agents, workspace, cx) = open_window_keeping(cx, scratch("goal-menu"), store.clone());
     cx.simulate_keystrokes("secondary-n");
-    assert!(cx.debug_bounds("goal-1").is_none());
+    assert!(!drawn(cx, "chat-1-goal"));
 
     right_click(cx, "chat-1");
     assert!(cx.debug_bounds("clear-goal").is_none());
@@ -1773,7 +1793,7 @@ async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
         Some(KeptGoal::Command("true".to_owned()))
     );
     cx.run_until_parked();
-    assert!(cx.debug_bounds("goal-1").is_some());
+    assert!(drawn(cx, "chat-1-goal"));
     // The input that sets the goal is closed, and the keyboard is back in
     // the chat's own.
     say(cx, &workspace, "hello").await;

@@ -26,10 +26,9 @@
 //! that chat, so that its agent sees those, and none of the human's or
 //! the other chats'; an agent's command gets the tab of its own last one
 //! that ended. When an agent works on a page, shows a file or runs a
-//! command, the stage shows that tab, and opens beside the conversation
-//! if it was closed, if the agent's chat is the one shown, or else opens
-//! the tab behind the one shown; the tabs of the chats not shown are
-//! drawn dimmer.
+//! command, the stage shows that tab, if the agent's chat is the one
+//! shown, or else opens the tab behind the one shown; the tabs of the
+//! chats not shown are drawn dimmer.
 //!
 //! The stage keeps its tabs as they change, with the chat each is of. A
 //! stage opens again on the pages and files kept, for the human to look
@@ -176,7 +175,7 @@ pub struct Stage {
     /// The menu of the right button on a tab, while it is open: where the
     /// mouse went down, and the tab's index.
     tab_menu: Option<(gpui::Point<gpui::Pixels>, usize)>,
-    /// Whether the stage is open beside the conversation.
+    /// Whether the stage is in sight, in the middle of the window.
     panel: Entity<Panel>,
     /// What keeps the tabs as they change, if they are kept.
     keep: Option<Keep>,
@@ -200,8 +199,8 @@ pub struct Stage {
 
 impl Stage {
     /// A stage of one tab showing `url`, for the chats working in `cwd`,
-    /// which opens `panel` when an agent works on it. Until it [works](Self::work)
-    /// with the chat's agent, nothing of it is kept.
+    /// in sight while `panel` says so. Until it [works](Self::work) with
+    /// the chat's agent, nothing of it is kept.
     pub fn new(
         cef: Cef,
         cwd: PathBuf,
@@ -591,12 +590,6 @@ impl Stage {
     fn push_android(&mut self, android: Entity<Android>, show: bool, cx: &mut Context<Self>) {
         let changes = cx.observe(&android, |stage, _, cx| stage.changed(cx));
         self.push(TabContent::Android(android), changes, None, show, cx);
-    }
-
-    fn show_panel(&self, cx: &mut Context<Self>) {
-        if self.in_sight() {
-            self.panel.update(cx, Panel::open);
-        }
     }
 
     /// The index of the tab showing `page`.

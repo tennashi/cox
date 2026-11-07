@@ -1,9 +1,10 @@
-//! The window: the projects on a rail down its left side, the chats of
-//! the project chosen in tabs along its top, and the one shown under
-//! them. A project is a folder the human opened: each chat in it works
-//! there, and its agent gets the human's instructions, then those in the
-//! folder's `COX.md` (see [`crate::agent::instructions`]). Chats in no
-//! project work in Cox's home, with the instructions there.
+//! The window: the projects on a rail down its left side, the stage of
+//! the chat shown in its middle, and the chat itself in a panel at its
+//! right, which a list at its head switches among the chats of the
+//! project chosen. A project is a folder the human opened: each chat in
+//! it works there, and its agent gets the human's instructions, then
+//! those in the folder's `COX.md` (see [`crate::agent::instructions`]).
+//! Chats in no project work in Cox's home, with the instructions there.
 //!
 //! The window runs no chat itself: the daemon does (see
 //! [`crate::daemon`]), which tells it the projects and chats, and how the
@@ -14,14 +15,19 @@
 //! carries out what each chat's agent asks of it, as the daemon passes it
 //! on.
 //!
-//! A chat's tab tells whether its agent is at work, waits for the human,
-//! or finished a turn the human has not seen yet, and whether it has a
-//! goal, and the project's button on the rail counts its chats that wait
-//! for the human. The menu of the right button on a tab renames the chat,
-//! as a double click does, sets or clears its goal, ends a sketch (see
-//! [`crate::chat::sketch`]), or archives it: an archived chat leaves the
-//! list for "Archived" at the end of the tabs, from where a click brings
-//! it back.
+//! The stage stays as it is while the human switches between chats that
+//! work in one folder, which share it. The head of the panel names the
+//! chat shown, and counts the project's other chats that wait for the
+//! human; a click on it opens the list of the project's chats, each
+//! telling whether its agent is at work, waits for the human, or finished
+//! a turn the human has not seen yet, and whether it has a goal, and the
+//! project's button on the rail counts its chats that wait for the human.
+//! The panel folds to the window's right edge, where a dot for each chat
+//! stays, which shows it. The menu of the right button on a chat renames
+//! it, as a double click on the head does, sets or clears its goal, ends
+//! a sketch (see [`crate::chat::sketch`]), or archives it: an archived
+//! chat leaves the list for "Archived" at its foot, from where a click
+//! brings it back.
 //!
 //! The gear at the foot of the rail opens the settings screen over the
 //! window (see [`crate::settings::view`]), where the human sets Cox's
@@ -41,9 +47,9 @@ use cox_core::list::List;
 use cox_core::store::{ChatId, Named, ProjectId};
 use cox_core::tabs::KeptTabs;
 use gpui::{
-    App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
-    MouseButton, MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString, Stateful,
-    Subscription, Task, Window, actions, anchored, deferred, div, prelude::*, px, rgb,
+    AnyElement, App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
+    KeyBinding, MouseButton, MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString,
+    Stateful, Subscription, Task, Window, actions, anchored, deferred, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -82,8 +88,9 @@ actions!(
         PreviousChat,
         /// Leaves the chat's name as it was.
         CancelRename,
-        /// Opens the stage of the chat shown, or closes it.
-        ToggleStage,
+        /// Folds the panel of the chat shown to the window's right edge, or
+        /// unfolds it.
+        ToggleChat,
     ]
 );
 
@@ -93,12 +100,15 @@ const RAIL_WIDTH: f32 = 76.;
 const PROJECT_SIZE: f32 = 42.;
 const PROJECT_RADIUS: f32 = 13.;
 
-/// How tall the row of tabs is, and how tall, how wide at most and how
-/// round each tab is.
-const TABS_HEIGHT: f32 = 40.;
-const TAB_HEIGHT: f32 = 34.;
-const TAB_WIDTH: f32 = 240.;
-const TAB_RADIUS: f32 = 11.;
+/// How wide the panel of the chat shown is, at the window's right, and
+/// how wide it is folded to its chats' dots.
+const PANEL_WIDTH: f32 = 420.;
+const FOLDED_WIDTH: f32 = 48.;
+
+/// How tall and how round each row of the panel's head and of the list
+/// of chats is.
+const ROW_HEIGHT: f32 = 34.;
+const ROW_RADIUS: f32 = 11.;
 
 /// The ground over the window while the settings are open: the window's
 /// own, mostly opaque.
@@ -128,7 +138,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-t", NewPage, Some("Workspace")),
         KeyBinding::new("ctrl-`", NewTerminal, Some("Workspace")),
         KeyBinding::new("secondary-p", OpenFile, Some("Workspace")),
-        KeyBinding::new("secondary-\\", ToggleStage, Some("Workspace")),
+        KeyBinding::new("secondary-\\", ToggleChat, Some("Workspace")),
         KeyBinding::new("escape", CancelRename, Some(RENAMING)),
     ]);
 }
@@ -332,6 +342,10 @@ struct Staged {
     tools: Option<UnboundedSender<ToolRequest>>,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "what the window shows, each apart"
+)]
 pub struct Workspace {
     /// The projects, in the order they were first opened, after no
     /// project, which comes first.
@@ -342,9 +356,15 @@ pub struct Workspace {
     /// The chats the human archived, out of the list, in the order they
     /// were archived.
     archived: Vec<Chat>,
-    /// Whether the menu of the archived chats is open.
+    /// Whether the archived chats are open, at the foot of the list of
+    /// chats.
     archived_open: bool,
-    /// The project chosen on the rail, whose chats the tabs show: the
+    /// Whether the list of chats is open, at the head of the panel.
+    switching: bool,
+    /// Whether the panel of the chat is folded to the window's right
+    /// edge.
+    folded: bool,
+    /// The project chosen on the rail, whose chats the list shows: the
     /// project of the chat shown, or one with none shown.
     chosen: usize,
     /// How many chats the app's icon counts.
@@ -428,6 +448,8 @@ impl Workspace {
             chats: List::new(),
             archived: Vec::new(),
             archived_open: false,
+            switching: false,
+            folded: false,
             chosen: 0,
             badged: 0,
             menu: None,
@@ -584,6 +606,7 @@ impl Workspace {
         for key in waiting {
             self.view(key, cx);
         }
+        self.sight(cx);
         self.badge(cx);
         cx.notify();
     }
@@ -638,7 +661,7 @@ impl Workspace {
         let link = self.link.clone();
         let agents = self.agents.clone();
         let view = cx.new(|cx| ChatView::new(key, link, row, agents, cx));
-        // The tabs redraw as the chat changes.
+        // The list of chats redraws as the chat changes.
         cx.observe(&view, |_, _, cx| cx.notify()).detach();
         if let Some(chat) = self.chat_mut(key) {
             chat.view = Some(view);
@@ -720,8 +743,29 @@ impl Workspace {
             Some(tools)
         });
         self.staged.insert(key, Staged { tools });
+        self.sight(cx);
         for asked in self.waiting.remove(&key).unwrap_or_default() {
             self.ask_stage(asked, window, cx);
+        }
+    }
+
+    /// The stage in the middle of the window: that of the folder the chat
+    /// shown works in, or, with none shown, of the project chosen, once
+    /// it is made.
+    fn centered(&self) -> Option<&StageView> {
+        let folder = match self.shown() {
+            Some(chat) => self.cwd_of(chat),
+            None => self.projects.get(self.chosen)?.folder.clone(),
+        };
+        self.folders.get(&folder).map(|(stage, _)| stage)
+    }
+
+    /// Tells each stage whether it is in sight now.
+    fn sight(&self, cx: &mut App) {
+        let centered = self.centered().map(|stage| stage.panel.clone());
+        for (stage, _) in self.folders.values() {
+            let in_sight = centered.as_ref() == Some(&stage.panel);
+            stage.panel.update(cx, |panel, cx| panel.set(in_sight, cx));
         }
     }
 
@@ -849,6 +893,19 @@ impl Workspace {
         self.chats.shown()
     }
 
+    /// Whether the list of chats is open, at the head of the panel.
+    #[must_use]
+    pub fn is_switching(&self) -> bool {
+        self.switching
+    }
+
+    /// Whether the panel of the chat is folded to the window's right
+    /// edge.
+    #[must_use]
+    pub fn is_folded(&self) -> bool {
+        self.folded
+    }
+
     /// Does `act` on the stage of the chat shown, which opens.
     fn on_stage(
         &self,
@@ -935,7 +992,7 @@ impl Workspace {
     /// Opens the settings screen over the window, with the keyboard in it.
     pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
-        self.archived_open = false;
+        self.switching = false;
         let view = if let Some((view, _)) = &self.settings {
             view.clone()
         } else {
@@ -971,12 +1028,14 @@ impl Workspace {
         }
     }
 
-    /// Shows the chat at `index` in the list, with the keyboard in its
-    /// input.
+    /// Shows the chat at `index` in the list, in the panel, unfolded,
+    /// with the keyboard in its input, and the stage of its folder.
     pub fn show(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if !self.chats.show(index) {
             return;
         }
+        self.switching = false;
+        self.folded = false;
         let chat = &mut self.chats[index];
         let key = chat.key;
         self.chosen = chat.project;
@@ -984,6 +1043,16 @@ impl Workspace {
         self.tell(ToDaemon::Shown { key: Some(key) });
         self.view(key, cx);
         self.stage_shows(key, cx);
+        self.sight(cx);
+        window.focus(&self.focus_handle(cx));
+        cx.notify();
+    }
+
+    /// Folds the panel of the chat to the window's right edge, or unfolds
+    /// it, with the keyboard back in the chat's input.
+    fn fold(&mut self, folded: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.folded = folded;
+        self.switching = false;
         window.focus(&self.focus_handle(cx));
         cx.notify();
     }
@@ -1018,9 +1087,13 @@ impl Workspace {
         }
     }
 
-    /// Opens an input in place of the name of the chat at `index`, for the
-    /// human to rename it.
+    /// Shows the chat at `index`, and opens an input in place of its name
+    /// at the head of the panel, for the human to rename it.
     pub fn rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.chats.shown_index() != Some(index) {
+            self.show(index, window, cx);
+        }
+        self.switching = false;
         let Some(chat) = self.chats.get(index) else {
             return;
         };
@@ -1250,6 +1323,8 @@ impl Workspace {
         } else {
             self.chosen = index;
             self.chats.hide();
+            self.switching = false;
+            self.sight(cx);
             self.tell(ToDaemon::Shown { key: None });
             window.focus(&self.focus_handle);
             cx.notify();
@@ -1467,99 +1542,293 @@ impl Workspace {
             )
     }
 
-    /// The tabs of the chats of the project chosen, along the top of the
-    /// window, with the button that opens another chat in it, "Archived"
-    /// at their end, if the human archived a chat, and at the right the
-    /// pill of the agent and the settings of the chat shown.
-    fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The panel of the chat shown, at the window's right: at its head,
+    /// the button that opens the list of the project's chats, naming the
+    /// chat shown, and the button that folds the panel; under it, the pill
+    /// of the agent and the settings of the chat; then its conversation,
+    /// under the list while it is open.
+    fn render_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = self.shown().and_then(Chat::view).cloned();
+        let settings = view
+            .as_ref()
+            .and_then(|view| view.update(cx, |view, cx| view.render_settings(cx)));
+        let key = if cfg!(target_os = "macos") {
+            "⌘\\"
+        } else {
+            "Ctrl+\\"
+        };
+        let body = match view {
+            Some(view) => view.into_any_element(),
+            None => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(GAP * 2.))
+                .text_color(rgb(FAINT))
+                .child(if self.chats(self.chosen).next().is_some() {
+                    "Choose a chat from the list above."
+                } else {
+                    "No chat here yet: the list above opens one."
+                })
+                .into_any_element(),
+        };
+        card()
+            .debug_selector(|| "chat-panel".to_owned())
+            .w(px(PANEL_WIDTH))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .p(px(6.))
+                    .child(self.render_switcher(cx))
+                    .child(
+                        div()
+                            .id("fold-chat")
+                            .debug_selector(|| "fold-chat".to_owned())
+                            .flex_shrink_0()
+                            .size(px(ROW_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(ROW_RADIUS))
+                            .text_color(rgb(FAINT))
+                            .text_size(px(16.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
+                            .tooltip(tip(format!("Fold the chat ({key})")))
+                            .child("›")
+                            .on_click(cx.listener(|workspace, _, window, cx| {
+                                workspace.fold(true, window, cx);
+                            })),
+                    ),
+            )
+            .children(settings.map(|settings| {
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .px(px(GAP))
+                    .pb(px(6.))
+                    .child(settings)
+            }))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .child(body)
+                    .children(self.switching.then(|| self.render_list(cx))),
+            )
+    }
+
+    /// The button at the head of the panel that opens the list of the
+    /// project's chats, or closes it: the chat shown, as its row in the
+    /// list names it, or the input that renames it, and how many of the
+    /// project's other chats wait for the human. A double click renames
+    /// the chat shown, and the right button opens its menu.
+    fn render_switcher(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let shown = self.chats.shown_index();
+        let shown_key = self.shown().map(Chat::key);
+        let others: Vec<&Chat> = self
+            .chats(self.chosen)
+            .filter(|chat| Some(chat.key) != shown_key)
+            .collect();
+        let asking = others
+            .iter()
+            .filter(|chat| chat.state == State::Asking)
+            .count();
+        let waiting = others
+            .iter()
+            .filter(|chat| chat.unread || chat.state == State::Asking)
+            .count();
+        let switching = self.switching;
+        div()
+            .id("chat-switcher")
+            .debug_selector(|| "chat-switcher".to_owned())
+            .flex_1()
+            .min_w_0()
+            .h(px(ROW_HEIGHT))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .rounded(px(ROW_RADIUS))
+            .text_size(px(13.))
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .when(switching, |button| button.bg(rgb(SELECTED)))
+            .hover(|style| style.bg(rgb(HOVER)))
+            .on_click(cx.listener(
+                move |workspace, event: &ClickEvent, window, cx| match shown {
+                    Some(index) if event.click_count() == 2 => {
+                        workspace.rename(index, window, cx);
+                    }
+                    _ => {
+                        workspace.switching = !workspace.switching;
+                        // The keyboard stays in the chat's input.
+                        window.focus(&workspace.focus_handle(cx));
+                        cx.notify();
+                    }
+                },
+            ))
+            .when_some(shown, |button, index| {
+                button.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |workspace, event: &MouseDownEvent, _, cx| {
+                        workspace.menu = Some((event.position, index));
+                        cx.notify();
+                    }),
+                )
+            })
+            .map(
+                |button| match shown.and_then(|index| Some((index, self.chats.get(index)?))) {
+                    Some((index, chat)) => {
+                        let name = self.render_name(index, chat, true, cx);
+                        button.children(self.render_marks(chat, "shown", name))
+                    }
+                    None => button.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(rgb(FAINT))
+                            .child("No chat"),
+                    ),
+                },
+            )
+            .child(div().flex_1())
+            .when(waiting > 0, |button| {
+                button.child(
+                    div()
+                        .debug_selector(|| "chats-waiting".to_owned())
+                        .flex_shrink_0()
+                        .px(px(7.))
+                        .h(px(18.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(9.))
+                        .bg(rgb(if asking > 0 { ASKING } else { ACCENT }))
+                        .text_color(rgb(GROUND))
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::BOLD)
+                        .child(format!("{waiting} waiting")),
+                )
+            })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(FAINT))
+                    .child(if switching { "▴" } else { "▾" }),
+            )
+    }
+
+    /// The list of the chats of the project chosen, over the conversation
+    /// while it is open, with the row that opens another chat in the
+    /// project, and "Archived" at its foot, if the human archived a chat.
+    fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let chosen = self.chosen;
         let folder = self.projects[chosen].folder.clone();
-        let tabs = self
+        let rows = self
             .chats
             .iter()
             .enumerate()
             .filter(|(_, chat)| chat.project == chosen)
-            .map(|(index, chat)| self.render_tab(index, chat, cx))
+            .map(|(index, chat)| self.render_row(index, chat, cx))
             .collect::<Vec<_>>();
         div()
-            .relative()
-            .h(px(TABS_HEIGHT))
-            .flex_shrink_0()
+            .id("chats")
+            .debug_selector(|| "chats".to_owned())
+            .occlude()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .max_h_full()
+            .overflow_y_scroll()
+            .p(px(6.))
             .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                div()
-                    .id("chats")
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .overflow_x_scroll()
-                    .children(tabs),
-            )
+            .flex_col()
+            .gap(px(2.))
+            .bg(rgb(RAISED))
+            .border_b_1()
+            .border_color(rgb(BORDER_STRONG))
+            .shadow_lg()
+            .children(rows)
             .child(
                 div()
                     .id("new-chat-in")
                     .debug_selector(move || format!("new-chat-in-{}", chosen + 1))
                     .flex_shrink_0()
-                    .size(px(TAB_HEIGHT))
+                    .h(px(ROW_HEIGHT))
+                    .px(px(12.))
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .rounded(px(TAB_RADIUS))
+                    .gap(px(8.))
+                    .rounded(px(ROW_RADIUS))
+                    .text_size(px(13.))
                     .text_color(rgb(FAINT))
-                    .text_size(px(16.))
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
-                    .tooltip(tip("New chat here"))
-                    .child("+")
-                    .on_click({
-                        let folder = folder.clone();
-                        cx.listener(move |workspace, _, window, cx| {
-                            workspace.open(Some(folder.clone()), window, cx);
-                        })
-                    }),
+                    .child(icon(Icon::Plus, 12., FAINT))
+                    .child("New chat")
+                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                        workspace.open(Some(folder.clone()), window, cx);
+                    })),
             )
-            .child(div().flex_1())
             .children(self.render_archived(cx))
-            // The agent and the settings of the chat shown, at the right,
-            // and the button that opens its stage.
-            .children(
-                self.shown()
-                    .and_then(Chat::view)
-                    .and_then(|view| view.update(cx, |view, cx| view.render_settings(cx))),
-            )
-            .children(
-                self.shown()
-                    .and_then(Chat::view)
-                    .and_then(|view| view.update(cx, |view, cx| view.render_stage_toggle(cx))),
-            )
     }
 
-    /// The tab of the chat at `index` in the list, which numbers its chats
-    /// from 1: a dot of how it stands, its name, or the input that renames
-    /// it, and whether it is a sketch and has a goal.
-    fn render_tab(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// The row of the chat at `index` in the list, which numbers its chats
+    /// from 1, marked when it is the chat shown: a click shows it, and the
+    /// right button opens its menu.
+    fn render_row(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Stateful<Div> {
         let number = index + 1;
         let shown = self.chats.shown_index() == Some(index);
-        let sketch = chat
-            .setup
-            .as_ref()
-            .is_some_and(|setup| setup.sketch.is_some());
-        let state = chat.open.then_some(chat.state);
-        // Filled, the dot asks the human to look; a ring, it says only
-        // whether the agent is at work. A closed chat has none.
-        let dot = match state {
-            Some(State::Asking) => Some((ASKING, true, "asking")),
-            _ if chat.unread => Some((ACCENT, true, "unread")),
-            Some(State::Busy | State::Stopping | State::Checking) => {
-                Some((ACCENT, false, "working"))
-            }
-            Some(State::Idle) => Some((DISABLED, false, "idle")),
-            Some(State::Closed) | None => None,
-        };
-        let name = self.render_tab_name(index, chat, cx);
+        let name = self.render_name(index, chat, false, cx);
+        div()
+            .id(("chat", number))
+            .debug_selector(move || format!("chat-{number}"))
+            .flex_shrink_0()
+            .h(px(ROW_HEIGHT))
+            .px(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .rounded(px(ROW_RADIUS))
+            .text_size(px(13.))
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .map(|row| {
+                if shown {
+                    row.bg(rgb(SELECTED)).text_color(rgb(FOREGROUND))
+                } else {
+                    row.text_color(rgb(DIM)).hover(|style| style.bg(rgb(HOVER)))
+                }
+            })
+            .on_click(cx.listener(move |workspace, _, window, cx| {
+                workspace.show(index, window, cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |workspace, event: &MouseDownEvent, _, cx| {
+                    workspace.menu = Some((event.position, index));
+                    cx.notify();
+                }),
+            )
+            .children(self.render_marks(chat, &format!("chat-{number}"), name))
+    }
+
+    /// What tells of `chat`, on its row or at the head of the panel: a dot
+    /// of how it stands, whether an agent opened it, its `name`, and
+    /// whether it is a sketch and has a goal, each named after `at`.
+    fn render_marks(&self, chat: &Chat, at: &str, name: Div) -> Vec<AnyElement> {
         // A chat an agent opened comes after the chat that opened it.
         let opened = chat.parent.is_some() && self.depth(chat) > 0;
         let small = |text: &'static str, selector: String| {
@@ -1569,83 +1838,146 @@ impl Workspace {
                 .text_color(rgb(DIM))
                 .debug_selector(move || selector.clone())
                 .child(text)
+                .into_any_element()
         };
-        div()
-            .id(("chat", number))
-            .debug_selector(move || format!("chat-{number}"))
-            .flex_shrink_0()
-            .max_w(px(TAB_WIDTH))
-            .h(px(TAB_HEIGHT))
-            .px(px(12.))
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .rounded(px(TAB_RADIUS))
-            .text_size(px(13.))
-            .font_weight(FontWeight::MEDIUM)
-            .cursor_pointer()
-            .map(|tab| {
-                if shown {
-                    tab.bg(rgb(SELECTED)).text_color(rgb(FOREGROUND))
-                } else {
-                    tab.text_color(rgb(DIM)).hover(|style| style.bg(rgb(HOVER)))
-                }
-            })
-            .on_click(
-                cx.listener(move |workspace, event: &ClickEvent, window, cx| {
-                    if event.click_count() == 2 {
-                        workspace.rename(index, window, cx);
-                    } else {
-                        workspace.show(index, window, cx);
-                    }
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |workspace, event: &MouseDownEvent, _, cx| {
-                    workspace.menu = Some((event.position, index));
-                    cx.notify();
-                }),
-            )
-            .when(opened, |tab| {
-                tab.child(small("↳", format!("opened-{number}")))
-            })
-            .children(dot.map(|(color, filled, mark)| {
-                let circle = div()
-                    .debug_selector(move || format!("chat-{number}-{mark}"))
-                    .flex_shrink_0()
-                    .size(px(8.))
-                    .rounded_full();
+        let mut marks = Vec::new();
+        if opened {
+            marks.push(small("↳", format!("{at}-opened")));
+        }
+        if let Some((color, filled, mark)) = dot(chat) {
+            let selector = format!("{at}-{mark}");
+            let circle = div()
+                .debug_selector(move || selector.clone())
+                .flex_shrink_0()
+                .size(px(8.))
+                .rounded_full();
+            marks.push(
                 if filled {
                     circle.bg(rgb(color))
                 } else {
                     circle.border_1().border_color(rgb(color))
                 }
-            }))
-            .child(name)
-            .when(sketch, |tab| {
-                tab.child(small("sketch", format!("sketch-{number}")))
+                .into_any_element(),
+            );
+        }
+        marks.push(name.into_any_element());
+        if chat.is_sketch() {
+            marks.push(small("sketch", format!("{at}-sketch")));
+        }
+        if chat.goal.is_some() {
+            marks.push(small("◎", format!("{at}-goal")));
+        }
+        marks
+    }
+
+    /// The panel folded to the window's right edge: the button that
+    /// unfolds it, and a dot for each chat of the project chosen, which
+    /// shows the chat.
+    fn render_folded(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let chosen = self.chosen;
+        let dots = self
+            .chats
+            .iter()
+            .enumerate()
+            .filter(|(_, chat)| chat.project == chosen)
+            .map(|(index, chat)| {
+                let number = index + 1;
+                let shown = self.chats.shown_index() == Some(index);
+                let (color, filled) =
+                    dot(chat).map_or((BORDER_STRONG, false), |(color, filled, _)| (color, filled));
+                let circle = div().size(px(10.)).rounded_full();
+                div()
+                    .id(("chat-dot", number))
+                    .debug_selector(move || format!("chat-dot-{number}"))
+                    .flex_shrink_0()
+                    .size(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(9.))
+                    .cursor_pointer()
+                    .when(shown, |button| button.bg(rgb(SELECTED)))
+                    .hover(|style| style.bg(rgb(HOVER)))
+                    .tooltip(tip(chat.name.clone()))
+                    .child(if filled {
+                        circle.bg(rgb(color))
+                    } else {
+                        circle.border_1().border_color(rgb(color))
+                    })
+                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                        workspace.show(index, window, cx);
+                    }))
             })
-            .when(chat.goal.is_some(), |tab| {
-                tab.child(small("◎", format!("goal-{number}")))
-            })
+            .collect::<Vec<_>>();
+        let key = if cfg!(target_os = "macos") {
+            "⌘\\"
+        } else {
+            "Ctrl+\\"
+        };
+        card()
+            .id("folded-chat")
+            .debug_selector(|| "folded-chat".to_owned())
+            .w(px(FOLDED_WIDTH))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(8.))
+            .py(px(6.))
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .id("unfold-chat")
+                    .debug_selector(|| "unfold-chat".to_owned())
+                    .flex_shrink_0()
+                    .size(px(ROW_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(ROW_RADIUS))
+                    .text_color(rgb(FAINT))
+                    .text_size(px(16.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
+                    .tooltip(tip(format!("Show the chat ({key})")))
+                    .child("‹")
+                    .on_click(cx.listener(|workspace, _, window, cx| {
+                        workspace.fold(false, window, cx);
+                    })),
+            )
+            .children(dots)
+    }
+}
+
+/// The dot of how `chat` stands, its color, whether it is filled, and
+/// what it is called: filled, it asks the human to look; a ring, it says
+/// only whether the agent is at work. A closed chat has none.
+fn dot(chat: &Chat) -> Option<(u32, bool, &'static str)> {
+    match chat.open.then_some(chat.state) {
+        Some(State::Asking) => Some((ASKING, true, "asking")),
+        _ if chat.unread => Some((ACCENT, true, "unread")),
+        Some(State::Busy | State::Stopping | State::Checking) => Some((ACCENT, false, "working")),
+        Some(State::Idle) => Some((DISABLED, false, "idle")),
+        Some(State::Closed) | None => None,
     }
 }
 
 impl Workspace {
-    /// The name of the chat at `index` on its tab, or the input that
-    /// renames it.
-    fn render_tab_name(&self, index: usize, chat: &Chat, cx: &mut Context<Self>) -> Div {
+    /// The name of the chat at `index`, or, at the head of the panel, as
+    /// `head` says, the input that renames it.
+    fn render_name(&self, index: usize, chat: &Chat, head: bool, cx: &mut Context<Self>) -> Div {
         match &self.renaming {
-            Some((renaming, input, _)) if *renaming == index => div()
+            Some((renaming, input, _)) if head && *renaming == index => div()
                 .key_context(RENAMING)
                 .debug_selector(|| "renaming".to_owned())
-                .w(px(180.))
+                .flex_1()
+                .min_w_0()
                 .px_1()
                 .border_1()
                 .border_color(rgb(LINK))
                 .rounded_sm()
-                // A click in the input stays there, not showing the chat.
+                // A click in the input stays there, not opening the list.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_action(cx.listener(|workspace, _: &CancelRename, window, cx| {
                     workspace.end_renaming(false, window, cx);
@@ -1663,9 +1995,9 @@ impl Workspace {
         }
     }
 
-    /// "Archived" at the end of the tabs, if the human archived a chat,
-    /// and under it, while it is open, the archived chats: each with its
-    /// project's name, brought back by a click.
+    /// "Archived" at the foot of the list of chats, if the human archived
+    /// a chat, and under it, while it is open, the archived chats: each
+    /// with its project's name, brought back by a click.
     fn render_archived(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         if self.archived.is_empty() {
             return None;
@@ -1675,37 +2007,45 @@ impl Workspace {
             .id("archived")
             .debug_selector(|| "archived".to_owned())
             .flex_shrink_0()
-            .h(px(TAB_HEIGHT))
+            .h(px(ROW_HEIGHT))
             .px(px(12.))
             .flex()
             .items_center()
             .gap_1()
-            .rounded(px(TAB_RADIUS))
+            .rounded(px(ROW_RADIUS))
             .text_size(px(13.))
             .text_color(rgb(FAINT))
             .cursor_pointer()
-            .when(open, |button| button.bg(rgb(SELECTED)))
             .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
             .child(format!("Archived ({})", self.archived.len()))
             .child(if open { "▴" } else { "▾" })
-            .on_click(cx.listener(|workspace, _, _, cx| {
+            .on_click(cx.listener(|workspace, _, window, cx| {
                 workspace.archived_open = !workspace.archived_open;
+                window.focus(&workspace.focus_handle(cx));
                 cx.notify();
             }));
-        let menu = open.then(|| {
-            let rows = self.archived.iter().enumerate().map(|(index, chat)| {
+        let rows = self
+            .archived
+            .iter()
+            .enumerate()
+            .filter(|_| open)
+            .map(|(index, chat)| {
                 let number = index + 1;
                 div()
                     .id(("archived-chat", number))
                     .debug_selector(move || format!("archived-{number}"))
+                    .flex_shrink_0()
+                    .h(px(ROW_HEIGHT))
                     .flex()
+                    .items_center()
                     .gap_2()
-                    .px_2()
-                    .py_1()
-                    .rounded(px(8.))
+                    .pl(px(24.))
+                    .pr(px(12.))
+                    .rounded(px(ROW_RADIUS))
+                    .text_size(px(13.))
                     .cursor_pointer()
                     .text_color(rgb(DIM))
-                    .hover(|style| style.bg(rgb(ACCENT_GROUND)).text_color(rgb(FOREGROUND)))
+                    .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
                     .child(
                         div()
                             .flex_1()
@@ -1716,7 +2056,7 @@ impl Workspace {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .text_xs()
+                            .text_size(px(11.))
                             .text_color(rgb(FAINT))
                             .child(self.projects[chat.project].name.clone()),
                     )
@@ -1724,30 +2064,21 @@ impl Workspace {
                         workspace.archived_open = false;
                         workspace.unarchive(index, window, cx);
                     }))
-            });
-            deferred(
-                div()
-                    .id("archived-chats")
-                    .occlude()
-                    .absolute()
-                    .top(px(TABS_HEIGHT))
-                    .right_0()
-                    .w(px(280.))
-                    .max_h(px(360.))
-                    .overflow_y_scroll()
-                    .p(px(6.))
-                    .flex()
-                    .flex_col()
-                    .bg(rgb(RAISED))
-                    .border_1()
-                    .border_color(rgb(BORDER_STRONG))
-                    .rounded(px(14.))
-                    .shadow_lg()
-                    .children(rows),
-            )
-            .with_priority(2)
-        });
-        Some(div().flex_shrink_0().child(button).children(menu))
+            })
+            .collect::<Vec<_>>();
+        Some(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .mt(px(4.))
+                .pt(px(4.))
+                .border_t_1()
+                .border_color(rgb(BORDER))
+                .child(button)
+                .children(rows),
+        )
     }
 
     /// The menu of the right button on a chat, if it is open.
@@ -1830,10 +2161,14 @@ impl Workspace {
 
 impl Focusable for Workspace {
     /// The settings' input while they are open, or else the shown chat's
-    /// input, or the window itself while none is open.
+    /// input, or the window itself while none is open, or the chat is
+    /// folded away.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         if let Some((settings, _)) = &self.settings {
             return settings.focus_handle(cx);
+        }
+        if self.folded {
+            return self.focus_handle.clone();
         }
         match self.shown().and_then(Chat::view) {
             Some(view) => view.focus_handle(cx),
@@ -1844,20 +2179,21 @@ impl Focusable for Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let shown = match self.shown().and_then(Chat::view) {
-            Some(view) => view.clone().into_any_element(),
-            None => card()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(rgb(FAINT))
-                .child(if self.chats(self.chosen).next().is_some() {
-                    "Choose a chat above, or open another with +."
-                } else {
-                    "No chat here yet: + above opens one."
-                })
-                .into_any_element(),
+        // The stage of the chat shown, or an empty card until it has one.
+        let stage = card()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .map(|card| match self.centered() {
+                Some(stage) => card
+                    .debug_selector(|| "stage-panel".to_owned())
+                    .child(stage.view.clone()),
+                None => card,
+            });
+        let chat = if self.folded {
+            self.render_folded(cx).into_any_element()
+        } else {
+            self.render_panel(cx).into_any_element()
         };
         div()
             .track_focus(&self.focus_handle)
@@ -1883,10 +2219,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|workspace, _: &NewTerminal, window, cx| {
                 workspace.on_stage(window, cx, Stage::new_terminal);
             }))
-            .on_action(cx.listener(|workspace, _: &ToggleStage, window, cx| {
-                if let Some(view) = workspace.shown().and_then(|chat| chat.view.clone()) {
-                    view.update(cx, |view, cx| view.toggle_stage(window, cx));
-                }
+            .on_action(cx.listener(|workspace, _: &ToggleChat, window, cx| {
+                workspace.fold(!workspace.folded, window, cx);
             }))
             .on_action(cx.listener(|workspace, _: &OpenFile, window, cx| {
                 workspace.on_stage(window, cx, |_, window, cx| Stage::choose_file(window, cx));
@@ -1899,20 +2233,19 @@ impl Render for Workspace {
             .font_family(UI_FONT)
             .text_size(px(14.))
             .child(self.render_rail(cx))
-            // The tabs, and the chat's cards under them, on the ground the
-            // rail is on.
+            // The stage, and the chat at its right, as cards on the ground
+            // the rail is on.
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .h_full()
                     .flex()
-                    .flex_col()
                     .gap(px(GAP))
                     .py(px(GAP))
                     .pr(px(GAP))
-                    .child(self.render_tabs(cx))
-                    .child(div().flex_1().min_h_0().child(shown)),
+                    .child(stage)
+                    .child(chat),
             )
             .children(self.render_menu(cx))
             .children(self.render_settings(cx))
