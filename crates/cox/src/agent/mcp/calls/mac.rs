@@ -156,7 +156,8 @@ fn acting_tools() -> [Value; 4] {
         json!({
             "name": MAC_WINDOW_SCROLL,
             "description": "Turns the wheel over a point of a window of another app on the \
-                Mac, and answers a picture of the window after.",
+                Mac, and answers a picture of the window after. A picture the same as before \
+                says nothing scrolled there, as at the end of what it shows.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -165,12 +166,14 @@ fn acting_tools() -> [Value; 4] {
                     "y": y,
                     "dx": {
                         "type": "integer",
-                        "description": "Pixels to scroll the content right, or left when \
-                            negative: 0 unless given.",
+                        "description": "Pixels to scroll right, toward the content's \
+                            end, as a page's scrollBy does, or left when negative: 0 unless \
+                            given.",
                     },
                     "dy": {
                         "type": "integer",
-                        "description": "Pixels to scroll the content down, or up when \
+                        "description": "Pixels to scroll down, toward the content's \
+                            end, as a page's scrollBy does, or up, toward its start, when \
                             negative: 0 unless given.",
                     },
                 },

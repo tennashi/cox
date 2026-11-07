@@ -481,9 +481,17 @@ fn post(window: &Window, input: Input) {
         }
         Input::Scroll { x, y, dx, dy } => {
             let (x, y) = (window.frame.x + x, window.frame.y + y);
-            let Some(event) =
-                CGEvent::new_scroll_wheel_event2(None, CGScrollEventUnit::Pixel, 2, dy, dx, 0)
-            else {
+            // The wheel's own way is the other: a positive turn scrolls up
+            // and left, toward the content's start.
+            let (wheel_y, wheel_x) = (dy.saturating_neg(), dx.saturating_neg());
+            let Some(event) = CGEvent::new_scroll_wheel_event2(
+                None,
+                CGScrollEventUnit::Pixel,
+                2,
+                wheel_y,
+                wheel_x,
+                0,
+            ) else {
                 tracing::debug!("cannot make a wheel event");
                 return;
             };

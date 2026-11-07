@@ -233,7 +233,9 @@ pub enum Input {
         button: Button,
         count: u8,
     },
-    /// The wheel, in pixels each way, there.
+    /// The wheel, in pixels each way, there: scrolling down and right,
+    /// toward the content's end, as a page's `scrollBy` does, as they are
+    /// positive.
     Scroll {
         x: f64,
         y: f64,
