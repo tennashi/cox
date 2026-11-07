@@ -413,13 +413,21 @@ wiki" in the menu of the right button asks, in the human's place, as
 the workflow's `wiki/save.md` says, or else Cox's own
 ([`workflow/wiki/save.md`](crates/cox/src/workflow/wiki/save.md)): to
 keep the decisions and why, what failed and why, and what a tool needs,
-not how the code works, and no secrets. What holds only of one project,
-as of its own people, customers or plans, the agent keeps in it, with
-`wiki_write`'s `keep_in_project`: the page's properties, the front
-matter Obsidian keeps between `---` lines at its top, then say
-`only: <project>`, by the project's name, and only that project's chats
-find the page, read it, see it in the index, or write it. The human
-can write the line themselves too.
+not how the code works, and no secrets.
+
+A project has a wiki of its own too, for what holds only of it, as of
+its own people, customers or plans: pages written the same way, in
+`.cox/wiki` in its folder, which the project's repository can keep,
+with an `index.md` of its own. Only that project's chats find its
+pages, read them, or write them: `wiki_search` answers the project's
+pages, then the human's, `wiki_read` reads the project's page of a
+name before the human's, unless asked for the human's, and the indexes
+of both without a page, and `wiki_write` writes the page where it is,
+or, with `keep_in_project`, in the project's wiki, or, set false, in
+the human's. A page of the human's wiki an earlier Cox kept in one
+project says so in its properties, the front matter Obsidian keeps
+between `---` lines at its top, as `only: <project>`, by the project's
+name, and only that project's chats see it either.
 
 So that the human need not remember to, Cox asks at a chat's
 milestones, when its goal is met and when a sketch ends, on a card in

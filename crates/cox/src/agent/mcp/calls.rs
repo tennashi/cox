@@ -4,7 +4,7 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cox_core::goal::Goal;
 use cox_core::tabs::Lines;
@@ -33,6 +33,10 @@ const START_SKETCH: &str = "start_sketch";
 const WIKI_SEARCH: &str = "wiki_search";
 const WIKI_READ: &str = "wiki_read";
 const WIKI_WRITE: &str = "wiki_write";
+/// What `wiki_read` calls the project's own wiki.
+const PROJECT: &str = "project";
+/// What `wiki_read` calls the human's wiki.
+const HUMAN: &str = "human";
 const RAW_KEEP: &str = "raw_keep";
 const RAW_SEARCH: &str = "raw_search";
 const RAW_READ: &str = "raw_read";
@@ -294,13 +298,13 @@ fn wiki_tools() -> [Value; 3] {
     [
         json!({
             "name": WIKI_SEARCH,
-            "description": "Searches the human's wiki: Markdown pages by topic, of what \
-                the agents of all the human's projects learned, such as why a choice was \
-                made, what a library needs, or what failed and why. Answers the pages \
-                that have every word of the query, whatever the case, those that have \
-                them most first, each by its name and title with the first lines that \
-                have them, but the pages another project keeps to itself. Read a page \
-                with wiki_read.",
+            "description": "Searches the wikis: Markdown pages by topic, of what the \
+                agents learned, such as why a choice was made, what a library needs, or \
+                what failed and why: this project's own wiki, of what holds only of it, \
+                and the human's, of what the agents of all their projects learned. \
+                Answers the pages that have every word of the query, whatever the case, \
+                wiki by wiki, those that have them most first, each by its name and title \
+                with the first lines that have them. Read a page with wiki_read.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -314,11 +318,11 @@ fn wiki_tools() -> [Value; 3] {
         }),
         json!({
             "name": WIKI_READ,
-            "description": "Reads a page of the human's wiki, whole, with its links to \
-                other pages as [[name]] and, under \"Used in\", where it was used: the \
-                day, the project, the chat, the commit and the code; a page this \
-                project keeps to itself says so in its properties, as `only: <project>`. \
-                Without a page, reads the index, which lists the pages.",
+            "description": "Reads a page of the wikis, whole, with its links to other \
+                pages as [[name]] and, under \"Used in\", where it was used: the day, the \
+                project, the chat, the commit and the code; this project's page of that \
+                name, if it has one, or else the human's. Without a page, reads the \
+                indexes, which list the pages.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -326,6 +330,13 @@ fn wiki_tools() -> [Value; 3] {
                         "type": "string",
                         "description": "The page's name, as wiki_search gives it, as \
                             `gpui-layout` or `rust/errors`; the index unless given.",
+                    },
+                    "wiki": {
+                        "type": "string",
+                        "enum": [PROJECT, HUMAN],
+                        "description": "The wiki to read it from: `project`, this \
+                            project's own, or `human`, the human's; the project's if it \
+                            has the page, unless given.",
                     },
                 },
             },
@@ -340,9 +351,9 @@ fn wiki_tools() -> [Value; 3] {
                 words; the human reads it in their own language, as Cox translates it. Cox adds, under \
                 \"Used in\", where this chat used it: the day, the project, the chat, the \
                 commit its folder is at, and the paths you give. What holds only of this \
-                project, as of its own people, customers or plans, keep in it with \
-                keep_in_project, so that only its chats find the page. Answers the page's \
-                file.",
+                project, as of its own people, customers or plans, keep in its own wiki \
+                with keep_in_project, so that only its chats find the page. Answers the \
+                page's file.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -363,9 +374,10 @@ fn wiki_tools() -> [Value; 3] {
                     },
                     "keep_in_project": {
                         "type": "boolean",
-                        "description": "true keeps the page in this project, for its chats \
-                            alone; false lets it out to every project; as it was unless \
-                            given.",
+                        "description": "true writes the page in this project's own wiki, \
+                            for its chats alone; false in the human's, for every project; \
+                            unless given, in the project's if it has the page, or else the \
+                            human's.",
                     },
                 },
                 "required": ["page", "text"],
@@ -1197,7 +1209,35 @@ async fn whereabouts(chats: &UnboundedSender<ChatRequest>) -> Result<Whereabouts
     heard.await.map_err(|_| "the chat has closed".to_owned())
 }
 
-/// Searches the wiki for what `arguments` ask, and tells what it found.
+/// A wiki a chat reads.
+struct Wiki {
+    /// What the agent hears it called.
+    called: &'static str,
+    root: PathBuf,
+    /// Whether it is the project's own.
+    own: bool,
+}
+
+/// The wikis a chat in the project of `folder`, if it is in one, reads,
+/// the first first: the project's own, then the human's.
+fn wikis(folder: Option<&Path>) -> Vec<Wiki> {
+    let mut wikis = Vec::new();
+    if let Some(folder) = folder {
+        wikis.push(Wiki {
+            called: "this project's wiki",
+            root: folder.join(wiki::PROJECT_WIKI),
+            own: true,
+        });
+    }
+    wikis.push(Wiki {
+        called: "the human's wiki",
+        root: crate::settings::wiki(),
+        own: false,
+    });
+    wikis
+}
+
+/// Searches the wikis for what `arguments` ask, and tells what it found.
 async fn wiki_search(
     arguments: &Value,
     chats: &UnboundedSender<ChatRequest>,
@@ -1207,51 +1247,93 @@ async fn wiki_search(
         .and_then(Value::as_str)
         .filter(|query| !query.trim().is_empty())
         .ok_or("no query: give the words to look for as `query`")?;
-    let project = whereabouts(chats).await?.project;
-    let found = wiki::search(&crate::settings::wiki(), query, &project);
-    if found.is_empty() {
-        return Ok(format!("No page of the wiki has every word of `{query}`."));
-    }
-    let mut told = format!("The pages of the wiki that have every word of `{query}`:");
-    for page in found {
-        let _ = write!(told, "\n\n{}: {}", page.name, page.title);
-        for line in page.lines {
-            let _ = write!(told, "\n  {line}");
+    let Whereabouts {
+        project, folder, ..
+    } = whereabouts(chats).await?;
+    let mut told = format!("The pages that have every word of `{query}`:");
+    let mut any = false;
+    for wiki in wikis(folder.as_deref()) {
+        let found = wiki::search(&wiki.root, query, &project);
+        if found.is_empty() {
+            continue;
+        }
+        any = true;
+        let _ = write!(told, "\n\nIn {}:", wiki.called);
+        for page in found {
+            let _ = write!(told, "\n\n{}: {}", page.name, page.title);
+            for line in page.lines {
+                let _ = write!(told, "\n  {line}");
+            }
         }
     }
-    Ok(told)
+    if any {
+        Ok(told)
+    } else {
+        Ok(format!("No page of the wikis has every word of `{query}`."))
+    }
 }
 
-/// Reads the page of the wiki `arguments` name, or its index.
+/// Reads the page of the wikis `arguments` name, or their indexes.
 async fn wiki_read(
     arguments: &Value,
     chats: &UnboundedSender<ChatRequest>,
 ) -> Result<String, String> {
     let page = match arguments.get("page") {
-        None | Some(Value::Null) => wiki::INDEX,
-        Some(Value::String(page)) => page,
+        None | Some(Value::Null) => None,
+        Some(Value::String(page)) => Some(page.as_str()),
         Some(_) => return Err("`page` is not a string".to_owned()),
     };
-    let root = crate::settings::wiki();
-    let project = whereabouts(chats).await?.project;
-    match wiki::read(&root, page, &project) {
-        Ok(text) => Ok(text),
-        Err(_) if page == wiki::INDEX => {
-            let pages = wiki::pages(&root);
-            if pages.is_empty() {
-                Ok("The wiki has no pages yet.".to_owned())
-            } else {
-                Ok(format!(
-                    "The wiki has no index; its pages: {}",
-                    pages.join(", ")
-                ))
-            }
+    let given = match arguments.get("wiki") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(wiki)) if wiki == PROJECT => Some(true),
+        Some(Value::String(wiki)) if wiki == HUMAN => Some(false),
+        Some(_) => return Err(format!("`wiki` is neither `{PROJECT}` nor `{HUMAN}`")),
+    };
+    let Whereabouts {
+        project, folder, ..
+    } = whereabouts(chats).await?;
+    if given == Some(true) && folder.is_none() {
+        return Err("this chat is in no project, so it has no wiki of its own".to_owned());
+    }
+    let wikis: Vec<Wiki> = wikis(folder.as_deref())
+        .into_iter()
+        .filter(|wiki| given.is_none_or(|own| wiki.own == own))
+        .collect();
+    let Some(page) = page.filter(|page| page.trim().trim_end_matches(".md") != wiki::INDEX) else {
+        let indexes: Vec<String> = wikis
+            .iter()
+            .map(|wiki| format!("{}:\n\n{}", wiki.called, index(&wiki.root, &project)))
+            .collect();
+        return Ok(indexes.join("\n\n"));
+    };
+    let mut missing = None;
+    for wiki in &wikis {
+        match wiki::read(&wiki.root, page, &project) {
+            Ok(text) => return Ok(text),
+            Err(error) => missing = Some(error),
         }
-        Err(error) => Err(format!("{error}: find its name with wiki_search")),
+    }
+    Err(format!(
+        "{}: find its name with wiki_search",
+        missing.unwrap_or_default()
+    ))
+}
+
+/// The index of the wiki at `root`, as a chat of `project` reads it, or
+/// its pages when it has none.
+fn index(root: &Path, project: &str) -> String {
+    if let Ok(index) = wiki::read(root, wiki::INDEX, project) {
+        return index;
+    }
+    let pages = wiki::pages(root);
+    if pages.is_empty() {
+        "It has no pages yet.".to_owned()
+    } else {
+        format!("It has no index; its pages: {}", pages.join(", "))
     }
 }
 
-/// Writes the page of the wiki `arguments` give, noting where the chat,
+/// Writes the page of the wikis `arguments` give, noting where the chat,
 /// in `cwd`, used it.
 async fn wiki_write(
     arguments: &Value,
@@ -1285,10 +1367,25 @@ async fn wiki_write(
     };
     let Whereabouts {
         project,
+        folder,
         chat,
         kept,
-        ..
     } = whereabouts(chats).await?;
+    let mut wikis = wikis(folder.as_deref());
+    let own = match keep {
+        Some(true) if folder.is_none() => {
+            return Err(
+                "this chat is in no project, so it has no wiki of its own: write \
+                 the page without keep_in_project"
+                    .to_owned(),
+            );
+        }
+        Some(keep) => keep,
+        None => wikis.first().is_some_and(|wiki| {
+            wiki.own && wiki::file(&wiki.root, page).is_ok_and(|file| file.exists())
+        }),
+    };
+    let wiki = wikis.remove(usize::from(!own && folder.is_some()));
     let used = wiki::Used {
         day: wiki::today(),
         project,
@@ -1297,16 +1394,19 @@ async fn wiki_write(
         commit: wiki::commit_of(cwd),
         paths,
     };
-    let root = crate::settings::wiki();
-    let file = wiki::write(&root, page, text, &used, keep)?;
+    // A page of the human's that an earlier Cox kept in one project stays
+    // so, unless the agent lets it out.
+    let keep = if own { None } else { keep.map(|_| false) };
+    let file = wiki::write(&wiki.root, page, text, &used, keep)?;
     let kept_in = fs::read_to_string(&file)
         .ok()
         .and_then(|page| wiki::only(&page))
         .map(|project| format!(" It is kept in {project}, for its chats alone."))
         .unwrap_or_default();
     Ok(format!(
-        "{} is written, used {}.{kept_in}",
+        "{} is written, in {}, used {}.{kept_in}",
         file.display(),
+        wiki.called,
         used.line().trim_start_matches("- ")
     ))
 }
@@ -1330,7 +1430,7 @@ async fn raw_keep(
     };
     let Whereabouts {
         project,
-        in_project,
+        folder,
         chat,
         kept,
     } = whereabouts(chats).await?;
@@ -1340,7 +1440,7 @@ async fn raw_keep(
         day: &day,
         chat: &chat,
         chat_id: kept.as_deref(),
-        project: in_project.then_some(project.as_str()),
+        project: folder.is_some().then_some(project.as_str()),
     };
     let name = raw::keep(&root, topic, source, kept)?;
     let file = wiki::file(&root, &name)?;
