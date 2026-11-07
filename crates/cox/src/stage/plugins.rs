@@ -51,7 +51,14 @@
 //!   of each project too (see
 //!   [`crate::trigger::told`]); `cox://api/triggers/set/<change>` turns
 //!   one on or off, or orders them, as the JSON of `<change>` says (see
-//!   [`crate::trigger::Change`]), and answers them so.
+//!   [`crate::trigger::Change`]), and answers them so;
+//!   `cox://api/triggers/save/<save>` writes a trigger's card to its file
+//!   (see [`crate::trigger::card::Save`]), `triggers/discuss/<line>` has
+//!   an agent talk the card through with the human, and
+//!   `triggers/discussion/<card>` tells how that stands, and
+//!   `triggers/try/<try>` tries the card on the last turn of a chat in
+//!   the folder, and `triggers/tried/<card>` tells how it went (see
+//!   [`crate::trigger::discuss`]).
 //!
 //! A plugin shows a chat of the window by going to `cox://chat/<key>`,
 //! the number the Activity page is told it by.
@@ -249,25 +256,29 @@ impl Plugins {
             }
             "triggers" if rest.is_empty() => self.triggers(),
             "triggers" => {
-                let change = rest.strip_prefix("set/")?;
-                let change: crate::trigger::Change =
-                    serde_json::from_str(&percent_decoded(change)).ok()?;
-                // Only where a trigger shown runs.
-                let shown = self.triggers();
-                let runs_there = shown["folders"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .flat_map(|folder| folder["triggers"].as_array().into_iter().flatten())
-                    .any(|trigger| trigger["at"].as_str() == change.folder().to_str());
-                if !runs_there {
-                    return None;
+                if let Some(json) = self.card(rest) {
+                    json
+                } else {
+                    let change = rest.strip_prefix("set/")?;
+                    let change: crate::trigger::Change =
+                        serde_json::from_str(&percent_decoded(change)).ok()?;
+                    // Only where a trigger shown runs.
+                    let shown = self.triggers();
+                    let runs_there = shown["folders"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|folder| folder["triggers"].as_array().into_iter().flatten())
+                        .any(|trigger| trigger["at"].as_str() == change.folder().to_str());
+                    if !runs_there {
+                        return None;
+                    }
+                    let kept = crate::storage::path(crate::storage::Kept::Triggers);
+                    if let Err(error) = change.make(kept.as_deref()) {
+                        tracing::error!("the triggers are not arranged as asked: {error}");
+                    }
+                    self.triggers()
                 }
-                let kept = crate::storage::path(crate::storage::Kept::Triggers);
-                if let Err(error) = change.make(kept.as_deref()) {
-                    tracing::error!("the triggers are not arranged as asked: {error}");
-                }
-                self.triggers()
             }
             "activity" if rest.is_empty() => crate::stage::activity::told(
                 &self.root,
@@ -313,6 +324,56 @@ impl Plugins {
         Some(Resource {
             mime: "application/json".to_owned(),
             body: serde_json::to_vec(&json).ok()?,
+        })
+    }
+
+    /// What the card of a trigger asks of `cox://api/triggers/<rest>`, if
+    /// it is the card's: to save it, to talk it through or try it, and how
+    /// those stand, of a folder the tab shows only.
+    fn card(&self, rest: &str) -> Option<serde_json::Value> {
+        use crate::trigger::{card, discuss};
+        let (what, said) = rest.split_once('/')?;
+        let said = percent_decoded(said);
+        let shown = |folder: &Path| {
+            self.trigger_folders()
+                .iter()
+                .any(|(shown, _)| shown == folder)
+        };
+        Some(match what {
+            "save" => {
+                let save: card::Save = serde_json::from_str(&said).ok()?;
+                if !shown(&save.folder) {
+                    return None;
+                }
+                let made = save.make(&crate::settings::workflow());
+                let mut told = self.triggers();
+                match made {
+                    Ok(file) => told["saved"] = serde_json::json!(file),
+                    Err(why) => told["error"] = why.into(),
+                }
+                told
+            }
+            "discuss" => {
+                let line: discuss::Line = serde_json::from_str(&said).ok()?;
+                if !shown(&line.folder) {
+                    return None;
+                }
+                discuss::say(&line)
+            }
+            "try" => {
+                let tried: discuss::Try = serde_json::from_str(&said).ok()?;
+                if !shown(&tried.folder) {
+                    return None;
+                }
+                discuss::try_on(tried, crate::storage::path(crate::storage::Kept::LastTurns))
+            }
+            "discussion" => discuss::told(&said),
+            "tried" => discuss::tried(&said),
+            "end" => {
+                discuss::end(&said);
+                serde_json::json!({})
+            }
+            _ => return None,
         })
     }
 

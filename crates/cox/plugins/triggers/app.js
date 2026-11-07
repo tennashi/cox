@@ -7,7 +7,8 @@
 // on a schedule say when they run next, and where their chat works when
 // that is elsewhere. In the home, each project's follow, under its name.
 // A trigger Cox cannot read says why, and with none, the page says how
-// one is written.
+// one is written. A click on a row, or on "New trigger", opens the card
+// that edits the trigger (see below).
 
 const API = "cox://api/triggers";
 const EVERY = 2000;
@@ -23,8 +24,6 @@ const app = document.getElementById("app");
 const sheet = document.getElementById("sheet");
 let told = null;
 let toldText = null;
-/// The trigger whose card is open, by its folder and file.
-let carded = null;
 /// The row being dragged, while one is.
 let dragged = null;
 
@@ -172,8 +171,21 @@ function draw() {
       .map((f) => `<div class="folder">${esc(f.name ?? "Home")}<span>${esc(f.folder)}</span></div>${folder(f)}`)
       .join("");
   }
-  app.innerHTML = `<h1>Triggers</h1>${unread}${body}`;
-  drawCard();
+  const make = `<span class="button" data-do="new" title="A trigger of ${esc(told.folders[0].folder)}">New trigger</span>`;
+  app.innerHTML = `<div class="head"><h1>Triggers</h1>${make}</div>${unread}${body}`;
+  drawStatus();
+}
+
+/// How the trigger of the card open last ran, on its top, as Cox tells
+/// it again.
+function drawStatus() {
+  const t = card?.file && find(card.folder, card.file);
+  const top = sheet.querySelector(".top");
+  if (!t || !top) return;
+  const dot = top.querySelector(".dot");
+  dot.className = `dot ${t.ran?.state ?? ""}`;
+  dot.title = status(t);
+  top.querySelector(".status").textContent = status(t);
 }
 
 /// The trigger of `file` in `folder`, as Cox last told.
@@ -181,78 +193,458 @@ function find(folder, file) {
   return told?.folders.find((f) => f.folder === folder)?.triggers.find((t) => t.file === file);
 }
 
+// The card of a trigger, over the list: what its file says, field by
+// field, for the human to change, the fields they changed marked until
+// they save them, which writes the file; or a new trigger's, empty, which
+// saving makes. Beside it, "Discuss" talks the trigger through with an
+// agent, which proposes a change of the card whole, laid on it as the
+// human's own would be; and "Try on the last turn" runs the card as it
+// stands on what a chat here said last as its turn ended.
+
+/// The fields of a card, as Cox's draft names them.
+const FIELDS = ["name", "scope", "on", "cron", "folder", "changed", "sketch", "by", "allow", "reject", "text"];
+
+/// The card open, while one is: the folder it is shown in, its file, if
+/// it has one yet, the draft as saved and as the human changed it, which
+/// part of it is open, its talk and how it was tried.
+let card = null;
+
+/// `draft` as it would be written: what does not go with its event, or
+/// with who runs it, left out.
+function sent(draft) {
+  const d = { ...draft };
+  if (d.on === "schedule") {
+    d.changed = [];
+    d.sketch = null;
+    d.by = "new";
+  } else {
+    d.cron = "";
+    d.folder = "";
+  }
+  if (d.by !== "new") {
+    d.allow = [];
+    d.reject = [];
+  }
+  return d;
+}
+
+/// The fields of the card the human changed, and did not save.
+function changes() {
+  if (!card) return new Set();
+  const [now, then] = [sent(card.draft), sent(card.saved)];
+  return new Set(FIELDS.filter((field) => JSON.stringify(now[field] ?? null) !== JSON.stringify(then[field] ?? null)));
+}
+
+/// The fields to mark as changed: none on a new trigger's card, all of
+/// whose fields are new.
+const marked = () => (card.file ? changes() : new Set());
+
+/// Opens the card of trigger `t`, shown in `folder`, or, without one, a
+/// new trigger's.
+function openCard(folder, t) {
+  const saved = t
+    ? structuredClone(t.draft)
+    : { name: "", scope: "project", on: "turn.end", cron: "", folder: "", changed: [], sketch: null, by: "new", allow: [], reject: [], text: "" };
+  card = {
+    id: t ? t.file : `new-${Date.now()}`,
+    folder,
+    file: t?.file ?? null,
+    saved,
+    draft: structuredClone(saved),
+    open: !t || t.by === "shell" ? "settings" : "do",
+    talk: null,
+    talking: false,
+    laid: 0,
+    tried: null,
+    error: null,
+  };
+  drawCard();
+}
+
+function closeCard() {
+  if (!card) return;
+  fetch(`${API}/end/${encodeURIComponent(card.id)}`).catch(() => {});
+  card = null;
+  drawCard();
+}
+
+/// Chips to choose one of `options`, as `[value, label]`, for `field`.
+function chips(field, options) {
+  const now = card.draft[field] ?? "";
+  return `<div class="chips" data-field="${field}">${options
+    .map(([value, label]) => `<span class="chip${value === now ? " chosen" : ""}" data-value="${esc(value)}">${esc(label)}</span>`)
+    .join("")}</div>`;
+}
+
+/// The patterns of `field`, `allow` or `reject`, each with its ×, and a +
+/// to add one.
+function patterns(field) {
+  const items = card.draft[field]
+    .map((item, at) => `<span class="pattern">${esc(item)}<span class="drop" data-field="${field}" data-at="${at}">×</span></span>`)
+    .join("");
+  return `<div class="patterns">${items}<input class="add" data-add="${field}" placeholder="+" spellcheck="false"></div>`;
+}
+
+/// A line of the open settings: its label and what sets it.
+const line = (label, field, what) =>
+  `<div class="line" data-of="${field}"><span class="label">${label}</span><div class="field">${what}</div></div>`;
+
+/// What the event is called, the one who runs it, and how sketches go.
+const EVENT_NAMES = [["turn.end", "Turn end"], ["schedule", "Schedule"]];
+const SKETCHES = [["", "Any"], ["skip", "Skip"], ["only", "Only"]];
+
+function settingsOpen() {
+  const d = card.draft;
+  const when = [line("Event", "on", chips("on", EVENT_NAMES))];
+  if (d.on === "schedule") {
+    when.push(line("Cron", "cron", `<input data-input="cron" class="mono" value="${esc(d.cron)}" placeholder="0 9 * * *" spellcheck="false">`));
+    when.push(line("Folder", "folder", `<input data-input="folder" class="mono" value="${esc(d.folder)}" placeholder="The home" spellcheck="false">`));
+  } else {
+    when.push(line("Changed", "changed", `<input data-input="changed" class="mono" value="${esc(d.changed.join(" "))}" placeholder="Anything" spellcheck="false">`));
+    when.push(line("Sketches", "sketch", chips("sketch", SKETCHES)));
+  }
+  const by = [
+    d.on === "schedule"
+      ? line("Who", "by", `<div class="chips"><span class="chip chosen">A new chat</span></div>`)
+      : line("Who", "by", chips("by", [["shell", "Shell"], ["new", "A new agent"]])),
+  ];
+  if (d.on === "schedule" || d.by === "new") {
+    by.push(line("Allowed", "allow", patterns("allow")));
+    by.push(line("Rejected", "reject", patterns("reject")));
+  }
+  return `<div class="section">WHEN</div>${when.join("")}<div class="section">BY</div>${by.join("")}`;
+}
+
+/// The settings folded to a table of what each is, a click opening them.
+function settingsFolded(changed) {
+  const d = card.draft;
+  const mark = (field) => (changed.has(field) ? " changed" : "");
+  const codes = (list) => list.map((item) => `<code>${esc(item)}</code>`).join(" ");
+  const cell = (label, field, value) => `<span class="label">${label}</span><span class="value${mark(field)}">${value}</span>`;
+  const cells = [cell("When", "on", EVENT_NAMES.find(([on]) => on === d.on)?.[1] ?? esc(d.on))];
+  if (d.on === "schedule") {
+    cells.push(cell("By", "by", "A new chat"));
+    cells.push(cell("Cron", "cron", `<code>${esc(d.cron)}</code>`));
+    cells.push(cell("Folder", "folder", esc(d.folder || "The home")));
+  } else {
+    cells.push(cell("By", "by", d.by === "shell" ? "Shell" : "A new agent"));
+    cells.push(cell("Changed", "changed", d.changed.length ? codes(d.changed) : "Anything"));
+    cells.push(cell("Sketches", "sketch", SKETCHES.find(([value]) => value === (d.sketch ?? ""))[1]));
+  }
+  if ((d.on === "schedule" || d.by === "new") && d.allow.length) {
+    cells.push(`<span class="label">Allowed</span><span class="value wide${mark("allow")}">${codes(d.allow)}</span>`);
+  }
+  return `<div class="folded settings" data-open="settings">${cells.join("")}<span class="unfold">▸</span></div>`;
+}
+
+function doOpen() {
+  const command = card.draft.by === "shell" && card.draft.on !== "schedule";
+  return `<div class="section">DO</div>
+    <textarea data-input="text" class="text${command ? " command" : ""}" spellcheck="false" placeholder="${command ? "The command to run" : "What the agent is asked"}">${esc(card.draft.text)}</textarea>`;
+}
+
+function doFolded(changed) {
+  const first = card.draft.text.split("\n").find((l) => l.trim()) ?? "";
+  return `<div class="section">DO</div>
+    <div class="folded do" data-open="do"><span class="first${changed.has("text") ? " changed" : ""}">${esc(first) || "Nothing yet"}</span><span class="unfold">▸</span></div>`;
+}
+
+/// How it went when the card was tried.
+function triedShown() {
+  const tried = card.tried;
+  if (!tried) return "";
+  const how = { running: "Running…", passed: "Passed", failed: "Found something", broken: "Could not run" }[tried.state] ?? tried.state;
+  const said = tried.said ? `<pre class="said">${esc(tried.said)}</pre>` : "";
+  return `<div class="section">ON THE LAST TURN</div><div class="tried"><span class="dot ${esc(tried.state)}"></span>${how}</div>${said}`;
+}
+
+function drawMain() {
+  const main = sheet.querySelector(".main");
+  if (!main) return;
+  const changed = marked();
+  const settings = card.open === "settings" ? settingsOpen() : settingsFolded(changed);
+  const what = card.open === "do" ? doOpen() : doFolded(changed);
+  main.innerHTML = `${settings}${what}${triedShown()}`;
+  marks();
+}
+
+/// Marks the open fields the human changed, and says how many on the
+/// card's foot.
+function marks() {
+  const changed = marked();
+  for (const field of sheet.querySelectorAll("[data-of]")) {
+    field.classList.toggle("changed", changed.has(field.dataset.of));
+  }
+  sheet.querySelector(".top .title")?.classList.toggle("changed", changed.has("name"));
+  sheet.querySelector(".top .where")?.classList.toggle("changed", changed.has("scope"));
+  sheet.querySelector("textarea.text")?.classList.toggle("changed", changed.has("text"));
+  drawFoot();
+}
+
+function drawFoot() {
+  const foot = sheet.querySelector(".foot");
+  if (!foot) return;
+  const n = changes().size;
+  const discuss = card.talking ? "" : `<span class="button" data-do="discuss">Discuss</span>`;
+  const save = `<span class="button primary" data-do="save">Save</span>`;
+  const error = card.error ? `<span class="error">${esc(card.error)}</span>` : "";
+  // A schedule runs at its times, on no turn.
+  const tryIt = card.draft.on === "schedule" ? "" : `<span class="button" data-do="try">Try on the last turn</span>`;
+  if (!card.file) {
+    foot.innerHTML = `${error || `<span class="faint">New trigger</span>`}<span class="grow"></span>${discuss}${tryIt}${save}`;
+  } else if (n) {
+    const unsaved = `<span class="unsaved">${n} unsaved change${n > 1 ? "s" : ""}</span>`;
+    foot.innerHTML = `${error || unsaved}<span class="grow"></span><span class="button quiet" data-do="revert">Revert</span>${discuss}${tryIt}${save}`;
+  } else {
+    foot.innerHTML = `<a href="${esc(`cox://open${card.file}`)}">Open file</a>${error}<span class="grow"></span>${discuss}${save}`;
+  }
+}
+
+/// The talk beside the card.
+function drawTalk() {
+  const talk = sheet.querySelector(".talk .said-all");
+  if (!talk) return;
+  const told = card.talk;
+  const agent = (told?.agent || "Agent").toUpperCase();
+  const said = (told?.said ?? [])
+    .map((s) => {
+      const who = s.who === "you" ? "YOU" : agent;
+      const laid = s.draft ? `<span class="laid"><span class="dot passed"></span>Changed the card</span>` : "";
+      const unread = s.unread ? `<span class="error">What it proposed is no trigger: ${esc(s.unread)}</span>` : "";
+      const text = s.text || (s.who === "you" ? "" : "…");
+      return `<div class="entry"><span class="who">${esc(who)}</span>${laid}<div class="words">${esc(text)}</div>${unread}</div>`;
+    })
+    .join("");
+  const error = told?.error ? `<div class="error">${esc(told.error)}</div>` : "";
+  const none = said ? "" : `<div class="faint">Say what it should do, or what went wrong when it ran.</div>`;
+  talk.innerHTML = `${none}${said}${error}`;
+  talk.scrollTop = talk.scrollHeight;
+}
+
 function drawCard() {
-  const t = carded && find(carded.folder, carded.file);
-  if (!t) {
+  if (!card) {
     sheet.hidden = true;
     sheet.innerHTML = "";
     return;
   }
-  const codes = (list) => list.map((item) => `<code>${esc(item)}</code>`).join(" ");
-  const by = t.schedule ? "A new chat" : t.by === "shell" ? "Shell" : "A new agent";
-  const sketches = { skip: "Skip", only: "Only" }[t.sketch] ?? "Any";
-  const changed = t.changed ? codes(t.changed) : "Anything";
-  const asksYou = t.schedule ? "Nothing: it asks you" : "Reading and tests";
-  const allowed = t.by === "new"
-    ? `<span class="label">Allowed</span><span class="value wide">${t.allow.length ? codes(t.allow) : asksYou}</span>`
+  const t = card.file && find(card.folder, card.file);
+  const state = t?.ran?.state ?? "";
+  const talk = card.talking
+    ? `<div class="talk">
+        <div class="talk-top"><span>Discuss this trigger</span><span class="grow"></span><span class="close" data-do="undiscuss" title="Close">×</span></div>
+        <div class="said-all"></div>
+        <textarea class="reply" placeholder="Reply…" rows="2"></textarea>
+      </div>`
     : "";
-  const rejected = t.reject.length ? `<span class="label">Rejected</span><span class="value wide">${codes(t.reject)}</span>` : "";
-  const when = t.schedule
-    ? `<span class="label">Runs</span><span class="value" title="${esc(t.schedule.cron)}">${esc(t.schedule.every)} <code>${esc(t.schedule.cron)}</code></span>
-        <span class="label">Next</span><span class="value">${esc(next(t))}</span>
-        <span class="label">Works in</span><span class="value wide">${esc(t.schedule.works)}</span>`
-    : `<span class="label">Changed</span><span class="value">${changed}</span>
-        <span class="label">Sketches</span><span class="value">${sketches}</span>`;
-  const said = t.ran?.said ? `<div class="section">LAST RUN</div><pre class="said">${esc(t.ran.said)}</pre>` : "";
-  sheet.innerHTML = `<div class="card" role="dialog">
-    <div class="top">
-      ${dot(t)}
-      <span class="title">${esc(t.name)}</span>
-      <span class="where" title="${esc(t.file)}">${scope(t)}</span>
-      <span class="status">${esc(status(t))}</span>
-      <span class="close" title="Close">×</span>
-    </div>
-    <div class="body">
-      <div class="settings">
-        <span class="label">When</span><span class="value">${esc(t.on.map((on) => EVENTS[event(on)] ?? event(on)).join(", "))}</span>
-        <span class="label">By</span><span class="value">${by}</span>
-        ${when}
-        ${allowed}
-        ${rejected}
+  sheet.innerHTML = `<div class="card${card.talking ? " talking" : ""}" role="dialog">
+    <div class="side">
+      <div class="top">
+        <span class="dot ${esc(state)}" title="${esc(t ? status(t) : "Never ran")}"></span>
+        <input class="title" data-input="name" value="${esc(card.draft.name)}" placeholder="Name" spellcheck="false">
+        <span class="where" data-do="scope" title="${esc(card.file ?? "")}">${card.draft.scope === "project" ? "Project" : "Global"}<span class="caret">▾</span></span>
+        <span class="status">${esc(t ? status(t) : "")}</span>
+        <span class="grow"></span>
+        ${card.talking ? "" : `<span class="close" data-do="close" title="Close">×</span>`}
       </div>
-      <div class="section">DO</div>
-      <div class="text${t.by === "shell" ? " command" : ""}">${esc(t.text)}</div>
-      ${said}
+      <div class="main"></div>
+      <div class="foot"></div>
     </div>
-    <div class="foot"><a href="${esc(`cox://open${t.file}`)}">Open file</a></div>
+    ${talk}
   </div>`;
   sheet.hidden = false;
+  drawMain();
+  drawTalk();
 }
 
-function close() {
-  carded = null;
-  drawCard();
+/// Lays on the card what the agent proposed last, once it has replied,
+/// its name and where it is kept staying the human's.
+function layProposed() {
+  if (card.talk?.working) return;
+  const said = card.talk?.said ?? [];
+  let proposed = null;
+  for (; card.laid < said.length; card.laid++) proposed = said[card.laid].draft ?? proposed;
+  if (proposed) {
+    card.draft = { ...proposed, name: card.draft.name, scope: card.draft.scope };
+    drawMain();
+  }
 }
 
-app.addEventListener("click", (event) => {
-  const row = event.target.closest(".row");
-  if (!row || event.target.closest(".handle")) return;
-  const { folder, file, at } = row.dataset;
-  if (event.target.closest(".switch")) {
-    const t = find(folder, file);
-    if (t) change({ folder: at, file, on: !t.enabled });
+async function ask(path, what) {
+  try {
+    const answer = await fetch(`${API}/${path}/${encodeURIComponent(typeof what === "string" ? what : JSON.stringify(what))}`, { cache: "no-store" });
+    return answer.ok ? await answer.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function save() {
+  const at = card;
+  const answer = await ask("save", { folder: at.folder, file: at.file, draft: sent(at.draft) });
+  if (at !== card) return;
+  if (!answer) {
+    card.error = "Cox did not save it.";
+  } else if (answer.error) {
+    card.error = answer.error;
+  } else {
+    card.file = answer.saved;
+    card.saved = structuredClone(card.draft);
+    card.error = null;
+    told = answer;
+    toldText = null;
+    draw();
+    drawCard();
     return;
   }
-  carded = { folder, file };
-  drawCard();
-});
+  drawFoot();
+}
+
+/// Follows what goes on beside the card: the talk while the agent
+/// replies, and the try while it runs.
+async function follow() {
+  if (!card) return;
+  const at = card;
+  if (at.talking && at.talk?.working) {
+    const talk = await ask("discussion", at.id);
+    if (at === card && talk) {
+      card.talk = talk;
+      drawTalk();
+      layProposed();
+    }
+  }
+  if (at.tried?.state === "running") {
+    const tried = await ask("tried", at.id);
+    if (at === card && tried) {
+      card.tried = tried;
+      drawMain();
+    }
+  }
+}
+
+async function say(words) {
+  const t = card.file && find(card.folder, card.file);
+  const talk = await ask("discuss", {
+    id: card.id,
+    folder: card.folder,
+    file: card.file,
+    draft: sent(card.draft),
+    ran: t?.ran?.said ?? null,
+    tried: card.tried?.state === "running" ? null : card.tried,
+    line: words,
+  });
+  if (talk) {
+    card.talk = talk;
+    drawTalk();
+  }
+}
+
+async function tryOn() {
+  const tried = await ask("try", { id: card.id, folder: card.folder, file: card.file, draft: sent(card.draft) });
+  card.tried = tried ?? { state: "broken", said: "Cox did not try it." };
+  if (card.open !== "do" && card.draft.by !== "shell") card.open = "do";
+  drawMain();
+}
 
 sheet.addEventListener("click", (event) => {
-  if (event.target === sheet || event.target.closest(".close")) close();
+  if (event.target === sheet) {
+    if (!changes().size) closeCard();
+    return;
+  }
+  const chip = event.target.closest(".chips[data-field] .chip");
+  if (chip) {
+    const field = chip.parentElement.dataset.field;
+    const value = chip.dataset.value;
+    card.draft[field] = field === "sketch" ? value || null : value;
+    drawMain();
+    return;
+  }
+  const drop = event.target.closest(".drop");
+  if (drop) {
+    card.draft[drop.dataset.field].splice(Number(drop.dataset.at), 1);
+    drawMain();
+    return;
+  }
+  const folded = event.target.closest("[data-open]");
+  if (folded) {
+    card.open = folded.dataset.open;
+    drawMain();
+    sheet.querySelector(card.open === "do" ? "textarea.text" : ".main input")?.focus();
+    return;
+  }
+  const what = event.target.closest("[data-do]")?.dataset.do;
+  if (what === "close") closeCard();
+  if (what === "scope") {
+    card.draft.scope = card.draft.scope === "project" ? "global" : "project";
+    drawCard();
+  }
+  if (what === "revert") {
+    card.draft = structuredClone(card.saved);
+    card.error = null;
+    drawCard();
+  }
+  if (what === "save") save();
+  if (what === "try") tryOn();
+  if (what === "discuss") {
+    card.talking = true;
+    drawCard();
+    sheet.querySelector(".reply")?.focus();
+  }
+  if (what === "undiscuss") {
+    card.talking = false;
+    drawCard();
+  }
+});
+
+sheet.addEventListener("input", (event) => {
+  const field = event.target.dataset.input;
+  if (!field) return;
+  const value = event.target.value;
+  card.draft[field] = field === "changed" ? value.split(/\s+/).filter(Boolean) : value;
+  card.error = null;
+  marks();
+});
+
+sheet.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  const add = event.target.dataset.add;
+  if (add) {
+    event.preventDefault();
+    const value = event.target.value.trim();
+    if (value) card.draft[add].push(value);
+    drawMain();
+    sheet.querySelector(`[data-add="${add}"]`)?.focus();
+    return;
+  }
+  if (event.target.classList.contains("reply")) {
+    event.preventDefault();
+    const words = event.target.value.trim();
+    if (!words || card.talk?.working) return;
+    event.target.value = "";
+    say(words);
+  }
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && carded) close();
+  if (event.key === "Escape" && card) closeCard();
+});
+
+setInterval(follow, 700);
+
+app.addEventListener("click", (event) => {
+  if (event.target.closest("[data-do='new']")) {
+    openCard(told.folders[0].folder, null);
+    return;
+  }
+  const row = event.target.closest(".row");
+  if (!row || event.target.closest(".handle")) return;
+  const { folder, file, at } = row.dataset;
+  const t = find(folder, file);
+  if (!t) return;
+  if (event.target.closest(".switch")) {
+    change({ folder: at, file, on: !t.enabled });
+    return;
+  }
+  openCard(folder, t);
 });
 
 // Ordering: a row dragged by its handle and let go over another goes

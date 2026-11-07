@@ -194,6 +194,7 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
     let agents = Agents::read(settings.command.clone(), named.as_deref());
     agents.fetch();
     crate::translate::start(agents.clone());
+    crate::trigger::discuss::start(agents.clone());
     // 3. coxd, which runs the chats, in a process of its own.
     let hello = crate::daemon::wire::Hello {
         home: settings.home,

@@ -239,14 +239,34 @@
         display: none;
       }
       .card {
-        width: 560px;
+        width: 580px;
         max-width: 100%;
         background: var(--background);
         border: 1px solid var(--border);
         border-radius: 16px;
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
         display: flex;
+        flex-wrap: wrap;
+        overflow: hidden;
+      }
+      .card.talking {
+        width: 1060px;
+        height: min(640px, calc(100vh - 96px));
+      }
+      .card .side {
+        flex: 1 1 480px;
+        min-width: 0;
+        max-height: 100%;
+        display: flex;
         flex-direction: column;
+      }
+      .card .main {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 20px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
       }
       .card .top {
         display: flex;
@@ -255,8 +275,26 @@
         padding: 16px 20px 6px;
       }
       .card .top .title {
-        font-size: 16px;
-        font-weight: 600;
+        width: 180px;
+        padding: 2px 4px;
+        margin-left: -4px;
+        background: transparent;
+        border: none;
+        border-radius: 6px;
+        color: var(--foreground);
+        font: 600 16px var(--sans);
+        outline: none;
+      }
+      .card .top .title:focus {
+        background: var(--ground);
+      }
+      .card .top .where {
+        cursor: pointer;
+      }
+      .caret {
+        margin-left: 5px;
+        font-size: 9px;
+        color: var(--disabled);
       }
       .card .top .where {
         padding: 2px 8px;
@@ -275,12 +313,6 @@
         font-size: 18px;
         cursor: pointer;
         line-height: 1;
-      }
-      .card .body {
-        padding: 12px 20px 20px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
       }
       .settings {
         display: grid;
@@ -348,10 +380,258 @@
       .card .foot {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         padding: 14px 20px;
         border-top: 1px solid var(--border);
         font-size: 12.5px;
+      }
+      .grow {
+        flex: 1;
+      }
+      .faint {
+        color: var(--faint);
+      }
+      .unsaved {
+        color: var(--warn);
+        white-space: nowrap;
+      }
+      .error {
+        color: var(--broken);
+        overflow-wrap: anywhere;
+      }
+      .button {
+        padding: 7px 13px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        color: var(--foreground);
+        font-size: 12.5px;
+        white-space: nowrap;
+        cursor: pointer;
+        user-select: none;
+      }
+      .button:hover {
+        background: var(--hover);
+      }
+      .button.quiet {
+        border-color: transparent;
+        color: var(--dim);
+      }
+      .button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--ground);
+        font-weight: 500;
+      }
+      .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+      .head h1 {
+        margin: 0;
+      }
+      /* What the human changed and did not save. */
+      .value.changed,
+      .first.changed,
+      .top .changed,
+      .line.changed .field input,
+      .line.changed .chip.chosen,
+      textarea.text.changed {
+        background: #2c2516;
+        box-shadow: 0 2px 0 var(--warn);
+      }
+      .line {
+        display: grid;
+        grid-template-columns: 76px 1fr;
+        gap: 12px;
+        align-items: center;
+        padding: 2px 0;
+      }
+      .line .label {
+        font-size: 12.5px;
+        color: var(--dim);
+      }
+      .line.changed .label {
+        color: var(--warn);
+      }
+      .chips,
+      .patterns {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .chip {
+        padding: 4px 11px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        color: var(--dim);
+        font-size: 12.5px;
+        white-space: nowrap;
+        cursor: pointer;
+        user-select: none;
+      }
+      .chip.chosen {
+        background: #152c2a;
+        border-color: var(--accent);
+        color: var(--foreground);
+      }
+      .field input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 5px 10px;
+        border-radius: 8px;
+        background: var(--ground);
+        border: 1px solid var(--border-strong);
+        color: var(--foreground);
+        font: 12.5px var(--mono);
+        outline: none;
+      }
+      .field input:focus,
+      textarea:focus {
+        border-color: var(--accent);
+      }
+      .pattern {
+        padding: 3px 9px;
+        border-radius: 999px;
+        background: var(--raised);
+        border: 1px solid var(--border);
+        font: 12px var(--mono);
+        white-space: nowrap;
+      }
+      .drop {
+        margin-left: 6px;
+        color: var(--disabled);
+        cursor: pointer;
+      }
+      .drop:hover {
+        color: var(--foreground);
+      }
+      .field input.add {
+        width: 120px;
+        padding: 3px 9px;
+        border-radius: 999px;
+        border-style: dashed;
+        font-size: 12px;
+      }
+      textarea.text {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 200px;
+        resize: vertical;
+        color: var(--foreground);
+        font: 13.5px/1.7 var(--sans);
+        outline: none;
+      }
+      textarea.text.command {
+        font: 12.5px/1.6 var(--mono);
+      }
+      .folded {
+        position: relative;
+        cursor: pointer;
+      }
+      .folded .unfold {
+        position: absolute;
+        right: 12px;
+        top: 10px;
+        font-size: 11px;
+        color: var(--disabled);
+      }
+      .folded.settings {
+        padding-right: 30px;
+      }
+      .folded.do {
+        padding: 10px 30px 10px 12px;
+        border-radius: 10px;
+        background: #1a1a1d;
+        border: 1px solid #26262b;
+        font-size: 12.5px;
+        color: var(--dim);
+      }
+      .folded.do .first {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .tried {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12.5px;
+      }
+      .dot.running {
+        border-color: var(--accent);
+      }
+      /* The talk beside the card. */
+      .talk {
+        flex: 1 1 300px;
+        min-width: 0;
+        max-height: 100%;
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid var(--border);
+      }
+      .talk-top {
+        display: flex;
+        align-items: center;
+        padding: 16px 18px 10px;
+        font-size: 13px;
+        color: var(--dim);
+      }
+      .close {
+        color: var(--faint);
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .said-all {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        font-size: 13.5px;
+        line-height: 1.6;
+      }
+      .entry {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        align-items: flex-start;
+      }
+      .entry .who {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        color: var(--dim);
+      }
+      .entry .words {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .laid {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 9px;
+        border-radius: 999px;
+        background: #26262b;
+        font-size: 12px;
+        color: #c9c9ce;
+      }
+      textarea.reply {
+        margin: 14px 18px;
+        padding: 10px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--border-strong);
+        background: transparent;
+        color: var(--foreground);
+        font: 13px/1.5 var(--sans);
+        resize: none;
+        outline: none;
       }
     </style>
   </head>
