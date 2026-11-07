@@ -647,8 +647,7 @@ stage shows that page's tab. The chats that work in one folder, as the
 chats of a project, or of a sketch (see below), share its stage, which
 shows beside whichever of them is shown. Each tab is the
 human's, as every tab they open is, or of one of the chats, as every
-tab its agent opens is: a dot on the tab marks a chat's, in the accent
-for the chat shown. Every chat's agent sees every page of the stage,
+tab its agent opens is. Every chat's agent sees every page of the stage,
 the human's and the other chats' too, and judges which are of its
 work, as Cox's own `cox.md` tells it; but a page another chat's agent
 is at work on, one it last worked on, or else opened, or was handed,
@@ -677,8 +676,16 @@ plugins' pages, such as "Knowledge" and "Schedules", and last
 "Workflow", each a tab that the bar shows by its button, not among the
 others, and kept there while its tab is open, each button by its icon,
 named where the mouse rests, but that of the view shown, which names
-it; then the other tabs, each with an icon of what it shows: a
-page, a Markdown file, code, a terminal, the flow of a tool call. The +
+it. The other tabs are in a column along the stage's left, under the
+bar, one under another in the order they were opened, each with an icon of what it shows, a page, a
+Markdown file, code, a terminal, the flow of a tool call, and its
+title, and, where the mouse rests or for the tab shown, the × that
+closes it; a tab an agent is at work on, as its chat takes a turn, has
+its icon in a color of the chat's own, one of eight of the accent's
+lightness, the first chat's the accent, and a ring of it beside its
+title, which names the chat where the mouse rests, and is not dimmer
+for being another chat's. The ‹ at the column's foot folds it to the tabs' icons,
+each named where the mouse rests, and the › unfolds it, for every stage at once. The +
 at the bar's end opens a menu of what the human opens there: a line at
 its top, where Enter opens what they typed, a file of that path, from
 the chat's folder, if there is one or the line starts as a path does,

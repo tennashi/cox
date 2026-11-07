@@ -1,65 +1,38 @@
 //! The bar along the top of the stage: the views of the project it keeps
 //! in sight, the project's files, what changed in them, and the pages of
-//! the plugins, such as the map, each by its icon but the one shown; then
-//! the tabs of the rest, each with an icon of what it shows; and, at its
-//! end, the menu that opens another, among them an Android emulator of
-//! each virtual device the SDK has. The button of what changed counts the
+//! the plugins, such as the map, each by its icon but the one shown, as
+//! the column beside the stage lists the rest of the tabs (see
+//! [`super::column`]); and, at its end, the menu that opens another tab,
+//! among them an Android emulator of each virtual device the SDK has. The button of what changed counts the
 //! files that did, while the stage is open.
 
-use std::cell::Cell;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use cox_editor::changes;
 use gpui::{
-    App, Context, Div, Entity, Focusable, FontWeight, MouseButton, MouseDownEvent,
-    PathPromptOptions, ScrollHandle, SharedString, Stateful, Subscription, Task, Window, actions,
-    deferred, div, prelude::*, px, rgb,
+    App, Context, Entity, Focusable, FontWeight, PathPromptOptions, SharedString, Subscription,
+    Task, Window, actions, deferred, div, prelude::*, px, rgb,
 };
 
+use super::Stage;
 use super::code::Code;
 use super::plugins::Plugin;
 use super::tab::{Tab, TabContent};
 use super::terminal::Program;
 use super::typed::{Typed, typed};
-use super::{Stage, TAB_WIDTH, TITLE_LENGTH};
-use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{
-    ACCENT, ASKING, BORDER, BORDER_STRONG, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, RAISED,
-    SELECTED, SURFACE,
+    ACCENT, ASKING, BORDER_STRONG, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED, SURFACE,
 };
 use crate::ui::tip;
 
-/// Where the tabs scroll along the bar, when there are more than it has
-/// room for, which keeps the tab shown in sight as another is shown.
-#[derive(Default)]
-pub(super) struct Strip {
-    scroll: ScrollHandle,
-    /// The tab the strip last scrolled to, so that it scrolls once each
-    /// time another is shown, and the human can scroll it after.
-    shown: Cell<Option<usize>>,
-}
-
-impl Strip {
-    /// Scrolls to the tab shown, `shown`, at `place` among the tabs the
-    /// strip has, unless it scrolled to it already.
-    fn follow(&self, shown: Option<usize>, place: Option<usize>) {
-        if self.shown.replace(shown) == shown {
-            return;
-        }
-        if let Some(place) = place {
-            self.scroll.scroll_to_item(place);
-        }
-    }
-}
-
-/// How tall a view's button is, and a tab, and how round each is.
+/// How tall a view's button is, and the +, and how round each is.
 const VIEW_HEIGHT: f32 = 28.;
-const TAB_HEIGHT: f32 = 32.;
+const PLUS_SIZE: f32 = 32.;
 const VIEW_RADIUS: f32 = 9.;
-const TAB_RADIUS: f32 = 10.;
+const PLUS_RADIUS: f32 = 10.;
 
 /// The keys of the menu's items, as the menu shows them (see
 /// [`crate::workspace::bind_keys`]).
@@ -142,32 +115,28 @@ impl Stage {
         }
     }
 
+    /// The tabs that are not views of the project, which the column
+    /// beside the stage lists, by their indexes.
+    pub(super) fn rest(&self, cx: &App) -> Vec<usize> {
+        let plugins = self.plugins.list();
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| self.view_of(tab, &plugins, cx).is_none())
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     pub(super) fn render_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let plugins = self.plugins.list();
         let shown = self
             .tabs
             .shown()
             .and_then(|tab| self.view_of(tab, &plugins, cx));
-        let rest: Vec<usize> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter(|(_, tab)| self.view_of(tab, &plugins, cx).is_none())
-            .map(|(index, _)| index)
-            .collect();
         let views: Vec<View> = self
             .tabs
             .iter()
             .filter_map(|tab| self.view_of(tab, &plugins, cx))
-            .collect();
-        let shown_index = self.tabs.shown_index();
-        self.strip.follow(
-            shown_index,
-            rest.iter().position(|&index| Some(index) == shown_index),
-        );
-        let tabs: Vec<_> = rest
-            .into_iter()
-            .map(|index| self.render_tab(index, &self.tabs[index], cx))
             .collect();
         div()
             .relative()
@@ -190,36 +159,17 @@ impl Stage {
                 self.waiting,
                 cx,
             ))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .w(px(1.))
-                    .h(px(18.))
-                    .mx(px(6.))
-                    .bg(rgb(BORDER)),
-            )
-            .child(
-                div()
-                    .id("stage-tabs")
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .overflow_x_scroll()
-                    .track_scroll(&self.strip.scroll)
-                    .children(tabs),
-            )
             .child(div().flex_1())
             .child(
                 div()
                     .id("stage-menu")
                     .debug_selector(|| "stage-menu".to_owned())
                     .flex_shrink_0()
-                    .size(px(TAB_HEIGHT))
+                    .size(px(PLUS_SIZE))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(TAB_RADIUS))
+                    .rounded(px(PLUS_RADIUS))
                     .text_color(rgb(FOREGROUND))
                     .cursor_pointer()
                     .when(self.menu.is_some(), |button| button.bg(rgb(SELECTED)))
@@ -336,92 +286,6 @@ impl Stage {
             })
             .children(rest)
             .child(workflow)
-    }
-
-    /// The tab at `index`: an icon of what it shows, its title, a dot if
-    /// it is a chat's, in the accent if the chat is shown, and the button
-    /// that closes it, unless it is the last.
-    fn render_tab(&self, index: usize, tab: &Tab, cx: &mut Context<Self>) -> Stateful<Div> {
-        let number = index + 1;
-        let title = tab.content.title(cx);
-        let title: String = title.chars().take(TITLE_LENGTH).collect();
-        let glyph = match &tab.content {
-            TabContent::Page { .. } => Icon::Globe,
-            TabContent::Document(_) => Icon::Document,
-            TabContent::Code(_) => Icon::Code,
-            TabContent::Tree(_) => Icon::Files,
-            TabContent::Changes(_) => Icon::Changes,
-            TabContent::Flow(_) => Icon::Flow,
-            TabContent::Terminal(_) => Icon::Terminal,
-            TabContent::Android(_) | TabContent::Devices(_) => Icon::Phone,
-            TabContent::MacWindow(_) | TabContent::Windows(_) => Icon::Window,
-            TabContent::Workflow(_) => Icon::Settings,
-        };
-        let shown = self.tabs.shown_index() == Some(index);
-        // The tabs of the chats not shown are drawn dimmer.
-        let others = tab.owner.is_some_and(|owner| Some(owner) != self.showing);
-        let of_chat = tab.owner.is_some();
-        div()
-            .id(("tab", number))
-            .debug_selector(move || format!("tab-{number}"))
-            .flex_shrink_0()
-            .max_w(px(TAB_WIDTH))
-            .h(px(TAB_HEIGHT))
-            .pl(px(10.))
-            .pr(px(6.))
-            .flex()
-            .items_center()
-            .gap(px(7.))
-            .rounded(px(TAB_RADIUS))
-            .text_size(px(13.))
-            .cursor_pointer()
-            .map(|tab| {
-                if shown {
-                    tab.bg(rgb(SELECTED)).text_color(rgb(FOREGROUND))
-                } else {
-                    tab.text_color(rgb(DIM)).hover(|style| style.bg(rgb(HOVER)))
-                }
-            })
-            .when(others, |tab| tab.opacity(0.5))
-            .on_click(cx.listener(move |stage, _, window, cx| stage.show(index, window, cx)))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |stage, event: &MouseDownEvent, _, cx| {
-                    stage.open_tab_menu(index, event.position, cx);
-                }),
-            )
-            .child(icon(glyph, 14., if shown { DIM } else { FAINT }))
-            .child(div().min_w_0().overflow_hidden().child(ellipsis(title)))
-            .when(of_chat, |tab| {
-                tab.child(
-                    div()
-                        .debug_selector(move || format!("tab-{number}-of-chat"))
-                        .flex_shrink_0()
-                        .size(px(6.))
-                        .rounded_full()
-                        .bg(rgb(if others { FAINT } else { ACCENT })),
-                )
-            })
-            .when(self.tabs.len() > 1, |tab| {
-                tab.child(
-                    div()
-                        .id(("close-tab", number))
-                        .debug_selector(move || format!("close-tab-{number}"))
-                        .flex_shrink_0()
-                        .size(px(18.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.))
-                        .text_color(rgb(FAINT))
-                        .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(FOREGROUND)))
-                        .child(icon(Icon::Close, 10., FAINT))
-                        .on_click(cx.listener(move |stage, _, window, cx| {
-                            cx.stop_propagation();
-                            let _ = stage.close_tab(index, window, cx);
-                        })),
-                )
-            })
     }
 
     /// Opens the menu of the stage's +, with the keyboard in the line at
