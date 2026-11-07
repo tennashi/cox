@@ -92,6 +92,7 @@ pub mod terminal;
 pub mod tree;
 mod typed;
 pub mod windows;
+pub mod workflow;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -345,6 +346,9 @@ impl Stage {
                 KeptTab::MacWindow { app, title } => {
                     let tab = mac_window::reopened(app, title, cx);
                     stage.push_mac_window(tab, show, cx);
+                }
+                KeptTab::Workflow => {
+                    stage.push_workflow(None, show, window, cx);
                 }
                 KeptTab::MacWindows => {
                     stage.push_windows(show, window, cx);
@@ -616,7 +620,8 @@ impl Stage {
             | TabContent::Android(_)
             | TabContent::Devices(_)
             | TabContent::MacWindow(_)
-            | TabContent::Windows(_) => false,
+            | TabContent::Windows(_)
+            | TabContent::Workflow(_) => false,
         })
     }
 

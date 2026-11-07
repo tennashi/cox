@@ -54,31 +54,37 @@ chosen. "New chat" (Command-N, Control-N)
 opens one in no project, which works in Cox's home: `<dir>` when given,
 or else the folder the settings set, or else `~/cox`; the rail shows it
 as `~`. The gear at the foot of the rail (Command-, on macOS, Control-,
-elsewhere) opens the settings, on a card over the window, where the
-human sets the home: a path typed in its input, whole or from `~`, which
+elsewhere) shows the settings, under the files of the human's workflow,
+on "Workflow", a tab of the stage in sight (see below), where the human
+sets the home: a path typed in its input, whole or from `~`, which
 Enter sets, or a folder "Choose…" asks for. The settings are kept in
 `settings.json`, in Cox's data folder (see [The stage](#the-stage)), as
 `agents.json` is, and the
 chats in no project that open from then on work there; `--home` still
 goes ahead of them for its run, until the human sets the home. Under
-the home, the card lists the agents of `agents.json` (see below), a row
+the home, the settings list the agents of `agents.json` (see below), a row
 each, with its name and its command on one line, as a shell takes it,
 as `CLAUDE_CODE_ENABLE_TODO_TOOLS=1 npx -y
-@agentclientprotocol/claude-agent-acp`, which Enter keeps, as the card
-does when it closes; a dot marks the agent `settings.json` names, and a
+@agentclientprotocol/claude-agent-acp`, which Enter keeps, as the
+keyboard leaving the settings does; a dot marks the agent `settings.json` names, and a
 click on another's names that one; "Test" starts the agent and asks it
 to open a session, in a folder of its own, saying whether it works,
 asks the human to log in first, or is not found on Cox's `PATH`; ×
 takes it out of the list; and "Add agent" adds one of the human's own,
 or one of the ACP Registry, as the registry runs it but for the version
-it pins, for the human to change. The card also sets, as the home is
+it pins, for the human to change. The settings also set, as the home is
 set, the folders of the human's workflow and wiki (see below), kept from
 `~` when they are in the home directory, or, emptied, Cox's own; and the
 translation (see below): the language, which, emptied, turns it off, and
 what translates, the agent a new chat talks to, one of the human's, or
 a command on one line, as an agent's. What else the files hold stays as
-it is. What the card says is selected and copied as the conversation's
-text is. Escape, the ×, or a click beside the card closes it. Each chat starts its own
+it is. What the settings say is selected and copied as the
+conversation's text is, and Escape gives the keyboard back to the chat.
+"Workflow" lists, above them, the files of the human's workflow, which
+every chat goes by whatever the project, and those of the stage's
+folder, which its chats go by (see below), each with what it does and
+whether it is there, a folder with how many files it holds; a click on
+a file that is there opens it on a tab. Each chat starts its own
 `<agent command>` working in its project's folder, and works on the
 stage of that folder, which the chats working there share (see below),
 showing `<url>` first, or else "Activity" (see below). Cox opened with no `<agent command>`, as the
@@ -658,9 +664,9 @@ page, file or view of the project once. The
 bar along its top keeps the views of the project in sight first, side
 by side: "Activity" (see below), "Map", when the project has a map, "Files",
 "Changes", when the project is in a Git repository, and the other
-plugins' pages, such as "Knowledge" and "Schedules", each a tab that the bar
-shows by its button, not among the others, and kept there while its tab
-is open; then the other tabs, each with an icon of what it shows: a
+plugins' pages, such as "Knowledge" and "Schedules", and last
+"Workflow", each a tab that the bar shows by its button, not among the
+others, and kept there while its tab is open; then the other tabs, each with an icon of what it shows: a
 page, a Markdown file, code, a terminal, the flow of a tool call. The +
 at the bar's end opens a menu of what the human opens there: a line at
 its top, where Enter opens what they typed, a file of that path, from

@@ -1,5 +1,7 @@
-//! The settings screen: a card over the window, which the gear at the
-//! foot of the rail opens, as Command-, does (Control-, off macOS).
+//! The settings: on the Workflow tab of the stage in sight (see
+//! [`crate::stage::workflow`]), which the gear at the foot of the rail
+//! shows, as Command-, does (Control-, off macOS), or, with no stage to
+//! show it, on a card over the window.
 //!
 //! It shows Cox's home, the folder chats in no project work in, in an
 //! input, where Enter sets what the human typed, a whole path or one from
@@ -10,9 +12,9 @@
 //! [`agents`]), and the language they read in (see [`translation`]).
 //! What the screen says the human selects, copies and translates (see
 //! [`words`]).
-//! Escape, the ×, or a click beside the card closes it,
-//! keeping the rows of agents changed, and leaving the home as it was
-//! last set.
+//! Escape, the ×, or a click beside the card closes it, as the keyboard
+//! leaving the tab does, keeping the rows of agents changed, and leaving
+//! the home as it was last set.
 
 mod agents;
 mod folder;
@@ -96,6 +98,11 @@ pub struct SettingsView {
     words: Words,
     /// What has the keyboard while the human selects the words.
     focus: FocusHandle,
+    /// What has the keyboard while it is anywhere in the settings.
+    frame: FocusHandle,
+    /// Whether they show on a card of their own, over the window, rather
+    /// than on a tab.
+    framed: bool,
     _submitted: Subscription,
 }
 
@@ -145,6 +152,8 @@ impl SettingsView {
             translation: cx.new(|cx| TranslationSection::new(words.clone(), cx)),
             words,
             focus: cx.focus_handle(),
+            frame: cx.focus_handle(),
+            framed: true,
             _submitted: submitted,
         }
     }
@@ -153,6 +162,19 @@ impl SettingsView {
     #[must_use]
     pub fn agents(&self) -> &Entity<AgentsSection> {
         &self.agents
+    }
+
+    /// Shows them on a card of their own, over the window, or, unless
+    /// `framed`, on a tab.
+    pub fn set_framed(&mut self, framed: bool, cx: &mut Context<Self>) {
+        self.framed = framed;
+        cx.notify();
+    }
+
+    /// What has the keyboard while it is anywhere in the settings.
+    #[must_use]
+    pub fn frame(&self) -> &FocusHandle {
+        &self.frame
     }
 
     /// Reads the settings again, as another program changed them.
@@ -355,74 +377,95 @@ impl Render for SettingsView {
         // after the screen.
         self.words.start();
         let mut words = self.words.part();
+        let framed = self.framed;
         let body = self.words.selectable(
             div()
                 .id("settings-body")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .px(px(22.))
-                .pt(px(18.))
-                .pb(px(22.))
+                .when(framed, |body| {
+                    body.flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .px(px(22.))
+                        .pt(px(18.))
+                        .pb(px(22.))
+                })
                 .flex()
                 .flex_col()
                 .gap_2(),
             &self.focus,
         );
-        card()
+        let body = body
+            .child(words.heading("HOME"))
+            .child(words.about(
+                "The folder Cox starts chats in when they are in no project, \
+                 as New chat opens them; the rail shows it as ~.",
+            ))
+            .child(
+                div()
+                    .mt_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .debug_selector(|| "home-input".to_owned())
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(32.))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .border_1()
+                            .border_color(rgb(LINK))
+                            .rounded(px(10.))
+                            .text_size(px(13.))
+                            .text_color(rgb(FOREGROUND))
+                            .child(self.input.clone()),
+                    )
+                    .child(Self::render_choose(cx)),
+            )
+            .child(
+                words
+                    .note(&told, color)
+                    .debug_selector(|| "home-told".to_owned()),
+            )
+            .child(div().mt_4().child(self.workflow.clone()))
+            .child(div().mt_4().child(self.wiki.clone()))
+            .child(div().mt_4().child(self.agents.clone()))
+            .child(div().mt_4().child(self.translation.clone()));
+        // On a card of its own, or on a tab, under what the tab shows of
+        // the workflow.
+        let settings = if framed { card() } else { div() }
             .id("settings")
             .debug_selector(|| "settings".to_owned())
             .key_context(KEY_CONTEXT)
-            .occlude()
-            .w(px(WIDTH))
-            .max_w_full()
-            .max_h_full()
+            .track_focus(&self.frame)
             .flex()
             .flex_col()
-            .shadow_lg()
-            // A click on the card stays there, not closing it.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_action(cx.listener(|_, _: &CloseSettings, _, cx| cx.emit(Dismissed)))
-            .child(Self::render_header(cx))
-            .child(
-                body.child(words.heading("HOME"))
-                    .child(words.about(
-                        "The folder Cox starts chats in when they are in no project, \
-                         as New chat opens them; the rail shows it as ~.",
-                    ))
-                    .child(
-                        div()
-                            .mt_1()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .debug_selector(|| "home-input".to_owned())
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h(px(32.))
-                                    .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .border_1()
-                                    .border_color(rgb(LINK))
-                                    .rounded(px(10.))
-                                    .text_size(px(13.))
-                                    .text_color(rgb(FOREGROUND))
-                                    .child(self.input.clone()),
-                            )
-                            .child(Self::render_choose(cx)),
-                    )
-                    .child(
-                        words
-                            .note(&told, color)
-                            .debug_selector(|| "home-told".to_owned()),
-                    )
-                    .child(div().mt_4().child(self.workflow.clone()))
-                    .child(div().mt_4().child(self.wiki.clone()))
-                    .child(div().mt_4().child(self.agents.clone()))
-                    .child(div().mt_4().child(self.translation.clone())),
-            )
+            .on_action(cx.listener(|_, _: &CloseSettings, _, cx| cx.emit(Dismissed)));
+        if framed {
+            settings
+                .occlude()
+                .w(px(WIDTH))
+                .max_w_full()
+                .max_h_full()
+                .shadow_lg()
+                // A click on the card stays there, not closing it.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(Self::render_header(cx))
+                .child(body)
+        } else {
+            settings
+                .gap_2()
+                .child(
+                    div()
+                        .pb(px(6.))
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(DIM))
+                        .child("SETTINGS"),
+                )
+                .child(body)
+        }
     }
 }

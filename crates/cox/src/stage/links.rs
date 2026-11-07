@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use cox_core::tabs::Lines;
-use gpui::{Context, Window, prelude::*};
+use gpui::{AnyView, Context, Window, prelude::*};
 
 use crate::stage::Stage;
 use crate::stage::changes::{self, Changes};
@@ -17,6 +17,7 @@ use crate::stage::document::Document;
 use crate::stage::flow::{self, Flow};
 use crate::stage::tab::{ShowsFile, TabContent};
 use crate::stage::tree::{Chosen, Tree};
+use crate::stage::workflow::{self, Workflow};
 use crate::ui::LinkClicked;
 use crate::ui::markdown::FileLink;
 
@@ -178,6 +179,66 @@ impl Stage {
             }
         });
         self.push(TabContent::Tree(tree), changes, Some(opens), show, cx);
+    }
+
+    /// Shows how the human works with Cox there (see [`super::workflow`]),
+    /// with `settings` when given: on its tab, or a new one, with the
+    /// keyboard in it.
+    pub fn show_workflow(
+        &mut self,
+        settings: Option<AnyView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let showing = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab.content, TabContent::Workflow(_)));
+        if let Some(index) = showing {
+            self.show(index, window, cx);
+        } else {
+            self.push_workflow(settings, true, window, cx);
+            self.focus_shown(window, cx);
+        }
+    }
+
+    /// Whether the tab shown is the Workflow tab.
+    #[must_use]
+    pub fn shows_workflow(&self) -> bool {
+        self.tabs
+            .shown()
+            .is_some_and(|tab| matches!(tab.content, TabContent::Workflow(_)))
+    }
+
+    /// Puts the Workflow tab, showing `settings` when given, after the
+    /// others, shown if `show` is.
+    pub(super) fn push_workflow(
+        &mut self,
+        settings: Option<AnyView>,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self.cwd.clone();
+        let workflow = cx.new(|cx| Workflow::new(cwd, settings, window, cx));
+        let changes = cx.observe(&workflow, |stage, _, cx| stage.changed(cx));
+        let opens = cx.subscribe_in(
+            &workflow,
+            window,
+            |stage, _, workflow::Chosen(path), window, cx| {
+                if stage.open_path(path, None, window, cx).is_err() {
+                    stage.show_file::<Code>(path.clone(), "", None, window, cx);
+                    stage.focus_shown(window, cx);
+                }
+            },
+        );
+        self.push(
+            TabContent::Workflow(workflow),
+            changes,
+            Some(opens),
+            show,
+            cx,
+        );
     }
 
     /// Shows what changed in the files of the repository of `folder`, an

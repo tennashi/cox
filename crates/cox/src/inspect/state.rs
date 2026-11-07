@@ -73,7 +73,7 @@ pub fn describe(
     } else if workspace.is_switching() {
         told.push_str("The list of chats is open, over the conversation\n");
     }
-    if let Some(settings) = workspace.settings() {
+    if let Some(settings) = workspace.settings(cx) {
         let _ = writeln!(
             told,
             "The settings are open, the home's input holding {:?}",
@@ -121,7 +121,7 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
     {
         return "the translation's card".to_owned();
     }
-    if let Some(settings) = workspace.settings().map(|settings| settings.read(cx)) {
+    if let Some(settings) = workspace.settings(cx).map(|settings| settings.read(cx)) {
         if focused == settings.input().focus_handle(cx) {
             return "the settings' input".to_owned();
         }
@@ -339,6 +339,7 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
             KeptTab::AndroidDevices => "android devices".to_owned(),
             KeptTab::MacWindow { app, title } => format!("mac window {app} {title:?}"),
             KeptTab::MacWindows => "mac windows".to_owned(),
+            KeptTab::Workflow => "workflow".to_owned(),
             KeptTab::Parts => "parts the chat ran with".to_owned(),
             KeptTab::Terminal { title } => format!("terminal {title:?}"),
         };
