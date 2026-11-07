@@ -635,6 +635,7 @@ impl Workspace {
         }
         self.stage_chosen();
         self.sight(cx);
+        self.at_work(cx);
         self.badge(cx);
         cx.notify();
     }
@@ -790,6 +791,7 @@ impl Workspace {
             workspace.reveal(*key, window, cx);
         });
         self.shows_chats.push(shows);
+        self.at_work(cx);
     }
 
     /// Asks the daemon for the stage of the project chosen, while no chat
@@ -818,6 +820,29 @@ impl Workspace {
             None => self.projects.get(self.chosen)?.folder.clone(),
         };
         self.folders.get(&folder).map(|(stage, _)| stage)
+    }
+
+    /// Tells each stage which chats' agents are at work, taking a turn,
+    /// so that the others do not act on their pages.
+    fn at_work(&self, cx: &mut App) {
+        let working: HashSet<u64> = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .filter(|chat| {
+                matches!(
+                    chat.state,
+                    State::Busy | State::Asking | State::Stopping | State::Checking
+                )
+            })
+            .map(|chat| chat.key)
+            .collect();
+        for (stage, _) in self.folders.values() {
+            if let Ok(stage) = stage.view.clone().downcast::<Stage>() {
+                let working = working.clone();
+                stage.update(cx, |stage, cx| stage.set_working(working, cx));
+            }
+        }
     }
 
     /// Tells each stage whether it is in sight now.

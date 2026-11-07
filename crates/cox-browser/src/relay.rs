@@ -6,7 +6,8 @@
 //!
 //! Every chat's pages are in the same browser, so the relay hides the rest
 //! of the browser from the agent: what it hears of other targets, and what
-//! it asks of them (see [`Scope`]).
+//! it asks of them (see [`Scope`]). A page another chat's agent is at work
+//! on the agent reads, but does not act on (see [`Pages::lock`]).
 //!
 //! The agent opens and closes pages as tabs of its chat's stage: the relay
 //! asks the stage instead of the browser. Whoever opens a tab, the stage
@@ -33,6 +34,7 @@ mod devtools;
 mod scope;
 mod seen;
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, TcpListener as StdTcpListener};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -105,6 +107,9 @@ pub struct Known {
     pub(super) opening: usize,
     /// Each page, in the order the relay came to know it.
     pub(super) pages: Vec<KnownPage>,
+    /// The pages another chat's agent is at work on, each with that
+    /// chat's name.
+    pub(super) locked: HashMap<String, String>,
 }
 
 /// One of a chat's pages, as the relay knows it.
@@ -166,6 +171,21 @@ impl Pages {
     pub fn hand(&self, page: TargetId) {
         // With the relay gone, no agent is there to hear of it.
         let _ = self.names.send(Find { page, handed: true });
+    }
+
+    /// The pages another chat's agent is at work on are those of
+    /// `locked`, each with that chat's name, from now on: the agent reads
+    /// them, but what it asks that acts on one, as a click, a key, going
+    /// to another address or closing it, is refused, the answer naming
+    /// the chat.
+    pub fn lock(&self, locked: HashMap<String, String>) {
+        self.known.send_if_modified(|known| {
+            if known.locked == locked {
+                return false;
+            }
+            known.locked = locked;
+            true
+        });
     }
 
     /// The page `page` is the chat's no longer: the agent hears that it is

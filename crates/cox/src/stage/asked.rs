@@ -52,12 +52,11 @@ impl Stage {
                 let _ = answer.send(Some(page));
             }
             FromAgent::Close { page, answer } => {
-                // An agent closes only its own chat's pages.
+                // The relay refused to close a page another chat's agent
+                // is at work on.
                 let closed = match stage.index_of(&page) {
-                    Some(index) if stage.tabs[index].owner == stage.acting => {
-                        stage.close_tab(index, window, cx)
-                    }
-                    _ => Err("No target with given id found"),
+                    Some(index) => stage.close_tab(index, window, cx),
+                    None => Err("No target with given id found"),
                 };
                 let _ = answer.send(closed);
             }
@@ -168,6 +167,9 @@ impl Stage {
         input: Option<cox_browser::relay::AgentInput>,
         cx: &mut Context<Self>,
     ) {
+        if let Some(page) = &page {
+            self.worked_on(page, cx);
+        }
         if let Some(index) = page.and_then(|page| self.index_of(&page))
             && self.tabs.shown_index() != Some(index)
             && self.in_sight()

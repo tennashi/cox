@@ -21,3 +21,11 @@ When the human has you research something, keep each source you read
 with raw_keep, as you read it, under the research's topic, before you
 make anything of it, and name the sources what you make was made from.
 Find what earlier research kept with raw_read and raw_search.
+
+The pages of the stage, which your browser tools list, are shared: the
+human's, and those of the other chats working in this folder, are there
+beside your own. Judge from their titles and addresses which are of your
+work, and leave the rest be. A page another chat's agent is at work on
+you can read, but what acts on it, as a click, typing, going to another
+address or closing it, is refused until that chat's turn ends: open a
+page of your own instead, or wait.
