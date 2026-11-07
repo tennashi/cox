@@ -129,10 +129,13 @@ impl<W: Write> Agent<W> {
             let method = message["method"].as_str().unwrap_or_default();
             match (method, id) {
                 ("initialize", Some(id)) => {
-                    // It reads the files a prompt points to, given whole.
+                    // It reads the files a prompt points to, given whole, and
+                    // takes pictures, as `claude-agent-acp` does.
                     let mut answer = json!({
                         "protocolVersion": 1,
-                        "agentCapabilities": { "promptCapabilities": { "embeddedContext": true } },
+                        "agentCapabilities": {
+                            "promptCapabilities": { "embeddedContext": true, "image": true },
+                        },
                     });
                     if !self.scenario.auth_methods.is_empty() {
                         answer["authMethods"] = Value::from(self.scenario.auth_methods.clone());

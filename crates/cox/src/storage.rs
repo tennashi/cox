@@ -77,11 +77,14 @@ pub enum Kept {
     /// When each of the human's schedules last ran (see
     /// [`crate::schedule`]).
     Schedules,
+    /// The pictures of the regions of the window the human handed the
+    /// chats (see [`crate::chat::region`]).
+    Pictures,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Settings,
         Self::Agents,
         Self::Workflow,
@@ -96,6 +99,7 @@ impl Kept {
         Self::Inspect,
         Self::Daemon,
         Self::Schedules,
+        Self::Pictures,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -116,6 +120,7 @@ impl Kept {
             Self::Inspect => "run/inspect.sock",
             Self::Daemon => "run/coxd.sock",
             Self::Schedules => "state/schedules.json",
+            Self::Pictures => "state/pictures",
         }
     }
 

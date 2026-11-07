@@ -646,6 +646,30 @@ agent takes files whole, as a resource of that URI (ACP's
 `embeddedContext`), and else as text after a line that says where it is
 from.
 
+The human hands the chat shown a region of the window too, as a
+screenshot is taken, to show the agent what they see where text says it
+poorly, as a layout gone wrong, or to point at a part of a page:
+Command-Shift-L (Control-Alt-Shift-L off macOS), or the chip "▭ region"
+under the input, lays a sheet over the window, where the human drags a
+rectangle over what to hand, and Escape, or the right button, gives up.
+The region shows as a chip over the input, as what is selected does,
+named after the parts of the window it covers, as `▭ main.rs:16-20`,
+and goes to the agent after the line, as the selections do, under
+`cox://region`: where in the window it is, and what each part it covers
+says of it: a tab of code, the lines in it and their text; a tab of
+Markdown and the conversation, the text in it; a terminal, the rows
+and columns in it and what they show; a page, its title, its address
+and where on the page the region is, in CSS pixels of the page's
+viewport; an Android device's display, or a Mac window, where on it,
+in the pixels the agent's tools take; and then its picture, which Cox
+takes of the screen as the sheet goes, and keeps in `state/pictures`
+in Cox's data folder (see [The stage](#the-stage)): the picture itself,
+when the agent takes pictures (ACP's `image`), as `claude-agent-acp`
+does, or else a link to its file. Taking the picture is through
+`screencapture` on macOS, which has to be allowed to record the
+screen, and through ImageMagick's `import` on Linux, as `cox --inspect
+screenshot` takes it (see [Asking Cox how it stands](#asking-cox-how-it-stands)).
+
 The plan and the thoughts are ACP's `plan` and `agent_thought_chunk`
 updates, which Cox shows from any agent that sends them. How an agent
 is to be run to send them is the agent's: `claude-agent-acp` sends, as
@@ -1131,8 +1155,9 @@ kind is kept apart
   move into the home); beside them `sketches`, the folders the sketches
   work in, and `logs`;
 - in `state`, what Cox would lose: the chats, in a SQLite database,
-  `chats.sqlite`, the stage's profile, `stage`, and when each schedule
-  last ran, `schedules.json`;
+  `chats.sqlite`, the stage's profile, `stage`, when each schedule
+  last ran, `schedules.json`, and the pictures of the regions handed
+  to the chats, `pictures`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it
   downloads, in `agents`, and `translations`;
 - in `run`, what is there only while Cox runs: `coxd.sock` and
@@ -1396,7 +1421,7 @@ it sets as Cox asks; the tour has a mode, a model and an effort.
 Its `commands` are the commands the agent runs, as ACP's
 `availableCommands` says them, which it tells Cox of as each session
 opens; the tour has three, and answers `/compact`. The agent takes
-files whole, and reads the files a line points to as
+files whole, and pictures, and reads the files a line points to as
 `claude-agent-acp` does, a link to each and its text, which a turn's
 `when` can match: the tour answers a line that points to a file.
 Its `authMethods` are the ways to log in it offers, as ACP's

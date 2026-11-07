@@ -86,7 +86,12 @@ pub fn of_file(path: &Path, lines: Option<Lines>, text: String) -> Attachment {
         ),
         None => (shown, uri),
     };
-    Attachment { label, uri, text }
+    Attachment {
+        label,
+        uri,
+        text,
+        picture: None,
+    }
 }
 
 /// How many characters of what a chip quotes it shows.

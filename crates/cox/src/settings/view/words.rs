@@ -135,6 +135,7 @@ fn of_settings(text: String) -> Attachment {
         label: "Settings".to_owned(),
         uri: "cox://settings".to_owned(),
         text,
+        picture: None,
     }
 }
 
