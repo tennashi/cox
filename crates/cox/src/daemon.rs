@@ -1001,9 +1001,13 @@ impl Daemon {
                 }
             }
             ToDaemon::Ran { id, ran } => {
-                self.stops.remove(&id);
                 if let Some(answer) = self.running.remove(&id) {
                     answer.send(ran).ok();
+                }
+                // What waits for the answer passes it on, and ends: stopped
+                // now, it would drop the answer before it did.
+                if let Some(waits) = self.stops.remove(&id) {
+                    waits.detach();
                 }
             }
             ToDaemon::Prepared { id, port } => {

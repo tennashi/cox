@@ -103,6 +103,9 @@ pub struct Fakes {
     /// Whether the chats run commands, as their goals', in a shell, as a
     /// terminal would.
     pub terminal: bool,
+    /// Whether the chats with no such terminal ask their stage, through
+    /// the daemon and the window, to run commands, as Cox's chats do.
+    pub staged_terminal: bool,
 }
 
 impl Default for Fakes {
@@ -118,6 +121,7 @@ impl Default for Fakes {
             setup: None,
             instructions: true,
             terminal: true,
+            staged_terminal: false,
         }
     }
 }
@@ -154,15 +158,24 @@ impl Spawns for FakeSpawns {
             fakes.mcp_servers.clone(),
             start,
         );
-        if fakes.terminal {
+        // The chat's commands run in a shell here, or else go through the
+        // daemon to the window, as on a terminal of the stage.
+        let stage = if fakes.terminal {
             spawned.tools = Some(fake_terminal());
-        }
+            None
+        } else if fakes.staged_terminal {
+            let (tools, stage) = tokio::sync::mpsc::unbounded_channel();
+            spawned.tools = Some(tools);
+            Some(stage)
+        } else {
+            None
+        };
         let (asks, chat_requests) = tokio::sync::mpsc::unbounded_channel();
         fakes.asks.borrow_mut().push(asks);
         spawned.chat_requests = Some(chat_requests);
         Spawned {
             agent: spawned,
-            stage: None,
+            stage,
         }
     }
 
@@ -227,7 +240,8 @@ pub type Made = Rc<std::cell::RefCell<Vec<(PathBuf, Option<KeptTabs<u64>>)>>>;
 
 /// Makes the chats' stages: none, or, when `opened` or `made` is given, a
 /// stand-in for each, which notes in `opened` the links the human opens,
-/// and in `made` the stages made.
+/// and in `made` the stages made. The commands asked of a chat with none
+/// run in a shell.
 #[derive(Default)]
 pub struct FakeStages {
     pub opened: Option<Opened>,
@@ -260,6 +274,12 @@ impl Stages for FakeStages {
 
     fn relay(&self) -> Option<Relay> {
         None
+    }
+
+    /// Runs the commands asked of a chat with no stage, as a terminal
+    /// would, in a shell.
+    fn unstaged(&self, request: ToolRequest) {
+        let _ = fake_terminal().send(request);
     }
 }
 
