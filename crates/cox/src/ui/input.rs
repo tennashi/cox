@@ -821,7 +821,7 @@ impl Render for LineInput {
                 MouseButton::Right,
                 cx.listener(|input, _, window, cx| {
                     let text = input.draft.selected_text().to_owned();
-                    if crate::ui::translation::offer(&text, window, cx) {
+                    if crate::ui::translation::offer(&text, None, window, cx) {
                         cx.stop_propagation();
                     }
                 }),

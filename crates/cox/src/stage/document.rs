@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use cox_core::entry::Attachment;
 use cox_core::tabs::{KeptTab, Lines};
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
@@ -17,6 +18,7 @@ use gpui::{
     rgb,
 };
 
+use crate::chat::hand::AddToChat;
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::tab::{Shows, ShowsFile, TabContent};
 use crate::ui::ellipsis::ellipsis;
@@ -144,6 +146,20 @@ impl Document {
         }
         crate::ui::translation::show(&text, window, cx);
     }
+
+    /// The text selected, with the file it is from, as it goes to the
+    /// agent when handed to the chat.
+    fn selected_attachment(&self) -> Attachment {
+        crate::chat::hand::of_file(&self.path, None, self.selected_text())
+    }
+
+    /// Hands the text selected to the chat shown, or with nothing
+    /// selected leaves the keys to what holds the part.
+    fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
+        if !crate::chat::hand::hand(self.selected_attachment(), cx) {
+            cx.propagate();
+        }
+    }
 }
 
 impl Follows for Document {
@@ -257,6 +273,7 @@ impl Render for Document {
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::translate))
+            .on_action(cx.listener(Self::add_to_chat))
             .size_full()
             .flex()
             .flex_col()
@@ -274,7 +291,8 @@ impl Render for Document {
                         MouseButton::Right,
                         cx.listener(|document, _, window, cx| {
                             let text = document.selected_text();
-                            if crate::ui::translation::offer(&text, window, cx) {
+                            let handed = Some(document.selected_attachment());
+                            if crate::ui::translation::offer(&text, handed, window, cx) {
                                 cx.stop_propagation();
                             }
                         }),

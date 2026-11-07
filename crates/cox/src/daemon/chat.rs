@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
+use cox_core::entry::Attachment;
 use cox_core::goal;
 use cox_core::store::{ChatId, Record};
 use tokio::sync::mpsc::UnboundedSender;
@@ -376,8 +377,8 @@ impl Chat {
 
     /// The human sent `text`. Answers whether it went: not while a turn
     /// runs.
-    pub fn submit(&mut self, text: &str) -> bool {
-        match self.conversation.submit(text) {
+    pub fn submit(&mut self, text: &str, attached: Vec<Attachment>) -> bool {
+        match self.conversation.submit_with(text, attached) {
             Some(command) => {
                 self.send(command);
                 true

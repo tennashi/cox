@@ -427,7 +427,7 @@ impl Worker {
         let (_, agent) = self.agent.as_mut().expect("started above");
         agent
             .commands
-            .send(Command::Prompt(prompt(way, text)))
+            .send(Command::Prompt(prompt(way, text).into()))
             .map_err(|_| "the agent closed".to_owned())?;
         let mut reply = String::new();
         loop {

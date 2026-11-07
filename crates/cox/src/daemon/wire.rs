@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use cox_core::entry::Attachment;
 use cox_core::goal::Goal;
 use cox_core::store::{ChatId, Named, ProjectId};
 use cox_core::tabs::{KeptTabs, Lines};
@@ -189,8 +190,14 @@ pub enum ToDaemon {
     /// The window shows the conversation of the chat `key` from now on:
     /// tell it how it changes.
     Watch { key: u64 },
-    /// The human sent `text` in the chat `key`.
-    Submit { key: u64, text: String },
+    /// The human sent `text` in the chat `key`, with what they handed it
+    /// from elsewhere on the screen.
+    Submit {
+        key: u64,
+        text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attached: Vec<Attachment>,
+    },
     /// The human chose the option at `index` of what the agent of the
     /// chat `key` asks: of a permission request, or of the ways to log in.
     Choose { key: u64, index: usize },

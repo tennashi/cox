@@ -2,7 +2,9 @@
 //! part of the window with text selected, or "Translate" in the menu the
 //! right button opens on it (see [`offer`]), shows a card by the mouse with the text's
 //! translation as it arrives (see [`crate::translate`]), which the human
-//! copies, and closes with Escape, the ×, or a click beside it.
+//! copies, and closes with Escape, the ×, or a click beside it. The menu
+//! also hands the selection to the chat shown, as [`crate::chat::hand`]
+//! says, where it knows where the selection is from.
 
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global,
@@ -10,6 +12,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, Task, Window, actions, anchored, deferred, div, point,
     prelude::FluentBuilder as _, px, rgb,
 };
+
+use cox_core::entry::Attachment;
 
 use crate::translate::{Arriving, Way};
 use crate::ui::theme::{
@@ -60,26 +64,33 @@ impl Global for Shown {}
 /// Shows the translation of `text`, by the mouse, unless it is only
 /// space: the card takes the keyboard until it closes.
 pub fn show(text: &str, window: &mut Window, cx: &mut App) {
-    open(text, false, window, cx);
+    open(text, None, false, window, cx);
 }
 
 /// Offers to translate or copy `text`, the selection the right button
 /// was pressed on, in a menu by the mouse, unless it is only space,
 /// saying whether it does, for the part to keep the press to itself.
-pub fn offer(text: &str, window: &mut Window, cx: &mut App) -> bool {
-    open(text, true, window, cx)
+/// The menu offers to hand it to the chat shown as `handed`, when given.
+pub fn offer(text: &str, handed: Option<Attachment>, window: &mut Window, cx: &mut App) -> bool {
+    open(text, handed, true, window, cx)
 }
 
 /// Opens the card on `text`, translating it or `offered`, unless it is
 /// only space.
-fn open(text: &str, offered: bool, window: &mut Window, cx: &mut App) -> bool {
+fn open(
+    text: &str,
+    handed: Option<Attachment>,
+    offered: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
     if text.trim().is_empty() {
         return false;
     }
     let at = window.mouse_position();
     let before = window.focused(cx);
     let card = cx.new(|cx| {
-        let mut card = TranslationCard::new(text, at, before, cx);
+        let mut card = TranslationCard::new(text, handed, at, before, cx);
         if !offered {
             card.translate(cx);
         }
@@ -108,6 +119,9 @@ pub fn close(window: &mut Window, cx: &mut App) {
 pub struct TranslationCard {
     /// What the human selected.
     text: String,
+    /// What the menu hands the chat shown, when the part knows where the
+    /// selection is from.
+    handed: Option<Attachment>,
     /// Whether the menu still offers the translation, which it has not
     /// asked for.
     offered: bool,
@@ -129,12 +143,14 @@ pub struct TranslationCard {
 impl TranslationCard {
     fn new(
         text: &str,
+        handed: Option<Attachment>,
         at: Point<Pixels>,
         before: Option<FocusHandle>,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
             text: text.trim().to_owned(),
+            handed,
             offered: true,
             way: None,
             so_far: None,
@@ -294,6 +310,7 @@ impl TranslationCard {
             "Ctrl-Shift-T"
         };
         let text = self.text.clone();
+        let handed = self.handed.clone();
         let menu = div()
             .id("translation")
             .key_context(KEY_CONTEXT)
@@ -315,6 +332,19 @@ impl TranslationCard {
                 item("translation-translate", "Translate", translate)
                     .on_click(cx.listener(|card, _, _, cx| card.translate(cx))),
             )
+            .when_some(handed, |menu, handed| {
+                menu.child(
+                    item(
+                        "translation-add-to-chat",
+                        "Add to chat",
+                        crate::chat::hand::keys(),
+                    )
+                    .on_click(move |_, window, cx| {
+                        crate::chat::hand::hand(handed.clone(), cx);
+                        close(window, cx);
+                    }),
+                )
+            })
             .child(item("translation-copy-selection", "Copy", "").on_click(
                 move |_, window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));

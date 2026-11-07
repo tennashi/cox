@@ -14,6 +14,9 @@ use crate::store::ChatId;
 pub enum Entry {
     /// A line the human sent.
     Human(String),
+    /// What the human handed the chat with the line before it, from
+    /// elsewhere on the screen, as text selected in a tab.
+    Attached(Vec<Attachment>),
     /// A line Cox sent the agent in the human's place, as the agent's
     /// next turn: what the chat's goal asks while it is not met.
     Cox(String),
@@ -89,6 +92,22 @@ pub enum Entry {
         /// The way chosen, once the human chose one.
         chosen: Option<usize>,
     },
+}
+
+/// Something on the screen the human hands a chat with their next line,
+/// for its agent to read with it: text they selected, in the
+/// conversation, a tab of code or Markdown, a terminal, or a page.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attachment {
+    /// What the chip that shows it names it by, as where it is from:
+    /// `src/main.rs:12-30`, or a page's title.
+    pub label: String,
+    /// Where it is from, as the agent is told: a file's `file:` URI, with
+    /// the lines as `#L12-30`, a page's address, or `cox:` and what in
+    /// Cox shows it, as `cox://terminal`.
+    pub uri: String,
+    /// What it says.
+    pub text: String,
 }
 
 /// A way the agent offers the human to log in.

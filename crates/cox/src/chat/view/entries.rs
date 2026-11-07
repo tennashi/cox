@@ -22,7 +22,7 @@ use gpui::{AnyElement, Context, FontWeight, SharedString, Stateful, div, prelude
 use cox_core::goal::Goal;
 
 use crate::chat::conversation::{
-    self, Answer, Content, Entry, LoginOption, State, Step, StepState, ToolCallResult,
+    self, Answer, Attachment, Content, Entry, LoginOption, State, Step, StepState, ToolCallResult,
 };
 use crate::chat::view::ChatView;
 use crate::ui::ellipsis::ellipsis;
@@ -62,7 +62,7 @@ impl Speaker {
     /// spoke last.
     fn of(entry: &Entry) -> Option<Self> {
         match entry {
-            Entry::Human(_) => Some(Self::Human),
+            Entry::Human(_) | Entry::Attached(_) => Some(Self::Human),
             Entry::Cox(_) | Entry::Keep { .. } => Some(Self::Cox),
             Entry::Note(_) | Entry::Switched { .. } => None,
             _ => Some(Self::Agent),
@@ -507,6 +507,34 @@ impl ChatView {
             .into_any_element()
     }
 
+    /// What the human handed the chat with the line before, a chip each,
+    /// which a click opens, when it is a file or a page.
+    fn render_attached_entry(
+        index: usize,
+        attached: &[Attachment],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .debug_selector(|| format!("attached-{index}"))
+            .flex()
+            .flex_wrap()
+            .gap(px(6.))
+            .pb(px(12.))
+            .children(attached.iter().enumerate().map(|(at, attachment)| {
+                let uri = attachment.uri.clone();
+                attachment_chip(
+                    SharedString::from(format!("attached-{index}-{at}")).into(),
+                    attachment,
+                )
+                .on_click(cx.listener(move |view, _, window, cx| {
+                    if opens(&uri) {
+                        view.show_link(&uri, window, cx);
+                    }
+                }))
+            }))
+            .into_any_element()
+    }
+
     fn render_entry(&self, index: usize, entry: &Entry, cx: &mut Context<Self>) -> AnyElement {
         let mut writer = self.reading.writer(index);
         match entry {
@@ -514,6 +542,7 @@ impl ChatView {
                 .text_size(px(15.))
                 .child(writer.plain(text, "\n\n"))
                 .into_any_element(),
+            Entry::Attached(attached) => Self::render_attached_entry(index, attached, cx),
             // Sent in the human's place, so drawn in theirs, but as Cox's
             // notes are.
             Entry::Cox(text) => div()
@@ -1133,6 +1162,53 @@ fn render_line(line: &Line, writer: &mut Writer) -> gpui::Div {
         .text_color(rgb(color))
         .child(div().flex_shrink_0().w(px(14.)).child(mark))
         .child(div().flex_1().min_w_0().child(writer.plain(&text, "\n")))
+}
+
+/// A chip of what the human handed the chat, named `id`: where it is
+/// from, and, where the mouse rests, the start of what it says.
+pub(super) fn attachment_chip(id: gpui::ElementId, attachment: &Attachment) -> Stateful<gpui::Div> {
+    let shown: String = attachment
+        .text
+        .lines()
+        .take(12)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let uri = attachment.uri.clone();
+    div()
+        .id(id)
+        .h(px(24.))
+        .max_w(px(260.))
+        .pl(px(9.))
+        .pr(px(5.))
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .rounded(px(12.))
+        .bg(rgb(BUTTON))
+        .text_size(px(12.))
+        .text_color(rgb(FAINT))
+        .when(opens(&uri), |chip| {
+            chip.cursor_pointer()
+                .hover(|style| style.text_color(rgb(FOREGROUND)))
+        })
+        .tooltip(crate::ui::tip(format!("{}\n\n{shown}", attachment.uri)))
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(attachment.label.clone()),
+        )
+}
+
+/// Whether a click on a chip of what the human handed opens where it is
+/// from: a file or a page does, a plugin's too, and the conversation, a
+/// terminal or the settings, which no address shows, do not.
+pub(super) fn opens(uri: &str) -> bool {
+    !["cox://chat/", "cox://terminal", "cox://settings"]
+        .iter()
+        .any(|shown| uri.starts_with(shown))
 }
 
 #[cfg(test)]

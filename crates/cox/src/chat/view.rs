@@ -37,6 +37,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use cox_core::entry::Attachment;
 use cox_core::goal;
 use cox_core::tabs::KeptTabs;
 use gpui::{
@@ -48,6 +49,7 @@ use gpui::{
 
 use crate::agents::Agents;
 use crate::chat::conversation::{Answer, Conversation, GOAL_TURNS, Goal, Patch, State};
+use crate::chat::hand::AddToChat;
 use crate::chat::sketch::Sketch;
 use crate::daemon::Link;
 use crate::daemon::wire::ToDaemon;
@@ -185,6 +187,9 @@ pub struct ChatView {
     setting_closed_at: Option<Point<Pixels>>,
     /// The agents the chat can talk to.
     agents: Option<Agents>,
+    /// What the human handed the chat from elsewhere on the screen, which
+    /// goes with the next line they send.
+    attached: Vec<Attachment>,
     _submitted: Subscription,
 }
 
@@ -226,7 +231,53 @@ impl ChatView {
             setting_open: None,
             setting_closed_at: None,
             agents,
+            attached: Vec::new(),
             _submitted: submitted,
+        }
+    }
+
+    /// Takes `attachment`, which the human handed the chat, to go with
+    /// the next line they send, unless it has it already, and gives the
+    /// keyboard to the input, for them to write the line.
+    pub fn attach(&mut self, attachment: Attachment, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.attached.contains(&attachment) {
+            self.attached.push(attachment);
+        }
+        window.focus(&self.input.focus_handle(cx));
+        cx.notify();
+    }
+
+    /// What the human handed the chat, which goes with the next line.
+    #[must_use]
+    pub fn attached(&self) -> &[Attachment] {
+        &self.attached
+    }
+
+    /// The text selected in the conversation, with where it is from, as
+    /// it goes to the agent when handed to the chat.
+    fn selected_attachment(&self) -> Attachment {
+        let text = self.selected_text();
+        Attachment {
+            label: crate::chat::hand::quoted(&text),
+            uri: format!("cox://chat/{}", self.key),
+            text,
+        }
+    }
+
+    /// The right button went down on the conversation: offers what to do
+    /// with the text selected, if any is.
+    fn offer_selection(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let handed = Some(self.selected_attachment());
+        if crate::ui::translation::offer(&self.selected_text(), handed, window, cx) {
+            cx.stop_propagation();
+        }
+    }
+
+    /// Hands the text selected in the conversation to the chat shown, or
+    /// with nothing selected leaves the keys to what holds the part.
+    fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
+        if !crate::chat::hand::hand(self.selected_attachment(), cx) {
+            cx.propagate();
         }
     }
 
@@ -638,9 +689,11 @@ impl ChatView {
             // The text stays: a turn is running.
             return;
         }
+        let attached = std::mem::take(&mut self.attached);
         self.tell(ToDaemon::Submit {
             key: self.key,
             text,
+            attached,
         });
         input.update(cx, LineInput::clear);
         cx.notify();
@@ -810,6 +863,7 @@ impl ChatView {
             .on_action(cx.listener(|view, _: &Stop, _, cx| view.stop(cx)))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::translate))
+            .on_action(cx.listener(Self::add_to_chat))
             .capture_key_down(cx.listener(Self::choose_with_key))
             // The list over the input takes its keys first, while it is
             // open.
@@ -856,18 +910,7 @@ impl ChatView {
                             .id("conversation")
                             .size_full()
                             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(|view, _, window, cx| {
-                                    if crate::ui::translation::offer(
-                                        &view.selected_text(),
-                                        window,
-                                        cx,
-                                    ) {
-                                        cx.stop_propagation();
-                                    }
-                                }),
-                            )
+                            .on_mouse_down(MouseButton::Right, cx.listener(Self::offer_selection))
                             .on_mouse_move(cx.listener(Self::mouse_move))
                             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                             .on_mouse_up_out(
@@ -966,6 +1009,9 @@ impl ChatView {
                     }
                 }),
             )
+            .when(!self.attached.is_empty(), |bar| {
+                bar.child(self.render_attached(cx))
+            })
             .child(
                 div()
                     .pt(px(4.))
@@ -999,6 +1045,44 @@ impl ChatView {
                         .when(running, |row| row.child(Self::render_stop(cx))),
                 )
             })
+    }
+
+    /// What the human handed the chat, over the input, a chip each: a
+    /// click on one opens where it is from, and its × takes it out.
+    fn render_attached(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .debug_selector(|| "attached".to_owned())
+            .flex()
+            .flex_wrap()
+            .gap(px(6.))
+            .pr(px(8.))
+            .children(self.attached.iter().enumerate().map(|(index, attachment)| {
+                let uri = attachment.uri.clone();
+                entries::attachment_chip(("attached", index).into(), attachment)
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        if entries::opens(&uri) {
+                            view.show_link(&uri, window, cx);
+                        }
+                    }))
+                    .child(
+                        div()
+                            .id(("unattach", index))
+                            .debug_selector(move || format!("unattach-{index}"))
+                            .px(px(2.))
+                            .rounded(px(4.))
+                            .text_color(rgb(DIM))
+                            .cursor_pointer()
+                            .hover(|style| style.text_color(rgb(FOREGROUND)))
+                            .child("×")
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                cx.stop_propagation();
+                                if index < view.attached.len() {
+                                    view.attached.remove(index);
+                                    cx.notify();
+                                }
+                            })),
+                    )
+            }))
     }
 
     /// A chip under the input, named `id`, that `start`s what its

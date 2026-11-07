@@ -38,6 +38,7 @@ mod text;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use cox_core::entry::Attachment;
 use cox_core::tabs::{KeptTab, Lines};
 use cox_editor::buffer::{Point as Place, is_word, word_around};
 use cox_editor::history::History;
@@ -55,6 +56,7 @@ use gpui::{
     prelude::*, px, size,
 };
 
+use crate::chat::hand::AddToChat;
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::servers::{LanguageServer, Servers};
 use crate::stage::tab::{self, Shows, ShowsFile};
@@ -730,6 +732,34 @@ impl Code {
             .unwrap_or_else(|| self.selected_text())
     }
 
+    /// The text selected in the code, with the file and the lines it is
+    /// from, as it goes to the agent when handed to the chat.
+    fn selected_attachment(&self) -> Attachment {
+        let lines = self.look.selection.map(|(anchor, head)| {
+            let (start, end) = (anchor.min(head), anchor.max(head));
+            // A selection that ends at the start of a line ends on the
+            // line before.
+            let last = if end.column == 0 && end.line > start.line {
+                end.line
+            } else {
+                end.line + 1
+            };
+            Lines {
+                first: start.line + 1,
+                last,
+            }
+        });
+        crate::chat::hand::of_file(&self.file.path, lines, self.selected_text())
+    }
+
+    /// Hands the text selected in the code to the chat shown, or with
+    /// nothing selected leaves the keys to what holds the part.
+    fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
+        if !crate::chat::hand::hand(self.selected_attachment(), cx) {
+            cx.propagate();
+        }
+    }
+
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         let text = self.chosen_text();
         if !text.is_empty() {
@@ -833,6 +863,7 @@ impl Render for Code {
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::translate))
+            .on_action(cx.listener(Self::add_to_chat))
             .on_action(cx.listener(Self::back))
             .on_action(cx.listener(Self::forward))
             .on_action(cx.listener(Self::dismiss))
