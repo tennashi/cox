@@ -675,7 +675,9 @@ by side: "Activity" (see below), "Map", when the project has a map, "Files",
 "Changes", when the project is in a Git repository, and the other
 plugins' pages, such as "Knowledge" and "Schedules", and last
 "Workflow", each a tab that the bar shows by its button, not among the
-others, and kept there while its tab is open; then the other tabs, each with an icon of what it shows: a
+others, and kept there while its tab is open, each button by its icon,
+named where the mouse rests, but that of the view shown, which names
+it; then the other tabs, each with an icon of what it shows: a
 page, a Markdown file, code, a terminal, the flow of a tool call. The +
 at the bar's end opens a menu of what the human opens there: a line at
 its top, where Enter opens what they typed, a file of that path, from

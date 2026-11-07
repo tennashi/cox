@@ -1,10 +1,10 @@
 //! The bar along the top of the stage: the views of the project it keeps
 //! in sight, the project's files, what changed in them, and the pages of
-//! the plugins, such as the map; then the tabs of the rest, each with an
-//! icon of what it shows; and, at its end, the menu that opens another,
-//! among them an Android emulator of each virtual device the SDK has.
-//! The button of what changed counts the files that did, while the stage
-//! is open.
+//! the plugins, such as the map, each by its icon but the one shown; then
+//! the tabs of the rest, each with an icon of what it shows; and, at its
+//! end, the menu that opens another, among them an Android emulator of
+//! each virtual device the SDK has. The button of what changed counts the
+//! files that did, while the stage is open.
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -30,6 +30,7 @@ use crate::ui::theme::{
     ACCENT, ASKING, BORDER, BORDER_STRONG, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, RAISED,
     SELECTED, SURFACE,
 };
+use crate::ui::tip;
 
 /// Where the tabs scroll along the bar, when there are more than it has
 /// room for, which keeps the tab shown in sight as another is shown.
@@ -237,7 +238,8 @@ impl Stage {
     }
 
     /// The buttons of the views of the project, side by side in one
-    /// ground, the one shown marked: "Activity", counting the chats of
+    /// ground, each by its icon, named where the mouse rests, but the one
+    /// shown, which is marked and named: "Activity", counting the chats of
     /// the folder that wait for the human, "Map" when the project has one,
     /// then "Files", "Changes" in a Git repository, then the other
     /// plugins, and last "Workflow".
@@ -669,8 +671,9 @@ pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
     })
 }
 
-/// A button of a view of the bar, `id`, with its icon and its `label`,
-/// marked when `chosen`.
+/// A button of a view of the bar, `id`, with its icon, and its `label`
+/// beside it when `chosen`, which it is marked as, or else where the
+/// mouse rests on it.
 fn view_button(
     chosen: bool,
     id: SharedString,
@@ -682,8 +685,10 @@ fn view_button(
         .debug_selector(move || id.to_string())
         .flex_shrink_0()
         .h(px(VIEW_HEIGHT))
-        .px(px(11.))
+        .min_w(px(VIEW_HEIGHT + 2.))
+        .px(px(if chosen { 11. } else { 8. }))
         .flex()
+        .justify_center()
         .items_center()
         .gap(px(7.))
         .rounded(px(VIEW_RADIUS))
@@ -699,5 +704,11 @@ fn view_button(
             }
         })
         .child(icon(glyph, 14., if chosen { FOREGROUND } else { DIM }))
-        .child(label)
+        .map(|button| {
+            if chosen {
+                button.child(label)
+            } else {
+                button.tooltip(tip(label))
+            }
+        })
 }
