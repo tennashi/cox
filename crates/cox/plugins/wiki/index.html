@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Wiki</title>
+    <title>Knowledge</title>
     <style>
       /* The colors of the window (see `ui::theme`), as the Map plugin
          has them: the page sits on the stage's card, as Cox's own tabs
@@ -45,6 +45,36 @@
       }
       a:hover {
         text-decoration: underline;
+      }
+      /* The shelves: the human's wiki, the project's, and the sources. */
+      .shelves {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      .shelf {
+        color: var(--dim);
+        border-radius: 8px;
+        padding: 4px 10px;
+        font-weight: 600;
+      }
+      .shelf:hover {
+        color: var(--foreground);
+        background: var(--hover);
+        text-decoration: none;
+      }
+      .shelf.on {
+        color: var(--foreground);
+        background: var(--hover);
+      }
+      .shelf b {
+        margin-left: 6px;
+        font-weight: 400;
+        font-size: 11.5px;
+        color: var(--faint);
       }
       .crumbs {
         display: flex;
