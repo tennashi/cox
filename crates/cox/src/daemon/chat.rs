@@ -459,7 +459,7 @@ impl Chat {
         let triggers: Vec<Trigger> = Arranged::read(kept.as_deref(), &cwd)
             .apply(triggers)
             .into_iter()
-            .filter(|(trigger, on)| *on && trigger.runs_on(On::TurnEnd, in_sketch))
+            .filter(|(trigger, on)| *on && trigger.runs_on(&On::TurnEnd, in_sketch))
             .map(|(trigger, _)| trigger)
             .collect();
         let watches = triggers
@@ -539,7 +539,7 @@ impl Chat {
         };
         let (allow, reject) = match self.due.iter().find(|trigger| trigger.file == due.file) {
             Some(Trigger {
-                by: By::New { allow, reject },
+                by: By::New { allow, reject, .. },
                 ..
             }) => (allow.clone(), reject.clone()),
             _ => (Vec::new(), Vec::new()),

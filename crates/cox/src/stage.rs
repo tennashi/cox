@@ -318,6 +318,11 @@ impl Stage {
             // it that opens again, or else the first after it.
             let show = index <= shown || stage.tabs.shown_index().is_none();
             match tab {
+                // The Schedules page of earlier runs opens as the page of
+                // the triggers, which took its place.
+                KeptTab::Page { url, .. } if url.starts_with("cox://schedules/") => {
+                    stage.open_tab(links::TRIGGERS_URL, show, window, cx);
+                }
                 KeptTab::Page { url, .. } => {
                     stage.open_tab(&url, show, window, cx);
                 }

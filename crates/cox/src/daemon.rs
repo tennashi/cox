@@ -47,6 +47,7 @@ use crate::chat::judge::{Heard, Starts};
 use crate::chat::sketch::{self, Sketch};
 use crate::stage::terminal::run_unseen;
 use crate::storage;
+use crate::trigger::By;
 use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
 use wire::{ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
@@ -150,8 +151,8 @@ pub enum Internal {
     Detach { id: u64 },
     /// The daemon is to stop, with its chats' agents.
     Quit,
-    /// It is time to look which of the human's schedules are due, and
-    /// run them (see [`crate::schedule`]).
+    /// It is time to look which of the triggers on a schedule are due,
+    /// and run them (see [`crate::schedule`]).
     Schedules,
 }
 
@@ -294,7 +295,8 @@ pub struct Daemon {
     /// When each of the human's schedules last ran (see
     /// [`crate::schedule`]), read as the daemon first looks.
     ran: Option<crate::schedule::Ran>,
-    /// The chat of the last run of each schedule, by its id.
+    /// The chat of the last run of each schedule, by what it is kept by
+    /// (see [`crate::schedule::id`]).
     scheduled: HashMap<String, u64>,
 }
 
@@ -1192,59 +1194,65 @@ impl Daemon {
             }
             Internal::Quit => self.done = true,
             Internal::Schedules => {
-                let user = std::env::var_os("HOME").map(PathBuf::from);
-                self.run_schedules(
-                    &crate::settings::workflow(),
-                    user.as_deref(),
-                    &jiff::Zoned::now(),
-                );
+                self.run_schedules(&crate::settings::workflow(), &jiff::Zoned::now());
             }
         }
     }
 
-    /// Runs each of the schedules of the human's `workflow`, from the home
-    /// directory `user`, and of the projects, that is due `now`, unless
-    /// the chat of its last run is still at work: a chat for each run, in
-    /// the project of the schedule's folder, or of Cox's own, on the
-    /// schedule's first line, sent in the human's place, its agent going
-    /// on unasked with what the schedule allows (see [`crate::schedule`]).
-    fn run_schedules(&mut self, workflow: &Path, user: Option<&Path>, now: &jiff::Zoned) {
-        let mut schedules = crate::schedule::schedules(workflow, user);
+    /// Runs each of the triggers on a schedule, of the human's `workflow`
+    /// and of the projects, that is due `now` and turned on where it
+    /// works, unless the chat of its last run is still at work: a chat for
+    /// each run, in the project of the folder it works in, or of Cox's
+    /// own, on the trigger's text, sent in the human's place, its agent
+    /// going on unasked with what the trigger allows (see
+    /// [`crate::schedule`]).
+    fn run_schedules(&mut self, workflow: &Path, now: &jiff::Zoned) {
         // The first is Cox's own, in the home.
-        for project in &self.projects[1..] {
-            schedules.extend(crate::schedule::of_project(&project.folder));
-        }
-        if schedules.is_empty() {
+        let home = self.projects[0].folder.clone();
+        let projects: Vec<PathBuf> = self.projects[1..]
+            .iter()
+            .map(|project| project.folder.clone())
+            .collect();
+        let scheduled = crate::trigger::scheduled(workflow, &home, &projects);
+        if scheduled.is_empty() {
             return;
         }
+        let arranged = storage::path(storage::Kept::Triggers);
         let mut ran = self
             .ran
             .take()
             .unwrap_or_else(|| crate::schedule::Ran::read(storage::path(storage::Kept::Schedules)));
-        for schedule in schedules {
+        for (trigger, works) in scheduled {
+            let (Some(cron), By::New { allow, reject, .. }) = (trigger.cron(), &trigger.by) else {
+                continue;
+            };
+            let id = crate::schedule::id(&trigger.name, &trigger.file, workflow);
             let at_work = self
                 .scheduled
-                .get(&schedule.id)
+                .get(&id)
                 .and_then(|&key| self.slot(key))
                 .is_some_and(|slot| working(slot.state));
-            let last = ran.last(&schedule.id);
-            if at_work || !schedule.every.due(last, now) {
+            let off = crate::trigger::Arranged::read(arranged.as_deref(), &works)
+                .off
+                .contains(&trigger.file);
+            let last = ran.last(&id);
+            if at_work || off || !cron.due(last, now) {
                 continue;
             }
-            tracing::info!(schedule = schedule.id, "a schedule runs");
-            ran.ran(&schedule.id, now.timestamp());
-            if let Some(folder) = &schedule.folder
-                && let Err(error) = std::fs::create_dir_all(folder)
-            {
-                tracing::error!("cannot make {}: {error}", folder.display());
+            tracing::info!(schedule = id, "a schedule runs");
+            ran.ran(&id, now.timestamp());
+            if let Err(error) = std::fs::create_dir_all(&works) {
+                tracing::error!("cannot make {}: {error}", works.display());
             }
-            let project = schedule
-                .folder
-                .clone()
-                .map_or(0, |folder| self.project(folder));
-            let setup = (!schedule.allow.is_empty()).then(|| Setup {
+            let project = if works == home {
+                0
+            } else {
+                self.project(works)
+            };
+            let setup = (!allow.is_empty() || !reject.is_empty()).then(|| Setup {
                 policy: Policy {
-                    allow: schedule.allow.clone(),
+                    allow: allow.clone(),
+                    reject: reject.clone(),
                     ..Policy::default()
                 },
                 ..Setup::default()
@@ -1252,13 +1260,17 @@ impl Daemon {
             let key = self.open_in(project, None, setup);
             let store = Rc::clone(&self.store);
             if let Some(slot) = self.slot_mut(key) {
-                slot.name_as(&schedule.chat_name(now), Named::Human, &store);
+                slot.name_as(
+                    &crate::schedule::chat_name(&trigger.name, now),
+                    Named::Human,
+                    &store,
+                );
             }
-            let line = schedule.line(now, last);
+            let line = crate::schedule::line(&trigger.text, &trigger.name, now, last);
             if let Some(chat) = self.chat(key) {
                 chat.told(&line);
             }
-            self.scheduled.insert(schedule.id, key);
+            self.scheduled.insert(id, key);
         }
         self.ran = Some(ran);
     }

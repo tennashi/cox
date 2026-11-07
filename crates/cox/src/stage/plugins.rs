@@ -45,13 +45,10 @@
 //! - `cox://api/activity`: what goes on in the folder, what waits for
 //!   the human and what happened without them (see
 //!   [`crate::stage::activity`]).
-//! - `cox://api/schedules`: the schedules that run in the project's
-//!   folder, its own and those of the human's workflow whose chats work
-//!   there, each with when it ran last and runs next (see
-//!   [`crate::schedule::told`]).
 //! - `cox://api/triggers`: the triggers of the folder, in the order they
 //!   run in there, each with whether it runs there and how it last ran,
-//!   and in the home, those of each project too (see
+//!   those on a schedule with when they run next, and in the home, those
+//!   of each project too (see
 //!   [`crate::trigger::told`]); `cox://api/triggers/set/<change>` turns
 //!   one on or off, or orders them, as the JSON of `<change>` says (see
 //!   [`crate::trigger::Change`]), and answers them so.
@@ -81,7 +78,7 @@ const PROJECT_PLUGINS: &str = ".cox/plugins";
 type Files = &'static [(&'static str, &'static [u8])];
 
 /// What is built into Cox at `cox://<name>/`: the Activity, Map,
-/// Knowledge, Schedules and Triggers plugins, with their files.
+/// Knowledge and Triggers plugins, with their files.
 const BUILT_IN: &[(&str, Files)] = &[
     (
         "activity",
@@ -120,20 +117,6 @@ const BUILT_IN: &[(&str, Files)] = &[
                 include_bytes!("../../plugins/wiki/index.html"),
             ),
             ("app.js", include_bytes!("../../plugins/wiki/app.js")),
-        ],
-    ),
-    (
-        "schedules",
-        &[
-            (
-                "plugin.json",
-                include_bytes!("../../plugins/schedules/plugin.json"),
-            ),
-            (
-                "index.html",
-                include_bytes!("../../plugins/schedules/index.html"),
-            ),
-            ("app.js", include_bytes!("../../plugins/schedules/app.js")),
         ],
     ),
     (
@@ -264,14 +247,20 @@ impl Plugins {
                     wiki::page_in(&root, &percent_decoded(rest), translate::page)?
                 }
             }
-            "schedules" if rest.is_empty() => self.schedules(),
             "triggers" if rest.is_empty() => self.triggers(),
             "triggers" => {
                 let change = rest.strip_prefix("set/")?;
                 let change: crate::trigger::Change =
                     serde_json::from_str(&percent_decoded(change)).ok()?;
-                let shown = self.trigger_folders();
-                if !shown.iter().any(|(folder, _)| folder == change.folder()) {
+                // Only where a trigger shown runs.
+                let shown = self.triggers();
+                let runs_there = shown["folders"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|folder| folder["triggers"].as_array().into_iter().flatten())
+                    .any(|trigger| trigger["at"].as_str() == change.folder().to_str());
+                if !runs_there {
                     return None;
                 }
                 let kept = crate::storage::path(crate::storage::Kept::Triggers);
@@ -284,7 +273,7 @@ impl Plugins {
                 &self.root,
                 &crate::settings::wiki(),
                 &crate::settings::raw(),
-                &self.schedules(),
+                &self.triggers(),
             ),
             "project-wiki" => {
                 let root = self.root.join(crate::wiki::PROJECT_WIKI);
@@ -327,28 +316,21 @@ impl Plugins {
         })
     }
 
-    /// The schedules that run in the folder, as `cox://api/schedules`
-    /// tells them.
-    fn schedules(&self) -> serde_json::Value {
-        crate::schedule::told(
-            &self.root,
-            &crate::settings::workflow(),
-            std::env::var_os("HOME").map(PathBuf::from).as_deref(),
-            &home(),
-            &crate::stage::activity::projects(),
-            &crate::schedule::Ran::read(crate::storage::path(crate::storage::Kept::Schedules)),
-            &jiff::Zoned::now(),
-        )
-    }
-
     /// The triggers of the folder, as `cox://api/triggers` tells them
     /// (see [`crate::trigger::told`]).
     fn triggers(&self) -> serde_json::Value {
+        use crate::storage::{Kept, path};
+        let (arranged, runs) = (path(Kept::Triggers), path(Kept::TriggerRuns));
         crate::trigger::told(
             &self.trigger_folders(),
-            &crate::settings::workflow(),
-            crate::storage::path(crate::storage::Kept::Triggers).as_deref(),
-            crate::storage::path(crate::storage::Kept::TriggerRuns).as_deref(),
+            &crate::trigger::Kept {
+                workflow: &crate::settings::workflow(),
+                home: &home(),
+                arranged: arranged.as_deref(),
+                runs: runs.as_deref(),
+                schedules: &crate::schedule::Ran::read(path(Kept::Schedules)),
+            },
+            &jiff::Zoned::now(),
         )
     }
 
@@ -508,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn the_schedules_of_the_folder_are_told_as_json() {
+    fn the_schedules_of_the_folder_are_told_among_its_triggers() {
         let root = scratch("schedules");
         std::fs::create_dir_all(root.join(".cox/schedules")).unwrap();
         std::fs::write(
@@ -518,14 +500,15 @@ mod tests {
         .unwrap();
         let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
 
-        let answer = plugins.resource("cox://api/schedules").unwrap();
+        let answer = plugins.resource("cox://api/triggers").unwrap();
         assert_eq!(answer.mime, "application/json");
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
-        assert_eq!(json["schedules"][0]["name"], "triage");
-        assert_eq!(json["schedules"][0]["of"], "project");
-        assert_eq!(json["schedules"][0]["every"], "every 6h");
-        assert_eq!(plugins.resource("cox://api/schedules/triage"), None);
-        assert!(plugins.resource("cox://schedules/").is_some());
+        let triage = &json["folders"][0]["triggers"][0];
+        assert_eq!(triage["name"], "triage");
+        assert_eq!(triage["scope"], "project");
+        assert_eq!(triage["schedule"]["every"], "Every 6 hours");
+        assert_eq!(plugins.resource("cox://api/schedules"), None);
+        assert!(plugins.resource("cox://schedules/").is_none());
     }
 
     #[test]
@@ -603,17 +586,13 @@ mod tests {
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["activity", "map", "wiki", "schedules", "triggers", "tour"]
-        );
+        assert_eq!(names, ["activity", "map", "wiki", "triggers", "tour"]);
         assert_eq!(listed[0].title, "Activity");
         assert_eq!(listed[1].title, "Map");
         assert_eq!(listed[2].title, "Knowledge");
-        assert_eq!(listed[3].title, "Schedules");
-        assert_eq!(listed[4].title, "Triggers");
-        assert_eq!(listed[5].title, "A tour");
-        assert_eq!(listed[5].url(), "cox://tour/");
+        assert_eq!(listed[3].title, "Triggers");
+        assert_eq!(listed[4].title, "A tour");
+        assert_eq!(listed[4].url(), "cox://tour/");
         assert_eq!(
             plugins.resource("cox://tour/").unwrap().body,
             b"<h1>Tour</h1>"

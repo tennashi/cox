@@ -3,15 +3,21 @@
 // Cox's own tabs follow what they show. They are listed under the event
 // they run on, in the order they run in, each with how it last ran, where
 // it is kept, and whether it runs in this folder, which its switch turns;
-// a drag of a row orders them, and a click on one opens its card. In the
-// home, each project's follow, under its name. A trigger Cox cannot read
-// says why, and with none, the page says how one is written.
+// a drag of a row orders them, and a click on one opens its card. Those
+// on a schedule say when they run next, and where their chat works when
+// that is elsewhere. In the home, each project's follow, under its name.
+// A trigger Cox cannot read says why, and with none, the page says how
+// one is written.
 
 const API = "cox://api/triggers";
 const EVERY = 2000;
 
 /// The events a trigger runs on, as the headings name them.
-const EVENTS = { "turn.end": "Turn end" };
+const EVENTS = { "turn.end": "Turn end", schedule: "Schedule" };
+
+/// The name of the event `on`, as Cox tells it: `turn.end`, or, for one
+/// that says more, as `{schedule: {cron}}`, its key.
+const event = (on) => (typeof on === "string" ? on : Object.keys(on)[0]);
 
 const app = document.getElementById("app");
 const sheet = document.getElementById("sheet");
@@ -56,16 +62,36 @@ function ago(at) {
   return `${days} day${days > 1 ? "s" : ""} ago`;
 }
 
+/// How long until `at`, in seconds since the epoch.
+function until(at) {
+  const seconds = Math.max(0, at - told.now);
+  if (seconds < 60) return "now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `in ${hours} hour${hours > 1 ? "s" : ""}`;
+  const days = Math.round(hours / 24);
+  return `in ${days} day${days > 1 ? "s" : ""}`;
+}
+
+/// When a trigger on a schedule runs next.
+const next = (t) => (t.schedule.due ? "Due" : t.schedule.next ? until(t.schedule.next) : "");
+
 /// How the trigger last ran, in words, for its dot and its card.
 function status(t) {
   if (!t.ran) return "Never ran";
+  if (t.schedule) return `Ran · ${ago(t.ran.at)}`;
   const how = { passed: "Passed", failed: "Found something", broken: "Could not run" }[t.ran.state] ?? t.ran.state;
   return `${how} · ${ago(t.ran.at)}`;
 }
 
-/// What the trigger does, on its row.
-function does(t) {
+/// What the trigger does, on its row, from the folder it is listed in.
+function does(t, folder) {
   const first = t.text.split("\n").find((line) => line.trim()) ?? "";
+  if (t.schedule) {
+    const where = t.schedule.works === folder ? "" : ` · in ${t.schedule.works}`;
+    return `${t.schedule.every}${where}`;
+  }
   const when = t.changed ? " · when files changed" : "";
   if (t.by === "shell") return `run: ${first}${when}`;
   return `agent: new${when}`;
@@ -75,12 +101,15 @@ const dot = (t) => `<span class="dot ${esc(t.ran?.state ?? "")}" title="${esc(st
 const scope = (t) => (t.scope === "project" ? "Project" : "Global");
 
 function row(folder, t) {
-  return `<div class="row${t.enabled ? "" : " off"}" data-folder="${esc(folder)}" data-file="${esc(t.file)}">
-    <span class="handle" title="Drag to reorder">⠿</span>
+  const handle = t.schedule ? `<span class="handle"></span>` : `<span class="handle" title="Drag to reorder">⠿</span>`;
+  const coming = t.schedule ? `<span class="next" title="Next run">${esc(next(t))}</span>` : "";
+  return `<div class="row${t.enabled ? "" : " off"}" data-folder="${esc(folder)}" data-at="${esc(t.at)}" data-on="${esc(event(t.on[0]))}" data-file="${esc(t.file)}">
+    ${handle}
     ${dot(t)}
     <span class="name">${esc(t.name)}</span>
-    <span class="does">${esc(does(t))}</span>
+    <span class="does">${esc(does(t, folder))}</span>
     <span class="last">${esc(t.ran ? ago(t.ran.at) : "")}</span>
+    ${coming}
     <span class="scope" title="${esc(t.file)}">${scope(t)}</span>
     <span class="switch${t.enabled ? " on" : ""}" title="${t.enabled ? "On" : "Off"}"></span>
     <span class="more">›</span>
@@ -90,10 +119,13 @@ function row(folder, t) {
 function folder(f) {
   const events = {};
   for (const t of f.triggers) {
-    const on = t.on[0];
-    (events[on] ??= []).push(t);
+    (events[event(t.on[0])] ??= []).push(t);
   }
+  // The events Cox knows first, in its order.
+  const known = Object.keys(EVENTS);
+  const place = (on) => (known.includes(on) ? known.indexOf(on) : known.length);
   const sections = Object.entries(events)
+    .sort(([one], [other]) => place(one) - place(other))
     .map(([on, ts]) => `<h2>${esc(EVENTS[on] ?? on)}</h2><div class="rows">${ts.map((t) => row(f.folder, t)).join("")}</div>`)
     .join("");
   return sections || `<div class="empty">None.</div>`;
@@ -110,6 +142,16 @@ by: new
 ---
 
 Read this turn's diff. If anything could be simpler, say where and how.</pre>
+    <p>One on a schedule opens a chat at the times its cron says, and goes on its text:</p>
+    <pre>---
+on:
+  schedule:
+    cron: "0 9 * * 1-5"
+by: new
+allow: [fetch:*, search:*]
+---
+
+Find out what changed in Rust since {last}.</pre>
   </div>`;
 }
 
@@ -146,12 +188,21 @@ function drawCard() {
     sheet.innerHTML = "";
     return;
   }
-  const by = t.by === "shell" ? "Shell" : "A new agent";
+  const codes = (list) => list.map((item) => `<code>${esc(item)}</code>`).join(" ");
+  const by = t.schedule ? "A new chat" : t.by === "shell" ? "Shell" : "A new agent";
   const sketches = { skip: "Skip", only: "Only" }[t.sketch] ?? "Any";
-  const changed = t.changed ? t.changed.map((glob) => `<code>${esc(glob)}</code>`).join(" ") : "Anything";
+  const changed = t.changed ? codes(t.changed) : "Anything";
+  const asksYou = t.schedule ? "Nothing: it asks you" : "Reading and tests";
   const allowed = t.by === "new"
-    ? `<span class="label">Allowed</span><span class="value wide">${t.allow.length ? t.allow.map((a) => `<code>${esc(a)}</code>`).join(" ") : "Reading and tests"}</span>`
+    ? `<span class="label">Allowed</span><span class="value wide">${t.allow.length ? codes(t.allow) : asksYou}</span>`
     : "";
+  const rejected = t.reject.length ? `<span class="label">Rejected</span><span class="value wide">${codes(t.reject)}</span>` : "";
+  const when = t.schedule
+    ? `<span class="label">Runs</span><span class="value" title="${esc(t.schedule.cron)}">${esc(t.schedule.every)} <code>${esc(t.schedule.cron)}</code></span>
+        <span class="label">Next</span><span class="value">${esc(next(t))}</span>
+        <span class="label">Works in</span><span class="value wide">${esc(t.schedule.works)}</span>`
+    : `<span class="label">Changed</span><span class="value">${changed}</span>
+        <span class="label">Sketches</span><span class="value">${sketches}</span>`;
   const said = t.ran?.said ? `<div class="section">LAST RUN</div><pre class="said">${esc(t.ran.said)}</pre>` : "";
   sheet.innerHTML = `<div class="card" role="dialog">
     <div class="top">
@@ -163,11 +214,11 @@ function drawCard() {
     </div>
     <div class="body">
       <div class="settings">
-        <span class="label">When</span><span class="value">${esc(t.on.map((on) => EVENTS[on] ?? on).join(", "))}</span>
+        <span class="label">When</span><span class="value">${esc(t.on.map((on) => EVENTS[event(on)] ?? event(on)).join(", "))}</span>
         <span class="label">By</span><span class="value">${by}</span>
-        <span class="label">Changed</span><span class="value">${changed}</span>
-        <span class="label">Sketches</span><span class="value">${sketches}</span>
+        ${when}
         ${allowed}
+        ${rejected}
       </div>
       <div class="section">DO</div>
       <div class="text${t.by === "shell" ? " command" : ""}">${esc(t.text)}</div>
@@ -186,10 +237,10 @@ function close() {
 app.addEventListener("click", (event) => {
   const row = event.target.closest(".row");
   if (!row || event.target.closest(".handle")) return;
-  const { folder, file } = row.dataset;
+  const { folder, file, at } = row.dataset;
   if (event.target.closest(".switch")) {
     const t = find(folder, file);
-    if (t) change({ folder, file, on: !t.enabled });
+    if (t) change({ folder: at, file, on: !t.enabled });
     return;
   }
   carded = { folder, file };
@@ -205,17 +256,19 @@ document.addEventListener("keydown", (event) => {
 });
 
 // Ordering: a row dragged by its handle and let go over another goes
-// before it, among the triggers of the same folder. It goes by the
+// before it, among the triggers of the same folder and event; those on a
+// schedule run at their times, and have no order. It goes by the
 // pointer, not by the page's drag and drop, which a page Cox draws
 // without a window of its own does not get.
 const over = (event) => {
   const row = document.elementFromPoint(event.clientX, event.clientY)?.closest(".row");
-  return row && row !== dragged && row.dataset.folder === dragged.dataset.folder ? row : null;
+  const same = (key) => row.dataset[key] === dragged.dataset[key];
+  return row && row !== dragged && same("folder") && same("on") ? row : null;
 };
 
 app.addEventListener("pointerdown", (event) => {
   const handle = event.target.closest(".handle");
-  if (!handle) return;
+  if (!handle || !handle.textContent) return;
   event.preventDefault();
   dragged = handle.closest(".row");
   dragged.classList.add("dragging");
@@ -241,7 +294,10 @@ app.addEventListener("pointerup", (event) => {
     return;
   }
   const folder = moved.dataset.folder;
-  const files = told.folders.find((f) => f.folder === folder).triggers.map((t) => t.file);
+  const files = told.folders
+    .find((f) => f.folder === folder)
+    .triggers.filter((t) => t.at === folder)
+    .map((t) => t.file);
   const order = files.filter((file) => file !== moved.dataset.file);
   order.splice(order.indexOf(row.dataset.file), 0, moved.dataset.file);
   change({ folder, order });

@@ -12,7 +12,6 @@ pub enum Icon {
     Bolt,
     Book,
     Changes,
-    Clock,
     Close,
     Code,
     Document,
@@ -33,11 +32,10 @@ pub enum Icon {
 }
 
 impl Icon {
-    const ALL: [Self; 21] = [
+    const ALL: [Self; 20] = [
         Self::Bolt,
         Self::Book,
         Self::Changes,
-        Self::Clock,
         Self::Close,
         Self::Code,
         Self::Document,
@@ -63,7 +61,6 @@ impl Icon {
             Self::Bolt => "icons/bolt.svg",
             Self::Book => "icons/book.svg",
             Self::Changes => "icons/changes.svg",
-            Self::Clock => "icons/clock.svg",
             Self::Close => "icons/close.svg",
             Self::Code => "icons/code.svg",
             Self::Document => "icons/document.svg",
@@ -90,7 +87,6 @@ impl Icon {
             Self::Bolt => include_bytes!("../../assets/icons/bolt.svg"),
             Self::Book => include_bytes!("../../assets/icons/book.svg"),
             Self::Changes => include_bytes!("../../assets/icons/changes.svg"),
-            Self::Clock => include_bytes!("../../assets/icons/clock.svg"),
             Self::Close => include_bytes!("../../assets/icons/close.svg"),
             Self::Code => include_bytes!("../../assets/icons/code.svg"),
             Self::Document => include_bytes!("../../assets/icons/document.svg"),

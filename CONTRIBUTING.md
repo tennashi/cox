@@ -295,7 +295,8 @@ Read this turn's diff. If anything could be simpler, say where and how.
 Change nothing.
 ```
 
-`on` is the event it runs on, `turn.end` for now. `when` narrows it:
+`on` is the event it runs on: `turn.end`, or `schedule`, which opens a
+chat at the times it says (see [Schedules](#schedules)). `when` narrows it:
 `changed`, globs of the chat's folder, those that start `!` leaving
 files out, which run it only when a file they match changed since it
 last ran in the chat, or else since the last commit, as Git tells,
@@ -333,7 +334,8 @@ whether it is the project's or the human's, and a switch that turns it
 on or off in that folder alone; a drag of its row orders them there,
 and a click opens its card, which says what its file does, how it last
 ran, with what it said, and opens the file. In the home, it lists those
-of each project too, under its name. Cox keeps which are off and their
+of each project too, under its name. Those on a schedule are listed
+there too (see [Schedules](#schedules)). Cox keeps which are off and their
 order apart from the files, in `state/triggers.json` in Cox's data
 folder, and how each last ran in `state/trigger-runs.json`, so that a
 file stays as it is written.
@@ -777,7 +779,7 @@ page, file or view of the project once. The
 bar along its top keeps the views of the project in sight first, side
 by side: "Activity" (see below), "Map", when the project has a map, "Files",
 "Changes", when the project is in a Git repository, and the other
-plugins' pages, such as "Knowledge", "Schedules" and "Triggers", each
+plugins' pages, such as "Knowledge" and "Triggers", each
 a tab that the bar shows by its button, not among the
 others, and kept there while its tab is open, each button by its icon,
 named where the mouse rests, but that of the view shown, which names
@@ -826,7 +828,7 @@ happened without them, the last first: the schedules that ran there
 (see [Schedules](#schedules)), the pages of the wiki written from there,
 the human's from its chats and the project's own, and the sources kept
 there (see [Research](#research)), each of which a click opens on
-"Knowledge" or "Schedules". The home's tells of every folder: the
+"Knowledge" or "Triggers". The home's tells of every folder: the
 chats that wait in any project, each with its project, the schedules
 that ran anywhere, the pages of the human's wiki written from any chat,
 and every source. Its button on the bar counts the chats
@@ -1030,7 +1032,7 @@ page's ‹ goes back from one map to the one before.
 A tab can show a plugin: a page, in HTML and JavaScript, that draws
 what Cox knows as a tab Cox draws would, for whoever wants a view of
 their own on the stage, the agent included, since it writes HTML and
-reads pages. "Activity", "Map", "Knowledge", "Schedules" and "Triggers" are built in. A plugin is a
+reads pages. "Activity", "Map", "Knowledge" and "Triggers" are built in. A plugin is a
 folder with an `index.html`, and a `plugin.json` naming its `title` if
 it has one: those built into Cox, in `crates/cox/plugins`, and the
 project's, in `.cox/plugins/<name>` under its folder. The bar has a
@@ -1058,11 +1060,11 @@ and `cox://api/wiki/<page>` a page, with its text as HTML;
 project's wiki, the same way, and whether the folder is the home;
 `cox://api/raw` is the sources, each with where it was read, when and
 by which chat, and `cox://api/raw/<name>` a source, as a page is told;
-`cox://api/schedules` is the schedules that run in the project's
-folder (see [Schedules](#schedules));
 `cox://api/triggers` is the triggers of the folder, as "Triggers" shows
-them, and `cox://api/triggers/set/` and a change, as JSON, turns one on
-or off, `{"folder": ..., "file": ..., "on": false}`, or orders them,
+them, those on a schedule (see [Schedules](#schedules)) with when they
+run next, and `cox://api/triggers/set/` and a change, as JSON, turns one on
+or off, `{"folder": ..., "file": ..., "on": false}`, a schedule's in the folder
+where its chat works, or orders them,
 `{"folder": ..., "order": [...]}`, answering them so;
 `cox://api/activity` is what goes on in it, what waits for the human
 and what happened, as "Activity" shows it; and
@@ -1336,62 +1338,70 @@ comes once none is.
 
 The human has an agent run on a schedule, with no human there: a chat
 that opens at the times they say and goes on its first line, as to find
-out every morning what changed in what they follow. Each is a file of
-their workflow (see [The stage](#the-stage)), in `schedules`, named
-after it, as `schedules/rust-news.md`, whose properties, the front
-matter between `---` lines at its top, say when it runs, where its chat
-works and what its agent does unasked, and whose rest is the chat's
-first line:
+out every morning what changed in what they follow. Each is a trigger
+(see [The stage](#the-stage)) that runs `on` a `schedule`, `by` a `new`
+chat, of their workflow, in `triggers`, or of a project, in
+`.cox/triggers` in its folder, whose properties say when it runs, where
+its chat works and what its agent does unasked, and whose rest is the
+chat's first line:
 
 ```markdown
 ---
-every: daily 09:00
+on:
+  schedule:
+    cron: "0 9 * * *"
+by: new
 folder: ~/notes
-allow:
-  - fetch:*
-  - search:*
+allow: [fetch:*, search:*]
 ---
 
 Find out what changed in Rust since {last}.
 ```
 
-`every` is `daily` and a time, `weekly`, a day, as `mon`, and a time,
-or `every` and a number of hours, as `every 6h`, in the time of the
-place Cox runs in. `folder`, whole or from `~`, is where the chat works,
-in the project of that folder, which Cox makes if it is not there; with
-none, the chat works in the home, as Cox's own. `allow` lists the
-patterns of the permission requests Cox answers in the human's place,
-as `open_chat`'s `allow` takes them (see [The stage](#the-stage)); the
-rest the agent asks the human, as any chat does. In the first line,
-`{name}` stands for the schedule's name, `{now}` for when it runs, and
-`{last}` for when it ran last, or `never`.
+`cron` is the times it runs, as cron writes them, in the time of the
+place Cox runs in: the minute, the hour, the day of the month, the
+month and the day of the week, each `*`, a number, a range, as `1-5`,
+any of them with a step, as `*/6`, or a list of those, as `1,3`, months
+and days named by their first three letters too; `0 9 * * 1-5` is nine
+on each weekday, and `0 */6 * * *` every six hours, from midnight.
+`on` also takes it on one line, as `{schedule: {cron: "0 9 * * *"}}`.
+`folder`, whole or from `~`, is where the chat works, in the project of
+that folder, which Cox makes if it is not there; with none, the chat
+works in the home, as Cox's own, and a project's works in the project.
+`allow` and `reject` list the patterns of the permission requests Cox
+answers in the human's place, as `open_chat`'s take them (see
+[The stage](#the-stage)); the rest the agent asks the human, as any
+chat does. In the first line, `{name}` stands for the trigger's name,
+`{now}` for when it runs, and `{last}` for when it ran last, or
+`never`. A schedule runs on no other event, and no shell runs it.
 
-A project has schedules of its own too, for what is of it alone, as to
-look every few hours at what changed in it: files written the same way,
-in `.cox/schedules` in its folder, as `.cox/schedules/triage.md`, which
-the project's repository can keep. Their chats work in the project, so
-they say no `folder`. Cox runs those of each project it has opened.
+An earlier Cox kept schedules apart, in `schedules` in the workflow and
+`.cox/schedules` in a project, saying when they run with `every`:
+`daily` and a time, `weekly`, a day and a time, or `every` and a number
+of hours. Cox reads those as triggers too, `every` as the cron it means:
+`daily 09:00` as `0 9 * * *`, `weekly mon 09:00` as `0 9 * * 1`, and
+`every 6h` as `0 */6 * * *`, which runs on the clock's hours rather
+than six hours after it last ran.
 
-Every minute, coxd (see [coxd](#coxd)) runs each schedule that is due,
-whether a window is there or not: one that never ran at once, and one a
-run of which Cox missed, as while the machine slept, once, however many
-it missed; while the chat of its last run is at work, it waits. A run
-is a chat named after the schedule and when it ran, as
+Every minute, coxd (see [coxd](#coxd)) runs each schedule that is due
+and turned on where it works, whether a window is there or not: one
+that never ran at once, and one a run of which Cox missed, as while the
+machine slept, once, however many it missed; while the chat of its
+last run is at work, it waits. Cox runs those of each project it has
+opened. A run is a chat named after the trigger and when it ran, as
 `rust-news 11/06 09:00`, whose first line goes in the human's place.
-When each schedule last ran is kept in `state/schedules.json` in Cox's
-data folder, by its name, or, for a project's, by its file's path. A schedule whose `every` or `folder` Cox cannot read is
-said in coxd's log, and does not run.
+When each last ran is kept in `state/schedules.json` in Cox's data
+folder, by its file's path, or, for one an earlier Cox kept in the
+workflow's `schedules`, by its name, as it kept them. One Cox cannot
+read is said in coxd's log, and does not run.
 
-"Schedules" on the stage's bar, a plugin (see [The stage](#the-stage)),
-at `cox://schedules/`, shows the human the schedules that run in the
-stage's folder: the project's own first, then those of their workflow
-whose chats work there, or, in the home, every schedule: the
-workflow's, each with where its chat works, then each project's own,
-under its name; each with when it runs, when it runs next, or that it is due, when it
-ran last, or never, what its agent does unasked, and its first line,
-and its file, which a click opens on a tab. A schedule there Cox cannot
-read says why, over them, and with none, the page says how one is
-written. The page reads them again every two seconds.
+"Triggers" on the stage's bar lists them under "Schedule", in the
+folder where their chats work, and in the home, those whose folder is
+no project's: each with how it runs in words, as `Daily 09:00`, where
+its chat works when that is elsewhere, when it ran last and when it
+runs next, or that it is due, and a switch that turns it on or off;
+its card says its cron, where its chat works, and what its agent does
+unasked.
 
 ## Research
 
@@ -1421,10 +1431,11 @@ whose first line asks for it:
 
 ```markdown
 ---
-every: daily 09:00
-allow:
-  - fetch:*
-  - search:*
+on:
+  schedule:
+    cron: "0 9 * * *"
+by: new
+allow: [fetch:*, search:*]
 ---
 
 Find out what changed in Rust since {last}. Keep each source you read
