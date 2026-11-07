@@ -1,10 +1,10 @@
 //! The icons the window draws, as SVG files built into Cox, which GPUI
 //! loads through [`Icons`], its source of assets, each in a color of its
-//! own.
+//! own, and Cox's own icon, the app's, in its colors.
 
 use std::borrow::Cow;
 
-use gpui::{AssetSource, Result, SharedString, Styled, Svg, px, rgb, svg};
+use gpui::{AssetSource, Img, Result, SharedString, Styled, Svg, img, px, rgb, svg};
 
 /// An icon of the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,11 +119,48 @@ pub fn icon(icon: Icon, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
-/// The assets GPUI loads: the icons.
+/// Cox's app icon, as `cargo xtask bundle` renders it for macOS.
+const APP_ICON: &str = include_str!("../../assets/app-icon.svg");
+
+/// What the app icon's file says of its size, and the room it leaves
+/// around its rounded square for the shadow macOS draws.
+const APP_ICON_FRAME: &str = r#"width="1024" height="1024" viewBox="0 0 1024 1024""#;
+
+/// Cox's app icon, `size` points square: its rounded square alone, in its
+/// own colors, without the room around it for its shadow.
+#[must_use]
+pub fn app_icon(size: f32) -> Img {
+    img(format!("app-icon/{size}.svg"))
+        .size(px(size))
+        .flex_none()
+}
+
+/// The app icon's file, for [`app_icon`] at `path`, sized to the points
+/// it is drawn at: GPUI renders an image's SVG at twice the size it says,
+/// so it is sharp, rather than scaled down from 1024 pixels.
+fn app_icon_file(path: &str) -> Option<String> {
+    let size: f32 = path
+        .strip_prefix("app-icon/")?
+        .strip_suffix(".svg")?
+        .parse()
+        .ok()?;
+    APP_ICON.contains(APP_ICON_FRAME).then(|| {
+        APP_ICON.replacen(
+            APP_ICON_FRAME,
+            &format!(r#"width="{size}" height="{size}" viewBox="100 100 824 824""#),
+            1,
+        )
+    })
+}
+
+/// The assets GPUI loads: the icons, and the app's.
 pub struct Icons;
 
 impl AssetSource for Icons {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(file) = app_icon_file(path) {
+            return Ok(Some(Cow::Owned(file.into_bytes())));
+        }
         Ok(Icon::ALL
             .into_iter()
             .find(|icon| icon.path() == path)
@@ -151,5 +188,14 @@ mod tests {
             assert!(file.starts_with(b"<svg"), "{icon:?}");
         }
         assert_eq!(Icons.list("icons/").unwrap().len(), Icon::ALL.len());
+    }
+
+    #[test]
+    fn the_app_icon_is_its_rounded_square_at_the_size_it_is_drawn() {
+        let file = Icons.load("app-icon/42.svg").unwrap().unwrap();
+        let file = std::str::from_utf8(&file).unwrap();
+        assert!(file.starts_with("<svg"));
+        assert!(file.contains(r#"width="42" height="42" viewBox="100 100 824 824""#));
+        assert_eq!(Icons.load("app-icon/big.svg").unwrap(), None);
     }
 }

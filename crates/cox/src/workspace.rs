@@ -67,7 +67,7 @@ use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView};
 use crate::stage::owners::ShowChat;
 use crate::stage::{NewPage, NewTerminal, OpenFile, Stage};
 use crate::ui::ellipsis::ellipsis;
-use crate::ui::icons::{Icon, icon};
+use crate::ui::icons::{Icon, app_icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
@@ -1562,8 +1562,9 @@ impl Workspace {
     }
 
     /// The button of the project at `index` on the rail: a folder in a
-    /// square, or `~` for no project, and its name under it, with its
-    /// folder where the mouse rests.
+    /// square, and its name under it, or Cox's icon alone for no project,
+    /// with its folder where the mouse rests, after its name for no
+    /// project.
     fn render_project(
         &self,
         index: usize,
@@ -1585,6 +1586,7 @@ impl Workspace {
             (SURFACE, BORDER, FAINT, FAINT)
         };
         let folder = shortened(&project.folder);
+        let home = project.id.is_none();
         div()
             .id(("project", index))
             .debug_selector(move || format!("project-{}", index + 1))
@@ -1596,7 +1598,11 @@ impl Workspace {
             .items_center()
             .gap(px(5.))
             .cursor_pointer()
-            .tooltip(tip(folder))
+            .tooltip(tip(if home {
+                format!("{} ({folder})", project.name)
+            } else {
+                folder
+            }))
             .on_click(cx.listener(move |workspace, _, window, cx| {
                 workspace.choose(index, window, cx);
             }))
@@ -1619,51 +1625,34 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(PROJECT_RADIUS))
-                    .bg(rgb(ground))
-                    .border_1()
-                    .border_color(rgb(edge))
-                    .text_color(rgb(ink))
-                    .text_size(px(16.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .when(!chosen, |square| square.hover(|style| style.bg(rgb(HOVER))))
-                    .map(|square| match project.id {
-                        None => square.child("~"),
-                        Some(_) => square.child(icon(Icon::Folder, 18., ink)),
+                    .map(|square| {
+                        if home {
+                            square.child(app_icon(PROJECT_SIZE))
+                        } else {
+                            square
+                                .rounded(px(PROJECT_RADIUS))
+                                .bg(rgb(ground))
+                                .border_1()
+                                .border_color(rgb(edge))
+                                .when(!chosen, |square| square.hover(|style| style.bg(rgb(HOVER))))
+                                .child(icon(Icon::Folder, 18., ink))
+                        }
                     })
                     .when(waiting > 0, |square| {
-                        square.child(
-                            div()
-                                .debug_selector(move || format!("project-{}-waiting", index + 1))
-                                .absolute()
-                                .top(px(-5.))
-                                .right(px(-5.))
-                                .min_w(px(17.))
-                                .h(px(17.))
-                                .px(px(4.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(9.))
-                                .border_2()
-                                .border_color(rgb(GROUND))
-                                .bg(rgb(if asking > 0 { ASKING } else { ACCENT }))
-                                .text_color(rgb(GROUND))
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::BOLD)
-                                .child(waiting.to_string()),
-                        )
+                        square.child(waiting_badge(index, waiting, asking > 0))
                     }),
             )
-            .child(
-                div()
-                    .max_w(px(RAIL_WIDTH - 8.))
-                    .overflow_hidden()
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(label))
-                    .child(ellipsis(project.name.clone())),
-            )
+            .when(!home, |button| {
+                button.child(
+                    div()
+                        .max_w(px(RAIL_WIDTH - 8.))
+                        .overflow_hidden()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(label))
+                        .child(ellipsis(project.name.clone())),
+                )
+            })
     }
 
     /// The panel of the chat shown, at the window's right: at its head,
@@ -2085,6 +2074,31 @@ fn dot(chat: &Chat) -> Option<(u32, bool, &'static str)> {
         Some(State::Idle) => Some((DISABLED, false, "idle")),
         Some(State::Closed) | None => None,
     }
+}
+
+/// The count over the top right of the project's square, on the rail, at
+/// `index`: how many of its chats wait for the human or that they have
+/// not seen, in amber when one of them `asks`.
+fn waiting_badge(index: usize, waiting: usize, asks: bool) -> Div {
+    div()
+        .debug_selector(move || format!("project-{}-waiting", index + 1))
+        .absolute()
+        .top(px(-5.))
+        .right(px(-5.))
+        .min_w(px(17.))
+        .h(px(17.))
+        .px(px(4.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(9.))
+        .border_2()
+        .border_color(rgb(GROUND))
+        .bg(rgb(if asks { ASKING } else { ACCENT }))
+        .text_color(rgb(GROUND))
+        .text_size(px(10.))
+        .font_weight(FontWeight::BOLD)
+        .child(waiting.to_string())
 }
 
 impl Workspace {

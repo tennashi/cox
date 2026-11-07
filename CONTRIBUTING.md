@@ -53,7 +53,7 @@ choice, and "New chat" in the list opens another chat in the project
 chosen. "New chat" (Command-N, Control-N)
 opens one in no project, which works in Cox's home: `<dir>` when given,
 or else the folder the settings set, or else `~/cox`; the rail shows it
-as `~`. The gear at the foot of the rail (Command-, on macOS, Control-,
+first, as Cox's icon, with no name under it. The gear at the foot of the rail (Command-, on macOS, Control-,
 elsewhere) opens the settings, on a card over the window, where the
 human sets the home: a path typed in its input, whole or from `~`, which
 Enter sets, or a folder "Choose…" asks for. The settings are kept in
