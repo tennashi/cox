@@ -122,7 +122,7 @@ impl Mode {
 impl Settings {
     fn parse(args: Vec<String>) -> Self {
         let mut args = args.into_iter().peekable();
-        let mut stage = "about:blank".to_owned();
+        let mut stage = crate::stage::links::ACTIVITY_URL.to_owned();
         let mut home = None;
         let mut data = None;
         loop {
@@ -602,11 +602,11 @@ mod tests {
     }
 
     #[test]
-    fn the_stage_is_blank_and_home_and_data_are_the_defaults_unless_asked() {
+    fn the_stage_shows_activity_and_home_and_data_are_the_defaults_unless_asked() {
         assert_eq!(
             parse(&["node", "agent.mjs"]),
             Mode::App(Settings {
-                stage: "about:blank".to_owned(),
+                stage: "cox://activity/".to_owned(),
                 home: None,
                 data: None,
                 command: vec!["node".to_owned(), "agent.mjs".to_owned()],
@@ -619,7 +619,7 @@ mod tests {
         assert_eq!(
             parse(&[]),
             Mode::App(Settings {
-                stage: "about:blank".to_owned(),
+                stage: "cox://activity/".to_owned(),
                 home: None,
                 data: None,
                 command: Vec::new(),

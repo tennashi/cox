@@ -377,32 +377,59 @@ fn read_said(
 /// The schedules that run in `folder`, as the stage's Schedules page
 /// shows them, as JSON: the project's own, in `.cox/schedules` there,
 /// then those of the human's `workflow` whose chats work there, from the
-/// home directory `user`, which, naming no folder, work in `home`. Each
-/// says when it runs, where, what its agent does unasked, its first
-/// line, and its file, and, as `ran` keeps it, when it ran last and runs
-/// next, `now`; and why each schedule there Cox cannot read does not
-/// run.
+/// home directory `user`, which, naming no folder, work in `home`. The
+/// home shows every schedule: the workflow's, wherever they work, and
+/// the own of each of `projects`, by folder and name. Each says when it
+/// runs, where, what its agent does unasked, its first line, and its
+/// file, and, as `ran` keeps it, when it ran last and runs next, `now`;
+/// and why each schedule there Cox cannot read does not run.
 #[must_use]
 pub fn told(
     folder: &Path,
     workflow: &Path,
     user: Option<&Path>,
     home: &Path,
+    projects: &[(PathBuf, String)],
     ran: &Ran,
     now: &Zoned,
 ) -> serde_json::Value {
     let (own, mut unread) = read_said(&folder.join(PROJECT_SCHEDULES), None, Some(folder));
     let (theirs, unread_theirs) = read_said(&workflow.join(SCHEDULES), user, None);
     let is_home = folder == home;
+    // The projects' own, each under its name, which only the home shows.
+    let mut others = Vec::new();
     if is_home {
         unread.extend(unread_theirs);
+        for (project, name) in projects {
+            if project == home {
+                continue;
+            }
+            let (schedules, unread_there) =
+                read_said(&project.join(PROJECT_SCHEDULES), None, Some(project));
+            unread.extend(unread_there);
+            others.extend(schedules.into_iter().map(|schedule| (schedule, name)));
+        }
     }
     let at = |when: Zoned| when.strftime("%Y-%m-%d %H:%M").to_string();
-    let row = |schedule: &Schedule, of: &str| {
+    // Where a schedule's chat works: `~` for the home, or the name of the
+    // project of its folder, or else the folder.
+    let where_of = |schedule: &Schedule| {
+        let works = schedule.folder.as_deref().unwrap_or(home);
+        if works == home {
+            return "~".to_owned();
+        }
+        projects
+            .iter()
+            .find(|(project, _)| project == works)
+            .map_or_else(|| works.display().to_string(), |(_, name)| name.clone())
+    };
+    let row = |schedule: &Schedule, of: &str, project: Option<&String>| {
         let last = ran.last(&schedule.id);
         serde_json::json!({
             "name": schedule.name,
             "of": of,
+            "project": project,
+            "where": where_of(schedule),
             "file": schedule.file,
             "every": schedule.every.to_string(),
             "allow": schedule.allow,
@@ -414,12 +441,17 @@ pub fn told(
     };
     let rows: Vec<serde_json::Value> = own
         .iter()
-        .map(|schedule| row(schedule, "project"))
+        .map(|schedule| row(schedule, "project", None))
         .chain(
             theirs
                 .iter()
-                .filter(|schedule| schedule.folder.as_deref().unwrap_or(home) == folder)
-                .map(|schedule| row(schedule, "workflow")),
+                .filter(|schedule| is_home || schedule.folder.as_deref().unwrap_or(home) == folder)
+                .map(|schedule| row(schedule, "workflow", None)),
+        )
+        .chain(
+            others
+                .iter()
+                .map(|(schedule, name)| row(schedule, "project", Some(name))),
         )
         .collect();
     serde_json::json!({
@@ -724,7 +756,16 @@ mod tests {
             at(3, 1, 0).timestamp(),
         );
 
-        let told = super::told(&project, &workflow, None, &home, &kept, &at(3, 2, 0));
+        let projects = [(project.clone(), "app".to_owned())];
+        let told = super::told(
+            &project,
+            &workflow,
+            None,
+            &home,
+            &projects,
+            &kept,
+            &at(3, 2, 0),
+        );
         let names: Vec<_> = told["schedules"]
             .as_array()
             .unwrap()
@@ -741,10 +782,41 @@ mod tests {
         assert_eq!(told["schedules"][1]["allow"][0], "fetch:*");
         assert_eq!(told["unread"].as_array().unwrap().len(), 1);
 
-        // The home runs the workflow's schedules that name no folder.
-        let told = super::told(&home, &workflow, None, &home, &kept, &at(3, 2, 0));
-        assert_eq!(told["schedules"][0]["name"], "tidy");
+        assert_eq!(told["schedules"][1]["where"], "app");
+
+        // The home shows every schedule: the workflow's, wherever they
+        // work, then each project's own.
+        let told = super::told(
+            &home,
+            &workflow,
+            None,
+            &home,
+            &projects,
+            &kept,
+            &at(3, 2, 0),
+        );
+        let rows: Vec<_> = told["schedules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["name"].as_str().unwrap(),
+                    row["where"].as_str().unwrap(),
+                    row["project"].as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("news", "app", None),
+                ("tidy", "~", None),
+                ("triage", "app", Some("app")),
+            ]
+        );
         assert_eq!(told["home"], true);
+        assert_eq!(told["unread"].as_array().unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

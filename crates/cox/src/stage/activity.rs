@@ -4,6 +4,7 @@
 //! something, or whose turn ended while they were not looking; and what
 //! happened without them, the schedules that ran there, the pages of the
 //! wiki written from there, and the sources kept there, the last first.
+//! The home, where Cox lands, tells of every folder.
 //!
 //! The window tells this module how its chats stand as they change (see
 //! [`tell`]), since the stage's pages are served apart from it; the bar
@@ -36,11 +37,13 @@ pub struct Chat {
     pub goal: Option<String>,
 }
 
-/// How the window's chats stand, and its projects, by folder and name.
+/// How the window's chats stand, and its projects, by folder and name,
+/// with the home, the folder of no project.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Told {
     pub chats: Vec<Chat>,
     pub projects: Vec<(PathBuf, String)>,
+    pub home: PathBuf,
 }
 
 /// How the chats stood when the window last told.
@@ -61,18 +64,32 @@ fn now() -> Told {
         .unwrap_or_default()
 }
 
-/// Whether `chat` waits for the human and is of the folder `root`.
-fn waits_in(chat: &Chat, root: &Path) -> bool {
-    (chat.asking || chat.unread) && (chat.cwd == root || chat.project == root)
+/// The window's projects, by folder and name, as it last told.
+#[must_use]
+pub fn projects() -> Vec<(PathBuf, String)> {
+    now().projects
+}
+
+/// The home, the folder of no project, as the window last told, if it
+/// told.
+#[must_use]
+pub fn home() -> Option<PathBuf> {
+    Some(now().home).filter(|home| !home.as_os_str().is_empty())
+}
+
+/// Whether `chat` waits for the human and is of the folder `root`, or
+/// of any, when `root` is the home of `told`.
+fn waits_in(told: &Told, chat: &Chat, root: &Path) -> bool {
+    (chat.asking || chat.unread) && (root == told.home || chat.cwd == root || chat.project == root)
 }
 
 /// How many chats of the folder `root` wait for the human, for the bar.
 #[must_use]
 pub fn waiting(root: &Path) -> usize {
-    now()
-        .chats
+    let told = now();
+    told.chats
         .iter()
-        .filter(|chat| waits_in(chat, root))
+        .filter(|chat| waits_in(&told, chat, root))
         .count()
 }
 
@@ -84,13 +101,20 @@ pub fn told(root: &Path, wiki: &Path, raw: &Path, schedules: &Value) -> Value {
     told_of(&now(), root, wiki, raw, schedules)
 }
 
-/// What goes on in the folder `root`, as [`told`] tells it, the chats
-/// standing as `told` says.
-fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, schedules: &Value) -> Value {
-    let waiting: Vec<Value> = told
-        .chats
+/// The project of `folder`, by its name, as `told` says it.
+fn name_of(told: &Told, folder: &Path) -> Option<String> {
+    told.projects
         .iter()
-        .filter(|chat| waits_in(chat, root))
+        .find(|(project, _)| project == folder)
+        .map(|(_, name)| name.clone())
+}
+
+/// The chats of the folder `root` that wait for the human, or of every
+/// folder in the home, each with where it is, as JSON.
+fn waiting_in(told: &Told, root: &Path) -> Vec<Value> {
+    told.chats
+        .iter()
+        .filter(|chat| waits_in(told, chat, root))
         .map(|chat| {
             json!({
                 "key": chat.key,
@@ -98,15 +122,22 @@ fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, schedules: &Value)
                 "why": if chat.asking { "asks you" } else { "finished a turn" },
                 "goal": chat.goal,
                 "sketch": chat.cwd != chat.project,
+                "where": if chat.project == told.home {
+                    Some("~".to_owned())
+                } else {
+                    name_of(told, &chat.project)
+                },
             })
         })
-        .collect();
-    let name = told
-        .projects
-        .iter()
-        .find(|(folder, _)| folder == root)
-        .map(|(_, name)| name.clone());
-    let home = schedules["home"].as_bool().unwrap_or(false);
+        .collect()
+}
+
+/// What goes on in the folder `root`, as [`told`] tells it, the chats
+/// standing as `told` says.
+fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, schedules: &Value) -> Value {
+    let home = root == told.home;
+    let waiting = waiting_in(told, root);
+    let name = name_of(told, root);
     let mut happened = Vec::new();
     for schedule in schedules["schedules"].as_array().into_iter().flatten() {
         if let Some(last) = schedule["last"].as_str() {
@@ -114,7 +145,15 @@ fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, schedules: &Value)
                 "when": last,
                 "kind": "schedule",
                 "title": schedule["name"],
-                "says": format!("ran, {}", schedule["every"].as_str().unwrap_or_default()),
+                "says": if home {
+                    format!(
+                        "ran in {}, {}",
+                        schedule["where"].as_str().unwrap_or_default(),
+                        schedule["every"].as_str().unwrap_or_default()
+                    )
+                } else {
+                    format!("ran, {}", schedule["every"].as_str().unwrap_or_default())
+                },
                 "href": "cox://schedules/",
             }));
         }
@@ -138,7 +177,9 @@ fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, schedules: &Value)
                 }
             }
         };
-    if let Some(name) = &name {
+    if home {
+        written(wiki, "", &|_: &str| true, &mut happened);
+    } else if let Some(name) = &name {
         let ours = format!("in {name}, chat ");
         written(
             wiki,
@@ -157,19 +198,21 @@ fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, schedules: &Value)
     }
     let sources = crate::raw::told(raw);
     for source in sources["sources"].as_array().into_iter().flatten() {
-        let kept_here = match source["project"].as_str() {
-            Some(project) => !home && name.as_deref() == Some(project),
-            None => home,
-        };
+        let project = source["project"].as_str();
+        let kept_here = home || (project.is_some() && name.as_deref() == project);
         if kept_here {
             happened.push(json!({
                 "when": source["kept"],
                 "kind": "source",
                 "title": source["title"],
                 "says": format!(
-                    "kept in {}{}",
+                    "kept in {}{}{}",
                     source["topic"].as_str().unwrap_or_default(),
-                    source["chat"].as_str().map(|chat| format!(" by {chat}")).unwrap_or_default()
+                    source["chat"].as_str().map(|chat| format!(" by {chat}")).unwrap_or_default(),
+                    project
+                        .filter(|_| home)
+                        .map(|project| format!(" in {project}"))
+                        .unwrap_or_default()
                 ),
                 "href": format!("cox://wiki/#raw:{}", source["name"].as_str().unwrap_or_default()),
             }));
@@ -225,6 +268,7 @@ mod tests {
                 chat(4, &other, &other, true, false),
             ],
             projects: vec![(root.clone(), "app".to_owned())],
+            home: root.join("home"),
         };
         let json = told_of(
             &told,
@@ -240,6 +284,24 @@ mod tests {
         assert_eq!(waiting[1]["key"], 3);
         assert_eq!(waiting[1]["why"], "finished a turn");
         assert_eq!(waiting[1]["sketch"], true);
+        assert_eq!(waiting[1]["where"], "app");
+
+        // The home tells of what waits in every folder.
+        let home = told.home.clone();
+        let json = told_of(
+            &told,
+            &home,
+            &home.join("wiki"),
+            &home.join("raw"),
+            &json!({}),
+        );
+        let keys: Vec<_> = json["waiting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chat| chat["key"].as_u64().unwrap())
+            .collect();
+        assert_eq!(keys, [1, 3, 4]);
     }
 
     #[test]
@@ -281,9 +343,14 @@ mod tests {
                 {"name": "never", "every": "daily 09:00", "last": null},
             ],
         });
+        let home = root.join("home");
         let told = Told {
             chats: Vec::new(),
-            projects: vec![(root.clone(), "app".to_owned())],
+            projects: vec![
+                (home.clone(), "~".to_owned()),
+                (root.clone(), "app".to_owned()),
+            ],
+            home: home.clone(),
         };
         let json = told_of(&told, &root, &wiki, &raw, &schedules);
         let kinds: Vec<(&str, &str)> = json["happened"]
@@ -308,5 +375,37 @@ mod tests {
         );
         assert_eq!(json["happened"][2]["href"], "cox://wiki/#errors");
         assert_eq!(json["happened"][3]["href"], "cox://wiki/#project:people");
+
+        // The home tells of what happened in every folder: the wiki's
+        // pages written from any, and the sources kept in any, but not
+        // the project's own wiki, which only the project shows.
+        let schedules = json!({
+            "home": true,
+            "schedules": [
+                {"name": "triage", "every": "every 6h", "where": "app", "last": "2026-11-07 09:00"},
+            ],
+        });
+        let json = told_of(&told, &home, &wiki, &raw, &schedules);
+        let said: Vec<(&str, &str)> = json["happened"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| {
+                (
+                    event["kind"].as_str().unwrap(),
+                    event["says"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("schedule", "ran in app, every 6h"),
+                ("source", "kept in elsewhere by news in other"),
+                ("source", "kept in news by news in app"),
+                ("wiki", "in other, chat \"two\""),
+                ("wiki", "in app, chat \"one\""),
+            ]
+        );
     }
 }

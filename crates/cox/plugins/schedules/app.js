@@ -2,10 +2,12 @@
 // the stage: read as JSON from `cox://api/schedules`, and again every two
 // seconds, as Cox's own tabs follow what they show. The project's own
 // schedules, in `.cox/schedules`, come first, then those of the human's
-// workflow whose chats work in the folder; each says when it runs, when
-// it ran last and runs next, what its agent does unasked, and its first
-// line, and its file opens on a tab. A schedule Cox cannot read says
-// why, and with none, the page says how one is written.
+// workflow whose chats work in the folder; in the home, every schedule:
+// the workflow's, each with where it works, then each project's own.
+// Each says when it runs, when it ran last and runs next, what its agent
+// does unasked, and its first line, and its file opens on a tab. A
+// schedule Cox cannot read says why, and with none, the page says how
+// one is written.
 
 const API = "cox://api/schedules";
 const EVERY = 2000;
@@ -34,14 +36,14 @@ async function load() {
   draw();
 }
 
-function schedule(s) {
+function schedule(s, where) {
   const next = s.due ? `<span class="due">due now</span>` : esc(s.next ?? "—");
   const allow = s.allow.length
     ? `<div class="allow">unasked:${s.allow.map((a) => `<span class="chip">${esc(a)}</span>`).join("")}</div>`
     : "";
   const file = s.file.split("/").pop();
   return `<div class="schedule">
-    <div class="top"><span class="name">${esc(s.name)}</span><span class="every">${esc(s.every)}</span><span class="file">${open(s.file, file)}</span></div>
+    <div class="top"><span class="name">${esc(s.name)}</span><span class="every">${esc(s.every)}</span>${where ? `<span class="chip" title="where its chat works">${esc(s.where)}</span>` : ""}<span class="file">${open(s.file, file)}</span></div>
     <div class="times"><span><b>next</b>${next}</span><span><b>last</b>${esc(s.last ?? "never")}</span></div>
     <div class="line">${esc(s.line.trim())}</div>
     ${allow}
@@ -53,15 +55,21 @@ function draw() {
     app.innerHTML = `<div class="empty">Cox did not answer with the schedules.</div>`;
     return;
   }
-  const own = told.schedules.filter((s) => s.of === "project");
+  const own = told.schedules.filter((s) => s.of === "project" && !s.project);
   const theirs = told.schedules.filter((s) => s.of === "workflow");
   const unread = told.unread.map((why) => `<div class="unread">${esc(why)}</div>`).join("");
   let body = unread;
   if (own.length) {
-    body += `<div class="group">This folder's<span class="path">.cox/schedules</span></div>${own.map(schedule).join("")}`;
+    body += `<div class="group">This folder's<span class="path">.cox/schedules</span></div>${own.map((s) => schedule(s, false)).join("")}`;
   }
   if (theirs.length) {
-    body += `<div class="group">Your workflow's<span class="path">${esc(told.workflow)}</span></div>${theirs.map(schedule).join("")}`;
+    body += `<div class="group">Your workflow's<span class="path">${esc(told.workflow)}</span></div>${theirs.map((s) => schedule(s, told.home)).join("")}`;
+  }
+  // In the home, each project's own, under its name.
+  const projects = [...new Set(told.schedules.filter((s) => s.project).map((s) => s.project))];
+  for (const project of projects) {
+    const of = told.schedules.filter((s) => s.project === project);
+    body += `<div class="group">${esc(project)}'s<span class="path">.cox/schedules</span></div>${of.map((s) => schedule(s, false)).join("")}`;
   }
   if (!told.schedules.length) {
     const where = told.home ? told.workflow : `${told.project}`;
@@ -74,7 +82,7 @@ allow:
 ---
 
 Find out what changed since {last}.</pre>
-      <p><code>every</code> is <code>daily 09:00</code>, <code>weekly mon 09:00</code> or <code>every 6h</code>.${told.home ? " A schedule of the workflow with no <code>folder</code> runs here, in the home." : ` A schedule of your workflow whose <code>folder</code> is this one shows here too.`}</p>
+      <p><code>every</code> is <code>daily 09:00</code>, <code>weekly mon 09:00</code> or <code>every 6h</code>.${told.home ? " A schedule of the workflow with no <code>folder</code> runs here, in the home; the home shows every project's too." : ` A schedule of your workflow whose <code>folder</code> is this one shows here too.`}</p>
     </div>`;
   }
   app.innerHTML = `<div class="head"><h1>Schedules</h1><span class="where">${esc(told.folder)}</span></div>${body}`;
