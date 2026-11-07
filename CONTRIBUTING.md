@@ -286,7 +286,8 @@ which chat opened it. The agent says how the chat's agent is set up:
 the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `run_command`,
 `open_chat`, `wait_chat`, `propose_goal`, `start_sketch`, `wiki_search`, `wiki_read`, `wiki_write`,
-`raw_keep`, `raw_search`, `raw_read`), all of them unless given; `stage`, `drive` for the tools
+`raw_keep`, `raw_search`, `raw_read`, and on macOS `mac_windows`, `mac_window_look`,
+`mac_window_click`, `mac_window_type`, `mac_window_key`, `mac_window_scroll`), all of them unless given; `stage`, `drive` for the tools
 that read and drive the stage, the default, or `look` for none of them;
 `allow` and `reject`, patterns of the permission requests Cox answers
 in the human's place, a request both match being rejected, and the
@@ -1019,15 +1020,28 @@ app and its title, which ScreenCaptureKit lists: "Show" shows the window
 on a tab of its own, or the tab that shows it, and "Bring to front"
 brings the window itself up. The tab draws the window as big as fits, as
 ScreenCaptureKit streams it at the size the tab draws it, and only draws
-it: to use the app, the human brings the window itself to the front,
-with the tab's "Bring to front" too. An app behind another takes the
-mouse and keys posted to it only in part, as a page in Chrome takes a
-click only while Chrome takes itself for the active app, and only
-through functions macOS keeps private, which it may change or drop.
-macOS asks the human to allow Cox to record the screen, for the pictures
-and the windows' titles, which the tabs ask for with "Allow…", and only
-then, since the system asks again each time Cox looks for the windows
-while it may not. A closed
+it for the human: to use the app, they bring the window itself to the
+front, with the tab's "Bring to front" too. The agent uses it from the
+tab, as the human watches: Cox's tools list the windows
+(`mac_windows`), show one on a tab of the chat's and answer a picture
+of it (`mac_window_look`), and click, type, press a key and scroll in it
+(`mac_window_click`, `mac_window_type`, `mac_window_key`,
+`mac_window_scroll`), posting each to the window's app while the window
+stays behind Cox, and answering a picture of it after, at most 1568
+pixels each way, in whose pixels the agent says where it acts. The tab
+draws the agent's pointer where it acts, as a page's does, so that the
+human sees what the agent sees and does. An app behind another takes
+the mouse and keys posted to it only in part, as a page in Chrome takes
+a click only while Chrome takes itself for the active app: from the
+agent's first click until its turn ends, the window's app takes itself
+for the active one, while the app in front stays in front, through
+functions macOS keeps private, which it may change or drop. macOS asks
+the human to allow Cox to record the screen, for the pictures and the
+windows' titles, which the tabs ask for with "Allow…", and only then,
+since the system asks again each time Cox looks for the windows while
+it may not; and to control the computer, for what the agent posts,
+which the agent's first act asks for, the tool saying so until the
+human allows it. A closed
 chat's stage, or the next run's, opens the tab again on the window of
 the same app and title, if one is open, and else with "Show" to look for
 it again.
@@ -1126,7 +1140,9 @@ again. Signed with a certificate, every build is the same app. A
 certificate of one's own is enough, made once in the login keychain
 with Keychain Access, "Certificate Assistant", "Create a Certificate…":
 named "Cox Local Signing", "Self Signed Root", of the type "Code
-Signing". `cargo run` on macOS stops at once,
+Signing". The first build to sign with it asks for the login keychain's
+password, for `codesign` to use the certificate's key, once for each
+part of the app it signs: "Always Allow" lets it from then on. `cargo run` on macOS stops at once,
 saying where the framework was expected.
 
 ## coxd

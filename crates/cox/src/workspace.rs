@@ -128,6 +128,10 @@ const RENAMING: &str = "Renaming";
 /// stage.
 const NO_TERMINAL: &str = "its terminal went away";
 
+/// Why the agent sees nothing of a Mac window whose stage went before it
+/// answered.
+const NO_TAB: &str = "the stage went away before it answered";
+
 /// Binds the keys that open chats and move between them.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -934,6 +938,17 @@ impl Workspace {
                     answer,
                     asks_human: false,
                 }
+            }
+            StageAsk::MacWindow { id, act } => {
+                let (answer, seen) = tokio::sync::oneshot::channel();
+                let link = self.link.clone();
+                let waits = cx.spawn(async move |this, cx| {
+                    let seen = seen.await.unwrap_or_else(|_| Err(NO_TAB.to_owned()));
+                    link.send(ToDaemon::Seen { id, seen });
+                    let _ = this.update(cx, |workspace, _| workspace.running.remove(&id));
+                });
+                self.running.insert(id, waits);
+                ToolRequest::MacWindow { act, answer }
             }
         }
     }

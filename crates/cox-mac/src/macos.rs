@@ -1,7 +1,11 @@
 //! The windows of other apps on macOS: `ScreenCaptureKit` lists them and
-//! streams a picture of one as it changes.
+//! streams a picture of one as it changes, and Core Graphics posts what
+//! the agent does to its app.
+
+mod skylight;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
@@ -12,8 +16,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send, sel};
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-use objc2_core_foundation::CGRect;
-use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
+use objc2_core_foundation::{CGPoint, CGRect};
+use objc2_core_graphics::{
+    CGEvent, CGEventField, CGEventFlags, CGEventType, CGMouseButton, CGPreflightPostEventAccess,
+    CGPreflightScreenCaptureAccess, CGRequestPostEventAccess, CGRequestScreenCaptureAccess,
+    CGScrollEventUnit,
+};
 use objc2_core_media::{CMSampleBuffer, CMTime};
 use objc2_core_video::{
     CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight,
@@ -27,7 +35,7 @@ use objc2_screen_capture_kit::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{Event, Frame, Rect, Shared, Size, Window, fitting};
+use crate::{Button, Event, Frame, Input, Rect, Shared, Stroke, Window, fitting};
 
 /// How long the system has to answer what Cox asks of it.
 const ANSWER_WITHIN: Duration = Duration::from_secs(5);
@@ -40,9 +48,30 @@ const LOOK_EVERY: Duration = Duration::from_millis(500);
 /// says how big it draws them.
 const FIRST_SIZE: u32 = 2048;
 
+/// How long the app takes, once told it is the active one, to take a
+/// click so: Cua's driver waits as long.
+const SETTLE: Duration = Duration::from_millis(50);
+
 /// The fewest points a window is wide and high to be listed: smaller ones
 /// are a menu's or a status item's.
 const SMALLEST: f64 = 40.;
+
+/// The field of an event that numbers the window it is for, which an app
+/// routes the mouse's events by: one Core Graphics does not name.
+const WINDOW_NUMBER: CGEventField = CGEventField(51);
+
+/// The field of a mouse's event that ties the events of one press
+/// together, from its button's going down to its coming up, which an app
+/// behind another takes a right click by: one Core Graphics does not name.
+const CLICK_GROUP: CGEventField = CGEventField(58);
+
+/// The mouse's subtype of a trackpad's touch, which an app behind another
+/// takes a right click by.
+const TOUCH: i64 = 3;
+
+/// The group of the press the mouse's button is in, as [`CLICK_GROUP`]
+/// has it: a new one each time the button goes down.
+static PRESSES: AtomicI64 = AtomicI64::new(0);
 
 /// What `ScreenCaptureKit` hands over from the queue it answers on.
 struct Sendable<T>(T);
@@ -159,6 +188,14 @@ pub(crate) fn may_record() -> bool {
 
 pub(crate) fn ask_to_record() {
     CGRequestScreenCaptureAccess();
+}
+
+pub(crate) fn may_control() -> bool {
+    CGPreflightPostEventAccess()
+}
+
+pub(crate) fn ask_to_control() {
+    CGRequestPostEventAccess();
 }
 
 pub(crate) fn bring_to_front(pid: i32) {
@@ -292,10 +329,10 @@ fn answered(ask: impl FnOnce(&block2::DynBlock<dyn Fn(*mut NSError)>)) -> Result
 pub(crate) fn mirror(
     id: u32,
     shared: &Arc<Shared>,
-    sizes: &Receiver<Size>,
+    inputs: &Receiver<Input>,
     events: &UnboundedSender<Event>,
 ) {
-    if let Err(why) = show(id, shared, sizes, events) {
+    if let Err(why) = show(id, shared, inputs, events) {
         let _ = events.send(Event::Ended(why));
     }
 }
@@ -303,7 +340,7 @@ pub(crate) fn mirror(
 fn show(
     id: u32,
     shared: &Arc<Shared>,
-    sizes: &Receiver<Size>,
+    inputs: &Receiver<Input>,
     events: &UnboundedSender<Event>,
 ) -> Result<(), String> {
     if !may_record() {
@@ -316,6 +353,7 @@ fn show(
     let (found, mut window) = find(id)
         .map_err(|error| format!("{error:#}"))?
         .ok_or_else(|| "The window is closed.".to_owned())?;
+    shared.place(window.frame);
     // Until the stage says how big it draws it.
     let mut asked = (FIRST_SIZE, FIRST_SIZE);
     let mut size = fitting(window.frame, asked.0, asked.1);
@@ -346,11 +384,20 @@ fn show(
     // SAFETY: as above.
     answered(|handler| unsafe { stream.startCaptureWithCompletionHandler(Some(handler)) })?;
     let _ = events.send(Event::Showing);
+    let mut focus = Focus::default();
     let ended = loop {
-        match sizes.recv_timeout(LOOK_EVERY) {
-            Ok(size) => asked = size,
+        match inputs.recv_timeout(LOOK_EVERY) {
+            Ok(Input::Size { width, height }) => asked = (width, height),
+            Ok(Input::Away) => focus.end(&window),
+            Ok(input) => {
+                focus.before(&window, &input);
+                post(&window, input);
+            }
             Err(RecvTimeoutError::Timeout) => match find(id) {
-                Ok(Some((_, now))) => window = now,
+                Ok(Some((_, now))) => {
+                    shared.place(now.frame);
+                    window = now;
+                }
                 Ok(None) => break Some("The window closed.".to_owned()),
                 Err(error) => tracing::debug!("cannot look at window {id}: {error:#}"),
             },
@@ -367,7 +414,177 @@ fn show(
             }
         }
     };
+    focus.end(&window);
     // SAFETY: as above.
     unsafe { stream.stopCaptureWithCompletionHandler(None) };
     ended.map_or(Ok(()), Err)
+}
+
+/// Whether the window's app takes itself for the active one: told so as
+/// the agent first clicks in it, since many apps let a click go while
+/// they are behind another, and told otherwise once the agent is done
+/// with it (see [`skylight::focus`]), so that its window looks active all
+/// the while the agent works in it, not by turns.
+#[derive(Default)]
+struct Focus {
+    /// Whether the app was told so.
+    focused: bool,
+}
+
+impl Focus {
+    /// Ahead of `input` to `window`'s app.
+    fn before(&mut self, window: &Window, input: &Input) {
+        if matches!(input, Input::Click { .. }) && !self.focused && skylight::focus(window.id, true)
+        {
+            self.focused = true;
+            std::thread::sleep(SETTLE);
+        }
+    }
+
+    /// Tells the app otherwise, if it was told so, unless it came to the
+    /// front since, as "Bring to front" brings it, where telling it
+    /// otherwise would take the keyboard from its window.
+    fn end(&mut self, window: &Window) {
+        let in_front = NSRunningApplication::runningApplicationWithProcessIdentifier(window.pid)
+            .is_some_and(|app| app.isActive());
+        if self.focused && !in_front {
+            skylight::focus(window.id, false);
+        }
+        self.focused = false;
+    }
+}
+
+/// Posts what the agent does, `input`, to `window`'s app.
+fn post(window: &Window, input: Input) {
+    // What is typed may be a password: the log says only how long it is.
+    if let Input::Text(text) = &input {
+        let chars = text.chars().count();
+        tracing::debug!(window = window.id, pid = window.pid, chars, "posting text");
+    } else {
+        tracing::debug!(window = window.id, pid = window.pid, ?input, "posting");
+    }
+    match input {
+        Input::Size { .. } | Input::Away => {}
+        Input::Click {
+            x,
+            y,
+            button,
+            count,
+        } => {
+            let (x, y) = (window.frame.x + x, window.frame.y + y);
+            for click in 1..=count.max(1) {
+                let group = PRESSES.fetch_add(1, Ordering::Relaxed) + 1;
+                for down in [true, false] {
+                    click_event(window, x, y, button, down, i64::from(click), group);
+                }
+            }
+        }
+        Input::Scroll { x, y, dx, dy } => {
+            let (x, y) = (window.frame.x + x, window.frame.y + y);
+            let Some(event) =
+                CGEvent::new_scroll_wheel_event2(None, CGScrollEventUnit::Pixel, 2, dy, dx, 0)
+            else {
+                tracing::debug!("cannot make a wheel event");
+                return;
+            };
+            CGEvent::set_location(Some(&event), CGPoint::new(x, y));
+            aim(&event, window, x, y);
+            CGEvent::post_to_pid(window.pid, Some(&event));
+        }
+        Input::Key(stroke) => {
+            let flags = flags(stroke);
+            for down in [true, false] {
+                if let Some(event) = CGEvent::new_keyboard_event(None, stroke.code, down) {
+                    CGEvent::set_flags(Some(&event), flags);
+                    CGEvent::post_to_pid(window.pid, Some(&event));
+                }
+            }
+        }
+        Input::Text(text) => {
+            // A character at a time: an app reads only so many of one
+            // event's.
+            for character in text.chars() {
+                let mut units = [0; 2];
+                let units = character.encode_utf16(&mut units);
+                for down in [true, false] {
+                    if let Some(event) = CGEvent::new_keyboard_event(None, 0, down) {
+                        // SAFETY: the units are as many as said, and live
+                        // through the call.
+                        unsafe {
+                            CGEvent::keyboard_set_unicode_string(
+                                Some(&event),
+                                units.len() as _,
+                                units.as_ptr(),
+                            );
+                        }
+                        CGEvent::post_to_pid(window.pid, Some(&event));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Posts the mouse's `button` going down, or up, at `x` and `y` on the
+/// screen, the `click`th in a row, in the press `group`.
+fn click_event(
+    window: &Window,
+    x: f64,
+    y: f64,
+    button: Button,
+    down: bool,
+    click: i64,
+    group: i64,
+) {
+    let (kind, button, number) = match (button, down) {
+        (Button::Left, true) => (CGEventType::LeftMouseDown, CGMouseButton::Left, 0),
+        (Button::Left, false) => (CGEventType::LeftMouseUp, CGMouseButton::Left, 0),
+        (Button::Right, true) => (CGEventType::RightMouseDown, CGMouseButton::Right, 1),
+        (Button::Right, false) => (CGEventType::RightMouseUp, CGMouseButton::Right, 1),
+    };
+    let Some(event) = CGEvent::new_mouse_event(None, kind, CGPoint::new(x, y), button) else {
+        tracing::debug!("cannot make a mouse event");
+        return;
+    };
+    aim(&event, window, x, y);
+    for (field, value) in [
+        (CLICK_GROUP, group),
+        (CGEventField::MouseEventButtonNumber, number),
+        (CGEventField::MouseEventClickState, click),
+        (CGEventField::MouseEventSubtype, TOUCH),
+    ] {
+        CGEvent::set_integer_value_field(Some(&event), field, value);
+    }
+    CGEvent::post_to_pid(window.pid, Some(&event));
+}
+
+/// The flags of the modifiers `stroke` holds.
+fn flags(stroke: Stroke) -> CGEventFlags {
+    let mut flags = CGEventFlags::empty();
+    for (held, flag) in [
+        (stroke.command, CGEventFlags::MaskCommand),
+        (stroke.shift, CGEventFlags::MaskShift),
+        (stroke.option, CGEventFlags::MaskAlternate),
+        (stroke.control, CGEventFlags::MaskControl),
+    ] {
+        if held {
+            flags |= flag;
+        }
+    }
+    flags
+}
+
+/// Aims a mouse's or the wheel's `event`, at `x` and `y` on the screen, at
+/// `window`, which its app then takes it for though the window is not
+/// under the mouse: as macOS 27 has it, only with the window's number and
+/// where in the window the event is.
+fn aim(event: &CGEvent, window: &Window, x: f64, y: f64) {
+    for field in [
+        WINDOW_NUMBER,
+        CGEventField::MouseEventWindowUnderMousePointer,
+        CGEventField::MouseEventWindowUnderMousePointerThatCanHandleThisEvent,
+    ] {
+        CGEvent::set_integer_value_field(Some(event), field, i64::from(window.id));
+    }
+    skylight::set_window_location(event, CGPoint::new(x - window.frame.x, y - window.frame.y));
 }

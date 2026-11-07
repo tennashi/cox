@@ -37,7 +37,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
 use crate::agent::instructions::Instructions;
-use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, ToolRequest, Waited, Whereabouts};
+use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, Whereabouts};
 use crate::agent::setup::{Policy, Setup, StageUse, keeps_in_wiki};
 use crate::agent::{self, Agent, AgentEvent, Start};
 use crate::agents::Agents;
@@ -60,6 +60,10 @@ pub const NAME_LENGTH: usize = 80;
 /// Why a command an agent asks to run does not run while no window is
 /// open.
 const NO_WINDOW: &str = "Cox's window is not open, so there is no terminal to run it in";
+
+/// Why the agent sees no window of the Mac's other apps while Cox's own
+/// window is not there.
+const NO_STAGE: &str = "Cox's window is not open, so there is no stage to show a Mac window on";
 
 /// What starts the agents of the chats: the agents Cox knows, or fake ones
 /// in tests.
@@ -263,6 +267,9 @@ pub struct Daemon {
     /// The commands the window runs, by their numbers, with where their
     /// answers go.
     running: HashMap<u64, oneshot::Sender<Result<Ran, String>>>,
+    /// What the agents do with the Mac's windows, by their numbers, with
+    /// where what they see goes.
+    seeing: HashMap<u64, oneshot::Sender<Result<Seen, String>>>,
     /// What waits for the commands' answers, and stops them once nothing
     /// waits.
     stops: HashMap<u64, Task>,
@@ -400,6 +407,7 @@ impl Daemon {
             window: None,
             listed: None,
             running: HashMap::new(),
+            seeing: HashMap::new(),
             stops: HashMap::new(),
             preparing: HashMap::new(),
             last_id: 0,
@@ -1004,6 +1012,11 @@ impl Daemon {
                     tracing::error!("the stage's tabs are not kept: {error:#}");
                 }
             }
+            ToDaemon::Seen { id, seen } => {
+                if let Some(answer) = self.seeing.remove(&id) {
+                    answer.send(seen).ok();
+                }
+            }
             ToDaemon::Ran { id, ran } => {
                 if let Some(answer) = self.running.remove(&id) {
                     answer.send(ran).ok();
@@ -1280,6 +1293,9 @@ impl Daemon {
         for (_, ran) in self.running.drain() {
             ran.send(Err(NO_WINDOW.to_owned())).ok();
         }
+        for (_, seen) in self.seeing.drain() {
+            seen.send(Err(NO_STAGE.to_owned())).ok();
+        }
         let preparing: Vec<Preparing> = self.preparing.drain().map(|(_, p)| p).collect();
         for Preparing {
             key,
@@ -1339,6 +1355,15 @@ impl Daemon {
                 self.running.insert(id, ran);
                 self.stops.insert(id, waits);
                 StageAsk::RunCommand { id, command, cwd }
+            }
+            ToolRequest::MacWindow { act, answer } => {
+                if self.window.is_none() {
+                    answer.send(Err(NO_STAGE.to_owned())).ok();
+                    return;
+                }
+                let id = self.next_id();
+                self.seeing.insert(id, answer);
+                StageAsk::MacWindow { id, act }
             }
         };
         self.tell(FromDaemon::Stage { key, ask });

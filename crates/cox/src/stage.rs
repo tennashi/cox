@@ -60,8 +60,8 @@
 //!   types into, and [`devices`] lists the emulator's virtual devices, for
 //!   the human to start one.
 //! - [`mac_window`] shows a window of another app on the Mac, which the
-//!   human clicks and types into, and [`windows`] lists those windows, for
-//!   the human to show one.
+//!   agent clicks and types into as the human watches, and [`windows`]
+//!   lists those windows, for the human to show one.
 //! - [`plugins`] are pages that draw what Cox knows, as a tab would, which
 //!   the stage serves its pages itself at `cox:` addresses: [`map`] tells
 //!   the project's map, as an agent wrote it, with what changed laid over
@@ -87,6 +87,7 @@ pub mod outline;
 pub mod owners;
 pub mod page;
 pub mod plugins;
+mod pointer;
 pub mod servers;
 pub mod tab;
 pub mod terminal;
@@ -536,6 +537,15 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let index = self.mac_window_tab(app_window, cx);
+        self.show(index, window, cx);
+        self.focus_shown(window, cx);
+    }
+
+    /// The index of the tab of `app_window`: the tab showing it, or one
+    /// kept of its app and title, which shows it again, or a new one, of
+    /// the chat acting.
+    fn mac_window_tab(&mut self, app_window: cox_mac::Window, cx: &mut Context<Self>) -> usize {
         let index = self.tabs.iter().position(|tab| match &tab.content {
             TabContent::MacWindow(tab) => {
                 let tab = tab.read(cx);
@@ -560,12 +570,12 @@ impl Stage {
                     }
                 });
             }
-            self.show(index, window, cx);
+            index
         } else {
             let tab = cx.new(|cx| MacWindow::new(app_window, cx));
-            self.push_mac_window(tab, true, cx);
+            self.push_mac_window(tab, false, cx);
+            self.tabs.len() - 1
         }
-        self.focus_shown(window, cx);
     }
 
     /// Puts a tab of a window of another app after the others, shown if

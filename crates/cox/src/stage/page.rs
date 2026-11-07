@@ -6,15 +6,16 @@
 //!   it to the page.
 //! - [`keys`] sends the keys to the page, but for the browser's own
 //!   shortcuts.
-//! - [`pointer`] draws the agent's pointer over the page: where the agent
-//!   points, clicks and types, as the relay saw it.
+//!
+//! Over the picture, the tab draws the agent's pointer: where the agent
+//! points, clicks and types, as the relay saw it (see
+//! [`crate::stage::pointer`]).
 //!
 //! The right button over text selected in the page opens a menu of what
 //! to do with it, "Translate" and "Copy", as the browser shows none.
 
 mod keys;
 mod picture;
-mod pointer;
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use self::picture::Picture;
+use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{ACCENT_GROUND, BORDER, BORDER_STRONG, BUTTON, DISABLED, RAISED, SELECTED};
@@ -522,8 +524,12 @@ impl Page {
 }
 
 impl Render for Page {
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the timer is only held: dropping it cancels it"
+    )]
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.update_look(cx);
+        (self.look, self._pointer_changes) = pointer::look_now(&self.pointer, cx);
         div()
             .size_full()
             .flex()
@@ -543,7 +549,11 @@ impl Render for Page {
                     .on_key_down(cx.listener(Self::key_down))
                     .on_key_up(cx.listener(Self::key_up))
                     .child(Picture { page: cx.entity() })
-                    .children(self.look.as_ref().map(Self::render_label)),
+                    .children(
+                        self.look
+                            .as_ref()
+                            .map(|look| pointer::label(look, Point::default())),
+                    ),
             )
             .children(self.render_menu(cx))
     }

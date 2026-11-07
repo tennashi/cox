@@ -10,7 +10,7 @@ use cox_core::store::{ChatId, Named, ProjectId};
 use cox_core::tabs::{KeptTabs, Lines};
 use serde::{Deserialize, Serialize};
 
-use crate::agent::mcp::Ran;
+use crate::agent::mcp::{MacAct, Ran, Seen};
 use crate::agent::setup::Setup;
 use crate::chat::conversation::{Answer, Patch, State};
 use crate::chat::sketch::Sketch;
@@ -99,6 +99,12 @@ pub enum StageAsk {
         id: u64,
         command: String,
         cwd: PathBuf,
+    },
+    /// Do `act` with the windows of the Mac's other apps, and answer what
+    /// the agent sees as [`ToDaemon::Seen`], with `id`.
+    MacWindow {
+        id: u64,
+        act: MacAct,
     },
 }
 
@@ -233,6 +239,8 @@ pub enum ToDaemon {
     },
     /// The command `id` ran as `ran` says.
     Ran { id: u64, ran: Result<Ran, String> },
+    /// What the agent sees of the Mac's windows once the act `id` is done.
+    Seen { id: u64, seen: Result<Seen, String> },
     /// The relay of the stage asked for as `id` listens on `port`, or did
     /// not start.
     Prepared { id: u64, port: Option<u16> },

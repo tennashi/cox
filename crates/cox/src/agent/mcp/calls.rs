@@ -16,10 +16,13 @@ use tokio::sync::oneshot;
 
 use crate::agent::mcp::{
     ASKS, Answered, ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest, Whereabouts, answered,
+    answered_with_picture,
 };
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::chat::sketch::Sketch;
 use crate::{raw, wiki};
+
+mod mac;
 
 const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
@@ -87,6 +90,12 @@ const OUTPUT_LENGTH: usize = 30_000;
 /// of them.
 pub(super) fn tools(only: Option<&[String]>) -> Value {
     let mut tools = all_tools();
+    // Only a Mac has the windows of other apps to show.
+    if cfg!(target_os = "macos")
+        && let Some(tools) = tools.as_array_mut()
+    {
+        tools.extend(mac::tools());
+    }
     if let Some(only) = only
         && let Some(tools) = tools.as_array_mut()
     {
@@ -618,6 +627,12 @@ pub(super) async fn call(
     // A tool the chat's agent does not get is no tool to it.
     if only.is_some_and(|only| !only.iter().any(|only| only == name)) {
         return Err((INVALID_PARAMS, format!("no tool {name}")));
+    }
+    if mac::NAMES.contains(&name) {
+        return Ok(match mac::call(name, arguments, requests).await {
+            Ok(seen) => answered_with_picture(&seen.text, seen.png.as_deref()),
+            Err(text) => answered(&text, true),
+        });
     }
     let done = match name {
         SHOW_MARKDOWN => show_markdown(arguments, cwd, requests),
