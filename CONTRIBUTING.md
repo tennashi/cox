@@ -1025,9 +1025,15 @@ the front. The mouse's events, the wheel's too, need where in the
 window they fall, which only a function macOS keeps private sets
 (`CGEventSetWindowLocation`, in SkyLight): on a macOS without it, they
 do not reach the window, and the keys alone do. Many apps take no
-click while they are behind another, as TextEdit's text, or a page in
-Chrome, where only the tabs and the toolbar answer: those take a click
-once the window is brought to the front. The mouse's right button, as a
+click while they are behind another, as a page in Chrome, where only
+the tabs and the toolbar answer, so as the left button goes down Cox
+has the window's app take itself for the active app, as yabai does,
+with a record of the window server's own that SkyLight posts
+(`SLPSPostEventRecordTo`), while its windows stay where they are and
+the keyboard stays with Cox, and has it take itself so no longer half
+a second after the button comes up: then a page takes the click. Some
+apps take none even so, as TextEdit's text, which takes a click once
+the window is brought to the front. The mouse's right button, as a
 trackpad's two-finger tap, opens the app's menu where the window itself
 is, or as near as the screen has room, not on the tab: the arrow keys,
 Enter and Escape over the tab choose from it. The window itself stays where it is, so the tab shows it a

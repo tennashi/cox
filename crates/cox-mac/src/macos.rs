@@ -2,11 +2,12 @@
 //! streams a picture of one as it changes, and Core Graphics posts the
 //! human's mouse and keys to its app.
 
-use std::ffi::{c_char, c_int, c_void};
+mod skylight;
+
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use block2::RcBlock;
@@ -47,6 +48,14 @@ const LOOK_EVERY: Duration = Duration::from_millis(500);
 /// says how big it draws them.
 const FIRST_SIZE: u32 = 2048;
 
+/// How long the app takes, once told it is the active one, to take a
+/// click so: Cua's driver waits as long.
+const SETTLE: Duration = Duration::from_millis(50);
+
+/// How long the app stays the active one, as it takes itself to be, after
+/// the mouse's left button comes up, for a double click to go on in.
+const LINGER: Duration = Duration::from_millis(500);
+
 /// The fewest points a window is wide and high to be listed: smaller ones
 /// are a menu's or a status item's.
 const SMALLEST: f64 = 40.;
@@ -67,37 +76,6 @@ const TOUCH: i64 = 3;
 /// The group of the press the mouse's button is in, as [`CLICK_GROUP`]
 /// has it: a new one each time the button goes down.
 static PRESSES: AtomicI64 = AtomicI64::new(0);
-
-/// `CGEventSetWindowLocation`, which sets where in its window an event is.
-type SetWindowLocation = unsafe extern "C" fn(&CGEvent, CGPoint);
-
-unsafe extern "C" {
-    fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-}
-
-/// `CGEventSetWindowLocation`, which macOS keeps private, in `SkyLight`:
-/// the mouse's events reach a window only knowing where in it they are
-/// (see [`aim`]). `None` where macOS has no such function.
-static SET_WINDOW_LOCATION: LazyLock<Option<SetWindowLocation>> = LazyLock::new(|| {
-    const RTLD_NOW: c_int = 0x2;
-    let path = c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight";
-    // SAFETY: a framework of the system, loaded for good, by a path that
-    // ends in NUL.
-    let skylight = unsafe { dlopen(path.as_ptr(), RTLD_NOW) };
-    if skylight.is_null() {
-        tracing::debug!("cannot load SkyLight");
-        return None;
-    }
-    // SAFETY: a name that ends in NUL, of a library that stays loaded.
-    let found = unsafe { dlsym(skylight, c"CGEventSetWindowLocation".as_ptr()) };
-    if found.is_null() {
-        tracing::debug!("SkyLight has no CGEventSetWindowLocation");
-        return None;
-    }
-    // SAFETY: the function takes an event and a point, as the type says.
-    Some(unsafe { std::mem::transmute::<*mut c_void, SetWindowLocation>(found) })
-});
 
 /// What `ScreenCaptureKit` hands over from the queue it answers on.
 struct Sendable<T>(T);
@@ -403,10 +381,20 @@ fn show(
     // SAFETY: as above.
     answered(|handler| unsafe { stream.startCaptureWithCompletionHandler(Some(handler)) })?;
     let _ = events.send(Event::Showing);
+    let mut focus = Focus::default();
     let ended = loop {
-        match inputs.recv_timeout(LOOK_EVERY) {
+        focus.lapse(&window);
+        let wait = focus.until.map_or(LOOK_EVERY, |until| {
+            until
+                .saturating_duration_since(Instant::now())
+                .min(LOOK_EVERY)
+        });
+        match inputs.recv_timeout(wait) {
             Ok(Input::Size { width, height }) => asked = (width, height),
-            Ok(input) => post(&window, input),
+            Ok(input) => {
+                focus.before(&window, &input);
+                post(&window, input);
+            }
             Err(RecvTimeoutError::Timeout) => match find(id) {
                 Ok(Some((_, now))) => window = now,
                 Ok(None) => break Some("The window closed.".to_owned()),
@@ -425,9 +413,67 @@ fn show(
             }
         }
     };
+    focus.end(&window);
     // SAFETY: as above.
     unsafe { stream.stopCaptureWithCompletionHandler(None) };
     ended.map_or(Ok(()), Err)
+}
+
+/// Whether the window's app takes itself for the active one, for the
+/// mouse's left button: told so as the button goes down, since many apps
+/// let a click go while they are behind another, and told otherwise a
+/// while after it comes up (see [`skylight::focus`]).
+#[derive(Default)]
+struct Focus {
+    /// Whether the app was told so.
+    focused: bool,
+    /// When to tell it otherwise, once the button is up.
+    until: Option<Instant>,
+}
+
+impl Focus {
+    /// Ahead of `input` to `window`'s app.
+    fn before(&mut self, window: &Window, input: &Input) {
+        let Input::Mouse {
+            button: Button::Left,
+            press,
+            ..
+        } = input
+        else {
+            return;
+        };
+        match press {
+            Press::Down => {
+                self.until = None;
+                if !self.focused && skylight::focus(window.id, true) {
+                    self.focused = true;
+                    std::thread::sleep(SETTLE);
+                }
+            }
+            Press::Drag => {}
+            Press::Up => self.until = self.focused.then(|| Instant::now() + LINGER),
+        }
+    }
+
+    /// Tells the app otherwise, once it is time to.
+    fn lapse(&mut self, window: &Window) {
+        if self.until.is_some_and(|until| until <= Instant::now()) {
+            self.end(window);
+        }
+    }
+
+    /// Tells the app otherwise, if it was told so, unless it came to the
+    /// front since, as "Bring to front" brings it, where telling it
+    /// otherwise would take the keyboard from its window.
+    fn end(&mut self, window: &Window) {
+        let in_front = NSRunningApplication::runningApplicationWithProcessIdentifier(window.pid)
+            .is_some_and(|app| app.isActive());
+        if self.focused && !in_front {
+            skylight::focus(window.id, false);
+        }
+        self.focused = false;
+        self.until = None;
+    }
 }
 
 /// Posts the human's `input` to `window`'s app.
@@ -549,11 +595,7 @@ fn aim(event: &CGEvent, window: &Window, x: f64, y: f64) {
     ] {
         CGEvent::set_integer_value_field(Some(event), field, i64::from(window.id));
     }
-    if let Some(set_window_location) = *SET_WINDOW_LOCATION {
-        let within = CGPoint::new(x - window.frame.x, y - window.frame.y);
-        // SAFETY: an event Cox made, which lives through the call.
-        unsafe { set_window_location(event, within) };
-    }
+    skylight::set_window_location(event, CGPoint::new(x - window.frame.x, y - window.frame.y));
 }
 
 /// The virtual key code of the key `name`, as the Mac's keyboards have it.
