@@ -247,7 +247,7 @@ pub fn follow(window: WindowHandle<Workspace>, agents: Agents, cx: &mut App) {
                 .await;
             let followed = window.update(cx, |workspace, _, cx| {
                 workspace.follow_home(home, cx);
-                if let Some(view) = workspace.made_settings().cloned() {
+                if let Some(view) = workspace.settings().cloned() {
                     view.update(cx, view::SettingsView::reread);
                 }
             });

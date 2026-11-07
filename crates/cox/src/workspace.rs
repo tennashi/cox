@@ -29,12 +29,9 @@
 //! chat leaves the list for "Archived" at its foot, from where a click
 //! brings it back.
 //!
-//! The gear at the foot of the rail shows the Workflow tab of the stage
-//! in sight (see [`crate::stage::workflow`]), with the settings under the
-//! files of the human's workflow (see [`crate::settings::view`]), or,
-//! with no stage to show it, opens the settings over the window: there
-//! the human sets Cox's home, where the chats in no project opened from
-//! then on work.
+//! The gear at the foot of the rail opens the settings screen over the
+//! window (see [`crate::settings::view`]), where the human sets Cox's
+//! home: the chats in no project opened from then on work there.
 //!
 //! A chat that comes to wait for the human, or whose turn ends, while the
 //! human is not looking at it, tells them so (see [`crate::notices`]),
@@ -384,12 +381,8 @@ pub struct Workspace {
     /// Whether `--home` gave the home, the folder of no project, for this
     /// run, ahead of what the settings keep.
     home_given: bool,
-    /// The settings, once a Workflow tab, or the gear, asked for them,
-    /// with what follows them.
-    settings: Option<(Entity<SettingsView>, [Subscription; 3])>,
-    /// Whether the settings are open over the window, as when no stage
-    /// shows them.
-    over: bool,
+    /// The settings screen, while it is open.
+    settings: Option<(Entity<SettingsView>, [Subscription; 2])>,
     /// Where what the human does goes.
     link: Link,
     /// What makes the chats' stages.
@@ -441,16 +434,6 @@ impl Workspace {
         // The translation of what the human selects shows over the window.
         cx.observe_global::<crate::ui::translation::Shown>(|_, cx| cx.notify())
             .detach();
-        // The Workflow tabs of the stages show the settings, made once.
-        let workspace = cx.weak_entity();
-        cx.set_global(crate::stage::workflow::Settings(Rc::new(
-            move |window: &mut Window, cx: &mut App| {
-                let workspace = workspace.upgrade()?;
-                let view =
-                    workspace.update(cx, |workspace, cx| workspace.settings_view(window, cx));
-                Some(view.into())
-            },
-        )));
         let mut from_daemon = from_daemon;
         let heard = cx.spawn_in(window, async move |this, cx| {
             while let Some(message) = from_daemon.recv().await {
@@ -480,7 +463,6 @@ impl Workspace {
             renaming: None,
             home_given,
             settings: None,
-            over: false,
             link,
             stages,
             agents,
@@ -1101,108 +1083,49 @@ impl Workspace {
         self.tell(ToDaemon::Home { home, set: false });
     }
 
-    /// The settings, while they are open: over the window, or on the
-    /// Workflow tab the stage in sight shows.
+    /// The settings screen, while it is open.
     #[must_use]
-    pub fn settings(&self, cx: &App) -> Option<&Entity<SettingsView>> {
-        let (view, _) = self.settings.as_ref()?;
-        let shown = self.over
-            || self
-                .centered()
-                .and_then(|stage| stage.view.clone().downcast::<Stage>().ok())
-                .is_some_and(|stage| stage.read(cx).shows_workflow());
-        shown.then_some(view)
-    }
-
-    /// The settings, once made, whether they are open or not.
-    #[must_use]
-    pub fn made_settings(&self) -> Option<&Entity<SettingsView>> {
+    pub fn settings(&self) -> Option<&Entity<SettingsView>> {
         self.settings.as_ref().map(|(view, _)| view)
     }
 
-    /// The settings, made the first time they are asked for, on a tab.
-    fn settings_view(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<SettingsView> {
-        if let Some((view, _)) = &self.settings {
-            return view.clone();
-        }
-        let home = self.home().to_owned();
-        let given = self.home_given;
-        let view = cx.new(|cx| {
-            let mut view = SettingsView::new(home, given, window, cx);
-            view.set_framed(false, cx);
-            view
-        });
-        let changed = cx.subscribe(&view, |workspace, _, HomeChanged(home), cx| {
-            workspace.home_given = false;
-            workspace.tell(ToDaemon::Home {
-                home: home.clone(),
-                set: true,
-            });
-            cx.notify();
-        });
-        let dismissed = cx.subscribe_in(&view, window, |workspace, view, Dismissed, window, cx| {
-            if workspace.over {
-                workspace.close_settings(window, cx);
-            } else {
-                view.update(cx, SettingsView::save_all);
-                window.focus(&workspace.focus_handle(cx));
-            }
-        });
-        // The rows of agents changed are kept as the keyboard leaves the
-        // settings, as when the human goes to another tab.
-        let frame = view.read(cx).frame().clone();
-        let left = cx.on_focus_out(&frame, window, |workspace, _, _, cx| {
-            if let Some((view, _)) = &workspace.settings {
-                view.update(cx, SettingsView::save_all);
-            }
-        });
-        self.settings = Some((view.clone(), [changed, dismissed, left]));
-        view
-    }
-
-    /// Shows the settings, with the keyboard in them: on the Workflow tab
-    /// of the stage in sight, or, with none, over the window.
+    /// Opens the settings screen over the window, with the keyboard in it.
     pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
         self.switching = false;
-        let view = self.settings_view(window, cx);
-        let stage = self
-            .centered()
-            .and_then(|stage| stage.view.clone().downcast::<Stage>().ok());
-        if let Some(stage) = stage {
-            self.over = false;
-            view.update(cx, |view, cx| view.set_framed(false, cx));
-            let settings = view.clone().into();
-            stage.update(cx, |stage, cx| {
-                stage.show_workflow(Some(settings), window, cx);
-            });
+        let view = if let Some((view, _)) = &self.settings {
+            view.clone()
         } else {
-            self.over = true;
-            view.update(cx, |view, cx| view.set_framed(true, cx));
-        }
+            let home = self.home().to_owned();
+            let given = self.home_given;
+            let view = cx.new(|cx| SettingsView::new(home, given, window, cx));
+            let changed = cx.subscribe(&view, |workspace, _, HomeChanged(home), cx| {
+                workspace.home_given = false;
+                workspace.tell(ToDaemon::Home {
+                    home: home.clone(),
+                    set: true,
+                });
+                cx.notify();
+            });
+            let dismissed =
+                cx.subscribe_in(&view, window, |workspace, _, Dismissed, window, cx| {
+                    workspace.close_settings(window, cx);
+                });
+            self.settings = Some((view.clone(), [changed, dismissed]));
+            view
+        };
         window.focus(&view.focus_handle(cx));
         cx.notify();
     }
 
-    /// Closes the settings over the window, giving the keyboard back to
-    /// the chat shown.
+    /// Closes the settings screen, giving the keyboard back to the chat
+    /// shown.
     pub fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.over {
-            return;
+        if let Some((view, _)) = self.settings.take() {
+            view.update(cx, SettingsView::save_all);
+            window.focus(&self.focus_handle(cx));
+            cx.notify();
         }
-        self.over = false;
-        if let Some((view, _)) = &self.settings {
-            view.update(cx, |view, cx| {
-                view.save_all(cx);
-                view.set_framed(false, cx);
-            });
-        }
-        window.focus(&self.focus_handle(cx));
-        cx.notify();
     }
 
     /// Shows the chat at `index` in the list, in the panel, unfolded,
@@ -1581,10 +1504,10 @@ impl Workspace {
             .child(self.render_settings_button(cx))
     }
 
-    /// The gear at the foot of the rail, which shows the settings, lit
-    /// while they are in sight.
+    /// The gear at the foot of the rail, which opens the settings, lit
+    /// while they are open.
     fn render_settings_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let open = self.settings(cx).is_some();
+        let open = self.settings.is_some();
         let key = if cfg!(target_os = "macos") {
             "⌘,"
         } else {
@@ -1613,7 +1536,7 @@ impl Workspace {
     /// The settings screen, over the window and dimming it, while it is
     /// open: a click beside it closes it.
     fn render_settings(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let (view, _) = self.settings.as_ref().filter(|_| self.over)?;
+        let (view, _) = self.settings.as_ref()?;
         Some(
             deferred(
                 div()
@@ -2361,11 +2284,11 @@ impl Workspace {
 }
 
 impl Focusable for Workspace {
-    /// The settings' input while they are open over the window, or else the shown chat's
+    /// The settings' input while they are open, or else the shown chat's
     /// input, or the window itself while none is open, or the chat is
     /// folded away.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        if let Some((settings, _)) = self.settings.as_ref().filter(|_| self.over) {
+        if let Some((settings, _)) = &self.settings {
             return settings.focus_handle(cx);
         }
         if self.folded {
