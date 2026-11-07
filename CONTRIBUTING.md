@@ -80,12 +80,7 @@ what translates, the agent a new chat talks to, one of the human's, or
 a command on one line, as an agent's. What else the files hold stays as
 it is. What the card says is selected and copied as the conversation's
 text is. Escape, the ×, or a click beside the card closes it.
-"Workflow", a tab of the stage (see below), lists the files of the
-human's workflow, which
-every chat goes by whatever the project, and those of the stage's
-folder, which its chats go by (see below), each with what it does and
-whether it is there, a folder with how many files it holds; a click on
-a file that is there opens it on a tab. Each chat starts its own
+Each chat starts its own
 `<agent command>` working in its project's folder, and works on the
 stage of that folder, which the chats working there share (see below),
 showing `<url>` first, or else "Activity" (see below). Cox opened with no `<agent command>`, as the
@@ -277,6 +272,71 @@ a line `COMMAND: ` ahead of its verdict, and the chat proposes the
 command as the goal, on a card as the agent's proposals are, once: set,
 the command checks the goal from then on, the same way each time, and
 the judge goes.
+
+What else is to run as a turn ends, whatever the chat, is a trigger: a
+Markdown file of the human's workflow, in `triggers`, which runs in
+every project, or of a project, in `.cox/triggers` in its folder,
+which the project's repository can keep, named after it, as
+`.cox/triggers/ci.md`. Its properties, the front matter between `---`
+lines at its top, say when it runs and who runs it, and its rest is
+what is done:
+
+```markdown
+---
+on: turn.end
+when:
+  changed: ["**/*.rs", "!target/**"]
+  sketch: skip
+by: new
+allow: [read:*, search:*, execute:git diff*]
+---
+
+Read this turn's diff. If anything could be simpler, say where and how.
+Change nothing.
+```
+
+`on` is the event it runs on, `turn.end` for now. `when` narrows it:
+`changed`, globs of the chat's folder, those that start `!` leaving
+files out, which run it only when a file they match changed since it
+last ran in the chat, or else since the last commit, as Git tells,
+comparing the trees of what the folder holds then and now, without
+touching its index; and `sketch`, `skip` not to run in a sketch, or
+`only` to run in one alone. `by` is who runs it: `shell` runs the rest
+as a command, in a terminal on the stage, as a goal's, which passes
+when it exits 0; and `new` asks an agent of its own, of the same
+command as the chat's, in the chat's folder, as a goal's judge, with
+none of Cox's tools nor the stage's, which ends its reply with `PASS`,
+or `FAIL: ` and what the chat has to act on; `allow` and `reject` are
+the patterns of its permission requests Cox answers in the human's
+place, as `open_chat`'s, what a judge may unless it says. The agent
+keeps one session while the file stays as it is, so it remembers what
+it looked at.
+
+When a turn ends as the agent ends it, the goal is checked first, then
+the triggers of the chat's folder run in order, the project's and then
+the human's, each by name, unless the human ordered them otherwise. The
+first that fails stops them, and the chat's agent is told what it
+found, as the next turn, in the human's place, as a goal not met tells
+it, the turns counting toward the ten of a line of the human's; the
+chat waits for the human once they all pass, or one could not run. A
+line names, under `TURN END`, the goal and each trigger, with a dot of
+how it went: a ring while it waits or runs, then in the accent once it
+passed, in amber when it found something, and in red when it could not
+run, as when its agent did not start; a click on one opens what it
+said. A trigger Cox cannot read is said in the log, and does not run.
+
+"Triggers", a tab of the stage (see below), lists the triggers of the
+stage's folder, under the event they run on, in the order they run in
+there, each with the dot of how it last ran in a chat there, which says
+so and when where the mouse rests, its name, what it does, when it ran,
+whether it is the project's or the human's, and a switch that turns it
+on or off in that folder alone; a drag of its row orders them there,
+and a click opens its card, which says what its file does, how it last
+ran, with what it said, and opens the file. In the home, it lists those
+of each project too, under its name. Cox keeps which are off and their
+order apart from the files, in `state/triggers.json` in Cox's data
+folder, and how each last ran in `state/trigger-runs.json`, so that a
+file stays as it is written.
 
 A chat's agent can open a chat too, with Cox's `open_chat` tool, giving
 it its first line: the chat opens in the list after the agent's own,
@@ -717,8 +777,8 @@ page, file or view of the project once. The
 bar along its top keeps the views of the project in sight first, side
 by side: "Activity" (see below), "Map", when the project has a map, "Files",
 "Changes", when the project is in a Git repository, and the other
-plugins' pages, such as "Knowledge" and "Schedules", and last
-"Workflow", each a tab that the bar shows by its button, not among the
+plugins' pages, such as "Knowledge", "Schedules" and "Triggers", each
+a tab that the bar shows by its button, not among the
 others, and kept there while its tab is open, each button by its icon,
 named where the mouse rests, but that of the view shown, which names
 it. The other tabs are in a column along the stage's left, under the
@@ -970,7 +1030,7 @@ page's ‹ goes back from one map to the one before.
 A tab can show a plugin: a page, in HTML and JavaScript, that draws
 what Cox knows as a tab Cox draws would, for whoever wants a view of
 their own on the stage, the agent included, since it writes HTML and
-reads pages. "Activity", "Map", "Knowledge" and "Schedules" are built in. A plugin is a
+reads pages. "Activity", "Map", "Knowledge", "Schedules" and "Triggers" are built in. A plugin is a
 folder with an `index.html`, and a `plugin.json` naming its `title` if
 it has one: those built into Cox, in `crates/cox/plugins`, and the
 project's, in `.cox/plugins/<name>` under its folder. The bar has a
@@ -1000,6 +1060,10 @@ project's wiki, the same way, and whether the folder is the home;
 by which chat, and `cox://api/raw/<name>` a source, as a page is told;
 `cox://api/schedules` is the schedules that run in the project's
 folder (see [Schedules](#schedules));
+`cox://api/triggers` is the triggers of the folder, as "Triggers" shows
+them, and `cox://api/triggers/set/` and a change, as JSON, turns one on
+or off, `{"folder": ..., "file": ..., "on": false}`, or orders them,
+`{"folder": ..., "order": [...]}`, answering them so;
 `cox://api/activity` is what goes on in it, what waits for the human
 and what happened, as "Activity" shows it; and
 `cox://api/lines/<path>:<line>` is the lines of the file around that
@@ -1164,8 +1228,9 @@ kind is kept apart
   work in, and `logs`;
 - in `state`, what Cox would lose: the chats, in a SQLite database,
   `chats.sqlite`, the stage's profile, `stage`, when each schedule
-  last ran, `schedules.json`, and the pictures of the regions handed
-  to the chats, `pictures`;
+  last ran, `schedules.json`, which triggers are off and their order,
+  `triggers.json`, and how each last ran, `trigger-runs.json`, and the
+  pictures of the regions handed to the chats, `pictures`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it
   downloads, in `agents`, and `translations`;
 - in `run`, what is there only while Cox runs: `coxd.sock` and

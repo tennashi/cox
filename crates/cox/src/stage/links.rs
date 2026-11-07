@@ -17,7 +17,6 @@ use crate::stage::document::Document;
 use crate::stage::flow::{self, Flow};
 use crate::stage::tab::{ShowsFile, TabContent};
 use crate::stage::tree::{Chosen, Tree};
-use crate::stage::workflow::{self, Workflow};
 use crate::ui::LinkClicked;
 use crate::ui::markdown::FileLink;
 
@@ -181,50 +180,6 @@ impl Stage {
         self.push(TabContent::Tree(tree), changes, Some(opens), show, cx);
     }
 
-    /// Shows how the human works with Cox there (see [`super::workflow`]):
-    /// on its tab, or a new one, with the keyboard in it.
-    pub fn show_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let showing = self
-            .tabs
-            .iter()
-            .position(|tab| matches!(tab.content, TabContent::Workflow(_)));
-        if let Some(index) = showing {
-            self.show(index, window, cx);
-        } else {
-            self.push_workflow(true, window, cx);
-            self.focus_shown(window, cx);
-        }
-    }
-
-    /// Puts the Workflow tab after the others, shown if `show` is.
-    pub(super) fn push_workflow(
-        &mut self,
-        show: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let cwd = self.cwd.clone();
-        let workflow = cx.new(|cx| Workflow::new(cwd, cx));
-        let changes = cx.observe(&workflow, |stage, _, cx| stage.changed(cx));
-        let opens = cx.subscribe_in(
-            &workflow,
-            window,
-            |stage, _, workflow::Chosen(path), window, cx| {
-                if stage.open_path(path, None, window, cx).is_err() {
-                    stage.show_file::<Code>(path.clone(), "", None, window, cx);
-                    stage.focus_shown(window, cx);
-                }
-            },
-        );
-        self.push(
-            TabContent::Workflow(workflow),
-            changes,
-            Some(opens),
-            show,
-            cx,
-        );
-    }
-
     /// Shows what changed in the files of the repository of `folder`, an
     /// absolute path: on its tab, or a new one, with the keyboard in it.
     pub(super) fn show_changes(
@@ -326,6 +281,9 @@ pub const ACTIVITY_URL: &str = "cox://activity/";
 
 /// The address of the Map page, at its top.
 pub(super) const MAP_URL: &str = "cox://map/";
+
+/// The address of the Triggers page.
+pub(super) const TRIGGERS_URL: &str = "cox://triggers/";
 
 /// The hash of the Map page open at the map `map`, or the project's
 /// first, `at`, a tier and a box in it by their ids: `#cox/stage`, or

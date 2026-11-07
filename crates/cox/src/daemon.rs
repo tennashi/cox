@@ -126,6 +126,13 @@ pub enum Internal {
         generation: u64,
         heard: Heard,
     },
+    /// The agent of the chat's trigger of `file` said this.
+    Trigger {
+        key: u64,
+        generation: u64,
+        file: PathBuf,
+        heard: Heard,
+    },
     /// The command `id`, which the window runs, is not waited for any more.
     Cancel { id: u64 },
     /// A window came, as the connection `id`, saying `hello`, to hear
@@ -1112,8 +1119,11 @@ impl Daemon {
                 generation,
                 event,
             } => {
+                let in_sketch =
+                    matches!(event, AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn))
+                        && self.sketch_of(key).is_some();
                 if let Some(chat) = self.chat(key) {
-                    chat.hear(generation, event);
+                    chat.hear(generation, event, in_sketch);
                 }
             }
             Internal::Asked {
@@ -1147,6 +1157,16 @@ impl Daemon {
             } => {
                 if let Some(chat) = self.chat(key) {
                     chat.heard_judge(generation, heard);
+                }
+            }
+            Internal::Trigger {
+                key,
+                generation,
+                file,
+                heard,
+            } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.heard_trigger(generation, &file, heard);
                 }
             }
             Internal::Cancel { id } => {

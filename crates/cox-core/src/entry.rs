@@ -77,6 +77,10 @@ pub enum Entry {
         #[serde(default)]
         kept: Option<bool>,
     },
+    /// What runs as a turn ends, as the agent ends it: the chat's goal,
+    /// then the triggers of the folder it works in, in order, each with
+    /// how it went.
+    Checks(Vec<Check>),
     /// A note from Cox: the instructions the agent gets, how a turn ended,
     /// an error, or the connection closing.
     Note(String),
@@ -146,6 +150,34 @@ pub enum Answer {
     Changed,
     /// Let it be.
     Dismissed,
+}
+
+/// One of what runs as a turn ends: the chat's goal, or a trigger.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Check {
+    /// What it goes by: `goal`, or the trigger's name.
+    pub name: String,
+    pub state: CheckState,
+    /// What it said, once it ran: what its command printed, at the end,
+    /// or its agent's reply, or why it could not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub said: Option<String>,
+}
+
+/// How one of what runs as a turn ends went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckState {
+    /// Its turn has not come, and does not, once one before it failed.
+    Waiting,
+    Running,
+    /// It passed: the goal is met, or the trigger found nothing.
+    Passed,
+    /// It failed, and the agent is told why: the goal is not met, or the
+    /// trigger found something.
+    Failed,
+    /// It could not run, as when its agent did not start.
+    Broken,
 }
 
 /// A step of the plan the agent works to.

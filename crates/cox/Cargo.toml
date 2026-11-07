@@ -31,6 +31,9 @@ cox-editor.workspace = true
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 # The version gpui uses, to hand it the browser's frames.
 image = "0.25.10"
+# Which files changed, of those a trigger's `changed` names: see
+# `src/trigger.rs`.
+globset = "0.4.20"
 # The time each run's file of what Cox says is named after: see
 # `src/logs.rs`.
 jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }

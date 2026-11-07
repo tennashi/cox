@@ -95,7 +95,6 @@ pub mod terminal;
 pub mod tree;
 mod typed;
 pub mod windows;
-pub mod workflow;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -352,8 +351,10 @@ impl Stage {
                     let tab = mac_window::reopened(app, title, cx);
                     stage.push_mac_window(tab, show, cx);
                 }
+                // The Workflow tab of earlier runs opens as the page of the
+                // triggers, which took its place.
                 KeptTab::Workflow => {
-                    stage.push_workflow(show, window, cx);
+                    stage.open_tab(links::TRIGGERS_URL, show, window, cx);
                 }
                 KeptTab::MacWindows => {
                     stage.push_windows(show, window, cx);
@@ -635,8 +636,7 @@ impl Stage {
             | TabContent::Android(_)
             | TabContent::Devices(_)
             | TabContent::MacWindow(_)
-            | TabContent::Windows(_)
-            | TabContent::Workflow(_) => false,
+            | TabContent::Windows(_) => false,
         })
     }
 

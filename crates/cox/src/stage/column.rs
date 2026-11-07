@@ -260,6 +260,5 @@ fn glyph(content: &TabContent) -> Icon {
         TabContent::Terminal(_) => Icon::Terminal,
         TabContent::Android(_) | TabContent::Devices(_) => Icon::Phone,
         TabContent::MacWindow(_) | TabContent::Windows(_) => Icon::Window,
-        TabContent::Workflow(_) => Icon::Settings,
     }
 }

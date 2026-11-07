@@ -49,6 +49,12 @@
 //!   folder, its own and those of the human's workflow whose chats work
 //!   there, each with when it ran last and runs next (see
 //!   [`crate::schedule::told`]).
+//! - `cox://api/triggers`: the triggers of the folder, in the order they
+//!   run in there, each with whether it runs there and how it last ran,
+//!   and in the home, those of each project too (see
+//!   [`crate::trigger::told`]); `cox://api/triggers/set/<change>` turns
+//!   one on or off, or orders them, as the JSON of `<change>` says (see
+//!   [`crate::trigger::Change`]), and answers them so.
 //!
 //! A plugin shows a chat of the window by going to `cox://chat/<key>`,
 //! the number the Activity page is told it by.
@@ -75,7 +81,7 @@ const PROJECT_PLUGINS: &str = ".cox/plugins";
 type Files = &'static [(&'static str, &'static [u8])];
 
 /// What is built into Cox at `cox://<name>/`: the Activity, Map,
-/// Knowledge and Schedules plugins, with their files.
+/// Knowledge, Schedules and Triggers plugins, with their files.
 const BUILT_IN: &[(&str, Files)] = &[
     (
         "activity",
@@ -128,6 +134,20 @@ const BUILT_IN: &[(&str, Files)] = &[
                 include_bytes!("../../plugins/schedules/index.html"),
             ),
             ("app.js", include_bytes!("../../plugins/schedules/app.js")),
+        ],
+    ),
+    (
+        "triggers",
+        &[
+            (
+                "plugin.json",
+                include_bytes!("../../plugins/triggers/plugin.json"),
+            ),
+            (
+                "index.html",
+                include_bytes!("../../plugins/triggers/index.html"),
+            ),
+            ("app.js", include_bytes!("../../plugins/triggers/app.js")),
         ],
     ),
 ];
@@ -245,6 +265,21 @@ impl Plugins {
                 }
             }
             "schedules" if rest.is_empty() => self.schedules(),
+            "triggers" if rest.is_empty() => self.triggers(),
+            "triggers" => {
+                let change = rest.strip_prefix("set/")?;
+                let change: crate::trigger::Change =
+                    serde_json::from_str(&percent_decoded(change)).ok()?;
+                let shown = self.trigger_folders();
+                if !shown.iter().any(|(folder, _)| folder == change.folder()) {
+                    return None;
+                }
+                let kept = crate::storage::path(crate::storage::Kept::Triggers);
+                if let Err(error) = change.make(kept.as_deref()) {
+                    tracing::error!("the triggers are not arranged as asked: {error}");
+                }
+                self.triggers()
+            }
             "activity" if rest.is_empty() => crate::stage::activity::told(
                 &self.root,
                 &crate::settings::wiki(),
@@ -304,6 +339,32 @@ impl Plugins {
             &crate::schedule::Ran::read(crate::storage::path(crate::storage::Kept::Schedules)),
             &jiff::Zoned::now(),
         )
+    }
+
+    /// The triggers of the folder, as `cox://api/triggers` tells them
+    /// (see [`crate::trigger::told`]).
+    fn triggers(&self) -> serde_json::Value {
+        crate::trigger::told(
+            &self.trigger_folders(),
+            &crate::settings::workflow(),
+            crate::storage::path(crate::storage::Kept::Triggers).as_deref(),
+            crate::storage::path(crate::storage::Kept::TriggerRuns).as_deref(),
+        )
+    }
+
+    /// The folders whose triggers the Triggers tab shows: the stage's,
+    /// and in the home, each project's after it, by name.
+    fn trigger_folders(&self) -> Vec<(PathBuf, Option<String>)> {
+        let mut folders = vec![(self.root.clone(), None)];
+        if self.root == home() {
+            folders.extend(
+                crate::stage::activity::projects()
+                    .into_iter()
+                    .filter(|(folder, _)| *folder != self.root)
+                    .map(|(folder, name)| (folder, Some(name))),
+            );
+        }
+        folders
     }
 
     /// The file `path` of the built-in plugin `name`, if there is one.
@@ -542,13 +603,17 @@ mod tests {
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
-        assert_eq!(names, ["activity", "map", "wiki", "schedules", "tour"]);
+        assert_eq!(
+            names,
+            ["activity", "map", "wiki", "schedules", "triggers", "tour"]
+        );
         assert_eq!(listed[0].title, "Activity");
         assert_eq!(listed[1].title, "Map");
         assert_eq!(listed[2].title, "Knowledge");
         assert_eq!(listed[3].title, "Schedules");
-        assert_eq!(listed[4].title, "A tour");
-        assert_eq!(listed[4].url(), "cox://tour/");
+        assert_eq!(listed[4].title, "Triggers");
+        assert_eq!(listed[5].title, "A tour");
+        assert_eq!(listed[5].url(), "cox://tour/");
         assert_eq!(
             plugins.resource("cox://tour/").unwrap().body,
             b"<h1>Tour</h1>"

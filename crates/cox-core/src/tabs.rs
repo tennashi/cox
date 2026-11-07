@@ -132,8 +132,8 @@ pub enum KeptTab {
     MacWindow { app: String, title: String },
     /// The windows of the Mac's other apps, listed.
     MacWindows,
-    /// How the human works with Cox: the files of their workflow and of
-    /// the folder, and the settings.
+    /// How the human works with Cox: a tab Cox drew in earlier runs,
+    /// which opens as the page of the triggers that took its place.
     Workflow,
     /// The parts the chat ran with, and how they reached each other: a
     /// tab Cox drew in earlier runs, and no longer does, so it does not

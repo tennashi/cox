@@ -22,7 +22,8 @@ use gpui::{AnyElement, Context, FontWeight, SharedString, Stateful, div, prelude
 use cox_core::goal::Goal;
 
 use crate::chat::conversation::{
-    self, Answer, Attachment, Content, Entry, LoginOption, State, Step, StepState, ToolCallResult,
+    self, Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, State, Step,
+    StepState, ToolCallResult,
 };
 use crate::chat::view::ChatView;
 use crate::ui::ellipsis::ellipsis;
@@ -63,7 +64,7 @@ impl Speaker {
     fn of(entry: &Entry) -> Option<Self> {
         match entry {
             Entry::Human(_) | Entry::Attached(_) => Some(Self::Human),
-            Entry::Cox(_) | Entry::Keep { .. } => Some(Self::Cox),
+            Entry::Cox(_) | Entry::Keep { .. } | Entry::Checks(_) => Some(Self::Cox),
             Entry::Note(_) | Entry::Switched { .. } => None,
             _ => Some(Self::Agent),
         }
@@ -221,6 +222,9 @@ pub(super) enum Fold {
     Content(usize),
     Work(usize),
     Step(usize),
+    /// What one of what ran as a turn ended said, by its place among
+    /// them, under their chips.
+    Check(usize, usize),
 }
 
 /// The parts the human opened or closed, which show otherwise as they do
@@ -478,6 +482,93 @@ impl ChatView {
             .into_any_element()
     }
 
+    /// What runs as a turn ends, on one line: `TURN END`, then a chip for
+    /// the goal and each trigger, with a mark of how it went, which a
+    /// click opens what it said under, once it ran.
+    fn render_checks(
+        &self,
+        index: usize,
+        checks: &[Check],
+        writer: &mut Writer,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let chips = checks.iter().enumerate().map(|(at, check)| {
+            let fold = Fold::Check(index, at);
+            let open = check.said.is_some() && self.folds.is_open(fold, false);
+            // A ring while it waits or runs, and a dot once it went:
+            // passed, found something, or could not run.
+            let (dot, filled, text) = match check.state {
+                CheckState::Waiting => (DISABLED, false, FAINT),
+                CheckState::Running => (LINK, false, DIM),
+                CheckState::Passed => (ACCENT, true, DIM),
+                CheckState::Failed => (ASKING, true, DIM),
+                CheckState::Broken => (FAILED_MARK, true, FAILED),
+            };
+            div()
+                .id(SharedString::from(format!("check-{index}-{at}")))
+                .debug_selector(move || format!("check-{index}-{at}"))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .h(px(24.))
+                .px(px(10.))
+                .max_w(px(240.))
+                .rounded_full()
+                .bg(rgb(RAISED))
+                .border_1()
+                .border_color(rgb(if open { BORDER_STRONG } else { RAISED }))
+                .text_color(rgb(text))
+                .text_size(px(12.))
+                .font_family(CODE_FONT)
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .size(px(7.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(rgb(dot))
+                        .when(filled, |mark| mark.bg(rgb(dot))),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(ellipsis(SharedString::from(check.name.clone()))),
+                )
+                .when(check.said.is_some(), |chip| {
+                    chip.cursor_pointer()
+                        .hover(|style| style.border_color(rgb(BORDER_STRONG)))
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.folds.flip(fold);
+                            cx.notify();
+                        }))
+                })
+        });
+        let said = checks.iter().enumerate().filter_map(|(at, check)| {
+            let said = check.said.as_ref()?;
+            self.folds
+                .is_open(Fold::Check(index, at), false)
+                .then(|| Content::Text(said.clone()))
+        });
+        let said: Vec<Content> = said.collect();
+        div()
+            .debug_selector(move || format!("checks-{index}"))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(label().mr_1().child("TURN END"))
+                    .children(chips),
+            )
+            .children(render_content(index, &said, writer))
+            .into_any_element()
+    }
+
     /// The card that asks the human to log in, one of the ways of
     /// `options`, while the agent waits for it, and after, the way `chosen`.
     fn render_login(
@@ -592,6 +683,7 @@ impl ChatView {
                 render_proposal(index, goal, why.as_deref(), *answer, &mut writer, cx)
             }
             Entry::Keep { why, kept, .. } => render_keep(index, why, *kept, &mut writer, cx),
+            Entry::Checks(checks) => self.render_checks(index, checks, &mut writer, cx),
             Entry::Note(text) => div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))

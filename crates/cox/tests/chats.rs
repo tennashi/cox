@@ -17,7 +17,7 @@ use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{ChatRequest, Waited};
 use cox::agent::setup::{Policy, Setup};
 use cox::agents::Agents as Choices;
-use cox::chat::conversation::{Conversation, Entry, Goal, State};
+use cox::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, State};
 use cox::chat::sketch::Sketch;
 use cox::chat::view::ChatView;
 use cox::notices::{AppNotices, Notices};
@@ -1558,7 +1558,16 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
         entries[entries.len() - 2],
         Entry::Note(format!("Goal met: `{command}` passed."))
     );
-    assert_eq!(entries[entries.len() - 4], Entry::Cox(prompts[1].clone()));
+    // The goal shows as a chip of what ran as the turn ended.
+    assert!(
+        matches!(
+            &entries[entries.len() - 3],
+            Entry::Checks(checks) if checks.len() == 1 && checks[0].name == "goal"
+        ),
+        "{:?}",
+        entries[entries.len() - 3]
+    );
+    assert_eq!(entries[entries.len() - 5], Entry::Cox(prompts[1].clone()));
     // The goal, and the way to it, are kept.
     let kept = store.chats().unwrap();
     assert_eq!(kept[0].goal, Some(KeptGoal::Command(command.clone())));
@@ -1598,6 +1607,54 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
     view.read_with(cx, |view, _| view.set_goal(None));
     assert_eq!(goals(cx, &workspace, 0), [None]);
     assert_eq!(store.chats().unwrap()[0].goal, None);
+}
+
+#[gpui::test]
+async fn a_trigger_of_the_folder_runs_as_a_turn_ends_until_it_passes(cx: &mut TestAppContext) {
+    let home = scratch("trigger");
+    let triggers = home.join(".cox/triggers");
+    std::fs::create_dir_all(&triggers).unwrap();
+    let command = passing_the_second_time(&home);
+    std::fs::write(
+        triggers.join("check.md"),
+        format!("---\non: turn.end\nby: shell\n---\n{command}\n"),
+    )
+    .unwrap();
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+
+    say(cx, &workspace, "tool").await;
+
+    let prompts = agents.borrow()[0].prompts();
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(
+        prompts[1].starts_with(&format!(
+            "The trigger `check` did not pass: `{command}` exit code 1. Fix what it found; the \
+             triggers run again as your turn ends. It printed, at the end:\n\nno tool ran yet"
+        )),
+        "{}",
+        prompts[1]
+    );
+    // Each turn's end shows the trigger as a chip, which failed, and then
+    // passed, saying what its command printed; nothing asks to keep
+    // anything, since the chat has no goal.
+    let entries = shown_entries(cx, &workspace);
+    let checks: Vec<&Vec<Check>> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Checks(checks) => Some(checks),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(checks.len(), 2, "{entries:?}");
+    assert_eq!(checks[0][0].name, "check");
+    assert_eq!(checks[0][0].state, CheckState::Failed);
+    assert_eq!(checks[0][0].said.as_deref(), Some("no tool ran yet"));
+    assert_eq!(checks[1][0].state, CheckState::Passed);
+    assert!(
+        matches!(entries.last(), Some(Entry::Checks(_))),
+        "{entries:?}"
+    );
 }
 
 #[gpui::test]

@@ -77,7 +77,6 @@ enum View {
     Files,
     Changes,
     Plugin(String),
-    Workflow,
 }
 
 /// The plugin that draws the project's maps.
@@ -100,7 +99,6 @@ impl Stage {
     fn view_of(&self, tab: &Tab, plugins: &[Plugin], cx: &App) -> Option<View> {
         match &tab.content {
             TabContent::Tree(_) => Some(View::Files),
-            TabContent::Workflow(_) => Some(View::Workflow),
             TabContent::Changes(changes) if changes.read(cx).folder() == self.cwd => {
                 Some(View::Changes)
             }
@@ -192,7 +190,7 @@ impl Stage {
     /// shown, which is marked and named: "Activity", counting the chats of
     /// the folder that wait for the human, "Map" when the project has one,
     /// then "Files", "Changes" in a Git repository, then the other
-    /// plugins, and last "Workflow".
+    /// plugins, "Triggers" last.
     fn render_views(
         shown: Option<&View>,
         plugins: Vec<Plugin>,
@@ -210,6 +208,7 @@ impl Stage {
                 MAP => Icon::Map,
                 "wiki" => Icon::Book,
                 "schedules" => Icon::Clock,
+                "triggers" => Icon::Bolt,
                 _ => Icon::Plug,
             };
             let name = plugin.name.clone();
@@ -241,15 +240,6 @@ impl Stage {
             .map(&mut plugin)
             .collect();
         let rest: Vec<_> = rest.into_iter().map(&mut plugin).collect();
-        let workflow = button(
-            "show-workflow".into(),
-            View::Workflow,
-            "Workflow".into(),
-            Icon::Settings,
-        )
-        .on_click(cx.listener(|stage, _, window, cx| {
-            stage.show_workflow(window, cx);
-        }));
         div()
             .flex_shrink_0()
             .flex()
@@ -285,7 +275,6 @@ impl Stage {
                 )
             })
             .children(rest)
-            .child(workflow)
     }
 
     /// Opens the menu of the stage's +, with the keyboard in the line at

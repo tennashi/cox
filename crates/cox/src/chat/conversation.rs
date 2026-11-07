@@ -10,13 +10,21 @@
 //! the next turn, and the agent goes on, until the goal is met, or the
 //! chat has taken as many turns on the human's line as one line gets, or
 //! the agent stops calling tools, which says it waits for the human.
+//!
+//! The triggers of the folder the chat works in that are due as the turn
+//! ends (see [`crate::trigger`]) run after the goal, the same way, each a
+//! [`Due`] that the host hands the conversation ahead of the turn's end:
+//! the first that fails stops them, and the agent is told what it found.
+//! The conversation shows them, with the goal, on one line of chips (see
+//! [`Entry::Checks`]).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
 
 use cox_acp::{PermissionAnswer, SlashCommand, StopReason};
 pub use cox_core::entry::{
-    Answer, Attachment, Content, Entry, LoginOption, Step, StepState, TerminalLogin, ToolCallResult,
+    Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, Step, StepState,
+    TerminalLogin, ToolCallResult,
 };
 use cox_core::goal;
 use cox_core::settings::Setting;
@@ -40,7 +48,8 @@ pub enum State {
     /// yet.
     Stopping,
     /// The turn ended, and the command of the chat's goal runs, or its
-    /// judge is asked, to see whether the goal is met.
+    /// judge is asked, to see whether the goal is met, or one of the
+    /// triggers due runs.
     Checking,
     /// The connection has closed; nothing more can be sent.
     Closed,
@@ -57,6 +66,33 @@ const IDLE_TURNS: usize = 2;
 /// The most of what the goal's command printed, or its judge said, that
 /// the agent is told, in characters, from the end.
 const OUTPUT_TAIL: usize = 4000;
+
+/// A trigger due as a turn ends, which runs after the chat's goal (see
+/// [`crate::trigger`]): what it goes by, and what it does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Due {
+    pub name: String,
+    /// Its file, which tells it from another of the same name.
+    pub file: std::path::PathBuf,
+    pub does: Does,
+}
+
+/// What a trigger due does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Does {
+    /// Runs the command, as the goal's would, passing when it exits 0.
+    Run(String),
+    /// Asks an agent of its own what the trigger says, which ends its
+    /// reply with `PASS`, or `FAIL: ` and why, as a judge's.
+    Ask(String),
+}
+
+/// What runs now, as the turn ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum At {
+    Goal,
+    Trigger(Due),
+}
 
 /// What a chat works until, and how far it has come.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -163,6 +199,20 @@ pub struct Conversation {
     /// Whether the chat's agent can keep what it learned in the wiki, so
     /// that the chat asks the human whether to at its milestones.
     keeps: bool,
+    /// The triggers due as the turn that runs ends, as the host said.
+    due: Vec<Due>,
+    /// What runs now, as the turn ended, while something does.
+    at: Option<At>,
+    /// The triggers due that have not run yet, as the turn ended.
+    rest: VecDeque<Due>,
+    /// The entry that shows what runs as the turn ended, and the place
+    /// in it of what runs now.
+    marks: Option<(usize, usize)>,
+    /// Whether the goal was met as the turn ended, which asks the human
+    /// whether to keep what was learned once the triggers pass too.
+    met: bool,
+    /// How many turns the chat took on the human's last line.
+    turns: usize,
 }
 
 impl Default for Conversation {
@@ -185,6 +235,12 @@ impl Conversation {
             commands: Vec::new(),
             before_login: State::Idle,
             keeps: true,
+            due: Vec::new(),
+            at: None,
+            rest: VecDeque::new(),
+            marks: None,
+            met: false,
+            turns: 0,
         }
     }
 
@@ -219,6 +275,12 @@ impl Conversation {
             commands: Vec::new(),
             before_login: State::Idle,
             keeps: true,
+            due: Vec::new(),
+            at: None,
+            rest: VecDeque::new(),
+            marks: None,
+            met: false,
+            turns: 0,
         }
     }
 
@@ -471,6 +533,7 @@ impl Conversation {
         }
         self.push(entry(text.to_owned()));
         self.state = State::Busy;
+        self.turns = 1;
         if let Some(goal) = &mut self.goal {
             goal.turns = 1;
         }
@@ -496,7 +559,7 @@ impl Conversation {
         };
         self.push(Entry::Note(note));
         if self.state == State::Checking {
-            self.state = State::Idle;
+            self.stop_checks(CheckState::Waiting);
         }
     }
 
@@ -534,12 +597,147 @@ impl Conversation {
         Some(proposed)
     }
 
-    /// The command that runs to see whether the goal is met, while one
-    /// does.
+    /// Hands the conversation the triggers due as the turn that runs
+    /// ends, which run after the goal, in order, if it ends as the agent
+    /// ends it.
+    pub fn set_due(&mut self, due: Vec<Due>) {
+        self.due = due;
+    }
+
+    /// Starts what runs as the turn ended: the goal, if the chat has one,
+    /// then `due`, shown on one line of chips.
+    fn start_checks(&mut self, due: Vec<Due>) {
+        let goal = self.goal.is_some().then(|| Check {
+            name: "goal".to_owned(),
+            state: CheckState::Waiting,
+            said: None,
+        });
+        let marks = goal
+            .into_iter()
+            .chain(due.iter().map(|due| Check {
+                name: due.name.clone(),
+                state: CheckState::Waiting,
+                said: None,
+            }))
+            .collect();
+        self.push(Entry::Checks(marks));
+        self.marks = Some((self.entries.len() - 1, 0));
+        self.rest = due.into();
+        self.met = false;
+        self.state = State::Checking;
+        self.at = if self.goal.is_some() {
+            Some(At::Goal)
+        } else {
+            self.rest.pop_front().map(At::Trigger)
+        };
+        self.mark(CheckState::Running);
+    }
+
+    /// Marks what runs now as `state`, on the line of chips.
+    fn mark(&mut self, state: CheckState) {
+        let Some((entry, at)) = self.marks else {
+            return;
+        };
+        if let Some(Entry::Checks(marks)) = self.entries.get_mut(entry)
+            && let Some(mark) = marks.get_mut(at)
+        {
+            mark.state = state;
+            self.changed.insert(entry);
+        }
+    }
+
+    /// Keeps what what runs now `said`, on its chip, for the human to read
+    /// there.
+    fn say(&mut self, said: &str) {
+        let Some((entry, at)) = self.marks else {
+            return;
+        };
+        if let Some(Entry::Checks(marks)) = self.entries.get_mut(entry)
+            && let Some(mark) = marks.get_mut(at)
+        {
+            mark.said = Some(tail(said, OUTPUT_TAIL)).filter(|said| !said.is_empty());
+            self.changed.insert(entry);
+        }
+    }
+
+    /// What runs now passed: the next runs, or, when none is left, the
+    /// chat waits for the human, asking whether to keep what was learned
+    /// if the goal was met.
+    fn passed(&mut self) {
+        self.mark(CheckState::Passed);
+        if let Some((_, at)) = &mut self.marks {
+            *at += 1;
+        }
+        self.at = self.rest.pop_front().map(At::Trigger);
+        if self.at.is_some() {
+            self.mark(CheckState::Running);
+        } else {
+            self.state = State::Idle;
+            self.marks = None;
+            if self.met {
+                self.ask_to_keep_here(GOAL_MET);
+            }
+        }
+    }
+
+    /// Stops what runs as the turn ended, marking what runs now as
+    /// `state`; what has not run yet stays waiting. The chat waits for the
+    /// human, unless it goes on, as [`Self::go_on`] says.
+    fn stop_checks(&mut self, state: CheckState) {
+        if self.at.is_some() {
+            self.mark(state);
+        }
+        self.at = None;
+        self.rest.clear();
+        self.marks = None;
+        self.state = State::Idle;
+    }
+
+    /// The name of what runs now as the turn ended, `goal` or a
+    /// trigger's, as the line of chips shows it, while something runs.
+    #[must_use]
+    pub fn running_check(&self) -> Option<&str> {
+        if self.state != State::Checking {
+            return None;
+        }
+        self.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Checks(checks) => checks
+                .iter()
+                .find(|check| check.state == CheckState::Running)
+                .map(|check| check.name.as_str()),
+            _ => None,
+        })
+    }
+
+    /// Where the chip of what runs now is, as the turn ended: the entry
+    /// of the line of chips, and its place in it, while something runs.
+    #[must_use]
+    pub fn check_at(&self) -> Option<(usize, usize)> {
+        self.marks.filter(|_| self.state == State::Checking)
+    }
+
+    /// The trigger that runs now, if one does.
+    #[must_use]
+    pub fn trigger(&self) -> Option<&Due> {
+        match (&self.state, &self.at) {
+            (State::Checking, Some(At::Trigger(due))) => Some(due),
+            _ => None,
+        }
+    }
+
+    /// The command that runs to see whether the goal is met, or of the
+    /// trigger that runs, while one does.
     #[must_use]
     pub fn checking(&self) -> Option<&str> {
-        match (self.state, &self.goal) {
-            (State::Checking, Some(goal)) => goal.command(),
+        match (self.state, &self.at) {
+            (State::Checking, Some(At::Goal)) => self.goal.as_ref()?.command(),
+            (
+                State::Checking,
+                Some(At::Trigger(Due {
+                    does: Does::Run(command),
+                    ..
+                })),
+            ) => Some(command),
             _ => None,
         }
     }
@@ -547,80 +745,112 @@ impl Conversation {
     /// The words of the goal the judge is asked about, while it is.
     #[must_use]
     pub fn judging(&self) -> Option<&str> {
-        match (self.state, &self.goal) {
-            (State::Checking, Some(goal)) => goal.words(),
+        match (self.state, &self.at) {
+            (State::Checking, Some(At::Goal)) => self.goal.as_ref()?.words(),
             _ => None,
         }
     }
 
-    /// Takes how the goal's command went, `ran`, and returns the next
-    /// turn to send the agent, when the goal is not met and the chat
-    /// goes on toward it. Otherwise the chat notes how it stands and
-    /// waits for the human: the goal is met, or the command could not
-    /// run, or the chat has taken as many turns as one line gets, or the
-    /// agent made no tool call in its last turns.
+    /// The trigger whose agent is asked, while it is.
+    #[must_use]
+    pub fn asking(&self) -> Option<&Due> {
+        self.trigger()
+            .filter(|due| matches!(due.does, Does::Ask(_)))
+    }
+
+    /// Takes how the command of the goal, or of the trigger that runs,
+    /// went, `ran`, and returns the next turn to send the agent, when it
+    /// failed and the chat goes on. When it passed, what is due next
+    /// runs, as [`Self::checking`] and the others say, or the chat waits
+    /// for the human; it waits too when the command could not run, or the
+    /// chat has taken as many turns as one line gets, or the agent made
+    /// no tool call in its last turns.
     pub fn checked(&mut self, ran: Result<Ran, String>) -> Option<Command> {
         let command = self.checking()?.to_owned();
-        self.state = State::Idle;
+        let trigger = self.trigger().map(|due| due.name.clone());
         let ran = match ran {
             Ok(ran) => ran,
             Err(error) => {
-                self.push(Entry::Note(format!(
-                    "The goal could not be checked: {error}"
-                )));
+                self.say(&error);
+                self.push(Entry::Note(match &trigger {
+                    Some(name) => format!("The trigger `{name}` could not run: {error}"),
+                    None => format!("The goal could not be checked: {error}"),
+                }));
+                self.stop_checks(CheckState::Broken);
                 return None;
             }
         };
+        self.say(&ran.output);
         let not_met = match ran.ended {
             Ended::Exited(0) => {
-                self.push(Entry::Note(format!("Goal met: `{command}` passed.")));
-                self.ask_to_keep_here(GOAL_MET);
+                if trigger.is_none() {
+                    self.push(Entry::Note(format!("Goal met: `{command}` passed.")));
+                    self.met = true;
+                }
+                self.passed();
                 return None;
             }
             Ended::Closed => {
-                self.push(Entry::Note(format!(
-                    "The goal was not checked: the terminal of `{command}` was closed."
-                )));
+                self.push(Entry::Note(match &trigger {
+                    Some(name) => format!(
+                        "The trigger `{name}` did not run: the terminal of `{command}` was closed."
+                    ),
+                    None => {
+                        format!("The goal was not checked: the terminal of `{command}` was closed.")
+                    }
+                }));
+                self.stop_checks(CheckState::Broken);
                 return None;
             }
-            ended => format!("Goal not met: `{command}` {ended}."),
+            ended => match &trigger {
+                Some(name) => format!("The trigger `{name}` did not pass: `{command}` {ended}."),
+                None => format!("Goal not met: `{command}` {ended}."),
+            },
         };
         let output = tail(&ran.output, OUTPUT_TAIL);
-        let told = if output.is_empty() {
-            "Go on until it passes. It printed nothing.".to_owned()
+        let go_on = if trigger.is_some() {
+            "Fix what it found; the triggers run again as your turn ends."
         } else {
-            format!("Go on until it passes. It printed, at the end:\n\n{output}")
+            "Go on until it passes."
         };
+        let told = if output.is_empty() {
+            format!("{go_on} It printed nothing.")
+        } else {
+            format!("{go_on} It printed, at the end:\n\n{output}")
+        };
+        self.stop_checks(CheckState::Failed);
         self.go_on(&not_met, &told)
     }
 
     /// Takes what the judge of the goal in words said, `judged`, or why
     /// it could not judge, and returns the next turn to send the agent,
     /// when the goal is not met and the chat goes on toward it; otherwise
-    /// the chat notes how it stands and waits for the human, as after
+    /// what is due next runs, or the chat waits for the human, as after
     /// [`Conversation::checked`].
     pub fn judged(&mut self, judged: Result<String, String>) -> Option<Command> {
         self.judging()?;
-        self.state = State::Idle;
         let said = match judged {
             Ok(said) => said,
             Err(error) => {
+                self.say(&error);
                 self.push(Entry::Note(format!(
                     "The goal could not be judged: {error}"
                 )));
+                self.stop_checks(CheckState::Broken);
                 return None;
             }
         };
+        self.say(&said);
         self.offer_command(&said);
         let why = match Verdict::of(&said) {
-            Verdict::Met(said) if said.is_empty() => {
-                self.push(Entry::Note("Goal met, as judged.".to_owned()));
-                self.ask_to_keep_here(GOAL_MET);
-                return None;
-            }
             Verdict::Met(said) => {
-                self.push(Entry::Note(format!("Goal met, as judged: {said}")));
-                self.ask_to_keep_here(GOAL_MET);
+                self.push(Entry::Note(if said.is_empty() {
+                    "Goal met, as judged.".to_owned()
+                } else {
+                    format!("Goal met, as judged: {said}")
+                }));
+                self.met = true;
+                self.passed();
                 return None;
             }
             Verdict::NotMet(why) => why,
@@ -630,7 +860,43 @@ impl Conversation {
             "Go on until it is met. The judge said:\n\n{}",
             tail(&said, OUTPUT_TAIL)
         );
+        self.stop_checks(CheckState::Failed);
         self.go_on(&not_met, &told)
+    }
+
+    /// Takes what the agent of the trigger that runs said, `said`, or why
+    /// it could not say, and returns the next turn to send the chat's
+    /// agent, when the trigger found something and the chat goes on;
+    /// otherwise what is due next runs, or the chat waits for the human,
+    /// as after [`Conversation::checked`].
+    pub fn found(&mut self, said: Result<String, String>) -> Option<Command> {
+        let name = self.asking()?.name.clone();
+        let said = match said {
+            Ok(said) => said,
+            Err(error) => {
+                self.say(&error);
+                self.push(Entry::Note(format!(
+                    "The trigger `{name}` could not run: {error}"
+                )));
+                self.stop_checks(CheckState::Broken);
+                return None;
+            }
+        };
+        self.say(&said);
+        let why = match Verdict::of(&said) {
+            Verdict::Met(_) => {
+                self.passed();
+                return None;
+            }
+            Verdict::NotMet(why) => why,
+        };
+        let found = format!("The trigger `{name}` found something: {why}");
+        let told = format!(
+            "Act on what it said; the triggers run again as your turn ends. It said:\n\n{}",
+            tail(&said, OUTPUT_TAIL)
+        );
+        self.stop_checks(CheckState::Failed);
+        self.go_on(&found, &told)
     }
 
     /// Proposes the command the judge `said` decides the goal, if it named
@@ -663,8 +929,7 @@ impl Conversation {
     /// tool call in its last turns, when the chat notes so and waits for
     /// the human.
     fn go_on(&mut self, not_met: &str, told: &str) -> Option<Command> {
-        let turns = self.goal.as_ref().map_or(0, Goal::turns);
-        if turns >= GOAL_TURNS {
+        if self.turns >= GOAL_TURNS {
             self.push(Entry::Note(format!(
                 "{not_met} The chat took {GOAL_TURNS} turns toward it, as many as one line gets; send a line to go on."
             )));
@@ -677,6 +942,7 @@ impl Conversation {
             return None;
         }
         let prompt = format!("{not_met} {told}");
+        self.turns += 1;
         if let Some(goal) = &mut self.goal {
             goal.turns += 1;
         }
@@ -805,10 +1071,10 @@ impl Conversation {
                 self.state = State::Stopping;
                 Some(Command::Cancel)
             }
-            // The goal's command stops; there is no turn to stop.
+            // What runs as the turn ended stops; there is no turn to stop.
             State::Checking => {
                 self.push(Entry::Note("Stopped.".to_owned()));
-                self.state = State::Idle;
+                self.stop_checks(CheckState::Waiting);
                 None
             }
             State::Idle | State::Stopping | State::Closed => None,
@@ -913,6 +1179,28 @@ impl Conversation {
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())
+    }
+
+    /// What the agent told in the last turn, whole, as [`Self::last_told`]
+    /// says, but for what ran as the turn ended and the notes it added,
+    /// which the judge of the goal, or the agent of a trigger, is not told
+    /// as the turn's.
+    #[must_use]
+    pub fn turn_told(&self) -> Option<&str> {
+        let turn: Vec<&Entry> = self
+            .entries
+            .iter()
+            .rev()
+            .take_while(|entry| !is_turn_start(entry))
+            .collect();
+        let after = turn
+            .iter()
+            .position(|entry| matches!(entry, Entry::Checks(_)))
+            .map_or(0, |at| at + 1);
+        turn.into_iter().skip(after).find_map(|entry| match entry {
+            Entry::Reply(text) | Entry::Note(text) => Some(text.as_str()),
+            _ => None,
+        })
     }
 
     /// What came last in the last turn, whole: the agent's reply or Cox's
@@ -1090,11 +1378,17 @@ impl Conversation {
                     self.push(Entry::Note(note.to_owned()));
                 }
                 // A turn the agent ended as it does, having done what it
-                // was asked, is when the goal is looked at.
+                // was asked, is when the goal is looked at, and the
+                // triggers due run.
+                let due = std::mem::take(&mut self.due);
                 let check = reason == StopReason::EndTurn
                     && self.state == State::Busy
-                    && self.goal.is_some();
-                self.state = if check { State::Checking } else { State::Idle };
+                    && (self.goal.is_some() || !due.is_empty());
+                if check {
+                    self.start_checks(due);
+                } else {
+                    self.state = State::Idle;
+                }
             }
             AgentEvent::LoginNeeded { options, failed } => self.ask_to_log_in(options, failed),
             AgentEvent::Note(note) => self.push(Entry::Note(note)),
@@ -1745,6 +2039,188 @@ mod tests {
         })
     }
 
+    /// The triggers `ci`, which runs `cargo test`, and `simplify`, which
+    /// asks its agent, due as the turn ends.
+    fn ci_and_simplify() -> Vec<Due> {
+        vec![
+            Due {
+                name: "ci".to_owned(),
+                file: "/work/.cox/triggers/ci.md".into(),
+                does: Does::Run("cargo test".to_owned()),
+            },
+            Due {
+                name: "simplify".to_owned(),
+                file: "/home/me/cox/triggers/simplify.md".into(),
+                does: Does::Ask("Say what could be simpler.".to_owned()),
+            },
+        ]
+    }
+
+    /// How the line of chips of what ran as the turn ended stands, by
+    /// name.
+    fn marks(conversation: &Conversation) -> Vec<(String, CheckState)> {
+        conversation
+            .entries()
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::Checks(checks) => Some(
+                    checks
+                        .iter()
+                        .map(|check| (check.name.clone(), check.state))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn the_triggers_run_after_the_goal_until_one_fails() {
+        let mut conversation = Conversation::new();
+        conversation.set_goal(Some(goal::Goal::Command("make".to_owned())));
+        conversation.submit("fix");
+        conversation.set_due(ci_and_simplify());
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.state(), State::Checking);
+        assert_eq!(conversation.checking(), Some("make"));
+        assert_eq!(conversation.running_check(), Some("goal"));
+
+        assert_eq!(conversation.checked(ran(0, "ok")), None);
+        assert_eq!(conversation.state(), State::Checking);
+        assert_eq!(conversation.checking(), Some("cargo test"));
+        assert_eq!(
+            conversation.trigger().map(|due| due.name.as_str()),
+            Some("ci")
+        );
+        assert_eq!(conversation.running_check(), Some("ci"));
+        // The goal is met, but the human is asked to keep what was learned
+        // only once the triggers pass too.
+        assert!(
+            !conversation
+                .entries()
+                .iter()
+                .any(|entry| matches!(entry, Entry::Keep { .. }))
+        );
+
+        assert_eq!(conversation.checked(ran(0, "test result: ok")), None);
+        assert_eq!(conversation.checking(), None);
+        assert_eq!(
+            conversation.asking().map(|due| due.name.as_str()),
+            Some("simplify")
+        );
+        // Its agent is told what the turn said, not what ran after.
+        assert_eq!(conversation.turn_told(), Some("Done."));
+
+        let said = "Read the diff.\nFAIL: parse repeats read";
+        let told = "The trigger `simplify` found something: parse repeats read \
+                    Act on what it said; the triggers run again as your turn ends. \
+                    It said:\n\nRead the diff.\nFAIL: parse repeats read";
+        assert_eq!(
+            conversation.found(Ok(said.to_owned())),
+            Some(Command::Prompt(told.to_owned().into()))
+        );
+        assert_eq!(conversation.state(), State::Busy);
+        assert_eq!(
+            marks(&conversation),
+            [
+                ("goal".to_owned(), CheckState::Passed),
+                ("ci".to_owned(), CheckState::Passed),
+                ("simplify".to_owned(), CheckState::Failed),
+            ]
+        );
+
+        // The next turn runs them all again, and once they pass, the human
+        // is asked whether to keep what the chat learned.
+        conversation.set_due(ci_and_simplify());
+        take_turn(&mut conversation, true);
+        conversation.checked(ran(0, "ok"));
+        conversation.checked(ran(0, "ok"));
+        assert_eq!(conversation.found(Ok("Fine.\nPASS".to_owned())), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert!(matches!(
+            conversation.entries().last(),
+            Some(Entry::Keep { .. })
+        ));
+    }
+
+    #[test]
+    fn a_chat_with_no_goal_runs_its_triggers() {
+        let mut conversation = Conversation::new();
+        conversation.submit("fix");
+        conversation.set_due(ci_and_simplify());
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.checking(), Some("cargo test"));
+        assert_eq!(
+            marks(&conversation),
+            [
+                ("ci".to_owned(), CheckState::Running),
+                ("simplify".to_owned(), CheckState::Waiting),
+            ]
+        );
+
+        let told = "The trigger `ci` did not pass: `cargo test` exit code 101. Fix what it \
+                    found; the triggers run again as your turn ends. It printed, at the \
+                    end:\n\n1 failed";
+        assert_eq!(
+            conversation.checked(ran(101, "1 failed")),
+            Some(Command::Prompt(told.to_owned().into()))
+        );
+        // The trigger after the one that failed did not run.
+        assert_eq!(
+            marks(&conversation),
+            [
+                ("ci".to_owned(), CheckState::Failed),
+                ("simplify".to_owned(), CheckState::Waiting),
+            ]
+        );
+
+        // A turn with nothing due ends as it did.
+        take_turn(&mut conversation, true);
+        assert_eq!(conversation.state(), State::Idle);
+    }
+
+    #[test]
+    fn a_trigger_that_cannot_run_waits_for_the_human() {
+        let mut conversation = Conversation::new();
+        conversation.submit("fix");
+        conversation.set_due(ci_and_simplify());
+        take_turn(&mut conversation, true);
+        conversation.checked(ran(0, ""));
+        assert_eq!(conversation.found(Err("its agent closed".to_owned())), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            conversation.last_said(),
+            Some("The trigger `simplify` could not run: its agent closed")
+        );
+        assert_eq!(
+            marks(&conversation),
+            [
+                ("ci".to_owned(), CheckState::Passed),
+                ("simplify".to_owned(), CheckState::Broken),
+            ]
+        );
+    }
+
+    #[test]
+    fn stopping_while_a_trigger_runs_gives_the_rest_up() {
+        let mut conversation = Conversation::new();
+        conversation.submit("fix");
+        conversation.set_due(ci_and_simplify());
+        take_turn(&mut conversation, true);
+
+        assert_eq!(conversation.cancel(), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(conversation.checked(ran(1, "")), None);
+        assert_eq!(
+            marks(&conversation),
+            [
+                ("ci".to_owned(), CheckState::Waiting),
+                ("simplify".to_owned(), CheckState::Waiting),
+            ]
+        );
+    }
+
     /// A conversation working until `make` passes, whose agent takes a
     /// turn on "fix", with a tool call when `calling`, which ends.
     fn toward_make(calling: bool) -> Conversation {
@@ -1827,8 +2303,17 @@ mod tests {
         assert_eq!(conversation.state(), State::Busy);
         assert_eq!(conversation.checking(), None);
         assert_eq!(conversation.goal().map(Goal::turns), Some(2));
-        assert_eq!(conversation.take_changed(), [4]);
-        assert_eq!(conversation.entries()[4], Entry::Cox(prompt.to_owned()));
+        // The goal's chip shows that it failed, with what it printed.
+        assert_eq!(conversation.take_changed(), [4, 5]);
+        assert_eq!(
+            conversation.entries()[4],
+            Entry::Checks(vec![Check {
+                name: "goal".to_owned(),
+                state: CheckState::Failed,
+                said: Some("error: x is not defined".to_owned()),
+            }])
+        );
+        assert_eq!(conversation.entries()[5], Entry::Cox(prompt.to_owned()));
 
         take_turn(&mut conversation, true);
         assert_eq!(conversation.checked(ran(0, "ok")), None);
@@ -2055,8 +2540,8 @@ mod tests {
         assert_eq!(conversation.state(), State::Busy);
         assert_eq!(conversation.judging(), None);
         assert_eq!(conversation.goal().map(Goal::turns), Some(2));
-        assert_eq!(conversation.take_changed(), [4]);
-        assert_eq!(conversation.entries()[4], Entry::Cox(prompt.to_owned()));
+        assert_eq!(conversation.take_changed(), [4, 5]);
+        assert_eq!(conversation.entries()[5], Entry::Cox(prompt.to_owned()));
 
         take_turn(&mut conversation, true);
         assert_eq!(
@@ -2137,9 +2622,8 @@ mod tests {
             panic!("a prompt");
         };
         assert!(
-            prompt.starts_with(
-                "Goal not met, as judged: the judge gave no verdict Go on until it is met."
-            ),
+            prompt
+                .starts_with("Goal not met, as judged: it gave no verdict Go on until it is met."),
             "{prompt}"
         );
         assert!(prompt.ends_with("I am not sure what you mean."), "{prompt}");
