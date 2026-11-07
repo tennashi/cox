@@ -9,7 +9,8 @@ use cox_core::tabs::KeptTab;
 use gpui::{App, Focusable as _, Window};
 
 use crate::chat::conversation::{
-    Answer, Attachment, Content, Entry, GOAL_TURNS, State, StepState, ToolCallResult,
+    Answer, Attachment, Check, CheckState, Content, Entry, GOAL_TURNS, State, StepState,
+    ToolCallResult,
 };
 use crate::chat::view::ChatView;
 use crate::ui::translation::Shown;
@@ -477,7 +478,26 @@ fn describe_entry(entry: &Entry) -> String {
             }
         }
         Entry::Keep { why, chat, kept } => describe_keep(why, *chat, *kept),
+        Entry::Checks(checks) => describe_checks(checks),
     }
+}
+
+/// What ran as a turn ended, each with how it went.
+fn describe_checks(checks: &[Check]) -> String {
+    let checks: Vec<String> = checks
+        .iter()
+        .map(|check| {
+            let state = match check.state {
+                CheckState::Waiting => "waiting",
+                CheckState::Running => "running",
+                CheckState::Passed => "passed",
+                CheckState::Failed => "failed",
+                CheckState::Broken => "broken",
+            };
+            format!("{} {state}", check.name)
+        })
+        .collect();
+    format!("turn end: {}", checks.join(", "))
 }
 
 /// Cox's card asking whether to keep in the wiki what a chat learned, at

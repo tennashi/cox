@@ -775,10 +775,20 @@ impl ChatView {
                 ),
                 None => "The agent is working. Escape stops it.".to_owned(),
             }),
-            State::Checking => Some(match goal.and_then(Goal::command) {
-                Some(command) => format!("Checking the goal: `{command}` runs. Escape stops it."),
-                None => "Judging the goal. Escape stops it.".to_owned(),
-            }),
+            State::Checking => Some(
+                match (
+                    self.conversation.running_check(),
+                    goal.and_then(Goal::command),
+                ) {
+                    (Some(trigger), _) if trigger != "goal" => {
+                        format!("The trigger `{trigger}` runs. Escape stops it.")
+                    }
+                    (_, Some(command)) => {
+                        format!("Checking the goal: `{command}` runs. Escape stops it.")
+                    }
+                    _ => "Judging the goal. Escape stops it.".to_owned(),
+                },
+            ),
             State::Asking => {
                 let count = self.conversation.options_asked();
                 let numbers = if count > 1 {

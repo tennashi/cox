@@ -106,7 +106,7 @@ impl Verdict {
             .map(str::trim)
             .find(|line| !line.is_empty());
         let Some(last) = last else {
-            return Self::NotMet("the judge said nothing".to_owned());
+            return Self::NotMet("it said nothing".to_owned());
         };
         let said = |rest: &str| {
             rest.trim_start_matches([':', ' ', '-', '`', '*', '_'])
@@ -119,12 +119,12 @@ impl Verdict {
         } else if let Some(rest) = strip_word(line, "FAIL") {
             let why = said(rest);
             Self::NotMet(if why.is_empty() {
-                "the judge said so, giving no reason".to_owned()
+                "it said so, giving no reason".to_owned()
             } else {
                 why
             })
         } else {
-            Self::NotMet("the judge gave no verdict".to_owned())
+            Self::NotMet("it gave no verdict".to_owned())
         }
     }
 }
@@ -247,9 +247,22 @@ impl Judge {
         goal: &str,
         heard: impl Fn(Heard) + 'static,
     ) -> Self {
+        let setup = setup(goal, &stance(&cwd));
+        Self::start_as(starts, cwd, setup, heard)
+    }
+
+    /// Starts an agent set up as `setup` says, working in `cwd`, which
+    /// judges as the judge of a goal does, as a trigger's agent: what it
+    /// says of each question goes to `heard`.
+    pub fn start_as(
+        starts: &Starts,
+        cwd: PathBuf,
+        setup: Setup,
+        heard: impl Fn(Heard) + 'static,
+    ) -> Self {
         let start = Start::New {
             instructions: Instructions::project(&cwd),
-            setup: Some(setup(goal, &stance(&cwd))),
+            setup: Some(setup),
         };
         let Agent {
             commands,
@@ -279,16 +292,16 @@ impl Judge {
                     }
                     AgentEvent::TurnEnded(reason) => {
                         reply.clear();
-                        Err(format!("the judge's turn ended early: {reason:?}"))
+                        Err(format!("its agent's turn ended early: {reason:?}"))
                     }
                     AgentEvent::TurnFailed(error) => {
                         reply.clear();
-                        Err(format!("the judge's turn failed: {error}"))
+                        Err(format!("its agent's turn failed: {error}"))
                     }
                     AgentEvent::Closed(error) => {
                         let error = error.map_or_else(
-                            || "the judge closed".to_owned(),
-                            |error| format!("the judge closed: {error}"),
+                            || "its agent closed".to_owned(),
+                            |error| format!("its agent closed: {error}"),
                         );
                         heard(Heard::Closed(error));
                         break;
@@ -311,6 +324,11 @@ impl Judge {
         let _ = self
             .commands
             .send(Command::Prompt(question(goal, said).into()));
+    }
+
+    /// Asks the agent `question`, as it is.
+    pub fn put(&self, question: String) {
+        let _ = self.commands.send(Command::Prompt(question.into()));
     }
 
     /// Stops the judgement under way, if one is.
@@ -346,20 +364,20 @@ mod tests {
         );
         assert_eq!(
             Verdict::of("FAIL"),
-            Verdict::NotMet("the judge said so, giving no reason".to_owned())
+            Verdict::NotMet("it said so, giving no reason".to_owned())
         );
         // A word that only starts like one is no verdict.
         assert_eq!(
             Verdict::of("PASSWORD is set"),
-            Verdict::NotMet("the judge gave no verdict".to_owned())
+            Verdict::NotMet("it gave no verdict".to_owned())
         );
         assert_eq!(
             Verdict::of("It looks fine to me."),
-            Verdict::NotMet("the judge gave no verdict".to_owned())
+            Verdict::NotMet("it gave no verdict".to_owned())
         );
         assert_eq!(
             Verdict::of("  \n"),
-            Verdict::NotMet("the judge said nothing".to_owned())
+            Verdict::NotMet("it said nothing".to_owned())
         );
     }
 

@@ -80,11 +80,17 @@ pub enum Kept {
     /// The pictures of the regions of the window the human handed the
     /// chats (see [`crate::chat::region`]).
     Pictures,
+    /// Which triggers the human turned off, and the order they run in,
+    /// folder by folder (see [`crate::trigger`]).
+    Triggers,
+    /// How each trigger last ran, folder by folder (see
+    /// [`crate::trigger`]).
+    TriggerRuns,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::Settings,
         Self::Agents,
         Self::Workflow,
@@ -100,6 +106,8 @@ impl Kept {
         Self::Daemon,
         Self::Schedules,
         Self::Pictures,
+        Self::Triggers,
+        Self::TriggerRuns,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -121,6 +129,8 @@ impl Kept {
             Self::Daemon => "run/coxd.sock",
             Self::Schedules => "state/schedules.json",
             Self::Pictures => "state/pictures",
+            Self::Triggers => "state/triggers.json",
+            Self::TriggerRuns => "state/trigger-runs.json",
         }
     }
 
