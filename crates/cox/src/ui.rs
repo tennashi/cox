@@ -12,12 +12,14 @@
 //!   stage share: whether the stage is in sight.
 //! - A [`card`] is what the window's parts sit in, on its ground.
 //! - [`translation`] shows what the human selected in their language.
+//! - [`screen`] captures what the screen shows of the window.
 
 pub mod ellipsis;
 pub mod icons;
 pub mod input;
 pub mod markdown;
 pub mod paths;
+pub mod screen;
 pub mod selection;
 pub mod text;
 pub mod theme;

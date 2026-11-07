@@ -15,6 +15,7 @@ use gpui::{
     ScrollDelta, ScrollWheelEvent, Style, Window, fill, point, px, relative, rgb, size,
 };
 
+use crate::chat::region;
 use crate::stage::pointer::paint_agent;
 use crate::ui::theme::RAISED;
 
@@ -94,6 +95,35 @@ impl Screen {
             origin: drawn.origin - area.origin,
             size: drawn.size,
         })
+    }
+
+    /// Where on the picture `over`, a stretch of a region in the window's
+    /// points, is, in the pixels of a picture of it `width` by `height`,
+    /// as the agent gets it, if it is over the picture as drawn last.
+    pub(super) fn covered(
+        &self,
+        over: Bounds<Pixels>,
+        (width, height): (u32, u32),
+    ) -> Option<String> {
+        let drawn = self.drawn?;
+        let over = over.intersect(&drawn);
+        if over.size.width <= px(0.) || over.size.height <= px(0.) {
+            return None;
+        }
+        let (left, right) = region::along(
+            (over.left(), over.right()),
+            (drawn.left(), drawn.size.width),
+            width,
+        );
+        let (top, bottom) = region::along(
+            (over.top(), over.bottom()),
+            (drawn.top(), drawn.size.height),
+            height,
+        );
+        Some(format!(
+            "from {left},{top} to {right},{bottom} in the pixels of the {width}×{height} picture \
+            of it the agent's tools answer and take"
+        ))
     }
 
     /// Where `position` is across the picture, from 0 to 1 each way, as it

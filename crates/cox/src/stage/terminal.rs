@@ -62,6 +62,7 @@ pub use self::pty::{Program, Running};
 pub use self::unseen::run_unseen;
 use crate::agent::mcp::{Ended, Ran};
 use crate::chat::hand::AddToChat;
+use crate::chat::region::{self, Described};
 use crate::stage::tab::Shows;
 use crate::ui::Copy;
 use crate::ui::ellipsis::ellipsis;
@@ -348,7 +349,58 @@ impl Terminal {
             label: self.title(),
             uri: "cox://terminal".to_owned(),
             text: self.selected_text().unwrap_or_default(),
+            picture: None,
         }
+    }
+
+    /// What the rows of the terminal under `over`, a stretch of a region
+    /// in the window's points, say, as the last frame drew them.
+    fn described(&self, over: Bounds<Pixels>) -> Option<Described> {
+        let laid = self.laid?;
+        let term = self.term.lock();
+        // A cell is in the region when its middle is, and at least one is.
+        let cells = |from: Pixels, to: Pixels, cell: Pixels, most: usize| {
+            let first = whole_cells((from / cell).round()).min(most - 1);
+            let last = whole_cells((to / cell).round() - 1.).clamp(first, most - 1);
+            (first, last)
+        };
+        let (left, right) = cells(
+            over.origin.x - laid.origin.x,
+            over.origin.x + over.size.width - laid.origin.x,
+            laid.cell.width,
+            term.columns(),
+        );
+        let (top, bottom) = cells(
+            over.origin.y - laid.origin.y,
+            over.origin.y + over.size.height - laid.origin.y,
+            laid.cell.height,
+            term.screen_lines(),
+        );
+        let offset = i32::try_from(term.grid().display_offset()).unwrap_or(0);
+        let rows: Vec<String> = (top..=bottom)
+            .map(|row| {
+                let line = Line(i32::try_from(row).unwrap_or(0) - offset);
+                term.bounds_to_string(
+                    Cell::new(line, Column(left)),
+                    Cell::new(line, Column(right)),
+                )
+                .trim_end()
+                .to_owned()
+            })
+            .collect();
+        drop(term);
+        let title = self.title();
+        Some(Described {
+            text: format!(
+                "rows {}-{} and columns {}-{} of the terminal `{title}`, as it shows them:\n\n{}",
+                top + 1,
+                bottom + 1,
+                left + 1,
+                right + 1,
+                region::fenced(&rows.join("\n"))
+            ),
+            name: title,
+        })
     }
 
     /// Hands the text selected to the chat shown, or with nothing
@@ -662,6 +714,7 @@ impl Render for Terminal {
                 div()
                     .id("terminal")
                     .debug_selector(|| "terminal".to_owned())
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .track_focus(&self.focus_handle)
@@ -688,7 +741,11 @@ impl Render for Terminal {
                     .cursor_text()
                     .child(Grid {
                         terminal: cx.entity(),
-                    }),
+                    })
+                    .child(region::mark({
+                        let terminal = cx.weak_entity();
+                        move |_, over, cx| terminal.upgrade()?.read(cx).described(over)
+                    })),
             )
     }
 }

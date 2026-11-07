@@ -96,7 +96,8 @@ pub enum Entry {
 
 /// Something on the screen the human hands a chat with their next line,
 /// for its agent to read with it: text they selected, in the
-/// conversation, a tab of code or Markdown, a terminal, or a page.
+/// conversation, a tab of code or Markdown, a terminal, or a page, or a
+/// region of the window, as a picture with what is in it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attachment {
     /// What the chip that shows it names it by, as where it is from:
@@ -108,6 +109,10 @@ pub struct Attachment {
     pub uri: String,
     /// What it says.
     pub text: String,
+    /// A picture of it, as a PNG file, by its absolute path: a region of
+    /// the window the human chose, which `text` then says what is in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<std::path::PathBuf>,
 }
 
 /// A way the agent offers the human to log in.

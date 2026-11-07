@@ -41,15 +41,16 @@ use cox_core::entry::Attachment;
 use cox_core::goal;
 use cox_core::tabs::KeptTabs;
 use gpui::{
-    AnyView, App, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
-    ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Subscription, Window, actions, div, list, prelude::*, px,
-    relative, rgb,
+    AnyView, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding,
+    KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Window, actions, div, list,
+    prelude::*, px, relative, rgb,
 };
 
 use crate::agents::Agents;
 use crate::chat::conversation::{Answer, Conversation, GOAL_TURNS, Goal, Patch, State};
 use crate::chat::hand::AddToChat;
+use crate::chat::region::{self, AddRegionToChat, Described};
 use crate::chat::sketch::Sketch;
 use crate::daemon::Link;
 use crate::daemon::wire::ToDaemon;
@@ -261,6 +262,25 @@ impl ChatView {
             label: crate::chat::hand::quoted(&text),
             uri: format!("cox://chat/{}", self.key),
             text,
+            picture: None,
+        }
+    }
+
+    /// What of the conversation shows under `over`, a stretch of a region
+    /// in the window's points.
+    fn described(&self, over: Bounds<Pixels>) -> Described {
+        let text = self.reading.text_within(over);
+        let shown = if text.trim().is_empty() {
+            String::new()
+        } else {
+            format!(", where it reads:\n\n{}", region::fenced(text.trim()))
+        };
+        Described {
+            name: "Conversation".to_owned(),
+            text: format!(
+                "the conversation of the chat cox://chat/{}{shown}",
+                self.key
+            ),
         }
     }
 
@@ -925,6 +945,10 @@ impl ChatView {
                                 .size_full(),
                             ),
                     )
+                    .child(region::mark({
+                        let view = cx.weak_entity();
+                        move |_, over, cx| Some(view.upgrade()?.read(cx).described(over))
+                    }))
                     // Drawn after the conversation, over it.
                     .children(plan),
             )
@@ -1019,32 +1043,46 @@ impl ChatView {
                     .min_w_0()
                     .child(self.input.clone()),
             )
-            .when(commands || files || running, |bar| {
-                bar.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .when(commands, |row| {
-                            row.child(Self::render_chip(
-                                "start-command",
-                                "/ commands",
-                                Self::start_command,
-                                cx,
-                            ))
-                        })
-                        .when(files, |row| {
-                            row.child(Self::render_chip(
-                                "start-file",
-                                "@ files",
-                                Self::start_file,
-                                cx,
-                            ))
-                        })
-                        .child(div().flex_1())
-                        .when(running, |row| row.child(Self::render_stop(cx))),
-                )
-            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .when(commands, |row| {
+                        row.child(Self::render_chip(
+                            "start-command",
+                            "/ commands",
+                            Self::start_command,
+                            cx,
+                        ))
+                    })
+                    .when(files, |row| {
+                        row.child(Self::render_chip(
+                            "start-file",
+                            "@ files",
+                            Self::start_file,
+                            cx,
+                        ))
+                    })
+                    .child(Self::render_chip(
+                        "start-region",
+                        "▭ region",
+                        Self::start_region,
+                        cx,
+                    ))
+                    .child(div().flex_1())
+                    .when(running, |row| row.child(Self::render_stop(cx))),
+            )
+    }
+
+    /// Lays the sheet over the window, for the human to drag a region of
+    /// it to hand the chat.
+    #[expect(
+        clippy::unused_self,
+        reason = "a chip's action is a method of the view"
+    )]
+    fn start_region(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.dispatch_action(Box::new(AddRegionToChat), cx);
     }
 
     /// What the human handed the chat, over the input, a chip each: a

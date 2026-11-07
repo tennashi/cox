@@ -19,12 +19,13 @@ use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
 use cox_core::tabs::KeptTab;
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, Hitbox, IntoElement, KeyDownEvent, Subscription,
-    Task, Window, div, prelude::*, px, rgb,
+    App, Bounds, Context, Entity, FocusHandle, Focusable, Hitbox, IntoElement, KeyDownEvent,
+    Pixels, Subscription, Task, Window, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::AndroidAct;
+use crate::chat::region::{self, Described};
 use crate::stage::mirror::{Display, Mirrored, Press, Screen, Touched, pass_on, scaled};
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
@@ -376,6 +377,21 @@ impl Focusable for Android {
     }
 }
 
+impl Android {
+    /// What the tab shows under `over`, a stretch of a region in the
+    /// window's points: the device, and where on its display.
+    fn described(&self, over: Bounds<Pixels>) -> Described {
+        let at = self
+            .picture_size()
+            .and_then(|size| self.screen.covered(over, size))
+            .map_or_else(String::new, |at| format!(", {at}"));
+        Described {
+            name: self.name.clone(),
+            text: format!("the display of the Android device `{}`{at}", self.name),
+        }
+    }
+}
+
 impl Render for Android {
     #[expect(
         clippy::used_underscore_binding,
@@ -409,6 +425,10 @@ impl Render for Android {
                     .child(Display {
                         mirrored: cx.entity(),
                     })
+                    .child(region::mark({
+                        let android = cx.weak_entity();
+                        move |_, over, cx| Some(android.upgrade()?.read(cx).described(over))
+                    }))
                     .children(label)
                     .children(ended.map(|why| {
                         div()

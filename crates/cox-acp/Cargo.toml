@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 agent-client-protocol = { workspace = true, features = ["process"] }
 anyhow.workspace = true
+# A picture in a prompt goes as base64.
+base64 = "0.22.1"
 # The commands an agent runs, which a daemon tells its window of.
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "sync"] }

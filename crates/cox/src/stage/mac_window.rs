@@ -17,12 +17,13 @@ use cox_browser::relay::AgentInput;
 use cox_core::tabs::KeptTab;
 use cox_mac::{Button, Event, Input, Mirror, Rect, Stroke, Window as AppWindow};
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, Task, Window, div, prelude::*, px,
-    rgb,
+    App, Bounds, Context, Entity, FocusHandle, Focusable, IntoElement, Pixels, Task, Window, div,
+    prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::MacAct;
+use crate::chat::region::{self, Described};
 use crate::stage::mirror::{Display, Mirrored, Screen, scaled};
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
@@ -437,6 +438,32 @@ impl Focusable for MacWindow {
     }
 }
 
+impl MacWindow {
+    /// What the tab shows under `over`, a stretch of a region in the
+    /// window's points: the window, and where on it.
+    fn described(&self, over: Bounds<Pixels>) -> Described {
+        let at = self
+            .bounds()
+            .and_then(|bounds| {
+                let scale = picture_scale(bounds);
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "a picture's size fits in u32"
+                )]
+                let side = |length: f64| (length * scale).round().max(1.) as u32;
+                self.screen
+                    .covered(over, (side(bounds.width), side(bounds.height)))
+            })
+            .map_or_else(String::new, |at| format!(", {at}"));
+        let title = self.title();
+        Described {
+            text: format!("the Mac window `{title}`{at}"),
+            name: title,
+        }
+    }
+}
+
 impl Render for MacWindow {
     #[expect(
         clippy::used_underscore_binding,
@@ -469,6 +496,10 @@ impl Render for MacWindow {
                     .child(Display {
                         mirrored: cx.entity(),
                     })
+                    .child(region::mark({
+                        let window = cx.weak_entity();
+                        move |_, over, cx| Some(window.upgrade()?.read(cx).described(over))
+                    }))
                     .children(label)
                     .children(ended.map(|why| {
                         div()

@@ -1295,6 +1295,7 @@ mod tests {
             label: "main.rs:2".to_owned(),
             uri: "file:///work/src/main.rs#L2".to_owned(),
             text: "println!(\"hello\");".to_owned(),
+            picture: None,
         }];
 
         assert_eq!(

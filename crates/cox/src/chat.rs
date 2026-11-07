@@ -10,7 +10,8 @@
 //! - [`view`] draws a chat's conversation with GPUI, its stage beside it,
 //!   and turns keystrokes and clicks into what the human does.
 //! - [`hand`] is what the human hands a chat from elsewhere on the
-//!   screen, as text selected in a tab.
+//!   screen, as text selected in a tab, and [`region`] a region of the
+//!   window they drag, as a picture.
 //! - [`conversation`] holds what the view shows and decides what the
 //!   human's input means, in plain Rust, so it is tested without GPUI.
 //!   `cox-core` keeps what it shows.
@@ -20,6 +21,7 @@ pub mod hand;
 pub mod judge;
 pub mod launcher;
 pub mod mention;
+pub mod region;
 pub mod sketch;
 pub mod view;
 

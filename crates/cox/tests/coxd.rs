@@ -313,6 +313,7 @@ fn what_the_window_and_coxd_say_reads_back_as_it_was() {
             label: "main.rs:2-3".to_owned(),
             uri: "file:///work/src/main.rs#L2-3".to_owned(),
             text: "a\nb".to_owned(),
+            picture: None,
         }],
     };
     let line = serde_json::to_string(&told).unwrap();

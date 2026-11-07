@@ -417,6 +417,7 @@ fn bind_keys(cx: &mut App) {
     crate::ui::input::bind_keys(cx);
     crate::ui::translation::bind_keys(cx);
     crate::chat::hand::bind_keys(cx);
+    crate::chat::region::bind_keys(cx);
     crate::settings::view::bind_keys(cx);
     crate::chat::view::bind_keys(cx);
     crate::stage::document::bind_keys(cx);

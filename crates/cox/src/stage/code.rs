@@ -57,6 +57,7 @@ use gpui::{
 };
 
 use crate::chat::hand::AddToChat;
+use crate::chat::region::{self, Described};
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::servers::{LanguageServer, Servers};
 use crate::stage::tab::{self, Shows, ShowsFile};
@@ -752,6 +753,48 @@ impl Code {
         crate::chat::hand::of_file(&self.file.path, lines, self.selected_text())
     }
 
+    /// What the lines of the code under `over`, a stretch of a region in
+    /// the window's points, are, as the tab last drew them.
+    fn described(&self, over: Bounds<Pixels>) -> Option<Described> {
+        let laid = self.look.laid.as_ref()?;
+        let over = over.intersect(&laid.text);
+        // A line is in the region when the middle of its row is.
+        let mut lines = laid.rows.iter().filter(|row| {
+            let middle = row.origin.y + laid.line_height / 2.;
+            over.top() <= middle && middle < over.bottom()
+        });
+        let first = lines.next()?.line;
+        let last = lines.next_back().map_or(first, |row| row.line);
+        let text = (first..=last)
+            .map(|line| {
+                self.file
+                    .buffer
+                    .line(line)
+                    .trim_end_matches(['\n', '\r'])
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lines = Lines {
+            first: first + 1,
+            last: last + 1,
+        };
+        let name = crate::chat::hand::of_file(&self.file.path, Some(lines), String::new()).label;
+        let span = if first == last {
+            format!("line {}", lines.first)
+        } else {
+            format!("lines {}-{}", lines.first, lines.last)
+        };
+        Some(Described {
+            name,
+            text: format!(
+                "{span} of {}, in a tab of code:\n\n{}",
+                self.file.path.display(),
+                region::fenced(&text)
+            ),
+        })
+    }
+
     /// Hands the text selected in the code to the chat shown, or with
     /// nothing selected leaves the keys to what holds the part.
     fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
@@ -872,6 +915,7 @@ impl Render for Code {
                 div()
                     .id("code")
                     .debug_selector(|| "code".to_owned())
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
@@ -897,6 +941,10 @@ impl Render for Code {
                     }))
                     .on_scroll_wheel(cx.listener(Self::scroll))
                     .child(Text { code: cx.entity() })
+                    .child(region::mark({
+                        let code = cx.weak_entity();
+                        move |_, over, cx| code.upgrade()?.read(cx).described(over)
+                    }))
                     .children(self.render_hover(cx))
                     .children(self.render_menu(cx)),
             )

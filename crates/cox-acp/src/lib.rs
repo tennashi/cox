@@ -21,9 +21,9 @@ use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand,
     AvailableCommandInput, AvailableCommandsUpdate, CancelNotification, ClientCapabilities,
     ConfigOptionUpdate, Content, ContentBlock, ContentChunk, Diff, EmbeddedResource,
-    EmbeddedResourceResource, InitializeRequest, LoadSessionRequest, McpServer as AcpMcpServer,
-    McpServerStdio, NewSessionRequest, PermissionOptionKind, Plan as AcpPlan,
-    PlanEntry as AcpPlanEntry, PlanEntryStatus, PromptRequest, PromptResponse,
+    EmbeddedResourceResource, ImageContent, InitializeRequest, LoadSessionRequest,
+    McpServer as AcpMcpServer, McpServerStdio, NewSessionRequest, PermissionOptionKind,
+    Plan as AcpPlan, PlanEntry as AcpPlanEntry, PlanEntryStatus, PromptRequest, PromptResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, ResourceLink,
     ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
     SessionConfigOption, SessionConfigOptionCategory, SessionConfigOptionValue,
@@ -38,6 +38,8 @@ use agent_client_protocol::{
     AcpAgent, Agent, Client, ConnectTo, ConnectionTo, ErrorCode, LineDirection, Responder,
 };
 use anyhow::Context;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 /// A way to reach an agent: a process speaking ACP on its stdio, or, in
@@ -184,6 +186,7 @@ pub async fn connect<T>(
                 settings,
                 login_methods,
                 embeds,
+                images,
             } = started;
             let mut received = received;
             if resumed {
@@ -198,6 +201,7 @@ pub async fn connect<T>(
                 settings,
                 login_methods,
                 embeds,
+                images,
                 received,
                 tool_calls: HashMap::new(),
             };
@@ -220,6 +224,8 @@ struct Started {
     /// Whether the agent takes a file's text in the prompt, rather than
     /// a link to it (ACP's `embeddedContext`).
     embeds: bool,
+    /// Whether the agent takes pictures in the prompt (ACP's `image`).
+    images: bool,
 }
 
 /// Initializes the connection, saying Cox runs the agent's command in a
@@ -248,6 +254,7 @@ async fn start(
         .agent_capabilities
         .prompt_capabilities
         .embedded_context;
+    let images = initialized.agent_capabilities.prompt_capabilities.image;
     let mcp_servers: Vec<AcpMcpServer> = mcp_servers.into_iter().map(Into::into).collect();
     if let Some(id) = resume
         && let Some(options) = resumed(
@@ -265,6 +272,7 @@ async fn start(
             settings: settings(options.unwrap_or_default()),
             login_methods,
             embeds,
+            images,
         });
     }
     let mut failed = None;
@@ -288,6 +296,7 @@ async fn start(
         settings: settings(session.config_options.unwrap_or_default()),
         login_methods,
         embeds,
+        images,
     })
 }
 
@@ -659,6 +668,8 @@ pub struct Session {
     login_methods: Vec<LoginMethod>,
     /// Whether the agent takes a file's text in the prompt.
     embeds: bool,
+    /// Whether the agent takes pictures in the prompt.
+    images: bool,
     received: UnboundedReceiver<Received>,
     /// What is known of each tool call of the turn that has not ended yet.
     tool_calls: HashMap<ToolCallId, Known>,
@@ -725,6 +736,7 @@ impl Session {
                     Block::Text(text) => ContentBlock::Text(TextContent::new(text)),
                     Block::File(path) => file_block(&path, self.embeds),
                     Block::Quote { uri, text } => quote_block(uri, text, self.embeds),
+                    Block::Picture(path) => picture_block(&path, self.images),
                 })
                 .collect(),
         );
@@ -753,6 +765,9 @@ pub enum Block {
         uri: String,
         text: String,
     },
+    /// A picture the human hands the agent, as a PNG file, by its
+    /// absolute path.
+    Picture(PathBuf),
 }
 
 impl From<String> for Block {
@@ -801,6 +816,19 @@ fn quote_block(uri: String, text: String, embeds: bool) -> ContentBlock {
     ContentBlock::Text(TextContent::new(format!(
         "From {uri}:\n\n{fence}\n{text}\n{fence}"
     )))
+}
+
+/// The PNG at `path` as a block of a prompt: the picture, when the agent
+/// takes `images`, or else a link to the file, for the agent to read.
+fn picture_block(path: &Path, images: bool) -> ContentBlock {
+    let uri = file_uri(path);
+    if images && let Ok(png) = std::fs::read(path) {
+        return ContentBlock::Image(ImageContent::new(STANDARD.encode(png), "image/png").uri(uri));
+    }
+    let name = path
+        .file_name()
+        .map_or_else(|| uri.clone(), |name| name.to_string_lossy().into_owned());
+    ContentBlock::ResourceLink(ResourceLink::new(name, uri).mime_type("image/png"))
 }
 
 /// How many of `letter` the longest run of it in `text` has.
@@ -1368,5 +1396,30 @@ mod tests {
             panic!("text: {block:?}");
         };
         assert_eq!(text.text, "From cox://terminal:\n\n````\na ```b```\n````");
+    }
+
+    #[test]
+    fn a_picture_goes_whole_to_an_agent_that_takes_images() {
+        let path = std::env::temp_dir().join(format!("cox-acp-picture-{}.png", std::process::id()));
+        std::fs::write(&path, b"png").unwrap();
+        let block = picture_block(&path, true);
+        std::fs::remove_file(&path).unwrap();
+        let ContentBlock::Image(image) = block else {
+            panic!("an image: {block:?}");
+        };
+        assert_eq!(image.data, STANDARD.encode(b"png"));
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(image.uri, Some(file_uri(&path)));
+    }
+
+    #[test]
+    fn a_picture_goes_as_a_link_to_an_agent_that_does_not_take_images() {
+        let block = picture_block(Path::new("/kept/1.png"), false);
+        let ContentBlock::ResourceLink(link) = block else {
+            panic!("a link: {block:?}");
+        };
+        assert_eq!(link.name, "1.png");
+        assert_eq!(link.uri, "file:///kept/1.png");
+        assert_eq!(link.mime_type.as_deref(), Some("image/png"));
     }
 }

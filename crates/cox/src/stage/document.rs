@@ -13,12 +13,13 @@ use std::path::{Path, PathBuf};
 use cox_core::entry::Attachment;
 use cox_core::tabs::{KeptTab, Lines};
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollHandle, Task, Window, div, prelude::*, px,
-    rgb,
+    App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, Task, Window, div,
+    prelude::*, px, rgb,
 };
 
 use crate::chat::hand::AddToChat;
+use crate::chat::region::{self, Described};
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::tab::{Shows, ShowsFile, TabContent};
 use crate::ui::ellipsis::ellipsis;
@@ -237,6 +238,26 @@ impl Focusable for Document {
     }
 }
 
+impl Document {
+    /// What the file is, and the text of it under `over`, a stretch of a
+    /// region in the window's points.
+    fn described(&self, over: Bounds<Pixels>) -> Described {
+        let text = self.reading.text_within(over);
+        let shown = if text.trim().is_empty() {
+            String::new()
+        } else {
+            format!(", where it reads:\n\n{}", region::fenced(text.trim()))
+        };
+        Described {
+            name: crate::chat::hand::of_file(&self.path, None, String::new()).label,
+            text: format!(
+                "the Markdown file {}, drawn as Markdown in a tab{shown}",
+                self.path.display()
+            ),
+        }
+    }
+}
+
 impl Render for Document {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The frame lays the text out again.
@@ -274,6 +295,7 @@ impl Render for Document {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::translate))
             .on_action(cx.listener(Self::add_to_chat))
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -305,5 +327,9 @@ impl Render for Document {
                     )
                     .child(div().max_w(px(TEXT_WIDTH)).px_4().py_3().child(text)),
             )
+            .child(region::mark({
+                let document = cx.weak_entity();
+                move |_, over, cx| Some(document.upgrade()?.read(cx).described(over))
+            }))
     }
 }

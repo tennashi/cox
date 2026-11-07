@@ -347,6 +347,18 @@ pub fn spawn<T: Transport + 'static>(
     }
 }
 
+/// What the human handed, as blocks of the prompt: what it says, with
+/// where it is from, then its picture, if it has one.
+fn handed_blocks(attachment: Attachment) -> impl Iterator<Item = Block> {
+    let picture = attachment.picture.map(Block::Picture);
+    [Block::Quote {
+        uri: attachment.uri,
+        text: attachment.text,
+    }]
+    .into_iter()
+    .chain(picture)
+}
+
 async fn run<T: Transport + 'static>(
     connect: impl FnOnce(&dyn Fn(String)) -> anyhow::Result<T>,
     cwd: PathBuf,
@@ -437,10 +449,7 @@ async fn run<T: Transport + 'static>(
                             .into_iter()
                             .chain([text])
                             .map(Block::Text)
-                            .chain(attached.into_iter().map(|attachment| Block::Quote {
-                                uri: attachment.uri,
-                                text: attachment.text,
-                            }))
+                            .chain(attached.into_iter().flat_map(handed_blocks))
                             .chain(files.into_iter().map(Block::File));
                         take_turn(
                             &mut session,

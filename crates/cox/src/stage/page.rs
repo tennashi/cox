@@ -31,6 +31,7 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use self::picture::Picture;
+use crate::chat::region::{self, Described};
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
@@ -495,6 +496,7 @@ impl Page {
             label: self.title(),
             uri: self.navigation.url.clone(),
             text: text.clone(),
+            picture: None,
         };
         let menu = div()
             .occlude()
@@ -536,6 +538,27 @@ impl Page {
     }
 }
 
+impl Page {
+    /// Where on the page `over`, a stretch of a region in the window's
+    /// points, is, the page being drawn over `page`.
+    fn described(&self, page: Bounds<Pixels>, over: Bounds<Pixels>) -> Described {
+        let title = self.title();
+        let url = &self.navigation.url;
+        let at = over.origin - page.origin;
+        Described {
+            text: format!(
+                "the page \"{title}\" at {url}, from {:.0},{:.0} to {:.0},{:.0} in CSS pixels \
+                of its viewport, as `document.elementFromPoint` takes them",
+                f32::from(at.x),
+                f32::from(at.y),
+                f32::from(at.x + over.size.width),
+                f32::from(at.y + over.size.height),
+            ),
+            name: title,
+        }
+    }
+}
+
 impl Render for Page {
     #[expect(
         clippy::used_underscore_binding,
@@ -562,6 +585,10 @@ impl Render for Page {
                     .on_key_down(cx.listener(Self::key_down))
                     .on_key_up(cx.listener(Self::key_up))
                     .child(Picture { page: cx.entity() })
+                    .child(region::mark({
+                        let page = cx.weak_entity();
+                        move |whole, over, cx| Some(page.upgrade()?.read(cx).described(whole, over))
+                    }))
                     .children(
                         self.look
                             .as_ref()

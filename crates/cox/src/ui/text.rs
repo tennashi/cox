@@ -226,6 +226,17 @@ impl Reading {
         self.painted.age(entries);
     }
 
+    /// The text that shows from the top left of `bounds` to its bottom
+    /// right, in the order it reads, as a drag between them selects it.
+    #[must_use]
+    pub fn text_within(&self, bounds: Bounds<Pixels>) -> String {
+        let spot = |position| self.painted.spot_at(position);
+        match (spot(bounds.origin), spot(bounds.bottom_right())) {
+            (Some(anchor), Some(head)) => self.painted.copy(&Selection { anchor, head }),
+            _ => String::new(),
+        }
+    }
+
     /// Writes entry `entry` of the text, showing what of it is selected.
     #[must_use]
     pub fn writer(&self, entry: usize) -> Writer {
