@@ -31,18 +31,28 @@ use cox_acp::Login;
 /// characters, in the note that says so.
 const OPENED_BY_LENGTH: usize = 40;
 
-/// A task that stops when this is dropped.
-pub struct Task(tokio::task::JoinHandle<()>);
+/// A task that stops when this is dropped, unless it was let go on its
+/// own (see [`Task::detach`]).
+pub struct Task(Option<tokio::task::JoinHandle<()>>);
+
+impl Task {
+    /// Lets the task go on until it ends on its own.
+    pub fn detach(mut self) {
+        self.0.take();
+    }
+}
 
 impl Drop for Task {
     fn drop(&mut self) {
-        self.0.abort();
+        if let Some(task) = &self.0 {
+            task.abort();
+        }
     }
 }
 
 /// Spawns `future` on the daemon's `LocalSet`, as a [`Task`].
 pub fn spawn(future: impl Future<Output = ()> + 'static) -> Task {
-    Task(tokio::task::spawn_local(future))
+    Task(Some(tokio::task::spawn_local(future)))
 }
 
 /// What a closed chat starts its agent again with: where it works, the

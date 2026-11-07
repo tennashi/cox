@@ -1587,6 +1587,35 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+async fn a_command_the_window_runs_answers_once_it_ends(cx: &mut TestAppContext) {
+    let home = scratch("window-runs");
+    std::fs::create_dir_all(&home).unwrap();
+    // The chat's commands go through the daemon to the window, which runs
+    // them, as on a terminal of the stage, and answers how each ended.
+    let fakes = Fakes {
+        terminal: false,
+        staged_terminal: true,
+        ..Fakes::default()
+    };
+    let (workspace, cx) = open_with(cx, home.clone(), Kept::Memory, fakes);
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    let command = "echo ran".to_owned();
+    view.read_with(cx, |view, _| {
+        view.set_goal(Some(KeptGoal::Command(command.clone())));
+    });
+
+    say(cx, &workspace, "hello").await;
+
+    let entries = shown_entries(cx, &workspace);
+    assert!(
+        entries.contains(&Entry::Note(format!("Goal met: `{command}` passed."))),
+        "{entries:?}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[gpui::test]
 async fn a_goal_in_words_is_judged_by_an_agent_until_it_is_met(cx: &mut TestAppContext) {
     let home = scratch("goal-words");
     std::fs::create_dir_all(&home).unwrap();
