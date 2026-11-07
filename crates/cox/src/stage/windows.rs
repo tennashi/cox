@@ -2,9 +2,8 @@
 //! human to show one on the stage, as the agent tries out an app it makes:
 //! each by its app and its title, which a click shows on a tab of its own
 //! (see [`crate::stage::mac_window`]), or brings to the front, to use the
-//! window itself. Over them, the tab asks the human to allow Cox what
-//! macOS asks of it: to record the screen, for the pictures and the
-//! titles, and to control the computer, for the mouse and keys.
+//! window itself. Over them, the tab asks the human to allow Cox to record
+//! the screen, which macOS asks of it for the pictures and the titles.
 
 use std::time::Duration;
 
@@ -29,7 +28,6 @@ pub const TITLE: &str = "Mac windows";
 struct Read {
     windows: Result<Vec<AppWindow>, String>,
     may_record: bool,
-    may_control: bool,
 }
 
 pub struct Windows {
@@ -53,7 +51,6 @@ impl Windows {
                         Read {
                             windows: cox_mac::windows().map_err(|error| format!("{error:#}")),
                             may_record: cox_mac::may_record(),
-                            may_control: cox_mac::may_control(),
                         }
                     })
                     .await;
@@ -200,13 +197,6 @@ impl Render for Windows {
                 "mac-may-record",
                 "Cox shows other apps' windows once it may record the screen.",
                 cox_mac::ask_to_record,
-            ));
-        }
-        if !read.may_control {
-            list = list.child(asking(
-                "mac-may-control",
-                "Cox passes clicks and keys on once it may control the computer.",
-                cox_mac::ask_to_control,
             ));
         }
         let note = |text: SharedString, color: u32| {

@@ -1,11 +1,8 @@
 //! The windows of other apps on macOS: `ScreenCaptureKit` lists them and
-//! streams a picture of one as it changes, and Core Graphics posts the
-//! human's mouse and keys to its app.
+//! streams a picture of one as it changes.
 
-use std::ffi::{c_char, c_int, c_void};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -15,12 +12,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send, sel};
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-use objc2_core_foundation::{CGPoint, CGRect};
-use objc2_core_graphics::{
-    CGEvent, CGEventField, CGEventType, CGMouseButton, CGPreflightPostEventAccess,
-    CGPreflightScreenCaptureAccess, CGRequestPostEventAccess, CGRequestScreenCaptureAccess,
-    CGScrollEventUnit,
-};
+use objc2_core_foundation::CGRect;
+use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
 use objc2_core_media::{CMSampleBuffer, CMTime};
 use objc2_core_video::{
     CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight,
@@ -34,7 +27,7 @@ use objc2_screen_capture_kit::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{Button, Event, Frame, Input, Press, Rect, Shared, Window, fitting, on_screen};
+use crate::{Event, Frame, Rect, Shared, Size, Window, fitting};
 
 /// How long the system has to answer what Cox asks of it.
 const ANSWER_WITHIN: Duration = Duration::from_secs(5);
@@ -50,54 +43,6 @@ const FIRST_SIZE: u32 = 2048;
 /// The fewest points a window is wide and high to be listed: smaller ones
 /// are a menu's or a status item's.
 const SMALLEST: f64 = 40.;
-
-/// The field of an event that numbers the window it is for, which an app
-/// routes the mouse's events by: one Core Graphics does not name.
-const WINDOW_NUMBER: CGEventField = CGEventField(51);
-
-/// The field of a mouse's event that ties the events of one press
-/// together, from its button's going down to its coming up, which an app
-/// behind another takes a right click by: one Core Graphics does not name.
-const CLICK_GROUP: CGEventField = CGEventField(58);
-
-/// The mouse's subtype of a trackpad's touch, which an app behind another
-/// takes a right click by.
-const TOUCH: i64 = 3;
-
-/// The group of the press the mouse's button is in, as [`CLICK_GROUP`]
-/// has it: a new one each time the button goes down.
-static PRESSES: AtomicI64 = AtomicI64::new(0);
-
-/// `CGEventSetWindowLocation`, which sets where in its window an event is.
-type SetWindowLocation = unsafe extern "C" fn(&CGEvent, CGPoint);
-
-unsafe extern "C" {
-    fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-}
-
-/// `CGEventSetWindowLocation`, which macOS keeps private, in `SkyLight`:
-/// the mouse's events reach a window only knowing where in it they are
-/// (see [`aim`]). `None` where macOS has no such function.
-static SET_WINDOW_LOCATION: LazyLock<Option<SetWindowLocation>> = LazyLock::new(|| {
-    const RTLD_NOW: c_int = 0x2;
-    let path = c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight";
-    // SAFETY: a framework of the system, loaded for good, by a path that
-    // ends in NUL.
-    let skylight = unsafe { dlopen(path.as_ptr(), RTLD_NOW) };
-    if skylight.is_null() {
-        tracing::debug!("cannot load SkyLight");
-        return None;
-    }
-    // SAFETY: a name that ends in NUL, of a library that stays loaded.
-    let found = unsafe { dlsym(skylight, c"CGEventSetWindowLocation".as_ptr()) };
-    if found.is_null() {
-        tracing::debug!("SkyLight has no CGEventSetWindowLocation");
-        return None;
-    }
-    // SAFETY: the function takes an event and a point, as the type says.
-    Some(unsafe { std::mem::transmute::<*mut c_void, SetWindowLocation>(found) })
-});
 
 /// What `ScreenCaptureKit` hands over from the queue it answers on.
 struct Sendable<T>(T);
@@ -214,14 +159,6 @@ pub(crate) fn bring_to_front(pid: i32) {
     if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
         app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
     }
-}
-
-pub(crate) fn may_control() -> bool {
-    CGPreflightPostEventAccess()
-}
-
-pub(crate) fn ask_to_control() {
-    CGRequestPostEventAccess();
 }
 
 struct Ivars {
@@ -349,10 +286,10 @@ fn answered(ask: impl FnOnce(&block2::DynBlock<dyn Fn(*mut NSError)>)) -> Result
 pub(crate) fn mirror(
     id: u32,
     shared: &Arc<Shared>,
-    inputs: &Receiver<Input>,
+    sizes: &Receiver<Size>,
     events: &UnboundedSender<Event>,
 ) {
-    if let Err(why) = show(id, shared, inputs, events) {
+    if let Err(why) = show(id, shared, sizes, events) {
         let _ = events.send(Event::Ended(why));
     }
 }
@@ -360,7 +297,7 @@ pub(crate) fn mirror(
 fn show(
     id: u32,
     shared: &Arc<Shared>,
-    inputs: &Receiver<Input>,
+    sizes: &Receiver<Size>,
     events: &UnboundedSender<Event>,
 ) -> Result<(), String> {
     if !may_record() {
@@ -404,9 +341,8 @@ fn show(
     answered(|handler| unsafe { stream.startCaptureWithCompletionHandler(Some(handler)) })?;
     let _ = events.send(Event::Showing);
     let ended = loop {
-        match inputs.recv_timeout(LOOK_EVERY) {
-            Ok(Input::Size { width, height }) => asked = (width, height),
-            Ok(input) => post(&window, input),
+        match sizes.recv_timeout(LOOK_EVERY) {
+            Ok(size) => asked = size,
             Err(RecvTimeoutError::Timeout) => match find(id) {
                 Ok(Some((_, now))) => window = now,
                 Ok(None) => break Some("The window closed.".to_owned()),
@@ -428,146 +364,4 @@ fn show(
     // SAFETY: as above.
     unsafe { stream.stopCaptureWithCompletionHandler(None) };
     ended.map_or(Ok(()), Err)
-}
-
-/// Posts the human's `input` to `window`'s app.
-fn post(window: &Window, input: Input) {
-    // What is typed may be a password: the log says only how long it is.
-    match &input {
-        Input::Text(text) => tracing::debug!(
-            window = window.id,
-            pid = window.pid,
-            chars = text.chars().count(),
-            "posting text"
-        ),
-        Input::Mouse {
-            press: Press::Drag, ..
-        } => tracing::trace!(window = window.id, pid = window.pid, ?input, "posting"),
-        _ => tracing::debug!(window = window.id, pid = window.pid, ?input, "posting"),
-    }
-    match input {
-        Input::Size { .. } => {}
-        Input::Mouse {
-            x,
-            y,
-            button,
-            press,
-        } => {
-            let (x, y) = on_screen(window.frame, x, y);
-            let kind = match (button, press) {
-                (Button::Left, Press::Down) => CGEventType::LeftMouseDown,
-                (Button::Left, Press::Drag) => CGEventType::LeftMouseDragged,
-                (Button::Left, Press::Up) => CGEventType::LeftMouseUp,
-                (Button::Right, Press::Down) => CGEventType::RightMouseDown,
-                (Button::Right, Press::Drag) => CGEventType::RightMouseDragged,
-                (Button::Right, Press::Up) => CGEventType::RightMouseUp,
-            };
-            let button = match button {
-                Button::Left => CGMouseButton::Left,
-                Button::Right => CGMouseButton::Right,
-            };
-            let Some(event) = CGEvent::new_mouse_event(None, kind, CGPoint::new(x, y), button)
-            else {
-                tracing::debug!("cannot make a mouse event");
-                return;
-            };
-            aim(&event, window, x, y);
-            let group = if press == Press::Down {
-                PRESSES.fetch_add(1, Ordering::Relaxed) + 1
-            } else {
-                PRESSES.load(Ordering::Relaxed)
-            };
-            let number = match button {
-                CGMouseButton::Right => 1,
-                _ => 0,
-            };
-            let mut fields = vec![
-                (CLICK_GROUP, group),
-                (CGEventField::MouseEventButtonNumber, number),
-            ];
-            if press != Press::Drag {
-                fields.extend([
-                    (CGEventField::MouseEventClickState, 1),
-                    (CGEventField::MouseEventSubtype, TOUCH),
-                ]);
-            }
-            for (field, value) in fields {
-                CGEvent::set_integer_value_field(Some(&event), field, value);
-            }
-            CGEvent::post_to_pid(window.pid, Some(&event));
-        }
-        Input::Wheel { x, y, dx, dy } => {
-            let (x, y) = on_screen(window.frame, x, y);
-            let Some(event) =
-                CGEvent::new_scroll_wheel_event2(None, CGScrollEventUnit::Pixel, 2, dy, dx, 0)
-            else {
-                tracing::debug!("cannot make a wheel event");
-                return;
-            };
-            CGEvent::set_location(Some(&event), CGPoint::new(x, y));
-            aim(&event, window, x, y);
-            CGEvent::post_to_pid(window.pid, Some(&event));
-        }
-        Input::Key(name) => {
-            if let Some(code) = key_code(&name) {
-                for down in [true, false] {
-                    if let Some(event) = CGEvent::new_keyboard_event(None, code, down) {
-                        CGEvent::post_to_pid(window.pid, Some(&event));
-                    }
-                }
-            }
-        }
-        Input::Text(text) => {
-            let units: Vec<u16> = text.encode_utf16().collect();
-            for down in [true, false] {
-                if let Some(event) = CGEvent::new_keyboard_event(None, 0, down) {
-                    // SAFETY: the units are as many as said, and live
-                    // through the call.
-                    unsafe {
-                        CGEvent::keyboard_set_unicode_string(
-                            Some(&event),
-                            units.len() as _,
-                            units.as_ptr(),
-                        );
-                    }
-                    CGEvent::post_to_pid(window.pid, Some(&event));
-                }
-            }
-        }
-    }
-}
-
-/// Aims a mouse's or the wheel's `event`, at `x` and `y` on the screen, at
-/// `window`, which its app then takes it for though the window is not
-/// under the mouse: as macOS 27 has it, only with the window's number and
-/// where in the window the event is.
-fn aim(event: &CGEvent, window: &Window, x: f64, y: f64) {
-    for field in [
-        WINDOW_NUMBER,
-        CGEventField::MouseEventWindowUnderMousePointer,
-        CGEventField::MouseEventWindowUnderMousePointerThatCanHandleThisEvent,
-    ] {
-        CGEvent::set_integer_value_field(Some(event), field, i64::from(window.id));
-    }
-    if let Some(set_window_location) = *SET_WINDOW_LOCATION {
-        let within = CGPoint::new(x - window.frame.x, y - window.frame.y);
-        // SAFETY: an event Cox made, which lives through the call.
-        unsafe { set_window_location(event, within) };
-    }
-}
-
-/// The virtual key code of the key `name`, as the Mac's keyboards have it.
-fn key_code(name: &str) -> Option<u16> {
-    Some(match name {
-        "Enter" => 36,
-        "Tab" => 48,
-        "Backspace" => 51,
-        "Escape" => 53,
-        "Delete" => 117,
-        "ArrowLeft" => 123,
-        "ArrowRight" => 124,
-        "ArrowDown" => 125,
-        "ArrowUp" => 126,
-        _ => return None,
-    })
 }

@@ -1,8 +1,8 @@
 //! What the tabs that show another program's screen share, as an Android
 //! emulator's display or a Mac app's window: the picture as it last came,
-//! drawn as big as fits in the middle of the tab, and the mouse over it,
-//! passed on as presses of its left and right buttons, drags and the
-//! wheel, where they fall across the picture.
+//! drawn as big as fits in the middle of the tab, and, for a program that
+//! takes it, the mouse over it, passed on as presses of its left button,
+//! drags and the wheel, where they fall across the picture.
 
 use std::sync::Arc;
 
@@ -18,25 +18,7 @@ use crate::ui::theme::RAISED;
 /// How many logical pixels one line of a wheel scroll is.
 pub(super) const LINE_HEIGHT: f32 = 40.;
 
-/// Which of the mouse's buttons, as a trackpad's two-finger tap is its
-/// right.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Button {
-    Left,
-    Right,
-}
-
-impl Button {
-    fn of(button: MouseButton) -> Option<Self> {
-        match button {
-            MouseButton::Left => Some(Self::Left),
-            MouseButton::Right => Some(Self::Right),
-            _ => None,
-        }
-    }
-}
-
-/// What a button of the mouse does over the picture.
+/// What the left button of the mouse does over the picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Press {
     Down,
@@ -57,8 +39,8 @@ pub(super) struct Screen {
     asked: Option<(u32, u32)>,
     /// Where the picture was drawn last, in the window.
     drawn: Option<Bounds<Pixels>>,
-    /// The mouse's button down on the picture, if one is.
-    pressed: Option<Button>,
+    /// Whether the mouse's left button is down on the picture.
+    pressed: bool,
 }
 
 impl Screen {
@@ -86,13 +68,24 @@ impl Screen {
 /// A tab that shows another program's screen.
 pub(super) trait Mirrored: 'static {
     fn screen(&mut self) -> &mut Screen;
-    fn focus_handle(&self) -> &FocusHandle;
     /// Whether the program is there to be asked a size of.
     fn is_live(&self) -> bool;
     /// Asks the program for pictures `width` by `height` pixels.
     fn resize(&mut self, width: u32, height: u32);
-    /// The mouse's `button`, at `x` and `y` across the picture.
-    fn press(&mut self, x: f32, y: f32, button: Button, press: Press);
+    /// Has the mouse over the picture, `over`, go on to the program, if it
+    /// takes it, as [`pass_on`] does.
+    fn listen(_mirrored: &Entity<Self>, _over: &Hitbox, _window: &mut Window)
+    where
+        Self: Sized,
+    {
+    }
+}
+
+/// A tab whose program takes the mouse over its picture.
+pub(super) trait Touched: Mirrored {
+    fn focus_handle(&self) -> &FocusHandle;
+    /// The mouse's left button, at `x` and `y` across the picture.
+    fn press(&mut self, x: f32, y: f32, press: Press);
     /// The wheel turned by `lines` each way, at `x` and `y` across the
     /// picture.
     fn scroll(&mut self, x: f32, y: f32, lines: (f32, f32));
@@ -144,7 +137,7 @@ fn prepare<T: Mirrored>(
 }
 
 /// Paints the picture of `T`'s program, as big as fits, in the middle of
-/// the tab, and passes the mouse over it on.
+/// the tab, and passes the mouse over it on, if the program takes it.
 pub(super) struct Display<T: Mirrored> {
     pub(super) mirrored: Entity<T>,
 }
@@ -235,70 +228,72 @@ impl<T: Mirrored> Element for Display<T> {
         self.mirrored
             .update(cx, |mirrored, _| mirrored.screen().drawn = drawn);
 
-        let mirrored = self.mirrored.clone();
-        let over = hitbox.clone();
-        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble
-                && let Some(button) = Button::of(event.button)
-                && over.is_hovered(window)
-            {
-                mirrored.update(cx, |mirrored, cx| {
-                    window.focus(mirrored.focus_handle());
-                    let screen = mirrored.screen();
-                    screen.pressed = Some(button);
-                    if let Some((x, y)) = screen.across(event.position) {
-                        mirrored.press(x, y, button, Press::Down);
-                    }
-                    cx.stop_propagation();
-                });
-            }
-        });
-        let mirrored = self.mirrored.clone();
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-            if phase == DispatchPhase::Bubble {
-                mirrored.update(cx, |mirrored, _| {
-                    let screen = mirrored.screen();
-                    if let Some(button) = screen.pressed
-                        && let Some((x, y)) = screen.across(event.position)
-                    {
-                        mirrored.press(x, y, button, Press::Drag);
-                    }
-                });
-            }
-        });
-        let mirrored = self.mirrored.clone();
-        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-            if phase == DispatchPhase::Bubble
-                && let Some(button) = Button::of(event.button)
-            {
-                mirrored.update(cx, |mirrored, _| {
-                    let screen = mirrored.screen();
-                    if screen.pressed == Some(button) {
-                        screen.pressed = None;
-                        if let Some((x, y)) = screen.across(event.position) {
-                            mirrored.press(x, y, button, Press::Up);
-                        }
-                    }
-                });
-            }
-        });
-        let mirrored = self.mirrored.clone();
-        let over = hitbox.clone();
-        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble && over.is_hovered(window) {
-                let lines = match event.delta {
-                    ScrollDelta::Lines(lines) => (lines.x, lines.y),
-                    ScrollDelta::Pixels(pixels) => (
-                        f32::from(pixels.x) / LINE_HEIGHT,
-                        f32::from(pixels.y) / LINE_HEIGHT,
-                    ),
-                };
-                mirrored.update(cx, |mirrored, _| {
-                    if let Some((x, y)) = mirrored.screen().across(event.position) {
-                        mirrored.scroll(x, y, lines);
-                    }
-                });
-            }
-        });
+        T::listen(&self.mirrored, hitbox, window);
     }
+}
+
+/// Passes the mouse over the picture, `over`, on to `mirrored`'s program:
+/// the left button, as it goes down, drags and comes up, and the wheel.
+pub(super) fn pass_on<T: Touched>(mirrored: &Entity<T>, over: &Hitbox, window: &mut Window) {
+    let (to, hovered) = (mirrored.clone(), over.clone());
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble
+            && event.button == MouseButton::Left
+            && hovered.is_hovered(window)
+        {
+            to.update(cx, |mirrored, cx| {
+                window.focus(mirrored.focus_handle());
+                let screen = mirrored.screen();
+                screen.pressed = true;
+                if let Some((x, y)) = screen.across(event.position) {
+                    mirrored.press(x, y, Press::Down);
+                }
+                cx.stop_propagation();
+            });
+        }
+    });
+    let to = mirrored.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+        if phase == DispatchPhase::Bubble {
+            to.update(cx, |mirrored, _| {
+                let screen = mirrored.screen();
+                if screen.pressed
+                    && let Some((x, y)) = screen.across(event.position)
+                {
+                    mirrored.press(x, y, Press::Drag);
+                }
+            });
+        }
+    });
+    let to = mirrored.clone();
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+            to.update(cx, |mirrored, _| {
+                let screen = mirrored.screen();
+                if screen.pressed {
+                    screen.pressed = false;
+                    if let Some((x, y)) = screen.across(event.position) {
+                        mirrored.press(x, y, Press::Up);
+                    }
+                }
+            });
+        }
+    });
+    let (to, hovered) = (mirrored.clone(), over.clone());
+    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble && hovered.is_hovered(window) {
+            let lines = match event.delta {
+                ScrollDelta::Lines(lines) => (lines.x, lines.y),
+                ScrollDelta::Pixels(pixels) => (
+                    f32::from(pixels.x) / LINE_HEIGHT,
+                    f32::from(pixels.y) / LINE_HEIGHT,
+                ),
+            };
+            to.update(cx, |mirrored, _| {
+                if let Some((x, y)) = mirrored.screen().across(event.position) {
+                    mirrored.scroll(x, y, lines);
+                }
+            });
+        }
+    });
 }
