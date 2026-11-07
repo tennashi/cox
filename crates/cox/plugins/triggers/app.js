@@ -14,7 +14,14 @@ const API = "cox://api/triggers";
 const EVERY = 2000;
 
 /// The events a trigger runs on, as the headings name them.
-const EVENTS = { "turn.end": "Turn end", schedule: "Schedule" };
+const EVENTS = {
+  "turn.end": "Turn end",
+  "goal.met": "Goal met",
+  "wiki.written": "Wiki written",
+  "sketch.end": "Sketch ended",
+  "chat.open": "Chat opened",
+  schedule: "Schedule",
+};
 
 /// The name of the event `on`, as Cox tells it: `turn.end`, or, for one
 /// that says more, as `{schedule: {cron}}`, its key.
@@ -93,6 +100,7 @@ function does(t, folder) {
   }
   const when = t.changed ? " · when files changed" : "";
   if (t.by === "shell") return `run: ${first}${when}`;
+  if (t.by === "this") return `tell: ${first}${when}`;
   return `agent: new${when}`;
 }
 
@@ -202,7 +210,7 @@ function find(folder, file) {
 // stands on what a chat here said last as its turn ended.
 
 /// The fields of a card, as Cox's draft names them.
-const FIELDS = ["name", "scope", "on", "cron", "folder", "changed", "sketch", "by", "allow", "reject", "text"];
+const FIELDS = ["name", "scope", "on", "pages", "cron", "folder", "changed", "sketch", "by", "allow", "reject", "text"];
 
 /// The card open, while one is: the folder it is shown in, its file, if
 /// it has one yet, the draft as saved and as the human changed it, which
@@ -213,6 +221,7 @@ let card = null;
 /// with who runs it, left out.
 function sent(draft) {
   const d = { ...draft };
+  if (d.on !== "wiki.written") d.pages = [];
   if (d.on === "schedule") {
     d.changed = [];
     d.sketch = null;
@@ -244,7 +253,7 @@ const marked = () => (card.file ? changes() : new Set());
 function openCard(folder, t) {
   const saved = t
     ? structuredClone(t.draft)
-    : { name: "", scope: "project", on: "turn.end", cron: "", folder: "", changed: [], sketch: null, by: "new", allow: [], reject: [], text: "" };
+    : { name: "", scope: "project", on: "turn.end", pages: [], cron: "", folder: "", changed: [], sketch: null, by: "new", allow: [], reject: [], text: "" };
   card = {
     id: t ? t.file : `new-${Date.now()}`,
     folder,
@@ -290,7 +299,8 @@ const line = (label, field, what) =>
   `<div class="line" data-of="${field}"><span class="label">${label}</span><div class="field">${what}</div></div>`;
 
 /// What the event is called, the one who runs it, and how sketches go.
-const EVENT_NAMES = [["turn.end", "Turn end"], ["schedule", "Schedule"]];
+const EVENT_NAMES = Object.entries(EVENTS);
+const WHO = [["shell", "Shell"], ["this", "This chat's agent"], ["new", "A new agent"]];
 const SKETCHES = [["", "Any"], ["skip", "Skip"], ["only", "Only"]];
 
 function settingsOpen() {
@@ -300,13 +310,16 @@ function settingsOpen() {
     when.push(line("Cron", "cron", `<input data-input="cron" class="mono" value="${esc(d.cron)}" placeholder="0 9 * * *" spellcheck="false">`));
     when.push(line("Folder", "folder", `<input data-input="folder" class="mono" value="${esc(d.folder)}" placeholder="The home" spellcheck="false">`));
   } else {
+    if (d.on === "wiki.written") {
+      when.push(line("Pages", "pages", `<input data-input="pages" class="mono" value="${esc(d.pages.join(" "))}" placeholder="Any" spellcheck="false">`));
+    }
     when.push(line("Changed", "changed", `<input data-input="changed" class="mono" value="${esc(d.changed.join(" "))}" placeholder="Anything" spellcheck="false">`));
     when.push(line("Sketches", "sketch", chips("sketch", SKETCHES)));
   }
   const by = [
     d.on === "schedule"
       ? line("Who", "by", `<div class="chips"><span class="chip chosen">A new chat</span></div>`)
-      : line("Who", "by", chips("by", [["shell", "Shell"], ["new", "A new agent"]])),
+      : line("Who", "by", chips("by", WHO)),
   ];
   if (d.on === "schedule" || d.by === "new") {
     by.push(line("Allowed", "allow", patterns("allow")));
@@ -327,7 +340,8 @@ function settingsFolded(changed) {
     cells.push(cell("Cron", "cron", `<code>${esc(d.cron)}</code>`));
     cells.push(cell("Folder", "folder", esc(d.folder || "The home")));
   } else {
-    cells.push(cell("By", "by", d.by === "shell" ? "Shell" : "A new agent"));
+    cells.push(cell("By", "by", WHO.find(([by]) => by === d.by)?.[1] ?? esc(d.by)));
+    if (d.on === "wiki.written") cells.push(cell("Pages", "pages", d.pages.length ? codes(d.pages) : "Any"));
     cells.push(cell("Changed", "changed", d.changed.length ? codes(d.changed) : "Anything"));
     cells.push(cell("Sketches", "sketch", SKETCHES.find(([value]) => value === (d.sketch ?? ""))[1]));
   }
@@ -340,7 +354,7 @@ function settingsFolded(changed) {
 function doOpen() {
   const command = card.draft.by === "shell" && card.draft.on !== "schedule";
   return `<div class="section">DO</div>
-    <textarea data-input="text" class="text${command ? " command" : ""}" spellcheck="false" placeholder="${command ? "The command to run" : "What the agent is asked"}">${esc(card.draft.text)}</textarea>`;
+    <textarea data-input="text" class="text${command ? " command" : ""}" spellcheck="false" placeholder="${command ? "The command to run" : card.draft.by === "this" ? "What the chat's agent is told" : "What the agent is asked"}">${esc(card.draft.text)}</textarea>`;
 }
 
 function doFolded(changed) {
@@ -599,7 +613,7 @@ sheet.addEventListener("input", (event) => {
   const field = event.target.dataset.input;
   if (!field) return;
   const value = event.target.value;
-  card.draft[field] = field === "changed" ? value.split(/\s+/).filter(Boolean) : value;
+  card.draft[field] = field === "changed" || field === "pages" ? value.split(/\s+/).filter(Boolean) : value;
   card.error = null;
   marks();
 });

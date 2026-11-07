@@ -295,8 +295,13 @@ Read this turn's diff. If anything could be simpler, say where and how.
 Change nothing.
 ```
 
-`on` is the event it runs on: `turn.end`, or `schedule`, which opens a
-chat at the times it says (see [Schedules](#schedules)). `when` narrows it:
+`on` is the event it runs on, or a list of them: `turn.end`;
+`goal.met`, as a chat's goal is met; `wiki.written`, as a chat's agent
+writes a page of a wiki, or, as `wiki.written: {page: "research/*"}`,
+one of the pages the globs name; `sketch.end`, as a sketch ends, in the
+chat that goes on with it; `chat.open`, as a chat opens, once its agent
+has started; or `schedule`, which opens a chat at the times it says
+(see [Schedules](#schedules)). `when` narrows it:
 `changed`, globs of the chat's folder, those that start `!` leaving
 files out, which run it only when a file they match changed since it
 last ran in the chat, or else since the last commit, as Git tells,
@@ -304,7 +309,10 @@ comparing the trees of what the folder holds then and now, without
 touching its index; and `sketch`, `skip` not to run in a sketch, or
 `only` to run in one alone. `by` is who runs it: `shell` runs the rest
 as a command, in a terminal on the stage, as a goal's, which passes
-when it exits 0; and `new` asks an agent of its own, of the same
+when it exits 0; `this` tells the chat's own agent the rest, as the
+next turn, in the human's place, once the triggers that run with it
+went, and, as a turn ends, once for a line of the human's, so that the
+turn it starts does not tell it again; and `new` asks an agent of its own, of the same
 command as the chat's, in the chat's folder, as a goal's judge, with
 none of Cox's tools nor the stage's, which ends its reply with `PASS`,
 or `FAIL: ` and what the chat has to act on; `allow` and `reject` are
@@ -326,6 +334,15 @@ passed, in amber when it found something, and in red when it could not
 run, as when its agent did not start; a click on one opens what it
 said. A trigger Cox cannot read is said in the log, and does not run.
 
+The triggers of the other events of a chat run once the chat waits for
+the human, as after the turn its goal was met in, or the turn its
+agent wrote a page in, all of them, in the same order, on a line of
+their own, under what happened, as `GOAL MET`, `WIKI WRITTEN`, `SKETCH
+ENDED` or `CHAT OPENED`, with a dot each as at a turn's end: what they
+find stays there, and the chat's agent is not told it. An agent of
+such a trigger, `by: new`, is told what happened, as which page was
+written.
+
 "Triggers", a tab of the stage (see below), lists the triggers of the
 stage's folder, under the event they run on, in the order they run in
 there, each with the dot of how it last ran in a chat there, which says
@@ -336,7 +353,7 @@ and a click opens its card, as "New trigger" at its top does for a
 trigger of the stage's folder that is not there yet. The card is what
 the file says, for the human to change: its name, whether it is the
 project's or the human's, which a click on it switches, the event it
-runs on, what narrows it, who runs it, the patterns its agent is
+runs on, what narrows it, as the pages of the wiki it runs on, who runs it, the patterns its agent is
 allowed and refused, each with its × and a + for another, and what is
 done. The part the human works on is open, and the other folded to a
 line, a click on which opens it: what is done, for an agent's, and the

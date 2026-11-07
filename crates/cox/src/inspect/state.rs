@@ -478,12 +478,13 @@ fn describe_entry(entry: &Entry) -> String {
             }
         }
         Entry::Keep { why, chat, kept } => describe_keep(why, *chat, *kept),
-        Entry::Checks(checks) => describe_checks(checks),
+        Entry::Checks(checks) => describe_checks("turn end", checks),
+        Entry::Event { on, checks } => describe_checks(on, checks),
     }
 }
 
-/// What ran as a turn ended, each with how it went.
-fn describe_checks(checks: &[Check]) -> String {
+/// What ran as a turn ended, or as `on` happened, each with how it went.
+fn describe_checks(on: &str, checks: &[Check]) -> String {
     let checks: Vec<String> = checks
         .iter()
         .map(|check| {
@@ -497,7 +498,7 @@ fn describe_checks(checks: &[Check]) -> String {
             format!("{} {state}", check.name)
         })
         .collect();
-    format!("turn end: {}", checks.join(", "))
+    format!("{on}: {}", checks.join(", "))
 }
 
 /// Cox's card asking whether to keep in the wiki what a chat learned, at

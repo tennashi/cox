@@ -105,8 +105,14 @@ pub struct Chat {
     starts: Option<Starts>,
     /// The judge of the goal in words, once it was asked.
     judge: Option<Judge>,
-    /// The triggers due as the last turn ended, as their files had them.
-    due: Vec<Trigger>,
+    /// The triggers that were due, as a turn ended or something else
+    /// happened, by their files, as the files had them.
+    due: HashMap<PathBuf, Trigger>,
+    /// Whether the chat runs the triggers of its opening once its agent
+    /// has started, in a sketch or not.
+    opens: Option<bool>,
+    /// Whether the chat worked in a sketch as its last turn ended.
+    in_sketch: bool,
     /// The tree of the chat's folder as the last turn ended, when a
     /// trigger due runs on what changed.
     ended_at: Option<String>,
@@ -159,7 +165,9 @@ impl Chat {
             login: None,
             starts,
             judge: None,
-            due: Vec::new(),
+            due: HashMap::new(),
+            opens: None,
+            in_sketch: false,
             ended_at: None,
             trees: HashMap::new(),
             askers: HashMap::new(),
@@ -314,6 +322,95 @@ impl Chat {
         for command in std::mem::take(&mut self.queued) {
             self.send(command);
         }
+        if let Some(in_sketch) = self.opens.take() {
+            self.fire(&On::ChatOpen, "The chat opened.".to_owned(), in_sketch);
+        }
+    }
+
+    /// Has the chat, which just opened, run the triggers of its opening
+    /// once its agent has started, in a sketch or not.
+    pub fn opened(&mut self, in_sketch: bool) {
+        self.opens = Some(in_sketch);
+    }
+
+    /// Runs the triggers of the chat's folder that run on `on`, which
+    /// happened as `about` tells their agents, in a sketch or not, as
+    /// `in_sketch` says: as soon as the chat waits for the human. A chat
+    /// whose agent does not run runs none.
+    pub fn fire(&mut self, on: &On, about: String, in_sketch: bool) {
+        let Some(cwd) = self.running.as_ref().map(|running| running.cwd.clone()) else {
+            return;
+        };
+        let due = self.due_on(&cwd, on, in_sketch);
+        self.conversation.run_event(
+            conversation::Happened {
+                on: on.name().to_owned(),
+                about,
+            },
+            due,
+        );
+        self.after();
+    }
+
+    /// The triggers of `cwd` that run on `on` there, in a sketch or not,
+    /// as `in_sketch` says, on what changed since each last ran, when it
+    /// says which files, as the conversation runs them.
+    fn due_on(&mut self, cwd: &Path, on: &On, in_sketch: bool) -> Vec<Due> {
+        let (triggers, unread) = trigger::of(cwd, &crate::settings::workflow());
+        for why in unread {
+            tracing::error!("a trigger does not run: {why}");
+        }
+        let kept = crate::storage::path(crate::storage::Kept::Triggers);
+        let triggers: Vec<Trigger> = Arranged::read(kept.as_deref(), cwd)
+            .apply(triggers)
+            .into_iter()
+            .filter(|(trigger, enabled)| *enabled && trigger.runs_on(on, in_sketch))
+            .map(|(trigger, _)| trigger)
+            .collect();
+        let watches = triggers
+            .iter()
+            .any(|trigger| trigger.when.changed.is_some());
+        if watches {
+            self.ended_at = trigger::tree(cwd);
+        }
+        let triggers: Vec<Trigger> = triggers
+            .into_iter()
+            .filter(|trigger| self.changed_for(cwd, trigger))
+            .collect();
+        triggers
+            .into_iter()
+            .map(|trigger| {
+                let due = Due {
+                    name: trigger.name.clone(),
+                    file: trigger.file.clone(),
+                    does: match trigger.by {
+                        By::Shell => Does::Run(trigger.text.trim().to_owned()),
+                        By::This => Does::Tell(trigger.text.trim().to_owned()),
+                        By::New { .. } => Does::Ask(trigger.text.trim().to_owned()),
+                    },
+                };
+                self.due.insert(trigger.file.clone(), trigger);
+                due
+            })
+            .collect()
+    }
+
+    /// What follows from where the conversation got to: the triggers of
+    /// the goal being met, if it was, and those of what happened that
+    /// wait, once the chat waits for the human.
+    fn after(&mut self) {
+        if self.conversation.take_goal_met() {
+            let in_sketch = self.in_sketch;
+            self.fire(
+                &On::GoalMet,
+                "The chat's goal is met.".to_owned(),
+                in_sketch,
+            );
+            return;
+        }
+        if self.conversation.run_waiting() {
+            self.check_next();
+        }
     }
 
     /// The agent did not start: the chat says why, and is closed.
@@ -418,6 +515,7 @@ impl Chat {
         if matches!(event, AgentEvent::TurnEnded(StopReason::EndTurn))
             && self.conversation.state() == State::Busy
         {
+            self.in_sketch = in_sketch;
             self.find_due(in_sketch);
         }
         if let (AgentEvent::Opened { id, .. }, Some(record)) = (&event, &self.record) {
@@ -440,6 +538,8 @@ impl Chat {
         }
         if !was_checking && self.conversation.state() == State::Checking {
             self.check_next();
+        } else {
+            self.after();
         }
     }
 
@@ -457,38 +557,8 @@ impl Chat {
         if let Err(error) = trigger::card::keep_last_turn(last.as_deref(), &cwd, said.as_deref()) {
             tracing::error!("the turn is not kept to try triggers on: {error}");
         }
-        let (triggers, unread) = trigger::of(&cwd, &crate::settings::workflow());
-        for why in unread {
-            tracing::error!("a trigger does not run: {why}");
-        }
-        let kept = crate::storage::path(crate::storage::Kept::Triggers);
-        let triggers: Vec<Trigger> = Arranged::read(kept.as_deref(), &cwd)
-            .apply(triggers)
-            .into_iter()
-            .filter(|(trigger, on)| *on && trigger.runs_on(&On::TurnEnd, in_sketch))
-            .map(|(trigger, _)| trigger)
-            .collect();
-        let watches = triggers
-            .iter()
-            .any(|trigger| trigger.when.changed.is_some());
-        self.ended_at = if watches { trigger::tree(&cwd) } else { None };
-        let due: Vec<Trigger> = triggers
-            .into_iter()
-            .filter(|trigger| self.changed_for(&cwd, trigger))
-            .collect();
-        self.conversation.set_due(
-            due.iter()
-                .map(|trigger| Due {
-                    name: trigger.name.clone(),
-                    file: trigger.file.clone(),
-                    does: match trigger.by {
-                        By::Shell => Does::Run(trigger.text.trim().to_owned()),
-                        By::New { .. } => Does::Ask(trigger.text.trim().to_owned()),
-                    },
-                })
-                .collect(),
-        );
-        self.due = due;
+        let due = self.due_on(&cwd, &On::TurnEnd, in_sketch);
+        self.conversation.set_due(due);
     }
 
     /// Whether what changed in `cwd` since `trigger` last ran, or since
@@ -524,6 +594,11 @@ impl Chat {
             self.ask_judge(&words);
         } else if let Some(due) = self.conversation.asking().cloned() {
             self.ask_trigger(&due);
+        } else if self.conversation.telling().is_some() {
+            let running = self.running_trigger();
+            let next = self.conversation.tell();
+            self.keep_ran(running);
+            self.go_on(next);
         }
     }
 
@@ -535,6 +610,7 @@ impl Chat {
             None if self.conversation.state() == State::Checking => self.check_next(),
             None => {}
         }
+        self.after();
     }
 
     /// Asks the agent of the trigger `due`, starting it if the chat has
@@ -543,7 +619,7 @@ impl Chat {
         let Does::Ask(text) = &due.does else {
             return;
         };
-        let (allow, reject) = match self.due.iter().find(|trigger| trigger.file == due.file) {
+        let (allow, reject) = match self.due.get(&due.file) {
             Some(Trigger {
                 by: By::New { allow, reject, .. },
                 ..
@@ -583,9 +659,12 @@ impl Chat {
             );
             self.askers.insert(due.file.clone(), (set_up, asker));
         }
-        let said = self.conversation.turn_told().map(str::to_owned);
+        let question = match self.conversation.event() {
+            Some(happened) => trigger::asked_of(&happened.about),
+            None => trigger::question(self.conversation.turn_told()),
+        };
         if let Some((_, asker)) = self.askers.get(&due.file) {
-            asker.put(trigger::question(said.as_deref()));
+            asker.put(question);
             self.asked = Some(due.file.clone());
         }
     }
@@ -718,7 +797,12 @@ impl Chat {
         let Some(cwd) = self.running.as_ref().map(|running| &running.cwd) else {
             return;
         };
-        let Some(Entry::Checks(checks)) = self.conversation.entries().get(entry) else {
+        let Some(checks) = self
+            .conversation
+            .entries()
+            .get(entry)
+            .and_then(Entry::checks)
+        else {
             return;
         };
         let Some(check) = checks.get(at) else {

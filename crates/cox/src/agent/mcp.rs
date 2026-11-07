@@ -210,6 +210,9 @@ pub enum ChatRequest {
     /// a sketch that ended beside it, to keep what it learned in the wiki,
     /// as the human chose on the card that asked them: no tool asks it.
     SaveToWiki { chat: Option<ChatId> },
+    /// The chat's agent wrote `page` of a wiki, which the triggers of
+    /// the chat's folder run on: no answer.
+    WikiWritten { page: String },
 }
 
 /// Where a chat is, as a page of the wiki its agent writes notes it.

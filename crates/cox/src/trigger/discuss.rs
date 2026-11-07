@@ -200,15 +200,21 @@ fn context(file: Option<&Path>, ran: Option<&str>) -> String {
 const STANCE: &str = "You help the human write one trigger of Cox, on its card, beside \
     which you talk with them. A trigger is a Markdown file whose properties, between `---` \
     lines at its top, say when it runs and who runs it, and whose rest is what is done.\n\n\
-    - `on: turn.end` runs it as a chat's turn ends. `on: {schedule: {cron: \"0 9 * * *\"}}` \
+    - `on: turn.end` runs it as a chat's turn ends, and what it finds the chat's agent is \
+    told, as the next turn. `on: goal.met`, `on: wiki.written` (or `on: {wiki.written: \
+    {page: \"research/*\"}}` for some pages), `on: sketch.end` and `on: chat.open` run it as \
+    a chat's goal is met, its agent writes a page of the wiki, a sketch beside it ends, or \
+    it opens, and what it finds stays on the chat's line, untold. \
+    `on: {schedule: {cron: \"0 9 * * *\"}}` \
     opens a chat at the times the cron says, in the time of the place Cox runs in, the rest \
     being that chat's first line, where `{name}`, `{now}` and `{last}` stand for the \
     trigger's name, when it runs and when it ran last; `folder:` is where that chat works.\n\
-    - `when:` narrows turn.end: `changed: [\"**/*.rs\", \"!target/**\"]` runs it only when \
+    - `when:` narrows the events of a chat: `changed: [\"**/*.rs\", \"!target/**\"]` runs it only when \
     files the globs match changed since it last ran, those that start `!` left out, and \
     `sketch: skip` or `sketch: only` keeps it out of sketches, or in them alone.\n\
     - `by: shell` runs the rest as a command in the chat's folder, which passes when it \
-    exits 0. `by: new` asks an agent of its own the rest, which ends its reply with `PASS`, \
+    exits 0. `by: this` tells the chat's own agent the rest, as the next turn, in the \
+    human's place: on turn.end, once for a line of the human's. `by: new` asks an agent of its own the rest, which ends its reply with `PASS`, \
     or `FAIL: ` and what the chat has to act on; `allow` and `reject` list the patterns of \
     its permission requests Cox answers in the human's place, as `read:*` or \
     `execute:cargo test*`, and with none it may read, search and run the usual tests. A \
@@ -484,6 +490,14 @@ fn tried_on(tried: &Try, last: Option<&Path>) -> Tried {
     }
     match &trigger.by {
         By::Shell => run(&trigger.text, &tried.folder),
+        // There is no chat to try it in: what it tells is all it does.
+        By::This => Tried {
+            state: CheckState::Passed,
+            said: Some(format!(
+                "It tells the chat's agent, in your place:\n\n{}",
+                trigger.text.trim()
+            )),
+        },
         By::New { allow, reject, .. } => {
             let Some(said) = super::card::last_turn(last, &tried.folder) else {
                 return broken("No turn has ended in this folder yet, to try it on.".to_owned());

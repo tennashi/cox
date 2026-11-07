@@ -69,6 +69,23 @@ pub enum On {
     /// A chat's turn ends, as its agent ends it: `turn.end`.
     #[serde(rename = "turn.end")]
     TurnEnd,
+    /// A chat's goal is met: `goal.met`.
+    #[serde(rename = "goal.met")]
+    GoalMet,
+    /// A chat's agent wrote a page of a wiki: `wiki.written`, or, for
+    /// some pages, `wiki.written: {page: "research/*"}`, globs of the
+    /// pages' names. Fired, it names the page written.
+    #[serde(rename = "wiki.written")]
+    WikiWritten {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pages: Option<Vec<String>>,
+    },
+    /// A sketch ended, in the chat that goes on with it: `sketch.end`.
+    #[serde(rename = "sketch.end")]
+    SketchEnd,
+    /// A chat opened: `chat.open`.
+    #[serde(rename = "chat.open")]
+    ChatOpen,
     /// The times a cron says, in no chat, as `schedule: {cron: "0 9 * * *"}`
     /// (see [`crate::schedule`]).
     #[serde(rename = "schedule")]
@@ -81,10 +98,17 @@ impl On {
     fn read(value: &Value) -> Result<Vec<Self>, String> {
         let by_name = |name: &str| match name {
             "turn.end" => Ok(Self::TurnEnd),
+            "goal.met" => Ok(Self::GoalMet),
+            "wiki.written" => Ok(Self::WikiWritten { pages: None }),
+            "sketch.end" => Ok(Self::SketchEnd),
+            "chat.open" => Ok(Self::ChatOpen),
             "schedule" => {
                 Err("schedule says when under it, as schedule: {cron: \"0 9 * * *\"}".to_owned())
             }
-            other => Err(format!("{other:?} is no event Cox knows, as turn.end")),
+            other => Err(format!(
+                "{other:?} is no event Cox knows: turn.end, goal.met, wiki.written, \
+                 sketch.end, chat.open or schedule"
+            )),
         };
         match value {
             Value::One(name) => Ok(vec![by_name(name)?]),
@@ -104,10 +128,64 @@ impl On {
                         }
                         Self::schedule(cron)
                     }
+                    ("wiki.written", Value::Under(under)) => {
+                        let pages = under
+                            .get("page")
+                            .map(|pages| pages.values().map_err(|why| format!("page {why}")))
+                            .transpose()?;
+                        if let Some(other) = under.keys().find(|key| *key != "page") {
+                            return Err(format!("wiki.written: {other:?} is nothing Cox knows"));
+                        }
+                        Ok(Self::WikiWritten { pages })
+                    }
                     (name, Value::Under(under)) if under.is_empty() => by_name(name),
                     (name, _) => Err(format!("{name} says nothing more under it")),
                 })
                 .collect(),
+        }
+    }
+
+    /// Whether a trigger that runs on this runs on `fired`, the event as
+    /// it happened: the same event, and, for a page of the wiki, one of
+    /// the pages it names, if it names any.
+    fn takes(&self, fired: &Self) -> bool {
+        match (self, fired) {
+            (
+                Self::WikiWritten { pages: Some(globs) },
+                Self::WikiWritten {
+                    pages: Some(written),
+                },
+            ) => {
+                let mut set = globset::GlobSetBuilder::new();
+                for glob in globs {
+                    match globset::GlobBuilder::new(glob)
+                        .literal_separator(true)
+                        .build()
+                    {
+                        Ok(glob) => {
+                            set.add(glob);
+                        }
+                        Err(error) => tracing::error!("page: {glob:?} is no glob: {error}"),
+                    }
+                }
+                set.build()
+                    .is_ok_and(|set| written.iter().any(|page| set.is_match(page)))
+            }
+            (Self::WikiWritten { .. }, Self::WikiWritten { .. }) => true,
+            (mine, fired) => mine == fired,
+        }
+    }
+
+    /// The name of the event, as `on` writes it.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::TurnEnd => "turn.end",
+            Self::GoalMet => "goal.met",
+            Self::WikiWritten { .. } => "wiki.written",
+            Self::SketchEnd => "sketch.end",
+            Self::ChatOpen => "chat.open",
+            Self::Schedule { .. } => "schedule",
         }
     }
 
@@ -146,6 +224,10 @@ pub enum By {
     /// A shell, in a terminal on the stage, which runs the trigger's text
     /// as a command, passing when it exits 0.
     Shell,
+    /// The chat's own agent, told the trigger's text in the human's place,
+    /// as the next turn: once for a line of the human's, on a turn's end,
+    /// so that the turn it starts does not tell it again.
+    This,
     /// An agent Cox starts for it, as the judge of a goal: not a chat, so
     /// not in the list, which ends its reply with `PASS`, or `FAIL: ` and
     /// why.
@@ -335,12 +417,13 @@ impl Trigger {
                     "a schedule runs in no chat, so no chat's agent does it: by: new".to_owned(),
                 );
             }
+            "this" if allow.is_empty() && reject.is_empty() => By::This,
             "this" => {
-                return Err("by: this does not run on turn.end, which tells the agent \
-                     what the triggers found already"
+                return Err("allow and reject are for an agent of the trigger's own, \
+                     by: new, and the chat's agent is asked as the chat asks it"
                     .to_owned());
             }
-            other => return Err(format!("by: {other:?} is none of shell and new")),
+            other => return Err(format!("by: {other:?} is none of shell, this and new")),
         };
         if let Some(other) = properties.keys().next() {
             return Err(format!("{other:?} is no property Cox knows"));
@@ -349,7 +432,7 @@ impl Trigger {
         if text.is_empty() {
             return Err(match by {
                 By::Shell => "it has no command to run under its properties".to_owned(),
-                By::New { .. } => "it asks nothing under its properties".to_owned(),
+                By::New { .. } | By::This => "it asks nothing under its properties".to_owned(),
             });
         }
         Ok(Self {
@@ -368,7 +451,7 @@ impl Trigger {
     pub fn cron(&self) -> Option<&Cron> {
         self.on.iter().find_map(|on| match on {
             On::Schedule { cron } => Some(cron),
-            On::TurnEnd => None,
+            _ => None,
         })
     }
 
@@ -389,7 +472,7 @@ impl Trigger {
     /// says, whatever changed.
     #[must_use]
     pub fn runs_on(&self, on: &On, sketch: bool) -> bool {
-        self.on.contains(on)
+        self.on.iter().any(|mine| mine.takes(on))
             && match self.when.sketch {
                 None => true,
                 Some(InSketch::Skip) => !sketch,
@@ -698,6 +781,16 @@ pub fn question(said: Option<&str>) -> String {
     format!("{said}Do what you were asked, and end with PASS or FAIL: what to act on.")
 }
 
+/// What the agent of a trigger is asked as `about` says something
+/// happened in the chat, besides a turn's end.
+#[must_use]
+pub fn asked_of(about: &str) -> String {
+    format!(
+        "{}\n\nDo what you were asked, and end with PASS or FAIL: what to act on.",
+        about.trim()
+    )
+}
+
 /// Which triggers the human turned off in a folder, and the order they
 /// run in there, by their files, as the stage's Triggers tab sets them:
 /// kept in Cox's state (see [`crate::storage::Kept::Triggers`]), a folder
@@ -844,6 +937,7 @@ pub fn told(
                 .map(|(trigger, on)| {
                     let (by, allow, reject) = match &trigger.by {
                         By::Shell => ("shell", Vec::new(), Vec::new()),
+                        By::This => ("this", Vec::new(), Vec::new()),
                         By::New { allow, reject, .. } => ("new", allow.clone(), reject.clone()),
                     };
                     let mut told = serde_json::json!({
@@ -1405,11 +1499,33 @@ mod tests {
                 .unwrap_err()
                 .contains("lunch")
         );
-        assert!(
-            parse("---\non: turn.end\nby: this\n---\nhi\n")
-                .unwrap_err()
-                .contains("this")
+        assert_eq!(
+            parse("---\non: [goal.met, turn.end]\nby: this\n---\nWrite the commit message.\n")
+                .unwrap()
+                .by,
+            By::This
         );
+        assert!(
+            parse("---\non: goal.met\nby: this\nallow: [read:*]\n---\nhi\n")
+                .unwrap_err()
+                .contains("by: new")
+        );
+        let wiki =
+            parse("---\non:\n  wiki.written:\n    page: \"research/*\"\nby: new\n---\nCheck it.\n")
+                .unwrap();
+        let written = |page: &str| On::WikiWritten {
+            pages: Some(vec![page.to_owned()]),
+        };
+        assert!(wiki.runs_on(&written("research/rust"), false));
+        assert!(!wiki.runs_on(&written("research/rust/1.92"), false));
+        assert!(!wiki.runs_on(&written("gpui-layout"), false));
+        assert!(!wiki.runs_on(&On::TurnEnd, false));
+        let any = parse("---\non: [wiki.written, sketch.end, chat.open]\nby: shell\n---\nmake\n")
+            .unwrap();
+        assert!(any.runs_on(&written("gpui-layout"), false));
+        assert!(any.runs_on(&On::SketchEnd, false));
+        assert!(any.runs_on(&On::ChatOpen, false));
+        assert!(!any.runs_on(&On::GoalMet, false));
         assert!(
             parse("---\non: turn.end\nby: shell\n---\n\n")
                 .unwrap_err()

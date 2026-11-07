@@ -1422,6 +1422,11 @@ async fn wiki_write(
     // so, unless the agent lets it out.
     let keep = if own { None } else { keep.map(|_| false) };
     let file = wiki::write(&wiki.root, page, text, &used, keep)?;
+    chats
+        .send(ChatRequest::WikiWritten {
+            page: page.to_owned(),
+        })
+        .ok();
     let kept_in = fs::read_to_string(&file)
         .ok()
         .and_then(|page| wiki::only(&page))

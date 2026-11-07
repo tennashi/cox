@@ -14,8 +14,13 @@ pub struct Draft {
     pub name: String,
     /// Where it is kept: the project's, or the human's.
     pub scope: Option<Scope>,
-    /// The event it runs on: `turn.end`, or `schedule`.
+    /// The event it runs on, as `on` names it: `turn.end`, `goal.met`,
+    /// `wiki.written`, `sketch.end`, `chat.open` or `schedule`.
     pub on: String,
+    /// The globs of the pages whose writing runs it, on `wiki.written`,
+    /// or, empty, any.
+    #[serde(default)]
+    pub pages: Vec<String>,
     /// The times a schedule runs, as cron writes them.
     #[serde(default)]
     pub cron: String,
@@ -47,6 +52,7 @@ impl Draft {
         let cron = trigger.cron().map(ToString::to_string).unwrap_or_default();
         let (by, allow, reject, folder) = match &trigger.by {
             By::Shell => ("shell", Vec::new(), Vec::new(), None),
+            By::This => ("this", Vec::new(), Vec::new(), None),
             By::New {
                 allow,
                 reject,
@@ -56,12 +62,19 @@ impl Draft {
         Self {
             name: trigger.name.clone(),
             scope: Some(trigger.scope),
-            on: if cron.is_empty() {
-                "turn.end"
-            } else {
-                "schedule"
-            }
-            .to_owned(),
+            on: trigger
+                .on
+                .first()
+                .map_or("turn.end", super::On::name)
+                .to_owned(),
+            pages: trigger
+                .on
+                .iter()
+                .find_map(|on| match on {
+                    super::On::WikiWritten { pages } => pages.clone(),
+                    _ => None,
+                })
+                .unwrap_or_default(),
             cron,
             folder: folder.map(from_home).unwrap_or_default(),
             changed: trigger.when.changed.clone().unwrap_or_default(),
@@ -82,6 +95,16 @@ impl Draft {
             lines.push("on:".to_owned());
             lines.push("  schedule:".to_owned());
             lines.push(format!("    cron: {}", quoted(self.cron.trim())));
+        } else if self.on == "wiki.written" && self.pages.iter().any(|page| !page.trim().is_empty())
+        {
+            let pages: Vec<&String> = self
+                .pages
+                .iter()
+                .filter(|page| !page.trim().is_empty())
+                .collect();
+            lines.push("on:".to_owned());
+            lines.push("  wiki.written:".to_owned());
+            lines.push(format!("    page: {}", listed(&pages)));
         } else {
             lines.push(format!("on: {}", self.on.trim()));
         }
@@ -297,6 +320,22 @@ mod tests {
         );
         let trigger = schedule.trigger(Path::new("/w/triggers/news.md")).unwrap();
         assert_eq!(Draft::of(&trigger), schedule);
+
+        let wiki = Draft {
+            name: "sources".to_owned(),
+            scope: Some(Scope::Global),
+            on: "wiki.written".to_owned(),
+            pages: vec!["research/*".to_owned()],
+            by: "this".to_owned(),
+            text: "Check the page names its sources.".to_owned(),
+            ..Draft::default()
+        };
+        assert_eq!(
+            wiki.written(),
+            "---\non:\n  wiki.written:\n    page: [\"research/*\"]\nby: this\n---\n\nCheck the page names its sources.\n"
+        );
+        let trigger = wiki.trigger(Path::new("/w/triggers/sources.md")).unwrap();
+        assert_eq!(Draft::of(&trigger), wiki);
 
         let bad = Draft {
             name: "../x".to_owned(),
