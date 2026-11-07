@@ -198,6 +198,7 @@ fn the_agent_gets_only_the_tools_its_setup_names() {
 /// answers where it is as the chat `chat` of that project, and the
 /// agent's end of the bridge to it.
 fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServer) {
+    let folder = cwd.to_owned();
     let mut server = cox::agent::mcp::start(cwd.to_owned(), None).unwrap();
     let agent = Agent::start(&server);
     let mut chat_requests = std::mem::replace(
@@ -210,7 +211,7 @@ fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServ
             if let ChatRequest::Whereabouts { answer } = request {
                 let _ = answer.send(Whereabouts {
                     project: project.clone(),
-                    in_project: true,
+                    folder: Some(folder.clone()),
                     chat: chat.clone(),
                     kept: Some("7".to_owned()),
                 });
@@ -278,7 +279,17 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
         "{index}"
     );
 
-    // A page the writer keeps in its project is not the reader's.
+    a_project_keeps_its_own_wiki(&mut writer, &mut reader, &one, &home);
+    sources_are_kept_apart_from_the_wiki(&mut writer, &mut reader, &home);
+    drop((writer, reader));
+    for folder in [data, one, other] {
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+}
+
+/// A page the writer keeps in its project's own wiki, in `one`, is not
+/// the reader's, nor in the human's wiki, in `home`.
+fn a_project_keeps_its_own_wiki(writer: &mut Agent, reader: &mut Agent, one: &Path, home: &Path) {
     writer.call(
         6,
         "wiki_write",
@@ -290,10 +301,15 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     );
     let written = writer.hear();
     let written = written["result"]["content"][0]["text"].as_str().unwrap();
+    let customers = one.join(".cox/wiki/customers.md");
     assert!(
-        written.ends_with(" It is kept in one, for its chats alone."),
+        written.starts_with(&format!(
+            "{} is written, in this project's wiki, used ",
+            customers.display()
+        )),
         "{written}"
     );
+    assert!(!home.join("wiki/customers.md").exists());
     reader.call(7, "wiki_search", &json!({ "query": "scrolls" }));
     let found = reader.hear();
     let found = found["result"]["content"][0]["text"].as_str().unwrap();
@@ -307,13 +323,22 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     writer.call(10, "wiki_search", &json!({ "query": "scrolls" }));
     let found = writer.hear();
     let found = found["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(found.contains("customers: Customers"), "{found}");
-
-    sources_are_kept_apart_from_the_wiki(&mut writer, &mut reader, &home);
-    drop((writer, reader));
-    for folder in [data, one, other] {
-        std::fs::remove_dir_all(folder).unwrap();
-    }
+    assert!(
+        found.contains("In this project's wiki:\n\ncustomers: Customers"),
+        "{found}"
+    );
+    // The project's page is read before the human's, unless the human's
+    // is asked for.
+    writer.call(11, "wiki_read", &json!({ "page": "customers" }));
+    let read = writer.hear();
+    let read = read["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(read.starts_with("# Customers\n"), "{read}");
+    writer.call(
+        12,
+        "wiki_read",
+        &json!({ "page": "customers", "wiki": "human" }),
+    );
+    assert_eq!(writer.hear()["result"]["isError"], true);
 }
 
 /// What a chat reads is kept apart from the wiki, in the home's `raw`,

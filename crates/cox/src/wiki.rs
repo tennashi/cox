@@ -14,11 +14,15 @@
 //! page that lists the others, unless the human wrote their own. The
 //! stage's Wiki plugin shows the pages to the human (see [`told`]).
 //!
-//! A page can be kept in one project, for what holds only of its work
-//! or its people: its properties, the front matter Obsidian keeps
-//! between `---` lines at the page's top, say `only: <project>`, and
-//! only the chats of that project find it, read it, or write it. The
-//! human sees every page, in the plugin as in the folder.
+//! A project has a wiki of its own too, for what holds only of its work
+//! or its people, in `.cox/wiki` in its folder, where its repository can
+//! keep it: only the chats of that project find its pages, read them, or
+//! write them, the project's before the human's. A page of the human's
+//! wiki that an earlier Cox kept in one project says so in its
+//! properties, the front matter Obsidian keeps between `---` lines at the
+//! page's top, as `only: <project>`, and only the chats of that project
+//! see it either. The human sees every page, in the plugin as in the
+//! folder.
 //!
 //! The agents write the pages in English, whatever language their chat
 //! speaks, so that a page is found by the same words from every chat;
@@ -35,6 +39,9 @@ use std::sync::Mutex;
 
 /// The page that lists the others.
 pub const INDEX: &str = "index";
+
+/// The folder of a project that holds its own wiki.
+pub const PROJECT_WIKI: &str = ".cox/wiki";
 
 /// The heading under which a page says where it was used, which Cox
 /// writes.

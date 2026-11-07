@@ -1343,7 +1343,8 @@ impl Daemon {
                     .map(|slot| Whereabouts {
                         project: self.projects[slot.project].name.clone(),
                         // The home is the first, and no project.
-                        in_project: slot.project != 0,
+                        folder: (slot.project != 0)
+                            .then(|| self.projects[slot.project].folder.clone()),
                         chat: slot.name.clone(),
                         kept: slot.kept.map(|kept| kept.to_string()),
                     })
