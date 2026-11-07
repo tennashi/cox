@@ -51,7 +51,7 @@ use chat::{Again, Chat, Task, spawn};
 use wire::{ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
 /// What the project of chats with no folder is called.
-const NO_PROJECT: &str = "No project";
+const COX: &str = "Cox";
 
 /// How long a chat's name grows, in characters, when the agent or the
 /// first line names it.
@@ -149,7 +149,7 @@ pub enum Internal {
 
 /// A project: a folder the human opened, whose chats work there.
 struct Project {
-    /// How it is kept, or `None` for no project.
+    /// How it is kept, or `None` for Cox's own.
     id: Option<ProjectId>,
     name: String,
     folder: PathBuf,
@@ -244,7 +244,7 @@ struct Preparing {
 }
 
 pub struct Daemon {
-    /// No project's first, then the human's.
+    /// Cox's own first, then the human's.
     projects: Vec<Project>,
     /// The chats in the order of the tabs.
     chats: Vec<Slot>,
@@ -331,7 +331,7 @@ impl Link {
 }
 
 /// Starts the daemon on a thread of its own, keeping what lasts in
-/// `store`, its chats in no project working in `home`, given by
+/// `store`, Cox's own chats working in `home`, given by
 /// `--home` when `home_given`, and its agents started by `spawns`, which
 /// it makes on its thread. It tells `window` what it does, and answers
 /// how to tell it what the human does, and to stop.
@@ -379,8 +379,8 @@ pub fn start(
 }
 
 impl Daemon {
-    /// The daemon of the projects and chats kept in `store`, its chats in
-    /// no project working in `home`.
+    /// The daemon of the projects and chats kept in `store`, Cox's own
+    /// chats working in `home`.
     fn new(
         home: PathBuf,
         home_given: bool,
@@ -391,7 +391,7 @@ impl Daemon {
         let mut daemon = Self {
             projects: vec![Project {
                 id: None,
-                name: NO_PROJECT.to_owned(),
+                name: COX.to_owned(),
                 folder: home,
                 opened: 0,
             }],
@@ -763,7 +763,7 @@ impl Daemon {
         self.projects.len() - 1
     }
 
-    /// Opens a chat in the project of `folder`, or in no project, and has
+    /// Opens a chat in the project of `folder`, or of Cox's own, and has
     /// the window show it.
     fn open(&mut self, folder: Option<PathBuf>) -> u64 {
         let index = folder.map_or(0, |folder| self.project(folder));
@@ -1180,12 +1180,12 @@ impl Daemon {
     /// Runs each of the schedules of the human's `workflow`, from the home
     /// directory `user`, and of the projects, that is due `now`, unless
     /// the chat of its last run is still at work: a chat for each run, in
-    /// the project of the schedule's folder, or in no project, on the
+    /// the project of the schedule's folder, or of Cox's own, on the
     /// schedule's first line, sent in the human's place, its agent going
     /// on unasked with what the schedule allows (see [`crate::schedule`]).
     fn run_schedules(&mut self, workflow: &Path, user: Option<&Path>, now: &jiff::Zoned) {
         let mut schedules = crate::schedule::schedules(workflow, user);
-        // The home is the first, and no project.
+        // The first is Cox's own, in the home.
         for project in &self.projects[1..] {
             schedules.extend(crate::schedule::of_project(&project.folder));
         }
@@ -1265,7 +1265,7 @@ impl Daemon {
             tracing::warn!("the daemon goes on as it was, since a chat is at work");
         }
         let Hello { home, command } = hello;
-        // A window not given a home leaves the chats in no project where
+        // A window not given a home leaves Cox's own chats where
         // the settings say now, which may have changed while none was
         // there.
         self.home_given = home.is_some();
@@ -1425,7 +1425,7 @@ impl Daemon {
                     .slot(key)
                     .map(|slot| Whereabouts {
                         project: self.projects[slot.project].name.clone(),
-                        // The home is the first, and no project.
+                        // The first is Cox's own, in the home.
                         folder: (slot.project != 0)
                             .then(|| self.projects[slot.project].folder.clone()),
                         chat: slot.name.clone(),

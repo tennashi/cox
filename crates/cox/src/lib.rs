@@ -20,7 +20,7 @@
 //! - [`agents`] is the agents a chat can talk to: the command line's,
 //!   the human's, and the ACP Registry's.
 //! - [`settings`] is what the human sets of Cox itself, on its settings
-//!   screen: the folder chats in no project work in.
+//!   screen: the folder Cox's own chats work in.
 //! - [`wiki`] is the human's wiki, where the agents keep what they
 //!   learned, for those of every project to find again.
 //! - [`raw`] is what the agents read, kept as they read it, as the

@@ -1317,7 +1317,7 @@ async fn wiki_read(
         project, folder, ..
     } = whereabouts(chats).await?;
     if given == Some(true) && folder.is_none() {
-        return Err("this chat is in no project, so it has no wiki of its own".to_owned());
+        return Err("this chat is Cox's own, of no project, so it has no project wiki".to_owned());
     }
     let wikis: Vec<Wiki> = wikis(folder.as_deref())
         .into_iter()
@@ -1399,7 +1399,7 @@ async fn wiki_write(
     let own = match keep {
         Some(true) if folder.is_none() => {
             return Err(
-                "this chat is in no project, so it has no wiki of its own: write \
+                "this chat is Cox's own, of no project, so it has no project wiki: write \
                  the page without keep_in_project"
                     .to_owned(),
             );

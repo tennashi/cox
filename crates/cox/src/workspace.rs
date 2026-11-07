@@ -4,7 +4,8 @@
 //! project chosen. A project is a folder the human opened: each chat in
 //! it works there, and its agent gets the human's instructions, then
 //! those in the folder's `COX.md` (see [`crate::agent::instructions`]).
-//! Chats in no project work in Cox's home, with the instructions there.
+//! Cox's own chats, of no project, work in Cox's home, with the
+//! instructions there.
 //!
 //! The window runs no chat itself: the daemon does (see
 //! [`crate::daemon`]), which tells it the projects and chats, and how the
@@ -31,7 +32,7 @@
 //!
 //! The gear at the foot of the rail opens the settings screen over the
 //! window (see [`crate::settings::view`]), where the human sets Cox's
-//! home: the chats in no project opened from then on work there.
+//! home: Cox's own chats opened from then on work there.
 //!
 //! A chat that comes to wait for the human, or whose turn ends, while the
 //! human is not looking at it, tells them so (see [`crate::notices`]),
@@ -80,7 +81,7 @@ use crate::workflow;
 actions!(
     cox,
     [
-        /// Opens a chat in no project.
+        /// Opens a chat of Cox's own, in no project.
         NewChat,
         /// Asks for a folder, and opens a chat in its project.
         OpenFolder,
@@ -116,7 +117,7 @@ const BACKDROP: u32 = 0x0e0e_0fb8;
 
 /// What the project of chats with no folder is called, until the daemon
 /// says.
-const NO_PROJECT: &str = "No project";
+const COX: &str = "Cox";
 
 /// The key context of the input that renames a chat.
 const RENAMING: &str = "Renaming";
@@ -150,7 +151,7 @@ pub fn bind_keys(cx: &mut App) {
 /// A folder the chats of a project work in. The chats themselves are in
 /// the window's list, under it.
 pub struct Project {
-    /// How it is kept, or `None` for no project, or a project that could
+    /// How it is kept, or `None` for Cox's own, or a project that could
     /// not be kept.
     id: Option<ProjectId>,
     name: SharedString,
@@ -378,7 +379,7 @@ pub struct Workspace {
     menu: Option<(Point<Pixels>, usize)>,
     /// The chat at an index in the list being renamed, in an input.
     renaming: Option<(usize, Entity<LineInput>, Subscription)>,
-    /// Whether `--home` gave the home, the folder of no project, for this
+    /// Whether `--home` gave the home, where Cox's own chats work, for this
     /// run, ahead of what the settings keep.
     home_given: bool,
     /// The settings screen, while it is open.
@@ -416,7 +417,7 @@ pub struct Workspace {
 impl Workspace {
     /// A window with no chat open, which shows the projects and chats the
     /// daemon, reached through `link`, tells of in `from_daemon`, and
-    /// tells the daemon what the human does. Chats in no project work in
+    /// tells the daemon what the human does. Cox's own chats work in
     /// `home`, which `--home` gave when `home_given` says so, until the
     /// daemon says. `stages` makes the chats' stages, and the chats talk
     /// to `agents`, when given.
@@ -448,7 +449,7 @@ impl Workspace {
         Self {
             projects: vec![Project {
                 id: None,
-                name: NO_PROJECT.into(),
+                name: COX.into(),
                 folder: home,
                 last: None,
             }],
@@ -965,7 +966,7 @@ impl Workspace {
         depth
     }
 
-    /// The projects, no project first.
+    /// The projects, Cox's own first.
     #[must_use]
     pub fn projects(&self) -> &[Project] {
         &self.projects
@@ -1039,7 +1040,7 @@ impl Workspace {
         &self.archived
     }
 
-    /// Opens a chat in the project of `folder`, or in no project when there
+    /// Opens a chat in the project of `folder`, or of Cox's own when there
     /// is none, and shows it.
     pub fn open(&mut self, folder: Option<PathBuf>, _: &mut Window, _: &mut Context<Self>) {
         self.tell(ToDaemon::Open { folder });
@@ -1070,13 +1071,13 @@ impl Workspace {
         .detach();
     }
 
-    /// Where chats in no project work: Cox's home.
+    /// Where Cox's own chats work: Cox's home.
     #[must_use]
     pub fn home(&self) -> &Path {
         &self.projects[0].folder
     }
 
-    /// Has the chats in no project opened from now on work in `home`, as
+    /// Has Cox's own chats opened from now on work in `home`, as
     /// `settings.json` names it now, unless `--home` gave the home for
     /// this run.
     pub fn follow_home(&mut self, home: PathBuf, _: &mut Context<Self>) {
@@ -1562,9 +1563,9 @@ impl Workspace {
     }
 
     /// The button of the project at `index` on the rail: a folder in a
-    /// square, and its name under it, or Cox's icon alone for no project,
-    /// with its folder where the mouse rests, after its name for no
-    /// project.
+    /// square, and its name under it, or Cox's icon alone for Cox's own,
+    /// with its folder where the mouse rests, after its name for Cox's
+    /// own.
     fn render_project(
         &self,
         index: usize,

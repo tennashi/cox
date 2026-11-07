@@ -1,7 +1,7 @@
 //! The settings screen: a card over the window, which the gear at the
 //! foot of the rail opens, as Command-, does (Control-, off macOS).
 //!
-//! It shows Cox's home, the folder chats in no project work in, in an
+//! It shows Cox's home, the folder Cox's own chats work in, in an
 //! input, where Enter sets what the human typed, a whole path or one from
 //! `~`, and "Choose…" asks for a folder and sets it. Set, the home is
 //! kept (see [`super::keep_home`]), and the window opens the chats in no
@@ -100,7 +100,7 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
-    /// The screen of the window whose chats in no project work in `home`,
+    /// The screen of the window whose own chats work in `home`,
     /// which `--home` gave when `given` says so.
     pub fn new(home: PathBuf, given: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
@@ -266,7 +266,7 @@ impl SettingsView {
             Told::Failed(why) => (why.clone(), FAILED),
             Told::Set => (
                 format!(
-                    "Set: chats in no project open in {} from now on.",
+                    "Set: Cox's own chats open in {} from now on.",
                     shortened(&self.home)
                 ),
                 ACCENT,
@@ -387,8 +387,8 @@ impl Render for SettingsView {
             .child(
                 body.child(words.heading("HOME"))
                     .child(words.about(
-                        "The folder Cox starts chats in when they are in no project, \
-                         as New chat opens them; the rail shows it as ~.",
+                        "The folder Cox starts its own chats in, of no project, as New \
+                         chat opens them; the rail shows it as Cox's icon.",
                     ))
                     .child(
                         div()

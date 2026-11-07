@@ -18,7 +18,7 @@ use crate::chat::sketch::Sketch;
 /// A project, as the window lists it on its rail.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectRow {
-    /// How it is kept, or `None` for no project.
+    /// How it is kept, or `None` for Cox's own.
     pub id: Option<ProjectId>,
     pub name: String,
     /// The folder its chats work in.
@@ -62,7 +62,7 @@ pub struct ChatRow {
 /// The projects and chats, as the window shows them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Listing {
-    /// No project's first, then the human's, in the order they were
+    /// Cox's own first, then the human's, in the order they were
     /// opened.
     pub projects: Vec<ProjectRow>,
     /// The chats in the order of the tabs, project by project, each chat
@@ -118,7 +118,7 @@ pub enum StageAsk {
 /// it was started with.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
-    /// Where chats in no project work for this window's run, as `--home`
+    /// Where Cox's own chats work for this window's run, as `--home`
     /// gave it, ahead of the settings.
     pub home: Option<PathBuf>,
     /// The agent a new chat talks to, and its arguments, as the command
@@ -181,7 +181,7 @@ pub enum FromDaemon {
 /// What a window tells the daemon: what the human did.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToDaemon {
-    /// Open a chat in the project of `folder`, or in no project, and show
+    /// Open a chat in the project of `folder`, or of Cox's own, and show
     /// it.
     Open { folder: Option<PathBuf> },
     /// The window shows the chat `key`, or none.
@@ -251,7 +251,7 @@ pub enum ToDaemon {
     /// The relay of the stage asked for as `id` listens on `port`, or did
     /// not start.
     Prepared { id: u64, port: Option<u16> },
-    /// The chats in no project opened from now on work in `home`, as the
+    /// Cox's own chats opened from now on work in `home`, as the
     /// human set it, or as the settings say now when `set` is false.
     Home { home: PathBuf, set: bool },
     /// Answer [`FromDaemon::Settled`] with `id` once all asked before is

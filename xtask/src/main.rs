@@ -452,7 +452,7 @@ fn run(sh: &Shell, args: &[String]) -> anyhow::Result<()> {
         sh.remove_path(&data)?;
         data
     };
-    // Chats in no project work in a folder of the run's, kept as the
+    // Cox's own chats work in a folder of the run's, kept as the
     // settings screen keeps it, which the human can change from there.
     let settings = data.join("settings.json");
     if !sh.path_exists(&settings) {

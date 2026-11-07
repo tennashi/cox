@@ -38,7 +38,7 @@ pub struct Chat {
 }
 
 /// How the window's chats stand, and its projects, by folder and name,
-/// with the home, the folder of no project.
+/// with the home, the folder of Cox's own chats.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Told {
     pub chats: Vec<Chat>,
@@ -70,7 +70,7 @@ pub fn projects() -> Vec<(PathBuf, String)> {
     now().projects
 }
 
-/// The home, the folder of no project, as the window last told, if it
+/// The home, the folder of Cox's own chats, as the window last told, if it
 /// told.
 #[must_use]
 pub fn home() -> Option<PathBuf> {
