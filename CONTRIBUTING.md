@@ -73,8 +73,9 @@ what translates, the agent a new chat talks to, one of the human's, or
 a command on one line, as an agent's. What else the files hold stays as
 it is. What the card says is selected and copied as the conversation's
 text is. Escape, the ×, or a click beside the card closes it. Each chat starts its own
-`<agent command>` working in its project's folder, and has a stage of its
-own, showing `<url>` first. Cox opened with no `<agent command>`, as the
+`<agent command>` working in its project's folder, and works on the
+stage of that folder, which the chats working there share (see below),
+showing `<url>` first. Cox opened with no `<agent command>`, as the
 Finder, the Dock or a launcher such as Raycast opens an app, starts the
 agent `settings.json` names, by its name in `agents.json` (see below),
 as `{"agent": "Claude"}`; with none named, or one `agents.json` does not
@@ -122,9 +123,9 @@ wait for the human or that they have not seen since a turn ended.
 their end, from where a click brings it back; its agent, if it runs, goes on. A chat's agent runs in coxd (see
 [coxd](#coxd)), which goes on after the window closes, until coxd is
 stopped. Cox
-keeps each chat's conversation, and its stage's tabs, as they change,
+keeps each chat's conversation, and each stage's tabs, as they change,
 and shows the chats of earlier runs as tabs too, greyed and closed, for the
-human to read what they showed. A closed chat's stage opens again on
+human to read what they showed. A stage opens again on
 the pages and Markdown files it had; its terminals do not start again.
 A line sent in a closed chat starts its agent again, which goes on with
 the chat's session when it can (ACP's `session/resume`, or else
@@ -614,7 +615,19 @@ of the tabs, after the pill, marked with a window split in two, opens
 and closes it (Command-\\, Control-\\ off macOS), and it opens on
 its own when a link opens on it, or when the agent works on a page
 there (navigates it, clicks or types in it, or
-opens a tab), showing that page's tab. Closed, it keeps its tabs. The
+opens a tab), showing that page's tab. Closed, it keeps its tabs.
+The chats that work in one folder, as the chats of a project, or of a
+sketch (see below), share its stage, which shows beside whichever of
+them is shown, and opens and closes for all of them. Each tab is of one
+of the chats: the chat whose agent opened it, or the chat shown when the
+human opened it. The tabs of the chats not shown are dimmer, and what
+the agent of a chat not shown opens there opens behind the tab shown,
+the stage staying as it was, until that chat is shown, which shows its
+last tab. A stage is kept with the chat each tab is of; an earlier Cox
+kept a stage for each chat, and the stage of a folder starts, the first
+time, from those of its chats not archived, that of the chat it is
+first shown for first, each tab of its chat but the terminals, and each
+page, file or view of the project once. The
 bar along its top keeps the views of the project in sight first, side
 by side: "Files", "Changes" and the plugins' pages, such as "Map" (see
 below), each a tab that the bar shows by its button, not among the
@@ -885,8 +898,8 @@ A tab can be a terminal too, through
 shell, working in the chat's folder. The agent runs a command in one with Cox's `run_command`
 tool: the stage shows it running, the human can type into it, as to
 answer what it asks, and the agent gets what the terminal shows and the
-exit code once it ends. A command gets the tab of the agent's last one
-that ended, or a new tab. When the agent stops waiting for it, as when
+exit code once it ends. A command gets the tab of the agent's own last
+one that ended, or a new tab. When the agent stops waiting for it, as when
 the human stops the turn, the command gets Control-C. Copying and
 pasting in a terminal is Command-C and Command-V on macOS, and
 Control-Shift-C and Control-Shift-V elsewhere, where Control-N,
@@ -978,9 +991,10 @@ connected to it, so the agent reads and drives the pages the human sees
 in that chat. The server runs through `npx`, so Node has to be on
 `PATH`; without it, the agent gets no tools for the stage. The server
 connects through a relay in Cox, one for each chat, which passes
-everything on but keeps the agent to its chat's pages: the agent hears
-nothing of other chats' pages, and the pages it opens and closes are
-tabs of its chat's stage. The relay also tells the stage where the agent
+everything on but keeps the agent to its chat's pages, the tabs of the
+stage that are its chat's: the agent hears nothing of other chats'
+pages, those on the same stage too, and the pages it opens are tabs of
+its chat, which it alone closes. The relay also tells the stage where the agent
 points, clicks and types, so the stage can draw the agent's pointer over
 the page. The server's tools that read or write files, as a screenshot
 saved to a file, may do so in the chat's folder and in `/tmp`, where
@@ -1331,7 +1345,7 @@ are:
   stages' DevTools port, the window and where the keyboard is, the chats
   in the order of the tabs, project by project, by the numbers they go
   by to the agents' tools, and one chat in full, the chat shown or chat `<chat>`: what it
-  waits for, as its input shows while empty, its input, its stage's tabs, and its conversation, entry by
+  waits for, as its input shows while empty, its input, its stage's tabs, each with the chat it is of, and its conversation, entry by
   entry.
 - `screenshot [<file>]`: the window as a PNG, written to `<file>`,
   `cox-screenshot.png` unless given: through ImageMagick's `import` on

@@ -21,7 +21,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 8;
+const VERSION: i64 = 9;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -36,7 +36,8 @@ CREATE TABLE chats (
     name TEXT NOT NULL,
     -- When the chat was opened, in milliseconds since the epoch.
     created INTEGER NOT NULL,
-    -- Its stage's tabs, as JSON, once it has a stage.
+    -- Its stage's tabs, as JSON, as an earlier Cox kept a stage for each
+    -- chat, which the stage of its folder starts from (see stages).
     tabs TEXT,
     -- The id its agent gave its session, once the agent has opened one.
     session TEXT,
@@ -83,6 +84,12 @@ CREATE TABLE choices (
     value TEXT NOT NULL,
     PRIMARY KEY (agent, setting)
 );
+CREATE TABLE stages (
+    -- The folder whose chats work on the stage, as a project's.
+    folder TEXT PRIMARY KEY,
+    -- Its tabs, as JSON, each with the chat it is of.
+    tabs TEXT NOT NULL
+);
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -107,6 +114,7 @@ const UPGRADES: &[&str] = &[
          value TEXT NOT NULL,
          PRIMARY KEY (agent, setting)
      );",
+    "CREATE TABLE stages (folder TEXT PRIMARY KEY, tabs TEXT NOT NULL);",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -444,7 +452,8 @@ impl Store {
         Ok(())
     }
 
-    /// The tabs of `chat`'s stage, if it had one.
+    /// The tabs of `chat`'s own stage, if it had one, as an earlier Cox
+    /// kept a stage for each chat.
     ///
     /// # Errors
     ///
@@ -458,7 +467,8 @@ impl Store {
         Ok(tabs.map(|tabs| serde_json::from_str(&tabs)).transpose()?)
     }
 
-    /// Keeps `tabs` as those of `chat`'s stage.
+    /// Keeps `tabs` as those of `chat`'s own stage, as an earlier Cox
+    /// did.
     ///
     /// # Errors
     ///
@@ -471,9 +481,41 @@ impl Store {
         Ok(())
     }
 
+    /// The tabs of the stage of `folder`, where its chats work, if it has
+    /// one.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read, or holds tabs this Cox cannot.
+    pub fn stage(&self, folder: &Path) -> anyhow::Result<Option<KeptTabs>> {
+        let tabs: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT tabs FROM stages WHERE folder = ?1",
+                [folder.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(tabs.map(|tabs| serde_json::from_str(&tabs)).transpose()?)
+    }
+
+    /// Keeps `tabs` as those of the stage of `folder`.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_stage(&self, folder: &Path, tabs: &KeptTabs) -> anyhow::Result<()> {
+        self.connection.execute(
+            "INSERT INTO stages (folder, tabs) VALUES (?1, ?2)
+             ON CONFLICT (folder) DO UPDATE SET tabs = excluded.tabs",
+            params![folder.to_string_lossy(), serde_json::to_string(tabs)?],
+        )?;
+        Ok(())
+    }
+
     /// Has the projects and the chats that were in the folder `from` be
     /// in `to`, which it moved to: the projects' folders, the folders the
-    /// chats work in, and the paths of their stages' tabs.
+    /// chats work in, the stages' folders, and the paths of their tabs.
     ///
     /// # Errors
     ///
@@ -493,6 +535,15 @@ impl Store {
         )?;
         transaction.execute(
             "UPDATE chats SET setup = replace(setup, ?1, ?2), tabs = replace(tabs, ?1, ?2)",
+            params![json(&from)?, json(&to)?],
+        )?;
+        transaction.execute(
+            "UPDATE OR REPLACE stages SET folder = ?2 || substr(folder, length(?1) + 1)
+             WHERE substr(folder, 1, length(?1)) = ?1",
+            params![from, to],
+        )?;
+        transaction.execute(
+            "UPDATE stages SET tabs = replace(tabs, ?1, ?2)",
             params![json(&from)?, json(&to)?],
         )?;
         transaction.commit()?;
@@ -959,9 +1010,35 @@ mod tests {
                 },
             ],
             shown: 1,
+            owners: Vec::new(),
         };
         store.keep_tabs(chat, &tabs).unwrap();
         assert_eq!(store.tabs(chat).unwrap(), Some(tabs));
+    }
+
+    #[test]
+    fn keeps_the_stage_of_a_folder_with_the_chat_of_each_tab() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        let folder = Path::new("/work");
+        assert_eq!(store.stage(folder).unwrap(), None);
+
+        let tabs = KeptTabs {
+            tabs: vec![
+                KeptTab::Files { open: Vec::new() },
+                KeptTab::Markdown {
+                    path: "/work/plan.md".into(),
+                },
+            ],
+            shown: 1,
+            owners: vec![None, Some(chat)],
+        };
+        store.keep_stage(folder, &tabs).unwrap();
+        assert_eq!(store.stage(folder).unwrap(), Some(tabs.clone()));
+        let shown = KeptTabs { shown: 0, ..tabs };
+        store.keep_stage(folder, &shown).unwrap();
+        assert_eq!(store.stage(folder).unwrap(), Some(shown));
+        assert_eq!(store.stage(Path::new("/elsewhere")).unwrap(), None);
     }
 
     #[test]
@@ -1064,8 +1141,12 @@ mod tests {
                 path: "/data/cox-sketches/greet-1/notes.md".into(),
             }],
             shown: 0,
+            owners: Vec::new(),
         };
         store.keep_tabs(chat, &tabs).unwrap();
+        store
+            .keep_stage(Path::new("/data/cox-sketches/greet-1"), &tabs)
+            .unwrap();
 
         store
             .moved(
@@ -1087,6 +1168,24 @@ mod tests {
         );
         let Some(KeptTabs { tabs, .. }) = store.tabs(chat).unwrap() else {
             panic!("the tabs are kept");
+        };
+        assert_eq!(
+            tabs,
+            [KeptTab::Markdown {
+                path: "/data/cox-data/sketches/greet-1/notes.md".into()
+            }]
+        );
+        assert_eq!(
+            store
+                .stage(Path::new("/data/cox-sketches/greet-1"))
+                .unwrap(),
+            None
+        );
+        let Some(KeptTabs { tabs, .. }) = store
+            .stage(Path::new("/data/cox-data/sketches/greet-1"))
+            .unwrap()
+        else {
+            panic!("the stage moved with its folder");
         };
         assert_eq!(
             tabs,

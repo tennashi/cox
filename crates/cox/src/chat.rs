@@ -1,7 +1,8 @@
-//! One chat: a human and an agent working in a folder, with a stage of
-//! their own. The daemon runs it (see [`crate::daemon`]); this is what
-//! starts it, what it is, and how the window shows it: the window makes
-//! each chat's stage through [`Stages`].
+//! One chat: a human and an agent working in a folder, on the stage of the
+//! folder, which they share with the other chats there. The daemon runs it
+//! (see [`crate::daemon`]); this is what starts it, what it is, and how
+//! the window shows it: the window makes each folder's stage through
+//! [`Stages`].
 //!
 //! - [`launcher`] starts a chat: its agent, with the tools between it and
 //!   its stage, for the daemon; and its stage and the relay to it, for
@@ -33,14 +34,15 @@ use cox_browser::relay::Relay;
 /// What makes the chats' stages for the window: the
 /// [`CefStages`](launcher::CefStages) of the browser, or none in tests.
 pub trait Stages {
-    /// The stage of a chat working in `cwd`, an absolute path, on the
-    /// tabs it had, if it had any, with what opens the links of its
-    /// conversation there, or `None` for a chat with no stage. A
-    /// [`Stage`] works with the chat's agent; any other view only shows.
+    /// The stage of the chats working in `cwd`, an absolute path, on the
+    /// tabs it had, if it had any, each of a chat by its key, with what
+    /// opens the links of their conversations there, or `None` for chats
+    /// with no stage. A [`Stage`] works with the chats' agents; any other
+    /// view only shows.
     fn stage(
         &self,
         cwd: PathBuf,
-        tabs: Option<KeptTabs>,
+        tabs: Option<KeptTabs<u64>>,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<(StageView, OpenLink)>;

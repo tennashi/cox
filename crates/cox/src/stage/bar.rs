@@ -312,6 +312,8 @@ impl Stage {
             TabContent::MacWindow(_) | TabContent::Windows(_) => Icon::Window,
         };
         let shown = self.tabs.shown_index() == Some(index);
+        // The tabs of the chats not shown are drawn dimmer.
+        let others = tab.owner.is_some_and(|owner| Some(owner) != self.showing);
         div()
             .id(("tab", number))
             .debug_selector(move || format!("tab-{number}"))
@@ -333,6 +335,7 @@ impl Stage {
                     tab.text_color(rgb(DIM)).hover(|style| style.bg(rgb(HOVER)))
                 }
             })
+            .when(others, |tab| tab.opacity(0.5))
             .on_click(cx.listener(move |stage, _, window, cx| stage.show(index, window, cx)))
             .child(icon(glyph, 14., if shown { DIM } else { FAINT }))
             .child(div().min_w_0().overflow_hidden().child(ellipsis(title)))

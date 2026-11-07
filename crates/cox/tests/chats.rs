@@ -29,7 +29,7 @@ use cox_core::store::Named;
 use cox_core::store::Store;
 use fake_agent::{FakeAgent, LogsIn, Resumes, TITLE};
 use fake_daemon::{
-    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, SECOND_AGENT, kept_at,
+    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, kept_at,
     open_again, settle, settle_on, settled,
 };
 use gpui::{
@@ -81,8 +81,7 @@ fn open_with(
     kept: Kept,
     fakes: Fakes,
 ) -> (Entity<Workspace>, &mut VisualTestContext) {
-    let (workspace, cx) =
-        fake_daemon::open_window(cx, home, kept, fakes, FakeStages { opened: None });
+    let (workspace, cx) = fake_daemon::open_window(cx, home, kept, fakes, FakeStages::default());
     settled(cx, &workspace);
     (workspace, cx)
 }
@@ -313,6 +312,48 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
         workspace.shown().map(|chat| chat.name().to_owned())
     });
     assert_eq!(shown.as_deref(), Some("Chat 2"));
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[gpui::test]
+async fn the_chats_of_a_folder_share_its_stage(cx: &mut TestAppContext) {
+    let home = scratch("stage-home");
+    let folder = scratch("stage-folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    let made = Made::default();
+    let stages = FakeStages {
+        opened: None,
+        made: Some(Rc::clone(&made)),
+    };
+    let (workspace, cx) =
+        fake_daemon::open_window(cx, home.clone(), Kept::Memory, Fakes::default(), stages);
+    settled(cx, &workspace);
+
+    cx.simulate_keystrokes("secondary-n");
+    for _ in 0..2 {
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.open(Some(folder.clone()), window, cx);
+        });
+    }
+    settle(cx).await;
+    click(cx, "chat-1");
+    settle(cx).await;
+
+    // A stage for each folder, which each of its chats shows.
+    let folders: Vec<PathBuf> = made
+        .borrow()
+        .iter()
+        .map(|(folder, _)| folder.clone())
+        .collect();
+    assert_eq!(folders, [home.clone(), folder.clone()]);
+    for chat in ["chat-1", "chat-2"] {
+        click(cx, chat);
+        assert!(
+            cx.debug_bounds("toggle-stage").is_some(),
+            "{chat} has the folder's stage"
+        );
+    }
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&folder);
 }

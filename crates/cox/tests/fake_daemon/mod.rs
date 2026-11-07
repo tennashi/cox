@@ -221,21 +221,34 @@ impl Render for FakeStage {
     }
 }
 
-/// Makes the chats' stages: none, or, when `opened` is given, a stand-in
-/// for each, which notes there the links the human opens.
+/// The stages made, each by the folder of its chats and the tabs it
+/// was made on, in order.
+pub type Made = Rc<std::cell::RefCell<Vec<(PathBuf, Option<KeptTabs<u64>>)>>>;
+
+/// Makes the chats' stages: none, or, when `opened` or `made` is given, a
+/// stand-in for each, which notes in `opened` the links the human opens,
+/// and in `made` the stages made.
+#[derive(Default)]
 pub struct FakeStages {
     pub opened: Option<Opened>,
+    pub made: Option<Made>,
 }
 
 impl Stages for FakeStages {
     fn stage(
         &self,
-        _: PathBuf,
-        _: Option<KeptTabs>,
+        cwd: PathBuf,
+        tabs: Option<KeptTabs<u64>>,
         _: &mut Window,
         cx: &mut App,
     ) -> Option<(StageView, OpenLink)> {
-        let opened = self.opened.clone()?;
+        if self.opened.is_none() && self.made.is_none() {
+            return None;
+        }
+        if let Some(made) = &self.made {
+            made.borrow_mut().push((cwd, tabs));
+        }
+        let opened = self.opened.clone().unwrap_or_default();
         let view = StageView {
             view: cx.new(|_| FakeStage).into(),
             panel: cx.new(|_| Panel::default()),
@@ -333,7 +346,7 @@ pub fn open_again(
     kept: Kept,
     fakes: Fakes,
 ) -> Entity<Workspace> {
-    let stages = FakeStages { opened: None };
+    let stages = FakeStages::default();
     cx.update(|window, cx| cx.new(|cx| over_daemon(home, kept, fakes, stages, window, cx)))
 }
 

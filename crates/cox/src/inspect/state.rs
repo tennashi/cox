@@ -292,7 +292,7 @@ fn tell(told: &mut String, chat: &Chat, workspace: &Workspace, cx: &App) {
     }
 }
 
-/// The stage's tabs.
+/// The stage's tabs, each with the chat it is of.
 fn tabs(told: &mut String, view: &ChatView, cx: &App) {
     let Some(tabs) = view.tabs(cx) else {
         told.push_str("  Stage: none\n");
@@ -335,6 +335,9 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
             KeptTab::Terminal { title } => format!("terminal {title:?}"),
         };
         let _ = write!(told, " {}. {what}", index + 1);
+        if let Some(owner) = tabs.owner(index) {
+            let _ = write!(told, " of chat {owner}");
+        }
         if index == tabs.shown {
             told.push_str(" (shown)");
         }

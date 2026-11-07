@@ -9,9 +9,10 @@
 //! [`crate::daemon`]), which tells it the projects and chats, and how the
 //! conversation of each chat the window shows changes, and which the
 //! window tells what the human does. What the window keeps of its own is
-//! what it shows: which chat, the menus and inputs open, and each chat's
-//! stage, which carries out what the chat's agent asks of it, as the
-//! daemon passes it on.
+//! what it shows: which chat, the menus and inputs open, and the stage of
+//! each folder the chats work in, which the chats there share, and which
+//! carries out what each chat's agent asks of it, as the daemon passes it
+//! on.
 //!
 //! A chat's tab tells whether its agent is at work, waits for the human,
 //! or finished a turn the human has not seen yet, and whether it has a
@@ -52,7 +53,7 @@ use crate::agents::Agents;
 use crate::chat::Stages;
 use crate::chat::conversation::State;
 use crate::chat::sketch::{self, Sketch};
-use crate::chat::view::{ChatView, Row};
+use crate::chat::view::{ChatView, OpenLink, Row, StageView};
 use crate::daemon::Link;
 use crate::daemon::wire::{ChatRow, FromDaemon, Listing, StageAsk, ToDaemon};
 use crate::notices::AppNotices;
@@ -365,6 +366,9 @@ pub struct Workspace {
     agents: Option<Agents>,
     /// The chats whose stages are made, by their keys.
     staged: HashMap<u64, Staged>,
+    /// The stages made, by the folder whose chats work on each, with what
+    /// opens the links of their conversations there.
+    folders: HashMap<PathBuf, (StageView, OpenLink)>,
     /// What the daemon asked of the stages of chats whose stages are not
     /// made yet, by their keys, to carry out once they are.
     waiting: HashMap<u64, Vec<FromDaemon>>,
@@ -431,6 +435,7 @@ impl Workspace {
             stages,
             agents,
             staged: HashMap::new(),
+            folders: HashMap::new(),
             waiting: HashMap::new(),
             running: HashMap::new(),
             syncs: HashMap::new(),
@@ -637,12 +642,14 @@ impl Workspace {
         self.tell(ToDaemon::Watch { key });
     }
 
-    /// Makes the stage of the chat `key`, on the tabs it had, unless it has
-    /// one, and carries out what was asked of it until then.
+    /// Gives the chat `key` the stage of the folder it works in, unless it
+    /// has one: the stage made already for another chat there, or one made
+    /// on `tabs`, as the stage had them; and carries out what was asked of
+    /// it until then.
     fn make_stage(
         &mut self,
         key: u64,
-        tabs: Option<KeptTabs>,
+        tabs: Option<KeptTabs<u64>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -656,29 +663,59 @@ impl Workspace {
             return;
         };
         let cwd = self.cwd_of(chat);
-        let made = self.stages.stage(cwd, tabs, window, cx);
-        let tools = made.and_then(|(shown, open_link)| {
+        let made = match self.folders.get(&cwd) {
+            Some((shown, open_link)) => Some((shown.clone(), open_link.clone(), false)),
+            None => self
+                .stages
+                .stage(cwd.clone(), tabs, window, cx)
+                .map(|(shown, open_link)| {
+                    self.folders
+                        .insert(cwd.clone(), (shown.clone(), open_link.clone()));
+                    (shown, open_link, true)
+                }),
+        };
+        let shown_key = self.shown().map(Chat::key);
+        let tools = made.and_then(|(shown, open_link, new)| {
             let stage = shown.view.clone().downcast::<Stage>().ok();
             view.update(cx, |view, cx| view.set_stage(shown, open_link, cx));
             // A stage works with the chat's agent: it carries out what the
-            // agent's tools ask, and keeps its tabs.
+            // agent's tools ask. A new one keeps its tabs, as those of its
+            // folder.
             let stage = stage?;
             let (tools, from_tools) = tokio::sync::mpsc::unbounded_channel();
-            let link = self.link.clone();
-            let keep: crate::stage::Keep = Rc::new(move |tabs: &KeptTabs| {
-                link.send(ToDaemon::Tabs {
-                    key,
-                    tabs: tabs.clone(),
+            let keep = new.then(|| {
+                let link = self.link.clone();
+                let keep: crate::stage::Keep = Rc::new(move |tabs: &KeptTabs<u64>| {
+                    link.send(ToDaemon::Tabs {
+                        folder: cwd.clone(),
+                        tabs: tabs.clone(),
+                    });
                 });
+                keep
             });
             stage.update(cx, |stage, cx| {
-                stage.work(None, Some(from_tools), Some(keep), window, cx);
+                stage.work(key, None, Some(from_tools), keep, window, cx);
+                if shown_key == Some(key) {
+                    stage.showing(key, cx);
+                }
             });
             Some(tools)
         });
         self.staged.insert(key, Staged { tools });
         for asked in self.waiting.remove(&key).unwrap_or_default() {
             self.ask_stage(asked, window, cx);
+        }
+    }
+
+    /// Tells the stage of the chat `key`, if it has one, that the chat is
+    /// shown.
+    fn stage_shows(&self, key: u64, cx: &mut Context<Self>) {
+        if let Some(stage) = self
+            .chat(key)
+            .and_then(Chat::view)
+            .and_then(|view| view.read(cx).stage())
+        {
+            stage.update(cx, |stage, cx| stage.showing(key, cx));
         }
     }
 
@@ -705,7 +742,7 @@ impl Workspace {
                 let port = relay.as_ref().map(|relay| relay.port);
                 if let (Some(stage), Some(relay)) = (stage, relay) {
                     stage.update(cx, |stage, cx| {
-                        stage.work(Some(relay), None, None, window, cx);
+                        stage.work(key, Some(relay), None, None, window, cx);
                     });
                 }
                 self.tell(ToDaemon::Prepared { id, port });
@@ -928,6 +965,7 @@ impl Workspace {
         self.projects[chat.project].last = Some(key);
         self.tell(ToDaemon::Shown { key: Some(key) });
         self.view(key, cx);
+        self.stage_shows(key, cx);
         window.focus(&self.focus_handle(cx));
         cx.notify();
     }
