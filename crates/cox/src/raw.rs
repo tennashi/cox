@@ -244,6 +244,103 @@ fn of(root: &Path, topic: Option<&str>) -> Vec<String> {
     }
 }
 
+/// The sources in the folder at `root`, as the stage's Knowledge page
+/// lists them, at `cox://api/raw` (see [`crate::stage::plugins`]): the
+/// last kept first, each with its topic, its title, and, as its
+/// properties say, where it was read, the day it was kept, and the chat
+/// and project that kept it.
+#[must_use]
+pub fn told(root: &Path) -> serde_json::Value {
+    let mut names = of(root, None);
+    names.sort_by(|a, b| newest_first(a, b));
+    let sources: Vec<serde_json::Value> = names
+        .iter()
+        .filter_map(|name| {
+            let page = fs::read_to_string(wiki::file(root, name).ok()?).ok()?;
+            let mut told = properties(&page);
+            let (_, text) = wiki::front(&page);
+            let title = text
+                .lines()
+                .find_map(|line| line.strip_prefix("# "))
+                .map_or_else(|| name.clone(), |title| title.trim().to_owned());
+            told["name"] = name.clone().into();
+            told["topic"] = name.rsplit_once('/').map_or("", |(topic, _)| topic).into();
+            told["title"] = title.into();
+            Some(told)
+        })
+        .collect();
+    serde_json::json!({
+        "root": root.display().to_string(),
+        "sources": sources,
+    })
+}
+
+/// The source `name` in the folder at `root`, as the Knowledge page
+/// reads it, at `cox://api/raw/<name>`: as a page of the wiki is told
+/// (see [`wiki::told::page_in`]), translated as `translated` does, with
+/// where it was read, the day it was kept, and the chat and project that
+/// kept it; or `None` when there is no such source.
+#[must_use]
+pub fn told_source(
+    root: &Path,
+    name: &str,
+    translated: impl FnOnce(&str) -> Option<crate::translate::Translated>,
+) -> Option<serde_json::Value> {
+    let page = fs::read_to_string(wiki::file(root, name).ok()?).ok()?;
+    let mut told = wiki::told::page_in(root, name, translated)?;
+    for (key, value) in properties(&page).as_object().into_iter().flatten() {
+        told[key] = value.clone();
+    }
+    Some(told)
+}
+
+/// What the properties of the source `page` say of it: where it was read
+/// (`source`), the day (`kept`), the chat (`chat`) and the project
+/// (`project`), each `null` when they do not say it.
+fn properties(page: &str) -> serde_json::Value {
+    let (lines, _) = wiki::front(page);
+    let value = |key: &str| {
+        lines
+            .iter()
+            .find_map(|line| wiki::property(line, key))
+            .map(unquoted)
+    };
+    serde_json::json!({
+        "source": value("source"),
+        "kept": value("kept"),
+        "chat": value("chat"),
+        "project": value("project"),
+    })
+}
+
+/// `value` as YAML reads it, unquoted, as [`quoted`] quotes it.
+fn unquoted(value: &str) -> String {
+    let Some(inner) = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    else {
+        return value
+            .strip_prefix('\'')
+            .and_then(|value| value.strip_suffix('\''))
+            .unwrap_or(value)
+            .to_owned();
+    };
+    let mut plain = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => plain.push('\n'),
+                Some(escaped) => plain.push(escaped),
+                None => {}
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
+}
+
 /// `value` as YAML reads it, quoted.
 fn quoted(value: &str) -> String {
     let mut quoted = String::from("\"");
@@ -389,5 +486,40 @@ mod tests {
         assert_eq!(slug("Rust 1.92: ネバー型!"), "rust-1-92-ネバー型");
         assert_eq!(slug("!!!"), "source");
         assert_eq!(slug(&"a".repeat(100)).len(), NAME_LENGTH);
+    }
+
+    #[test]
+    fn the_sources_are_told_the_last_kept_first_with_where_each_was_read() {
+        let root = scratch("told");
+        let old = keep(&root, "rust-news", release("Old.\n"), by("2026-11-05")).unwrap();
+        let new = keep(&root, "rust-news", release("New.\n"), by("2026-11-06")).unwrap();
+        let told = told(&root);
+        let sources = told["sources"].as_array().unwrap();
+        assert_eq!(sources[0]["name"], new.as_str());
+        assert_eq!(sources[1]["name"], old.as_str());
+        assert_eq!(sources[0]["topic"], "rust-news");
+        assert_eq!(sources[0]["title"], "Announcing Rust 1.92.0");
+        assert_eq!(
+            sources[0]["source"],
+            "https://blog.rust-lang.org/2026/11/06/Rust-1.92.0/"
+        );
+        assert_eq!(sources[0]["kept"], "2026-11-06");
+        assert_eq!(sources[0]["chat"], "rust-news 11/06 09:00");
+        assert_eq!(sources[0]["project"], "notes");
+
+        let page = told_source(&root, &new, |_| None).unwrap();
+        assert_eq!(page["chat"], "rust-news 11/06 09:00");
+        assert!(page["html"].as_str().unwrap().contains("New."));
+        assert_eq!(told_source(&root, "rust-news/none", |_| None), None);
+    }
+
+    #[test]
+    fn a_quoted_property_is_read_as_it_was_written() {
+        assert_eq!(
+            unquoted(&quoted("say \"hi\"\\ there\n")),
+            "say \"hi\"\\ there\n"
+        );
+        assert_eq!(unquoted("'plain'"), "plain");
+        assert_eq!(unquoted("2026-11-06"), "2026-11-06");
     }
 }

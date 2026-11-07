@@ -451,12 +451,18 @@ of the human's, so that the turn that keeps it, which meets the goal
 again, does not ask again; and a chat whose agent has no `wiki_write`
 is not asked.
 
-"Wiki" on the stage's bar, a plugin (see below), at `cox://wiki/`,
-shows the wiki to the human: its pages, with their titles, their first
+"Knowledge" on the stage's bar, a plugin (see below), at
+`cox://wiki/`, shows the human what the agents learned and read, on
+shelves the line at its top chooses between: "Your wiki", the human's,
+"This project's wiki", the project's own, at `cox://wiki/#project:`,
+which the home has none of, and "Sources", what the agents kept as
+they read it (see [Research](#research)), at `cox://wiki/#raw:`, each
+with how many it holds. A wiki shows its pages, with their titles, their first
 lines and where they were used last, which a line at the top narrows to
 those that have every word typed; and a page, at `cox://wiki/#` and its
-name, as `cox://wiki/#rust/errors`, drawn as Markdown, its links going
-to the pages they name, `[[name]]` or `[[name|what it says]]`, as
+name, as `cox://wiki/#rust/errors`, or `cox://wiki/#project:` and its
+name for the project's, drawn as Markdown, its links going
+to the pages they name on its shelf, `[[name]]` or `[[name|what it says]]`, as
 Obsidian writes them, or a Markdown link to a page's file, a name that
 is no page's naming the only page whose last part it is, as Obsidian
 finds it; then where it was used, the pages that link to it, and its
@@ -466,14 +472,19 @@ no agent, the pages with links to no page, those no page links to, the
 index aside, those with no title, and those that say nowhere where they
 were used, as those the human wrote; chips over the pages narrow them
 to those of a mark. A page kept in one project says which, as the
-human sees every page. The page reads the wiki again every two seconds.
+human sees every page. The sources are listed the last kept first,
+each with its title, where it was read, the day it was kept and the
+chat that kept it, which the line at the top narrows too; and a source,
+at `cox://wiki/#raw:` and its name, drawn as a page is, with where it
+was read, a page of the web on a tab of its own, and the day and the
+chat that kept it. The page reads them all again every two seconds.
 
 The agents write the wiki in English, whatever language their chats
 speak, as Cox's tools and `wiki/save.md` tell them, so that a page is
 found by the same words from every chat; the human reads it, and
 whatever else they select in the window, in a language of their own,
 as `settings.json` names it, as `{"translation": {"language":
-"Japanese"}}`. "Wiki" then shows a page in that language, as far as it
+"Japanese"}}`. "Knowledge" then shows a page, or a source, in that language, as far as it
 is translated, the rest as it is written, with how far it has gone,
 and a chip "As written" over it to read it as the agent wrote it. It
 is translated a block at a time, its paragraphs, headings, lists,
@@ -646,7 +657,7 @@ page, file or view of the project once. The
 bar along its top keeps the views of the project in sight first, side
 by side: "Map" (see below), when the project has a map, "Files",
 "Changes", when the project is in a Git repository, and the other
-plugins' pages, such as "Wiki" and "Schedules", each a tab that the bar
+plugins' pages, such as "Knowledge" and "Schedules", each a tab that the bar
 shows by its button, not among the others, and kept there while its tab
 is open; then the other tabs, each with an icon of what it shows: a
 page, a Markdown file, code, a terminal, the flow of a tool call. The +
@@ -874,7 +885,7 @@ page's ‹ goes back from one map to the one before.
 A tab can show a plugin: a page, in HTML and JavaScript, that draws
 what Cox knows as a tab Cox draws would, for whoever wants a view of
 their own on the stage, the agent included, since it writes HTML and
-reads pages. "Map", "Wiki" and "Schedules" are built in. A plugin is a
+reads pages. "Map", "Knowledge" and "Schedules" are built in. A plugin is a
 folder with an `index.html`, and a `plugin.json` naming its `title` if
 it has one: those built into Cox, in `crates/cox/plugins`, and the
 project's, in `.cox/plugins/<name>` under its folder. The bar has a
@@ -898,6 +909,10 @@ file calls, for a step of a flow made there;
 `cox://api/wiki` is the human's wiki, its pages, each with what it
 links to, what links to it, where it was used and what Cox marks of it,
 and `cox://api/wiki/<page>` a page, with its text as HTML;
+`cox://api/project-wiki` and `cox://api/project-wiki/<page>` are the
+project's wiki, the same way, and whether the folder is the home;
+`cox://api/raw` is the sources, each with where it was read, when and
+by which chat, and `cox://api/raw/<name>` a source, as a page is told;
 `cox://api/schedules` is the schedules that run in the project's
 folder (see [Schedules](#schedules)); and
 `cox://api/lines/<path>:<line>` is the lines of the file around that
@@ -1212,7 +1227,8 @@ and its number (`chat`, `chat_id`), and its project, if it is in one
 source is never written again: what changed is another source, kept
 beside it. `raw_read` reads a source, or lists those of a topic, the
 last kept first, and `raw_search` finds those that have every word it
-looks for.
+looks for. "Knowledge" on the stage's bar shows them to the human,
+under "Sources" (see [The stage](#the-stage)).
 
 So research on a schedule is a schedule (see [Schedules](#schedules))
 whose first line asks for it:

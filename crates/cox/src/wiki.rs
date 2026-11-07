@@ -12,7 +12,7 @@
 //! and the paths of the code the page is of, so that a page says where it
 //! came from without the agent writing it. Cox keeps `index.md`, the
 //! page that lists the others, unless the human wrote their own. The
-//! stage's Wiki plugin shows the pages to the human (see [`told`]).
+//! stage's Knowledge plugin shows the pages to the human (see [`told`]).
 //!
 //! A project has a wiki of its own too, for what holds only of its work
 //! or its people, in `.cox/wiki` in its folder, where its repository can

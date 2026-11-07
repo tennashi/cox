@@ -34,6 +34,13 @@
 //!   and, when the human reads the wiki in a language of their own, as
 //!   HTML in that language too, as far as it is translated (see
 //!   [`crate::wiki::told`] and [`crate::translate`]).
+//! - `cox://api/project-wiki`: the project's own wiki, in `.cox/wiki` in
+//!   its folder, as the human's is told, and whether the folder is the
+//!   home, which has none; and `cox://api/project-wiki/<page>`, a page.
+//! - `cox://api/raw`: the sources the agents kept of what they read (see
+//!   [`crate::raw::told`]), the last kept first; and
+//!   `cox://api/raw/<name>`, a source, as a page of the wiki is told,
+//!   with where it was read.
 //!
 //! - `cox://api/schedules`: the schedules that run in the project's
 //!   folder, its own and those of the human's workflow whose chats work
@@ -61,7 +68,7 @@ const PROJECT_PLUGINS: &str = ".cox/plugins";
 /// The files of a plugin, by their paths within it.
 type Files = &'static [(&'static str, &'static [u8])];
 
-/// What is built into Cox at `cox://<name>/`: the Map, Wiki and
+/// What is built into Cox at `cox://<name>/`: the Map, Knowledge and
 /// Schedules plugins, with their files.
 const BUILT_IN: &[(&str, Files)] = &[
     (
@@ -225,6 +232,26 @@ impl Plugins {
                 &crate::schedule::Ran::read(crate::storage::path(crate::storage::Kept::Schedules)),
                 &jiff::Zoned::now(),
             ),
+            "project-wiki" => {
+                let root = self.root.join(crate::wiki::PROJECT_WIKI);
+                if rest.is_empty() {
+                    let mut told = wiki::told(&root);
+                    told["home"] = (self.root
+                        == crate::settings::home_for_chats(crate::settings::Saved::read().home))
+                    .into();
+                    told
+                } else {
+                    wiki::page_in(&root, &percent_decoded(rest), translate::page)?
+                }
+            }
+            "raw" => {
+                let root = crate::settings::raw();
+                if rest.is_empty() {
+                    crate::raw::told(&root)
+                } else {
+                    crate::raw::told_source(&root, &percent_decoded(rest), translate::page)?
+                }
+            }
             "file" if !rest.is_empty() => {
                 let path = PathBuf::from(format!("/{}", percent_decoded(rest)));
                 self.outlines.told(&self.root, &path)?
@@ -403,6 +430,27 @@ mod tests {
     }
 
     #[test]
+    fn the_projects_wiki_is_told_as_json() {
+        let root = scratch("project-wiki");
+        std::fs::create_dir_all(root.join(".cox/wiki")).unwrap();
+        std::fs::write(
+            root.join(".cox/wiki/people.md"),
+            "# People\n\nWho to ask.\n",
+        )
+        .unwrap();
+        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
+
+        let answer = plugins.resource("cox://api/project-wiki").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["pages"][0]["name"], "people");
+        assert_eq!(json["home"], false);
+        let answer = plugins.resource("cox://api/project-wiki/people").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["title"], "People");
+        assert_eq!(plugins.resource("cox://api/project-wiki/nobody"), None);
+    }
+
+    #[test]
     fn a_file_is_told_as_json_within_the_project() {
         let root = scratch("file");
         std::fs::create_dir_all(root.join("my src")).unwrap();
@@ -458,7 +506,7 @@ mod tests {
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();
         assert_eq!(names, ["map", "wiki", "schedules", "tour"]);
         assert_eq!(listed[0].title, "Map");
-        assert_eq!(listed[1].title, "Wiki");
+        assert_eq!(listed[1].title, "Knowledge");
         assert_eq!(listed[2].title, "Schedules");
         assert_eq!(listed[3].title, "A tour");
         assert_eq!(listed[3].url(), "cox://tour/");
