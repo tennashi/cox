@@ -2,8 +2,8 @@
 //! the chats away from the Mac: the projects and chats, and a chat's
 //! conversation, as they change.
 //!
-//! coxd serves it only when `settings.json` names a port, as
-//! `{"phone": {"port": 7421}}`, and only on the Mac's own `127.0.0.1`:
+//! coxd serves it unless `settings.json` turns it off, as
+//! `{"phone": false}`, on [`PORT`], and only on the Mac's own `127.0.0.1`:
 //! the phone reaches it through `tailscale serve`, which hands the page
 //! to the human's tailnet over HTTPS. Since any page in any browser on
 //! the Mac can reach `127.0.0.1` too, every answer but the pairing asks
@@ -110,28 +110,42 @@ const FILES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// The port `settings.json` names for the page, if it names one.
+/// The port the page is served on unless `settings.json` names another:
+/// what `tailscale serve` hands to the tailnet, and nothing the human
+/// has to choose.
+pub const PORT: u16 = 7421;
+
+/// The port the page is served on, or none when `settings.json` turns it
+/// off, as `{"phone": false}`.
 #[must_use]
 pub fn port() -> Option<u16> {
-    let file = storage::path(Kept::Settings)?;
-    let bytes = std::fs::read(&file).ok()?;
+    let Some(file) = storage::path(Kept::Settings) else {
+        return Some(PORT);
+    };
+    let Ok(bytes) = std::fs::read(&file) else {
+        return Some(PORT);
+    };
     port_in(&bytes)
         .inspect_err(|why| tracing::error!("\"phone\" in {} cannot be read: {why}", file.display()))
-        .ok()
-        .flatten()
+        .unwrap_or(Some(PORT))
 }
 
-/// The port the settings `bytes` name for the page, if they name one.
+/// The port the settings `bytes` say the page is served on: [`PORT`],
+/// unless they turn it off, or name another, as `{"phone": {"port":
+/// 7422}}`.
 fn port_in(bytes: &[u8]) -> Result<Option<u16>, String> {
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     match value.get("phone") {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(phone) => match phone.get("port").and_then(serde_json::Value::as_u64) {
-            Some(port) => u16::try_from(port)
+        None | Some(serde_json::Value::Null | serde_json::Value::Bool(true)) => Ok(Some(PORT)),
+        Some(serde_json::Value::Bool(false)) => Ok(None),
+        Some(phone) => match phone.get("port") {
+            None => Ok(Some(PORT)),
+            Some(port) => port
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok())
                 .map(Some)
-                .map_err(|_| format!("{port} is no port")),
-            None => Err("it names no \"port\"".to_owned()),
+                .ok_or_else(|| format!("{port} is no port")),
         },
     }
 }
@@ -176,11 +190,10 @@ fn token_at(file: &Path) -> anyhow::Result<String> {
 ///
 /// # Errors
 ///
-/// When the settings name no port, or the secret cannot be had.
+/// When the settings turn the page off, or the secret cannot be had.
 pub fn link() -> anyhow::Result<String> {
-    let port = port().context(
-        "settings.json names no port for the phone's page, as {\"phone\": {\"port\": 7421}}",
-    )?;
+    let port =
+        port().context("settings.json turns the phone's page off, with {\"phone\": false}")?;
     let token = token()?;
     Ok(match tailnet_name() {
         Some(name) => format!(
@@ -202,15 +215,41 @@ fn tailnet_name() -> Option<String> {
     ]
     .into_iter()
     .find_map(|program| {
-        let output = std::process::Command::new(program)
-            .args(["status", "--json"])
-            .output()
-            .ok()?;
-        let status: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+        let output = answer_of(program, &["status", "--json"], ASKS_TAILSCALE)?;
+        let status: serde_json::Value = serde_json::from_slice(&output).ok()?;
         let name = status.pointer("/Self/DNSName")?.as_str()?;
         let name = name.trim_end_matches('.');
         (!name.is_empty()).then(|| name.to_owned())
     })
+}
+
+/// How long `tailscale` may take to say the Mac's name: the app's own
+/// program, asked from where the app does not run it, may never answer.
+const ASKS_TAILSCALE: Duration = Duration::from_secs(5);
+
+/// What `program`, run with `args`, writes on its standard output, unless
+/// it fails to start or takes longer than `time`, when it is stopped.
+fn answer_of(program: &str, args: &[&str], time: Duration) -> Option<Vec<u8>> {
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (read, output) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        let _ = read.send(bytes);
+    });
+    let bytes = output.recv_timeout(time).ok();
+    if bytes.is_none() {
+        let _ = child.kill();
+    }
+    let status = child.wait().ok()?;
+    status.success().then_some(bytes?)
 }
 
 /// Listens for the phone on `port` of the Mac's own address.
@@ -662,10 +701,12 @@ mod tests {
 
     #[test]
     fn reads_the_port_from_the_settings() {
-        assert_eq!(port_in(br#"{"home": "~/cox"}"#), Ok(None));
-        assert_eq!(port_in(br#"{"phone": {"port": 7421}}"#), Ok(Some(7421)));
+        assert_eq!(port_in(br#"{"home": "~/cox"}"#), Ok(Some(PORT)));
+        assert_eq!(port_in(br#"{"phone": false}"#), Ok(None));
+        assert_eq!(port_in(br#"{"phone": true}"#), Ok(Some(PORT)));
+        assert_eq!(port_in(br#"{"phone": {}}"#), Ok(Some(PORT)));
+        assert_eq!(port_in(br#"{"phone": {"port": 7422}}"#), Ok(Some(7422)));
         assert!(port_in(br#"{"phone": {"port": 70000}}"#).is_err());
-        assert!(port_in(br#"{"phone": {}}"#).is_err());
     }
 
     #[test]
@@ -866,6 +907,24 @@ mod tests {
             .await
             .expect("the page answers in time");
         std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn stops_a_program_that_does_not_answer() {
+        assert_eq!(
+            answer_of("sh", &["-c", "printf hi"], Duration::from_secs(5)),
+            Some(b"hi".to_vec())
+        );
+        let started = std::time::Instant::now();
+        assert_eq!(
+            answer_of("sleep", &["30"], Duration::from_millis(200)),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            answer_of("cox-no-such-program", &[], Duration::from_secs(1)),
+            None
+        );
     }
 
     #[test]

@@ -1413,8 +1413,11 @@ comes once none is.
 ## On the phone
 
 The human follows the chats from their phone, away from the Mac, on a
-page coxd serves when `settings.json` names a port for it, as
-`{"phone": {"port": 7421}}`, which coxd reads as it starts: the
+page coxd serves, on port 7421, unless `settings.json` turns it off, as
+`{"phone": false}`, or names another port, as `{"phone": {"port":
+7422}}`, which coxd reads as it starts; a coxd that finds the port taken,
+as by another Cox run from elsewhere, says so in its log and serves no
+page. The page shows the
 projects, each with its chats and how each stands, as the window's
 list has them, those that wait for the human first, under "Waits for
 you"; and a chat's conversation, as it goes on, the agent's tool calls
