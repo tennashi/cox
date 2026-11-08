@@ -165,22 +165,26 @@
         gap: 8px;
         margin: 0 0 10px;
       }
+      /* As the button of the window (see `ui::button`). */
       .wayto {
-        font: 12.5px var(--sans);
+        display: inline-flex;
+        align-items: center;
+        box-sizing: border-box;
+        height: 28px;
+        font: 13px var(--sans);
         color: var(--foreground);
-        background: var(--card);
-        border: 1px solid var(--dim);
+        background: #26262b;
         border-radius: 8px;
-        padding: 5px 12px;
+        padding: 0 10px;
         cursor: pointer;
       }
       .wayto b {
         font-weight: 600;
+        margin: 0 0.25em;
       }
       .wayto:hover,
       .wayto:focus-visible {
-        background: var(--card-hover);
-        border-color: var(--foreground);
+        background: #303036;
       }
       .legend .name[data-goes],
       .seq .box .name[data-goes] {

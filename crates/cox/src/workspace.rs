@@ -2260,26 +2260,9 @@ impl Workspace {
         let endings = self.endings(index);
         let starts_sketch = self.starts_sketch(index);
         let saves_to_wiki = self.saves_to_wiki(index);
-        let item = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .debug_selector(move || id.to_owned())
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(ACCENT_GROUND)))
-                .child(label)
-        };
-        let menu = div()
-            .occlude()
+        let item = |id: &'static str, label: &'static str| crate::ui::menu::item(id, label, "");
+        let menu = crate::ui::menu::menu()
             .min_w(px(160.))
-            .p_1()
-            .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER_STRONG))
-            .rounded_md()
-            .shadow_md()
             .on_mouse_down_out(cx.listener(|workspace, _, _, cx| {
                 workspace.menu = None;
                 cx.notify();
@@ -2308,18 +2291,11 @@ impl Workspace {
                 )))
             })
             .children(endings.into_iter().enumerate().map(|(at, ending)| {
-                div()
-                    .id(("sketch-ending", at))
-                    .debug_selector(move || format!("sketch-ending-{at}"))
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(rgb(ACCENT_GROUND)))
-                    .child(ending.name.clone())
-                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                crate::ui::menu::item(("sketch-ending", at), ending.name.clone(), "").on_click(
+                    cx.listener(move |workspace, _, window, cx| {
                         workspace.end_sketch_as(index, ending.clone(), window, cx);
-                    }))
+                    }),
+                )
             }))
             .child(item("archive-chat", "Archive").on_click(
                 cx.listener(move |workspace, _, window, cx| workspace.archive(index, window, cx)),

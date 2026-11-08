@@ -29,7 +29,8 @@ use crate::chat::region::{self, Described};
 use crate::stage::mirror::{Display, Mirrored, Press, Screen, Touched, pass_on, scaled};
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
-use crate::ui::theme::{BORDER, BUTTON, DIM, FAILED, FOREGROUND, RAISED, SELECTED};
+use crate::ui::button::{Kind, button};
+use crate::ui::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
 
 /// How far one click of a mouse's wheel turns it, as the emulator counts.
 const WHEEL_CLICK: f32 = 120.;
@@ -291,17 +292,7 @@ impl Android {
     }
 
     fn render_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let button = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .debug_selector(move || id.to_owned())
-                .px_2()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .bg(rgb(BUTTON))
-                .hover(|style| style.bg(rgb(SELECTED)))
-                .child(label)
-        };
+        let button = |id: &'static str, label: &'static str| button(id, label, Kind::Plain);
         let key = |key: &'static str| {
             cx.listener(move |android: &mut Self, _, window: &mut Window, cx| {
                 android.send(Input::Key(key.to_owned()));
