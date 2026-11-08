@@ -223,11 +223,22 @@ struct Project {
     /// How it is kept, or `None` for Cox's own.
     id: Option<ProjectId>,
     name: String,
+    /// Whether the human named it, rather than its folder's name.
+    named: bool,
     folder: PathBuf,
     /// The other folders its chats work in too.
     also: Vec<PathBuf>,
     /// How many chats were opened in it, which numbers the next.
     opened: usize,
+}
+
+/// What a project of `folder` is named, unless the human names it: the
+/// folder's name, or its path when it has none.
+fn folder_name(folder: &Path) -> String {
+    folder.file_name().map_or_else(
+        || folder.to_string_lossy().into_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 impl Project {
@@ -503,6 +514,7 @@ impl Daemon {
             projects: vec![Project {
                 id: None,
                 name: COX.to_owned(),
+                named: false,
                 folder: home,
                 also: Vec::new(),
                 opened: 0,
@@ -553,6 +565,7 @@ impl Daemon {
             .extend(projects.into_iter().map(|project| Project {
                 id: Some(project.id),
                 name: project.name,
+                named: project.named,
                 folder: project.folder,
                 also: project.also,
                 opened: 0,
@@ -960,10 +973,7 @@ impl Daemon {
         {
             return index;
         }
-        let name = folder.file_name().map_or_else(
-            || folder.to_string_lossy().into_owned(),
-            |name| name.to_string_lossy().into_owned(),
-        );
+        let name = folder_name(&folder);
         let id = self
             .store
             .project(&folder, &name)
@@ -972,6 +982,7 @@ impl Daemon {
         self.projects.push(Project {
             id,
             name,
+            named: false,
             folder,
             also: Vec::new(),
             opened: 0,
@@ -1309,6 +1320,7 @@ impl Daemon {
                 }
             }
             ToDaemon::MoveProject { project, folder } => self.move_project(project, &folder),
+            ToDaemon::RenameProject { project, name } => self.rename_project(project, name),
             ToDaemon::AddFolder { project, folder } => self.add_folder(project, folder),
             ToDaemon::RemoveFolder { project, folder } => self.remove_folder(project, &folder),
             ToDaemon::MakePrimary { project, folder } => self.make_primary(project, &folder),
@@ -1348,10 +1360,7 @@ impl Daemon {
             tracing::error!("the project does not move while a chat of it is at work");
             return;
         }
-        let name = folder.file_name().map_or_else(
-            || folder.to_string_lossy().into_owned(),
-            |name| name.to_string_lossy().into_owned(),
-        );
+        let name = folder_name(folder);
         if let Err(error) = self.store.move_project(project, folder, &name) {
             tracing::error!("the project does not move: {error:#}");
             return;
@@ -1369,7 +1378,9 @@ impl Daemon {
             .collect();
         tracing::info!(from = %from.display(), to = %folder.display(), "the project moved");
         folder.clone_into(&mut self.projects[index].folder);
-        self.projects[index].name = name;
+        if !self.projects[index].named {
+            self.projects[index].name = name;
+        }
         let note = format!(
             "The project's folder moved from {} to {}. A line sent starts the agent again there, \
              with the conversation so far.",
@@ -1424,6 +1435,31 @@ impl Daemon {
         for key in moving {
             self.read_again(key);
         }
+    }
+
+    /// The project kept as `project` is named `name` from now on, as the
+    /// human named it, or, with `None` or a name of only spaces, after
+    /// its folder, wherever that goes.
+    fn rename_project(&mut self, project: ProjectId, name: Option<String>) {
+        let Some(index) = self.index_of(project) else {
+            return;
+        };
+        let name = name
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty());
+        let folder_name = folder_name(&self.projects[index].folder);
+        if let Err(error) = self
+            .store
+            .rename_project(project, name.as_deref(), &folder_name)
+        {
+            tracing::error!("the project is not renamed: {error:#}");
+            return;
+        }
+        let project = &mut self.projects[index];
+        project.named = name.is_some();
+        project.name = name.unwrap_or(folder_name);
+        tracing::info!(name = %project.name, "the project is renamed");
+        self.tell_listing();
     }
 
     /// The chats of the project kept as `project` work in `folder` too,
@@ -2630,6 +2666,7 @@ impl Daemon {
                 .map(|project| ProjectRow {
                     id: project.id,
                     name: project.name.clone(),
+                    named: project.named,
                     folder: project.folder.clone(),
                     missing: project.id.is_some() && !project.folder.is_dir(),
                     also: project.also.clone(),

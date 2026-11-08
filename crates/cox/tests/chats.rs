@@ -33,8 +33,8 @@ use fake_daemon::{
     open_again, settle, settle_on, settled,
 };
 use gpui::{
-    Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, TestAppContext,
-    VisualTestContext,
+    Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
+    TestAppContext, VisualTestContext,
 };
 
 /// Where a test keeps its chats, which it opens too, to keep chats there
@@ -1012,6 +1012,7 @@ async fn a_project_works_in_other_folders_and_its_chats_go_on_where_they_work(
     let input = card(cx).read_with(cx, |card, _| card.input().clone());
     let typed = lib.display().to_string();
     input.update(cx, |input, cx| input.set_text(&typed, cx));
+    cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
     cx.simulate_keystrokes("enter");
     settled(cx, &workspace);
     assert_eq!(
@@ -1075,6 +1076,52 @@ async fn a_project_works_in_other_folders_and_its_chats_go_on_where_they_work(
         .folder;
     assert_eq!(folder, Some(app.clone()));
     assert_eq!(agents.borrow().len(), 3);
+}
+
+#[gpui::test]
+fn a_project_is_named_on_its_card_and_after_its_folder_when_emptied(cx: &mut TestAppContext) {
+    let app = scratch("named-app");
+    let (store, _) = kept_chat(&app, None);
+    let (_, workspace, cx) =
+        open_window_resuming(cx, scratch("named-home"), store.clone(), Resumes::Resume);
+    let name = |cx: &mut VisualTestContext| {
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.open_project_card(1, window, cx);
+        });
+        let card = workspace.read_with(cx, |workspace, _| {
+            workspace.project_card().expect("the card is open").clone()
+        });
+        card.read_with(cx, |card, _| card.name_input().clone())
+    };
+
+    // Enter keeps the name typed.
+    let input = name(cx);
+    input.update(cx, |input, cx| input.set_text("Shop", cx));
+    cx.simulate_keystrokes("enter");
+    settled(cx, &workspace);
+    let projects = store.projects().unwrap();
+    assert_eq!(
+        (projects[0].name.as_str(), projects[0].named),
+        ("Shop", true)
+    );
+    cx.simulate_keystrokes("escape");
+
+    // Emptied, the name is the folder's again, as the card closes.
+    let input = name(cx);
+    assert_eq!(
+        input.read_with(cx, |input, _| input.text().to_owned()),
+        "Shop"
+    );
+    input.update(cx, |input, cx| input.set_text("", cx));
+    cx.simulate_keystrokes("escape");
+    settled(cx, &workspace);
+    assert!(workspace.read_with(cx, |workspace, _| workspace.project_card().is_none()));
+    let projects = store.projects().unwrap();
+    let folder_name = app.file_name().unwrap().to_string_lossy();
+    assert_eq!(
+        (projects[0].name.as_str(), projects[0].named),
+        (&*folder_name, false)
+    );
 }
 
 #[gpui::test]

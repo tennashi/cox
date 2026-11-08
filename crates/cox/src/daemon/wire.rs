@@ -23,6 +23,9 @@ pub struct ProjectRow {
     /// How it is kept, or `None` for Cox's own.
     pub id: Option<ProjectId>,
     pub name: String,
+    /// Whether the human named it, rather than its folder's name.
+    #[serde(default)]
+    pub named: bool,
     /// The folder its chats work in.
     pub folder: PathBuf,
     /// Whether its folder is not there, as when the human moved it, for
@@ -288,6 +291,12 @@ pub enum ToDaemon {
     /// The project kept as `project` works in `folder` from now on, as
     /// when the human moved its folder there.
     MoveProject { project: ProjectId, folder: PathBuf },
+    /// The project kept as `project` is named `name` from now on, or,
+    /// with `None`, after its folder, wherever that goes.
+    RenameProject {
+        project: ProjectId,
+        name: Option<String>,
+    },
     /// The chats of the project kept as `project` work in `folder` too,
     /// beside its own.
     AddFolder { project: ProjectId, folder: PathBuf },

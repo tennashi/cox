@@ -22,13 +22,16 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 12;
+const VERSION: i64 = 13;
 
 const TABLES: &str = "
 CREATE TABLE projects (
     id INTEGER PRIMARY KEY,
     folder TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    -- Whether the human named it, rather than its folder's name naming
+    -- it, which a move of its folder leaves as it is.
+    named INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE chats (
     id INTEGER PRIMARY KEY,
@@ -135,6 +138,7 @@ const UPGRADES: &[&str] = &[
          UNIQUE (project, folder)
      );",
     "ALTER TABLE chats ADD COLUMN baseline TEXT;",
+    "ALTER TABLE projects ADD COLUMN named INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -171,6 +175,8 @@ pub struct KeptProject {
     /// The folder its chats work in.
     pub folder: PathBuf,
     pub name: String,
+    /// Whether the human named it, rather than its folder's name.
+    pub named: bool,
     /// The other folders its chats work in too, in the order the human
     /// added them.
     pub also: Vec<PathBuf>,
@@ -303,12 +309,13 @@ impl Store {
     pub fn projects(&self) -> anyhow::Result<Vec<KeptProject>> {
         let mut statement = self
             .connection
-            .prepare("SELECT id, folder, name FROM projects ORDER BY id")?;
+            .prepare("SELECT id, folder, name, named FROM projects ORDER BY id")?;
         let projects = statement.query_map([], |row| {
             Ok(KeptProject {
                 id: ProjectId(row.get(0)?),
                 folder: PathBuf::from(row.get::<_, String>(1)?),
                 name: row.get(2)?,
+                named: row.get(3)?,
                 also: Vec::new(),
             })
         })?;
@@ -386,8 +393,8 @@ impl Store {
         Ok(ProjectId(self.connection.last_insert_rowid()))
     }
 
-    /// Keeps that `project` works in `folder` from now on, named `name`,
-    /// as when the human moved its folder there, with the tabs of the
+    /// Keeps that `project` works in `folder` from now on, named `name`
+    /// unless the human named it, as when the human moved its folder there, with the tabs of the
     /// stage of the folder it worked in, each path in the folder moved
     /// with it.
     ///
@@ -420,7 +427,8 @@ impl Store {
         )?;
         let transaction = self.connection.unchecked_transaction()?;
         transaction.execute(
-            "UPDATE projects SET folder = ?2, name = ?3 WHERE id = ?1",
+            "UPDATE projects SET folder = ?2, name = CASE WHEN named THEN name ELSE ?3 END
+             WHERE id = ?1",
             params![project.0, to, name],
         )?;
         let tabs: Option<String> = transaction
@@ -445,6 +453,25 @@ impl Store {
             )?;
         }
         transaction.commit()?;
+        Ok(())
+    }
+
+    /// Keeps that `project` is named `name`, as the human named it, or,
+    /// with `None`, after its folder again, `folder_name`.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn rename_project(
+        &self,
+        project: ProjectId,
+        name: Option<&str>,
+        folder_name: &str,
+    ) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE projects SET name = ?2, named = ?3 WHERE id = ?1",
+            params![project.0, name.unwrap_or(folder_name), name.is_some()],
+        )?;
         Ok(())
     }
 
@@ -1059,12 +1086,14 @@ mod tests {
                     id: cox,
                     folder: "/src/cox".into(),
                     name: "cox".to_owned(),
+                    named: false,
                     also: Vec::new(),
                 },
                 KeptProject {
                     id: notes,
                     folder: "/notes".into(),
                     name: "notes".to_owned(),
+                    named: false,
                     also: Vec::new(),
                 },
             ]
@@ -1244,6 +1273,28 @@ mod tests {
         assert_eq!(store.chats().unwrap()[0].project, Some(project));
         store.forget_session(chat).unwrap();
         assert_eq!(store.session(chat).unwrap(), None);
+    }
+
+    #[test]
+    fn a_project_the_human_names_keeps_its_name_where_its_folder_goes() {
+        let store = Store::in_memory().unwrap();
+        let project = store.project(Path::new("/work/app"), "app").unwrap();
+        assert!(!store.projects().unwrap()[0].named);
+
+        store.rename_project(project, Some("Shop"), "app").unwrap();
+        store
+            .move_project(project, Path::new("/src/app-2"), "app-2")
+            .unwrap();
+        let kept = &store.projects().unwrap()[0];
+        assert_eq!((kept.name.as_str(), kept.named), ("Shop", true));
+
+        // Unnamed, it is named after its folder again, and follows it.
+        store.rename_project(project, None, "app-2").unwrap();
+        store
+            .move_project(project, Path::new("/src/app-3"), "app-3")
+            .unwrap();
+        let kept = &store.projects().unwrap()[0];
+        assert_eq!((kept.name.as_str(), kept.named), ("app-3", false));
     }
 
     #[test]

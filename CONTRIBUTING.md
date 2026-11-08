@@ -62,6 +62,8 @@ agent is asked is the workflow's `icon/generate.md` (see below), or else
 Cox's own ([`workflow/icon/generate.md`](crates/cox/src/workflow/icon/generate.md)),
 with `{name}`, the project's name. "Remove icon" takes the icon away.
 "Edit project…" opens a card over the window with the project's
+name, which Enter keeps, as the card does as it closes, and which,
+emptied, is its primary folder's, wherever that goes, and the project's
 folders: its own, the primary, which its chats work in, and the others
 the human added, which their agents work in too, as roots of their
 session beside their own (ACP's `additionalDirectories`), for an agent
@@ -78,7 +80,7 @@ on with those it had. Another project's folder is one a project works
 in too, but does not become its primary. The card also says where the
 primary is, as once the human moved or renamed it: typed in the input,
 or chosen, while the folder is not there. The project goes there, named
-after the folder, with its chats, the tabs of its stage, its icon, how
+after the folder unless the human named it, with its chats, the tabs of its stage, its icon, how
 its triggers are arranged and last ran, and when its schedules ran;
 each of its chats that works in the primary notes the move, its agent
 stops, and a line sent starts it again there, told the conversation so
