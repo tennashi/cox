@@ -42,8 +42,52 @@
         flex-direction: column;
         gap: 12px;
         min-height: 100vh;
-        padding: 10px 16px 32px;
+        padding: 12px 16px 32px;
         box-sizing: border-box;
+      }
+      /* The heading, as Cox's own tabs have it (see `stage::heading`):
+         the title, a line on what the tab shows, and, at the right
+         edge, where it shows it from. */
+      #app > .head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 4px;
+        min-height: 26px;
+        margin-bottom: -4px;
+        white-space: nowrap;
+      }
+      #app > .head h1 {
+        flex: none;
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      #app > .head .summary {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--dim);
+      }
+      #app > .head .since {
+        color: var(--changed);
+      }
+      /* What follows the heading outside the cards, in line with it. */
+      #app > .maps,
+      #app > .crumbs,
+      #app > .says,
+      #app > .flows {
+        padding-left: 4px;
+        padding-right: 4px;
+      }
+      #app > .head .where {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: right;
+        font: 11.5px var(--mono);
+        color: var(--faint);
       }
       button {
         all: unset;
@@ -150,21 +194,6 @@
         color: var(--link);
         fill: var(--link);
         font-weight: 400;
-      }
-      .source {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px 14px;
-        align-items: baseline;
-        font-size: 12px;
-        color: var(--dim);
-      }
-      .source .file {
-        font-family: var(--mono);
-        color: var(--foreground);
-      }
-      .source .since {
-        color: var(--changed);
       }
       .says {
         font-size: 13px;

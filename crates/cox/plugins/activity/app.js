@@ -61,8 +61,9 @@ function draw() {
     return;
   }
   const count = told.waiting.length;
+  const said = count === 1 ? "1 chat waits for you" : count ? `${count} chats wait for you` : "nothing waits for you";
   app.innerHTML =
-    `<div class="head"><h1>Activity</h1><span class="where">${esc(told.folder)}</span></div>` +
+    `<div class="head"><h1>Activity</h1><span class="summary">${said}</span><span class="where" title="${esc(told.folder)}">${esc(told.folder)}</span></div>` +
     `<div class="tier">Waiting for you${count ? `<b>${count}</b>` : ""}</div>` +
     `<div class="waiting">${count ? told.waiting.map(waiting).join("") : `<div class="none">No chat ${told.home ? "" : "here "}waits for you.</div>`}</div>` +
     `<div class="tier">What happened</div>` +

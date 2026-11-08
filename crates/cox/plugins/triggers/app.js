@@ -180,7 +180,11 @@ function draw() {
       .join("");
   }
   const make = `<span class="button" data-do="new" title="A trigger of ${esc(told.folders[0].folder)}">New trigger</span>`;
-  app.innerHTML = `<div class="head"><h1>Triggers</h1>${make}</div>${unread}${body}`;
+  const all = told.folders.flatMap((f) => f.triggers);
+  const off = all.filter((t) => !t.enabled).length;
+  const said = `${all.length === 1 ? "1 trigger" : `${all.length || "No"} triggers`}${off ? ` · ${off} off` : ""}`;
+  const where = told.folders[0].folder;
+  app.innerHTML = `<div class="head"><h1>Triggers</h1><span class="summary">${said}</span><span class="where" title="${esc(where)}">${esc(where)}</span>${make}</div>${unread}${body}`;
   drawStatus();
 }
 

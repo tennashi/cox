@@ -79,6 +79,7 @@ pub mod devices;
 pub mod document;
 pub mod flow;
 pub mod follow;
+pub mod heading;
 pub mod lines;
 pub mod links;
 pub mod mac_window;

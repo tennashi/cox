@@ -14,8 +14,9 @@ use gpui::{
     div, prelude::*, px, rgb,
 };
 
+use crate::stage::heading::{INSET, TEXT_INSET, body, card, heading, note, parted};
 use crate::stage::tab::Shows;
-use crate::ui::theme::{ASKING, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND};
+use crate::ui::theme::{ASKING, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND};
 
 /// How often the tab reads the windows again, as apps open and close them.
 const READ_EVERY: Duration = Duration::from_secs(2);
@@ -76,15 +77,13 @@ impl Windows {
     fn render_window(index: usize, window: &AppWindow, cx: &mut Context<Self>) -> impl IntoElement {
         let shown = window.clone();
         let pid = window.pid;
-        div()
+        parted(div(), index == 0)
             .debug_selector(move || format!("mac-window-{index}"))
             .flex()
             .items_center()
             .gap_2()
             .px_3()
             .py_2()
-            .border_b_1()
-            .border_color(rgb(BORDER))
             .child(
                 div()
                     .flex_1()
@@ -153,10 +152,8 @@ fn asking(id: &'static str, what: &'static str, ask: fn()) -> impl IntoElement {
         .flex()
         .items_center()
         .gap_2()
-        .px_3()
+        .px(px(TEXT_INSET))
         .py_2()
-        .border_b_1()
-        .border_color(rgb(BORDER))
         .child(div().flex_1().text_color(rgb(ASKING)).child(what))
         .child(button(id, 0, "Allow…").on_click(move |_, _, _| ask()))
 }
@@ -180,15 +177,19 @@ impl Focusable for Windows {
 impl Render for Windows {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let read = self.read.clone();
-        let mut list = div()
+        let said = match read.as_ref().map(|read| &read.windows) {
+            None => "Reading the windows on screen…".to_owned(),
+            Some(Err(_)) => String::new(),
+            Some(Ok(windows)) if windows.len() == 1 => "1 window of another app".to_owned(),
+            Some(Ok(windows)) => format!("{} windows of other apps", windows.len()),
+        };
+        let mut list = body()
             .id("mac-windows")
             .debug_selector(|| "mac-windows".to_owned())
             .track_focus(&self.focus_handle)
-            .size_full()
             .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .text_size(px(13.));
+            .text_color(rgb(FOREGROUND))
+            .child(heading("mac-windows-heading", TITLE, said, None));
         let Some(read) = read else {
             return list;
         };
@@ -199,13 +200,7 @@ impl Render for Windows {
                 cox_mac::ask_to_record,
             ));
         }
-        let note = |text: SharedString, color: u32| {
-            div()
-                .debug_selector(|| "mac-windows-note".to_owned())
-                .p_3()
-                .text_color(rgb(color))
-                .child(text)
-        };
+        let note = |text: SharedString, color: u32| note("mac-windows-note", text, color);
         match read.windows {
             // The row above asks for what the system would not say.
             Err(_) if !read.may_record => list,
@@ -221,7 +216,13 @@ impl Render for Windows {
                         Self::render_window(index, window, cx).into_any_element()
                     })
                     .collect();
-                list.children(rows)
+                list.child(
+                    div()
+                        .px(px(INSET))
+                        .pt_1()
+                        .pb_3()
+                        .child(card().children(rows)),
+                )
             }
         }
     }

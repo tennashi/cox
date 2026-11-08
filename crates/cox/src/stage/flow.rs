@@ -27,8 +27,9 @@ use gpui::{
 };
 
 use crate::logs::flow::{self, Lane, Step};
+use crate::stage::heading::{INSET, body, card, heading, note};
 use crate::stage::tab::Shows;
-use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FOREGROUND, HOVER, LINK};
+use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
 
 /// What a link to the flow of a tool call starts with, followed by the
 /// call's id.
@@ -130,29 +131,12 @@ impl Flow {
         }
     }
 
-    /// The line above the lanes: the call, how many steps it took and how
-    /// long, and which run it is read from; or why it cannot be read.
+    /// The heading over the lanes: the call, how many steps it took and
+    /// how long, and which run it is read from.
     fn render_heading(&self) -> AnyElement {
-        let mut heading = div()
-            .flex()
-            .flex_wrap()
-            .items_baseline()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .border_b_1()
-            .border_color(rgb(BORDER));
-        match &self.read {
-            None => {
-                heading = heading.child(
-                    div()
-                        .text_color(rgb(DIM))
-                        .child("Reading what Cox kept of the run…"),
-                );
-            }
-            Some(Err(error)) => {
-                heading = heading.child(div().text_color(rgb(FAILED)).child(error.clone()));
-            }
+        let (said, run) = match &self.read {
+            None => ("Reading what Cox kept of the run…".to_owned(), None),
+            Some(Err(_)) => ("Cannot be read".to_owned(), None),
             Some(Ok(shown)) => {
                 let flow = &shown.flow;
                 let title = flow.title.clone().unwrap_or_else(|| flow.call.clone());
@@ -161,17 +145,15 @@ impl Flow {
                     || flow.run.display().to_string(),
                     |name| name.to_string_lossy().into_owned(),
                 );
-                heading = heading
-                    .child(div().text_color(rgb(DIM)).child("Tool call"))
-                    .child(div().font_weight(FontWeight::BOLD).child(title))
-                    .child(div().text_color(rgb(DIM)).child(format!(
-                        "· {} over {} · from {run}",
-                        counted(flow.steps.len(), "step"),
-                        elapsed(took)
-                    )));
+                let said = format!(
+                    "{title} · {} over {}",
+                    counted(flow.steps.len(), "step"),
+                    elapsed(took)
+                );
+                (said, Some(run))
             }
-        }
-        heading.into_any_element()
+        };
+        heading("flow-heading", "Flow", said, run).into_any_element()
     }
 
     /// The lanes' names, over their columns.
@@ -183,19 +165,21 @@ impl Flow {
                 .flex_col()
                 .items_center()
                 .px_1()
-                .child(div().font_weight(FontWeight::BOLD).child(lane.name()))
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(lane.name()))
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(DIM))
+                        .text_color(rgb(FAINT))
                         .text_center()
                         .child(lane.says()),
                 )
         });
         div()
             .flex()
+            .flex_shrink_0()
             .px_3()
             .py_2()
+            .bg(rgb(RAISED))
             .border_b_1()
             .border_color(rgb(BORDER))
             .child(div().w(px(TIME_WIDTH)).flex_shrink_0())
@@ -451,25 +435,30 @@ impl Render for Flow {
                 .collect(),
             _ => Vec::new(),
         };
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
+        let error = match &self.read {
+            Some(Err(error)) => Some(note("flow-error", error.clone(), FAILED)),
+            _ => None,
+        };
+        let lanes = (!steps.is_empty()).then(|| {
+            div().flex_1().min_h_0().px(px(INSET)).pt_1().pb_3().child(
+                card().max_h_full().child(Self::render_lanes()).child(
+                    div()
+                        .id("flow")
+                        .debug_selector(|| "flow".to_owned())
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll)
+                        .py_1()
+                        .children(steps),
+                ),
+            )
+        });
+        body()
             .track_focus(&self.focus_handle)
             .text_color(rgb(FOREGROUND))
             .child(self.render_heading())
-            .child(Self::render_lanes())
-            .child(
-                div()
-                    .id("flow")
-                    .debug_selector(|| "flow".to_owned())
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .py_1()
-                    .children(steps),
-            )
+            .children(error)
+            .children(lanes)
     }
 }
 

@@ -139,10 +139,21 @@ function shelves(chosen) {
   );
 }
 
+/// The heading over the shelf or the page: what it says, as HTML, and
+/// where it is, with where a click on it goes.
+function head(said, where, opens) {
+  const place = where
+    ? opens
+      ? `<a class="where" href="${esc(opens)}" title="opens the file on a tab">${esc(where)}</a>`
+      : `<span class="where" title="${esc(where)}">${esc(where)}</span>`
+    : "";
+  return `<div class="head"><h1>Knowledge</h1><span class="summary">${said}</span>${place}</div>`;
+}
+
 function drawList(shelf) {
   const list = lists[shelf];
   if (!list) {
-    app.innerHTML = `${shelves(shelf)}<div class="empty">Cox cannot tell where the ${shelf === "raw" ? "sources are" : "wiki is"}.</div>`;
+    app.innerHTML = `${head("")}<div class="find">${shelves(shelf)}</div><div class="empty">Cox cannot tell where the ${shelf === "raw" ? "sources are" : "wiki is"}.</div>`;
     return;
   }
   const entries = entriesOf(shelf);
@@ -155,9 +166,8 @@ function drawList(shelf) {
   if (marked && !counts.some(([m]) => m === marked)) marked = null;
   const focused = document.activeElement?.id === "find";
   app.innerHTML =
-    shelves(shelf) +
-    `<div class="crumbs"><span>${entries.length} ${shelf === "raw" ? "source" : "page"}${entries.length === 1 ? "" : "s"}</span><span class="where">${esc(list.root)}</span></div>` +
-    `<div class="find"><input id="find" placeholder="Narrow by words" value="${esc(typed)}" spellcheck="false">` +
+    head(`${entries.length} ${shelf === "raw" ? "source" : "page"}${entries.length === 1 ? "" : "s"}`, list.root) +
+    `<div class="find">${shelves(shelf)}<input id="find" placeholder="Narrow by words" value="${esc(typed)}" spellcheck="false">` +
     counts.map(([m, n]) => `<span class="chip ${marked === m ? "on" : ""}" data-mark="${m}" title="${esc(MARKS[m][1])}"><b>${n}</b> ${esc(MARKS[m][0])}</span>`).join("") +
     `</div><div class="pages" id="pages"></div>`;
   const input = document.getElementById("find");
@@ -189,6 +199,7 @@ const NOTHING = {
 function drawEntries(shelf) {
   const list = document.getElementById("pages");
   const entries = entriesOf(shelf);
+  list.classList.remove("card");
   if (!entries.length) {
     list.innerHTML = `<div class="empty">${NOTHING[shelf]}</div>`;
     return;
@@ -202,6 +213,7 @@ function drawEntries(shelf) {
     list.innerHTML = '<div class="empty">No page fits.</div>';
     return;
   }
+  list.classList.add("card");
   list.innerHTML = fits.map((p) => (shelf === "raw" ? sourceEntry(p) : pageEntry(shelf, p))).join("");
 }
 
@@ -237,7 +249,7 @@ function sourceEntry(s) {
 function drawPage(shelf, name) {
   const back = `<a href="${href(shelf, "")}">${esc(SHELVES[shelf].label)}</a>`;
   if (!page) {
-    app.innerHTML = `${shelves(shelf)}<div class="crumbs">${back} › <span>${esc(name)}</span></div><div class="empty">There is no page <code>${esc(name)}</code> here.</div>`;
+    app.innerHTML = `${head(`${back} › ${esc(name)}`)}<div class="find">${shelves(shelf)}</div><div class="empty">There is no page <code>${esc(name)}</code> here.</div>`;
     return;
   }
   const entries = entriesOf(shelf);
@@ -254,8 +266,8 @@ function drawPage(shelf, name) {
       `<div class="aside"><h2>Linked from</h2>${page.linked_from.length ? `<ul>${page.linked_from.map((n) => `<li>${link(n)}</li>`).join("")}</ul>` : '<div class="none">No page.</div>'}</div>` +
       (warned ? `<div class="aside"><h2>Cox marks</h2><ul>${warned}</ul></div>` : "");
   app.innerHTML =
-    shelves(shelf) +
-    `<div class="crumbs">${back} › <span>${esc(page.name)}</span>${only(page)}${raw ? "" : marks(page)}<a class="where" href="cox://open${esc(page.file)}" title="opens the file on a tab">${esc(page.file)}</a></div>` +
+    head(`${back} › ${esc(page.name)}${only(page)}${raw ? "" : marks(page)}`, page.file, `cox://open${page.file}`) +
+    `<div class="find">${shelves(shelf)}</div>` +
     (translation ? languages(translation) : "") +
     `<div class="page">${translated ? translation.html : page.html}</div>` +
     aside;
