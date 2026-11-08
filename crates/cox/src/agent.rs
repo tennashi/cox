@@ -1041,6 +1041,7 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
                     .join("\n\n"),
             ),
             Entry::Cox(text) => Some(format!("[cox]\n{text}")),
+            Entry::Merge => Some("[the human asked you to merge what you made]".to_owned()),
             Entry::Media { from, caption, .. } => Some(match caption {
                 Some(caption) => format!("[shown to the human: {from}, {caption}]"),
                 None => format!("[shown to the human: {from}]"),

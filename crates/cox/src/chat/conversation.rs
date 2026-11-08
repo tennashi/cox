@@ -710,6 +710,17 @@ impl Conversation {
         self.start_turn(text, Entry::Cox)
     }
 
+    /// Starts a turn on `text`, Cox's in the human's place, asking the
+    /// agent to merge what it made, when it waits for a line: the work the
+    /// human's last line left it closes there.
+    pub fn merge(&mut self, text: &str) -> Option<Command> {
+        if self.state != State::Idle || text.trim().is_empty() {
+            return None;
+        }
+        self.push(Entry::Merge);
+        self.told(text)
+    }
+
     /// Starts a turn on `text`, shown as `entry` makes it, when the agent
     /// waits for a line.
     fn start_turn(&mut self, text: &str, entry: fn(String) -> Entry) -> Option<Command> {
@@ -2525,6 +2536,23 @@ mod tests {
         conversation.apply(AgentEvent::Plan(vec![step("Push", StepState::Pending)]));
         assert_eq!(conversation.baseline(), Some(&["Push".to_owned()][..]));
         assert_eq!(conversation.take_plan_changed(), None);
+    }
+
+    #[test]
+    fn asks_to_merge_once_the_turn_ends() {
+        let mut conversation = Conversation::new();
+        conversation.submit("fix it");
+        assert_eq!(conversation.merge("Merge it."), None);
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+
+        assert!(conversation.merge("Merge it.").is_some());
+
+        let entries = conversation.entries();
+        assert_eq!(
+            entries[entries.len() - 2..],
+            [Entry::Merge, Entry::Cox("Merge it.".to_owned())]
+        );
+        assert_eq!(conversation.state(), State::Busy);
     }
 
     #[test]

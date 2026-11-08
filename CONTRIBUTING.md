@@ -1513,6 +1513,24 @@ of it and does nothing on it, and only Cox's page frames a mock. A mock
 is served, as the page is, only to the human's phone, since a sketch's
 folder can hold the project's code.
 
+Once a chat waits for the human after the work their last line left
+it, the phone gathers, on a card under the conversation, what they
+close that work on: what the agent showed of it, as pictures and
+videos, which a tap opens; what it decided on its own, the steps it
+added to the plan it started with and those it took out, as `PLAN
+CHANGED` says them; and how the checks went as its last turn ended,
+with the goal's when it was met. "Merge" on the card, tapped twice, so
+that a tap by mistake does not, asks the agent, in the human's place,
+to merge what it made, as the workflow's `close/merge.md` says, or
+else Cox's own
+([`workflow/close/merge.md`](crates/cox/src/workflow/close/merge.md)):
+the way the project merges its work, as its `COX.md` or
+`CONTRIBUTING.md` says, stopping at what the merge waits for, as a
+review. The conversation notes that the human asked, and the card
+shows no more until their next line. "Merge" in the menu of the right
+button on a chat asks the same from the window. A sketch, which ends
+its own ways, and a chat it opened, have none.
+
 coxd serves it on the Mac's own address alone, `127.0.0.1`, and the
 phone reaches it through [Tailscale](https://tailscale.com), as
 `tailscale serve --bg 7421` hands it to the human's tailnet, over HTTPS,

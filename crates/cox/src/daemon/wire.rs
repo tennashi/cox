@@ -253,6 +253,9 @@ pub enum ToDaemon {
     /// The human asked the agent of the chat `key` to keep what it
     /// learned in the wiki.
     SaveToWiki { key: u64 },
+    /// The human, done looking at what the agent of the chat `key` made,
+    /// asked it to merge it.
+    Merge { key: u64 },
     /// The human ended the sketch `key` as `ending` says.
     EndSketch {
         key: u64,
