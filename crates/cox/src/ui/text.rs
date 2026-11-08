@@ -590,24 +590,25 @@ impl Writer {
         }
     }
 
-    /// A code block, with a button that copies all of it.
+    /// A code block, with a button that copies all of it, at its right,
+    /// beside the code rather than over its first line.
     fn code(&mut self, text: &markdown::Text) -> gpui::Div {
         let code = text.text.clone();
         let button = ElementId::Name(format!("copy-{}-{}", self.entry, self.part).into());
         div()
-            .relative()
+            .flex()
+            .items_start()
+            .gap_2()
             .p_2()
             .rounded_sm()
             .bg(rgb(RAISED))
             .font_family(CODE_FONT)
             .text_size(px(13.))
-            .child(self.text(text, "\n\n"))
+            .child(div().flex_1().min_w_0().child(self.text(text, "\n\n")))
             .child(
                 div()
                     .id(button)
-                    .absolute()
-                    .top_1()
-                    .right_1()
+                    .flex_shrink_0()
                     .px_1()
                     .rounded_sm()
                     .text_size(px(11.))

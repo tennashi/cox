@@ -142,6 +142,9 @@ fn create(new: NewBrowser) {
         // asks for them: above any display's rate, so that the window's
         // frames alone pace them (see `frames`).
         windowless_frame_rate: 240,
+        // White behind a page that sets no background, as the settings
+        // CEF starts with have it (see `start`).
+        background_color: 0xFFFF_FFFF,
         ..Default::default()
     };
     let url = CefString::from(url.as_str());
