@@ -4,6 +4,7 @@
 
 use std::fmt::Write as _;
 
+use cox_core::entry::MediaKind;
 use cox_core::store::ChatId;
 use cox_core::tabs::KeptTab;
 use gpui::{App, Focusable as _, Window};
@@ -426,6 +427,12 @@ fn describe_entry(entry: &Entry) -> String {
             format!("login: {}; chosen: {chosen}{failed}", options.join(", "))
         }
         Entry::PlanChanged { added, removed } => describe_drift(added, removed),
+        Entry::Media {
+            kind,
+            from,
+            caption,
+            ..
+        } => describe_media(*kind, from, caption.as_deref()),
         Entry::Plan(steps) => describe_plan(steps),
         Entry::ToolCall {
             title,
@@ -486,6 +493,18 @@ fn describe_entry(entry: &Entry) -> String {
         Entry::Keep { why, chat, kept } => describe_keep(why, *chat, *kept),
         Entry::Checks(checks) => describe_checks("turn end", checks),
         Entry::Event { on, checks } => describe_checks(on, checks),
+    }
+}
+
+/// A picture or a video shown, of `kind`, from `from`, with `caption`.
+fn describe_media(kind: MediaKind, from: &str, caption: Option<&str>) -> String {
+    let kind = match kind {
+        MediaKind::Image => "picture",
+        MediaKind::Video => "video",
+    };
+    match caption {
+        Some(caption) => format!("{kind} shown from {from}: {caption}"),
+        None => format!("{kind} shown from {from}"),
     }
 }
 

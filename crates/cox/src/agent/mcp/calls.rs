@@ -29,6 +29,7 @@ const SHOW_MARKDOWN: &str = "show_markdown";
 const SHOW_FILE: &str = "show_file";
 const SHOW_CHANGES: &str = "show_changes";
 const SHOW_MAP: &str = "show_map";
+const SHOW_MEDIA: &str = "show_media";
 const RUN_COMMAND: &str = "run_command";
 const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
@@ -110,6 +111,7 @@ pub(super) fn tools(only: Option<&[String]>) -> Value {
 }
 
 /// Every tool, as the agent learns of it.
+#[expect(clippy::too_many_lines, reason = "the tools, one after another")]
 fn all_tools() -> Value {
     let mut tools = json!([
     {
@@ -203,6 +205,7 @@ fn all_tools() -> Value {
             "required": ["chat"],
         },
     },
+    show_media_tool(),
     propose_goal_tool(),
     start_sketch_tool(),
     ]);
@@ -507,6 +510,35 @@ fn start_sketch_tool() -> Value {
     })
 }
 
+/// The tool that shows the human a picture or a video in the
+/// conversation, as the agent learns of it.
+fn show_media_tool() -> Value {
+    json!(
+    {
+        "name": SHOW_MEDIA,
+        "description": "Shows the human a picture or a video in the conversation, as a \
+            screenshot or a screen recording of what you made, for them to see what it \
+            does without reading the code, on the Mac or on their phone. Take it first, \
+            with the tools you have, and give its file: PNG, JPEG, GIF or WebP, or MP4, \
+            MOV or WebM, of 100 MB at most. Cox keeps a copy, so the conversation shows it \
+            as it was.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The file, absolute or from the working directory.",
+                },
+                "caption": {
+                    "type": "string",
+                    "description": "What it shows, in a line, for the human to read under it.",
+                },
+            },
+            "required": ["path"],
+        },
+    })
+}
+
 /// The tool that proposes a goal for the chat, as the agent learns of it.
 fn propose_goal_tool() -> Value {
     json!(
@@ -665,6 +697,7 @@ pub(super) async fn call(
         OPEN_CHAT => open_chat(arguments, chats).await,
         WAIT_CHAT => wait_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
+        SHOW_MEDIA => show_media(arguments, cwd, chats).await,
         START_SKETCH => start_sketch(arguments, chats).await,
         WIKI_SEARCH => wiki_search(arguments, chats).await,
         WIKI_READ => wiki_read(arguments, chats).await,
@@ -1151,6 +1184,41 @@ async fn wait_chat(
         None => told.push_str(" It said nothing."),
     }
     Ok(told)
+}
+
+/// Keeps the picture or the video `arguments` name, and asks the chat to
+/// show it in the conversation.
+async fn show_media(
+    arguments: &Value,
+    cwd: &Path,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("no path: give the picture or video to show as `path`")?;
+    let caption = match arguments.get("caption") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(caption)) => Some(caption.clone()),
+        Some(_) => return Err("`caption` is not a string".to_owned()),
+    };
+    let from = cwd.join(path);
+    let shown = crate::media::keep(&from, None)?;
+    let (answer, done) = oneshot::channel();
+    chats
+        .send(ChatRequest::ShowMedia {
+            shown,
+            from: path.to_owned(),
+            caption,
+            answer,
+        })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    done.await
+        .map_err(|_| "the chat closed before it showed it".to_owned())?;
+    Ok(format!(
+        "{} is in the conversation, for the human to see.",
+        from.display()
+    ))
 }
 
 /// Asks the window to show the human the goal `arguments` propose, and
@@ -1687,7 +1755,8 @@ mod tests {
         assert_eq!(listed[3]["name"], SHOW_MAP);
         assert_eq!(listed[4]["name"], RUN_COMMAND);
         assert_eq!(listed[5]["name"], OPEN_CHAT);
-        assert_eq!(listed[8]["name"], START_SKETCH);
+        assert_eq!(listed[7]["name"], SHOW_MEDIA);
+        assert_eq!(listed[9]["name"], START_SKETCH);
     }
 
     #[test]
@@ -2185,6 +2254,23 @@ mod tests {
                 sketch: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn shows_only_pictures_and_videos() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let params = json!({ "name": SHOW_MEDIA, "arguments": { "path": "notes.txt" } });
+
+        let answered = call(&params, Path::new("/work"), None, &sent, &chats)
+            .await
+            .unwrap();
+
+        assert_eq!(answered["isError"], true);
+        let told = answered["content"][0]["text"].as_str().unwrap();
+        assert!(told.contains("is no picture or video Cox shows"), "{told}");
+        drop(chats);
+        assert!(asked.recv().await.is_none());
     }
 
     #[tokio::test]

@@ -162,6 +162,15 @@ impl ToolRequest {
 /// conversation, or past the chat itself.
 #[derive(Debug)]
 pub enum ChatRequest {
+    /// Show the human `shown`, a picture or a video kept from the path
+    /// `from`, with `caption`, if the agent gave one, in the
+    /// conversation; answer once it is there.
+    ShowMedia {
+        shown: crate::media::Shown,
+        from: String,
+        caption: Option<String>,
+        answer: oneshot::Sender<()>,
+    },
     /// Show the human `goal`, proposed for the chat, for them to set,
     /// change, or let be, with `why`, if the agent said; answer the goal
     /// the chat has now, if any.
@@ -848,7 +857,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 15 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 16 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();

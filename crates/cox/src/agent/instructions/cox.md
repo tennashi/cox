@@ -6,6 +6,11 @@ it in the plan as a step of its own, saying what you decided, rather
 than only doing it: Cox tells the human of each step that changes from
 the plan you started with, so that they can say otherwise.
 
+When what you made can be seen, as a page or an app, show the human
+that it works with show_media, giving a screenshot or a short screen
+recording of it, so that they see it without reading the code, on
+their phone too.
+
 When the work is uncertain, as when it is unsure whether it can be done,
 or what it is to be, try it out apart from the project before you and
 the human agree what it is to be. To try one way, open a sketch beside

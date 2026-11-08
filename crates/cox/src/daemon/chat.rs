@@ -985,6 +985,32 @@ impl Chat {
         Some((running.cwd.clone(), running.tools.clone()?))
     }
 
+    /// Shows the human `shown`, a picture or a video kept from the path
+    /// `from`, with `caption`, if given, in the conversation.
+    pub fn show_media(
+        &mut self,
+        shown: crate::media::Shown,
+        from: String,
+        caption: Option<String>,
+    ) {
+        self.conversation.show_media(shown, from, caption);
+    }
+
+    /// Shows the pictures and videos a trigger's command printed as
+    /// Markdown does, `![caption](path)`, its paths from the chat's
+    /// folder, noting those it cannot.
+    fn show_printed(&mut self, output: &str) {
+        let Some(cwd) = self.running.as_ref().map(|running| running.cwd.clone()) else {
+            return;
+        };
+        for (caption, path) in crate::media::printed(output) {
+            match crate::media::keep(&cwd.join(&path), None) {
+                Ok(shown) => self.conversation.show_media(shown, path, caption),
+                Err(why) => self.conversation.note(format!("Not shown: {why}")),
+            }
+        }
+    }
+
     /// The goal's command, run while the agent of `generation` ran, ended
     /// as `ran` says.
     pub fn heard_check(&mut self, generation: u64, ran: Result<Ran, String>) {
@@ -999,6 +1025,9 @@ impl Chat {
         self.check = None;
         if self.conversation.checking().is_none() {
             return;
+        }
+        if let (Some(_), Ok(ran)) = (self.conversation.trigger(), &ran) {
+            self.show_printed(&ran.output);
         }
         let running = self.running_trigger();
         let next = self.conversation.checked(ran);

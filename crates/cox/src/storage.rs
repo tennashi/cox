@@ -66,6 +66,9 @@ pub enum Kept {
     /// The pictures of the regions of the window the human handed the
     /// chats (see [`crate::chat::region`]).
     Pictures,
+    /// The pictures and videos shown in the conversations (see
+    /// [`crate::media`]).
+    Media,
     /// The icons the human gave the projects, as the rail draws them (see
     /// [`crate::project_icon`]).
     Icons,
@@ -91,7 +94,7 @@ pub enum Kept {
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Settings,
         Self::Agents,
         Self::Sketches,
@@ -105,6 +108,7 @@ impl Kept {
         Self::Daemon,
         Self::Schedules,
         Self::Pictures,
+        Self::Media,
         Self::Icons,
         Self::Triggers,
         Self::TriggerRuns,
@@ -131,6 +135,7 @@ impl Kept {
             Self::Daemon => "run/coxd.sock",
             Self::Schedules => "state/schedules.json",
             Self::Pictures => "state/pictures",
+            Self::Media => "state/media",
             Self::Icons => "state/icons",
             Self::Triggers => "state/triggers.json",
             Self::TriggerRuns => "state/trigger-runs.json",

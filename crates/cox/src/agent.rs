@@ -1041,6 +1041,10 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
                     .join("\n\n"),
             ),
             Entry::Cox(text) => Some(format!("[cox]\n{text}")),
+            Entry::Media { from, caption, .. } => Some(match caption {
+                Some(caption) => format!("[shown to the human: {from}, {caption}]"),
+                None => format!("[shown to the human: {from}]"),
+            }),
             Entry::Reply(text) => Some(format!("[you]\n{text}")),
             Entry::ToolCall { title, result, .. } => {
                 let result = result.map_or_else(|| "not ended".to_owned(), |r| format!("{r:?}"));

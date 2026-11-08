@@ -417,6 +417,9 @@ impl Page {
                 None => answer(StatusCode::NOT_FOUND, TEXT, "coxd pushes nothing"),
             };
         }
+        if let Some(file) = path.strip_prefix("/media/") {
+            return media(file, request.headers().get(header::RANGE));
+        }
         if path == "/events" {
             let chat = request.uri().query().and_then(|query| {
                 query
@@ -671,6 +674,60 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// An answer of `status`, holding `text` of the type `kind`.
+/// The picture or the video shown in a conversation kept as `file`, or
+/// the part of it `range` asks for, as a phone's browser asks to play a
+/// video.
+fn media(file: &str, range: Option<&HeaderValue>) -> Response<Body> {
+    let Some((path, kind)) = crate::media::kept(file) else {
+        return answer(StatusCode::NOT_FOUND, TEXT, "Not found");
+    };
+    let Ok(bytes) = std::fs::read(path) else {
+        return answer(StatusCode::NOT_FOUND, TEXT, "Not found");
+    };
+    let length = bytes.len();
+    let asked = range
+        .and_then(|range| range.to_str().ok())
+        .and_then(|range| ranged(range, length));
+    let mut response = match asked {
+        Some((start, end)) => {
+            let mut response = answer(
+                StatusCode::PARTIAL_CONTENT,
+                kind,
+                Bytes::from(bytes).slice(start..=end),
+            );
+            if let Ok(range) = HeaderValue::from_str(&format!("bytes {start}-{end}/{length}")) {
+                response.headers_mut().insert(header::CONTENT_RANGE, range);
+            }
+            response
+        }
+        None => answer(StatusCode::OK, kind, bytes),
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    // What a copy holds never changes: its name is what it holds.
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
+    response
+}
+
+/// The first and last byte a `Range` header asks for, of a file of
+/// `length` bytes, if it asks for one range Cox serves.
+fn ranged(range: &str, length: usize) -> Option<(usize, usize)> {
+    let (start, end) = range.strip_prefix("bytes=")?.split_once('-')?;
+    let last = length.checked_sub(1)?;
+    let (start, end) = match (start.trim(), end.trim()) {
+        ("", suffix) => {
+            let suffix: usize = suffix.parse().ok()?;
+            (length.checked_sub(suffix.min(length))?, last)
+        }
+        (start, "") => (start.parse().ok()?, last),
+        (start, end) => (start.parse().ok()?, end.parse::<usize>().ok()?.min(last)),
+    };
+    (start <= end).then_some((start, end))
+}
+
 fn answer(status: StatusCode, kind: &'static str, text: impl Into<Bytes>) -> Response<Body> {
     let mut response = Response::new(Body::Whole(Some(text.into())));
     *response.status_mut() = status;
@@ -767,6 +824,17 @@ fn event(told: &FromDaemon) -> Bytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serves_the_part_of_a_video_a_browser_asks_for() {
+        assert_eq!(ranged("bytes=0-1", 10), Some((0, 1)));
+        assert_eq!(ranged("bytes=4-", 10), Some((4, 9)));
+        assert_eq!(ranged("bytes=-3", 10), Some((7, 9)));
+        assert_eq!(ranged("bytes=2-99", 10), Some((2, 9)));
+        assert_eq!(ranged("bytes=9-2", 10), None);
+        assert_eq!(ranged("bytes=0-1,4-5", 10), None);
+        assert_eq!(ranged("bytes=0-", 0), None);
+    }
 
     #[test]
     fn reads_the_port_from_the_settings() {

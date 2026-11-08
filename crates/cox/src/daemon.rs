@@ -1863,6 +1863,17 @@ impl Daemon {
                 }
                 answer.send(opened).ok();
             }
+            ChatRequest::ShowMedia {
+                shown,
+                from,
+                caption,
+                answer,
+            } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.show_media(shown, from, caption);
+                }
+                answer.send(()).ok();
+            }
             ChatRequest::ProposeGoal { goal, why, answer } => {
                 let now = self
                     .chat(key)

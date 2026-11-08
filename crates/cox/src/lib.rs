@@ -57,6 +57,7 @@ pub mod daemon;
 pub mod inspect;
 pub mod login;
 pub mod logs;
+pub mod media;
 pub mod notices;
 pub mod process;
 pub mod project_icon;
