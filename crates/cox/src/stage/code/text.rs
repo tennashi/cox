@@ -32,7 +32,7 @@ pub(super) const PLAIN: (u32, FontWeight, FontStyle) =
 
 /// How code is drawn, by what its syntax says it is: its color, and
 /// whether it is bold or italic.
-fn style(highlight: Highlight) -> (u32, FontWeight, FontStyle) {
+pub(crate) fn style(highlight: Highlight) -> (u32, FontWeight, FontStyle) {
     let color = match highlight {
         Highlight::Keyword
         | Highlight::VariableBuiltin

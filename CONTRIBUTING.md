@@ -932,7 +932,12 @@ and a closed chat's stage opens it again with the same folders open.
 as Git tells it, file by file and line by line, with the files Git does
 not track yet but does not ignore: in a sketch, all it changed since it
 started, what it committed too, and elsewhere what changed since the
-last commit. A click on a file, or on a line, opens the file there, as
+last commit. Each file is a card, headed by how it changed, its path
+and the lines it gained and lost, over its lines, drawn in the colors
+of their syntax as a tab of code draws them; of a line the change put
+in place of one it removed, the words that differ are marked on both,
+a line paired with the first one after it that has enough in common.
+A click on a file, or on a line, opens the file there, as
 a link to it does. The tab follows the files as they change, and while
 the stage is open, its button counts the files that changed, whether
 the tab is open or not. The agent

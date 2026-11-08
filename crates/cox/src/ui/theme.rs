@@ -95,6 +95,10 @@ pub const FAILED_GROUND: u32 = 0x2a_1a1a;
 pub const FAILED_MARK: u32 = 0xde_6b66;
 /// The ground of lines a change adds, and of those it removes.
 pub const ADDED_GROUND: u32 = 0x14_2c29;
-pub const REMOVED_GROUND: u32 = 0x36_1e1e;
+pub const REMOVED_GROUND: u32 = 0x2c_1b1c;
+/// The ground of the words a change put in a line, and of those it took
+/// out, over the line's ground.
+pub const ADDED_WORD: u32 = 0x1f_4a44;
+pub const REMOVED_WORD: u32 = 0x4d_2629;
 /// The ground of the text the human selected.
 pub const SELECTION: u32 = 0x22_4a45;
