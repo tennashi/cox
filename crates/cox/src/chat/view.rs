@@ -139,6 +139,9 @@ pub struct Row {
     pub agent: String,
     /// The folder it works in.
     pub cwd: PathBuf,
+    /// Whether the folder of its project is not there, as when the human
+    /// moved it, so that it does not start again until they say where.
+    pub gone: bool,
 }
 
 pub struct ChatView {
@@ -812,6 +815,9 @@ impl ChatView {
             // line as an open one does.
             State::Closed if self.row.again => {
                 Some("Closed. A line sent starts the agent again.".to_owned())
+            }
+            State::Closed if self.row.gone => {
+                Some("Its folder is gone: Edit project… on the rail.".to_owned())
             }
             State::Closed => Some("Closed.".to_owned()),
         }

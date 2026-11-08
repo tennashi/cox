@@ -60,7 +60,25 @@ draws and keeps the same way, the square's edge dashed in the accent
 meanwhile, and where the mouse rests, why when it drew none. What the
 agent is asked is the workflow's `icon/generate.md` (see below), or else
 Cox's own ([`workflow/icon/generate.md`](crates/cox/src/workflow/icon/generate.md)),
-with `{name}`, the project's name. "Remove icon" takes the icon away. A project is a folder:
+with `{name}`, the project's name. "Remove icon" takes the icon away.
+"Edit project…" opens a card over the window where the human says
+where the project's folder is, as once they moved or renamed it: a
+path typed in its input, whole or from `~`, which Enter sets, or a
+folder "Choose…" asks for. The project goes there, named after the
+folder, with its chats, the tabs of its stage, its icon, how its
+triggers are arranged and last ran, and when its schedules ran; each
+of its chats notes the move, its agent stops, and a line sent starts
+it again there, told the conversation so far, as an agent that could
+not resume is. A chat of a sketch goes on in the sketch's folder, Git
+told that the repository of a sketch from the project moved. No file
+moves: the card only says where the folder went, so a project moves
+only once its folder is not there, since another folder, while its own
+is there, is a project of its own, and not while one of its chats is
+at work. A project whose folder
+is not there, as when the human moved it while Cox was closed, is
+marked on the rail, its square dashed in amber with a ?, and its chats
+do not start again, their input saying so, until the human says where
+the folder went. A project is a folder:
 "Open folder…", the + at the foot of the rail (Command-O on macOS,
 Control-O elsewhere), opens a chat in the project of a folder of your
 choice, and "New chat" in the list opens another chat in the project

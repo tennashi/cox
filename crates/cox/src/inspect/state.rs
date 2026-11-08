@@ -87,6 +87,11 @@ pub fn describe(
             let _ = writeln!(told, "  {line}");
         }
     }
+    if let Some(card) = workspace.project_card() {
+        for line in card.read(cx).described(cx) {
+            let _ = writeln!(told, "{line}");
+        }
+    }
     if let Some(card) = cx
         .try_global::<crate::ui::translation::Shown>()
         .and_then(|shown| shown.0.as_ref())
@@ -129,6 +134,11 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
         if focused == *settings.words_focus() {
             return format!("the settings' text, {:?} selected", settings.selected());
         }
+    }
+    if let Some(card) = workspace.project_card()
+        && focused == card.read(cx).input().focus_handle(cx)
+    {
+        return "the project card's input".to_owned();
     }
     if workspace.is_folded() && focused == workspace.focus_handle(cx) {
         return "the window, the chat folded away".to_owned();

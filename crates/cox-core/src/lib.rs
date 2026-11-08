@@ -11,11 +11,13 @@
 //! - [`list`] is a list of which one item is shown, as a stage's tabs
 //!   are, and a window's chats.
 //! - [`store`] keeps all of it in `SQLite`.
+//! - [`moved`] makes what is kept of a folder name where it moved.
 
 pub mod diff;
 pub mod entry;
 pub mod goal;
 pub mod list;
+pub mod moved;
 pub mod settings;
 pub mod store;
 pub mod tabs;

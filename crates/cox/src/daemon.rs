@@ -1043,12 +1043,120 @@ impl Daemon {
                     self.projects[0].folder = home;
                 }
             }
+            ToDaemon::MoveProject { project, folder } => self.move_project(project, &folder),
             ToDaemon::Sync { id } => {
                 // What came before is done, but for what it changed, which
                 // is told before this.
                 self.settle();
                 self.tell(FromDaemon::Settled { id });
             }
+        }
+    }
+
+    /// The project kept as `project` works in `folder` from now on, as
+    /// when the human moved its folder there: what Cox keeps of it goes
+    /// with it, and each of its chats goes on there, its agent stopped,
+    /// unless it works in a sketch's folder. Nothing moves while its
+    /// folder is still there, or while one of its chats is at work.
+    fn move_project(&mut self, project: ProjectId, folder: &Path) {
+        let Some(index) = self
+            .projects
+            .iter()
+            .position(|kept| kept.id == Some(project))
+        else {
+            return;
+        };
+        let from = self.projects[index].folder.clone();
+        if from == folder {
+            return;
+        }
+        // Another folder, while its own is there, is another project.
+        if from.exists() {
+            tracing::error!("the project does not move while its folder is there");
+            return;
+        }
+        if self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .any(|slot| slot.project == index && working(slot.state))
+        {
+            tracing::error!("the project does not move while a chat of it is at work");
+            return;
+        }
+        let name = folder.file_name().map_or_else(
+            || folder.to_string_lossy().into_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        if let Err(error) = self.store.move_project(project, folder, &name) {
+            tracing::error!("the project does not move: {error:#}");
+            return;
+        }
+        let moved = cox_core::moved::Moved {
+            from: &from,
+            to: folder,
+        };
+        if let Err(error) = storage::moved(moved) {
+            tracing::error!("what Cox keeps of the folder's triggers does not move: {error}");
+        }
+        self.scheduled = std::mem::take(&mut self.scheduled)
+            .into_iter()
+            .map(|(id, key)| (moved.text(&id).unwrap_or(id), key))
+            .collect();
+        tracing::info!(from = %from.display(), to = %folder.display(), "the project moved");
+        folder.clone_into(&mut self.projects[index].folder);
+        self.projects[index].name = name;
+        let note = format!(
+            "The project's folder moved from {} to {}. A line sent starts the agent again there, \
+             with the conversation so far.",
+            from.display(),
+            folder.display()
+        );
+        let mut moving = Vec::new();
+        let mut sketches = Vec::new();
+        let store = Rc::clone(&self.store);
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            if slot.project != index {
+                continue;
+            }
+            // A chat of a sketch works in the sketch's folder, which
+            // stays where it is; a sketch from the project is a worktree
+            // of its repository, which Git is told moved.
+            if let Some(setup) = &slot.setup
+                && let Some(works) = &setup.folder
+            {
+                if setup.sketch == Some(Sketch::Project) && works.exists() {
+                    sketches.push(works.clone());
+                }
+                continue;
+            }
+            if let Some(kept) = slot.kept {
+                // The agent's session was of the folder it worked in.
+                if let Err(error) = store.forget_session(kept) {
+                    tracing::error!("the chat's session is not forgotten: {error:#}");
+                }
+            }
+            if let Some(chat) = &mut slot.chat {
+                chat.note(note.clone());
+            } else if let Some(kept) = slot.kept {
+                let entries = store.entries(kept).map(|entries| entries.len());
+                if let Ok(number) = entries
+                    && let Err(error) = store.keep_entry(kept, number, &Entry::Note(note.clone()))
+                {
+                    tracing::error!("the chat is not kept as it goes: {error:#}");
+                }
+            }
+            slot.state = State::Closed;
+            moving.push(slot.key);
+        }
+        if !sketches.is_empty() {
+            sketch::repair(folder, &sketches);
+        }
+        // The window hears where the project is before it hears the
+        // chats again, with the tabs of its stage there.
+        self.tell_listing();
+        for key in moving {
+            self.read_again(key);
         }
     }
 
@@ -2062,6 +2170,15 @@ impl Daemon {
         }
     }
 
+    /// How the chat of `slot` stands, as the window lists it: one whose
+    /// project's folder is not there does not start again, until the
+    /// human says where the folder went.
+    fn row(&self, slot: &Slot, agents: &Agents) -> ChatRow {
+        let mut row = slot.row(agents, &self.store);
+        row.again &= slot.project == 0 || self.cwd(slot).is_dir();
+        row
+    }
+
     /// Tells the window the projects and chats, if they changed since it
     /// was last told.
     fn tell_listing(&mut self) {
@@ -2074,17 +2191,18 @@ impl Daemon {
                     id: project.id,
                     name: project.name.clone(),
                     folder: project.folder.clone(),
+                    missing: project.id.is_some() && !project.folder.is_dir(),
                 })
                 .collect(),
             chats: self
                 .chats
                 .iter()
-                .map(|slot| slot.row(&agents, &self.store))
+                .map(|slot| self.row(slot, &agents))
                 .collect(),
             archived: self
                 .archived
                 .iter()
-                .map(|slot| slot.row(&agents, &self.store))
+                .map(|slot| self.row(slot, &agents))
                 .collect(),
         };
         if self.listed.as_ref() != Some(&listing) {

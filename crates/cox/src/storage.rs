@@ -160,6 +160,59 @@ pub fn path(kept: Kept) -> Option<PathBuf> {
     Some(path)
 }
 
+/// What Cox keeps by the paths of folders, or of files in them, outside
+/// its database: how the triggers of each folder are arranged and last
+/// ran, what a chat of each said last as its turn ended, and when each
+/// schedule last ran, by its file.
+const BY_FOLDER: [Kept; 4] = [
+    Kept::Triggers,
+    Kept::TriggerRuns,
+    Kept::LastTurns,
+    Kept::Schedules,
+];
+
+/// Makes what Cox keeps by the paths of a folder that moved, as `moved`
+/// says, outside its database, name where it is now, so that its
+/// triggers stay arranged as they were, and its schedules know when
+/// they last ran.
+///
+/// # Errors
+///
+/// When a file of it cannot be read or written, saying which.
+pub fn moved(moved: cox_core::moved::Moved<'_>) -> Result<(), String> {
+    let mut failed = Vec::new();
+    for kept in BY_FOLDER {
+        if let Some(path) = path(kept)
+            && let Err(error) = move_in(&path, moved)
+        {
+            failed.push(error);
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("; "))
+    }
+}
+
+/// Makes the JSON file at `path`, if there is one, name where a folder
+/// moved, as `moved` says.
+fn move_in(path: &Path, moved: cox_core::moved::Moved<'_>) -> Result<(), String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    let mut value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    if !moved.json(&mut value) {
+        return Ok(());
+    }
+    let text = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    fs::write(path, text + "\n")
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))
+}
+
 /// Where the Cox at `exe` keeps what lasts. The installed one keeps it in
 /// `~/Library/Application Support/Cox` on macOS, and in
 /// `$XDG_DATA_HOME/cox`, by default `~/.local/share/cox`, elsewhere. Any
@@ -196,6 +249,33 @@ mod tests {
 
     fn now(root: Option<PathBuf>, kept: Kept) -> PathBuf {
         root.unwrap().join(kept.place())
+    }
+
+    #[test]
+    fn a_file_kept_by_folder_names_where_the_folder_moved() {
+        let dir = std::env::temp_dir().join(format!("cox-moved-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("triggers.json");
+        fs::write(
+            &file,
+            r#"{"/work/app": {"off": ["/work/app/.cox/triggers/ci.md"]}, "/work/b": {}}"#,
+        )
+        .unwrap();
+        let moved = cox_core::moved::Moved {
+            from: Path::new("/work/app"),
+            to: Path::new("/src/app"),
+        };
+        move_in(&file, moved).unwrap();
+        let now: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            now,
+            serde_json::json!({"/src/app": {"off": ["/src/app/.cox/triggers/ci.md"]}, "/work/b": {}})
+        );
+        // A file that is not there is left so.
+        move_in(&dir.join("none.json"), moved).unwrap();
+        assert!(!dir.join("none.json").exists());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

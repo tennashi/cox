@@ -24,6 +24,10 @@ pub struct ProjectRow {
     pub name: String,
     /// The folder its chats work in.
     pub folder: PathBuf,
+    /// Whether its folder is not there, as when the human moved it, for
+    /// them to say where it went.
+    #[serde(default)]
+    pub missing: bool,
 }
 
 /// A chat, as the window lists it in its tabs.
@@ -261,6 +265,9 @@ pub enum ToDaemon {
     /// Cox's own chats opened from now on work in `home`, as the
     /// human set it, or as the settings say now when `set` is false.
     Home { home: PathBuf, set: bool },
+    /// The project kept as `project` works in `folder` from now on, as
+    /// when the human moved its folder there.
+    MoveProject { project: ProjectId, folder: PathBuf },
     /// Answer [`FromDaemon::Settled`] with `id` once all asked before is
     /// done.
     Sync { id: u64 },

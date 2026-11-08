@@ -17,6 +17,7 @@ use rusqlite::{Connection, OptionalExtension as _, params};
 
 use crate::entry::Entry;
 use crate::goal::Goal;
+use crate::moved::Moved;
 use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
@@ -338,6 +339,80 @@ impl Store {
             params![folder, name],
         )?;
         Ok(ProjectId(self.connection.last_insert_rowid()))
+    }
+
+    /// Keeps that `project` works in `folder` from now on, named `name`,
+    /// as when the human moved its folder there, with the tabs of the
+    /// stage of the folder it worked in, each path in the folder moved
+    /// with it.
+    ///
+    /// # Errors
+    ///
+    /// When another project works in `folder`, or the database cannot be
+    /// written.
+    pub fn move_project(
+        &self,
+        project: ProjectId,
+        folder: &Path,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        let to = folder.to_string_lossy();
+        let other: Option<i64> = self
+            .connection
+            .query_row(
+                "SELECT id FROM projects WHERE folder = ?1 AND id != ?2",
+                params![to, project.0],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if other.is_some() {
+            bail!("another project works in {}", folder.display());
+        }
+        let from: String = self.connection.query_row(
+            "SELECT folder FROM projects WHERE id = ?1",
+            [project.0],
+            |row| row.get(0),
+        )?;
+        let transaction = self.connection.unchecked_transaction()?;
+        transaction.execute(
+            "UPDATE projects SET folder = ?2, name = ?3 WHERE id = ?1",
+            params![project.0, to, name],
+        )?;
+        let tabs: Option<String> = transaction
+            .query_row(
+                "SELECT tabs FROM stages WHERE folder = ?1",
+                [&from],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(tabs) = tabs {
+            let mut tabs: serde_json::Value = serde_json::from_str(&tabs)?;
+            let moved = Moved {
+                from: Path::new(&from),
+                to: folder,
+            };
+            moved.json(&mut tabs);
+            transaction.execute("DELETE FROM stages WHERE folder = ?1", [&from])?;
+            transaction.execute(
+                "INSERT INTO stages (folder, tabs) VALUES (?1, ?2)
+                 ON CONFLICT (folder) DO UPDATE SET tabs = excluded.tabs",
+                params![to, serde_json::to_string(&tabs)?],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Forgets the session of `chat`'s agent, which it cannot go on with,
+    /// as when its folder moved.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn forget_session(&self, chat: ChatId) -> anyhow::Result<()> {
+        self.connection
+            .execute("UPDATE chats SET session = NULL WHERE id = ?1", [chat.0])?;
+        Ok(())
     }
 
     /// Keeps a new chat named `name` in `project`, or of Cox's own.
@@ -929,6 +1004,49 @@ mod tests {
         store.keep_stage(folder, &shown).unwrap();
         assert_eq!(store.stage(folder).unwrap(), Some(shown));
         assert_eq!(store.stage(Path::new("/elsewhere")).unwrap(), None);
+    }
+
+    #[test]
+    fn a_project_moves_to_another_folder_with_its_stage() {
+        let store = Store::in_memory().unwrap();
+        let project = store.project(Path::new("/work/app"), "app").unwrap();
+        let other = store.project(Path::new("/work/other"), "other").unwrap();
+        let chat = store.add_chat(Some(project), "Chat 1").unwrap();
+        store.keep_session(chat, "s-1").unwrap();
+        let tabs = KeptTabs {
+            tabs: vec![KeptTab::Markdown {
+                path: "/work/app/plan.md".into(),
+            }],
+            shown: 0,
+            owners: vec![Some(chat)],
+        };
+        store.keep_stage(Path::new("/work/app"), &tabs).unwrap();
+
+        assert!(
+            store
+                .move_project(project, Path::new("/work/other"), "other")
+                .is_err()
+        );
+        store
+            .move_project(project, Path::new("/src/app-2"), "app-2")
+            .unwrap();
+        let projects = store.projects().unwrap();
+        assert_eq!(projects[0].folder, Path::new("/src/app-2"));
+        assert_eq!(projects[0].name, "app-2");
+        assert_eq!(projects[1].id, other);
+        assert_eq!(store.stage(Path::new("/work/app")).unwrap(), None);
+        let moved = KeptTabs {
+            tabs: vec![KeptTab::Markdown {
+                path: "/src/app-2/plan.md".into(),
+            }],
+            ..tabs
+        };
+        assert_eq!(store.stage(Path::new("/src/app-2")).unwrap(), Some(moved));
+        // The chat stays the project's, and its session is the daemon's
+        // to forget.
+        assert_eq!(store.chats().unwrap()[0].project, Some(project));
+        store.forget_session(chat).unwrap();
+        assert_eq!(store.session(chat).unwrap(), None);
     }
 
     #[test]
