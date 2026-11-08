@@ -25,7 +25,7 @@ const REVEAL_AT: f32 = 1. / 3.;
 
 pub(super) const NUMBER: u32 = DISABLED;
 /// The name the server says something of.
-const HOVERED: u32 = 0x2c_3a4a;
+const HOVERED: u32 = crate::ui::theme::BUTTON_HOVER;
 /// How code that is nothing in particular is drawn.
 pub(super) const PLAIN: (u32, FontWeight, FontStyle) =
     (FOREGROUND, FontWeight::NORMAL, FontStyle::Normal);

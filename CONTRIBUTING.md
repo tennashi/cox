@@ -1130,7 +1130,10 @@ opens a file on a tab
 by going to `cox://open/<path>#L<line>`, which the stage takes as it
 takes a link to a file (a page that is not itself a file may not link
 to one), and shows a chat by going to `cox://chat/<key>`, by the
-number `cox://api/activity` tells it by. The Map plugin draws its own cards and lines, with no
+number `cox://api/activity` tells it by. A plugin draws in the window's
+colors by linking `cox://api/theme.css`, whose custom properties are
+the colors Cox draws its own tabs in, as `--surface`, `--accent` or
+`--asking-ground`, as the built-in plugins do. The Map plugin draws its own cards and lines, with no
 library, and reads its JSON again every two seconds, as Cox's own tabs
 follow what they show.
 

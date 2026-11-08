@@ -66,6 +66,9 @@ pub const ACCENT: u32 = 0x6f_d3c5;
 pub const ACCENT_GROUND: u32 = 0x15_2c2a;
 /// A link.
 pub const LINK: u32 = 0xa6_ebe1;
+/// Code among words, as `a path` in the conversation, and the stretch of
+/// a line a search found.
+pub const CODE: u32 = 0xe0_b080;
 /// The colors that tell the chats apart, as on the tabs of the stage: of
 /// the accent's lightness and saturation, around the wheel but for the
 /// amber and the red of what asks and what went wrong, in an order that
@@ -108,3 +111,66 @@ pub const ADDED_WORD: u32 = 0x1f_4a44;
 pub const REMOVED_WORD: u32 = 0x4d_2629;
 /// The ground of the text the human selected.
 pub const SELECTION: u32 = 0x22_4a45;
+
+/// The colors above, as CSS custom properties on `:root`, named after
+/// them, as `--asking-ground`, for the pages of the stage that draw as
+/// the window does, as the plugins, which read them from
+/// `cox://api/theme.css`.
+#[must_use]
+pub fn css() -> String {
+    use std::fmt::Write as _;
+
+    const COLORS: &[(&str, u32)] = &[
+        ("ground", GROUND),
+        ("surface", SURFACE),
+        ("raised", RAISED),
+        ("hover", HOVER),
+        ("button", BUTTON),
+        ("button-hover", BUTTON_HOVER),
+        ("selected", SELECTED),
+        ("border", BORDER),
+        ("border-strong", BORDER_STRONG),
+        ("foreground", FOREGROUND),
+        ("dim", DIM),
+        ("faint", FAINT),
+        ("disabled", DISABLED),
+        ("accent", ACCENT),
+        ("accent-ground", ACCENT_GROUND),
+        ("link", LINK),
+        ("code", CODE),
+        ("asking", ASKING),
+        ("asking-ground", ASKING_GROUND),
+        ("asking-edge", ASKING_EDGE),
+        ("asking-button", ASKING_BUTTON),
+        ("offering-ground", OFFERING_GROUND),
+        ("offering-edge", OFFERING_EDGE),
+        ("offering-button", OFFERING_BUTTON),
+        ("failed", FAILED),
+        ("failed-ground", FAILED_GROUND),
+        ("failed-mark", FAILED_MARK),
+        ("added-ground", ADDED_GROUND),
+        ("removed-ground", REMOVED_GROUND),
+        ("added-word", ADDED_WORD),
+        ("removed-word", REMOVED_WORD),
+        ("selection", SELECTION),
+    ];
+    let mut css = String::from(":root {\n  color-scheme: dark;\n");
+    for (name, color) in COLORS {
+        let _ = writeln!(css, "  --{name}: #{color:06x};");
+    }
+    css.push_str("}\n");
+    css
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_css_names_each_color_as_the_window_draws_it() {
+        let css = css();
+        assert!(css.contains("  --ground: #0e0e0f;\n"), "{css}");
+        assert!(css.contains("  --asking-ground: #1e1b15;\n"), "{css}");
+        assert!(css.starts_with(":root {") && css.ends_with("}\n"), "{css}");
+    }
+}

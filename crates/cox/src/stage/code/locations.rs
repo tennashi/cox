@@ -27,7 +27,7 @@ use crate::ui::theme::{
 const HEIGHT: f32 = 0.35;
 
 /// The stretch of a line that is the place.
-const FOUND: u32 = 0xe0_b080;
+const FOUND: u32 = crate::ui::theme::CODE;
 
 /// What the human asked the server to find.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -3,33 +3,19 @@
   <head>
     <meta charset="utf-8" />
     <title>Knowledge</title>
+    <link rel="stylesheet" href="cox://api/theme.css" />
     <style>
-      /* The colors of the window (see `ui::theme`), as the Map plugin
-         has them: the page sits on the stage's card, as Cox's own tabs
-         do. */
+      /* The colors of the window, which Cox gives every plugin as
+         `cox://api/theme.css` (see `ui::theme`): the page sits on the
+         stage's card, as Cox's own tabs do. */
       :root {
-        color-scheme: dark;
-        --foreground: #e4e4e6;
-        --background: #151517;
-        --card: #17171a;
-        --card-hover: #1f1f23;
-        --dim: #a5a5ab;
-        --faint: #8e8e95;
-        --link: #a6ebe1;
-        --border: #2c2c31;
-        --hover: #222226;
-        --accent: #6fd3c5;
-        --code: #e7b98a;
-        --code-ground: #1d1d21;
-        --warn: #e8b660;
-        --broken: #ec8580;
         --sans: -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
         --mono: Menlo, "DejaVu Sans Mono", monospace;
       }
       html,
       body {
         margin: 0;
-        background: var(--background);
+        background: var(--surface);
         color: var(--foreground);
         font: 13px/1.5 var(--sans);
       }
@@ -87,7 +73,7 @@
         flex: none;
         gap: 2px;
         padding: 2px;
-        background: var(--card);
+        background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 10px;
       }
@@ -121,7 +107,7 @@
         flex: 1 1 220px;
         font: 13px var(--sans);
         color: var(--foreground);
-        background: var(--card);
+        background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 8px;
         padding: 6px 10px;
@@ -133,7 +119,7 @@
       .chip {
         font: 11.5px var(--sans);
         color: var(--dim);
-        background: var(--card);
+        background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 999px;
         padding: 2px 9px;
@@ -169,7 +155,7 @@
         border-top: 1px solid var(--border);
       }
       .entry:hover {
-        background: var(--card-hover);
+        background: var(--hover);
         text-decoration: none;
       }
       .entry .title {
@@ -198,7 +184,7 @@
         border-radius: 4px;
         padding: 1px 5px;
         vertical-align: 1px;
-        color: var(--warn);
+        color: var(--asking);
         border: 1px solid currentColor;
       }
       .only {
@@ -210,11 +196,11 @@
         border-radius: 4px;
         padding: 1px 5px;
         vertical-align: 1px;
-        color: var(--background);
+        color: var(--surface);
         background: var(--accent);
       }
       .mark.broken {
-        color: var(--broken);
+        color: var(--failed);
       }
       .empty {
         color: var(--dim);
@@ -224,7 +210,7 @@
       .page code {
         font: 12px var(--mono);
         color: var(--code);
-        background: var(--code-ground);
+        background: var(--raised);
         border-radius: 4px;
         padding: 1px 4px;
       }
@@ -241,7 +227,7 @@
         margin: 14px 0 4px;
       }
       .page pre {
-        background: var(--code-ground);
+        background: var(--raised);
         border-radius: 8px;
         padding: 10px 12px;
         overflow-x: auto;
@@ -252,7 +238,7 @@
         color: var(--foreground);
       }
       .page a.missing {
-        color: var(--broken);
+        color: var(--failed);
         text-decoration: underline dotted;
       }
       .page table {
@@ -318,7 +304,7 @@
         align-self: center;
       }
       .translating.failed {
-        color: var(--warn);
+        color: var(--asking);
       }
     </style>
   </head>

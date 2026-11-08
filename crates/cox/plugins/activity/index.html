@@ -3,34 +3,19 @@
   <head>
     <meta charset="utf-8" />
     <title>Activity</title>
+    <link rel="stylesheet" href="cox://api/theme.css" />
     <style>
-      /* The colors of the window (see `ui::theme`), as the other
-         plugins have them: the page sits on the stage's card, as Cox's
-         own tabs do. */
+      /* The colors of the window, which Cox gives every plugin as
+         `cox://api/theme.css` (see `ui::theme`): the page sits on the
+         stage's card, as Cox's own tabs do. */
       :root {
-        color-scheme: dark;
-        --foreground: #e4e4e6;
-        --background: #151517;
-        --card: #17171a;
-        --card-hover: #1f1f23;
-        --dim: #a5a5ab;
-        --faint: #8e8e95;
-        --link: #a6ebe1;
-        --border: #2c2c31;
-        --hover: #222226;
-        --accent: #6fd3c5;
-        --code: #e7b98a;
-        --code-ground: #1d1d21;
-        --warn: #e8b660;
-        --broken: #ec8580;
-        --asking: #e5b46d;
         --sans: -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
         --mono: Menlo, "DejaVu Sans Mono", monospace;
       }
       html,
       body {
         margin: 0;
-        background: var(--background);
+        background: var(--surface);
         color: var(--foreground);
         font: 13px/1.5 var(--sans);
       }
@@ -96,11 +81,11 @@
         color: var(--foreground);
       }
       a.row:hover {
-        background: var(--card-hover);
+        background: var(--hover);
         text-decoration: none;
       }
       .waiting .row {
-        background: var(--card);
+        background: var(--surface);
         border: 1px solid var(--border);
         margin-bottom: 6px;
       }

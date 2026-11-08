@@ -27,10 +27,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::ui::markdown::{self, Block, Kind};
 use crate::ui::selection::{Piece, Selection, Spot, TextId};
 use crate::ui::theme::{
-    BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, LINK, RAISED, SELECTION,
+    BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE, CODE_FONT, DIM, LINK, RAISED, SELECTION,
 };
-
-const CODE: u32 = 0xe0_b080;
 
 /// How far each list a block is in moves it right.
 const INDENT: f32 = 20.;

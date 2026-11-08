@@ -3,37 +3,19 @@
   <head>
     <meta charset="utf-8" />
     <title>Triggers</title>
+    <link rel="stylesheet" href="cox://api/theme.css" />
     <style>
-      /* The colors of the window (see `ui::theme`), as the other plugins
-         have them: the page sits on the stage's card, as Cox's own tabs
-         do. */
+      /* The colors of the window, which Cox gives every plugin as
+         `cox://api/theme.css` (see `ui::theme`): the page sits on the
+         stage's card, as Cox's own tabs do. */
       :root {
-        color-scheme: dark;
-        --foreground: #e4e4e6;
-        --background: #151517;
-        --card: #17171a;
-        --raised: #1f1f23;
-        --ground: #0e0e0f;
-        --dim: #a5a5ab;
-        --faint: #8e8e95;
-        --disabled: #5f5f66;
-        --link: #a6ebe1;
-        --border: #2c2c31;
-        --border-strong: #36363b;
-        --hover: #1f1f23;
-        --accent: #6fd3c5;
-        --accent-ground: #2f6b64;
-        --warn: #e5b46d;
-        --broken: #de6b66;
-        --code: #e7b98a;
-        --code-ground: #1d1d21;
         --sans: -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
         --mono: Menlo, "DejaVu Sans Mono", monospace;
       }
       html,
       body {
         margin: 0;
-        background: var(--background);
+        background: var(--surface);
         color: var(--foreground);
         font: 13px/1.5 var(--sans);
       }
@@ -51,7 +33,7 @@
       code {
         font: 12px var(--mono);
         color: var(--code);
-        background: var(--code-ground);
+        background: var(--raised);
         border-radius: 4px;
         padding: 1px 4px;
       }
@@ -129,12 +111,12 @@
         border-color: var(--accent);
       }
       .dot.failed {
-        background: var(--warn);
-        border-color: var(--warn);
+        background: var(--asking);
+        border-color: var(--asking);
       }
       .dot.broken {
-        background: var(--broken);
-        border-color: var(--broken);
+        background: var(--failed-mark);
+        border-color: var(--failed-mark);
       }
       .name {
         width: 120px;
@@ -192,22 +174,22 @@
         transition: left 0.12s;
       }
       .switch.on {
-        background: var(--accent-ground);
+        background: var(--accent);
       }
       .switch.on::after {
         left: 14px;
-        background: var(--foreground);
+        background: var(--ground);
       }
       .more {
         width: 10px;
         color: var(--disabled);
       }
       .unread {
-        border: 1px solid var(--warn);
+        border: 1px solid var(--asking);
         border-radius: 10px;
         padding: 8px 12px;
         margin-bottom: 8px;
-        color: var(--warn);
+        color: var(--asking);
         overflow-wrap: anywhere;
       }
       .empty {
@@ -215,7 +197,7 @@
         padding: 4px;
       }
       .empty pre {
-        background: var(--code-ground);
+        background: var(--raised);
         border-radius: 8px;
         padding: 10px 12px;
         color: var(--foreground);
@@ -240,7 +222,7 @@
       .card {
         width: 580px;
         max-width: 100%;
-        background: var(--background);
+        background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 16px;
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
@@ -321,8 +303,8 @@
         align-items: baseline;
         padding: 10px 12px;
         border-radius: 10px;
-        background: #1a1a1d;
-        border: 1px solid #26262b;
+        background: var(--raised);
+        border: 1px solid var(--border);
         font-size: 12.5px;
       }
       .settings .label {
@@ -330,7 +312,7 @@
         white-space: nowrap;
       }
       .settings .value {
-        color: #c9c9ce;
+        color: var(--foreground);
         overflow-wrap: anywhere;
       }
       .settings .wide {
@@ -349,7 +331,7 @@
         content: "";
         flex: 1;
         height: 1px;
-        background: #26262b;
+        background: var(--button);
       }
       .text {
         padding: 12px 14px;
@@ -391,11 +373,11 @@
         color: var(--faint);
       }
       .unsaved {
-        color: var(--warn);
+        color: var(--asking);
         white-space: nowrap;
       }
       .error {
-        color: var(--broken);
+        color: var(--failed);
         overflow-wrap: anywhere;
       }
       /* The button of the window (see `ui::button`): 28 high, rounded
@@ -409,7 +391,7 @@
         height: 28px;
         padding: 0 10px;
         border-radius: 8px;
-        background: #26262b;
+        background: var(--button);
         color: var(--foreground);
         font-size: 13px;
         white-space: nowrap;
@@ -417,14 +399,14 @@
         user-select: none;
       }
       .button:hover {
-        background: #303036;
+        background: var(--button-hover);
       }
       .button.quiet {
         background: transparent;
         color: var(--dim);
       }
       .button.quiet:hover {
-        background: #26262b;
+        background: var(--button);
         color: var(--foreground);
       }
       .button.primary {
@@ -478,8 +460,8 @@
       .line.changed .field input,
       .line.changed .chip.chosen,
       textarea.text.changed {
-        background: #2c2516;
-        box-shadow: 0 2px 0 var(--warn);
+        background: var(--asking-ground);
+        box-shadow: 0 2px 0 var(--asking);
       }
       .line {
         display: grid;
@@ -493,7 +475,7 @@
         color: var(--dim);
       }
       .line.changed .label {
-        color: var(--warn);
+        color: var(--asking);
       }
       .chips,
       .patterns {
@@ -513,7 +495,7 @@
         user-select: none;
       }
       .chip.chosen {
-        background: #152c2a;
+        background: var(--accent-ground);
         border-color: var(--accent);
         color: var(--foreground);
       }
@@ -584,8 +566,8 @@
       .folded.do {
         padding: 10px 30px 10px 12px;
         border-radius: 10px;
-        background: #1a1a1d;
-        border: 1px solid #26262b;
+        background: var(--raised);
+        border: 1px solid var(--border);
         font-size: 12.5px;
         color: var(--dim);
       }
@@ -658,9 +640,9 @@
         gap: 6px;
         padding: 3px 9px;
         border-radius: 999px;
-        background: #26262b;
+        background: var(--button);
         font-size: 12px;
-        color: #c9c9ce;
+        color: var(--foreground);
       }
       textarea.reply {
         margin: 14px 18px;
