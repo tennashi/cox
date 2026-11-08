@@ -42,7 +42,8 @@ actions!(cox, [Quit]);
 pub const USAGE: &str = "\
 Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] [<agent command> [args...]]
        cox [--data <dir>] --daemon
-       cox [--data <dir>] --inspect [<tool> [<arguments>...]]";
+       cox [--data <dir>] --inspect [<tool> [<arguments>...]]
+       cox --read-page <url>";
 
 /// What the command line says to be coxd, after `--data <dir>`.
 pub const DAEMON: &str = "--daemon";
@@ -67,6 +68,9 @@ pub enum Mode {
         data: Option<PathBuf>,
         args: Vec<String>,
     },
+    /// The reader of the web page at the URL given, for `raw_keep`, as
+    /// `cox --read-page <url>` (see [`crate::raw::page`]).
+    ReadPage(String),
     /// The usage, as `cox --help`.
     Usage,
 }
@@ -96,6 +100,9 @@ impl Mode {
         let args: Vec<String> = args.into_iter().collect();
         if let Some(socket) = crate::agent::mcp::bridge_to(&args) {
             return Self::Bridge(socket);
+        }
+        if let Some(url) = crate::raw::page::reading(&args) {
+            return Self::ReadPage(url.to_owned());
         }
         let settings = Settings::parse(args);
         if settings.command.first().map(String::as_str) == Some(crate::inspect::OPTION) {
@@ -641,6 +648,14 @@ mod tests {
         assert_eq!(
             parse(&["--mcp", "/tmp/cox-1-0/mcp"]),
             Mode::Bridge(PathBuf::from("/tmp/cox-1-0/mcp"))
+        );
+    }
+
+    #[test]
+    fn the_reader_of_a_page_is_asked_for_with_its_url() {
+        assert_eq!(
+            parse(&["--read-page", "https://example.com/"]),
+            Mode::ReadPage("https://example.com/".to_owned())
         );
     }
 
