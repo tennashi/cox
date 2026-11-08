@@ -32,6 +32,14 @@
   ],
   "turns": [
     {
+      "when": "Draw an icon for the project",
+      "steps": [
+        { "tool": { "id": "read-readme", "title": "Read README.md", "kind": "read", "locations": [{ "path": "{cwd}/README.md" }], "status": "completed" } },
+        { "sleep": 3000 },
+        { "say": "A gear around a dot, for a tool that builds things.\n\n```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\"><rect width=\"64\" height=\"64\" fill=\"#0f766e\"/><circle cx=\"32\" cy=\"32\" r=\"17\" fill=\"none\" stroke=\"#f0fdfa\" stroke-width=\"6\"/><path d=\"M32 15v-6M32 55v-6M15 32H9M55 32h-6\" stroke=\"#f0fdfa\" stroke-width=\"6\" stroke-linecap=\"round\"/><circle cx=\"32\" cy=\"32\" r=\"6\" fill=\"#fbbf24\"/></svg>\n```" }
+      ]
+    },
+    {
       "when": "/compact",
       "steps": [{ "say": "Summed up the conversation so far." }]
     },
