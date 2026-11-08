@@ -442,9 +442,11 @@ function planChanged(changed) {
 function permission(asked, last) {
   const waiting = asked.chosen === null || asked.chosen === undefined;
   const asks = waiting && last && chat.state === "Asking";
+  const gathering = (asked.gathered || []).some((check) => check.state === "running");
   return el("div", { class: `entry card ${asks ? "asks" : ""}` },
-    el("div", { class: "label" }, asks ? "Asks you" : "Asked"),
+    el("div", { class: "label" }, asks ? (gathering ? "Asks you · gathering" : "Asks you") : "Asked"),
     el("div", { class: "what" }, asked.title),
+    gathered(asked.gathered),
     asked.content.map(content),
     el("ul", { class: "options" }, asked.options.map((option, index) => {
       let how = null;
@@ -455,6 +457,28 @@ function permission(asked, last) {
       return el("li", { class: how }, el("button", { onclick: (event) => choose(event, index) }, label));
     })),
     asked.by_setup ? el("p", { class: "hint" }, "Cox answered in your place, as the chat is set up.") : null);
+}
+
+// What the triggers gathered for the human to answer with, each by its
+// name, with its headline, its first line, first.
+function gathered(list) {
+  if (!list || !list.length) return null;
+  return el("div", { class: "gathered" }, list.map((check) => {
+    const state = { waiting: "", running: "", passed: "done", failed: "found", broken: "failed" }[check.state];
+    let said;
+    if (check.state === "running") said = el("p", { class: "hint" }, "Gathering what you need to answer…");
+    else if (!check.said) said = el("p", { class: "hint" }, "It said nothing.");
+    else {
+      const text = check.said.trim();
+      const cut = text.indexOf("\n");
+      const headline = (cut < 0 ? text : text.slice(0, cut)).trim().replace(/^#+\s*/, "").replace(/^\*\*(.*)\*\*$/, "$1");
+      const rest = cut < 0 ? "" : text.slice(cut + 1).trim();
+      said = [el("div", { class: "headline" }, headline), rest ? markdown(rest) : null];
+    }
+    return el("div", { class: "gather" },
+      el("span", { class: "check" }, el("span", { class: `mark ${state}` }), check.name),
+      said);
+  }));
 }
 
 // Answers what the agent asks with the option at `index`, once.

@@ -27,9 +27,11 @@
 //! the human's place, once those that run with it went.
 
 use std::collections::{BTreeSet, VecDeque};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use cox_acp::{PermissionAnswer, SlashCommand, StopReason};
+use cox_core::diff::Line;
 pub use cox_core::entry::{
     Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, Step, StepState,
     TerminalLogin, ToolCallResult,
@@ -97,6 +99,18 @@ pub enum Does {
     /// once what runs with it went: once for a line of the human's, as a
     /// turn ends.
     Tell(String),
+}
+
+/// What a trigger that gathers what the human needs to answer a
+/// permission request came back with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Gathered {
+    /// What its agent said.
+    Said(String),
+    /// What its command printed, and how it ended.
+    Printed(Ran),
+    /// Why it could not run.
+    Broken(String),
 }
 
 /// What happened in a chat, besides a turn's end, whose triggers run:
@@ -1353,6 +1367,150 @@ impl Conversation {
         Some(option)
     }
 
+    /// What the agent asks the human's permission for, while it waits on
+    /// the human, as the triggers that gather what the human needs to
+    /// answer are told: the call, what it is about to do, and the options.
+    #[must_use]
+    pub fn asked_about(&self) -> Option<String> {
+        let (
+            State::Asking,
+            Some(Entry::Permission {
+                title,
+                content,
+                options,
+                chosen: None,
+                ..
+            }),
+        ) = (self.state, self.entries.last())
+        else {
+            return None;
+        };
+        let mut about =
+            format!("The chat's agent asks the human's permission for a tool call: {title}");
+        for content in content {
+            match content {
+                Content::Text(text) => {
+                    let _ = write!(about, "\n\n{}", text.trim());
+                }
+                Content::Diff { path, lines } => {
+                    let _ = write!(about, "\n\nIts change to {path}:\n");
+                    for line in lines {
+                        let _ = match line {
+                            Line::Same(text) => writeln!(about, " {text}"),
+                            Line::Removed(text) => writeln!(about, "-{text}"),
+                            Line::Added(text) => writeln!(about, "+{text}"),
+                            Line::Skipped(count) => writeln!(about, "[{count} lines]"),
+                        };
+                    }
+                }
+            }
+        }
+        let _ = write!(
+            about,
+            "\n\nThe human chooses one of: {}.",
+            options.join(", ")
+        );
+        Some(about)
+    }
+
+    /// Has the triggers named `names` gather what the human needs to
+    /// answer the permission request the agent waits on, which shows that
+    /// they do until each has said, or [`Self::stop_gathering`].
+    pub fn gather(&mut self, names: Vec<String>) {
+        if self.asked().is_none() {
+            return;
+        }
+        if let Some(gathered) = self.gathered_mut() {
+            *gathered = names
+                .into_iter()
+                .map(|name| Check {
+                    name,
+                    state: CheckState::Running,
+                    said: None,
+                })
+                .collect();
+        }
+    }
+
+    /// Takes what the trigger at `at` of those that gather said, as
+    /// `gathered` says.
+    pub fn gathered(&mut self, at: usize, gathered: Gathered) {
+        let (state, said) = match gathered {
+            Gathered::Said(said) => (CheckState::Passed, head(&said, OUTPUT_TAIL)),
+            Gathered::Printed(Ran {
+                output,
+                ended: Ended::Exited(0),
+            }) => (CheckState::Passed, tail(&output, OUTPUT_TAIL)),
+            Gathered::Printed(Ran { output, ended }) => {
+                let output = tail(&output, OUTPUT_TAIL);
+                (CheckState::Failed, format!("{output}\n\n({ended})"))
+            }
+            Gathered::Broken(why) => (CheckState::Broken, why),
+        };
+        if let Some(check) = self
+            .gathered_mut()
+            .and_then(|gathered| gathered.get_mut(at))
+            .filter(|check| check.state == CheckState::Running)
+        {
+            check.state = state;
+            check.said = Some(said).filter(|said| !said.trim().is_empty());
+        }
+    }
+
+    /// Stops what gathers yet, as `why` says, as when the human answered
+    /// first, or it took too long.
+    pub fn stop_gathering(&mut self, why: &str) {
+        let Some(gathered) = self.gathered_mut() else {
+            return;
+        };
+        for check in gathered {
+            if check.state == CheckState::Running {
+                check.state = CheckState::Broken;
+                check.said = Some(why.to_owned());
+            }
+        }
+    }
+
+    /// Whether triggers gather yet what the human needs to answer the
+    /// permission request the agent waits on.
+    #[must_use]
+    pub fn gathering(&self) -> bool {
+        match (self.state, self.entries.last()) {
+            (State::Asking, Some(Entry::Permission { gathered, .. })) => gathered
+                .iter()
+                .any(|check| check.state == CheckState::Running),
+            _ => false,
+        }
+    }
+
+    /// The headlines of what the triggers gathered for the permission
+    /// request the agent waits on: the first line each said.
+    #[must_use]
+    pub fn headlines(&self) -> Vec<&str> {
+        match (self.state, self.entries.last()) {
+            (State::Asking, Some(Entry::Permission { gathered, .. })) => gathered
+                .iter()
+                .filter(|check| matches!(check.state, CheckState::Passed | CheckState::Failed))
+                .filter_map(|check| check.said.as_deref().and_then(headline))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// What the triggers gathered for the last permission request, as it
+    /// stands, to change.
+    fn gathered_mut(&mut self) -> Option<&mut Vec<Check>> {
+        let index = self
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::Permission { .. }))?;
+        self.changed.insert(index);
+        match &mut self.entries[index] {
+            Entry::Permission { gathered, .. } => Some(gathered),
+            _ => None,
+        }
+    }
+
     /// Chooses the option at `index` of the permission request the agent
     /// waits on, and returns the answer to send.
     pub fn choose(&mut self, index: usize) -> Option<Command> {
@@ -1724,6 +1882,7 @@ impl Conversation {
             options,
             chosen: decided,
             by_setup: decided.is_some(),
+            gathered: Vec::new(),
         });
     }
 
@@ -1942,6 +2101,28 @@ fn is_turn_start(entry: &Entry) -> bool {
 
 /// The last `length` characters of `text`, at most, less blank lines at
 /// its end, with a mark of what is left out.
+/// The start of `text`, at most `length` characters of it.
+fn head(text: &str, length: usize) -> String {
+    let text = text.trim();
+    match text.char_indices().nth(length) {
+        Some((end, _)) => format!("{}[…]", &text[..end]),
+        None => text.to_owned(),
+    }
+}
+
+/// The headline of what a trigger gathered, `said`: its first line, as
+/// it reads, without the marks of a Markdown heading or strong text.
+#[must_use]
+pub fn headline(said: &str) -> Option<&str> {
+    let line = said.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let line = line.trim_start_matches('#').trim();
+    let line = line
+        .strip_prefix("**")
+        .and_then(|line| line.strip_suffix("**"))
+        .unwrap_or(line);
+    Some(line)
+}
+
 fn tail(text: &str, length: usize) -> String {
     let text = text.trim_end();
     let count = text.chars().count();
@@ -2543,6 +2724,86 @@ mod tests {
                 ("permission", vec![text("Run the checks")])
             ]
         );
+    }
+
+    #[test]
+    fn shows_what_the_triggers_gathered_for_the_human_to_answer_with() {
+        let mut conversation = Conversation::new();
+        conversation.submit("permission");
+        conversation.apply(AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
+            title: Some("Edit x.txt".to_owned()),
+            content: Some(vec![Content::Diff {
+                path: "x.txt".to_owned(),
+                lines: vec![
+                    Line::Removed("old".to_owned()),
+                    Line::Added("new".to_owned()),
+                ],
+            }]),
+            options: vec!["Allow".to_owned(), "Reject".to_owned()],
+        });
+        assert_eq!(
+            conversation.asked_about().as_deref(),
+            Some(
+                "The chat's agent asks the human's permission for a tool call: Edit x.txt\n\n\
+                 Its change to x.txt:\n-old\n+new\n\n\nThe human chooses one of: Allow, Reject."
+            )
+        );
+        assert!(!conversation.gathering());
+
+        conversation.gather(vec!["summary".to_owned(), "tests".to_owned()]);
+        assert!(conversation.gathering());
+        conversation.gathered(
+            0,
+            Gathered::Said("## Only x.txt changes\n\nNothing else is touched.".to_owned()),
+        );
+        assert!(conversation.gathering());
+        conversation.gathered(
+            1,
+            Gathered::Printed(Ran {
+                output: "2 failed".to_owned(),
+                ended: Ended::Exited(1),
+            }),
+        );
+        // Each came, so the human is asked, the headlines first.
+        assert!(!conversation.gathering());
+        assert_eq!(conversation.headlines(), ["Only x.txt changes", "2 failed"]);
+        let Some(Entry::Permission { gathered, .. }) = conversation.entries().last() else {
+            panic!("{:?}", conversation.entries());
+        };
+        assert_eq!(gathered[0].state, CheckState::Passed);
+        assert_eq!(gathered[1].state, CheckState::Failed);
+        assert_eq!(
+            gathered[1].said.as_deref(),
+            Some("2 failed\n\n(exit code 1)")
+        );
+        assert_eq!(conversation.state(), State::Asking);
+        assert!(conversation.choose(0).is_some());
+    }
+
+    #[test]
+    fn asks_without_what_has_not_come_once_gathering_stops() {
+        let mut conversation = Conversation::new();
+        conversation.submit("permission");
+        conversation.apply(AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
+            title: Some("touch x.txt".to_owned()),
+            content: None,
+            options: vec!["Allow".to_owned()],
+        });
+        conversation.gather(vec!["slow".to_owned()]);
+        conversation.stop_gathering("It took too long.");
+
+        assert!(!conversation.gathering());
+        assert_eq!(conversation.headlines(), Vec::<&str>::new());
+        let Some(Entry::Permission { gathered, .. }) = conversation.entries().last() else {
+            panic!("{:?}", conversation.entries());
+        };
+        assert_eq!(gathered[0].state, CheckState::Broken);
+        assert_eq!(gathered[0].said.as_deref(), Some("It took too long."));
+        // What comes after is let be.
+        conversation.gathered(0, Gathered::Said("Late".to_owned()));
+        assert_eq!(conversation.headlines(), Vec::<&str>::new());
     }
 
     #[test]

@@ -59,6 +59,11 @@ pub enum Entry {
         /// not asked.
         #[serde(default)]
         by_setup: bool,
+        /// What the triggers that run as the agent asks gathered for the
+        /// human to answer with, each as it went: what it said, the first
+        /// line its headline.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        gathered: Vec<Check>,
     },
     /// A goal the agent proposed for the chat, for the human to set as it
     /// is, to change before they set it, or to let be.

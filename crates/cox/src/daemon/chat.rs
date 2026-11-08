@@ -23,7 +23,8 @@ use crate::agent::setup::Setup;
 use crate::agent::{Agent, AgentEvent, AgentThread, Command};
 use crate::agents::Agents;
 use crate::chat::conversation::{
-    self, Answer, Conversation, Does, Due, Entry, Goal, LoginOption, Patch, State, TerminalLogin,
+    self, Answer, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch, State,
+    TerminalLogin,
 };
 use crate::chat::judge::{Heard, Judge, Starts};
 use crate::daemon::Internal;
@@ -33,6 +34,11 @@ use cox_acp::{Login, StopReason};
 /// How long the name of the chat that opened a chat grows, in
 /// characters, in the note that says so.
 const OPENED_BY_LENGTH: usize = 40;
+
+/// How long the human waits on the triggers that gather what they need
+/// to answer a permission request, before they are asked without what
+/// has not come.
+const GATHER_FOR: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// A task that stops when this is dropped, unless it was let go on its
 /// own (see [`Task::detach`]).
@@ -124,6 +130,17 @@ pub struct Chat {
     askers: HashMap<PathBuf, (String, Judge)>,
     /// The trigger whose agent is asked now, if one is.
     asked: Option<PathBuf>,
+    /// The triggers that gather what the human needs to answer the
+    /// permission request the agent waits on, by their files, in the
+    /// order of their chips, each with whether it is waited on, and its
+    /// command while it runs. Dropping one lets go of its command.
+    gathering: Vec<(PathBuf, bool, Option<Task>)>,
+    /// The agents of the triggers `by: new` that gather, by their files,
+    /// each with what it was set up with, once one was asked.
+    gatherers: HashMap<PathBuf, (String, Judge)>,
+    /// What asks the human without what has not come, once the time is
+    /// up, while the triggers gather.
+    gather_until: Option<Task>,
     /// The agents the chat can talk to, and the id of the one it talks to.
     agents: Option<(Agents, String)>,
     internal: UnboundedSender<Internal>,
@@ -172,6 +189,9 @@ impl Chat {
             trees: HashMap::new(),
             askers: HashMap::new(),
             asked: None,
+            gathering: Vec::new(),
+            gatherers: HashMap::new(),
+            gather_until: None,
             agents,
             internal,
             watched: false,
@@ -534,6 +554,7 @@ impl Chat {
             }
         }
         let closed = matches!(event, AgentEvent::Closed(_));
+        let asks = matches!(event, AgentEvent::PermissionRequest { .. });
         let was_checking = self.conversation.state() == State::Checking;
         self.conversation.apply(event);
         if let Some(about) = self.conversation.take_plan_changed() {
@@ -545,12 +566,209 @@ impl Chat {
             self.judge = None;
             self.askers.clear();
             self.asked = None;
+            self.gatherers.clear();
+        }
+        self.settle_gathering();
+        if asks {
+            self.gather(in_sketch);
         }
         if !was_checking && self.conversation.state() == State::Checking {
             self.check_next();
         } else {
             self.after();
         }
+    }
+
+    /// Has the triggers of the chat's folder that run as the agent asks
+    /// the human's permission, in a sketch or not, as `in_sketch` says,
+    /// gather what the human needs to answer, all at once: their
+    /// commands run, and their agents are asked, until each said, or the
+    /// time is up.
+    fn gather(&mut self, in_sketch: bool) {
+        let (Some(about), Some(cwd)) = (
+            self.conversation.asked_about(),
+            self.running.as_ref().map(|running| running.cwd.clone()),
+        ) else {
+            return;
+        };
+        let due = self.due_on(&cwd, &On::PermissionAsked, in_sketch);
+        if due.is_empty() {
+            return;
+        }
+        self.conversation
+            .gather(due.iter().map(|due| due.name.clone()).collect());
+        self.gathering = due
+            .iter()
+            .map(|due| (due.file.clone(), true, None))
+            .collect();
+        for (at, due) in due.iter().enumerate() {
+            match &due.does {
+                Does::Run(command) => self.gather_by_running(at, command.clone()),
+                Does::Ask(text) => self.gather_by_asking(at, due, text, &cwd, &about),
+                Does::Tell(_) => self.conversation.gathered(
+                    at,
+                    Gathered::Broken(
+                        "A trigger by: this does not run as the agent asks: the agent waits \
+                         on the human."
+                            .to_owned(),
+                    ),
+                ),
+            }
+        }
+        let (key, generation) = (self.key, self.generation);
+        let internal = self.internal.clone();
+        self.gather_until = Some(spawn(async move {
+            tokio::time::sleep(GATHER_FOR).await;
+            let _ = internal.send(Internal::GatheredEnough { key, generation });
+        }));
+        self.settle_gathering();
+    }
+
+    /// Runs `command`, of the trigger at `at` of those that gather, in a
+    /// terminal on the stage, and takes what it printed once it ends.
+    fn gather_by_running(&mut self, at: usize, command: String) {
+        let Some((cwd, tools)) = self.tools() else {
+            self.conversation.gathered(
+                at,
+                Gathered::Broken("the chat has no terminal to run it in".to_owned()),
+            );
+            return;
+        };
+        let (answer, ran) = oneshot::channel();
+        let request = ToolRequest::RunCommand {
+            command,
+            cwd,
+            answer,
+            asks_human: false,
+        };
+        if tools.send(request).is_err() {
+            self.conversation.gathered(
+                at,
+                Gathered::Broken("the chat's terminals are gone".to_owned()),
+            );
+            return;
+        }
+        let (key, generation) = (self.key, self.generation);
+        let internal = self.internal.clone();
+        let file = self.gathering[at].0.clone();
+        self.gathering[at].2 = Some(spawn(async move {
+            let gathered = match ran.await {
+                Ok(Ok(ran)) => Gathered::Printed(ran),
+                Ok(Err(error)) => Gathered::Broken(error),
+                Err(_) => Gathered::Broken("its terminal went away".to_owned()),
+            };
+            let _ = internal.send(Internal::Gathered {
+                key,
+                generation,
+                file,
+                gathered,
+            });
+        }));
+    }
+
+    /// Asks the agent of the trigger `due`, at `at` of those that gather,
+    /// which gathers as `text` says,
+    /// of what the chat's agent asks, as `about` tells it, starting the
+    /// agent if the chat has none of it yet, or one set up otherwise.
+    fn gather_by_asking(&mut self, at: usize, due: &Due, text: &str, cwd: &Path, about: &str) {
+        let (allow, reject) = match self.due.get(&due.file) {
+            Some(Trigger {
+                by: By::New { allow, reject, .. },
+                ..
+            }) => (allow.clone(), reject.clone()),
+            _ => (Vec::new(), Vec::new()),
+        };
+        let set_up = format!("{text}\n{allow:?}\n{reject:?}");
+        if self
+            .gatherers
+            .get(&due.file)
+            .is_none_or(|(was, _)| *was != set_up)
+        {
+            let Some(starts) = &self.starts else {
+                self.conversation.gathered(
+                    at,
+                    Gathered::Broken("the chat has no agent to run it".to_owned()),
+                );
+                return;
+            };
+            let (key, generation) = (self.key, self.generation);
+            let internal = self.internal.clone();
+            let file = due.file.clone();
+            let gatherer = Judge::start_as(
+                starts,
+                cwd.to_owned(),
+                trigger::gathers(text, &allow, &reject),
+                move |heard| {
+                    let gathered = match heard {
+                        Heard::Judged(Ok(said)) => Gathered::Said(said),
+                        Heard::Judged(Err(error)) | Heard::Closed(error) => Gathered::Broken(error),
+                    };
+                    let _ = internal.send(Internal::Gathered {
+                        key,
+                        generation,
+                        file: file.clone(),
+                        gathered,
+                    });
+                },
+            );
+            self.gatherers.insert(due.file.clone(), (set_up, gatherer));
+        }
+        if let Some((_, gatherer)) = self.gatherers.get(&due.file) {
+            gatherer.put(trigger::asked_to_gather(about));
+        }
+    }
+
+    /// The trigger of `file` that gathers, for the agent of `generation`,
+    /// came back as `gathered` says.
+    pub fn heard_gathered(&mut self, generation: u64, file: &Path, gathered: Gathered) {
+        if generation != self.generation {
+            return;
+        }
+        if matches!(gathered, Gathered::Broken(_)) {
+            self.gatherers.remove(file);
+        }
+        let Some(at) = self
+            .gathering
+            .iter()
+            .position(|(gathers, waited, _)| *waited && gathers == file)
+        else {
+            return;
+        };
+        self.gathering[at].1 = false;
+        self.gathering[at].2 = None;
+        self.conversation.gathered(at, gathered);
+        self.settle_gathering();
+    }
+
+    /// The time the human waits on the triggers that gather, for the
+    /// agent of `generation`, is up: they are asked without what has not
+    /// come.
+    pub fn gathered_enough(&mut self, generation: u64) {
+        if generation != self.generation || self.gathering.is_empty() {
+            return;
+        }
+        self.conversation.stop_gathering(&format!(
+            "It took longer than {} seconds: the human was asked without it.",
+            GATHER_FOR.as_secs()
+        ));
+        self.settle_gathering();
+    }
+
+    /// Lets go of what gathers, once the conversation no longer waits on
+    /// it: each said, the time is up, or the request is no longer asked,
+    /// as when the human answered first.
+    fn settle_gathering(&mut self) {
+        if self.gathering.is_empty() || self.conversation.gathering() {
+            return;
+        }
+        self.conversation
+            .stop_gathering("Not waited for: the request was no longer asked.");
+        for (file, waited, _) in std::mem::take(&mut self.gathering) {
+            if waited && let Some((_, gatherer)) = self.gatherers.get(&file) {
+                gatherer.cancel();
+            }
+        }
+        self.gather_until = None;
     }
 
     /// Hands the conversation the triggers of the chat's folder due as
@@ -1003,6 +1221,7 @@ impl Chat {
         } else if let Some(command) = self.conversation.choose(index) {
             self.send(command);
         }
+        self.settle_gathering();
     }
 
     /// Logs in as `option` says: through the agent, or in a terminal on the
@@ -1077,6 +1296,7 @@ impl Chat {
             self.send(command);
         }
         self.let_checks_go(was_checking);
+        self.settle_gathering();
     }
 
     fn send(&mut self, command: Command) {

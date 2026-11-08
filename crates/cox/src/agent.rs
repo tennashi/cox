@@ -1207,6 +1207,7 @@ mod tests {
                 options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
                 chosen: Some(0),
                 by_setup: false,
+                gathered: Vec::new(),
             },
             Entry::Permission {
                 id: "call-2".to_owned(),
@@ -1215,6 +1216,7 @@ mod tests {
                 options: vec!["Allow once".to_owned(), "Reject once".to_owned()],
                 chosen: Some(1),
                 by_setup: true,
+                gathered: Vec::new(),
             },
             Entry::Reply("Done".to_owned()),
             Entry::Proposal {
