@@ -1436,7 +1436,11 @@ window's.
 coxd serves it on the Mac's own address alone, `127.0.0.1`, and the
 phone reaches it through [Tailscale](https://tailscale.com), as
 `tailscale serve --bg 7421` hands it to the human's tailnet, over HTTPS,
-with the tailnet's certificate. Since any page in a browser on the Mac
+with the tailnet's certificate: the tailnet has MagicDNS on, for the
+phone to find the Mac by its name, and HTTPS and Serve, which
+`tailscale serve` asks to turn on the first time, with a link to the
+admin console, while Funnel, which would hand the page to the whole
+internet, stays off. Since any page in a browser on the Mac
 reaches `127.0.0.1` too, the page answers only a phone that holds the
 secret coxd keeps in `state/phone-token` in Cox's data folder (see
 [The stage](#the-stage)), made the first time, which the phone gets by
