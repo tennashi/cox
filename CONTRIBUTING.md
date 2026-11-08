@@ -1500,10 +1500,25 @@ chat looked at on the phone counts as seen. What else the window does,
 as handing the chat a selection, opening a chat or a sketch, is the
 window's.
 
+A chat of a sketch lists the sketch's HTML pages under its
+conversation, "Try it", for the human to try a mock the agent made as
+it is, with a tap, which shows the page over the chat, in a frame, its
+scripts running, with ‹ back to the chat, ↻ and ↗, which opens it on
+its own. coxd serves the sketches' folders for it on the port after
+the page's, 7422 unless the page's is another, as
+`<port>/<the sketch's folder>/<path>`, a folder's `index.html` for the
+folder, and nothing hidden, as its `.git`, nor out of the folder: the
+mocks are another origin than Cox's page, so that a mock reads nothing
+of it and does nothing on it, and only Cox's page frames a mock. A mock
+is served, as the page is, only to the human's phone, since a sketch's
+folder can hold the project's code.
+
 coxd serves it on the Mac's own address alone, `127.0.0.1`, and the
 phone reaches it through [Tailscale](https://tailscale.com), as
 `tailscale serve --bg 7421` hands it to the human's tailnet, over HTTPS,
-with the tailnet's certificate, which coxd has it do as it starts,
+with the tailnet's certificate, and `tailscale serve --bg --https=7422
+7422` the sketches' mocks, at that port of the Mac's name, which coxd
+has it do as it starts,
 unless something else is served there, or `settings.json` says not, as
 `{"phone": {"tailscale": false}}`, or `tailscale` is not on its `PATH`
 nor in `/Applications/Tailscale.app`. The tailnet has MagicDNS on, for

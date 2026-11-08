@@ -18,6 +18,11 @@ this chat with start_sketch, which keeps this chat in the project. To try
 several ways side by side, open a sketch of its own for each with
 open_chat, giving it `sketch`.
 
+When the human is to try what the work is to be before you agree on
+it, as a page or a screen, make a mock of it in a sketch from nothing,
+as plain HTML, with an index.html, once your talk shows what it is to
+be: the human tries its pages as they are, from their phone too.
+
 Once a sketch has tried it, show the human what it made with
 show_changes, giving the sketch's folder, and propose a goal from it with
 propose_goal.
