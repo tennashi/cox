@@ -42,15 +42,17 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use cox_core::goal::Goal;
 use cox_core::list::List;
 use cox_core::store::{ChatId, Named, ProjectId};
 use cox_core::tabs::KeptTabs;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
+    AnyElement, App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Image,
     KeyBinding, MouseButton, MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString,
-    Stateful, Subscription, Task, Window, actions, anchored, deferred, div, prelude::*, px, rgb,
+    Stateful, Subscription, Task, Window, actions, anchored, deferred, div, img, prelude::*, px,
+    rgb,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -160,6 +162,9 @@ pub struct Project {
     /// The key of the chat of it shown last, which choosing the project
     /// shows again.
     last: Option<u64>,
+    /// The icon the human gave it, which the rail draws in place of a
+    /// folder (see [`crate::project_icon`]).
+    icon: Option<Arc<Image>>,
 }
 
 impl Project {
@@ -172,6 +177,12 @@ impl Project {
     #[must_use]
     pub fn folder(&self) -> &Path {
         &self.folder
+    }
+
+    /// Whether the human gave it an icon.
+    #[must_use]
+    pub const fn has_icon(&self) -> bool {
+        self.icon.is_some()
     }
 }
 
@@ -378,6 +389,9 @@ pub struct Workspace {
     /// The menu of the right button, where it opened in the window, for
     /// the chat at an index in the list.
     menu: Option<(Point<Pixels>, usize)>,
+    /// The menu of the right button on the rail, where it opened in the
+    /// window, for the project at an index among the projects.
+    project_menu: Option<(Point<Pixels>, usize)>,
     /// The chat at an index in the list being renamed, in an input.
     renaming: Option<(usize, Entity<LineInput>, Subscription)>,
     /// Whether `--home` gave the home, where Cox's own chats work, for this
@@ -461,6 +475,7 @@ impl Workspace {
                 name: COX.into(),
                 folder: home,
                 last: None,
+                icon: None,
             }],
             chats: List::new(),
             archived: Vec::new(),
@@ -470,6 +485,7 @@ impl Workspace {
             chosen: 0,
             badged: 0,
             menu: None,
+            project_menu: None,
             renaming: None,
             home_given,
             settings: None,
@@ -554,6 +570,12 @@ impl Workspace {
             archived,
         } = listing;
         let lasts: Vec<_> = self.projects.iter().map(|project| project.last).collect();
+        // The icons read already, read again only when they change.
+        let icons: HashMap<ProjectId, Option<Arc<Image>>> = self
+            .projects
+            .iter_mut()
+            .filter_map(|project| Some((project.id?, project.icon.take())))
+            .collect();
         self.projects = projects
             .into_iter()
             .enumerate()
@@ -562,8 +584,17 @@ impl Workspace {
                 name: row.name.into(),
                 folder: row.folder,
                 last: lasts.get(index).copied().flatten(),
+                icon: row.id.and_then(|id| {
+                    icons
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| crate::project_icon::read(id))
+                }),
             })
             .collect();
+        self.project_menu = self
+            .project_menu
+            .filter(|(_, index)| self.projects.get(*index).is_some_and(|p| p.id.is_some()));
         let shown = self.chats.shown_index();
         let shown_key = self.shown().map(Chat::key);
         let menu = self
@@ -1074,6 +1105,62 @@ impl Workspace {
     /// is none, and shows it.
     pub fn open(&mut self, folder: Option<PathBuf>, _: &mut Window, _: &mut Context<Self>) {
         self.tell(ToDaemon::Open { folder });
+    }
+
+    /// Asks the human for a picture, and makes it the icon of the project
+    /// at `index` (see [`crate::project_icon`]).
+    pub fn choose_icon(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.project_menu = None;
+        cx.notify();
+        let Some(id) = self.projects.get(index).and_then(|project| project.id) else {
+            return;
+        };
+        let chosen = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let from = match chosen.await {
+                Ok(Ok(Some(mut paths))) if !paths.is_empty() => paths.swap_remove(0),
+                Ok(Err(error)) => {
+                    tracing::error!("no picture chosen: {error:#}");
+                    return;
+                }
+                _ => return,
+            };
+            let set = cx
+                .background_spawn(async move { crate::project_icon::set(id, &from) })
+                .await;
+            if let Err(error) = set {
+                tracing::error!("the project's icon was not set: {error:#}");
+            }
+            this.update(cx, |workspace, cx| workspace.read_icon(id, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Takes away the icon of the project at `index`, which the rail then
+    /// draws as a folder.
+    pub fn remove_icon(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.project_menu = None;
+        let Some(id) = self.projects.get(index).and_then(|project| project.id) else {
+            return;
+        };
+        if let Err(error) = crate::project_icon::remove(id) {
+            tracing::error!("the project's icon was not removed: {error:#}");
+        }
+        self.read_icon(id, cx);
+    }
+
+    /// Reads again the icon of the project kept as `id`, as it is now.
+    fn read_icon(&mut self, id: ProjectId, cx: &mut Context<Self>) {
+        if let Some(project) = self.projects.iter_mut().find(|p| p.id == Some(id)) {
+            project.icon = crate::project_icon::read(id);
+        }
+        cx.notify();
     }
 
     /// Asks the human for a folder, and opens a chat in its project.
@@ -1592,10 +1679,10 @@ impl Workspace {
         )
     }
 
-    /// The button of the project at `index` on the rail: a folder in a
-    /// square, and its name under it, or Cox's icon alone for Cox's own,
-    /// with its folder where the mouse rests, after its name for Cox's
-    /// own.
+    /// The button of the project at `index` on the rail: its icon, or a
+    /// folder, in a square, and its name under it, or Cox's icon alone for
+    /// Cox's own, with its folder where the mouse rests, after its name
+    /// for Cox's own. The right button opens its menu, but on Cox's own.
     fn render_project(
         &self,
         index: usize,
@@ -1611,11 +1698,7 @@ impl Workspace {
         let waiting = chats
             .filter(|chat| chat.unread || chat.state == State::Asking)
             .count();
-        let (ground, edge, ink, label) = if chosen {
-            (ACCENT_GROUND, ACCENT, ACCENT, LINK)
-        } else {
-            (SURFACE, BORDER, FAINT, FAINT)
-        };
+        let label = if chosen { LINK } else { FAINT };
         let folder = shortened(&project.folder);
         let home = project.id.is_none();
         div()
@@ -1629,14 +1712,26 @@ impl Workspace {
             .items_center()
             .gap(px(5.))
             .cursor_pointer()
-            .tooltip(tip(if home {
-                format!("{} ({folder})", project.name)
-            } else {
-                folder
-            }))
+            // Not over its menu, while that is open.
+            .when(self.project_menu.is_none(), |button| {
+                button.tooltip(tip(if home {
+                    format!("{} ({folder})", project.name)
+                } else {
+                    folder
+                }))
+            })
             .on_click(cx.listener(move |workspace, _, window, cx| {
                 workspace.choose(index, window, cx);
             }))
+            .when(!home, |button| {
+                button.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |workspace, event: &MouseDownEvent, _, cx| {
+                        workspace.project_menu = Some((event.position, index));
+                        cx.notify();
+                    }),
+                )
+            })
             .when(chosen, |button| {
                 button.child(
                     div()
@@ -1656,19 +1751,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .map(|square| {
-                        if home {
-                            square.child(app_icon(PROJECT_SIZE))
-                        } else {
-                            square
-                                .rounded(px(PROJECT_RADIUS))
-                                .bg(rgb(ground))
-                                .border_1()
-                                .border_color(rgb(edge))
-                                .when(!chosen, |square| square.hover(|style| style.bg(rgb(HOVER))))
-                                .child(icon(Icon::Folder, 18., ink))
-                        }
-                    })
+                    .map(|square| project_square(square, project, home, chosen))
                     .when(waiting > 0, |square| {
                         square.child(waiting_badge(index, waiting, asking > 0))
                     }),
@@ -2107,6 +2190,36 @@ fn dot(chat: &Chat) -> Option<(u32, bool, &'static str)> {
     }
 }
 
+/// What the square of `project` on the rail shows: Cox's icon for Cox's
+/// own, the home's, or else the icon the human gave the project, filling
+/// the square inside its edge, or else a folder; the edge marks it
+/// chosen.
+fn project_square(square: Div, project: &Project, home: bool, chosen: bool) -> Div {
+    let (ground, edge, ink) = if chosen {
+        (ACCENT_GROUND, ACCENT, ACCENT)
+    } else {
+        (SURFACE, BORDER, FAINT)
+    };
+    if home {
+        return square.child(app_icon(PROJECT_SIZE));
+    }
+    let square = square
+        .rounded(px(PROJECT_RADIUS))
+        .border_1()
+        .border_color(rgb(edge));
+    match project.icon.clone() {
+        Some(picture) => square.child(
+            img(picture)
+                .size(px(PROJECT_SIZE - 2.))
+                .rounded(px(PROJECT_RADIUS - 1.)),
+        ),
+        None => square
+            .bg(rgb(ground))
+            .when(!chosen, |square| square.hover(|style| style.bg(rgb(HOVER))))
+            .child(icon(Icon::Folder, 18., ink)),
+    }
+}
+
 /// The count over the top right of the project's square, on the rail, at
 /// `index`: how many of its chats wait for the human or that they have
 /// not seen, in amber when one of them `asks`.
@@ -2248,6 +2361,29 @@ impl Workspace {
                 .child(button)
                 .children(rows),
         )
+    }
+
+    /// The menu of the right button on a project of the rail, if it is
+    /// open: to choose its icon, and to take it away.
+    fn render_project_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (at, index) = self.project_menu?;
+        let has_icon = self.projects.get(index)?.has_icon();
+        let item = |id: &'static str, label: &'static str| crate::ui::menu::item(id, label, "");
+        let menu = crate::ui::menu::menu()
+            .min_w(px(160.))
+            .on_mouse_down_out(cx.listener(|workspace, _, _, cx| {
+                workspace.project_menu = None;
+                cx.notify();
+            }))
+            .child(item("choose-icon", "Choose icon…").on_click(cx.listener(
+                move |workspace, _, window, cx| workspace.choose_icon(index, window, cx),
+            )))
+            .when(has_icon, |menu| {
+                menu.child(item("remove-icon", "Remove icon").on_click(
+                    cx.listener(move |workspace, _, _, cx| workspace.remove_icon(index, cx)),
+                ))
+            });
+        Some(deferred(anchored().position(at).child(menu)).with_priority(2))
     }
 
     /// The menu of the right button on a chat, if it is open.
@@ -2398,6 +2534,7 @@ impl Render for Workspace {
                     .child(chat),
             )
             .children(self.render_menu(cx))
+            .children(self.render_project_menu(cx))
             .children(self.render_settings(cx))
             .children(self.render_sheet(cx))
             .children(

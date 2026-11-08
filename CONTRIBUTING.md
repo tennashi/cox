@@ -38,15 +38,22 @@ build downloads the matching CEF distribution from the official builds
 
 `cox [--stage <url>] [--home <dir>] [--data <dir>] [<agent command>]` opens a window with
 no chat in it. The rail on the left of the window shows the projects,
-each as a folder with its name under it, and its folder's path where
-the mouse rests; the stage of the chat shown (see below) fills the
+each as a folder, or the icon the human gave it, with its name under
+it, and its folder's path where the mouse rests; the stage of the chat shown (see below) fills the
 middle of the window, and the chat itself, its conversation, is in a
 panel at the right. The head of the panel names the chat shown and
 counts the other chats of its project that wait for the human; a click
 on it opens a list of the chats of the project chosen on the rail, over
 the conversation, which a click on one shows. A click on a project
 chooses it, showing the chat of it shown last, or, with none, the stage
-of its folder alone, as Cox shows its own, the home's, as it opens. A project is a folder:
+of its folder alone, as Cox shows its own, the home's, as it opens. The
+right button on a project opens its menu: "Choose icon…" asks for a
+picture, as a PNG, a JPEG, a WebP or an SVG, which Cox crops to a
+square at its middle, or draws, for an SVG, and keeps, 256 pixels
+square, in `state/icons` in Cox's data folder (see
+[The stage](#the-stage)), named after the number the project is kept
+by, so that the project's folder stays as it is; "Remove icon" takes it
+away. A project is a folder:
 "Open folder…", the + at the foot of the rail (Command-O on macOS,
 Control-O elsewhere), opens a chat in the project of a folder of your
 choice, and "New chat" in the list opens another chat in the project
@@ -1288,8 +1295,9 @@ kind is kept apart
   `chats.sqlite`, the stage's profile, `stage`, when each schedule
   last ran, `schedules.json`, which triggers are off and their order,
   `triggers.json`, how each last ran, `trigger-runs.json`, what a chat
-  of each folder said last as its turn ended, `last-turns.json`, and the
-  pictures of the regions handed to the chats, `pictures`;
+  of each folder said last as its turn ended, `last-turns.json`, the
+  pictures of the regions handed to the chats, `pictures`, and the
+  icons the human gave the projects, `icons`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it
   downloads, in `agents`, and `translations`;
 - in `run`, what is there only while Cox runs: `coxd.sock` and

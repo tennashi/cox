@@ -31,6 +31,9 @@ cox-editor.workspace = true
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 # The version gpui uses, to hand it the browser's frames.
 image = "0.25.10"
+# Drawing an SVG the human chooses as a project's icon into a picture,
+# as gpui draws SVGs: see `src/project_icon.rs`.
+resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts"] }
 # Which files changed, of those a trigger's `changed` names: see
 # `src/trigger.rs`.
 globset = "0.4.20"
