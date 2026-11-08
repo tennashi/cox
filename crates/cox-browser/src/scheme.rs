@@ -2,8 +2,13 @@
 //! for a page of the stage to show what a tab drawn by Cox would, such
 //! as the map of the project, in HTML and JavaScript instead. The
 //! stage gives each browser it opens what to [`Serve`] at a `cox:`
-//! address; CEF asks it on its own thread for each request of a page,
-//! and [`Served`] hands the answer to CEF as a response. The scheme is
+//! address, which answers each request of a page on a thread of its own,
+//! and [`Served`] hands the answer to CEF as a response. CEF asks for the
+//! response on its IO thread, which carries what the browser says to
+//! every page, as the wheel's scrolling and the asks for pictures: so the
+//! answer is not made there, where an answer that takes a while, as
+//! what goes on in a folder with many pages of the wiki, would freeze the
+//! page the human scrolls. The scheme is
 //! registered as a standard, secure one that pages fetch from, so a
 //! page at one `cox:` address reads JSON from another, as
 //! `cox://map/` reads `cox://api/map`.
@@ -18,16 +23,17 @@
 )]
 
 use std::os::raw::c_int;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use cef::rc::Rc as _;
 use cef::sys::{cef_return_value_t, cef_scheme_options_t};
 use cef::{
-    Callback, CefString, ImplRequest, ImplResourceHandler, ImplResourceRequestHandler,
-    ImplResponse, ImplSchemeRegistrar, Request, ResourceHandler, ResourceReadCallback,
-    ResourceRequestHandler, Response, ReturnValue, SchemeRegistrar, WrapResourceHandler,
-    WrapResourceRequestHandler, wrap_resource_handler, wrap_resource_request_handler,
+    Callback, CefString, ImplCallback, ImplRequest, ImplResourceHandler,
+    ImplResourceRequestHandler, ImplResponse, ImplSchemeRegistrar, Request, ResourceHandler,
+    ResourceReadCallback, ResourceRequestHandler, Response, ReturnValue, SchemeRegistrar,
+    WrapResourceHandler, WrapResourceRequestHandler, wrap_resource_handler,
+    wrap_resource_request_handler,
 };
 
 pub use crate::links::percent_decoded;
@@ -47,7 +53,7 @@ pub struct Resource {
 }
 
 /// What a browser's pages get at `cox:` addresses: given the address,
-/// the resource there, or `None` for nothing there. CEF calls it on a
+/// the resource there, or `None` for nothing there. It is called on a
 /// thread of its own, for each request.
 pub type Serve = Arc<dyn Fn(&str) -> Option<Resource> + Send + Sync>;
 
@@ -128,33 +134,57 @@ wrap_resource_request_handler! {
             request: Option<&mut Request>,
         ) -> Option<ResourceHandler> {
             let url = CefString::from(&request?.url()).to_string();
-            let resource = (self.serve)(&url);
-            if resource.is_none() {
-                tracing::debug!("nothing is served at {url}");
-            }
-            Some(Served::new(resource.map(Arc::new), Arc::new(AtomicUsize::new(0))))
+            Some(Served::new(
+                self.serve.clone(),
+                Arc::from(url),
+                Arc::new(OnceLock::new()),
+                Arc::new(AtomicUsize::new(0)),
+            ))
         }
     }
 }
 
-// One response: the resource, or nothing there, read out as CEF asks for
-// it, from `read` bytes in.
+// One response to `url`: the resource, or nothing there, once `serve`
+// answered, read out as CEF asks for it, from `read` bytes in.
 wrap_resource_handler! {
     struct Served {
-        resource: Option<Arc<Resource>>,
+        serve: Serve,
+        url: Arc<str>,
+        answer: Arc<OnceLock<Option<Resource>>>,
         read: Arc<AtomicUsize>,
     }
 
     impl ResourceHandler {
-        /// The response is ready at once.
+        /// The response is ready once `serve` answered, on a thread of
+        /// its own, which tells CEF so.
         fn open(
             &self,
             _request: Option<&mut Request>,
             handle_request: Option<&mut c_int>,
-            _callback: Option<&mut Callback>,
+            callback: Option<&mut Callback>,
         ) -> c_int {
-            if let Some(handle_request) = handle_request {
+            let Some(handle_request) = handle_request else {
+                return 0;
+            };
+            let Some(callback) = callback.map(|callback| callback.clone()) else {
+                // CEF gives no way to say later: answered here.
+                answer(&self.serve, &self.url, &self.answer);
                 *handle_request = 1;
+                return 1;
+            };
+            *handle_request = 0;
+            let (serve, url, told) = (self.serve.clone(), self.url.clone(), self.answer.clone());
+            let serving = std::thread::Builder::new()
+                .name("cox-serve".to_owned())
+                .spawn(move || {
+                    answer(&serve, &url, &told);
+                    callback.cont();
+                });
+            if let Err(error) = serving {
+                tracing::error!("cannot answer {}: {error}", self.url);
+                // Cancelled at once.
+                *handle_request = 1;
+                return 0;
             }
             1
         }
@@ -166,7 +196,7 @@ wrap_resource_handler! {
             _redirect_url: Option<&mut CefString>,
         ) {
             let Some(response) = response else { return };
-            let Some(resource) = &self.resource else {
+            let Some(resource) = self.answer.get().and_then(Option::as_ref) else {
                 response.set_status(404);
                 response.set_mime_type(Some(&CefString::from("text/plain")));
                 if let Some(length) = response_length {
@@ -199,7 +229,7 @@ wrap_resource_handler! {
             bytes_read: Option<&mut c_int>,
             _callback: Option<&mut ResourceReadCallback>,
         ) -> c_int {
-            let copied = self.resource.as_ref().map_or(0, |resource| {
+            let copied = self.answer.get().and_then(Option::as_ref).map_or(0, |resource| {
                 let from = self.read.load(Ordering::Acquire);
                 let rest = &resource.body[from.min(resource.body.len())..];
                 let count = rest.len().min(usize::try_from(bytes_to_read).unwrap_or(0));
@@ -218,6 +248,15 @@ wrap_resource_handler! {
             c_int::from(copied > 0)
         }
     }
+}
+
+/// Has `serve` answer `url`, keeping the answer in `told`.
+fn answer(serve: &Serve, url: &str, told: &OnceLock<Option<Resource>>) {
+    let resource = serve(url);
+    if resource.is_none() {
+        tracing::debug!("nothing is served at {url}");
+    }
+    let _ = told.set(resource);
 }
 
 #[cfg(test)]
