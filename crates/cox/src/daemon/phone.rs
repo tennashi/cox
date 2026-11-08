@@ -1,6 +1,6 @@
-//! The page coxd serves the human's phone, for them to follow the chats
-//! away from the Mac: the projects and chats, and a chat's conversation,
-//! as they change.
+//! The page coxd serves the human's phone, for them to follow and answer
+//! the chats away from the Mac: the projects and chats, and a chat's
+//! conversation, as they change.
 //!
 //! coxd serves it only when `settings.json` names a port, as
 //! `{"phone": {"port": 7421}}`, and only on the Mac's own `127.0.0.1`:
@@ -17,6 +17,10 @@
 //! and chats whenever it changes, the [`FromDaemon::Patch`]es of the
 //! chat named by `?chat=<key>`, all of it first, and the
 //! [`FromDaemon::News`] of the chats that come to wait for the human.
+//! What the human does on it, as sending a line or answering what the
+//! agent asks, it posts to `/act`, a [`ToDaemon`] as JSON, as the window
+//! says it, which coxd does as the window's (see [`done_on_the_page`]
+//! for which).
 
 use std::cell::Cell;
 use std::convert::Infallible;
@@ -32,12 +36,12 @@ use bytes::Bytes;
 use http_body::Frame;
 use hyper::body::Incoming;
 use hyper::header::{self, HeaderValue};
-use hyper::{Request, Response, StatusCode};
+use hyper::{Method, Request, Response, StatusCode};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::Internal;
-use super::wire::FromDaemon;
+use super::wire::{FromDaemon, ToDaemon};
 use crate::storage::{self, Kept};
 
 /// The cookie that holds the secret, once the phone is paired.
@@ -227,9 +231,17 @@ pub async fn serve(listener: TcpListener, token: String, internal: UnboundedSend
         };
         let page = Rc::clone(&page);
         tokio::task::spawn_local(async move {
-            let service = hyper::service::service_fn(move |request| {
-                let answer = page.answer(&request);
-                async move { Ok::<_, Infallible>(answer) }
+            let service = hyper::service::service_fn(move |request: Request<Incoming>| {
+                let page = Rc::clone(&page);
+                async move {
+                    let answer =
+                        if request.method() == Method::POST && request.uri().path() == "/act" {
+                            page.act(request).await
+                        } else {
+                            page.answer(&request)
+                        };
+                    Ok::<_, Infallible>(answer)
+                }
             });
             if let Err(error) = hyper::server::conn::http1::Builder::new()
                 .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
@@ -283,6 +295,33 @@ impl Page {
                 "Not found",
             ),
         }
+    }
+
+    /// Does what the human did on the page, as `request` says it, a
+    /// [`ToDaemon`] as JSON, as the window would: only what the page
+    /// does, and only from the page itself.
+    async fn act(&self, request: Request<Incoming>) -> Response<Body> {
+        const TEXT: &str = "text/plain; charset=utf-8";
+        if !self.paired(&request) {
+            return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
+        }
+        if !from_the_page(&request) {
+            return answer(StatusCode::FORBIDDEN, TEXT, "Not from the page");
+        }
+        let body = http_body_util::Limited::new(request.into_body(), MOST);
+        let Ok(body) = http_body_util::BodyExt::collect(body).await else {
+            return answer(StatusCode::PAYLOAD_TOO_LARGE, TEXT, "Too long");
+        };
+        let Ok(message) = serde_json::from_slice::<ToDaemon>(&body.to_bytes()) else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "Not understood");
+        };
+        if !done_on_the_page(&message) {
+            return answer(StatusCode::FORBIDDEN, TEXT, "Not done from the phone");
+        }
+        if self.internal.send(Internal::Act { message }).is_err() {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        }
+        answer(StatusCode::NO_CONTENT, TEXT, "")
     }
 
     /// Pairs the phone that opened `/pair/<token>`, when it is the secret.
@@ -352,6 +391,47 @@ impl Page {
         );
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         response
+    }
+}
+
+/// How long what the page does may be, as a line sent, at most.
+const MOST: usize = 256 * 1024;
+
+/// Whether `request` comes from the page itself, and not from another
+/// page that the phone's browser, or the Mac's, has open: the page says
+/// so in a header of its own, which another page could send only after
+/// asking, as browsers have it, and which nothing here answers; and
+/// where the browser says which page it comes from, it is this one.
+fn from_the_page(request: &Request<Incoming>) -> bool {
+    let headers = request.headers();
+    let said = headers.get("x-cox").is_some_and(|said| said == "phone");
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|origin| origin.to_str().ok());
+    let host = headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok());
+    let same_origin = match origin {
+        None => true,
+        Some(origin) => origin
+            .split_once("://")
+            .is_some_and(|(_, at)| Some(at) == host),
+    };
+    said && same_origin
+}
+
+/// Whether the phone may do `message`: what its page does, and nothing
+/// of the window's own, as what the stage carried out.
+fn done_on_the_page(message: &ToDaemon) -> bool {
+    match message {
+        ToDaemon::Submit { attached, .. } => attached.is_empty(),
+        ToDaemon::Choose { .. }
+        | ToDaemon::Stop { .. }
+        | ToDaemon::SetGoal { .. }
+        | ToDaemon::AnswerProposal { .. }
+        | ToDaemon::ChangeProposal { .. }
+        | ToDaemon::AnswerKeep { .. } => true,
+        _ => false,
     }
 }
 
@@ -571,6 +651,26 @@ mod tests {
                     matches!(heard.recv().await, Some(Internal::Unview { id: gone }) if gone == id),
                     "the phone that went is not said to have gone"
                 );
+
+                let line = r#"{"Submit":{"key":7,"text":"go on"}}"#;
+                let posted = |headers: &str| {
+                    format!(
+                        "POST /act HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n{headers}\
+                         Content-Type: application/json\r\nContent-Length: {}\r\n\
+                         Connection: close\r\n\r\n{line}",
+                        line.len()
+                    )
+                };
+                let elsewhere = ask(port, &posted("Origin: https://evil\r\nX-Cox: phone\r\n"), "").await;
+                assert!(elsewhere.starts_with("HTTP/1.1 403"), "{elsewhere}");
+                let unsaid = ask(port, &posted(""), "").await;
+                assert!(unsaid.starts_with("HTTP/1.1 403"), "{unsaid}");
+                let done = ask(port, &posted("Origin: http://x\r\nX-Cox: phone\r\n"), "").await;
+                assert!(done.starts_with("HTTP/1.1 204"), "{done}");
+                assert!(matches!(
+                    heard.recv().await,
+                    Some(Internal::Act { message: ToDaemon::Submit { key: 7, ref text, .. } }) if text == "go on"
+                ));
             });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
@@ -588,6 +688,30 @@ mod tests {
         );
         assert_eq!(pasted(&format!("link={secret}+")), secret);
         assert_eq!(pasted("link=short"), "short");
+    }
+
+    #[test]
+    fn does_only_what_the_page_does() {
+        let line = |attached: Vec<cox_core::entry::Attachment>| ToDaemon::Submit {
+            key: 1,
+            text: "go on".to_owned(),
+            attached,
+        };
+        assert!(done_on_the_page(&line(Vec::new())));
+        assert!(done_on_the_page(&ToDaemon::Choose { key: 1, index: 0 }));
+        assert!(done_on_the_page(&ToDaemon::Stop { key: 1 }));
+        assert!(!done_on_the_page(&ToDaemon::Open { folder: None }));
+        assert!(!done_on_the_page(&ToDaemon::Archive {
+            key: 1,
+            archived: true
+        }));
+        let picture = cox_core::entry::Attachment {
+            label: "region".to_owned(),
+            uri: "cox://region".to_owned(),
+            text: String::new(),
+            picture: Some("/etc/passwd".into()),
+        };
+        assert!(!done_on_the_page(&line(vec![picture])));
     }
 
     #[test]

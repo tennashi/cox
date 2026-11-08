@@ -76,7 +76,8 @@ button { font: inherit; color: inherit; }
 }
 
 main {
-  padding: 8px max(14px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 24px) max(14px, env(safe-area-inset-left));
+  min-height: calc(100vh - 140px);
+  padding: 8px max(14px, env(safe-area-inset-right)) 24px max(14px, env(safe-area-inset-left));
 }
 
 .dot {
@@ -318,3 +319,87 @@ details[open] .last-thought { display: none; }
   color: var(--ground);
   font-weight: 600;
 }
+
+/* What the human does from the phone */
+
+#goal-button {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--soft);
+  font-size: 18px;
+}
+
+#bottom {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--ground);
+  padding: 0 max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
+}
+#compose, #goal-form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 10px 0 calc(env(safe-area-inset-bottom) + 10px);
+  border-top: 1px solid var(--raised);
+}
+#goal-form { flex-direction: column; align-items: stretch; gap: 6px; padding-bottom: 10px; }
+#goal-form label { font-size: 12px; color: var(--faint); }
+#line, #goal-line {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 160px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.35;
+  resize: none;
+}
+#send, #stop {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#send { background: var(--accent); color: var(--ground); }
+#stop { background: var(--raised); color: var(--text); }
+#send:disabled, #stop:disabled { opacity: 0.5; }
+#failed { margin: 8px 0 0; font-size: 12.5px; color: var(--red); }
+#held { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
+
+.options button {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.options li:has(button) { padding: 0; }
+.options li button { padding: 12px; }
+.options button:disabled { opacity: 0.6; }
+.answers { display: flex; gap: 8px; margin: 10px 0 0; }
+.answers button {
+  flex: 1;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+}
+.answers button.first { background: var(--amber); border-color: var(--amber); color: #1a1408; font-weight: 600; }
+.answers button:disabled { opacity: 0.6; }

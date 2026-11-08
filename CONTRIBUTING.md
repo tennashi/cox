@@ -1418,8 +1418,15 @@ list has them, those that wait for the human first, under "Waits for
 you"; and a chat's conversation, as it goes on, the agent's tool calls
 and thoughts folded under a line of their chips, as the window folds
 them, which a tap opens, and the plan, what the agent asks, and what
-ran as a turn ended, in sight. The page only reads, for now: the human
-answers on the Mac.
+ran as a turn ended, in sight. From there the human sends a line, as
+in the window, which waits while the agent is at work; answers what the
+agent asks, a tap on an option; sets or dismisses a goal the agent
+proposes, and says whether to keep what was learned in the wiki; stops
+a turn; and sets the chat's goal, with ◎ at the page's head, as "Set
+goal…" takes it, `$ ` and a command, or words, emptied to clear it. A
+chat looked at on the phone counts as seen. What else the window does,
+as handing the chat a selection, opening a chat or a sketch, is the
+window's.
 
 coxd serves it on the Mac's own address alone, `127.0.0.1`, and the
 phone reaches it through [Tailscale](https://tailscale.com), as

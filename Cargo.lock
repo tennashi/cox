@@ -1554,6 +1554,7 @@ dependencies = [
  "globset",
  "gpui",
  "http-body",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "image",

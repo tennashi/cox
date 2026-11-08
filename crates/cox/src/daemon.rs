@@ -164,6 +164,9 @@ pub enum Internal {
     ViewChat { id: u64, key: Option<u64> },
     /// The phone of the connection `id` went.
     Unview { id: u64 },
+    /// The human did `message` on their phone, as they would in the
+    /// window (see [`phone`]).
+    Act { message: ToDaemon },
     /// The daemon is to stop, with its chats' agents.
     Quit,
     /// It is time to look which of the triggers on a schedule are due,
@@ -1381,7 +1384,14 @@ impl Daemon {
                 }
             }
             Internal::View { id, phone } => self.view(id, phone),
-            Internal::ViewChat { id, key } => self.view_chat(id, key),
+            Internal::ViewChat { id, key } => {
+                // The human looks at the chat, on their phone.
+                if let Some(slot) = key.and_then(|key| self.slot_mut(key)) {
+                    slot.unread = false;
+                }
+                self.view_chat(id, key);
+            }
+            Internal::Act { message } => self.act(message),
             Internal::Unview { id } => {
                 if self.viewers.remove(&id).is_some() {
                     tracing::info!(phone = id, "a phone went");
