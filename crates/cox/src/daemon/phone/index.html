@@ -22,9 +22,27 @@
     <span id="over"></span>
     <h1 id="title">Cox</h1>
   </div>
+  <button id="goal-button" type="button" aria-label="Set the chat's goal" hidden>◎</button>
   <span id="dot" class="dot" hidden></span>
 </header>
 <p id="lost" hidden>Cox cannot be reached. Trying again…</p>
 <main id="main"></main>
+<footer id="bottom">
+  <form id="goal-form" hidden>
+    <label for="goal-line">Goal: <code>$ </code> and a command, or words. Empty clears it.</label>
+    <input id="goal-line" autocomplete="off" enterkeyhint="done" placeholder="$ cargo xtask ci">
+  </form>
+  <p id="failed" hidden></p>
+  <p id="held" hidden></p>
+  <form id="compose" hidden>
+    <textarea id="line" rows="1" aria-label="A line to the agent"></textarea>
+    <button id="stop" type="button" aria-label="Stop the turn" hidden>
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect width="14" height="14" rx="3" fill="currentColor"></rect></svg>
+    </button>
+    <button id="send" type="submit" aria-label="Send">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>
+    </button>
+  </form>
+</footer>
 </body>
 </html>

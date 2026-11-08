@@ -5,6 +5,20 @@
 "use strict";
 
 const main = document.getElementById("main");
+const compose = {
+  form: document.getElementById("compose"),
+  line: document.getElementById("line"),
+  send: document.getElementById("send"),
+  stop: document.getElementById("stop"),
+  goal: document.getElementById("goal-form"),
+  goalLine: document.getElementById("goal-line"),
+  goalButton: document.getElementById("goal-button"),
+  failed: document.getElementById("failed"),
+  held: document.getElementById("held"),
+};
+// The line the human sent while the agent was at work, which goes once
+// the turn ends, as the window's does.
+let held = null;
 const head = {
   back: document.getElementById("back"),
   over: document.getElementById("over"),
@@ -34,6 +48,25 @@ function el(tag, props, ...children) {
     node.append(typeof child === "string" ? document.createTextNode(child) : child);
   }
   return node;
+}
+
+// Does `message` in coxd, as the window would: a ToDaemon, as serde
+// writes it. Says so under the input when coxd would not.
+async function act(message) {
+  compose.failed.hidden = true;
+  try {
+    const answer = await fetch("/act", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Cox": "phone" },
+      body: JSON.stringify(message),
+    });
+    if (!answer.ok) throw new Error(await answer.text());
+    return true;
+  } catch (error) {
+    compose.failed.textContent = `Not done: ${error.message}`;
+    compose.failed.hidden = false;
+    return false;
+  }
 }
 
 // The chat the address names, as `#chat/12`.
@@ -70,6 +103,7 @@ function hear(told) {
     chat.title = patch.title;
     chat.goal = patch.goal;
     chat.came = true;
+    if (held !== null && takesLines(chat.state)) sendHeld();
   } else {
     return;
   }
@@ -96,7 +130,10 @@ function standing(row) {
   return { dot: "", words: "idle" };
 }
 
+// A goal as the input that sets it reads it: the chat's, as the list
+// has it, or as its conversation has it, with the turns it took.
 function goalText(goal) {
+  if (goal && goal.what) goal = goal.what;
   if (!goal) return null;
   if (goal.Command !== undefined) return `$ ${goal.Command}`;
   return goal.Words;
@@ -121,6 +158,9 @@ function chatRow(row, child) {
 }
 
 function drawHome() {
+  compose.form.hidden = true;
+  compose.goal.hidden = true;
+  compose.goalButton.hidden = true;
   head.back.hidden = true;
   head.over.textContent = "";
   head.title.textContent = "Cox";
@@ -163,6 +203,9 @@ function drawChat() {
     head.over.textContent = "";
     head.title.textContent = listing ? "No such chat" : "Cox";
   }
+  compose.form.hidden = !row;
+  compose.goalButton.hidden = !row;
+  if (row) drawCompose(row);
   if (listing && !row) {
     main.replaceChildren(el("p", { class: "empty" }, "This chat is not there any more. ",
       el("a", { href: "#" }, "Back to the chats")));
@@ -181,6 +224,22 @@ function drawChat() {
   }
   main.replaceChildren(...nodes);
   if (atEnd) window.scrollTo(0, document.body.scrollHeight);
+}
+
+function working(state) {
+  return state === "Busy" || state === "Checking" || state === "Stopping";
+}
+
+// The input under the conversation: the line to send, or Stop while the
+// agent is at work.
+function drawCompose(row) {
+  const state = chat.state || row.state;
+  const busy = working(state);
+  compose.stop.hidden = !busy;
+  compose.stop.disabled = state === "Stopping";
+  compose.line.placeholder = state === "Asking" ? "Answer above first…"
+    : busy ? "Waits for this turn to end…"
+      : row.open || row.again ? "A line to the agent…" : "This chat cannot start again";
 }
 
 function titleCase(word) {
@@ -247,14 +306,18 @@ function conversation(entries, agent) {
         break;
       case "proposal":
         speak(agent, "agent");
-        nodes.push(proposal(value));
+        nodes.push(proposal(value, at));
         break;
       case "keep":
         speak("COX", "cox");
-        nodes.push(el("div", { class: "entry card" },
+        nodes.push(el("div", { class: `entry card ${value.kept === null || value.kept === undefined ? "asks" : ""}` },
           el("div", { class: "label" }, "Keep in the wiki?"),
           el("div", { class: "why" }, value.why),
-          value.kept === null || value.kept === undefined ? null
+          value.kept === null || value.kept === undefined
+            ? buttons([
+              ["Save to wiki", { AnswerKeep: { key: chat.key, index: at, keep: true } }, true],
+              ["Not now", { AnswerKeep: { key: chat.key, index: at, keep: false } }],
+            ])
             : el("p", { class: "hint" }, value.kept ? "You saved it." : "Not now.")));
         break;
       case "checks":
@@ -362,19 +425,48 @@ function permission(asked, last) {
       let how = null;
       if (asks && index === 0) how = "first";
       else if (asked.chosen === index) how = "chosen";
-      return el("li", { class: how }, `${index + 1} · ${option}`);
+      const label = `${index + 1} · ${option}`;
+      if (!asks) return el("li", { class: how }, label);
+      return el("li", { class: how }, el("button", { onclick: (event) => choose(event, index) }, label));
     })),
-    asks ? el("p", { class: "hint" }, "Answer on the Mac for now.") : null,
     asked.by_setup ? el("p", { class: "hint" }, "Cox answered in your place, as the chat is set up.") : null);
 }
 
-function proposal(proposed) {
+// Answers what the agent asks with the option at `index`, once.
+function choose(event, index) {
+  for (const button of event.target.closest(".options").querySelectorAll("button")) button.disabled = true;
+  act({ Choose: { key: chat.key, index } }).then((done) => {
+    if (!done) for (const button of event.target.closest(".options").querySelectorAll("button")) button.disabled = false;
+  });
+}
+
+// Buttons that each do a message once, all of them off while it goes.
+function buttons(list) {
+  const row = el("div", { class: "answers" });
+  for (const [label, message, first] of list) {
+    row.append(el("button", {
+      class: first ? "first" : null,
+      onclick: () => {
+        for (const button of row.querySelectorAll("button")) button.disabled = true;
+        act(message).then((done) => {
+          if (!done) for (const button of row.querySelectorAll("button")) button.disabled = false;
+        });
+      },
+    }, label));
+  }
+  return row;
+}
+
+function proposal(proposed, index) {
   const answers = { set: "You set it.", changed: "You changed it, then set it.", dismissed: "You let it be." };
-  return el("div", { class: "entry card" },
+  return el("div", { class: `entry card ${proposed.answer ? "" : "asks"}` },
     el("div", { class: "label" }, "Proposes a goal"),
     el("div", { class: "what" }, proposed.goal),
     proposed.why ? el("div", { class: "why" }, proposed.why) : null,
-    el("p", { class: "hint" }, proposed.answer ? answers[proposed.answer] : "Waits for you to set it, on the Mac."));
+    proposed.answer ? el("p", { class: "hint" }, answers[proposed.answer]) : buttons([
+      ["Set goal", { AnswerProposal: { key: chat.key, index, answer: "set" } }, true],
+      ["Dismiss", { AnswerProposal: { key: chat.key, index, answer: "dismissed" } }],
+    ]));
 }
 
 function checks(title, list) {
@@ -460,12 +552,75 @@ function inline(text) {
   return nodes;
 }
 
+// The goal as the input that sets it reads it: `$ ` and a command, or
+// words, or nothing to clear it.
+function goalOf(text) {
+  const line = text.trim();
+  if (!line) return null;
+  if (line.startsWith("$ ")) return { Command: line.slice(2).trim() };
+  return { Words: line };
+}
+
+// Whether the chat takes a line now, rather than once its turn ends.
+function takesLines(state) {
+  return state === "Idle" || state === "Closed";
+}
+
+function hold(text) {
+  held = text;
+  compose.held.hidden = held === null;
+  compose.held.textContent = held === null ? "" : `Goes once this turn ends: ${shorten(held, 80)}`;
+}
+
+async function sendHeld() {
+  const text = held;
+  hold(null);
+  if (!(await act({ Submit: { key: chat.key, text } }))) compose.line.value = text;
+}
+
+compose.form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = compose.line.value.trim();
+  if (!text || !chat) return;
+  compose.line.value = "";
+  grow();
+  hold(text);
+  if (takesLines(chat.state)) await sendHeld();
+});
+compose.stop.addEventListener("click", () => {
+  if (chat) act({ Stop: { key: chat.key } });
+});
+compose.goalButton.addEventListener("click", () => {
+  if (!chat) return;
+  compose.goal.hidden = !compose.goal.hidden;
+  if (!compose.goal.hidden) {
+    compose.goalLine.value = goalText(chat.goal) || "";
+    compose.goalLine.focus();
+  }
+});
+compose.goal.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (chat && await act({ SetGoal: { key: chat.key, goal: goalOf(compose.goalLine.value) } })) {
+    compose.goal.hidden = true;
+  }
+});
+// The line grows with what is written in it, up to a few lines.
+function grow() {
+  compose.line.style.height = "auto";
+  compose.line.style.height = `${Math.min(compose.line.scrollHeight, 160)}px`;
+}
+compose.line.addEventListener("input", grow);
+
 head.back.addEventListener("click", (event) => {
   event.preventDefault();
   location.hash = "";
 });
 window.addEventListener("hashchange", () => {
   opened.clear();
+  compose.line.value = "";
+  hold(null);
+  compose.goal.hidden = true;
+  compose.failed.hidden = true;
   connect();
   window.scrollTo(0, 0);
 });
