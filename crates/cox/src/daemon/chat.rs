@@ -536,6 +536,9 @@ impl Chat {
         let closed = matches!(event, AgentEvent::Closed(_));
         let was_checking = self.conversation.state() == State::Checking;
         self.conversation.apply(event);
+        if let Some(about) = self.conversation.take_plan_changed() {
+            self.fire(&On::PlanChanged, about, in_sketch);
+        }
         if closed {
             self.running = None;
             self.check = None;
@@ -1094,9 +1097,13 @@ impl Chat {
     pub fn flush(&mut self) -> Option<Patch> {
         let changed = self.conversation.take_changed();
         let settings_changed = self.conversation.take_settings_changed();
+        let baseline_changed = self.conversation.take_baseline_changed();
         if let Some(record) = &self.record {
             if settings_changed && let Err(error) = record.settings(self.conversation.settings()) {
                 tracing::error!("the chat's settings are not kept: {error:#}");
+            }
+            if baseline_changed && let Err(error) = record.baseline(self.conversation.baseline()) {
+                tracing::error!("the chat's plan is not kept: {error:#}");
             }
             for &index in &changed {
                 if let Err(error) = record.entry(index, &self.conversation.entries()[index]) {

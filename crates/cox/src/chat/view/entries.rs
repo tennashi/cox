@@ -67,6 +67,7 @@ fn event_label(on: &str) -> &'static str {
         "wiki.written" => "WIKI WRITTEN",
         "sketch.end" => "SKETCH ENDED",
         "chat.open" => "CHAT OPENED",
+        "plan.changed" => "PLAN CHANGED",
         _ => "TRIGGERS",
     }
 }
@@ -643,6 +644,7 @@ impl ChatView {
             .into_any_element()
     }
 
+    #[expect(clippy::too_many_lines, reason = "one arm for each kind of entry")]
     fn render_entry(&self, index: usize, entry: &Entry, cx: &mut Context<Self>) -> AnyElement {
         let mut writer = self.reading.writer(index);
         match entry {
@@ -696,6 +698,9 @@ impl ChatView {
             }
             Entry::Thought(text) => self.render_thought(index, text, &mut writer, cx),
             Entry::Plan(steps) => self.render_plan_entry(index, steps, cx),
+            Entry::PlanChanged { added, removed } => {
+                render_drift(index, added, removed, &mut writer)
+            }
             Entry::Proposal { goal, why, answer } => {
                 render_proposal(index, goal, why.as_deref(), *answer, &mut writer, cx)
             }
@@ -855,6 +860,47 @@ impl ChatView {
             .when(open, |plan| plan.child(render_steps(steps).pl(px(INDENT))))
             .into_any_element()
     }
+}
+
+/// How the plan differs from the one the human left the agent to: each
+/// step `added`, in amber, as what the agent decided on its own, and each
+/// it `removed`, dimmer.
+fn render_drift(
+    index: usize,
+    added: &[String],
+    removed: &[String],
+    writer: &mut Writer,
+) -> AnyElement {
+    let step = |mark: &'static str, color: u32, text: &str, writer: &mut Writer| {
+        div()
+            .flex()
+            .gap_2()
+            .text_size(px(13.))
+            .text_color(rgb(color))
+            .child(div().flex_shrink_0().w(px(10.)).child(mark))
+            .child(div().flex_1().min_w_0().child(writer.plain(text, "\n")))
+    };
+    let mut steps: Vec<gpui::Div> = added
+        .iter()
+        .map(|text| step("+", ASKING, text, writer))
+        .collect();
+    steps.extend(removed.iter().map(|text| step("−", DIM, text, writer)));
+    if steps.is_empty() {
+        steps.push(step(
+            "=",
+            DIM,
+            "The plan is back to the one the line started with.",
+            writer,
+        ));
+    }
+    div()
+        .debug_selector(move || format!("plan-changed-{index}"))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(label().child("PLAN CHANGED"))
+        .children(steps)
+        .into_any_element()
 }
 
 /// The colors of a card that waits for the human to answer: in amber

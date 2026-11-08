@@ -169,6 +169,24 @@ const GOAL_MET: &str = "The goal is met.";
 /// The event of the goal being met, as a trigger's `on` names it.
 const GOAL_MET_EVENT: &str = "goal.met";
 
+/// The texts of `steps`.
+fn texts(steps: &[Step]) -> Vec<String> {
+    steps.iter().map(|step| step.text.clone()).collect()
+}
+
+/// The steps `added` to the plan and `removed` from it, a line each.
+fn changed_steps(added: &[String], removed: &[String]) -> String {
+    let lines: Vec<String> = added
+        .iter()
+        .map(|step| format!("+ {step}"))
+        .chain(removed.iter().map(|step| format!("- {step}")))
+        .collect();
+    if lines.is_empty() {
+        return "The plan is back to the one the line started with.".to_owned();
+    }
+    lines.join("\n")
+}
+
 /// How `goal` reads, after "Goal:".
 #[must_use]
 pub fn line(goal: &goal::Goal) -> String {
@@ -198,6 +216,30 @@ pub struct Patch {
     /// daemon of before it was said, it does not.
     #[serde(default)]
     pub steers: bool,
+}
+
+/// How the agent's plan stands against the one the human left it to: the
+/// first it sent after the human's last line.
+#[derive(Debug, Default)]
+struct Drift {
+    /// The steps of the plan the agent first sent after the human's last
+    /// line, which they left it to, once it sent one: the plan is told
+    /// against it as it changes.
+    baseline: Option<Vec<String>>,
+    /// Whether the next plan the agent sends is the baseline, as the
+    /// first after a line of the human's.
+    rebase: bool,
+    /// Whether the baseline changed since it was last taken, to keep.
+    unkept: bool,
+    /// Where the entries told against the baseline start: it changed
+    /// there.
+    from: usize,
+    /// What the plan's change since the baseline tells the triggers that
+    /// run on it, once the agent changed a step, until they are fired.
+    fired: Option<String>,
+    /// How many times the agent changed a step of the plan since the
+    /// baseline, for the human to be told each.
+    changes: usize,
 }
 
 /// The conversation the window shows.
@@ -234,6 +276,8 @@ pub struct Conversation {
     /// side has not taken yet: a turn that ends meanwhile is not the end
     /// of the human's line, as the agent goes on with them.
     steering: usize,
+    /// How the agent's plan stands against the one the human left it to.
+    drift: Drift,
     /// The triggers due as the turn that runs ends, as the host said.
     due: Vec<Due>,
     /// What runs now, as the turn ended, while something does.
@@ -299,6 +343,7 @@ impl Conversation {
             keeps: true,
             steers: false,
             steering: 0,
+            drift: Drift::default(),
             due: Vec::new(),
             at: None,
             rest: VecDeque::new(),
@@ -346,6 +391,7 @@ impl Conversation {
             keeps: true,
             steers: false,
             steering: 0,
+            drift: Drift::default(),
             due: Vec::new(),
             at: None,
             rest: VecDeque::new(),
@@ -365,6 +411,15 @@ impl Conversation {
     #[must_use]
     pub fn with_goal(mut self, goal: Option<goal::Goal>) -> Self {
         self.goal = goal.map(Goal::new);
+        self
+    }
+
+    /// The conversation, of a chat whose agent's plan started the human's
+    /// last line as `baseline` says, as it was kept.
+    #[must_use]
+    pub fn with_baseline(mut self, baseline: Option<Vec<String>>) -> Self {
+        self.drift.baseline = baseline;
+        self.drift.from = self.entries.len();
         self
     }
 
@@ -593,6 +648,9 @@ impl Conversation {
             Some(command) => command,
             None => self.start_turn(input, Entry::Human)?,
         };
+        // The human leaves the agent to the line from here: the first
+        // plan it sends after is the one its plan is told against.
+        self.drift.rebase = true;
         if !attached.is_empty() {
             self.push(Entry::Attached(attached.clone()));
         }
@@ -1313,7 +1371,110 @@ impl Conversation {
         *chosen = Some(index);
         self.changed.insert(self.entries.len() - 1);
         self.state = State::Busy;
+        // The human answered as the plan stands: it is the one the plan
+        // is told against from here.
+        let planned = self.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Plan(steps) => Some(texts(steps)),
+            _ => None,
+        });
+        match planned {
+            Some(steps) => self.set_baseline(steps),
+            None => self.drift.rebase = true,
+        }
         Some(Command::Answer(PermissionAnswer::Select(index)))
+    }
+
+    /// Takes `steps` as the baseline, the plan told against from here.
+    fn set_baseline(&mut self, steps: Vec<String>) {
+        self.drift.rebase = false;
+        self.drift.from = self.entries.len();
+        if self.drift.baseline.as_ref() != Some(&steps) {
+            self.drift.baseline = Some(steps);
+            self.drift.unkept = true;
+        }
+    }
+
+    /// The steps of the plan the agent first sent after the human's last
+    /// line, once it sent one.
+    #[must_use]
+    pub fn baseline(&self) -> Option<&[String]> {
+        self.drift.baseline.as_deref()
+    }
+
+    /// Whether the baseline changed since this was last called, to keep.
+    pub fn take_baseline_changed(&mut self) -> bool {
+        std::mem::take(&mut self.drift.unkept)
+    }
+
+    /// What the plan's change since the baseline tells the triggers that
+    /// run on it, once the agent changed a step of it, if it did since
+    /// this was last called.
+    pub fn take_plan_changed(&mut self) -> Option<String> {
+        self.drift.fired.take()
+    }
+
+    /// How many times the agent changed a step of the plan since the
+    /// baseline, as the human is told each time, and what the last time
+    /// says, as the news of it.
+    #[must_use]
+    pub fn plan_changes(&self) -> (usize, Option<String>) {
+        let last = self.entries.iter().rev().find_map(|entry| match entry {
+            Entry::PlanChanged { added, removed } => Some(changed_steps(added, removed)),
+            _ => None,
+        });
+        (self.drift.changes, last)
+    }
+
+    /// Tells the steps of the plan the agent sent, `steps`, against the
+    /// baseline, or takes them as the baseline, as the first after a
+    /// line of the human's: a step added, removed or changed shows how
+    /// the plan stands against it, and is fired for the triggers that run
+    /// on it. A step that only went further changes nothing.
+    fn follow_plan(&mut self, steps: Vec<String>) {
+        let Some(baseline) = self.drift.baseline.as_ref().filter(|_| !self.drift.rebase) else {
+            self.set_baseline(steps);
+            return;
+        };
+        let added: Vec<String> = steps
+            .iter()
+            .filter(|step| !baseline.contains(step))
+            .cloned()
+            .collect();
+        let removed: Vec<String> = baseline
+            .iter()
+            .filter(|step| !steps.contains(step))
+            .cloned()
+            .collect();
+        let told = self.entries[self.drift.from.min(self.entries.len())..]
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::PlanChanged { added, removed } => Some((added.clone(), removed.clone())),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if (&added, &removed) == (&told.0, &told.1) {
+            return;
+        }
+        let new_added: Vec<String> = added
+            .iter()
+            .filter(|step| !told.0.contains(step))
+            .cloned()
+            .collect();
+        let new_removed: Vec<String> = removed
+            .iter()
+            .filter(|step| !told.1.contains(step))
+            .cloned()
+            .collect();
+        if !new_added.is_empty() || !new_removed.is_empty() {
+            self.drift.changes += 1;
+            self.drift.fired = Some(format!(
+                "The chat's agent changed the plan it started the human's last line with, \
+                 which the human left it to.\n\n{}",
+                changed_steps(&added, &removed)
+            ));
+        }
+        self.push(Entry::PlanChanged { added, removed });
     }
 
     /// Asks the agent to stop the turn it is taking, if one is running and
@@ -1419,6 +1580,7 @@ impl Conversation {
     /// before in the turn, if it did, so that the turn shows one plan, as
     /// it stands.
     fn plan(&mut self, steps: Vec<Step>) {
+        let texts = texts(&steps);
         let turn = self
             .entries
             .iter()
@@ -1434,6 +1596,7 @@ impl Conversation {
             }
             None => self.push(Entry::Plan(steps)),
         }
+        self.follow_plan(texts);
     }
 
     /// The title the agent gave its session, if it gave one.
@@ -2097,10 +2260,112 @@ mod tests {
     }
 
     #[test]
+    fn tells_the_steps_the_agent_changed_from_the_plan_the_human_left_it_to() {
+        let mut conversation = Conversation::new();
+        conversation.submit("fix it");
+        let planned = vec![
+            step("Read", StepState::InProgress),
+            step("Fix", StepState::Pending),
+        ];
+        conversation.apply(AgentEvent::Plan(planned));
+        assert_eq!(
+            conversation.baseline(),
+            Some(&["Read".to_owned(), "Fix".to_owned()][..])
+        );
+        assert!(conversation.take_baseline_changed());
+
+        // A step that only goes further changes nothing.
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Read", StepState::Completed),
+            step("Fix", StepState::InProgress),
+        ]));
+        assert_eq!(conversation.take_plan_changed(), None);
+        assert_eq!(conversation.plan_changes().0, 0);
+
+        // A step it adds, and one it leaves out, are told.
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Read", StepState::Completed),
+            step("Skip the tests: they need a network", StepState::InProgress),
+        ]));
+        let told = conversation.take_plan_changed().unwrap();
+        assert!(
+            told.contains("+ Skip the tests: they need a network"),
+            "{told}"
+        );
+        assert!(told.contains("- Fix"), "{told}");
+        assert_eq!(
+            conversation.entries().last(),
+            Some(&Entry::PlanChanged {
+                added: vec!["Skip the tests: they need a network".to_owned()],
+                removed: vec!["Fix".to_owned()],
+            })
+        );
+        assert_eq!(
+            conversation.plan_changes(),
+            (
+                1,
+                Some("+ Skip the tests: they need a network\n- Fix".to_owned())
+            )
+        );
+        // Told once.
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Read", StepState::Completed),
+            step("Skip the tests: they need a network", StepState::Completed),
+        ]));
+        assert_eq!(conversation.take_plan_changed(), None);
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+
+        // A line Cox sends in the human's place leaves the baseline be.
+        conversation.told("go on");
+        conversation.apply(AgentEvent::Plan(vec![step("Push", StepState::Pending)]));
+        assert!(conversation.take_plan_changed().is_some());
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+
+        // The human's next line leaves the plan sent after it as the new
+        // baseline.
+        conversation.submit("now push");
+        conversation.apply(AgentEvent::Plan(vec![step("Push", StepState::Pending)]));
+        assert_eq!(conversation.baseline(), Some(&["Push".to_owned()][..]));
+        assert_eq!(conversation.take_plan_changed(), None);
+    }
+
+    #[test]
+    fn answering_the_agent_takes_the_plan_as_it_stands_as_the_baseline() {
+        let mut conversation = Conversation::new();
+        conversation.submit("permission");
+        conversation.apply(AgentEvent::Plan(vec![step("Edit", StepState::Pending)]));
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Edit", StepState::Pending),
+            step("Also rename it", StepState::Pending),
+        ]));
+        assert!(conversation.take_plan_changed().is_some());
+        conversation.apply(AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
+            title: Some("Edit x.txt".to_owned()),
+            content: None,
+            options: vec!["Allow".to_owned(), "Reject".to_owned()],
+        });
+
+        conversation.choose(0);
+        assert_eq!(
+            conversation.baseline(),
+            Some(&["Edit".to_owned(), "Also rename it".to_owned()][..])
+        );
+        conversation.apply(AgentEvent::Plan(vec![
+            step("Edit", StepState::Completed),
+            step("Also rename it", StepState::InProgress),
+        ]));
+        assert_eq!(conversation.take_plan_changed(), None);
+    }
+
+    #[test]
     fn shows_one_plan_a_turn_as_it_stands() {
         let mut conversation = Conversation::new();
         conversation.submit("plan");
-        let first = vec![step("Read", StepState::InProgress)];
+        let first = vec![
+            step("Read", StepState::InProgress),
+            step("Fix", StepState::Pending),
+        ];
         let then = vec![
             step("Read", StepState::Completed),
             step("Fix", StepState::InProgress),

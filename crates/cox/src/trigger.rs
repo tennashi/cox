@@ -86,6 +86,10 @@ pub enum On {
     /// A chat opened: `chat.open`.
     #[serde(rename = "chat.open")]
     ChatOpen,
+    /// A chat's agent added, removed or changed a step of the plan it
+    /// started the human's last line with: `plan.changed`.
+    #[serde(rename = "plan.changed")]
+    PlanChanged,
     /// The times a cron says, in no chat, as `schedule: {cron: "0 9 * * *"}`
     /// (see [`crate::schedule`]).
     #[serde(rename = "schedule")]
@@ -102,12 +106,13 @@ impl On {
             "wiki.written" => Ok(Self::WikiWritten { pages: None }),
             "sketch.end" => Ok(Self::SketchEnd),
             "chat.open" => Ok(Self::ChatOpen),
+            "plan.changed" => Ok(Self::PlanChanged),
             "schedule" => {
                 Err("schedule says when under it, as schedule: {cron: \"0 9 * * *\"}".to_owned())
             }
             other => Err(format!(
                 "{other:?} is no event Cox knows: turn.end, goal.met, wiki.written, \
-                 sketch.end, chat.open or schedule"
+                 sketch.end, chat.open, plan.changed or schedule"
             )),
         };
         match value {
@@ -185,6 +190,7 @@ impl On {
             Self::WikiWritten { .. } => "wiki.written",
             Self::SketchEnd => "sketch.end",
             Self::ChatOpen => "chat.open",
+            Self::PlanChanged => "plan.changed",
             Self::Schedule { .. } => "schedule",
         }
     }
@@ -1491,9 +1497,12 @@ mod tests {
         assert!(!wiki.runs_on(&written("research/rust/1.92"), false));
         assert!(!wiki.runs_on(&written("gpui-layout"), false));
         assert!(!wiki.runs_on(&On::TurnEnd, false));
-        let any = parse("---\non: [wiki.written, sketch.end, chat.open]\nby: shell\n---\nmake\n")
-            .unwrap();
+        let any = parse(
+            "---\non: [wiki.written, sketch.end, chat.open, plan.changed]\nby: shell\n---\nmake\n",
+        )
+        .unwrap();
         assert!(any.runs_on(&written("gpui-layout"), false));
+        assert!(any.runs_on(&On::PlanChanged, false));
         assert!(any.runs_on(&On::SketchEnd, false));
         assert!(any.runs_on(&On::ChatOpen, false));
         assert!(!any.runs_on(&On::GoalMet, false));

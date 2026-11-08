@@ -20,6 +20,7 @@ const EVENTS = {
   "wiki.written": "Wiki written",
   "sketch.end": "Sketch ended",
   "chat.open": "Chat opened",
+  "plan.changed": "Plan changed",
   schedule: "Schedule",
 };
 

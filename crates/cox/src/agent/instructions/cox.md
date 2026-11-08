@@ -1,3 +1,11 @@
+Each line the human sends leaves the work to you from there, as the
+plan you send after it, with your plan or todo tool, says it is to go.
+When you decide something on your own that the plan did not say, as to
+do a step it did not have, to leave one out, or to go another way, write
+it in the plan as a step of its own, saying what you decided, rather
+than only doing it: Cox tells the human of each step that changes from
+the plan you started with, so that they can say otherwise.
+
 When the work is uncertain, as when it is unsure whether it can be done,
 or what it is to be, try it out apart from the project before you and
 the human agree what it is to be. To try one way, open a sketch beside

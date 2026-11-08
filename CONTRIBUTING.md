@@ -175,7 +175,8 @@ accent. A closed chat has none. The project's square on the rail counts
 its chats that wait for the human or that they have not seen.
 On macOS, a chat the human is not looking at, as when another chat is
 shown or Cox is behind other windows, tells them with a notification
-when it comes to wait for them, and when its turn ends; a click on the
+when it comes to wait for them, when its turn ends, and when its agent
+changes the plan the human left it to (see below); a click on the
 notification shows the chat. The Dock's icon counts the chats that
 wait for the human or that they have not seen since a turn ended.
 "Archive" in the menu takes a chat out of the list, to "Archived" at
@@ -353,7 +354,8 @@ Change nothing.
 writes a page of a wiki, or, as `wiki.written: {page: "research/*"}`,
 one of the pages the globs name; `sketch.end`, as a sketch ends, in the
 chat that goes on with it; `chat.open`, as a chat opens, once its agent
-has started; or `schedule`, which opens a chat at the times it says
+has started; `plan.changed`, as a chat's agent adds, removes or changes a
+step of the plan the human left it to (see below); or `schedule`, which opens a chat at the times it says
 (see [Schedules](#schedules)). `when` narrows it:
 `changed`, globs of the chat's folder, those that start `!` leaving
 files out, which run it only when a file they match changed since it
@@ -391,7 +393,7 @@ The triggers of the other events of a chat run once the chat waits for
 the human, as after the turn its goal was met in, or the turn its
 agent wrote a page in, all of them, in the same order, on a line of
 their own, under what happened, as `GOAL MET`, `WIKI WRITTEN`, `SKETCH
-ENDED` or `CHAT OPENED`, with a dot each as at a turn's end: what they
+ENDED`, `CHAT OPENED` or `PLAN CHANGED`, with a dot each as at a turn's end: what they
 find stays there, and the chat's agent is not told it. An agent of
 such a trigger, `by: new`, is told what happened, as which page was
 written.
@@ -713,7 +715,16 @@ of it, and open while it arrives, and so does the plan it works to,
 with each step marked as waiting, under way or done. The plan also
 stays in sight on a card over the top right of the conversation, after
 its turn too, until the next line is sent; a click on the card's line
-folds it to that line. The tool calls, thoughts and
+folds it to that line. Each line the human sends leaves the work to the
+agent from there, as the first plan it sends after says it is to go,
+which the chat keeps, as the human's answer to what the agent asks
+keeps the plan as it stands then, while a line Cox sends in the human's
+place keeps the plan it had. A step the agent then adds, removes or
+changes, as Cox's own `cox.md` tells it to write what it decides on its
+own, shows under `PLAN CHANGED`, the steps it added in amber and those
+it removed dimmer, as the plan stands against the one the human left it
+to, and the human is told of it, as of a turn's end, while the agent
+goes on; a step that only goes further is not a change. The tool calls, thoughts and
 plan of the agent one after another fold under one line, which names
 the agent where it starts to speak and counts the steps, its tool
 calls, as `CLAUDE · 4 STEPS`, and how far the plan has gone: each call
@@ -1484,8 +1495,8 @@ own; an iPhone keeps the cookies of such an app apart from Safari's, so
 the page there asks for the link, pasted. To pair the phones no more,
 take the file away and start coxd again.
 
-The phone tells the human of a chat that comes to wait for them, or
-whose turn ends, while they are away from the Mac, as the Mac's
+The phone tells the human of a chat that comes to wait for them, whose
+turn ends, or whose agent changes the plan they left it to, while they are away from the Mac, as the Mac's
 notifications do while they are at it, once the bell at the head of the
 list of chats asked for it; a tap on the notification shows the chat.
 coxd takes the human to be away when no window is there, or, on macOS,

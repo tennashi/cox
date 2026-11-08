@@ -175,9 +175,10 @@ pub enum FromDaemon {
     },
     /// Show the chat `key`, which the human asked for, as when it opens.
     Reveal { key: u64 },
-    /// The chat `key`, named `name`, comes to wait for the human, or ended
-    /// a turn, as `body` says, for the window to tell the human, unless
-    /// they look at it.
+    /// The chat `key`, named `name`, comes to wait for the human, ended
+    /// a turn, or its agent changed the plan the human left it to, as
+    /// `body` says, for the window to tell the human, unless they look at
+    /// it.
     News {
         key: u64,
         name: String,

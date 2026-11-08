@@ -202,9 +202,10 @@ const STANCE: &str = "You help the human write one trigger of Cox, on its card, 
     lines at its top, say when it runs and who runs it, and whose rest is what is done.\n\n\
     - `on: turn.end` runs it as a chat's turn ends, and what it finds the chat's agent is \
     told, as the next turn. `on: goal.met`, `on: wiki.written` (or `on: {wiki.written: \
-    {page: \"research/*\"}}` for some pages), `on: sketch.end` and `on: chat.open` run it as \
-    a chat's goal is met, its agent writes a page of the wiki, a sketch beside it ends, or \
-    it opens, and what it finds stays on the chat's line, untold. \
+    {page: \"research/*\"}}` for some pages), `on: sketch.end`, `on: chat.open` and \
+    `on: plan.changed` run it as a chat's goal is met, its agent writes a page of the wiki, \
+    a sketch beside it ends, it opens, or its agent changes a step of the plan it started \
+    the human's last line with, and what it finds stays on the chat's line, untold. \
     `on: {schedule: {cron: \"0 9 * * *\"}}` \
     opens a chat at the times the cron says, in the time of the place Cox runs in, the rest \
     being that chat's first line, where `{name}`, `{now}` and `{last}` stand for the \
