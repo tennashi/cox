@@ -49,6 +49,9 @@ use cox_editor::syntax::Syntax;
 
 use self::file::File;
 use self::text::Text;
+/// How code is drawn, by what its syntax says it is, as a tab of code
+/// draws it: for another tab that shows code, as "Changes" does.
+pub(crate) use self::text::style as syntax_style;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
     KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,

@@ -8,7 +8,8 @@
 //! - [`history`] is where a tab has been, to go back and forward.
 //! - [`files`] lists what is in a project's folders.
 //! - [`fuzzy`] finds a path by a few of its letters.
-//! - [`changes`] is what changed in them, as Git tells it.
+//! - [`changes`] is what changed in them, as Git tells it, and
+//!   [`words`] what changed within the lines a change replaced.
 //! - [`map`] is the project's map, in tiers, as an agent wrote it, with
 //!   what changed laid over it.
 //! - [`language`] is the languages the editor knows, and what in their
@@ -27,3 +28,4 @@ pub mod line;
 pub mod lsp;
 pub mod map;
 pub mod syntax;
+pub mod words;
