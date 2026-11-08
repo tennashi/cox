@@ -18,10 +18,10 @@ use gpui::{
     px, rgb,
 };
 
+use crate::stage::heading::{INSET, body, card, heading, note, parted};
 use crate::stage::tab::Shows;
-use crate::ui::theme::{
-    ACCENT, ASKING, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND,
-};
+use crate::ui::paths::shortened;
+use crate::ui::theme::{ACCENT, ASKING, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND};
 
 /// How often the tab reads the devices again, as Android Studio makes or
 /// deletes them and emulators start and stop.
@@ -116,15 +116,14 @@ impl Devices {
                 devices.open(&name, Boot::default(), cx);
             })
         };
-        let row = div()
+        let row = parted(div(), index == 0)
             .debug_selector(move || format!("android-device-{index}"))
             .flex()
             .items_center()
             .gap_2()
             .px_3()
             .py_2()
-            .border_b_1()
-            .border_color(rgb(BORDER))
+            .child(dot(running.is_some()))
             .child(
                 div()
                     .flex_1()
@@ -196,6 +195,17 @@ impl Devices {
     }
 }
 
+/// The dot that says whether a device runs: filled in the accent while it
+/// does, and a ring otherwise.
+fn dot(runs: bool) -> impl IntoElement {
+    let dot = div().flex_shrink_0().size(px(7.)).mr_1().rounded_full();
+    if runs {
+        dot.bg(rgb(ACCENT))
+    } else {
+        dot.border_1().border_color(rgb(FAINT))
+    }
+}
+
 /// A button of a device's row, the `index`th.
 fn button(id: &'static str, index: usize, label: &'static str) -> gpui::Stateful<gpui::Div> {
     div()
@@ -252,40 +262,53 @@ impl Render for Devices {
             .enumerate()
             .map(|(index, avd)| self.render_device(index, avd, cx).into_any_element())
             .collect();
+        let home = cox_android::avd::home()
+            .map_or_else(|| "~/.android/avd".to_owned(), |home| shortened(&home));
+        let running = self
+            .avds
+            .iter()
+            .filter(|avd| self.running(&avd.name).is_some())
+            .count();
+        let said = match (self.avds.len(), running) {
+            (0, _) => "none yet".to_owned(),
+            (1, 0) => "1 device".to_owned(),
+            (1, _) => "1 device, running".to_owned(),
+            (count, 0) => format!("{count} devices"),
+            (count, running) => format!("{count} devices · {running} running"),
+        };
         let empty = self.avds.is_empty().then(|| {
-            let home = cox_android::avd::home().map_or_else(
-                || "~/.android/avd".to_owned(),
-                |home| home.display().to_string(),
-            );
-            div()
-                .debug_selector(|| "android-no-devices".to_owned())
-                .p_3()
-                .text_color(rgb(DIM))
-                .child(format!(
+            note(
+                "android-no-devices",
+                format!(
                     "No virtual devices in {home}. Make one in Android Studio's Device Manager."
-                ))
+                ),
+                DIM,
+            )
         });
         let no_emulator = (!self.emulator).then(|| {
-            div()
-                .debug_selector(|| "android-no-emulator".to_owned())
-                .p_3()
-                .text_color(rgb(FAILED))
-                .child(
-                    "No Android SDK's emulator is found: install it from Android Studio, \
-                     or name the SDK with ANDROID_HOME.",
-                )
+            note(
+                "android-no-emulator",
+                "No Android SDK's emulator is found: install it from Android Studio, \
+                 or name the SDK with ANDROID_HOME.",
+                FAILED,
+            )
         });
-        div()
+        let devices = (!rows.is_empty()).then(|| {
+            div()
+                .px(px(INSET))
+                .pt_1()
+                .pb_3()
+                .child(card().children(rows))
+        });
+        body()
             .id("android-devices")
             .debug_selector(|| "android-devices".to_owned())
             .track_focus(&self.focus_handle)
-            .size_full()
             .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .text_size(px(13.))
+            .text_color(rgb(FOREGROUND))
+            .child(heading("android-heading", TITLE, said, Some(home)))
             .children(no_emulator)
-            .children(rows)
+            .children(devices)
             .children(empty)
     }
 }

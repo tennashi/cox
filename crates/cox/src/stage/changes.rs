@@ -24,12 +24,12 @@ use cox_editor::language::{Highlight, Language};
 use cox_editor::syntax::Syntax;
 use cox_editor::words;
 use gpui::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
-    ListAlignment, ListOffset, ListState, SharedString, StyledText, Task, Window, div, list,
-    prelude::*, px, rgb,
+    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, ListAlignment,
+    ListOffset, ListState, SharedString, StyledText, Task, Window, div, list, prelude::*, px, rgb,
 };
 
 use crate::stage::code::syntax_style;
+use crate::stage::heading::{CARD_RADIUS, INSET, heading};
 use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::paths::shortened;
@@ -48,10 +48,6 @@ const NUMBER: usize = 5;
 /// code draws them.
 const CODE_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 18.;
-/// How round a file's card is.
-const CARD_RADIUS: f32 = 12.;
-/// How far the cards are from the tab's edges.
-const INSET: f32 = 16.;
 /// How long a stretch's row is: a little longer than a line's, to part
 /// the stretches.
 const STRETCH_HEIGHT: f32 = 26.;
@@ -209,41 +205,12 @@ impl Changes {
         let top = self
             .diff()
             .map_or_else(|| self.folder.clone(), |diff| diff.top.clone());
-        div()
-            .debug_selector(|| "changes-heading".to_owned())
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .px(px(INSET + 4.))
-            .pt_3()
-            .pb_1()
-            .whitespace_nowrap()
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(15.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.title.clone()),
-            )
-            .child(
-                said.flex_shrink_0()
-                    .text_color(rgb(if failed { FAILED } else { DIM })),
-            )
-            .child(
-                // Grown to the right edge, rather than pushed there by an
-                // auto margin, which the heading's gaps then go missing
-                // beside.
-                div()
-                    .flex_1()
-                    .flex()
-                    .justify_end()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .font_family(CODE_FONT)
-                    .text_size(px(11.5))
-                    .text_color(rgb(FAINT))
-                    .child(ellipsis(shortened(&top))),
-            )
+        heading(
+            "changes-heading",
+            self.title.clone(),
+            said.text_color(rgb(if failed { FAILED } else { DIM })),
+            Some(shortened(&top)),
+        )
     }
 
     /// The row at `row` of the tab.

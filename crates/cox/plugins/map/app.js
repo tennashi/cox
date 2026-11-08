@@ -369,10 +369,19 @@ function mapsEl() {
   return `<nav class="maps"><span class="mapsname">maps</span>${chips}</nav>`;
 }
 
-function sourceLine() {
-  const n = Object.keys(parts()).length;
-  const since = data.since ? `<span class="since">${esc(data.since)} · ${data.changed_files} file${data.changed_files === 1 ? "" : "s"} changed</span>` : "";
-  return `<div class="source"><span>map</span><span class="file">${esc(data.file.replace(data.root + "/", ""))}</span><span>${tiers().length} tier${tiers().length === 1 ? "" : "s"} · ${n} box${n === 1 ? "" : "es"}</span>${since}</div>`;
+/// The heading, as Cox's own tabs have it (see `stage::heading`): the
+/// map's tiers and boxes, and what changed, and, at the right edge, its
+/// file.
+function headEl() {
+  const file = data.file ? data.file.replace(data.root + "/", "") : "";
+  let said = "";
+  if (data.map && tiers().length) {
+    const n = Object.keys(parts()).length;
+    const since = data.since ? ` · <span class="since">${data.changed_files} file${data.changed_files === 1 ? "" : "s"} changed ${esc(data.since)}</span>` : "";
+    said = `${tiers().length} tier${tiers().length === 1 ? "" : "s"} · ${n} box${n === 1 ? "" : "es"}${since}`;
+  }
+  const where = file ? `<span class="where" title="${esc(data.file)}">${esc(file)}</span>` : "";
+  return `<div class="head"><h1>Map</h1><span class="summary">${said}</span>${where}</div>`;
 }
 
 /// A card for the box `id`. `key` places it in its row for the wires; a
@@ -527,7 +536,7 @@ function renderTier(tierId) {
     ? `<div class="foot"><span>a column opens the tier inside it, or the code it holds</span><span>·</span><span>a row is a step of the flow; a loop is a step inside a box, and opens where the step is drawn apart</span><span>·</span><span>← → go from step to step, ↑ up a tier, Backspace back</span></div>`
     : `<div class="foot"><span>a card opens the tier inside it, or the code it holds</span><span>·</span><span>teal is what changed, as Changes shows it</span><span>·</span><span>↑ goes up a tier, Backspace back</span></div>`;
   const chain = [...above(tierId), tierId].map((id) => ({ text: tier(id).name, tier: id }));
-  app.innerHTML = `${mapsEl()}${crumbs(chain)}${sourceLine()}${data.map.says ? `<div class="says mapsays">${esc(data.map.says)}</div>` : ""}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${waysEl()}${body}${foot}`;
+  app.innerHTML = `${headEl()}${mapsEl()}${crumbs(chain)}${data.map.says ? `<div class="says mapsays">${esc(data.map.says)}</div>` : ""}${t.says ? `<div class="says">${esc(t.says)}</div>` : ""}${flowBar}${stepsBar}${waysEl()}${body}${foot}`;
   if (seq) seqScrolled();
   wired();
 }
@@ -909,7 +918,7 @@ function renderLeaf(tierId, id) {
     .join("");
   const chain = [...above(tierId), tierId].map((tid) => ({ text: tier(tid).name, tier: tid }));
   chain.push({ text: p.name });
-  app.innerHTML = `${mapsEl()}${crumbs(chain)}${sourceLine()}
+  app.innerHTML = `${headEl()}${mapsEl()}${crumbs(chain)}
     <div class="says"><b style="color:var(--foreground);font-weight:500">${esc(p.name)}.</b> ${esc(p.says)}${p.each ? ` <span class="each" style="font-size:10.5px;border:1px solid var(--border);border-radius:999px;padding:0 7px">${esc(p.each)}</span>` : ""}</div>
     ${p.kinds && p.kinds.length ? `<div class="says" style="font-family:var(--mono);font-size:11.5px">${p.kinds.map(esc).join(" · ")}</div>` : ""}
     ${p.note ? `<div class="says" style="color:var(--note)"><b>note</b> ${esc(p.note)}</div>` : ""}
@@ -968,14 +977,14 @@ function symEl(path, line, depth) {
 function renderEmpty() {
   if (data.error) {
     const fix = data.file ? `<div class="says">The map is <code>${esc(data.file)}</code>. An agent fixes it; ask it to.</div>` : "";
-    app.innerHTML = `${mapsEl()}<div class="says failed">${esc(data.error)}</div>${fix}`;
+    app.innerHTML = `${headEl()}${mapsEl()}<div class="says failed">${esc(data.error)}</div>${fix}`;
     return;
   }
   if (data.map) {
-    app.innerHTML = `${mapsEl()}<div class="says empty">The map <code>${esc(data.name)}</code> has no tier yet. An agent writes them in <code>${esc(data.file)}</code>: ask it, in the chat.</div>`;
+    app.innerHTML = `${headEl()}${mapsEl()}<div class="says empty">The map <code>${esc(data.name)}</code> has no tier yet. An agent writes them in <code>${esc(data.file)}</code>: ask it, in the chat.</div>`;
     return;
   }
-  app.innerHTML = `<div class="says empty">This project has no map yet. An agent writes one in <code>.cox/maps/</code>, a file for each map, as <code>.cox/maps/parts.json</code>: ask it, in the chat, to map the project.</div>`;
+  app.innerHTML = `${headEl()}<div class="says empty">This project has no map yet. An agent writes one in <code>.cox/maps/</code>, a file for each map, as <code>.cox/maps/parts.json</code>: ask it, in the chat, to map the project.</div>`;
 }
 
 function render() {

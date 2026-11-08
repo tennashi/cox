@@ -18,16 +18,20 @@ use gpui::{
     div, prelude::*, px, rgb,
 };
 
+use crate::stage::heading::{INSET, body, heading};
 use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
+use crate::ui::icons::{Icon, icon};
 use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT_GROUND, BORDER, DIM, FAILED, FOREGROUND, HOVER};
+use crate::ui::theme::{ACCENT_GROUND, DIM, FAILED, FAINT, FOREGROUND, HOVER};
 
 /// How often the tab looks at the folders open in it.
 const LOOK_EVERY: Duration = Duration::from_secs(1);
 
 /// How far in a folder's files and folders are from it.
 const INDENT: f32 = 16.;
+/// How tall a row is.
+const ROW_HEIGHT: f32 = 26.;
 
 /// The human chose the file at this path, to open it.
 pub struct Chosen(pub PathBuf);
@@ -155,7 +159,8 @@ impl Tree {
             Row::Listed { entry, depth, open } => (entry, depth, open),
             Row::Unread { error, depth } => {
                 return div()
-                    .pl(indent(depth))
+                    .pl(indent(depth) + px(16.))
+                    .py_1()
                     .text_color(rgb(FAILED))
                     .child(format!("cannot read: {error}"))
                     .into_any_element();
@@ -164,7 +169,14 @@ impl Tree {
         let marker = match (entry.is_folder, open) {
             (true, true) => "▾",
             (true, false) => "▸",
-            (false, _) => " ",
+            (false, _) => "",
+        };
+        let kind = if entry.is_folder {
+            Icon::Folder
+        } else if is_markdown(&entry.path) {
+            Icon::Document
+        } else {
+            Icon::Code
         };
         let path = entry.path.clone();
         let is_folder = entry.is_folder;
@@ -172,11 +184,22 @@ impl Tree {
             .id(("entry", number))
             .debug_selector(move || format!("entry-{number}"))
             .flex()
-            .gap_1()
+            .items_center()
+            .gap(px(6.))
+            .h(px(ROW_HEIGHT))
             .pl(indent(depth))
             .pr_2()
+            .rounded(px(6.))
             .cursor_pointer()
-            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(marker))
+            .child(
+                div()
+                    .w(px(10.))
+                    .flex_shrink_0()
+                    .text_size(px(10.))
+                    .text_color(rgb(DIM))
+                    .child(marker),
+            )
+            .child(icon(kind, 14., FAINT).flex_shrink_0())
             .child(
                 div()
                     .min_w_0()
@@ -215,7 +238,13 @@ enum Row<'a> {
 
 /// How far in a row `depth` folders under the project's is drawn.
 fn indent(depth: u16) -> gpui::Pixels {
-    px(8. + INDENT * f32::from(depth))
+    px(4. + INDENT * f32::from(depth))
+}
+
+/// Whether the file at `path` is Markdown, which a tab draws as a page.
+fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 /// What is in `folder`, or why it could not be listed.
@@ -281,30 +310,24 @@ impl Render for Tree {
             .enumerate()
             .map(|(index, row)| self.render_row(index + 1, row, cx))
             .collect();
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
+        body()
             .track_focus(&self.focus_handle)
             .text_color(rgb(FOREGROUND))
-            .child(
-                div()
-                    .debug_selector(|| "tree-path".to_owned())
-                    .px_3()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(DIM))
-                    .overflow_hidden()
-                    .child(ellipsis(shortened(&self.root))),
-            )
+            .child(heading(
+                "tree-path",
+                "Files",
+                "without what Git ignores",
+                Some(shortened(&self.root)),
+            ))
             .child(
                 div()
                     .id("tree")
                     .debug_selector(|| "tree".to_owned())
                     .flex_1()
                     .min_h_0()
-                    .py_1()
+                    .px(px(INSET))
+                    .pt_1()
+                    .pb_3()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .children(rows),
