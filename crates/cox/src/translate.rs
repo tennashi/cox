@@ -31,7 +31,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{Read as _, Write as _};
+use std::io::{self, Read, Write as _};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
@@ -549,26 +549,9 @@ fn run(
         let _ = stderr.read_to_end(&mut said);
         said
     });
-    let mut stdout = child.stdout.take().ok_or("the command writes nothing")?;
-    let mut written = Vec::new();
-    let mut chunk = [0; 4096];
-    loop {
-        let read = stdout
-            .read(&mut chunk)
-            .map_err(|error| format!("{program} cannot be read: {error}"))?;
-        if read == 0 {
-            break;
-        }
-        written.extend_from_slice(&chunk[..read]);
-        // Up to the last whole character, as a chunk may end inside one.
-        let whole = match std::str::from_utf8(&written) {
-            Ok(whole) => whole,
-            Err(error) => std::str::from_utf8(&written[..error.valid_up_to()]).unwrap_or_default(),
-        };
-        if !whole.trim().is_empty() {
-            so_far(whole.trim());
-        }
-    }
+    let stdout = child.stdout.take().ok_or("the command writes nothing")?;
+    let written = as_written(stdout, &mut so_far)
+        .map_err(|error| format!("{program} cannot be read: {error}"))?;
     let status = child
         .wait()
         .map_err(|error| format!("{program} cannot be waited for: {error}"))?;
@@ -584,6 +567,34 @@ fn run(
         return Err(format!("{program} wrote nothing"));
     }
     Ok(translated)
+}
+
+/// All `from` writes, telling `so_far` what it has written as it writes
+/// it, up to its last whole character.
+///
+/// A read a signal interrupts is read again, as `read_to_end` does: the
+/// window's process, where CEF runs too, may handle a signal without
+/// having the system restart what it interrupted.
+fn as_written(mut from: impl Read, mut so_far: impl FnMut(&str)) -> io::Result<Vec<u8>> {
+    let mut written = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        let read = match from.read(&mut chunk) {
+            Ok(0) => return Ok(written),
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        written.extend_from_slice(&chunk[..read]);
+        // Up to the last whole character, as a chunk may end inside one.
+        let whole = match std::str::from_utf8(&written) {
+            Ok(whole) => whole,
+            Err(error) => std::str::from_utf8(&written[..error.valid_up_to()]).unwrap_or_default(),
+        };
+        if !whole.trim().is_empty() {
+            so_far(whole.trim());
+        }
+    }
 }
 
 /// Keeps `translated` in `file`, whole or not at all, as a page may be
@@ -806,6 +817,37 @@ mod tests {
         );
         assert_eq!(unfenced(" こんにちは \n", "Hello"), "こんにちは");
         assert_eq!(unfenced("```\nx\n```", "```\nx\n```"), "```\nx\n```");
+    }
+
+    #[test]
+    fn a_read_a_signal_interrupts_is_read_again() {
+        /// Says `parts` one at a time, each after a read a signal
+        /// interrupts.
+        struct Interrupted {
+            parts: VecDeque<&'static [u8]>,
+            interrupt: bool,
+        }
+        impl Read for Interrupted {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                self.interrupt = !self.interrupt;
+                if self.interrupt {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                let Some(part) = self.parts.pop_front() else {
+                    return Ok(0);
+                };
+                buffer[..part.len()].copy_from_slice(part);
+                Ok(part.len())
+            }
+        }
+        let from = Interrupted {
+            parts: VecDeque::from(["こん".as_bytes(), "にちは".as_bytes()]),
+            interrupt: false,
+        };
+        let mut told = Vec::new();
+        let written = as_written(from, |so_far| told.push(so_far.to_owned())).unwrap();
+        assert_eq!(String::from_utf8(written).unwrap(), "こんにちは");
+        assert_eq!(told, ["こん", "こんにちは"]);
     }
 
     fn scratch(name: &str) -> PathBuf {
