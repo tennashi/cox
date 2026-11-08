@@ -66,6 +66,10 @@ hyper-util = { version = "0.1.21", features = ["tokio"] }
 http-body = "1.1.0"
 http-body-util = "0.1.5"
 bytes = "1.12.1"
+# Telling the phones of the chats with Web Push, encrypted for each and
+# signed as coxd: see `src/daemon/push.rs`. The version rustls, for ureq,
+# has already.
+ring = "0.17.14"
 
 # CEF is cox-browser's; the executables depend on its sys crate as well
 # only for `build.rs`, which has to know where the CEF distribution is to

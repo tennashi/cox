@@ -22,6 +22,10 @@ pub(crate) fn ask_to_control() {}
 
 pub(crate) fn bring_to_front(_pid: i32) {}
 
+pub(crate) fn idle() -> Option<std::time::Duration> {
+    None
+}
+
 pub(crate) fn mirror(
     _id: u32,
     _shared: &std::sync::Arc<Shared>,

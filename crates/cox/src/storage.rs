@@ -81,11 +81,17 @@ pub enum Kept {
     /// The secret a phone is paired with, to read the chats on the page
     /// coxd serves it (see [`crate::daemon::phone`]).
     PhoneToken,
+    /// The key coxd signs what it pushes to the phones with, which their
+    /// browsers' push services know it by (see [`crate::daemon::push`]).
+    PushKey,
+    /// Where coxd pushes to each phone that asked to be told of the
+    /// chats (see [`crate::daemon::push`]).
+    Pushes,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Settings,
         Self::Agents,
         Self::Sketches,
@@ -104,6 +110,8 @@ impl Kept {
         Self::TriggerRuns,
         Self::LastTurns,
         Self::PhoneToken,
+        Self::PushKey,
+        Self::Pushes,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -128,6 +136,8 @@ impl Kept {
             Self::TriggerRuns => "state/trigger-runs.json",
             Self::LastTurns => "state/last-turns.json",
             Self::PhoneToken => "state/phone-token",
+            Self::PushKey => "state/push-key",
+            Self::Pushes => "state/pushes.json",
         }
     }
 }

@@ -1323,8 +1323,10 @@ kind is kept apart
   `triggers.json`, how each last ran, `trigger-runs.json`, what a chat
   of each folder said last as its turn ended, `last-turns.json`, the
   pictures of the regions handed to the chats, `pictures`, the
-  icons the human gave the projects, `icons`, and the secret the
-  human's phones are paired with, `phone-token`;
+  icons the human gave the projects, `icons`, the secret the
+  human's phones are paired with, `phone-token`, the key what is
+  pushed to them is signed with, `push-key`, and where to push to
+  them, `pushes.json`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it
   downloads, in `agents`, and `translations`;
 - in `run`, what is there only while Cox runs: `coxd.sock` and
@@ -1424,8 +1426,11 @@ comes once none is.
 ## On the phone
 
 The human follows the chats from their phone, away from the Mac, on a
-page coxd serves when `settings.json` names a port for it, as
-`{"phone": {"port": 7421}}`, which coxd reads as it starts: the
+page coxd serves, on port 7421, unless `settings.json` turns it off, as
+`{"phone": false}`, or names another port, as `{"phone": {"port":
+7422}}`, which coxd reads as it starts; a coxd that finds the port taken,
+as by another Cox run from elsewhere, says so in its log and serves no
+page. The page shows the
 projects, each with its chats and how each stands, as the window's
 list has them, those that wait for the human first, under "Waits for
 you"; and a chat's conversation, as it goes on, the agent's tool calls
@@ -1444,7 +1449,11 @@ window's.
 coxd serves it on the Mac's own address alone, `127.0.0.1`, and the
 phone reaches it through [Tailscale](https://tailscale.com), as
 `tailscale serve --bg 7421` hands it to the human's tailnet, over HTTPS,
-with the tailnet's certificate. Since any page in a browser on the Mac
+with the tailnet's certificate: the tailnet has MagicDNS on, for the
+phone to find the Mac by its name, and HTTPS and Serve, which
+`tailscale serve` asks to turn on the first time, with a link to the
+admin console, while Funnel, which would hand the page to the whole
+internet, stays off. Since any page in a browser on the Mac
 reaches `127.0.0.1` too, the page answers only a phone that holds the
 secret coxd keeps in `state/phone-token` in Cox's data folder (see
 [The stage](#the-stage)), made the first time, which the phone gets by
@@ -1455,6 +1464,20 @@ browser's "Add to Home Screen" puts it there, gets it as an app of its
 own; an iPhone keeps the cookies of such an app apart from Safari's, so
 the page there asks for the link, pasted. To pair the phones no more, take the file away and start coxd
 again.
+
+The phone tells the human of a chat that comes to wait for them, or
+whose turn ends, while they are away from the Mac, as the Mac's
+notifications do while they are at it, once the bell at the head of the
+list of chats asked for it; a tap on the notification shows the chat.
+coxd takes the human to be away when no window is there, or, on macOS,
+when they have not used the Mac's keyboard, mouse or trackpad for two
+minutes, and does not tell of a chat a phone shows. It pushes through
+the push service of the phone's browser, with Web Push, encrypted for
+that phone alone and signed with a key of coxd's own, which it makes
+the first time and keeps in `state/push-key`, keeping where to push to
+each phone in `state/pushes.json`. An iPhone takes them only on a page
+opened from its home screen; another browser, as Safari's own tab, has
+no bell to ask with. A tap on the bell again asks no more.
 
 ## Schedules
 

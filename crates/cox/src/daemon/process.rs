@@ -17,8 +17,8 @@
 //! Every minute, coxd runs the human's schedules that are due (see
 //! [`crate::schedule`]), whether a window is there or not.
 //!
-//! When the settings name a port for it, coxd serves the human's phone a
-//! page of the chats there too (see [`super::phone`]).
+//! Unless the settings turn it off, coxd serves the human's phone a page
+//! of the chats too (see [`super::phone`]).
 
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
@@ -72,13 +72,21 @@ pub fn run(
                 Ok(token) => match super::phone::listen(port).await {
                     Ok(phone) => {
                         tracing::info!(port, "coxd serves the phone");
+                        let pushes = super::push::Pushes::open()
+                            .inspect_err(|error| {
+                                tracing::error!("nothing is pushed to the phones: {error:#}");
+                            })
+                            .ok();
                         tokio::task::spawn_local(super::phone::serve(
                             phone,
                             token,
+                            pushes,
                             internal.clone(),
                         ));
                     }
-                    Err(error) => tracing::error!("{error:#}"),
+                    // As when another Cox, run from elsewhere, serves its
+                    // phone there.
+                    Err(error) => tracing::warn!("the phone is not served: {error:#}"),
                 },
                 Err(error) => tracing::error!("the phone cannot be served: {error:#}"),
             }

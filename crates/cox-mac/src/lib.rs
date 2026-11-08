@@ -95,6 +95,13 @@ pub fn bring_to_front(pid: i32) {
     system::bring_to_front(pid);
 }
 
+/// How long since the human last used the Mac's keyboard, mouse or
+/// trackpad, in any app, or nothing off macOS, where Cox cannot tell.
+#[must_use]
+pub fn idle() -> Option<std::time::Duration> {
+    system::idle()
+}
+
 /// A picture of a window, four bytes a pixel, blue, green, red and alpha,
 /// row after row from the top.
 #[derive(Clone, Debug)]

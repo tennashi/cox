@@ -18,9 +18,9 @@ use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send, sel};
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
 use objc2_core_foundation::{CGPoint, CGRect};
 use objc2_core_graphics::{
-    CGEvent, CGEventField, CGEventFlags, CGEventType, CGMouseButton, CGPreflightPostEventAccess,
-    CGPreflightScreenCaptureAccess, CGRequestPostEventAccess, CGRequestScreenCaptureAccess,
-    CGScrollEventUnit,
+    CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventType,
+    CGMouseButton, CGPreflightPostEventAccess, CGPreflightScreenCaptureAccess,
+    CGRequestPostEventAccess, CGRequestScreenCaptureAccess, CGScrollEventUnit,
 };
 use objc2_core_media::{CMSampleBuffer, CMTime};
 use objc2_core_video::{
@@ -180,6 +180,15 @@ fn find(id: u32) -> anyhow::Result<Option<(Retained<SCWindow>, Window)>> {
         let listed = listed(&window, own)?;
         Some((window, listed))
     }))
+}
+
+pub(crate) fn idle() -> Option<std::time::Duration> {
+    // kCGAnyInputEventType: whichever came last.
+    let seconds = CGEventSource::seconds_since_last_event_type(
+        CGEventSourceStateID::CombinedSessionState,
+        CGEventType(u32::MAX),
+    );
+    std::time::Duration::try_from_secs_f64(seconds).ok()
 }
 
 pub(crate) fn may_record() -> bool {

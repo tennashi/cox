@@ -322,7 +322,7 @@ details[open] .last-thought { display: none; }
 
 /* What the human does from the phone */
 
-#goal-button {
+#goal-button, #push-button {
   width: 40px;
   height: 40px;
   border: 0;
@@ -330,6 +330,16 @@ details[open] .last-thought { display: none; }
   background: transparent;
   color: var(--soft);
   font-size: 18px;
+}
+#push-button { display: flex; align-items: center; justify-content: center; color: var(--faint); }
+#push-button.on { color: var(--accent); background: var(--accent-ground); }
+
+#note {
+  margin: 0;
+  padding: 8px 14px;
+  background: var(--raised);
+  color: var(--soft);
+  font-size: 13px;
 }
 
 #bottom {
