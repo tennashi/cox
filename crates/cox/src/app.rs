@@ -247,7 +247,9 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
             cx.set_global(Servers::default());
             cx.set_global(agents.clone());
             serve_browser(&cef, cx);
+            crate::busy::watch(cx);
             quit_when_asked(cx);
+            let inspected = cef.clone();
             shut_down_on_quit(cef, cx);
             let workspace = Opened {
                 link,
@@ -259,7 +261,7 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
             };
             let window = open_window(workspace, cx);
             crate::settings::follow(window, agents, cx);
-            crate::inspect::start(window, devtools, cx);
+            crate::inspect::start(window, devtools, inspected, cx);
         });
     ExitCode::SUCCESS
 }
@@ -462,7 +464,7 @@ fn serve_browser(cef: &Cef, cx: &mut App) {
                 () = cx.background_executor().timer(PUMP_INTERVAL) => {}
                 () = cox_browser::macos::pump_wanted() => {}
             }
-            pumped.pump();
+            crate::busy::timed("CEF's turn", || pumped.pump());
         }
     })
     .detach();

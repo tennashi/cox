@@ -616,9 +616,11 @@ wrap_render_handler! {
             match *type_.as_ref() {
                 cef_paint_element_type_t::PET_VIEW => {
                     shared.painted = Some((width, height));
+                    let now = Instant::now();
+                    shared.timeline.painted(now);
                     // The page changed: the window asks for its pictures
                     // at each frame for a while (see `frames`).
-                    shared.pacing.stirred(Instant::now());
+                    shared.pacing.stirred(now);
                     if shared.resizing.is_some()
                         && shared.reported.device_size() == (width, height)
                     {

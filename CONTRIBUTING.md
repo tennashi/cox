@@ -1551,7 +1551,12 @@ server of Cox's own tools send each other over the chat's socket, under
 `cox::agent::mcp::asks`, and the stage carrying it out, under
 `cox::stage::asked`, and what the agent writes to its standard error,
 under `cox_acp::stderr`. Each line names the file and line of Cox's code
-it was said at. The files are in `logs`
+it was said at. How long each answer at a `cox:` address took is there
+too, under `cox_browser::scheme`, as a warning when it took 100 ms or
+more; and so is each while the window's thread, which draws the window
+and on macOS gives CEF its turns, was busy for 100 ms or more, under
+`cox::busy`, with CEF's turn when that was it, so that what else was said
+then shows what kept it. The files are in `logs`
 in Cox's data folder (see [The stage](#the-stage)), as
 `~/Library/Application Support/Cox/logs` for the installed Cox on macOS,
 and `target/debug/cox-data/logs` for the Cox built there, each named
@@ -1702,6 +1707,16 @@ are:
   shows it: through `xdotool` on Linux, and not on macOS yet.
 - `action <name>`: dispatches a GPUI action by name, as `cox::NewChat`,
   or `NewChat` when only one action's name ends so.
+- `frames [<seconds>]`: where the window stuck over the last ten seconds,
+  or `<seconds>`, up to a minute, for an agent to find when the human saw
+  it stick, and read what the log said then: each while the window's
+  thread was busy for 100 ms or more, with what, when Cox knows; and each
+  page of the stages, by its address, with how many times the wheel
+  scrolled it, how many pictures CEF painted of it, and each wait of
+  50 ms or more from a turn of the wheel to the next picture, which the
+  human sees as the page sticking, as when what carries the wheel and the
+  asks for pictures to the page is busy. A page at its end, which the
+  wheel cannot scroll further, paints nothing either.
 
 ## Using Cox to build Cox
 

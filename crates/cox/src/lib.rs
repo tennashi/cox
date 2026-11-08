@@ -51,6 +51,7 @@
 pub mod agent;
 pub mod agents;
 pub mod app;
+pub mod busy;
 pub mod chat;
 pub mod daemon;
 pub mod inspect;

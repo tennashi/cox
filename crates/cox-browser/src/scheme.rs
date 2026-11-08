@@ -25,6 +25,7 @@
 use std::os::raw::c_int;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use cef::rc::Rc as _;
 use cef::sys::{cef_return_value_t, cef_scheme_options_t};
@@ -250,9 +251,23 @@ wrap_resource_handler! {
     }
 }
 
-/// Has `serve` answer `url`, keeping the answer in `told`.
+/// How long an answer takes before the log warns of it: a page that
+/// reads it every two seconds, as the plugins do, waits that long each
+/// time.
+const SLOW: Duration = Duration::from_millis(100);
+
+/// Has `serve` answer `url`, keeping the answer in `told`, and says in the
+/// log how long it took, so that what answers slowly is found there.
 fn answer(serve: &Serve, url: &str, told: &OnceLock<Option<Resource>>) {
+    let started = Instant::now();
     let resource = serve(url);
+    let took = started.elapsed();
+    let took_ms = took.as_millis();
+    if took >= SLOW {
+        tracing::warn!(url, took_ms, "{url} took {took_ms} ms to answer");
+    } else {
+        tracing::debug!(url, took_ms, "answered {url}");
+    }
     if resource.is_none() {
         tracing::debug!("nothing is served at {url}");
     }
