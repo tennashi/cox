@@ -30,12 +30,11 @@ use self::agents::AgentsSection;
 use self::folder::FolderField;
 use self::translation::TranslationSection;
 use self::words::Words;
+use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
-use crate::ui::theme::{
-    ACCENT, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK,
-};
+use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK};
 use crate::ui::{Copy, card};
 
 actions!(
@@ -318,23 +317,18 @@ impl SettingsView {
 
     /// The button that asks for a folder.
     fn render_choose(cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        div()
-            .id("choose-home")
-            .debug_selector(|| "choose-home".to_owned())
-            .flex_shrink_0()
-            .h(px(32.))
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded(px(10.))
-            .bg(rgb(BUTTON))
-            .text_size(px(13.))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-            .child(icon(Icon::Folder, 14., DIM))
-            .child("Choose…")
-            .on_click(cx.listener(|_, _, window, cx| Self::choose(window, cx)))
+        button(
+            "choose-home",
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon(Icon::Folder, 14., DIM))
+                .child("Choose…"),
+            Kind::Plain,
+        )
+        .h(px(INPUT_HEIGHT))
+        .on_click(cx.listener(|_, _, window, cx| Self::choose(window, cx)))
     }
 }
 
@@ -401,7 +395,7 @@ impl Render for SettingsView {
                                     .debug_selector(|| "home-input".to_owned())
                                     .flex_1()
                                     .min_w_0()
-                                    .h(px(32.))
+                                    .h(px(INPUT_HEIGHT))
                                     .px_2()
                                     .flex()
                                     .items_center()

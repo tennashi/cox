@@ -20,8 +20,9 @@ use gpui::{
 
 use crate::stage::heading::{INSET, body, card, heading, note, parted};
 use crate::stage::tab::Shows;
+use crate::ui::button::{self, Kind};
 use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT, ASKING, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND};
+use crate::ui::theme::{ACCENT, ASKING, DIM, FAILED, FAINT, FOREGROUND};
 
 /// How often the tab reads the devices again, as Android Studio makes or
 /// deletes them and emulators start and stop.
@@ -106,7 +107,8 @@ impl Devices {
     }
 
     fn render_device(&self, index: usize, avd: &Avd, cx: &mut Context<Self>) -> impl IntoElement {
-        let button = |id: &'static str, label: &'static str| button(id, index, label);
+        let button =
+            |id: &'static str, label: &'static str| button::button((id, index), label, Kind::Plain);
         let running = self.running(&avd.name).cloned();
         let wiping = self.wiping.as_deref() == Some(avd.name.as_str());
         let name = avd.name.clone();
@@ -155,7 +157,10 @@ impl Devices {
                         .text_color(rgb(ASKING))
                         .child("Its apps and data go. Wipe?"),
                 )
-                .child(button("android-wipe-yes", "Wipe").on_click(wipe))
+                .child(
+                    button::button(("android-wipe-yes", index), "Wipe", Kind::Primary)
+                        .on_click(wipe),
+                )
                 .child(button("android-wipe-no", "Cancel").on_click(cx.listener(
                     |devices, _, _, cx| {
                         devices.wiping = None;
@@ -185,12 +190,14 @@ impl Devices {
                         devices.open(&name, boot, cx);
                     })
                 }))
-                .child(button("android-wipe", "Wipe data").on_click(cx.listener(
-                    move |devices, _, _, cx| {
-                        devices.wiping = Some(name.clone());
-                        cx.notify();
-                    },
-                ))),
+                .child(
+                    button::button(("android-wipe", index), "Wipe data", Kind::Quiet).on_click(
+                        cx.listener(move |devices, _, _, cx| {
+                            devices.wiping = Some(name.clone());
+                            cx.notify();
+                        }),
+                    ),
+                ),
         }
     }
 }
@@ -204,20 +211,6 @@ fn dot(runs: bool) -> impl IntoElement {
     } else {
         dot.border_1().border_color(rgb(FAINT))
     }
-}
-
-/// A button of a device's row, the `index`th.
-fn button(id: &'static str, index: usize, label: &'static str) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id((id, index))
-        .debug_selector(move || format!("{id}-{index}"))
-        .px_2()
-        .py(px(2.))
-        .rounded(px(6.))
-        .cursor_pointer()
-        .bg(rgb(BUTTON))
-        .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-        .child(label)
 }
 
 /// What `avd` is, as the line under its name says it: the phone it is

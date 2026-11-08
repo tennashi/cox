@@ -14,10 +14,12 @@
 //! - [`translation`] shows what the human selected in their language.
 //! - [`screen`] captures what the screen shows of the window.
 
+pub mod button;
 pub mod ellipsis;
 pub mod icons;
 pub mod input;
 pub mod markdown;
+pub mod menu;
 pub mod paths;
 pub mod screen;
 pub mod selection;

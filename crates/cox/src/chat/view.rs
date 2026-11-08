@@ -41,8 +41,8 @@ use cox_core::entry::Attachment;
 use cox_core::goal;
 use cox_core::tabs::KeptTabs;
 use gpui::{
-    AnyView, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding,
-    KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
+    AnyView, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
+    KeyBinding, KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Window, actions, div, list,
     prelude::*, px, relative, rgb,
 };
@@ -59,7 +59,8 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{self, LineInput, Submitted};
 use crate::ui::text::Reading;
 use crate::ui::theme::{
-    ACCENT, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND, LINK, RAISED, UI_FONT,
+    ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND,
+    OFFERING_EDGE, RAISED, UI_FONT,
 };
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, Panel, tip};
@@ -1240,93 +1241,100 @@ impl ChatView {
     fn render_goal_input(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (input, _, _) = self.goal_input.as_ref()?;
         Some(
-            div()
+            Self::render_input_card("Goal", "words, or $ and a command · Enter sets it")
                 .key_context(GOAL)
                 .debug_selector(|| "goal-input".to_owned())
-                .px_3()
-                .py_1()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_size(px(12.))
                 .on_action(cx.listener(|view, _: &CancelGoal, window, cx| {
                     view.end_editing_goal(false, window, cx);
                 }))
                 .on_mouse_down_out(cx.listener(|view, _, window, cx| {
                     view.end_editing_goal(true, window, cx);
                 }))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_color(rgb(DIM))
-                        .child("Goal: words, or $ and a command"),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .px_1()
-                        .border_1()
-                        .border_color(rgb(LINK))
-                        .rounded_sm()
-                        .child(input.clone()),
-                ),
+                .child(input.clone()),
         )
     }
 
     /// The input that starts a sketch, with what the sketch starts from,
-    /// which a click changes, while it is open.
+    /// which a click on the other changes, while it is open.
     fn render_sketch_input(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (input, sketch, _) = self.sketch_input.as_ref()?;
-        let from = match sketch {
-            Sketch::Project => "from the project",
-            Sketch::Empty => "from nothing",
-        };
-        Some(
-            div()
-                .key_context(SKETCH)
-                .debug_selector(|| "sketch-input".to_owned())
-                .px_3()
-                .py_1()
+        // What the sketch starts from, lit, and the other, which a click
+        // chooses instead.
+        let from = |label: &'static str, chosen: bool| {
+            let chip = div()
+                .h(px(24.))
+                .px(px(9.))
                 .flex()
                 .items_center()
-                .gap_2()
+                .rounded(px(12.))
                 .text_size(px(12.))
+                .child(label);
+            if chosen {
+                chip.bg(rgb(ACCENT_GROUND))
+                    .text_color(rgb(ACCENT))
+                    .into_any_element()
+            } else {
+                chip.id("sketch-from")
+                    .debug_selector(|| "sketch-from".to_owned())
+                    .bg(rgb(BUTTON))
+                    .text_color(rgb(FAINT))
+                    .cursor_pointer()
+                    .hover(|style| style.text_color(rgb(FOREGROUND)))
+                    .on_click(cx.listener(|view, _, window, cx| view.flip_sketch(window, cx)))
+                    .into_any_element()
+            }
+        };
+        let project = *sketch == Sketch::Project;
+        Some(
+            Self::render_input_card("Sketch", "what to try out · Enter opens it")
+                .key_context(SKETCH)
+                .debug_selector(|| "sketch-input".to_owned())
                 .on_action(cx.listener(|view, _: &CancelSketch, window, cx| {
                     view.end_editing_sketch(false, window, cx);
                 }))
+                .child(input.clone())
                 .child(
                     div()
-                        .flex_shrink_0()
-                        .text_color(rgb(DIM))
-                        .child("Sketch: what to try out"),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .px_1()
-                        .border_1()
-                        .border_color(rgb(LINK))
-                        .rounded_sm()
-                        .child(input.clone()),
-                )
-                .child(
-                    div()
-                        .id("sketch-from")
-                        .debug_selector(|| "sketch-from".to_owned())
-                        .flex_shrink_0()
-                        .px_2()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(rgb(BORDER))
-                        .text_color(rgb(DIM))
-                        .cursor_pointer()
-                        .hover(|style| style.text_color(rgb(FOREGROUND)))
-                        .child(from)
-                        .on_click(cx.listener(|view, _, window, cx| view.flip_sketch(window, cx))),
+                        .flex()
+                        .gap(px(6.))
+                        .child(from("from the project", project))
+                        .child(from("from nothing", !project)),
                 ),
         )
+    }
+
+    /// A card over the chat's input, as the input's own box is drawn but
+    /// edged in the accent, for an input that takes `what`, as `hint`
+    /// says.
+    fn render_input_card(what: &'static str, hint: &'static str) -> gpui::Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .mx(px(12.))
+            .mt(px(12.))
+            .px(px(16.))
+            .py(px(10.))
+            .rounded(px(16.))
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(OFFERING_EDGE))
+            .text_size(px(15.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(11.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(FAINT))
+                            .child(what.to_uppercase()),
+                    )
+                    .child(div().text_color(rgb(FAINT)).child(hint)),
+            )
     }
 }
 

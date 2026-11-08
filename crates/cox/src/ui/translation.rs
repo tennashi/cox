@@ -16,9 +16,7 @@ use gpui::{
 use cox_core::entry::Attachment;
 
 use crate::translate::{Arriving, Way};
-use crate::ui::theme::{
-    ACCENT_GROUND, BORDER_STRONG, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED,
-};
+use crate::ui::theme::{BORDER_STRONG, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED};
 
 actions!(
     cox,
@@ -311,23 +309,14 @@ impl TranslationCard {
         };
         let text = self.text.clone();
         let handed = self.handed.clone();
-        let menu = div()
+        let menu = crate::ui::menu::menu()
             .id("translation")
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .on_action(|_: &CloseTranslation, window, cx| close(window, cx))
             .on_action(cx.listener(|card, _: &Translate, _, cx| card.translate(cx)))
             .on_mouse_down_out(|_, window, cx| close(window, cx))
-            .occlude()
             .min_w(px(200.))
-            .p_1()
-            .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER_STRONG))
-            .rounded_md()
-            .shadow_md()
-            .text_size(px(13.))
-            .text_color(rgb(FOREGROUND))
             .child(
                 item("translation-translate", "Translate", translate)
                     .on_click(cx.listener(|card, _, _, cx| card.translate(cx))),
@@ -363,19 +352,7 @@ impl TranslationCard {
 
 /// An item of the menu, with the keys that do the same.
 fn item(id: &'static str, label: &'static str, keys: &'static str) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .debug_selector(move || id.to_owned())
-        .flex()
-        .justify_between()
-        .gap_4()
-        .px_2()
-        .py_0p5()
-        .rounded_sm()
-        .cursor_pointer()
-        .hover(|style| style.bg(rgb(ACCENT_GROUND)))
-        .child(label)
-        .child(div().text_color(rgb(DIM)).child(keys))
+    crate::ui::menu::item(id, label, keys)
 }
 
 /// A small button of the card's head.

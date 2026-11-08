@@ -2,10 +2,10 @@
 //! where it is defined, or list where it is used; and, with text
 //! selected, translate it.
 
-use gpui::{Context, IntoElement, anchored, deferred, div, prelude::*, px, rgb};
+use gpui::{Context, IntoElement, anchored, deferred, prelude::*, px, rgb};
 
 use super::Code;
-use crate::ui::theme::{ACCENT_GROUND, BORDER_STRONG, DIM, FOREGROUND, RAISED};
+use crate::ui::theme::{BORDER_STRONG, FOREGROUND, RAISED};
 
 pub(super) const MENU: u32 = RAISED;
 pub(super) const MENU_BORDER: u32 = BORDER_STRONG;
@@ -27,29 +27,10 @@ impl Code {
         let selected = self.chosen_text();
         let handed = self.selected_attachment();
         let item = |id: &'static str, label: &'static str, key: &'static str| {
-            div()
-                .id(id)
-                .debug_selector(move || id.to_owned())
-                .flex()
-                .justify_between()
-                .gap_4()
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(ACCENT_GROUND)))
-                .child(label)
-                .child(div().text_color(rgb(DIM)).child(key))
+            crate::ui::menu::item(id, label, key)
         };
-        let menu = div()
-            .occlude()
+        let menu = crate::ui::menu::menu()
             .min_w(px(220.))
-            .p_1()
-            .bg(rgb(MENU))
-            .border_1()
-            .border_color(rgb(MENU_BORDER))
-            .rounded_md()
-            .shadow_md()
             .text_color(rgb(FOREGROUND))
             .on_mouse_down_out(cx.listener(|code, _, _, cx| {
                 code.menu = None;

@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 use super::words::Words;
 use crate::agents::{Agents, line};
+use crate::ui::button::INPUT_HEIGHT;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, FAILED, FAINT, FOREGROUND,
@@ -239,9 +240,9 @@ impl Render for TranslationSection {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let input = |input: &Entity<LineInput>| {
             div()
-                .min_h(px(32.))
+                .min_h(px(INPUT_HEIGHT))
                 .px_2()
-                .py(px(7.))
+                .py(px(4.))
                 .flex()
                 .items_center()
                 .border_1()

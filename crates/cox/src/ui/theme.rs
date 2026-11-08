@@ -88,6 +88,12 @@ pub const ASKING: u32 = 0xe5_b46d;
 pub const ASKING_GROUND: u32 = 0x1e_1b15;
 pub const ASKING_EDGE: u32 = 0x4a_3d25;
 pub const ASKING_BUTTON: u32 = 0x2e_2920;
+/// The ground of what Cox or the agent offers the human, as a goal to
+/// set, its edge, and its buttons but the first, which is `ACCENT`: as
+/// what asks them is drawn, in the accent rather than amber.
+pub const OFFERING_GROUND: u32 = 0x15_1f1e;
+pub const OFFERING_EDGE: u32 = 0x26_4a45;
+pub const OFFERING_BUTTON: u32 = 0x1c_2e2b;
 /// What went wrong.
 pub const FAILED: u32 = 0xec_8580;
 /// The ground of what went wrong, and the mark on it.

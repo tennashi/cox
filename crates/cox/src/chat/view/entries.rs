@@ -31,7 +31,7 @@ use crate::ui::text::Writer;
 use crate::ui::theme::{
     ACCENT, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER, BORDER_STRONG, BUTTON,
     BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND, FAILED_MARK, FAINT, FOREGROUND,
-    GROUND, LINK, RAISED, SURFACE,
+    GROUND, LINK, OFFERING_BUTTON, OFFERING_EDGE, OFFERING_GROUND, RAISED, SURFACE,
 };
 
 /// How tall what a tool call shows grows before it scrolls on its own.
@@ -856,6 +856,118 @@ impl ChatView {
     }
 }
 
+/// The colors of a card that waits for the human to answer: in amber
+/// for what asks them, as a permission request, and in the accent for
+/// what Cox or the agent offers them, as a goal to set.
+#[derive(Clone, Copy)]
+struct Tone {
+    /// The mark at the card's head, its tag, and the first button.
+    mark: u32,
+    ground: u32,
+    edge: u32,
+    /// The buttons but the first.
+    button: u32,
+}
+
+const ASKING_TONE: Tone = Tone {
+    mark: ASKING,
+    ground: ASKING_GROUND,
+    edge: ASKING_EDGE,
+    button: ASKING_BUTTON,
+};
+
+const OFFERING_TONE: Tone = Tone {
+    mark: ACCENT,
+    ground: OFFERING_GROUND,
+    edge: OFFERING_EDGE,
+    button: OFFERING_BUTTON,
+};
+
+/// A card in `tone` that waits for the human: `head` at its top, with
+/// `tag` at its right, what it shows, and `buttons` along its foot.
+fn answer_card(
+    tone: Tone,
+    head: impl IntoElement,
+    tag: &'static str,
+    shows: impl IntoIterator<Item = AnyElement>,
+    buttons: impl IntoIterator<Item = Stateful<gpui::Div>>,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .p(px(14.))
+        .rounded(px(14.))
+        .bg(rgb(tone.ground))
+        .border_1()
+        .border_color(rgb(tone.edge))
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .child(div().flex_1().min_w_0().child(head))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(12.))
+                        .text_color(rgb(tone.mark))
+                        .child(tag),
+                ),
+        )
+        .children(shows)
+        .child(div().flex().gap(px(6.)).children(buttons))
+}
+
+/// A button of a card in `tone`, which a test finds as `selector`: the
+/// first, which the human most likely answers, stands out.
+fn answer_button(
+    id: impl Into<gpui::ElementId>,
+    selector: String,
+    label: impl IntoElement,
+    first: bool,
+    tone: Tone,
+) -> Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .debug_selector(move || selector)
+        .flex_1()
+        .min_w_0()
+        .h(px(34.))
+        .px_2()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(10.))
+        .text_size(px(13.))
+        .cursor_pointer()
+        .map(|button| {
+            if first {
+                button
+                    .bg(rgb(tone.mark))
+                    .text_color(rgb(GROUND))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .hover(|style| style.opacity(0.9))
+            } else {
+                button
+                    .bg(rgb(tone.button))
+                    .text_color(rgb(FOREGROUND))
+                    .hover(|style| style.bg(rgb(tone.edge)))
+            }
+        })
+        .child(label)
+}
+
+/// The head of a card that waits for the human: its mark, in the card's
+/// tone, and what it is.
+fn card_head(mark: &'static str, tone: Tone, what: impl IntoElement) -> gpui::Div {
+    div()
+        .flex()
+        .gap_2()
+        .child(div().flex_shrink_0().text_color(rgb(tone.mark)).child(mark))
+        .child(div().flex_1().min_w_0().child(what))
+}
+
 /// A goal the agent proposed: while the human has not answered it, a
 /// card with why the agent proposes it, and buttons to set it, to
 /// change it first, or to let it be; then a line that says what they
@@ -881,54 +993,48 @@ fn render_proposal(
             .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
             .into_any_element();
     }
-    let button = |name: &'static str, label: &'static str| {
-        div()
-            .id(SharedString::from(format!("{name}-{index}")))
-            .debug_selector(move || format!("{name}-{index}"))
-            .px_2()
-            .rounded_sm()
-            .bg(rgb(BUTTON))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-            .child(label)
+    let button = |name: &'static str, label: &'static str, first: bool| {
+        let id = format!("{name}-{index}");
+        answer_button(
+            SharedString::from(id.clone()),
+            id,
+            label,
+            first,
+            OFFERING_TONE,
+        )
     };
     let buttons = [
-        button("set-goal", "Set goal").on_click(cx.listener(move |view, _, _, cx| {
+        button("set-goal", "Set goal", true).on_click(cx.listener(move |view, _, _, cx| {
             view.answer_proposal(index, Answer::Set, cx);
         })),
-        button("change-goal", "Change…").on_click(cx.listener(move |view, _, window, cx| {
-            view.change_proposal(index, window, cx);
-        })),
-        button("dismiss-goal", "Dismiss").on_click(cx.listener(move |view, _, _, cx| {
+        button("change-goal", "Change…", false).on_click(cx.listener(
+            move |view, _, window, cx| {
+                view.change_proposal(index, window, cx);
+            },
+        )),
+        button("dismiss-goal", "Dismiss", false).on_click(cx.listener(move |view, _, _, cx| {
             view.answer_proposal(index, Answer::Dismissed, cx);
         })),
     ];
-    div()
-        .debug_selector(move || format!("proposal-{index}"))
-        .flex()
-        .flex_col()
-        .gap_2()
-        .p_2()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(LINK))
-        .child(
-            div()
-                .flex()
-                .gap_2()
-                .text_color(rgb(DIM))
-                .child(div().flex_shrink_0().text_color(rgb(LINK)).child("◎"))
-                .child("Proposed goal"),
-        )
-        .child(writer.markdown(&read))
-        .children(why.map(|why| {
+    let shows = [
+        Some(writer.markdown(&read).into_any_element()),
+        why.map(|why| {
             div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
                 .child(writer.markdown(why))
-        }))
-        .child(div().flex().flex_wrap().gap_2().children(buttons))
-        .into_any_element()
+                .into_any_element()
+        }),
+    ];
+    answer_card(
+        OFFERING_TONE,
+        card_head("◎", OFFERING_TONE, "Proposed goal"),
+        "for you to set",
+        shows.into_iter().flatten(),
+        buttons,
+    )
+    .debug_selector(move || format!("proposal-{index}"))
+    .into_any_element()
 }
 
 /// Cox's card asking the human whether to keep what a chat learned in
@@ -949,48 +1055,42 @@ fn render_keep(
             .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
             .into_any_element();
     }
-    let button = |name: &'static str, label: &'static str| {
-        div()
-            .id(SharedString::from(format!("{name}-{index}")))
-            .debug_selector(move || format!("{name}-{index}"))
-            .px_2()
-            .rounded_sm()
-            .bg(rgb(BUTTON))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-            .child(label)
+    let button = |name: &'static str, label: &'static str, first: bool| {
+        let id = format!("{name}-{index}");
+        answer_button(
+            SharedString::from(id.clone()),
+            id,
+            label,
+            first,
+            OFFERING_TONE,
+        )
     };
     let buttons = [
-        button("keep-in-wiki", "Save to wiki").on_click(cx.listener(move |view, _, _, cx| {
-            view.answer_keep(index, true, cx);
-        })),
-        button("keep-not-now", "Not now").on_click(cx.listener(move |view, _, _, cx| {
+        button("keep-in-wiki", "Save to wiki", true).on_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_keep(index, true, cx);
+            },
+        )),
+        button("keep-not-now", "Not now", false).on_click(cx.listener(move |view, _, _, cx| {
             view.answer_keep(index, false, cx);
         })),
     ];
-    div()
-        .debug_selector(move || format!("keep-{index}"))
-        .flex()
-        .flex_col()
-        .gap_2()
-        .p_2()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(LINK))
-        .child(
-            div()
-                .flex()
-                .gap_2()
-                .text_color(rgb(DIM))
-                .child(div().flex_shrink_0().text_color(rgb(LINK)).child("✎"))
-                .child(writer.plain(why, "\n")),
-        )
+    let shows = [div()
+        .text_color(rgb(DIM))
         .child(writer.plain(
             "Keep what was learned in the wiki, for the agents of every project to find again?",
             "\n\n",
         ))
-        .child(div().flex().flex_wrap().gap_2().children(buttons))
-        .into_any_element()
+        .into_any_element()];
+    answer_card(
+        OFFERING_TONE,
+        card_head("✎", OFFERING_TONE, writer.plain(why, "\n")),
+        "keep it?",
+        shows,
+        buttons,
+    )
+    .debug_selector(move || format!("keep-{index}"))
+    .into_any_element()
 }
 
 /// The permission request the agent waits on: what it asks to do, and
@@ -1003,75 +1103,21 @@ fn render_asking(
     writer: &mut Writer,
     cx: &mut Context<ChatView>,
 ) -> AnyElement {
-    // The first option, which the human most likely answers, stands out.
     let options = options.iter().enumerate().map(|(i, name)| {
-        let first = i == 0;
-        div()
-            .id(("option", i))
-            .debug_selector(|| format!("option-{}", i + 1))
-            .flex_1()
-            .min_w_0()
-            .h(px(34.))
-            .px_2()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(10.))
-            .text_size(px(13.))
-            .cursor_pointer()
-            .map(|button| {
-                if first {
-                    button
-                        .bg(rgb(ASKING))
-                        .text_color(rgb(GROUND))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .hover(|style| style.opacity(0.9))
-                } else {
-                    button
-                        .bg(rgb(ASKING_BUTTON))
-                        .text_color(rgb(FOREGROUND))
-                        .hover(|style| style.bg(rgb(ASKING_EDGE)))
-                }
-            })
-            .child(
-                div()
-                    .overflow_hidden()
-                    .child(ellipsis(SharedString::from(format!("{} · {name}", i + 1)))),
-            )
-            .on_click(cx.listener(move |view, _, _, cx| view.choose(i, cx)))
-    });
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(12.))
-        .p(px(14.))
-        .rounded(px(14.))
-        .bg(rgb(ASKING_GROUND))
-        .border_1()
-        .border_color(rgb(ASKING_EDGE))
-        .child(
+        answer_button(
+            ("option", i),
+            format!("option-{}", i + 1),
             div()
-                .flex()
-                .items_start()
-                .gap_2()
-                .child(div().flex_1().min_w_0().child(line_of(
-                    index,
-                    None,
-                    ("?", ASKING),
-                    title,
-                    writer,
-                )))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_size(px(12.))
-                        .text_color(rgb(ASKING))
-                        .child("waiting for you"),
-                ),
+                .overflow_hidden()
+                .child(ellipsis(SharedString::from(format!("{} · {name}", i + 1)))),
+            i == 0,
+            ASKING_TONE,
         )
-        .children(render_content(index, content, writer))
-        .child(div().flex().gap(px(6.)).children(options))
-        .into_any_element()
+        .on_click(cx.listener(move |view, _, _, cx| view.choose(i, cx)))
+    });
+    let head = line_of(index, None, ("?", ASKING), title, writer);
+    let shows = render_content(index, content, writer);
+    answer_card(ASKING_TONE, head, "waiting for you", shows, options).into_any_element()
 }
 
 /// The line of a tool call or a permission request: whether what it

@@ -13,10 +13,11 @@ use gpui::{
 use serde_json::Value;
 
 use super::words::Words;
+use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND};
+use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND};
 
 /// A folder of the settings, by its key in `settings.json`.
 pub struct FolderField {
@@ -196,7 +197,7 @@ impl Render for FolderField {
                             .debug_selector(move || format!("{key}-input"))
                             .flex_1()
                             .min_w_0()
-                            .h(px(32.))
+                            .h(px(INPUT_HEIGHT))
                             .px_2()
                             .flex()
                             .items_center()
@@ -208,23 +209,18 @@ impl Render for FolderField {
                             .child(self.input.clone()),
                     )
                     .child(
-                        div()
-                            .id(choose.clone())
-                            .debug_selector(move || choose.to_string())
-                            .flex_shrink_0()
-                            .h(px(32.))
-                            .px_3()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded(px(10.))
-                            .bg(rgb(BUTTON))
-                            .text_size(px(13.))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-                            .child(icon(Icon::Folder, 14., DIM))
-                            .child("Choose…")
-                            .on_click(cx.listener(|_, _, window, cx| Self::choose(window, cx))),
+                        button(
+                            choose,
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(icon(Icon::Folder, 14., DIM))
+                                .child("Choose…"),
+                            Kind::Plain,
+                        )
+                        .h(px(INPUT_HEIGHT))
+                        .on_click(cx.listener(|_, _, window, cx| Self::choose(window, cx))),
                     ),
             )
             .child(words.note(&told, color))

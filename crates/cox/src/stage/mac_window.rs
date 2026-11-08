@@ -27,7 +27,8 @@ use crate::chat::region::{self, Described};
 use crate::stage::mirror::{Display, Mirrored, Screen, scaled};
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
-use crate::ui::theme::{BORDER, BUTTON, DIM, FAILED, FOREGROUND, RAISED, SELECTED};
+use crate::ui::button::{Kind, button};
+use crate::ui::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
 
 /// Why a tab that was not shown its window ended, as it opens.
 const NOT_SHOWN: &str = "Not shown";
@@ -314,17 +315,7 @@ impl MacWindow {
     }
 
     fn render_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let button = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .debug_selector(move || id.to_owned())
-                .px_2()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .bg(rgb(BUTTON))
-                .hover(|style| style.bg(rgb(SELECTED)))
-                .child(label)
-        };
+        let button = |id: &'static str, label: &'static str| button(id, label, Kind::Plain);
         let state = match &self.status {
             Status::Finding => Some(("Finding the window…", DIM)),
             Status::Showing => None,

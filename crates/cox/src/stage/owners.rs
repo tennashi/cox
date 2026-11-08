@@ -12,13 +12,11 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::{
-    App, Context, EventEmitter, Pixels, Point, SharedString, anchored, deferred, div, prelude::*,
-    px, rgb,
+    App, Context, EventEmitter, Pixels, Point, SharedString, anchored, deferred, prelude::*, px,
 };
 
 use super::Stage;
 use super::tab::{Tab, TabContent};
-use crate::ui::theme::{ACCENT_GROUND, BORDER_STRONG, RAISED};
 
 /// What names the chats the stage's tabs are of, by their keys, as the
 /// list of chats names them.
@@ -191,17 +189,7 @@ impl Stage {
     ) -> Option<impl IntoElement + use<>> {
         let (at, index) = self.tab_menu?;
         let tab = self.tabs.get(index)?;
-        let item = |id: &'static str, label: SharedString| {
-            div()
-                .id(id)
-                .debug_selector(move || id.to_owned())
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(ACCENT_GROUND)))
-                .child(label)
-        };
+        let item = |id: &'static str, label: SharedString| crate::ui::menu::item(id, label, "");
         let hand_to = tab
             .owner
             .is_none()
@@ -214,15 +202,8 @@ impl Stage {
             .map(|chat| (chat, self.name_of(chat, cx)));
         let taken = tab.owner.is_some();
         let closes = self.tabs.len() > 1;
-        let menu = div()
-            .occlude()
+        let menu = crate::ui::menu::menu()
             .min_w(px(160.))
-            .p_1()
-            .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER_STRONG))
-            .rounded_md()
-            .shadow_md()
             .text_size(px(13.))
             .on_mouse_down_out(cx.listener(|stage, _, _, cx| stage.close_tab_menu(cx)))
             .children(hand_to.map(|(chat, name)| {

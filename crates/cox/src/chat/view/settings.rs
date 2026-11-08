@@ -22,8 +22,9 @@ use super::ChatView;
 use crate::agents::REGISTRY_GROUP;
 use crate::chat::conversation::State;
 use crate::ui::ellipsis::ellipsis;
+use crate::ui::menu::{ROW_HEIGHT, ROW_RADIUS};
 use crate::ui::theme::{
-    ACCENT, ACCENT_GROUND, BORDER, BORDER_STRONG, BUTTON, DIM, FOREGROUND, RAISED, SURFACE,
+    ACCENT, ACCENT_GROUND, BORDER, BUTTON, DIM, FAINT, FOREGROUND, SELECTED, SURFACE,
 };
 
 /// How wide the list of a setting's choices is.
@@ -205,15 +206,14 @@ impl ChatView {
         div()
             .id(id)
             .debug_selector(move || selector.clone())
+            .h(px(ROW_HEIGHT))
             .flex()
             .items_center()
             .gap_2()
-            .px_2()
-            .py_1()
-            .rounded_sm()
+            .px(px(10.))
+            .rounded(px(ROW_RADIUS))
             .when(enabled, |row| {
-                row.cursor_pointer()
-                    .hover(|style| style.bg(rgb(ACCENT_GROUND)))
+                row.cursor_pointer().hover(|style| style.bg(rgb(SELECTED)))
             })
             .when(!enabled, |row| row.opacity(0.5))
             .child(div().text_color(rgb(DIM)).child(setting.name.clone()))
@@ -244,20 +244,12 @@ impl ChatView {
     /// The list under the pill, holding `rows`, which a click anywhere
     /// else closes.
     fn render_list(rows: Vec<AnyElement>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        div()
+        crate::ui::menu::menu()
             .id("setting-choices")
             .debug_selector(|| "setting-choices".to_owned())
-            .occlude()
             .w(px(CHOICES_WIDTH))
             .max_h(px(CHOICES_HEIGHT))
             .overflow_y_scroll()
-            .p_1()
-            .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER_STRONG))
-            .rounded_md()
-            .shadow_md()
-            .text_size(px(12.))
             .on_mouse_down_out(cx.listener(|view, event: &MouseDownEvent, _, cx| {
                 view.setting_open = None;
                 view.setting_closed_at = Some(event.position);
@@ -276,14 +268,15 @@ impl ChatView {
         let back = div()
             .id("settings-back")
             .debug_selector(|| "settings-back".to_owned())
+            .h(px(ROW_HEIGHT))
             .flex()
+            .items_center()
             .gap_2()
-            .px_2()
-            .py_1()
-            .rounded_sm()
+            .px(px(10.))
+            .rounded(px(ROW_RADIUS))
             .text_color(rgb(DIM))
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(ACCENT_GROUND)))
+            .hover(|style| style.bg(rgb(SELECTED)))
             .child("‹")
             .child(setting.name.clone())
             .on_mouse_down(
@@ -303,52 +296,58 @@ impl ChatView {
                 group.clone_from(&choice.group);
                 list = list.child(
                     div()
-                        .px_2()
-                        .pt_1()
-                        .text_color(rgb(DIM))
+                        .px(px(10.))
+                        .pt_2()
+                        .pb_1()
+                        .text_size(px(12.))
+                        .text_color(rgb(FAINT))
                         .children(group.clone()),
                 );
             }
             let chosen = choice.id == setting.value;
             let (id, value) = (setting.id.clone(), choice.id.clone());
-            list =
-                list.child(
-                    div()
-                        .id(ElementId::NamedInteger("choice".into(), index as u64))
-                        .debug_selector(move || format!("choice-{index}"))
-                        .flex()
-                        .gap_2()
-                        .px_2()
-                        .py_0p5()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .hover(|style| style.bg(rgb(ACCENT_GROUND)))
-                        .child(
-                            div()
-                                .w(px(10.))
-                                .flex_shrink_0()
-                                .when(chosen, |mark| mark.child("✓")),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .child(choice.name.clone())
-                                .children(choice.description.clone().map(|description| {
-                                    div().text_color(rgb(DIM)).child(description)
-                                })),
-                        )
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            match menu {
-                                Menu::Agent => view.choose_agent(&value, cx),
-                                Menu::Setting(_) => view.set(&id, &value, cx),
-                                Menu::Rows => {}
-                            }
-                            window.focus(&view.input.focus_handle(cx));
-                        })),
-                );
+            list = list.child(
+                div()
+                    .id(ElementId::NamedInteger("choice".into(), index as u64))
+                    .debug_selector(move || format!("choice-{index}"))
+                    .min_h(px(ROW_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px(px(10.))
+                    .py(px(5.))
+                    .rounded(px(ROW_RADIUS))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(rgb(SELECTED)))
+                    .child(
+                        div()
+                            .w(px(10.))
+                            .flex_shrink_0()
+                            .when(chosen, |mark| mark.child("✓")),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(choice.name.clone())
+                            .children(choice.description.clone().map(|description| {
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(FAINT))
+                                    .child(description)
+                            })),
+                    )
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        match menu {
+                            Menu::Agent => view.choose_agent(&value, cx),
+                            Menu::Setting(_) => view.set(&id, &value, cx),
+                            Menu::Rows => {}
+                        }
+                        window.focus(&view.input.focus_handle(cx));
+                    })),
+            );
         }
         list
     }

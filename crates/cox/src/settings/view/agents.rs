@@ -22,11 +22,12 @@ use crate::agents::check::{self, Checked};
 use crate::agents::line;
 use crate::agents::listing::Listing;
 use crate::agents::{Agents, Known};
+use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{
-    ACCENT, ASKING, BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, DIM, DISABLED, FAILED, FAINT,
-    FOREGROUND, HOVER, LINK, RAISED,
+    ACCENT, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER, LINK,
+    RAISED,
 };
 use crate::ui::tip;
 
@@ -412,9 +413,9 @@ impl AgentsSection {
         let changed = row.changed(cx);
         let input = |input: &Entity<LineInput>| {
             div()
-                .min_h(px(32.))
+                .min_h(px(INPUT_HEIGHT))
                 .px_2()
-                .py(px(7.))
+                .py(px(4.))
                 .flex()
                 .items_center()
                 .border_1()
@@ -425,24 +426,18 @@ impl AgentsSection {
                 .child(input.clone())
         };
         let testing = row.testing;
-        let test = div()
-            .id(("agent-test", key))
-            .debug_selector(move || format!("agent-test-{key}"))
-            .flex_shrink_0()
-            .h(px(32.))
-            .px_3()
-            .flex()
-            .items_center()
-            .rounded(px(10.))
-            .bg(rgb(BUTTON))
-            .text_size(px(13.))
-            .text_color(rgb(if testing { DISABLED } else { FOREGROUND }))
-            .child(if testing { "Testing…" } else { "Test" })
-            .when(!testing, |test| {
-                test.cursor_pointer()
-                    .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-                    .on_click(cx.listener(move |section, _, _, cx| section.test(key, cx)))
-            });
+        let test = button(
+            ("agent-test", key),
+            if testing { "Testing…" } else { "Test" },
+            Kind::Plain,
+        )
+        .h(px(INPUT_HEIGHT))
+        .when(testing, |test| {
+            test.text_color(rgb(DISABLED)).cursor_default()
+        })
+        .when(!testing, |test| {
+            test.on_click(cx.listener(move |section, _, _, cx| section.test(key, cx)))
+        });
         let remove = div()
             .id(("agent-remove", key))
             .debug_selector(move || format!("agent-remove-{key}"))
@@ -613,25 +608,23 @@ impl Render for AgentsSection {
                             .items_center()
                             .gap_3()
                             .child(
-                                div()
-                                    .id("add-agent")
-                                    .debug_selector(|| "add-agent".to_owned())
-                                    .h(px(32.))
-                                    .px_3()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .rounded(px(10.))
-                                    .bg(rgb(BUTTON))
-                                    .text_size(px(13.))
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-                                    .child(icon(Icon::Plus, 14., DIM))
-                                    .child("Add agent")
-                                    .on_click(cx.listener(|section, _, _, cx| {
+                                button(
+                                    "add-agent",
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(icon(Icon::Plus, 14., DIM))
+                                        .child("Add agent"),
+                                    Kind::Plain,
+                                )
+                                .h(px(INPUT_HEIGHT))
+                                .on_click(cx.listener(
+                                    |section, _, _, cx| {
                                         section.adding = !section.adding;
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             )
                             .child(hint),
                     )

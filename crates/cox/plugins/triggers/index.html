@@ -398,28 +398,42 @@
         color: var(--broken);
         overflow-wrap: anywhere;
       }
+      /* The button of the window (see `ui::button`): 28 high, rounded
+         by 8, filled; the one the human most likely wants in the
+         accent, and one that takes something away quiet. */
       .button {
-        padding: 7px 13px;
-        border-radius: 10px;
-        border: 1px solid var(--border);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+        height: 28px;
+        padding: 0 10px;
+        border-radius: 8px;
+        background: #26262b;
         color: var(--foreground);
-        font-size: 12.5px;
+        font-size: 13px;
         white-space: nowrap;
         cursor: pointer;
         user-select: none;
       }
       .button:hover {
-        background: var(--hover);
+        background: #303036;
       }
       .button.quiet {
-        border-color: transparent;
+        background: transparent;
         color: var(--dim);
+      }
+      .button.quiet:hover {
+        background: #26262b;
+        color: var(--foreground);
       }
       .button.primary {
         background: var(--accent);
-        border-color: var(--accent);
         color: var(--ground);
-        font-weight: 500;
+        font-weight: 600;
+      }
+      .button.primary:hover {
+        opacity: 0.9;
       }
       /* The heading, as Cox's own tabs have it (see `stage::heading`):
          the title, a line on what the tab shows, and, at the right
@@ -456,8 +470,6 @@
       }
       .head .button {
         flex: none;
-        padding: 2px 10px;
-        border-radius: 8px;
       }
       /* What the human changed and did not save. */
       .value.changed,

@@ -36,7 +36,7 @@ use crate::chat::region::{self, Described};
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
-use crate::ui::theme::{ACCENT_GROUND, BORDER, BORDER_STRONG, BUTTON, DISABLED, RAISED, SELECTED};
+use crate::ui::theme::{BORDER, BUTTON, DISABLED, SELECTED};
 use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
 use cox_browser::{Browser, Caret, Event, Navigation, TargetId};
@@ -502,17 +502,7 @@ impl Page {
     /// The menu of the text selected in the page, while it is open.
     fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (at, text) = self.menu.clone()?;
-        let item = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .debug_selector(move || id.to_owned())
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .cursor_pointer()
-                .hover(|style| style.bg(rgb(ACCENT_GROUND)))
-                .child(label)
-        };
+        let item = |id: &'static str, label: &'static str| crate::ui::menu::item(id, label, "");
         let copied = text.clone();
         let handed = Attachment {
             label: self.title(),
@@ -520,15 +510,8 @@ impl Page {
             text: text.clone(),
             picture: None,
         };
-        let menu = div()
-            .occlude()
+        let menu = crate::ui::menu::menu()
             .min_w(px(140.))
-            .p_1()
-            .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgb(BORDER_STRONG))
-            .rounded_md()
-            .shadow_md()
             .on_mouse_down_out(cx.listener(|page, _, _, cx| {
                 page.menu = None;
                 cx.notify();
