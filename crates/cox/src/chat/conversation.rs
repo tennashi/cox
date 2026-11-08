@@ -1413,6 +1413,23 @@ impl Conversation {
         Some(about)
     }
 
+    /// Shows the human the picture or video `shown`, kept from the path
+    /// `from`, with `caption`, if given.
+    pub fn show_media(
+        &mut self,
+        shown: crate::media::Shown,
+        from: String,
+        caption: Option<String>,
+    ) {
+        self.push(Entry::Media {
+            file: shown.file,
+            kind: shown.kind,
+            from,
+            caption,
+            size: shown.size,
+        });
+    }
+
     /// Has the triggers named `names` gather what the human needs to
     /// answer the permission request the agent waits on, which shows that
     /// they do until each has said, or [`Self::stop_gathering`].

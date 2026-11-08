@@ -312,6 +312,9 @@ function conversation(entries, agent) {
         speaker = null;
         nodes.push(planChanged(value));
         break;
+      case "media":
+        nodes.push(media(value));
+        break;
       case "permission":
         speak(agent, "agent");
         nodes.push(permission(value, at === lastIndexOf(entries, "permission")));
@@ -457,6 +460,20 @@ function permission(asked, last) {
       return el("li", { class: how }, el("button", { onclick: (event) => choose(event, index) }, label));
     })),
     asked.by_setup ? el("p", { class: "hint" }, "Cox answered in your place, as the chat is set up.") : null);
+}
+
+// A picture or a video shown in the conversation, with its caption, or
+// where it was shown from.
+function media(shown) {
+  const source = `/media/${encodeURIComponent(shown.file)}`;
+  const seen = shown.kind === "video"
+    ? el("video", { src: source, controls: true, playsinline: true, preload: "metadata" })
+    : el("img", {
+      src: source, alt: shown.caption || shown.from, loading: "lazy",
+      // Its size, when Cox knows it, keeps its room while it loads.
+      ...(shown.size ? { width: shown.size[0], height: shown.size[1] } : {}),
+    });
+  return el("figure", { class: "entry media" }, seen, el("figcaption", {}, shown.caption || shown.from));
 }
 
 // What the triggers gathered for the human to answer with, each by its

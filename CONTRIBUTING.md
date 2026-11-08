@@ -459,7 +459,7 @@ conversation in the human's place but dimmer, after a line that says
 which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
-the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `run_command`,
+the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `show_media`, `run_command`,
 `open_chat`, `wait_chat`, `propose_goal`, `start_sketch`, `wiki_search`, `wiki_read`, `wiki_write`,
 `raw_keep`, `raw_search`, `raw_read`, and on macOS `mac_windows`, `mac_window_look`,
 `mac_window_click`, `mac_window_type`, `mac_window_key`, `mac_window_scroll`, and `android_devices`,
@@ -948,6 +948,20 @@ that ran anywhere, the pages of the human's wiki written from any chat,
 and every source. Its button on the bar counts the chats
 that wait, and the page reads it all again every two seconds.
 
+The conversation shows pictures and videos too, as a screenshot or a
+screen recording of what the agent made, for the human to see what it
+does without reading the code, at the Mac or on the phone: the agent
+shows one with Cox's `show_media` tool, giving its file, a PNG, a
+JPEG, a GIF or a WebP, or an MP4, a MOV or a WebM, of 100 MB at most,
+and a caption, and a trigger `by: shell` shows one by printing it as
+Markdown does, on a line of its own, `![caption](path)`, its path from
+the chat's folder. Cox keeps a copy of each, in `state/media` in its
+data folder (see [The stage](#the-stage)), named after what it holds,
+so that the conversation shows it as it was. A picture shows as big as
+fits, and a video on a line of its own, each with its caption under it;
+a click opens it on the stage, at `cox://api/media/` and its name, where
+a video plays.
+
 A tab can show a Markdown file too, drawn as the conversation draws the
 agent's replies, for the human to read: the agent opens it with Cox's
 `show_markdown` tool. The tab follows the file as it changes, and the
@@ -1360,6 +1374,7 @@ kind is kept apart
   `triggers.json`, how each last ran, `trigger-runs.json`, what a chat
   of each folder said last as its turn ended, `last-turns.json`, the
   pictures of the regions handed to the chats, `pictures`, the
+  pictures and videos shown in the conversations, `media`, the
   icons the human gave the projects, `icons`, the secret the
   human's phones are paired with, `phone-token`, the key what is
   pushed to them is signed with, `push-key`, and where to push to
@@ -1472,8 +1487,9 @@ projects, each with its chats and how each stands, as the window's
 list has them, those that wait for the human first, under "Waits for
 you"; and a chat's conversation, as it goes on, the agent's tool calls
 and thoughts folded under a line of their chips, as the window folds
-them, which a tap opens, and the plan, what the agent asks, and what
-ran as a turn ended, in sight. From there the human sends a line, as
+them, which a tap opens, and the plan, what the agent asks, the
+pictures and videos shown in it, which play there, and what ran as a
+turn ended, in sight. From there the human sends a line, as
 in the window, which goes into the turn the agent takes, or waits for
 it to end, as in the window; answers what the
 agent asks, a tap on an option; sets or dismisses a goal the agent

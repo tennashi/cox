@@ -35,6 +35,21 @@ pub enum Entry {
         added: Vec<String>,
         removed: Vec<String>,
     },
+    /// A picture or a video shown in the conversation, as a screenshot of
+    /// what the agent made, for the human to see on the Mac or the phone:
+    /// the copy Cox keeps of it, by the name of its `file`, of the `kind`
+    /// it is, shown `from` the path it was at, with its `caption`, if it
+    /// has one, and, for a picture, its `size` in pixels, when Cox could
+    /// read it.
+    Media {
+        file: String,
+        kind: MediaKind,
+        from: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<(u32, u32)>,
+    },
     /// A tool call, running until it has a result.
     ToolCall {
         id: String,
@@ -188,6 +203,14 @@ impl Entry {
             _ => None,
         }
     }
+}
+
+/// What a picture or a video in the conversation is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    Image,
+    Video,
 }
 
 /// One of what runs as a turn ends, or as something else happens: the

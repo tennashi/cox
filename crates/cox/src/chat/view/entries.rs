@@ -19,6 +19,7 @@ use std::ops::Range;
 use cox_core::diff::Line;
 use gpui::{AnyElement, Context, FontWeight, SharedString, Stateful, div, prelude::*, px, rgb};
 
+use cox_core::entry::MediaKind;
 use cox_core::goal::Goal;
 
 use crate::chat::conversation::{
@@ -34,6 +35,12 @@ use crate::ui::theme::{
     FOREGROUND, GROUND, LINK, OFFERING_BUTTON, OFFERING_EDGE, OFFERING_GROUND, RAISED,
     REMOVED_GROUND, SURFACE,
 };
+
+/// How tall a picture shown in the conversation grows.
+const MEDIA_HEIGHT: f32 = 360.;
+/// The widest a picture in the conversation is drawn, the panel narrowing it
+/// further.
+const MEDIA_WIDTH: f32 = 480.;
 
 /// How tall what a tool call shows grows before it scrolls on its own.
 const CONTENT_HEIGHT: f32 = 320.;
@@ -706,6 +713,13 @@ impl ChatView {
                 render_proposal(index, goal, why.as_deref(), *answer, &mut writer, cx)
             }
             Entry::Keep { why, kept, .. } => render_keep(index, why, *kept, &mut writer, cx),
+            Entry::Media {
+                file,
+                kind,
+                from,
+                caption,
+                size,
+            } => render_media(index, (file, *kind, from, caption.as_deref()), *size, cx),
             Entry::Checks(checks) => self.render_checks(index, "TURN END", checks, &mut writer, cx),
             Entry::Event { on, checks } => {
                 self.render_checks(index, event_label(on), checks, &mut writer, cx)
@@ -1180,6 +1194,81 @@ fn render_asking(
         "waiting for you"
     };
     answer_card(ASKING_TONE, head, tag, shows, options).into_any_element()
+}
+
+/// A picture shown in the conversation, as big as fits, or a video, on
+/// a line of its own, each with its caption, or where it was shown from,
+/// under it: a click opens it on the stage, where a video plays.
+/// How wide a picture of `size` is drawn, as big as fits in
+/// `MEDIA_WIDTH` by `MEDIA_HEIGHT`, keeping its shape, so that its height
+/// follows from its width with no empty band beside it; one of no known size
+/// takes the whole width.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a picture is far smaller than f32 counts exactly"
+)]
+fn media_width(size: Option<(u32, u32)>) -> f32 {
+    match size {
+        Some((width, height)) if width > 0 && height > 0 => {
+            let (width, height) = (width as f32, height as f32);
+            width.min(MEDIA_HEIGHT * width / height).min(MEDIA_WIDTH)
+        }
+        _ => MEDIA_WIDTH,
+    }
+}
+
+fn render_media(
+    index: usize,
+    (file, kind, from, caption): (&str, MediaKind, &str, Option<&str>),
+    size: Option<(u32, u32)>,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let link = format!("cox://api/media/{file}");
+    let shown = match (kind, crate::media::kept(file)) {
+        (MediaKind::Image, Some((path, _))) => div()
+            .max_w_full()
+            .child(
+                gpui::img(path)
+                    .w(px(media_width(size)))
+                    .max_w_full()
+                    .object_fit(gpui::ObjectFit::Contain)
+                    .rounded(px(8.)),
+            )
+            .into_any_element(),
+        _ => div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px(px(12.))
+            .py(px(10.))
+            .rounded(px(8.))
+            .bg(rgb(RAISED))
+            .text_color(rgb(LINK))
+            .child("▶")
+            .child(
+                div()
+                    .min_w_0()
+                    .child(ellipsis(SharedString::from(from.to_owned()))),
+            )
+            .into_any_element(),
+    };
+    let under = caption.unwrap_or(from).to_owned();
+    div()
+        .id(("media", index))
+        .debug_selector(move || format!("media-{index}"))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .cursor_pointer()
+        .child(shown)
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child(SharedString::from(under)),
+        )
+        .on_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .into_any_element()
 }
 
 /// What the triggers that run as the agent asks the human's permission
