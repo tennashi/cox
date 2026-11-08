@@ -279,12 +279,6 @@ impl Stage {
 /// `--stage` says another.
 pub const ACTIVITY_URL: &str = "cox://activity/";
 
-/// The address of the Map page, at its top.
-pub(super) const MAP_URL: &str = "cox://map/";
-
-/// The address of the Triggers page.
-pub(super) const TRIGGERS_URL: &str = "cox://triggers/";
-
 /// The hash of the Map page open at the map `map`, or the project's
 /// first, `at`, a tier and a box in it by their ids: `#cox/stage`, or
 /// `#deploy:cox/stage` for the map `deploy`, and `#` alone at the top of

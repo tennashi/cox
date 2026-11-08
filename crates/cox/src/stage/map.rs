@@ -81,7 +81,7 @@ pub fn told(root: &Path, name: Option<&str>) -> serde_json::Value {
 mod tests {
     use std::path::PathBuf;
 
-    use cox_editor::map::{MAP_FILE, MAPS_FOLDER};
+    use cox_editor::map::MAPS_FOLDER;
 
     use super::*;
 
@@ -116,12 +116,17 @@ mod tests {
         assert_eq!(json["map"], serde_json::Value::Null);
         assert_eq!(json["error"], serde_json::Value::Null);
 
-        std::fs::create_dir_all(root.join(".cox")).unwrap();
+        std::fs::create_dir_all(root.join(MAPS_FOLDER)).unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(root.join(MAP_FILE), A_MAP).unwrap();
+        std::fs::write(root.join(MAPS_FOLDER).join("map.json"), A_MAP).unwrap();
         let json = told(&root, None);
-        assert!(json["file"].as_str().unwrap().ends_with(".cox/map.json"));
+        assert!(
+            json["file"]
+                .as_str()
+                .unwrap()
+                .ends_with(".cox/maps/map.json")
+        );
         assert_eq!(json["name"], "map");
         assert_eq!(json["map"]["tiers"][0]["id"], "whole");
         assert_eq!(json["map"]["parts"]["app"]["tier"], "app");
@@ -134,7 +139,7 @@ mod tests {
         );
         assert_eq!(json["facts"]["user"]["holds"], serde_json::json!([]));
 
-        std::fs::write(root.join(MAP_FILE), r#"{ "tiers": 3 }"#).unwrap();
+        std::fs::write(root.join(MAPS_FOLDER).join("map.json"), r#"{ "tiers": 3 }"#).unwrap();
         let json = told(&root, None);
         assert!(json["error"].as_str().unwrap().contains("not a map"));
         assert_eq!(json["map"], serde_json::Value::Null);
@@ -144,36 +149,36 @@ mod tests {
     fn a_map_is_told_by_its_name_with_the_others() {
         let root = scratch("named");
         std::fs::create_dir_all(root.join(MAPS_FOLDER)).unwrap();
-        std::fs::write(root.join(MAP_FILE), A_MAP).unwrap();
+        std::fs::write(root.join(MAPS_FOLDER).join("map.json"), A_MAP).unwrap();
         std::fs::write(
-            root.join(MAPS_FOLDER).join("deploy.json"),
+            root.join(MAPS_FOLDER).join("runtime.json"),
             r#"{ "says": "Where it runs.",
                  "tiers": [{ "id": "hosts", "name": "Hosts", "rows": [{ "parts": ["box"] }] }],
                  "parts": { "box": { "name": "A box" } } }"#,
         )
         .unwrap();
 
-        let json = told(&root, Some("deploy"));
-        assert_eq!(json["name"], "deploy");
+        let json = told(&root, Some("runtime"));
+        assert_eq!(json["name"], "runtime");
         assert!(
             json["file"]
                 .as_str()
                 .unwrap()
-                .ends_with(".cox/maps/deploy.json")
+                .ends_with(".cox/maps/runtime.json")
         );
         assert_eq!(json["map"]["says"], "Where it runs.");
         assert_eq!(json["map"]["tiers"][0]["id"], "hosts");
         assert_eq!(json["facts"]["box"]["holds"], serde_json::json!([]));
         assert_eq!(json["maps"][0]["name"], "map");
-        assert_eq!(json["maps"][1]["name"], "deploy");
+        assert_eq!(json["maps"][1]["name"], "runtime");
         assert_eq!(json["maps"][1]["says"], "Where it runs.");
-        assert_eq!(json["maps"][1]["file"], ".cox/maps/deploy.json");
+        assert_eq!(json["maps"][1]["file"], ".cox/maps/runtime.json");
         assert_eq!(told(&root, None)["name"], "map");
 
         let json = told(&root, Some("gone"));
         assert_eq!(json["name"], serde_json::Value::Null);
         assert_eq!(json["map"], serde_json::Value::Null);
         assert!(json["error"].as_str().unwrap().contains("no map `gone`"));
-        assert_eq!(json["maps"][1]["name"], "deploy");
+        assert_eq!(json["maps"][1]["name"], "runtime");
     }
 }

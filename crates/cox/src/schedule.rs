@@ -18,10 +18,6 @@
 //! Find out what changed in Rust since {last}.
 //! ```
 //!
-//! An earlier Cox kept them apart, in `schedules`, saying when they run
-//! with `every`, as `daily 09:00`: Cox reads those as triggers too, as
-//! the cron that means (see [`Cron::from_every`]).
-//!
 //! coxd looks every minute which are due, and opens a chat for each (see
 //! [`crate::daemon`]). When each last ran is kept where Cox keeps what
 //! lasts (see [`crate::storage::Kept::Schedules`]), so that a run Cox
@@ -29,18 +25,11 @@
 //! however many were missed.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use jiff::civil::{Date, Time, Weekday};
+use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp, Zoned};
-
-/// The folder of the human's workflow where an earlier Cox kept the
-/// schedules, which Cox reads as triggers.
-pub const SCHEDULES: &str = "schedules";
-
-/// The folder of a project where an earlier Cox kept its schedules.
-pub const PROJECT_SCHEDULES: &str = ".cox/schedules";
 
 /// How far ahead Cox looks for the next time a cron says, in days: far
 /// enough for the 29th of February on a day of the week.
@@ -100,51 +89,6 @@ impl Cron {
             any_day: days.starts_with('*'),
             any_weekday: weekdays.starts_with('*'),
         })
-    }
-
-    /// The cron of what an earlier Cox's schedule said with `every`:
-    /// `daily HH:MM`, `weekly <day> HH:MM`, or `every <n>h`, which runs
-    /// on the hours a multiple of `n` from midnight, as the clock has
-    /// them, rather than `n` hours after it last ran.
-    ///
-    /// # Errors
-    ///
-    /// When `text` is none of those.
-    pub fn from_every(text: &str) -> Result<Self, String> {
-        let words: Vec<&str> = text.split_whitespace().collect();
-        let time = |text: &str| {
-            Time::strptime("%H:%M", text).map_err(|_| format!("{text:?} is no time, as 09:00"))
-        };
-        let cron = match words.as_slice() {
-            ["daily", at] => {
-                let at = time(at)?;
-                format!("{} {} * * *", at.minute(), at.hour())
-            }
-            ["weekly", day, at] => {
-                let at = time(at)?;
-                let day = weekday(day)?.to_sunday_zero_offset();
-                format!("{} {} * * {day}", at.minute(), at.hour())
-            }
-            ["every", hours] => {
-                let hours = hours
-                    .strip_suffix('h')
-                    .and_then(|hours| hours.parse::<u32>().ok())
-                    .filter(|&hours| hours > 0)
-                    .ok_or_else(|| format!("{hours:?} is no number of hours, as 6h"))?;
-                match hours {
-                    1 => "0 * * * *".to_owned(),
-                    2..24 => format!("0 */{hours} * * *"),
-                    _ if hours % 24 == 0 => format!("0 0 */{} * *", hours / 24),
-                    _ => return Err(format!("every {hours}h is neither under a day nor days")),
-                }
-            }
-            _ => {
-                return Err(format!(
-                    "{text:?} says no time Cox knows: daily 09:00, weekly mon 09:00 or every 6h"
-                ));
-            }
-        };
-        Self::parse(&cron)
     }
 
     /// Whether it runs on `date`.
@@ -302,33 +246,6 @@ fn field(text: &str, min: u32, max: u32, names: &[&str], offset: u32) -> Result<
     Ok(bits)
 }
 
-/// The day `text` names, by its first three letters, as `mon`.
-fn weekday(text: &str) -> Result<Weekday, String> {
-    let day = match text.to_ascii_lowercase().get(..3) {
-        Some("mon") => Weekday::Monday,
-        Some("tue") => Weekday::Tuesday,
-        Some("wed") => Weekday::Wednesday,
-        Some("thu") => Weekday::Thursday,
-        Some("fri") => Weekday::Friday,
-        Some("sat") => Weekday::Saturday,
-        Some("sun") => Weekday::Sunday,
-        _ => return Err(format!("{text:?} is no day of the week, as mon")),
-    };
-    Ok(day)
-}
-
-/// What the schedule of `file`, named `name`, is kept by apart from
-/// every other: its name, for one an earlier Cox kept in the `schedules`
-/// of the human's `workflow`, as it kept them, and else its file's path.
-#[must_use]
-pub fn id(name: &str, file: &Path, workflow: &Path) -> String {
-    if file.parent() == Some(&workflow.join(SCHEDULES)) {
-        name.to_owned()
-    } else {
-        file.display().to_string()
-    }
-}
-
 /// The first line of the run `now` of the schedule `name`, whose text is
 /// `text`, which ran last `last`, if it did: `{name}`, `{now}` and
 /// `{last}` standing for its name, when it runs and when it ran last, or
@@ -349,8 +266,8 @@ pub fn chat_name(name: &str, now: &Zoned) -> String {
     format!("{name} {}", now.strftime("%m/%d %H:%M"))
 }
 
-/// When each schedule last ran, by what it is kept by (see [`id`]), as
-/// Cox keeps it in the file at `path`.
+/// When each schedule last ran, by the path of its file, as Cox keeps it
+/// in the file at `path`.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Ran {
     path: Option<PathBuf>,
@@ -412,8 +329,6 @@ impl Ran {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use jiff::Zoned;
     use jiff::civil::date;
     use jiff::tz::TimeZone;
@@ -497,20 +412,6 @@ mod tests {
     }
 
     #[test]
-    fn what_an_earlier_cox_said_every_is_a_cron() {
-        let every = |text: &str| Cron::from_every(text).map(|cron| cron.to_string());
-        assert_eq!(every("daily 09:00").as_deref(), Ok("0 9 * * *"));
-        assert_eq!(every("weekly Mon 18:30").as_deref(), Ok("30 18 * * 1"));
-        assert_eq!(every("every 6h").as_deref(), Ok("0 */6 * * *"));
-        assert_eq!(every("every 1h").as_deref(), Ok("0 * * * *"));
-        assert_eq!(every("every 48h").as_deref(), Ok("0 0 */2 * *"));
-        assert!(every("every 0h").is_err());
-        assert!(every("every 30h").is_err());
-        assert!(every("daily 9am").is_err());
-        assert!(every("hourly").is_err());
-    }
-
-    #[test]
     fn a_cron_is_shown_in_words_where_it_has_them() {
         let words = |text: &str| cron(text).words();
         assert_eq!(words("0 9 * * *"), "Daily 09:00");
@@ -524,16 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn a_schedule_of_an_earlier_cox_is_kept_by_its_name() {
-        let workflow = Path::new("/w");
-        assert_eq!(
-            super::id("news", Path::new("/w/schedules/news.md"), workflow),
-            "news"
-        );
-        assert_eq!(
-            super::id("news", Path::new("/w/triggers/news.md"), workflow),
-            "/w/triggers/news.md"
-        );
+    fn a_run_is_told_its_name_and_when_it_ran() {
         assert_eq!(
             super::line(
                 "Since {last}, as {name}.",

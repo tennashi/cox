@@ -11,8 +11,7 @@
 //! deployed: each is a file of the project, in [`MAPS_FOLDER`], named
 //! after the map, so that it is there whenever it is opened, written by
 //! an agent once and kept by the agents that change the code, in the
-//! change that moves it. The one file an earlier Cox read, [`MAP_FILE`],
-//! is still a map, named [`OLD_NAME`] (see [`list`]).
+//! change that moves it.
 //!
 //! Over it goes what the project is now: what changed, as
 //! [`crate::changes`] tells it, falls on the boxes that hold the files,
@@ -28,13 +27,6 @@ use serde::{Deserialize, Serialize};
 /// Where a project keeps its maps, under its folder: a file each, as
 /// `.cox/maps/parts.json` for the map named `parts`.
 pub const MAPS_FOLDER: &str = ".cox/maps";
-
-/// Where an earlier Cox read a project's map, its only one, under its
-/// folder, which is still the map named [`OLD_NAME`].
-pub const MAP_FILE: &str = ".cox/map.json";
-
-/// The name of the map in [`MAP_FILE`].
-pub const OLD_NAME: &str = "map";
 
 /// A project's map, as its file has it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,13 +111,12 @@ pub struct Row {
 }
 
 /// The boxes around an open tier: the user's side above it, and the
-/// code's side below. Maps written when the frame stood beside the tier
-/// name them `left` and `right`, which still read.
+/// code's side below.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frame {
-    #[serde(default, alias = "left")]
+    #[serde(default)]
     pub above: Vec<String>,
-    #[serde(default, alias = "right")]
+    #[serde(default)]
     pub below: Vec<String>,
 }
 
@@ -206,9 +197,8 @@ pub struct Named {
     pub says: String,
 }
 
-/// The maps of the project in `root`: [`MAP_FILE`] first, as an earlier
-/// Cox read it, unless [`MAPS_FOLDER`] has a map of its name, then the
-/// files of [`MAPS_FOLDER`] by name. A name with `:` in it is left out,
+/// The maps of the project in `root`: the files of [`MAPS_FOLDER`], by
+/// name. A name with `:` in it is left out,
 /// since the Map page writes the map it is open at as its name and `:`.
 #[must_use]
 pub fn list(root: &Path) -> Vec<Named> {
@@ -224,19 +214,10 @@ pub fn list(root: &Path) -> Vec<Named> {
         })
         .collect();
     names.sort();
-    let mut files: Vec<(String, String)> = names
+    names
         .into_iter()
         .map(|name| {
             let file = format!("{MAPS_FOLDER}/{name}.json");
-            (name, file)
-        })
-        .collect();
-    if root.join(MAP_FILE).is_file() && !files.iter().any(|(name, _)| name == OLD_NAME) {
-        files.insert(0, (OLD_NAME.to_owned(), MAP_FILE.to_owned()));
-    }
-    files
-        .into_iter()
-        .map(|(name, file)| {
             let says = said(&root.join(&file));
             Named { name, file, says }
         })
@@ -521,12 +502,12 @@ mod tests {
         let root = scratch("read");
         assert_eq!(read(&root, None), Ok(None));
         assert_eq!(read(&root, Some("parts")), Ok(None));
-        std::fs::create_dir_all(root.join(".cox")).unwrap();
-        std::fs::write(root.join(MAP_FILE), A_MAP).unwrap();
+        std::fs::create_dir_all(root.join(MAPS_FOLDER)).unwrap();
+        std::fs::write(root.join(MAPS_FOLDER).join("map.json"), A_MAP).unwrap();
 
         let (named, map) = read(&root, None).unwrap().unwrap();
         assert_eq!(named.name, "map");
-        assert_eq!(named.file, ".cox/map.json");
+        assert_eq!(named.file, ".cox/maps/map.json");
         assert_eq!(map.tiers.len(), 2);
         assert_eq!(map.tier("app").unwrap().name, "The app");
         assert_eq!(map.tier_of("app").unwrap().id, "app");
@@ -543,11 +524,11 @@ mod tests {
         assert!(!map.flows[0].steps[0].back);
         assert!(map.flows[0].steps[1].back);
 
-        std::fs::write(root.join(MAP_FILE), "{ not json").unwrap();
+        std::fs::write(root.join(MAPS_FOLDER).join("map.json"), "{ not json").unwrap();
         assert!(
             read(&root, None)
                 .unwrap_err()
-                .starts_with(".cox/map.json is not a map")
+                .starts_with(".cox/maps/map.json is not a map")
         );
     }
 
@@ -555,45 +536,42 @@ mod tests {
     fn a_project_has_maps_by_name() {
         let root = scratch("named");
         std::fs::create_dir_all(root.join(MAPS_FOLDER)).unwrap();
-        std::fs::write(root.join(MAP_FILE), A_MAP).unwrap();
+        std::fs::write(root.join(MAPS_FOLDER).join("parts.json"), A_MAP).unwrap();
         std::fs::write(
             root.join(MAPS_FOLDER).join("deploy.json"),
             r#"{ "says": "Where it runs.", "tiers": [{ "id": "hosts", "name": "Hosts" }] }"#,
         )
         .unwrap();
-        std::fs::write(root.join(MAPS_FOLDER).join("broken.json"), "{").unwrap();
+        std::fs::write(root.join(MAPS_FOLDER).join("wrong.json"), "{").unwrap();
+        // The one file an earlier Cox read is no map now.
+        std::fs::write(root.join(".cox/map.json"), A_MAP).unwrap();
         std::fs::write(root.join(MAPS_FOLDER).join("a:b.json"), "{}").unwrap();
         std::fs::write(root.join(MAPS_FOLDER).join("notes.md"), "").unwrap();
 
         let listed = |root: &Path| -> Vec<String> {
             list(root).into_iter().map(|named| named.name).collect()
         };
-        // The one file an earlier Cox read comes first, then the folder's
-        // by name.
-        assert_eq!(listed(&root), ["map", "broken", "deploy"]);
-        assert_eq!(list(&root)[2].says, "Where it runs.");
-        assert_eq!(list(&root)[2].file, ".cox/maps/deploy.json");
-        assert_eq!(list(&root)[1].says, "");
+        assert_eq!(listed(&root), ["deploy", "parts", "wrong"]);
+        assert_eq!(list(&root)[0].says, "Where it runs.");
+        assert_eq!(list(&root)[0].file, ".cox/maps/deploy.json");
+        assert_eq!(list(&root)[2].says, "");
 
-        let (named, map) = read(&root, Some("deploy")).unwrap().unwrap();
+        let (named, map) = read(&root, Some("parts")).unwrap().unwrap();
+        assert_eq!(named.name, "parts");
+        assert_eq!(map.tiers[0].id, "whole");
+        let (named, map) = read(&root, None).unwrap().unwrap();
         assert_eq!(named.name, "deploy");
         assert_eq!(map.says, "Where it runs.");
         assert_eq!(map.tiers[0].id, "hosts");
-        assert_eq!(read(&root, None).unwrap().unwrap().0.name, "map");
         assert!(
-            read(&root, Some("broken"))
+            read(&root, Some("wrong"))
                 .unwrap_err()
-                .starts_with(".cox/maps/broken.json is not a map")
+                .starts_with(".cox/maps/wrong.json is not a map")
         );
         assert_eq!(
-            read(&root, Some("gone")).unwrap_err(),
-            "the project has no map `gone`; it has: map, broken, deploy"
+            read(&root, Some("map")).unwrap_err(),
+            "the project has no map `map`; it has: deploy, parts, wrong"
         );
-
-        // A map of the folder named as the old file's goes ahead of it.
-        std::fs::write(root.join(MAPS_FOLDER).join("map.json"), "{}").unwrap();
-        assert_eq!(listed(&root), ["broken", "deploy", "map"]);
-        assert_eq!(list(&root)[2].file, ".cox/maps/map.json");
     }
 
     #[test]
@@ -633,18 +611,6 @@ mod tests {
         assert_eq!(facts.holds[0].lines, None);
         assert_eq!(facts.changed.files, 1);
         assert_eq!(facts.changed.added, 3);
-    }
-
-    #[test]
-    fn a_frame_written_as_left_and_right_still_reads() {
-        let frame: Frame =
-            serde_json::from_str(r#"{ "left": ["user"], "right": ["os"] }"#).unwrap();
-        assert_eq!(frame.above, ["user"]);
-        assert_eq!(frame.below, ["os"]);
-        assert_eq!(
-            serde_json::to_string(&frame).unwrap(),
-            r#"{"above":["user"],"below":["os"]}"#
-        );
     }
 
     #[test]

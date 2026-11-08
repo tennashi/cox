@@ -30,10 +30,6 @@ pub type Starts = Rc<dyn Fn(PathBuf, Start) -> Agent>;
 /// project's judges, when there is one.
 pub const STANCE_FILE: &str = ".cox/goal.md";
 
-/// Where an earlier Cox read [`STANCE_FILE`] from, which counts while the
-/// project has no [`STANCE_FILE`].
-const EARLIER_STANCE_FILE: &str = "COX.goal.md";
-
 /// What the judge is told it is, ahead of the goal, unless the project's
 /// [`STANCE_FILE`] says otherwise.
 const STANCE: &str = "You judge whether another chat's work meets a goal. The chat works in \
@@ -153,16 +149,10 @@ fn strip_word<'a>(line: &'a str, word: &str) -> Option<&'a str> {
 }
 
 /// What the judges of the project in `folder` are told they are: what
-/// its [`STANCE_FILE`] says, or its [`EARLIER_STANCE_FILE`], or
-/// [`STANCE`] when there is neither.
+/// its [`STANCE_FILE`] says, or [`STANCE`] when there is none.
 #[must_use]
 pub fn stance(folder: &Path) -> String {
     let path = folder.join(STANCE_FILE);
-    let path = if !path.exists() && folder.join(EARLIER_STANCE_FILE).exists() {
-        folder.join(EARLIER_STANCE_FILE)
-    } else {
-        path
-    };
     match std::fs::read_to_string(&path) {
         Ok(text) if !text.trim().is_empty() => text.trim().to_owned(),
         Ok(_) => STANCE.to_owned(),
@@ -435,10 +425,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(folder.join(".cox")).unwrap();
         assert_eq!(stance(&folder), STANCE);
-
-        // Where an earlier Cox read it, until the project moves it.
-        std::fs::write(folder.join(EARLIER_STANCE_FILE), "You judge as before.\n").unwrap();
-        assert_eq!(stance(&folder), "You judge as before.");
 
         std::fs::write(folder.join(STANCE_FILE), " \n").unwrap();
         assert_eq!(stance(&folder), STANCE);

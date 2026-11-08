@@ -2,8 +2,8 @@
 //! topic, for the agents of every project to find again. A page is a
 //! file, as `gpui-layout.md` or `rust/errors.md`, in the wiki's folder,
 //! which `settings.json` names, as `{"wiki": "~/notes/cox"}`, an Obsidian
-//! vault or a Git repository of the human's, or else `wiki` where Cox
-//! keeps what lasts (see [`crate::settings::wiki`]).
+//! vault or a Git repository of the human's, or else `wiki` in the home
+//! (see [`crate::settings::wiki`]).
 //!
 //! The agents read and write it with Cox's tools (see
 //! [`crate::agent::mcp`]), and every page they write goes through Cox,
@@ -17,12 +17,7 @@
 //! A project has a wiki of its own too, for what holds only of its work
 //! or its people, in `.cox/wiki` in its folder, where its repository can
 //! keep it: only the chats of that project find its pages, read them, or
-//! write them, the project's before the human's. A page of the human's
-//! wiki that an earlier Cox kept in one project says so in its
-//! properties, the front matter Obsidian keeps between `---` lines at the
-//! page's top, as `only: <project>`, and only the chats of that project
-//! see it either. The human sees every page, in the plugin as in the
-//! folder.
+//! write them, the project's before the human's.
 //!
 //! The agents write the pages in English, whatever language their chat
 //! speaks, so that a page is found by the same words from every chat;
@@ -46,9 +41,6 @@ pub const PROJECT_WIKI: &str = ".cox/wiki";
 /// The heading under which a page says where it was used, which Cox
 /// writes.
 const USED_IN: &str = "## Used in";
-
-/// The property that keeps a page in one project, as `only: cox`.
-const ONLY: &str = "only";
 
 /// The first line of an index Cox keeps, which tells it from one the
 /// human wrote, which Cox leaves be.
@@ -229,101 +221,26 @@ pub fn property<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     (named.trim() == key).then(|| value.trim())
 }
 
-/// The project `page` is kept in, if its properties keep it in one.
-#[must_use]
-pub fn only(page: &str) -> Option<String> {
-    let value = front(page)
-        .0
-        .into_iter()
-        .find_map(|line| property(line, ONLY))?;
-    let value = match value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-    {
-        Some(quoted) => quoted.replace("\\\"", "\"").replace("\\\\", "\\"),
-        None => value
-            .strip_prefix('\'')
-            .and_then(|value| value.strip_suffix('\''))
-            .unwrap_or(value)
-            .to_owned(),
-    };
-    (!value.is_empty()).then_some(value)
-}
-
-/// The property that keeps a page in `project`, quoted when YAML would
-/// read it otherwise.
-fn only_line(project: &str) -> String {
-    let plain = !project.is_empty()
-        && project.trim() == project
-        && !project.contains(|c: char| ":#\"'\\[]{},&*!|>%@`".contains(c));
-    if plain {
-        format!("{ONLY}: {project}")
-    } else {
-        let quoted = project.replace('\\', "\\\\").replace('"', "\\\"");
-        format!("{ONLY}: \"{quoted}\"")
-    }
-}
-
-/// Whether a chat of `project` sees `page`: kept in no project, or in
-/// that one.
-fn seen(page: &str, project: &str) -> bool {
-    only(page).is_none_or(|only| only == project)
-}
-
-/// The pages of the wiki at `root` that a chat of `project` does not
-/// see.
-fn unseen(root: &Path, project: &str) -> Vec<String> {
-    pages(root)
-        .into_iter()
-        .filter(|name| {
-            fs::read_to_string(root.join(format!("{name}.md")))
-                .is_ok_and(|page| !seen(&page, project))
-        })
-        .collect()
-}
-
-/// The text of the page `name` in the wiki at `root`, as a chat of
-/// `project` reads it: a page kept in another project is no page to it,
-/// and the index lists none.
+/// The text of the page `name` in the wiki at `root`.
 ///
 /// # Errors
 ///
 /// When there is no such page, or it cannot be read.
-pub fn read(root: &Path, name: &str, project: &str) -> Result<String, String> {
+pub fn read(root: &Path, name: &str) -> Result<String, String> {
     let file = file(root, name)?;
-    let no_page = || format!("the wiki has no page `{name}`");
-    let text = fs::read_to_string(&file).map_err(|error| match error.kind() {
-        io::ErrorKind::NotFound => no_page(),
+    fs::read_to_string(&file).map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => format!("the wiki has no page `{name}`"),
         _ => format!("cannot read {}: {error}", file.display()),
-    })?;
-    if !seen(&text, project) {
-        return Err(no_page());
-    }
-    if name.trim().trim_end_matches(".md") != INDEX {
-        return Ok(text);
-    }
-    let unseen = unseen(root, project);
-    let mut index = String::new();
-    for line in text.split_inclusive('\n') {
-        let links = |name: &String| {
-            line.contains(&format!("[[{name}]]"))
-                || line.contains(&format!("[[{name}|"))
-                || line.contains(&format!("({name}.md)"))
-        };
-        if !unseen.iter().any(links) {
-            index.push_str(line);
-        }
-    }
-    Ok(index)
+    })
 }
 
-/// The pages of the wiki at `root`, but the index and those kept in
-/// another project than `project`, that have every word of `query`, in
-/// their names or their text, past their properties, whatever the case:
+/// The pages of the wiki at `root`, but the index, that have every word
+/// of `query`, in their names or their text, past their properties,
+/// whatever the case:
 /// those that have them most first, each with the first few of its lines
 /// that have one.
 #[must_use]
-pub fn search(root: &Path, query: &str, project: &str) -> Vec<Found> {
+pub fn search(root: &Path, query: &str) -> Vec<Found> {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     if words.is_empty() {
         return Vec::new();
@@ -334,9 +251,6 @@ pub fn search(root: &Path, query: &str, project: &str) -> Vec<Found> {
         .filter(|name| name != INDEX)
         .filter_map(|name| {
             let page = fs::read_to_string(file(root, &name).ok()?).ok()?;
-            if !seen(&page, project) {
-                return None;
-            }
             let (_, text) = front(&page);
             let lower = text.to_lowercase();
             let named = name.to_lowercase();
@@ -386,23 +300,15 @@ pub fn search(root: &Path, query: &str, project: &str) -> Vec<Found> {
 /// before; and lists it in the index, when Cox keeps it. Answers the
 /// page's file.
 ///
-/// The page is kept in `used`'s project when `keep` is `Some(true)`, in
-/// none when it is `Some(false)`, and as it was otherwise. What `text`
-/// says under a "Used in" of its own is Cox's to write, so it is left
-/// out, as the project it keeps the page in is; its other properties are
-/// the page's, or, when it has none, those the page had.
+/// What `text` says under a "Used in" of its own is Cox's to write, so it
+/// is left out; its properties are the page's, or, when it has none,
+/// those the page had.
 ///
 /// # Errors
 ///
-/// When `name` is no page's name, or that of a page kept in another
-/// project, `text` says nothing, or the page cannot be written.
-pub fn write(
-    root: &Path,
-    name: &str,
-    text: &str,
-    used: &Used,
-    keep: Option<bool>,
-) -> Result<PathBuf, String> {
+/// When `name` is no page's name, `text` says nothing, or the page cannot
+/// be written.
+pub fn write(root: &Path, name: &str, text: &str, used: &Used) -> Result<PathBuf, String> {
     let file = file(root, name)?;
     let (given, text) = front(text);
     let (body, _) = split(text);
@@ -414,26 +320,8 @@ pub fn write(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let was = fs::read_to_string(&file).unwrap_or_default();
-    if !seen(&was, &used.project) {
-        return Err(format!(
-            "the wiki has a page `{name}` that another project keeps to itself: name this \
-             one otherwise"
-        ));
-    }
     let (had, was_text) = front(&was);
-    let mut properties: Vec<String> = if given.is_empty() { had } else { given }
-        .into_iter()
-        .filter(|line| property(line, ONLY).is_none())
-        .map(str::to_owned)
-        .collect();
-    let kept = match keep {
-        Some(true) => Some(used.project.clone()),
-        Some(false) => None,
-        None => only(&was),
-    };
-    if let Some(project) = kept {
-        properties.push(only_line(&project));
-    }
+    let properties = if given.is_empty() { had } else { given };
     let (_, mut lines) = split(was_text);
     let what = used.what();
     // A line a day: the same use again moves to the end, as of today.
@@ -571,7 +459,6 @@ mod tests {
             "gpui-layout",
             page,
             &used("cox", "Fix scroll", "2026-11-04"),
-            None,
         )
         .unwrap();
         // The agent's own "Used in" is left out, and the same use again
@@ -583,7 +470,6 @@ mod tests {
             "gpui-layout",
             again,
             &used("notes", "Layout", "2026-11-05"),
-            None,
         )
         .unwrap();
         write(
@@ -591,11 +477,10 @@ mod tests {
             "gpui-layout",
             again,
             &used("cox", "Fix scroll", "2026-11-05"),
-            None,
         )
         .unwrap();
         assert_eq!(
-            read(&root, "gpui-layout", "cox").unwrap(),
+            read(&root, "gpui-layout").unwrap(),
             "# GPUI layout\n\nA flex child needs `min_h_0` to scroll, in a column.\n\n\
              ## Used in\n\n\
              - 2026-11-05 in notes, chat \"Layout\" (#3), at 9955f39: src/view.rs\n\
@@ -613,7 +498,6 @@ mod tests {
             "rust/errors",
             "# Errors\n\nUse anyhow at the top.\n",
             &used("a", "c", day),
-            None,
         )
         .unwrap();
         write(
@@ -621,26 +505,18 @@ mod tests {
             "acp",
             "# ACP\n\nSessions resume.\n",
             &used("b", "c", day),
-            None,
         )
         .unwrap();
         assert_eq!(
-            read(&root, INDEX, "a").unwrap(),
+            read(&root, INDEX).unwrap(),
             format!(
                 "{KEPT_INDEX}\n# Index\n\n- [[acp|ACP]]: Sessions resume.\n\
                  - [[rust/errors|Errors]]: Use anyhow at the top.\n"
             )
         );
         fs::write(root.join("index.md"), "# Mine\n").unwrap();
-        write(
-            &root,
-            "more",
-            "# More\n\nText.\n",
-            &used("b", "c", day),
-            None,
-        )
-        .unwrap();
-        assert_eq!(read(&root, INDEX, "a").unwrap(), "# Mine\n");
+        write(&root, "more", "# More\n\nText.\n", &used("b", "c", day)).unwrap();
+        assert_eq!(read(&root, INDEX).unwrap(), "# Mine\n");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -653,7 +529,6 @@ mod tests {
             "gpui",
             "# GPUI\n\nLayout is taffy.\nTaffy is slow in debug.\n",
             &used("a", "c", day),
-            None,
         )
         .unwrap();
         write(
@@ -661,12 +536,11 @@ mod tests {
             "taffy",
             "# Taffy\n\nFlexbox.\n",
             &used("a", "c", day),
-            None,
         )
         .unwrap();
         fs::create_dir_all(root.join(".obsidian")).unwrap();
         fs::write(root.join(".obsidian/taffy.md"), "taffy").unwrap();
-        let found = search(&root, "TAFFY", "a");
+        let found = search(&root, "TAFFY");
         let names: Vec<&str> = found.iter().map(|found| found.name.as_str()).collect();
         assert_eq!(names, ["gpui", "taffy"]);
         assert_eq!(found[0].title, "GPUI");
@@ -677,108 +551,43 @@ mod tests {
             found[0].lines,
             ["Layout is taffy.", "Taffy is slow in debug."]
         );
-        let names: Vec<String> = search(&root, "taffy debug", "a")
+        let names: Vec<String> = search(&root, "taffy debug")
             .into_iter()
             .map(|found| found.name)
             .collect();
         assert_eq!(names, ["gpui"]);
-        assert_eq!(search(&root, "  ", "a"), []);
+        assert_eq!(search(&root, "  "), []);
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn a_page_kept_in_a_project_is_only_that_projects() {
-        let root = scratch("only");
+    fn a_page_keeps_its_properties_unless_new_ones_are_given() {
+        let root = scratch("properties");
         let day = "2026-11-05";
-        let page =
-            "---\ntags: [billing]\nonly: made-up\n---\n\n# Billing\n\nAcme pays by the seat.\n";
-        write(&root, "billing", page, &used("acme", "c", day), Some(true)).unwrap();
-        write(
-            &root,
-            "seats",
-            "# Seats\n\nA seat is a login.\n",
-            &used("b", "c", day),
-            None,
-        )
-        .unwrap();
-        let text = read(&root, "billing", "acme").unwrap();
-        // The page is kept where it was written, whatever the agent wrote.
-        assert!(
-            text.starts_with("---\ntags: [billing]\nonly: acme\n---\n\n# Billing\n"),
-            "{text}"
-        );
-        assert_eq!(only(&text).as_deref(), Some("acme"));
-        assert_eq!(title(&text).as_deref(), Some("Billing"));
-        assert_eq!(about(&text).as_deref(), Some("Acme pays by the seat."));
-        let names = |project| -> Vec<String> {
-            search(&root, "seat", project)
-                .into_iter()
-                .map(|found| found.name)
-                .collect()
-        };
-        assert_eq!(names("acme"), ["seats", "billing"]);
-        assert_eq!(names("b"), ["seats"]);
-        // Its properties are not searched.
-        assert_eq!(search(&root, "tags", "acme"), []);
-        assert!(read(&root, "billing", "b").is_err());
-        let index = read(&root, INDEX, "b").unwrap();
-        assert!(!index.contains("billing"), "{index}");
-        assert!(
-            read(&root, INDEX, "acme")
-                .unwrap()
-                .contains("[[billing|Billing]]")
-        );
-        assert!(
-            write(
-                &root,
-                "billing",
-                "# Mine\n\nText.\n",
-                &used("b", "c", day),
-                None
-            )
-            .is_err()
-        );
-        // Written again, it stays kept, with its properties, until it is
-        // let out.
+        let page = "---\ntags: [billing]\n---\n\n# Billing\n\nAcme pays by the seat.\n";
+        write(&root, "billing", page, &used("acme", "c", day)).unwrap();
         write(
             &root,
             "billing",
-            "# Billing\n\nBy the seat.\n",
+            "# Billing\n\nAcme pays by the login.\n",
             &used("acme", "c", day),
-            None,
         )
         .unwrap();
-        let text = read(&root, "billing", "acme").unwrap();
+        let text = read(&root, "billing").unwrap();
         assert!(
-            text.starts_with("---\ntags: [billing]\nonly: acme\n---\n"),
+            text.starts_with("---\ntags: [billing]\n---\n\n# Billing\n\nAcme pays by the login.\n"),
             "{text}"
         );
         write(
             &root,
             "billing",
-            "# Billing\n\nBy the seat.\n",
+            "---\ntags: [money]\n---\n# Billing\n\nAcme pays by the login.\n",
             &used("acme", "c", day),
-            Some(false),
         )
         .unwrap();
-        let text = read(&root, "billing", "b").unwrap();
-        assert!(
-            text.starts_with("---\ntags: [billing]\n---\n\n# Billing\n"),
-            "{text}"
-        );
+        let text = read(&root, "billing").unwrap();
+        assert!(text.starts_with("---\ntags: [money]\n---\n"), "{text}");
         let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn a_project_is_kept_in_a_line_yaml_reads() {
-        assert_eq!(only_line("cox"), "only: cox");
-        assert_eq!(only_line("my app"), "only: my app");
-        assert_eq!(only_line("a: \"b\""), r#"only: "a: \"b\"""#);
-        for project in ["cox", "my app", "a: \"b\"", "c:\\d", "'x'"] {
-            let page = format!("---\n{}\n---\n# T\n", only_line(project));
-            assert_eq!(only(&page).as_deref(), Some(project), "{page}");
-        }
-        assert_eq!(only("# T\n\nonly: cox\n"), None);
     }
 
     #[test]

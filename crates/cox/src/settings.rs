@@ -297,14 +297,6 @@ impl Folder {
         }
     }
 
-    /// Where an earlier Cox kept it when the settings named none.
-    const fn earlier(self) -> Kept {
-        match self {
-            Self::Workflow => Kept::Workflow,
-            Self::Wiki => Kept::Wiki,
-        }
-    }
-
     fn named(self, saved: &Saved) -> Option<PathBuf> {
         match self {
             Self::Workflow => saved.workflow.clone(),
@@ -321,20 +313,14 @@ impl Folder {
             .unwrap_or_else(|| self.in_home_of(saved.home))
     }
 
-    /// Where it is when the settings name none: in the home, unless the
-    /// one an earlier Cox kept where it keeps what lasts could not move
-    /// there (see [`settle_folders`]), which goes on being used.
+    /// Where it is when the settings name none: in the home.
     #[must_use]
     pub fn in_home(self) -> PathBuf {
         self.in_home_of(Saved::read().home)
     }
 
     fn in_home_of(self, home: Option<PathBuf>) -> PathBuf {
-        folder_in(
-            &home_for_chats(home),
-            self.key(),
-            crate::storage::path(self.earlier()),
-        )
+        home_for_chats(home).join(self.key())
     }
 }
 
@@ -359,56 +345,6 @@ pub fn raw() -> PathBuf {
     saved
         .raw
         .unwrap_or_else(|| home_for_chats(saved.home).join(crate::raw::RAW))
-}
-
-/// The folder `name` in `home`, unless there is none, and `earlier` is
-/// one.
-fn folder_in(home: &Path, name: &str, earlier: Option<PathBuf>) -> PathBuf {
-    let folder = home.join(name);
-    match earlier {
-        Some(earlier) if fs::symlink_metadata(&folder).is_err() && earlier.is_dir() => earlier,
-        _ => folder,
-    }
-}
-
-/// Moves each folder an earlier Cox kept where it keeps what lasts, when
-/// the settings named none, into the home the settings set, unless the
-/// home has one of its name already.
-pub fn settle_folders() {
-    let saved = Saved::read();
-    let home = home_for_chats(saved.home.clone());
-    for folder in Folder::ALL {
-        if folder.named(&saved).is_none()
-            && let Some(earlier) = crate::storage::path(folder.earlier())
-        {
-            move_folder(&earlier, &home, folder.key());
-        }
-    }
-}
-
-/// Moves `earlier` into `home`, as `name`: says where it is now, if it
-/// moved.
-fn move_folder(earlier: &Path, home: &Path, name: &str) -> Option<PathBuf> {
-    let folder = home.join(name);
-    if !fs::symlink_metadata(earlier).is_ok_and(|metadata| metadata.is_dir())
-        || fs::symlink_metadata(&folder).is_ok()
-    {
-        return None;
-    }
-    match fs::create_dir_all(home).and_then(|()| fs::rename(earlier, &folder)) {
-        Ok(()) => {
-            tracing::info!(
-                "moved the {name} from {} to {}",
-                earlier.display(),
-                folder.display()
-            );
-            Some(folder)
-        }
-        Err(error) => {
-            tracing::warn!("the {name} stays in {}: {error}", earlier.display());
-            None
-        }
-    }
 }
 
 /// How the human reads the wiki, and what they select, in a language of
@@ -539,35 +475,7 @@ pub fn folder_of(text: &str, user: Option<&Path>) -> Result<PathBuf, &'static st
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Saved, Translation, folder_in, folder_of, keep_home_in, keep_in, move_folder};
-
-    #[test]
-    fn a_folder_an_earlier_cox_kept_moves_into_the_home() {
-        let dir = std::env::temp_dir().join(format!("cox-folders-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let (earlier, home) = (dir.join("data/wiki"), dir.join("home"));
-        let wiki = home.join("wiki");
-        // With no earlier folder, the folder is the home's, and nothing
-        // moves.
-        assert_eq!(folder_in(&home, "wiki", Some(earlier.clone())), wiki);
-        assert_eq!(move_folder(&earlier, &home, "wiki"), None);
-
-        std::fs::create_dir_all(&earlier).unwrap();
-        std::fs::write(earlier.join("page.md"), "# Page\n").unwrap();
-        // Until it moves, the earlier folder is the one used.
-        assert_eq!(folder_in(&home, "wiki", Some(earlier.clone())), earlier);
-        assert_eq!(move_folder(&earlier, &home, "wiki"), Some(wiki.clone()));
-        assert!(wiki.join("page.md").is_file());
-        assert!(!earlier.exists());
-        assert_eq!(folder_in(&home, "wiki", Some(earlier.clone())), wiki);
-
-        // A folder in the home already stays, and the earlier one with it.
-        std::fs::create_dir_all(&earlier).unwrap();
-        assert_eq!(move_folder(&earlier, &home, "wiki"), None);
-        assert!(earlier.is_dir());
-        assert_eq!(folder_in(&home, "wiki", Some(earlier)), wiki);
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
+    use super::{Saved, Translation, folder_of, keep_home_in, keep_in};
 
     #[test]
     fn the_home_is_read_and_kept_beside_what_else_the_file_holds() {

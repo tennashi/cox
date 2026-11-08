@@ -45,9 +45,7 @@ pub struct Setup {
     /// [`crate::chat::sketch`]).
     pub folder: Option<PathBuf>,
     /// What the chat started from, when it is a sketch: not a chat that a
-    /// sketch opened, which works in its folder too. A Cox from before
-    /// sketches were named so kept it as `trial`.
-    #[serde(alias = "trial")]
+    /// sketch opened, which works in its folder too.
     pub sketch: Option<Sketch>,
 }
 
@@ -252,12 +250,6 @@ mod tests {
         assert_eq!(Setup::from_json(&json).unwrap(), setup);
         assert!(json.contains("\"stage\":\"look\""), "{json}");
         assert!(json.contains("\"sketch\":\"project\""), "{json}");
-
-        // A Cox from before sketches were named so kept it as `trial`.
-        assert_eq!(
-            Setup::from_json(r#"{"trial":"empty"}"#).unwrap().sketch,
-            Some(Sketch::Empty)
-        );
 
         // Every part can be left out.
         assert_eq!(Setup::from_json("{}").unwrap(), Setup::default());

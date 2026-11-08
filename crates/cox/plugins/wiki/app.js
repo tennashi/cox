@@ -74,7 +74,6 @@ function shown() {
 }
 const encoded = (name) => name.split("/").map(encodeURIComponent).join("/");
 const href = (shelf, name) => `#${SHELVES[shelf].prefix}${encoded(name)}`;
-const only = (p) => (p.only ? `<span class="only" title="Only the chats of ${esc(p.only)} find this page">only in ${esc(p.only)}</span>` : "");
 const marks = (p) => (p.marks ?? []).map((m) => `<span class="mark ${m}" title="${esc(MARKS[m]?.[1] ?? m)}">${esc(MARKS[m]?.[0] ?? m)}</span>`).join("");
 const entriesOf = (shelf) => (shelf === "raw" ? lists.raw?.sources : lists[shelf]?.pages) ?? [];
 
@@ -206,7 +205,7 @@ function drawEntries(shelf) {
   }
   const words = typed.toLowerCase().split(/\s+/).filter(Boolean);
   const fits = entries.filter((p) => {
-    const text = `${p.name} ${p.title} ${p.about ?? ""} ${p.only ?? ""} ${p.source ?? ""} ${p.chat ?? ""}`.toLowerCase();
+    const text = `${p.name} ${p.title} ${p.about ?? ""} ${p.source ?? ""} ${p.chat ?? ""}`.toLowerCase();
     return words.every((w) => text.includes(w)) && (!marked || p.marks?.includes(marked));
   });
   if (!fits.length) {
@@ -220,7 +219,7 @@ function drawEntries(shelf) {
 function pageEntry(shelf, p) {
   const last = p.used.at(-1);
   return (
-    `<a class="entry" href="${href(shelf, p.name)}"><div><span class="title">${esc(p.title)}</span><span class="name">${esc(p.name)}</span>${only(p)}${marks(p)}</div>` +
+    `<a class="entry" href="${href(shelf, p.name)}"><div><span class="title">${esc(p.title)}</span><span class="name">${esc(p.name)}</span>${marks(p)}</div>` +
     (p.about ? `<div class="about">${esc(p.about)}</div>` : "") +
     (last ? `<div class="last">used ${esc(last.day)} ${esc(last.what)}${p.used.length > 1 ? ` · ${p.used.length} uses` : ""}</div>` : "") +
     `</a>`
@@ -266,7 +265,7 @@ function drawPage(shelf, name) {
       `<div class="aside"><h2>Linked from</h2>${page.linked_from.length ? `<ul>${page.linked_from.map((n) => `<li>${link(n)}</li>`).join("")}</ul>` : '<div class="none">No page.</div>'}</div>` +
       (warned ? `<div class="aside"><h2>Cox marks</h2><ul>${warned}</ul></div>` : "");
   app.innerHTML =
-    head(`${back} › ${esc(page.name)}${only(page)}${raw ? "" : marks(page)}`, page.file, `cox://open${page.file}`) +
+    head(`${back} › ${esc(page.name)}${raw ? "" : marks(page)}`, page.file, `cox://open${page.file}`) +
     `<div class="find">${shelves(shelf)}</div>` +
     (translation ? languages(translation) : "") +
     `<div class="page">${translated ? translation.html : page.html}</div>` +

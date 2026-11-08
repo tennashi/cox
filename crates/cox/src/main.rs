@@ -40,13 +40,9 @@ fn main() -> ExitCode {
             // On Linux, CEF runs `cox` again for its helper processes,
             // which end inside `app::run`, and keep no file of their own.
             let helper = std::env::args().any(|arg| arg.starts_with("--type="));
-            let (logs, settled) = if helper {
-                (None, cox::storage::Settled::default())
-            } else {
-                // Before what was kept is used, the log too.
-                let settled = cox::storage::settle();
-                (cox::storage::path(cox::storage::Kept::Logs), settled)
-            };
+            let logs = (!helper)
+                .then(|| cox::storage::path(cox::storage::Kept::Logs))
+                .flatten();
             cox::logs::init(logs.as_deref());
             if !helper {
                 cox::scratch::sweep();
@@ -61,13 +57,7 @@ fn main() -> ExitCode {
                     "the agents get launchd's environment, not the login shell's: {why}"
                 ),
             }
-            for moved in &settled.moved {
-                tracing::info!("{moved}");
-            }
-            for left in &settled.left {
-                tracing::warn!("{left}");
-            }
-            app::run(settings, settled.sketches)
+            app::run(settings)
         }
         Mode::Daemon { data } => {
             // First, while coxd has no other thread.
@@ -75,7 +65,6 @@ fn main() -> ExitCode {
             if let Some(data) = &data {
                 cox::storage::keep_in(data);
             }
-            let settled = cox::storage::settle();
             cox::logs::init(cox::storage::path(cox::storage::Kept::Logs).as_deref());
             cox::scratch::sweep();
             if let cox::login::Taken::Failed(why) = environment {
@@ -83,13 +72,7 @@ fn main() -> ExitCode {
                     "the agents get launchd's environment, not the login shell's: {why}"
                 );
             }
-            for moved in &settled.moved {
-                tracing::info!("{moved}");
-            }
-            for left in &settled.left {
-                tracing::warn!("{left}");
-            }
-            app::daemon(settled.sketches)
+            app::daemon()
         }
         Mode::Bridge(socket) => {
             cox::logs::init(None);
