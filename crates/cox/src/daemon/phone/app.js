@@ -308,6 +308,10 @@ function conversation(entries, agent) {
         speak(agent, "agent");
         nodes.push(plan(value));
         break;
+      case "plan_changed":
+        speaker = null;
+        nodes.push(planChanged(value));
+        break;
       case "permission":
         speak(agent, "agent");
         nodes.push(permission(value, at === lastIndexOf(entries, "permission")));
@@ -420,6 +424,19 @@ function plan(steps) {
   const marks = { completed: "✓", in_progress: "◌", pending: "" };
   return el("ul", { class: "entry plan" }, steps.map((step) =>
     el("li", { class: step.state }, el("span", { class: "state" }, marks[step.state] || ""), step.text)));
+}
+
+// How the plan differs from the one the human left the agent to: the
+// steps it added, as what it decided on its own, and those it removed.
+function planChanged(changed) {
+  const steps = [
+    ...changed.added.map((step) => el("li", { class: "added" }, el("span", { class: "state" }, "+"), step)),
+    ...changed.removed.map((step) => el("li", { class: "removed" }, el("span", { class: "state" }, "−"), step)),
+  ];
+  if (!steps.length) steps.push(el("li", { class: "removed" }, el("span", { class: "state" }, "="), "Back to the plan the line started with."));
+  return el("div", { class: "entry plan-changed" },
+    el("div", { class: "label" }, "Plan changed"),
+    el("ul", { class: "plan" }, steps));
 }
 
 function permission(asked, last) {

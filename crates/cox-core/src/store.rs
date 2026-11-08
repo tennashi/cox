@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 11;
+const VERSION: i64 = 12;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -63,7 +63,10 @@ CREATE TABLE chats (
     agent TEXT,
     -- The folder it works in, when it is not its project's: the one that
     -- was, as the chat opened, before another of the project's became it.
-    folder TEXT
+    folder TEXT,
+    -- The steps of the plan its agent first sent after the human's last
+    -- line, as JSON, which the plan is told against as it changes.
+    baseline TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -131,6 +134,7 @@ const UPGRADES: &[&str] = &[
          folder TEXT NOT NULL,
          UNIQUE (project, folder)
      );",
+    "ALTER TABLE chats ADD COLUMN baseline TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -803,6 +807,38 @@ impl Store {
             .unwrap_or_default())
     }
 
+    /// The steps of the plan `chat`'s agent first sent after the human's
+    /// last line, once it sent one.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read, or holds steps this Cox cannot.
+    pub fn baseline(&self, chat: ChatId) -> anyhow::Result<Option<Vec<String>>> {
+        let baseline: Option<String> = self.connection.query_row(
+            "SELECT baseline FROM chats WHERE id = ?1",
+            [chat.0],
+            |row| row.get(0),
+        )?;
+        Ok(baseline
+            .map(|baseline| serde_json::from_str(&baseline))
+            .transpose()?)
+    }
+
+    /// Keeps `baseline` as the steps of the plan `chat`'s agent first sent
+    /// after the human's last line, or none.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_baseline(&self, chat: ChatId, baseline: Option<&[String]>) -> anyhow::Result<()> {
+        let baseline = baseline.map(serde_json::to_string).transpose()?;
+        self.connection.execute(
+            "UPDATE chats SET baseline = ?2 WHERE id = ?1",
+            params![chat.0, baseline],
+        )?;
+        Ok(())
+    }
+
     /// Keeps `settings` as those of `chat`'s session.
     ///
     /// # Errors
@@ -902,6 +938,16 @@ impl Record {
     /// When the database cannot be written.
     pub fn settings(&self, settings: &[Setting]) -> anyhow::Result<()> {
         self.store.keep_settings(self.chat, settings)
+    }
+
+    /// Keeps `baseline` as the steps of the plan the chat's agent first
+    /// sent after the human's last line, or none.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn baseline(&self, baseline: Option<&[String]>) -> anyhow::Result<()> {
+        self.store.keep_baseline(self.chat, baseline)
     }
 
     /// What the human set each setting of `agent`'s sessions to last, of
@@ -1270,6 +1316,19 @@ mod tests {
 
         store.keep_session(chat, "session-1").unwrap();
         assert_eq!(store.session(chat).unwrap().as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn keeps_the_plan_a_chat_started_its_last_line_with() {
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        assert_eq!(store.baseline(chat).unwrap(), None);
+
+        let steps = ["Read the code".to_owned(), "Fix the greeting".to_owned()];
+        store.keep_baseline(chat, Some(&steps)).unwrap();
+        assert_eq!(store.baseline(chat).unwrap().as_deref(), Some(&steps[..]));
+        store.keep_baseline(chat, None).unwrap();
+        assert_eq!(store.baseline(chat).unwrap(), None);
     }
 
     #[test]

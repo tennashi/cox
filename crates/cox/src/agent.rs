@@ -1013,6 +1013,7 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
             Entry::Note(_)
                 | Entry::Thought(_)
                 | Entry::Plan(_)
+                | Entry::PlanChanged { .. }
                 | Entry::Switched { .. }
                 | Entry::Login { .. }
                 | Entry::Keep { .. }
@@ -1082,6 +1083,7 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
             // agent is asked in a line of its own when they choose to.
             Entry::Thought(_)
             | Entry::Plan(_)
+            | Entry::PlanChanged { .. }
             | Entry::Note(_)
             | Entry::Login { .. }
             | Entry::Keep { .. }

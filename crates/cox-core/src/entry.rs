@@ -27,6 +27,14 @@ pub enum Entry {
     Thought(String),
     /// The plan the agent works to in a turn, as it last sent it.
     Plan(Vec<Step>),
+    /// How the steps of the plan differ from those of the plan the agent
+    /// first sent after the human's last line, which the human left it
+    /// to: the steps it `added`, as what it decided on its own, and those
+    /// it `removed`, as the plan stands now.
+    PlanChanged {
+        added: Vec<String>,
+        removed: Vec<String>,
+    },
     /// A tool call, running until it has a result.
     ToolCall {
         id: String,

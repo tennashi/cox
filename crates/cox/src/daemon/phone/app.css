@@ -255,6 +255,9 @@ details[open] .last-thought { display: none; }
 .plan .state { width: 14px; flex-shrink: 0; text-align: center; }
 .plan .completed { color: var(--faint); }
 .plan .in_progress .state { color: var(--accent); }
+.plan-changed .label { color: var(--amber); }
+.plan-changed .added { color: var(--amber); }
+.plan-changed .removed { color: var(--faint); }
 
 .card {
   padding: 12px;

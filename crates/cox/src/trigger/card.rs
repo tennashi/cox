@@ -15,7 +15,7 @@ pub struct Draft {
     /// Where it is kept: the project's, or the human's.
     pub scope: Option<Scope>,
     /// The event it runs on, as `on` names it: `turn.end`, `goal.met`,
-    /// `wiki.written`, `sketch.end`, `chat.open` or `schedule`.
+    /// `wiki.written`, `sketch.end`, `chat.open`, `plan.changed` or `schedule`.
     pub on: String,
     /// The globs of the pages whose writing runs it, on `wiki.written`,
     /// or, empty, any.

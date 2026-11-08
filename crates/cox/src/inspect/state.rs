@@ -9,7 +9,7 @@ use cox_core::tabs::KeptTab;
 use gpui::{App, Focusable as _, Window};
 
 use crate::chat::conversation::{
-    Answer, Attachment, Check, CheckState, Content, Entry, GOAL_TURNS, State, StepState,
+    Answer, Attachment, Check, CheckState, Content, Entry, GOAL_TURNS, State, Step, StepState,
     ToolCallResult,
 };
 use crate::chat::view::ChatView;
@@ -425,20 +425,8 @@ fn describe_entry(entry: &Entry) -> String {
             let chosen = chosen.map_or("none yet".to_owned(), |chosen| (chosen + 1).to_string());
             format!("login: {}; chosen: {chosen}{failed}", options.join(", "))
         }
-        Entry::Plan(steps) => {
-            let steps: Vec<String> = steps
-                .iter()
-                .map(|step| {
-                    let state = match step.state {
-                        StepState::Pending => "waiting",
-                        StepState::InProgress => "under way",
-                        StepState::Completed => "done",
-                    };
-                    format!("[{state}] {}", step.text)
-                })
-                .collect();
-            format!("plan: {}", steps.join("; "))
-        }
+        Entry::PlanChanged { added, removed } => describe_drift(added, removed),
+        Entry::Plan(steps) => describe_plan(steps),
         Entry::ToolCall {
             title,
             content,
@@ -493,6 +481,33 @@ fn describe_entry(entry: &Entry) -> String {
         Entry::Checks(checks) => describe_checks("turn end", checks),
         Entry::Event { on, checks } => describe_checks(on, checks),
     }
+}
+
+/// The steps of a plan, each with how it stands.
+fn describe_plan(steps: &[Step]) -> String {
+    let steps: Vec<String> = steps
+        .iter()
+        .map(|step| {
+            let state = match step.state {
+                StepState::Pending => "waiting",
+                StepState::InProgress => "under way",
+                StepState::Completed => "done",
+            };
+            format!("[{state}] {}", step.text)
+        })
+        .collect();
+    format!("plan: {}", steps.join("; "))
+}
+
+/// The steps the agent added to the plan the human left it to, and those
+/// it removed.
+fn describe_drift(added: &[String], removed: &[String]) -> String {
+    let steps: Vec<String> = added
+        .iter()
+        .map(|step| format!("+ {step}"))
+        .chain(removed.iter().map(|step| format!("- {step}")))
+        .collect();
+    format!("plan changed: {}", steps.join("; "))
 }
 
 /// What ran as a turn ended, or as `on` happened, each with how it went.

@@ -229,6 +229,9 @@ struct Slot {
     /// How it stood when last looked at.
     state: State,
     unread: bool,
+    /// How many times its agent had changed a step of the plan the human
+    /// left it to when last looked at, as its conversation counts them.
+    plan_changes: usize,
     goal: Option<Goal>,
     parent: Option<u64>,
     setup: Option<Setup>,
@@ -552,6 +555,7 @@ impl Daemon {
                 named: chat.named,
                 state: State::Closed,
                 unread: false,
+                plan_changes: 0,
                 goal: chat.goal,
                 parent,
                 setup,
@@ -735,7 +739,12 @@ impl Daemon {
             session,
             setup,
         });
+        let baseline = self.store.baseline(kept).unwrap_or_else(|error| {
+            tracing::error!("the chat's plan cannot be read: {error:#}");
+            None
+        });
         let conversation = Conversation::closed(entries)
+            .with_baseline(baseline)
             .with_goal(goal)
             .with_settings(settings)
             .with_keeping(keeps);
@@ -1015,6 +1024,7 @@ impl Daemon {
             named: Named::Numbered,
             state: State::Idle,
             unread: false,
+            plan_changes: 0,
             goal: None,
             parent: from.map(|(parent, _)| parent),
             setup: setup.clone(),
@@ -1488,9 +1498,10 @@ impl Daemon {
                 generation,
                 event,
             } => {
-                let in_sketch =
-                    matches!(event, AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn))
-                        && self.sketch_of(key).is_some();
+                let in_sketch = matches!(
+                    event,
+                    AgentEvent::TurnEnded(cox_acp::StopReason::EndTurn) | AgentEvent::Plan(_)
+                ) && self.sketch_of(key).is_some();
                 if let Some(chat) = self.chat(key) {
                     chat.hear(generation, event, in_sketch);
                 }
@@ -2522,9 +2533,9 @@ impl Daemon {
 
     /// Follows how each chat stands now: a turn that ends while it is not
     /// shown leaves it unread, and what it is about names it, unless a name
-    /// that lasts more has. A chat that comes to wait for the human, or
-    /// ends a turn, tells the window, for it to tell the human unless they
-    /// look at it. What waits for a chat that is not at work hears how it
+    /// that lasts more has. A chat that comes to wait for the human, ends
+    /// a turn, or whose agent changed the plan the human left it to, tells
+    /// the window, for it to tell the human unless they look at it. What waits for a chat that is not at work hears how it
     /// stands, and a sketch the human ends goes on to its end. Answers
     /// whether a sketch went on, which may change other chats.
     fn review(&mut self) -> bool {
@@ -2556,6 +2567,14 @@ impl Daemon {
             } else {
                 None
             };
+            // The agent changing the plan the human left it to is news as
+            // it goes on.
+            let (changes, change) = conversation.plan_changes();
+            let told = told.or_else(|| {
+                (changes > slot.plan_changes)
+                    .then(|| format!("The plan changed:\n{}", change.unwrap_or_default()))
+            });
+            slot.plan_changes = changes;
             slot.state = state;
             slot.goal = conversation.goal().map(|goal| goal.what().clone());
             let about = match (conversation.title(), conversation.first_line()) {
