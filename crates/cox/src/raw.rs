@@ -14,6 +14,12 @@
 //! say where it was read, the day, and the chat that kept it. A source
 //! is never written again: what changed is another source, kept beside
 //! it.
+//!
+//! What a source says is anyone's, as a page of the web, kept in a
+//! folder the human may open as an Obsidian vault, where some of the
+//! plugins run what a note holds: so it is kept [`inert`], with what
+//! they would run broken where they would find it. A web page Cox reads
+//! itself, whole, for `raw_keep` (see [`page`]).
 
 use std::fmt::Write as _;
 use std::fs;
@@ -21,6 +27,8 @@ use std::io::{self, Write as _};
 use std::path::Path;
 
 use crate::wiki::{self, Found};
+
+pub mod page;
 
 /// The folder in the home that keeps the sources, unless the settings
 /// name another.
@@ -89,6 +97,7 @@ pub fn keep(root: &Path, topic: &str, source: Source, kept: Kept) -> Result<Stri
     if text.is_empty() {
         return Err("no text: give what the source says, as it was read, as `text`".into());
     }
+    let text = inert(text);
     let title = source.title.trim();
     let title = if title.is_empty() { from } else { title };
     let day = kept.day;
@@ -109,7 +118,7 @@ pub fn keep(root: &Path, topic: &str, source: Source, kept: Kept) -> Result<Stri
     if let Some(project) = kept.project {
         let _ = writeln!(properties, "project: {}", quoted(project));
     }
-    let page = format!("---\n{properties}---\n\n# {title}\n\n{text}\n");
+    let page = format!("---\n{properties}---\n\n# {}\n\n{text}\n", inert(title));
     let folder = root.join(topic);
     fs::create_dir_all(&folder)
         .map_err(|error| format!("cannot make {}: {error}", folder.display()))?;
@@ -137,6 +146,53 @@ pub fn keep(root: &Path, topic: &str, source: Source, kept: Kept) -> Result<Stri
         }
     }
     unreachable!("a name of its own is found")
+}
+
+/// The language of a code block Dataview runs as JavaScript.
+const DATAVIEW_JS: &str = "dataviewjs";
+
+/// What a code block of [`DATAVIEW_JS`] is kept as.
+const INERT_DATAVIEW_JS: &str = "inert-dataviewjs";
+
+/// What is put between the characters a plugin finds to run what
+/// follows, which shows as nothing.
+const BREAK: char = '\u{200B}';
+
+/// `text` as it reads, with what the plugins of an Obsidian vault run
+/// as a note is opened or made broken where they would find it, so that
+/// a source kept in a vault runs nothing: Dataview's code blocks of
+/// JavaScript, ```` ```dataviewjs ````, kept as ```` ```inert-dataviewjs
+/// ````; its inline JavaScript, `` `$= ...` ``; and Templater's commands,
+/// `<% ... %>`, which it runs in a note made in a folder it watches.
+/// Every `$=` and `<%` gets a zero-width space after its first character,
+/// in code too, wherever a plugin looks for them.
+#[must_use]
+pub fn inert(text: &str) -> String {
+    let mut inert = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let fence = &line[indent..];
+        let marks = ['`', '~']
+            .iter()
+            .map(|mark| fence.len() - fence.trim_start_matches(*mark).len())
+            .max()
+            .unwrap_or(0);
+        let info = fence[marks..].trim_start_matches([' ', '\t']);
+        let language = info
+            .find(|c: char| c.is_whitespace() || c == '{')
+            .map_or(info, |end| &info[..end]);
+        if indent < 4 && marks >= 3 && language.eq_ignore_ascii_case(DATAVIEW_JS) {
+            let at = line.len() - info.len();
+            inert.push_str(&line[..at]);
+            inert.push_str(INERT_DATAVIEW_JS);
+            inert.push_str(&line[at + language.len()..]);
+        } else {
+            inert.push_str(line);
+        }
+    }
+    inert
+        .replace("<%", &format!("<{BREAK}%"))
+        .replace("$=", &format!("${BREAK}="))
 }
 
 /// The text of the source `name` in the folder at `root`.
@@ -436,6 +492,37 @@ mod tests {
         assert!(keep(&root, "../out", source, by("2026-11-06")).is_err());
         assert!(keep(&root, "rust-news", release(" \n"), by("2026-11-06")).is_err());
         assert!(read(&root, "rust-news/none").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_source_runs_nothing_in_a_vault() {
+        let text = "Dataview runs this:\n\n```dataviewjs\ndv.paragraph(1)\n```\n\n\
+                    ~~~ DataviewJS {.x}\nrun()\n~~~\n\n\
+                    ```dataviewjsx\nleft()\n```\n\n\
+                    ```js\nlet a = 1;\n```\n\n\
+                    Inline: `$= dv.current()`, and <%* tp.system() %>.\n";
+        let kept = inert(text);
+        assert_eq!(
+            kept,
+            "Dataview runs this:\n\n```inert-dataviewjs\ndv.paragraph(1)\n```\n\n\
+             ~~~ inert-dataviewjs {.x}\nrun()\n~~~\n\n\
+             ```dataviewjsx\nleft()\n```\n\n\
+             ```js\nlet a = 1;\n```\n\n\
+             Inline: `$\u{200B}= dv.current()`, and <\u{200B}%* tp.system() %>.\n"
+        );
+        let root = scratch("inert");
+        let source = Source {
+            from: "https://example.com/",
+            title: "<% tp.file.title %>",
+            text,
+        };
+        let name = keep(&root, "vault", source, by("2026-11-08")).unwrap();
+        let read = read(&root, &name).unwrap();
+        assert!(
+            !read.contains("<%") && !read.contains("```dataviewjs\n"),
+            "{read}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

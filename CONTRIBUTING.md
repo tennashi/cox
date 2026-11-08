@@ -1483,6 +1483,28 @@ last kept first, and `raw_search` finds those that have every word it
 looks for. "Knowledge" on the stage's bar shows them to the human,
 under "Sources" (see [The stage](#the-stage)).
 
+A web page the agent keeps by its URL alone, and Cox reads it itself,
+whole, since an agent's own fetch tool may answer what a smaller model
+made of the page rather than the page, as Claude Code's `WebFetch` does:
+its article, apart from the site's menus, as Readability finds it, in
+Markdown, as Obsidian's Web Clipper reads it, which Cox keeps, and
+answers the agent. The page is anyone's, so Cox reads it apart from
+itself, as `cox --read-page <url>`, which it stops after a minute, since
+a page can be made to keep a parser busy for longer; and reads only
+`http` and `https`, of no address of the machine's own or of its
+networks', as `localhost`, `192.168.1.1` or a cloud's metadata, whether
+named so or resolved to it, nor through a redirect, at most 5 MB of it,
+and only HTML and text. A page its scripts draw, which Cox does not
+run, or one past a login, the agent reads on the stage, with the
+browser's tools, and keeps as text. What a source says goes to the
+agent, from `raw_keep` and `raw_read`, between two lines that mark it
+as the source's and not the human's, 30,000 bytes of it at a time,
+`raw_read` going on from the line the last left off at. A source runs
+nothing in an Obsidian vault: Dataview's ```` ```dataviewjs ```` blocks
+are kept as ```` ```inert-dataviewjs ````, and a zero-width space breaks
+every `$=`, Dataview's inline JavaScript, and `<%`, Templater's
+commands, which it runs in a note made in a folder it watches.
+
 So research on a schedule is a schedule (see [Schedules](#schedules))
 whose first line asks for it:
 

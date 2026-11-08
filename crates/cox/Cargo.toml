@@ -41,7 +41,7 @@ jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-sy
 # the wiki's pages as HTML, for the stage's Wiki plugin: see
 # `src/wiki/told.rs`.
 pulldown-cmark = { version = "0.13.5", default-features = false, features = ["html"] }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
 # What Cox says of itself, and what gpui and others say through `log`, on
 # standard error, and as JSON in a file of each run's own: see
@@ -50,6 +50,12 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 unicode-segmentation = "1.12.0"
 # Fetching the ACP Registry's agents: see `src/agents.rs`.
 ureq = "3.4.2"
+# Reading a web page whole for raw_keep, its article as Markdown, apart
+# from the site's menus, as Readability does: see `src/raw/page.rs`.
+dom_smoothie = "0.19.0"
+dom_query = "0.29.0"
+encoding_rs = "0.8.42"
+url = "2.5.8"
 
 # CEF is cox-browser's; the executables depend on its sys crate as well
 # only for `build.rs`, which has to know where the CEF distribution is to

@@ -225,6 +225,8 @@ fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServ
 fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     let data = scratch("wiki-data");
     cox::storage::keep_in(&data);
+    // A page is read by the `cox` built, as the tools' server runs it.
+    cox::raw::page::read_with(PathBuf::from(env!("CARGO_BIN_EXE_cox")));
     // The wiki is in the home the settings set.
     let home = data.join("home");
     std::fs::write(
@@ -384,8 +386,36 @@ fn sources_are_kept_apart_from_the_wiki(writer: &mut Agent, reader: &mut Agent, 
         read.contains("chat: \"Fix scroll\"\nchat_id: 7\nproject: \"one\"\n"),
         "{read}"
     );
+    // Marked as the source's, not the human's.
     assert!(
-        read.ends_with("# gpui docs\n\nOverflow scrolls only inside a bounded height.\n"),
+        read.starts_with(&format!(
+            "What the source {name} says, lines 1 to 11 of 11,"
+        )),
         "{read}"
     );
+    assert!(
+        read.contains("# gpui docs\n\nOverflow scrolls only inside a bounded height.\n--- source "),
+        "{read}"
+    );
+    reader.call(16, "raw_read", &json!({ "source": name, "from_line": 9 }));
+    let read = reader.hear();
+    let read = read["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(read.contains(", lines 9 to 11 of 11,"), "{read}");
+    assert!(!read.contains("chat_id"), "{read}");
+    // Cox reads only a web page itself, and only of the web.
+    writer.call(
+        17,
+        "raw_keep",
+        &json!({ "topic": "gpui-news", "from": "cargo doc --open" }),
+    );
+    let refused = writer.hear();
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    writer.call(
+        18,
+        "raw_keep",
+        &json!({ "topic": "gpui-news", "from": "http://127.0.0.1:9/admin" }),
+    );
+    let refused = writer.hear();
+    let refused = refused["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(refused.contains("not on the web"), "{refused}");
 }
