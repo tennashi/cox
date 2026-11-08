@@ -43,10 +43,15 @@ pub const USAGE: &str = "\
 Usage: cox [--stage <url>] [--home <dir>] [--data <dir>] [<agent command> [args...]]
        cox [--data <dir>] --daemon
        cox [--data <dir>] --inspect [<tool> [<arguments>...]]
+       cox [--data <dir>] --phone-link
        cox --read-page <url>";
 
 /// What the command line says to be coxd, after `--data <dir>`.
 pub const DAEMON: &str = "--daemon";
+
+/// What the command line says to print the link that pairs a phone,
+/// after `--data <dir>`.
+pub const PHONE_LINK: &str = "--phone-link";
 
 /// What the command line asks `cox` to be.
 #[derive(Debug, PartialEq, Eq)]
@@ -68,6 +73,9 @@ pub enum Mode {
         data: Option<PathBuf>,
         args: Vec<String>,
     },
+    /// The link that pairs a phone with the page coxd serves it, as `cox
+    /// [--data <dir>] --phone-link` (see [`crate::daemon::phone`]).
+    PhoneLink { data: Option<PathBuf> },
     /// The reader of the web page at the URL given, for `raw_keep`, as
     /// `cox --read-page <url>` (see [`crate::raw::page`]).
     ReadPage(String),
@@ -113,6 +121,11 @@ impl Mode {
         }
         if settings.command.first().map(String::as_str) == Some(DAEMON) {
             return Self::Daemon {
+                data: settings.data,
+            };
+        }
+        if settings.command.first().map(String::as_str) == Some(PHONE_LINK) {
+            return Self::PhoneLink {
                 data: settings.data,
             };
         }
@@ -607,6 +620,12 @@ mod tests {
             }
         );
         assert_eq!(parse(&["--daemon"]), Mode::Daemon { data: None });
+        assert_eq!(
+            parse(&["--data", "/tmp/d", "--phone-link"]),
+            Mode::PhoneLink {
+                data: Some(PathBuf::from("/tmp/d"))
+            }
+        );
     }
 
     #[test]

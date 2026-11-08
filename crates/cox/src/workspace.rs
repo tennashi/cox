@@ -575,6 +575,7 @@ impl Workspace {
             projects,
             chats,
             archived,
+            ..
         } = listing;
         let lasts: Vec<_> = self.projects.iter().map(|project| project.last).collect();
         // The icons read already, read again only when they change.
