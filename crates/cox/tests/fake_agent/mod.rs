@@ -11,7 +11,7 @@
 //! mentions "title", it first titles its session [`TITLE`], and when it
 //! mentions "slow", it waits a moment before anything. When the
 //! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
-//! turn. A turn cancelled, or whose permission request Cox answers as cancelled,
+//! turn, or steers a line into it, which it echoes, ending the turn. A turn cancelled, or whose permission request Cox answers as cancelled,
 //! ends as cancelled. Its sessions have two settings, [`MODEL`] and
 //! [`MODE`], which Cox sets as it asks, and when a prompt mentions
 //! "switch", the agent sets its mode to `plan` on its own. It goes on with a session it opened before as
@@ -38,7 +38,9 @@ use agent_client_protocol::schema::v1::{
     ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
     ToolCallUpdateFields, ToolKind,
 };
-use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Responder, Result};
+use agent_client_protocol::{
+    Agent, Channel, Client, ConnectionTo, Error, Responder, Result, UntypedMessage,
+};
 use cox::agent::instructions;
 use tokio::sync::Notify;
 
@@ -222,11 +224,15 @@ fn switch(
     ))
 }
 
-/// The cancels Cox has sent.
+/// The cancels Cox has sent, and the lines it steered into a turn that
+/// waits.
 #[derive(Default)]
 struct Cancels {
     count: AtomicUsize,
-    /// Wakes the turn that waits to be cancelled.
+    /// Whether a turn waits, which takes a line steered into it.
+    waiting: std::sync::atomic::AtomicBool,
+    steered: Mutex<Vec<String>>,
+    /// Wakes the turn that waits to be cancelled, or steered.
     wake: Notify,
 }
 
@@ -409,6 +415,7 @@ async fn serve(
     settings: Arc<Mutex<Settings>>,
 ) -> Result<()> {
     let waits = Arc::clone(&cancels);
+    let steers = Arc::clone(&cancels);
     let loaded = Arc::clone(&asked_to_resume);
     let (on_initialize, on_authenticate, on_new, on_prompt_login) =
         (login.clone(), login.clone(), login.clone(), login);
@@ -423,10 +430,16 @@ async fn serve(
         .name("fake-agent")
         .on_receive_request(
             async move |request: InitializeRequest, responder, _cx| {
+                let mut meta = serde_json::Map::new();
+                meta.insert(
+                    "steering".to_owned(),
+                    serde_json::json!({ "supported": true }),
+                );
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(capabilities(resumes))
-                        .auth_methods(on_initialize.logs_in.methods()),
+                        .auth_methods(on_initialize.logs_in.methods())
+                        .meta(meta),
                 )
             },
             agent_client_protocol::on_receive_request!(),
@@ -530,6 +543,26 @@ async fn serve(
             },
             agent_client_protocol::on_receive_request!(),
         )
+        // It takes a line into a turn that waits, as `claude-agent-acp`
+        // takes one (`_session/steering`).
+        .on_receive_request(
+            async move |request: UntypedMessage, responder: Responder<serde_json::Value>, _cx| {
+                if request.method != "_session/steering" {
+                    return responder.respond_with_error(Error::method_not_found());
+                }
+                if !steers.waiting.load(Ordering::SeqCst) {
+                    return responder.respond(
+                        serde_json::json!({ "outcome": "promptRequired", "reason": "noRunningTurn" }),
+                    );
+                }
+                let prompt: Vec<ContentBlock> =
+                    serde_json::from_value(request.params["prompt"].clone()).unwrap_or_default();
+                steers.steered.lock().unwrap().push(texts_of(&prompt).concat());
+                steers.wake.notify_one();
+                responder.respond(serde_json::json!({ "outcome": "injected" }))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .on_receive_notification(
             async move |_: CancelNotification, _cx| {
                 cancels.count.fetch_add(1, Ordering::SeqCst);
@@ -567,8 +600,15 @@ async fn take_turn(
     work(&turn, &request.session_id, &text)?;
     if text.contains("wait") {
         say(&turn, &request.session_id, "waiting")?;
+        cancels.waiting.store(true, Ordering::SeqCst);
         cancels.wake.notified().await;
-        return responder.respond(PromptResponse::new(StopReason::Cancelled));
+        cancels.waiting.store(false, Ordering::SeqCst);
+        let steered = cancels.steered.lock().unwrap().pop();
+        let Some(steered) = steered else {
+            return responder.respond(PromptResponse::new(StopReason::Cancelled));
+        };
+        say(&turn, &request.session_id, &format!("echo: {steered}"))?;
+        return responder.respond(PromptResponse::new(StopReason::EndTurn));
     }
     if text.contains("permission") {
         let answer = ask_permission(&turn, &request.session_id).await?;

@@ -4,7 +4,9 @@
 //! each `session/prompt`, and ends the turn early when Cox cancels it. It
 //! asks Cox to log in as the scenario says, and takes `authenticate`. It
 //! reads the files a prompt points to as `claude-agent-acp` does: see
-//! [`read`].
+//! [`read`]. It takes a line Cox steers into a turn (`_session/steering`,
+//! as `claude-agent-acp` takes it), and plays the turn of the scenario
+//! for it once the turn's own steps have gone, before the turn ends.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead as _, Write};
@@ -50,6 +52,11 @@ pub struct Agent<W: Write> {
     input: Receiver<Value>,
     /// What Cox sent while the agent waited for something else.
     held: VecDeque<Value>,
+    /// Whether a turn runs, which a line steered goes into.
+    turning: bool,
+    /// What the lines steered into the turn that runs say, the first
+    /// first, which the turn goes on with.
+    steered: VecDeque<String>,
     /// The MCP servers `session/new` handed the agent, by their names.
     servers: HashMap<String, Value>,
     started: HashMap<String, Server>,
@@ -110,6 +117,8 @@ impl<W: Write> Agent<W> {
             output,
             input,
             held: VecDeque::new(),
+            turning: false,
+            steered: VecDeque::new(),
             servers: HashMap::new(),
             started: HashMap::new(),
             result: String::new(),
@@ -130,14 +139,16 @@ impl<W: Write> Agent<W> {
             match (method, id) {
                 ("initialize", Some(id)) => {
                     // It reads the files a prompt points to, given whole,
-                    // takes pictures, and works in other folders beside its
-                    // own, as `claude-agent-acp` does.
+                    // takes pictures, works in other folders beside its
+                    // own, and takes lines into its turns, as
+                    // `claude-agent-acp` does.
                     let mut answer = json!({
                         "protocolVersion": 1,
                         "agentCapabilities": {
                             "promptCapabilities": { "embeddedContext": true, "image": true },
                             "sessionCapabilities": { "additionalDirectories": {} },
                         },
+                        "_meta": { "steering": { "supported": true } },
                     });
                     if !self.scenario.auth_methods.is_empty() {
                         answer["authMethods"] = Value::from(self.scenario.auth_methods.clone());
@@ -184,6 +195,9 @@ impl<W: Write> Agent<W> {
                     }
                 }
                 ("session/set_config_option", Some(id)) => self.set(&id, &message["params"]),
+                // With no turn running, a line steered goes as a prompt of
+                // its own, as Cox asks.
+                (STEER, Some(id)) => self.steer(&id, &message["params"]),
                 ("session/prompt", Some(id)) => {
                     if !self.prompt(&id, &message["params"]) {
                         return;
@@ -266,38 +280,72 @@ impl<W: Write> Agent<W> {
         self.answer(id, &json!({ "configOptions": options }));
     }
 
-    /// Takes the turn that answers the prompt `params`, and answers `id`
-    /// as it ends. Answers whether Cox is still there.
+    /// Takes the turn that answers the prompt `params`, and those of the
+    /// lines steered into it, and answers `id` as they end. Answers
+    /// whether Cox is still there.
     fn prompt(&mut self, id: &Value, params: &Value) -> bool {
         let session = params["sessionId"].clone();
-        let text = params["prompt"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(read)
-            .collect::<Vec<_>>()
-            .join("\n");
+        self.turning = true;
+        let mut said = Some(said(&params["prompt"]));
+        let mut went = (Went::On, Value::from("end_turn"));
+        while let (Went::On, Some(text)) =
+            (&went.0, said.take().or_else(|| self.steered.pop_front()))
+        {
+            went = self.answer_line(&session, &text);
+        }
+        self.turning = false;
+        self.steered.clear();
+        match went {
+            (Went::On, stop) => self.answer(id, &json!({ "stopReason": stop })),
+            (Went::Cancelled, _) => self.answer(id, &json!({ "stopReason": "cancelled" })),
+            (Went::Failed(error), _) => self.fail(id, INTERNAL_ERROR, &error),
+            (Went::Gone, _) => return false,
+        }
+        true
+    }
+
+    /// Takes the turn of the scenario that answers `text`, and answers
+    /// how it went, with the reason it stops for.
+    fn answer_line(&mut self, session: &Value, text: &str) -> (Went, Value) {
         let turn = (0..self.scenario.turns.len())
-            .find(|&turn| !self.taken[turn] && self.scenario.turns[turn].answers(&text));
+            .find(|&turn| !self.taken[turn] && self.scenario.turns[turn].answers(text));
         let Some(turn) = turn else {
-            self.say(&session, "The scenario has no turn for this.");
-            self.answer(id, &json!({ "stopReason": "end_turn" }));
-            return true;
+            return (
+                self.say(session, "The scenario has no turn for this."),
+                Value::from("end_turn"),
+            );
         };
         self.taken[turn] = true;
         let steps = std::mem::take(&mut self.scenario.turns[turn].steps);
-        let went = self.steps(&session, &steps);
+        let went = self.steps(session, &steps);
         self.scenario.turns[turn].steps = steps;
-        match went {
-            Went::On => {
-                let stop = self.scenario.turns[turn].stop.clone();
-                self.answer(id, &json!({ "stopReason": stop }));
-            }
-            Went::Cancelled => self.answer(id, &json!({ "stopReason": "cancelled" })),
-            Went::Failed(error) => self.fail(id, INTERNAL_ERROR, &error),
-            Went::Gone => return false,
+        (went, Value::from(self.scenario.turns[turn].stop.clone()))
+    }
+
+    /// Takes the line `params` steers into the turn that runs, and answers
+    /// `id` that it did, or, with none running, that it goes as a prompt.
+    fn steer(&mut self, id: &Value, params: &Value) {
+        if !self.turning {
+            self.answer(
+                id,
+                &json!({ "outcome": "promptRequired", "reason": "noRunningTurn" }),
+            );
+            return;
         }
-        true
+        self.steered.push_back(said(&params["prompt"]));
+        self.answer(id, &json!({ "outcome": "injected" }));
+    }
+
+    /// Keeps `message`, which Cox sent while the agent did something else,
+    /// for later, but takes a line steered into the turn at once.
+    fn hold(&mut self, message: Value) {
+        if message["method"] == STEER
+            && let Some(id) = message.get("id").cloned()
+        {
+            self.steer(&id, &message["params"]);
+            return;
+        }
+        self.held.push_back(message);
     }
 
     fn steps(&mut self, session: &Value, steps: &[Step]) -> Went {
@@ -382,7 +430,7 @@ impl<W: Write> Agent<W> {
             if message.get("method").is_some() || message["id"] != id {
                 // A cancel comes with Cox's answer to this request too.
                 if message["method"] != "session/cancel" {
-                    self.held.push_back(message);
+                    self.hold(message);
                 }
                 continue;
             }
@@ -463,7 +511,7 @@ impl<W: Write> Agent<W> {
                 Err(RecvTimeoutError::Timeout) => return Went::On,
                 Err(RecvTimeoutError::Disconnected) => return Went::Gone,
                 Ok(message) if message["method"] == "session/cancel" => return Went::Cancelled,
-                Ok(message) => self.held.push_back(message),
+                Ok(message) => self.hold(message),
             }
         }
     }
@@ -471,7 +519,7 @@ impl<W: Write> Agent<W> {
     /// Whether Cox has cancelled the turn, among what it sent so far.
     fn cancelled(&mut self) -> bool {
         while let Ok(message) = self.input.try_recv() {
-            self.held.push_back(message);
+            self.hold(message);
         }
         let at = self
             .held
@@ -507,6 +555,21 @@ impl<W: Write> Agent<W> {
         // Cox gone, the agent learns it from its input.
         let _ = writeln!(self.output, "{message}").and_then(|()| self.output.flush());
     }
+}
+
+/// The method of the request that steers a turn, as `claude-agent-acp`
+/// names it.
+const STEER: &str = "_session/steering";
+
+/// What the agent reads of the blocks of `prompt`, one under another.
+fn said(prompt: &Value) -> String {
+    prompt
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(read)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// ACP's update `kind` of a tool call, from the step's `fields`, with

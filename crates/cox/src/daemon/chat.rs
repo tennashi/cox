@@ -499,7 +499,7 @@ impl Chat {
     }
 
     /// The human sent `text`. Answers whether it went: not while a turn
-    /// runs.
+    /// runs, unless the agent takes it into the turn.
     pub fn submit(&mut self, text: &str, attached: Vec<Attachment>) -> bool {
         match self.conversation.submit_with(text, attached) {
             Some(command) => {
@@ -520,6 +520,7 @@ impl Chat {
         }
         if matches!(event, AgentEvent::TurnEnded(StopReason::EndTurn))
             && self.conversation.state() == State::Busy
+            && !self.conversation.steering()
         {
             self.in_sketch = in_sketch;
             self.find_due(in_sketch);

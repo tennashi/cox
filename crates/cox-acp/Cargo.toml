@@ -15,6 +15,8 @@ anyhow.workspace = true
 base64 = "0.22.1"
 # The commands an agent runs, which a daemon tells its window of.
 serde = { version = "1.0.229", features = ["derive"] }
+# A line steered into a turn goes in a request ACP's schema does not have.
+serde_json = "1.0.154"
 tokio = { workspace = true, features = ["macros", "sync"] }
 # The files a prompt points to, by their `file:` URIs.
 url = "2.5.8"

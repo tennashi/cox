@@ -225,6 +225,37 @@ fn cancelling_ends_the_turn() {
 }
 
 #[test]
+fn a_line_steered_into_a_turn_takes_its_turn_before_the_turn_ends() {
+    let scenario = json!({ "turns": [
+        { "steps": [{ "say": "Working." }, { "sleep": 300 }, { "say": "Done." }] },
+        { "when": "also", "steps": [{ "say": "And that too." }] },
+    ] });
+    let mut agent = Agent::play("steer", &scenario);
+    let (_, initialized) = agent.ask("initialize", &json!({ "protocolVersion": 1 }));
+    assert_eq!(
+        initialized["result"]["_meta"]["steering"]["supported"],
+        true
+    );
+    agent.ask("session/new", &json!({ "cwd": "/", "mcpServers": [] }));
+    let steer = json!({
+        "sessionId": "fake-1",
+        "prompt": [{ "type": "text", "text": "also this" }],
+        "_meta": { "steering": { "idleBehavior": "promptRequired" } },
+    });
+
+    let (_, idle) = agent.ask("_session/steering", &steer);
+    assert_eq!(idle["result"]["outcome"], "promptRequired");
+    let id = agent.prompt("go");
+    agent.until(|message| message["params"]["update"]["content"]["text"] == "Working.");
+    let (_, steered) = agent.ask("_session/steering", &steer);
+    assert_eq!(steered["result"]["outcome"], "injected");
+    let (sent, answer) = agent.until(|message| message["id"] == id);
+
+    assert_eq!(replied(&sent), "Done.And that too.");
+    assert_eq!(answer["result"]["stopReason"], "end_turn");
+}
+
+#[test]
 fn a_call_reaches_the_server_cox_handed_over() {
     // An MCP server that answers each call with the arguments it got.
     let server = r#"while read -r line; do

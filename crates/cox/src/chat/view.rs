@@ -702,7 +702,8 @@ impl ChatView {
         match self.conversation.state() {
             State::Idle => true,
             State::Closed => self.row.again,
-            State::Busy | State::Asking | State::Stopping | State::Checking => false,
+            State::Busy | State::Asking => self.conversation.steers(),
+            State::Stopping | State::Checking => false,
         }
     }
 
@@ -777,6 +778,9 @@ impl ChatView {
                     "The agent works toward the goal, turn {} of {GOAL_TURNS}. Escape stops it.",
                     goal.turns()
                 ),
+                None if self.conversation.steers() => {
+                    "A line goes into this turn. Escape stops it.".to_owned()
+                }
                 None => "The agent is working. Escape stops it.".to_owned(),
             }),
             State::Checking => Some(
