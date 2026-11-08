@@ -51,8 +51,7 @@ const RAW_READ: &str = "raw_read";
 const MAP_FORMAT: &str = "\
 A project has a map for each picture of it from a top of its own, as one of what it is made \
 of and one of how it is deployed, each a file in `.cox/maps` in the project's folder, named \
-after the map, as `.cox/maps/parts.json` for the map `parts` (`.cox/map.json`, as an earlier \
-Cox read it, is the map `map`). A map is a JSON object with `says`, one line on what it shows \
+after the map, as `.cox/maps/parts.json` for the map `parts`. A map is a JSON object with `says`, one line on what it shows \
 as against the project's other maps, `tiers`, `parts`, `edges` and `flows`. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
 \"frame\"}`: `says` is one line on what the tier shows; `rows` are the lines of boxes, from the \
 top, each `{\"name\", \"parts\": [ids], \"under\": id}`, where `under` hangs the row under a \
@@ -1285,13 +1284,11 @@ async fn wiki_search(
         .and_then(Value::as_str)
         .filter(|query| !query.trim().is_empty())
         .ok_or("no query: give the words to look for as `query`")?;
-    let Whereabouts {
-        project, folder, ..
-    } = whereabouts(chats).await?;
+    let Whereabouts { folder, .. } = whereabouts(chats).await?;
     let mut told = format!("The pages that have every word of `{query}`:");
     let mut any = false;
     for wiki in wikis(folder.as_deref()) {
-        let found = wiki::search(&wiki.root, query, &project);
+        let found = wiki::search(&wiki.root, query);
         if found.is_empty() {
             continue;
         }
@@ -1327,9 +1324,7 @@ async fn wiki_read(
         Some(Value::String(wiki)) if wiki == HUMAN => Some(false),
         Some(_) => return Err(format!("`wiki` is neither `{PROJECT}` nor `{HUMAN}`")),
     };
-    let Whereabouts {
-        project, folder, ..
-    } = whereabouts(chats).await?;
+    let Whereabouts { folder, .. } = whereabouts(chats).await?;
     if given == Some(true) && folder.is_none() {
         return Err("this chat is Cox's own, of no project, so it has no project wiki".to_owned());
     }
@@ -1340,13 +1335,13 @@ async fn wiki_read(
     let Some(page) = page.filter(|page| page.trim().trim_end_matches(".md") != wiki::INDEX) else {
         let indexes: Vec<String> = wikis
             .iter()
-            .map(|wiki| format!("{}:\n\n{}", wiki.called, index(&wiki.root, &project)))
+            .map(|wiki| format!("{}:\n\n{}", wiki.called, index(&wiki.root)))
             .collect();
         return Ok(indexes.join("\n\n"));
     };
     let mut missing = None;
     for wiki in &wikis {
-        match wiki::read(&wiki.root, page, &project) {
+        match wiki::read(&wiki.root, page) {
             Ok(text) => return Ok(text),
             Err(error) => missing = Some(error),
         }
@@ -1357,10 +1352,9 @@ async fn wiki_read(
     ))
 }
 
-/// The index of the wiki at `root`, as a chat of `project` reads it, or
-/// its pages when it has none.
-fn index(root: &Path, project: &str) -> String {
-    if let Ok(index) = wiki::read(root, wiki::INDEX, project) {
+/// The index of the wiki at `root`, or its pages when it has none.
+fn index(root: &Path) -> String {
+    if let Ok(index) = wiki::read(root, wiki::INDEX) {
         return index;
     }
     let pages = wiki::pages(root);
@@ -1432,22 +1426,14 @@ async fn wiki_write(
         commit: wiki::commit_of(cwd),
         paths,
     };
-    // A page of the human's that an earlier Cox kept in one project stays
-    // so, unless the agent lets it out.
-    let keep = if own { None } else { keep.map(|_| false) };
-    let file = wiki::write(&wiki.root, page, text, &used, keep)?;
+    let file = wiki::write(&wiki.root, page, text, &used)?;
     chats
         .send(ChatRequest::WikiWritten {
             page: page.to_owned(),
         })
         .ok();
-    let kept_in = fs::read_to_string(&file)
-        .ok()
-        .and_then(|page| wiki::only(&page))
-        .map(|project| format!(" It is kept in {project}, for its chats alone."))
-        .unwrap_or_default();
     Ok(format!(
-        "{} is written, in {}, used {}.{kept_in}",
+        "{} is written, in {}, used {}.",
         file.display(),
         wiki.called,
         used.line().trim_start_matches("- ")
@@ -1707,11 +1693,11 @@ mod tests {
     #[test]
     fn shows_the_map_and_tells_what_is_there() {
         let cwd = scratch("map");
-        fs::create_dir_all(cwd.join(".cox")).unwrap();
+        fs::create_dir_all(cwd.join(map::MAPS_FOLDER)).unwrap();
         fs::create_dir_all(cwd.join("src")).unwrap();
         fs::write(cwd.join("src/main.rs"), "fn main() {}\n").unwrap();
         fs::write(
-            cwd.join(map::MAP_FILE),
+            cwd.join(map::MAPS_FOLDER).join("map.json"),
             r#"{
               "tiers": [
                 { "id": "whole", "name": "Whole", "says": "The few things.",
@@ -1773,25 +1759,24 @@ mod tests {
 
         // With another map, each names the other, and is shown by its
         // name.
-        fs::create_dir_all(cwd.join(map::MAPS_FOLDER)).unwrap();
         fs::write(
-            cwd.join(map::MAPS_FOLDER).join("deploy.json"),
+            cwd.join(map::MAPS_FOLDER).join("runtime.json"),
             r#"{ "says": "Where it runs.",
                  "tiers": [{ "id": "hosts", "name": "Hosts", "rows": [{ "parts": ["box"] }] }],
                  "parts": { "box": { "name": "A box" } } }"#,
         )
         .unwrap();
-        let shown = call_now(SHOW_MAP, &json!({ "map": "deploy" }), &cwd, &sent);
+        let shown = call_now(SHOW_MAP, &json!({ "map": "runtime" }), &cwd, &sent);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert_eq!(
             told,
-            "The map `deploy` of the project is on the stage, open at the tier `hosts`, for \
+            "The map `runtime` of the project is on the stage, open at the tier `hosts`, for \
              the human to see where things are:\n`box` A box\nThe project's other maps, \
              which `map` shows:\n`map`"
         );
         match requests.try_recv() {
             Ok(ToolRequest::ShowMap { map, at }) => {
-                assert_eq!(map.as_deref(), Some("deploy"));
+                assert_eq!(map.as_deref(), Some("runtime"));
                 assert_eq!(at, Vec::<String>::new());
             }
             _ => panic!("the stage was not asked to show the map"),
@@ -1799,11 +1784,11 @@ mod tests {
         let shown = call_now(SHOW_MAP, &json!({}), &cwd, &sent);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert!(told.starts_with("The map `map` of the project"), "{told}");
-        assert!(told.ends_with("\n`deploy`: Where it runs."), "{told}");
+        assert!(told.ends_with("\n`runtime`: Where it runs."), "{told}");
         let shown = call_now(SHOW_MAP, &json!({ "map": "gone" }), &cwd, &sent);
         assert_eq!(shown["isError"], true);
         let told = shown["content"][0]["text"].as_str().unwrap();
-        assert_eq!(told, "the project has no map `gone`; it has: map, deploy");
+        assert_eq!(told, "the project has no map `gone`; it has: map, runtime");
     }
 
     #[test]

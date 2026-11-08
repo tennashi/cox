@@ -118,8 +118,8 @@ mod tests {
             Some(Typed::File(folder.join("src/gone.rs")))
         );
         assert_eq!(
-            typed(".cox/map.json", &folder),
-            Some(Typed::File(folder.join(".cox/map.json")))
+            typed(".cox/maps/map.json", &folder),
+            Some(Typed::File(folder.join(".cox/maps/map.json")))
         );
     }
 

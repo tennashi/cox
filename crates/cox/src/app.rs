@@ -158,11 +158,9 @@ impl Settings {
     }
 }
 
-/// Runs the app as `settings` say, until the human quits it. The chats
-/// that worked in the sketches follow them when they moved, from the
-/// first of `sketches` to the second.
+/// Runs the app as `settings` say, until the human quits it.
 #[must_use]
-pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode {
+pub fn run(settings: Settings) -> ExitCode {
     let profile = crate::storage::path(crate::storage::Kept::Stage);
     // On Linux, CEF's helper processes run this same executable with
     // arguments of their own, and exit inside `start`, before they reach
@@ -170,27 +168,12 @@ pub fn run(settings: Settings, sketches: Option<(PathBuf, PathBuf)>) -> ExitCode
     if std::env::args().any(|arg| arg.starts_with("--type=")) {
         let _ = cox_browser::start(profile.clone());
     }
-    // What the chats that worked where things moved follow, kept before
-    // coxd reads them.
-    let mut moved: Vec<(PathBuf, PathBuf)> = sketches.into_iter().collect();
     let home_given = settings.home.is_some();
     let home = settings
         .home
         .clone()
         .or_else(|| crate::settings::Saved::read().home);
-    if home.is_none()
-        && let Some(user) = std::env::var_os("HOME")
-        && let Some(renamed) = lowercase_home(Path::new(&user))
-    {
-        moved.push(renamed);
-    }
     let home = crate::settings::home_for_chats(home);
-    if !moved.is_empty() {
-        open_store(&moved);
-    }
-    // The workflow and the wiki move after the home, which may have been
-    // renamed.
-    crate::settings::settle_folders();
     // Opened from the Finder, the Dock or a launcher, Cox is given no
     // command, and starts the agent the settings name.
     let named = settings
@@ -290,11 +273,9 @@ fn start_daemon(data: Option<&Path>) -> std::io::Result<()> {
 
 /// Runs coxd until it is stopped: the chats, kept where this Cox keeps
 /// what lasts, their agents started as `agents.json` and `settings.json`
-/// say, following them as they change. The chats that worked in the
-/// sketches follow them when they moved, from the first of `sketches` to
-/// the second.
+/// say, following them as they change.
 #[must_use]
-pub fn daemon(sketches: Option<(PathBuf, PathBuf)>) -> ExitCode {
+pub fn daemon() -> ExitCode {
     let Some(socket) = crate::storage::path(crate::storage::Kept::Daemon) else {
         eprintln!("cox: there is no place for coxd's socket");
         return ExitCode::from(1);
@@ -316,7 +297,7 @@ pub fn daemon(sketches: Option<(PathBuf, PathBuf)>) -> ExitCode {
     let ran = crate::daemon::process::run(
         &socket,
         home,
-        move || Rc::new(open_store(&Vec::from_iter(sketches))),
+        move || Rc::new(open_store()),
         move || Rc::new(launcher),
     );
     crate::scratch::take_away();
@@ -365,61 +346,17 @@ fn follow_agents(agents: Agents) {
     }
 }
 
-/// The name an earlier Cox gave the home, `~/cox` now.
-const EARLIER_HOME: &str = "Cox";
-
-/// Renames the home an earlier Cox made in `user`, the home directory,
-/// `Cox`, to what Cox names it now, `cox`, unless there is a `cox` there
-/// too, saying where it was and where it is now. The names are compared
-/// as the folder lists them, since on macOS `cox` finds `Cox` too.
-fn lowercase_home(user: &Path) -> Option<(PathBuf, PathBuf)> {
-    let names: Vec<_> = std::fs::read_dir(user)
-        .ok()?
-        .filter_map(|entry| Some(entry.ok()?.file_name()))
-        .collect();
-    if !names.iter().any(|name| name == EARLIER_HOME)
-        || names.iter().any(|name| name == crate::settings::HOME)
-    {
-        return None;
-    }
-    let (from, to) = (user.join(EARLIER_HOME), user.join(crate::settings::HOME));
-    if !std::fs::symlink_metadata(&from).is_ok_and(|metadata| metadata.is_dir()) {
-        return None;
-    }
-    match std::fs::rename(&from, &to) {
-        Ok(()) => {
-            tracing::info!("renamed {} to {}", from.display(), to.display());
-            Some((from, to))
-        }
-        Err(error) => {
-            tracing::warn!("{} stays as it was: {error}", from.display());
-            None
-        }
-    }
-}
-
 /// The store of the chats this Cox keeps, or one for this run only when
-/// that cannot be opened, the chats that worked where things `moved`
-/// following them, from the first of each to the second.
-fn open_store(moved: &[(PathBuf, PathBuf)]) -> Store {
+/// that cannot be opened.
+fn open_store() -> Store {
     let kept = crate::storage::path(crate::storage::Kept::Chats)
         .ok_or_else(|| anyhow::anyhow!("there is no place to keep them"))
         .and_then(|path| Store::open(&path));
-    let store = kept
-        .or_else(|error| {
-            tracing::error!("the chats last for this run only: {error:#}");
-            Store::in_memory()
-        })
-        .expect("SQLite opens a database in memory");
-    for (from, to) in moved {
-        if let Err(error) = store.moved(from, to) {
-            tracing::error!(
-                "the chats that worked in {} do not find it: {error:#}",
-                from.display()
-            );
-        }
-    }
-    store
+    kept.or_else(|error| {
+        tracing::error!("the chats last for this run only: {error:#}");
+        Store::in_memory()
+    })
+    .expect("SQLite opens a database in memory")
 }
 
 /// Binds the keys of every part of the window, and of quitting.
@@ -700,25 +637,5 @@ mod tests {
             PathBuf::from(home).join("cox")
         );
         assert!(crate::settings::home_for_chats(Some("relative".into())).is_absolute());
-    }
-
-    #[test]
-    fn the_home_an_earlier_cox_made_is_renamed_unless_there_is_one_now() {
-        let user = std::env::temp_dir().join(format!("cox-home-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&user);
-        std::fs::create_dir_all(user.join("Cox")).unwrap();
-        std::fs::write(user.join("Cox").join("notes.md"), "kept").unwrap();
-
-        assert_eq!(
-            super::lowercase_home(&user),
-            Some((user.join("Cox"), user.join("cox")))
-        );
-        assert_eq!(
-            std::fs::read_to_string(user.join("cox").join("notes.md")).unwrap(),
-            "kept"
-        );
-        // Once renamed, it is not again.
-        assert_eq!(super::lowercase_home(&user), None);
-        let _ = std::fs::remove_dir_all(&user);
     }
 }

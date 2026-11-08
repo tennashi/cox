@@ -316,16 +316,9 @@ impl Trigger {
         let (lines, rest) = crate::wiki::front(text);
         let mut properties = properties(&lines)?;
         let key = |properties: &mut BTreeMap<String, Value>, key: &str| properties.remove(key);
-        // An earlier Cox's schedule says when it runs with `every`.
-        let on = match (key(&mut properties, "on"), key(&mut properties, "every")) {
-            (Some(on), None) => On::read(&on)?,
-            (None, Some(every)) => vec![On::Schedule {
-                cron: Cron::from_every(every.one().map_err(|why| format!("every {why}"))?)?,
-            }],
-            (Some(_), Some(_)) => {
-                return Err("on and every both say when it runs: on alone".to_owned());
-            }
-            (None, None) => {
+        let on = match key(&mut properties, "on") {
+            Some(on) => On::read(&on)?,
+            None => {
                 return Err("it says nothing of when it runs, as on: turn.end".to_owned());
             }
         };
@@ -393,7 +386,7 @@ impl Trigger {
         };
         let by = match key(&mut properties, "by") {
             Some(by) => by.one().map_err(|why| format!("by {why}"))?.to_owned(),
-            // A schedule opens a chat, as an earlier Cox's did.
+            // A schedule opens a chat.
             None if scheduled => "new".to_owned(),
             None => return Err("it says nothing of who runs it, as by: shell".to_owned()),
         };
@@ -656,19 +649,11 @@ fn unquoted(value: &str) -> &str {
 /// The triggers that run in `folder`, as its chats find them: the
 /// project's own, in `.cox/triggers` there, then the human's, in their
 /// `workflow`, each by name; and why each of those Cox cannot read does
-/// not run. The schedules an earlier Cox kept apart, in `.cox/schedules`
-/// and the workflow's `schedules`, are among them (see
-/// [`crate::schedule`]).
+/// not run.
 #[must_use]
 pub fn of(folder: &Path, workflow: &Path) -> (Vec<Trigger>, Vec<String>) {
     let (mut triggers, mut unread) = of_project(folder);
-    let (global, also) = read_all(
-        &[
-            workflow.join(TRIGGERS),
-            workflow.join(crate::schedule::SCHEDULES),
-        ],
-        Scope::Global,
-    );
+    let (global, also) = read_all(&workflow.join(TRIGGERS), Scope::Global);
     triggers.extend(global);
     unread.extend(also);
     (triggers, unread)
@@ -677,13 +662,7 @@ pub fn of(folder: &Path, workflow: &Path) -> (Vec<Trigger>, Vec<String>) {
 /// The project's own triggers of `folder`, and why each of those Cox
 /// cannot read does not run.
 fn of_project(folder: &Path) -> (Vec<Trigger>, Vec<String>) {
-    read_all(
-        &[
-            folder.join(PROJECT_TRIGGERS),
-            folder.join(crate::schedule::PROJECT_SCHEDULES),
-        ],
-        Scope::Project,
-    )
+    read_all(&folder.join(PROJECT_TRIGGERS), Scope::Project)
 }
 
 /// The triggers that run on a schedule: the human's, in their
@@ -692,13 +671,7 @@ fn of_project(folder: &Path) -> (Vec<Trigger>, Vec<String>) {
 /// in the log those Cox cannot read.
 #[must_use]
 pub fn scheduled(workflow: &Path, home: &Path, projects: &[PathBuf]) -> Vec<(Trigger, PathBuf)> {
-    let (global, mut unread) = read_all(
-        &[
-            workflow.join(TRIGGERS),
-            workflow.join(crate::schedule::SCHEDULES),
-        ],
-        Scope::Global,
-    );
+    let (global, mut unread) = read_all(&workflow.join(TRIGGERS), Scope::Global);
     let mut found: Vec<(Trigger, PathBuf)> = global
         .into_iter()
         .filter(|trigger| trigger.cron().is_some())
@@ -961,8 +934,7 @@ pub fn told(
                             Scope::Project => folder.clone(),
                             Scope::Global => trigger.works_in(kept.home),
                         };
-                        let id = crate::schedule::id(&trigger.name, &trigger.file, kept.workflow);
-                        let last = kept.schedules.last(&id);
+                        let last = kept.schedules.last(&trigger.file.display().to_string());
                         if works != *folder {
                             told["at"] = serde_json::json!(works);
                             told["enabled"] = (!Arranged::read(kept.arranged, &works)
@@ -1089,15 +1061,12 @@ fn read_kept<T: serde::de::DeserializeOwned>(kept: Option<&Path>) -> BTreeMap<Pa
     }
 }
 
-/// The triggers in `folders`, by name, and why each Cox cannot read does
+/// The triggers in `folder`, by name, and why each Cox cannot read does
 /// not run.
-fn read_all(folders: &[PathBuf], scope: Scope) -> (Vec<Trigger>, Vec<String>) {
+fn read_all(folder: &Path, scope: Scope) -> (Vec<Trigger>, Vec<String>) {
     let mut triggers = Vec::new();
     let mut unread = Vec::new();
-    for folder in folders {
-        let Ok(entries) = std::fs::read_dir(folder) else {
-            continue;
-        };
+    if let Ok(entries) = std::fs::read_dir(folder) {
         for entry in entries.filter_map(Result::ok) {
             match Trigger::read(&entry.path(), scope) {
                 Ok(trigger) => triggers.extend(trigger),
@@ -1278,18 +1247,14 @@ mod tests {
     }
 
     /// The schedules of a workflow in `root`, and of a project: one that
-    /// works in the project, one of an earlier Cox, one that works in a
-    /// folder no project has, and the project's own. Answers the home, the
+    /// works in the project, one that works in the home, one that works
+    /// in a folder no project has, and the project's own. Answers the home, the
     /// project, that folder and the workflow.
     fn schedules_in(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let _ = std::fs::remove_dir_all(root);
         let (home, project, elsewhere) = (root.join("home"), root.join("app"), root.join("notes"));
         let workflow = root.join("workflow");
-        for folder in [
-            workflow.join(TRIGGERS),
-            workflow.join("schedules"),
-            project.join(".cox/schedules"),
-        ] {
+        for folder in [workflow.join(TRIGGERS), project.join(PROJECT_TRIGGERS)] {
             std::fs::create_dir_all(folder).unwrap();
         }
         std::fs::write(
@@ -1300,10 +1265,9 @@ mod tests {
             ),
         )
         .unwrap();
-        // An earlier Cox's, kept by its name.
         std::fs::write(
-            workflow.join("schedules/tidy.md"),
-            "---\nevery: every 6h\nallow: [read:*]\n---\nTidy.\n",
+            workflow.join(TRIGGERS).join("tidy.md"),
+            "---\non: {schedule: {cron: \"0 */6 * * *\"}}\nallow: [read:*]\n---\nTidy.\n",
         )
         .unwrap();
         std::fs::write(
@@ -1315,8 +1279,8 @@ mod tests {
         )
         .unwrap();
         std::fs::write(
-            project.join(".cox/schedules/triage.md"),
-            "---\nevery: daily 09:00\nfolder: ~/ignored\n---\nTriage.\n",
+            project.join(PROJECT_TRIGGERS).join("triage.md"),
+            "---\non: {schedule: {cron: \"0 9 * * *\"}}\nfolder: ~/ignored\n---\nTriage.\n",
         )
         .unwrap();
         (home, project, elsewhere, workflow)
@@ -1331,7 +1295,14 @@ mod tests {
             .at(10, 0, 0, 0)
             .to_zoned(jiff::tz::TimeZone::UTC)
             .unwrap();
-        schedules.ran("tidy", now.timestamp());
+        schedules.ran(
+            &workflow
+                .join(TRIGGERS)
+                .join("tidy.md")
+                .display()
+                .to_string(),
+            now.timestamp(),
+        );
         let arranged = root.join("triggers.json");
         let kept = Kept {
             workflow: &workflow,
@@ -1536,11 +1507,6 @@ mod tests {
                 .unwrap_err()
                 .contains("maybe")
         );
-        assert!(
-            parse("---\non: turn.end\nby: shell\nevery: daily\n---\nmake\n")
-                .unwrap_err()
-                .contains("every")
-        );
         let scheduled = |rest: &str| {
             parse(&format!(
                 "---\non: {{schedule: {{cron: \"0 9 * * *\"}}}}\n{rest}---\nhi\n"
@@ -1588,13 +1554,10 @@ mod tests {
             want
         );
         assert_eq!(cron("---\non:\n  schedule: 0 9 * * 1,3\n---\nhi\n"), want);
-        assert_eq!(
-            cron("---\nevery: weekly mon 09:00\n---\nhi\n"),
-            Ok(Some("0 9 * * 1".to_owned()))
-        );
-        let trigger =
-            parse("---\nevery: daily 09:00\nfolder: /notes\nallow:\n  - fetch:*\n---\nhi\n")
-                .unwrap();
+        let trigger = parse(
+            "---\non: {schedule: {cron: \"0 9 * * *\"}}\nfolder: /notes\nallow:\n  - fetch:*\n---\nhi\n",
+        )
+        .unwrap();
         assert_eq!(
             trigger.by,
             By::New {

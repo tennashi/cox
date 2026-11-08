@@ -20,7 +20,7 @@ use std::path::Path;
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, html};
 use serde_json::{Value, json};
 
-use super::{INDEX, about, file, front, only, pages, split, title};
+use super::{INDEX, about, file, front, pages, split, title};
 use crate::translate::Translated;
 
 /// What Cox finds wrong with a page.
@@ -50,8 +50,6 @@ struct Told {
     broken: BTreeSet<String>,
     /// Where it was used, each as its day and the rest of its line.
     used: Vec<(String, String)>,
-    /// The project it is kept in, if it is kept in one.
-    only: Option<String>,
 }
 
 /// The wiki at `root`: its folder, and its pages, but the index, by name.
@@ -162,7 +160,6 @@ fn read(name: &str, text: &str, all: &[&str]) -> Told {
         links,
         broken,
         used,
-        only: only(text),
     }
 }
 
@@ -256,7 +253,6 @@ fn page_json(name: &str, page: &Told, linked_from: &BTreeMap<&str, Vec<&str>>) -
             .iter()
             .map(|(day, what)| json!({ "day": day, "what": what }))
             .collect::<Vec<_>>(),
-        "only": page.only,
         "marks": marks,
     })
 }
@@ -327,7 +323,7 @@ mod tests {
         fs::write(root.join("index.md"), "- [[gpui]]\n- [[lonely]]\n").unwrap();
         fs::write(
             root.join("lonely.md"),
-            "---\nonly: acme\n---\n\n# Lonely\n\nOf acme alone.\n",
+            "---\ntags: [acme]\n---\n\n# Lonely\n\nOf acme alone.\n",
         )
         .unwrap();
 
@@ -351,8 +347,6 @@ mod tests {
         assert_eq!(of("lonely")["marks"], json!([ORPHAN, UNUSED]));
         assert_eq!(of("lonely")["title"], "Lonely");
         assert_eq!(of("lonely")["about"], "Of acme alone.");
-        assert_eq!(of("lonely")["only"], "acme");
-        assert_eq!(of("gpui")["only"], Value::Null);
         assert_eq!(of("rust/errors")["title"], "rust/errors");
         assert_eq!(of("rust/errors")["marks"], json!([UNTITLED, UNUSED]));
         assert_eq!(of("rust/errors")["linked_from"], json!(["gpui"]));

@@ -171,45 +171,29 @@ fn page(url: &str) -> KeptTab {
 }
 
 #[test]
-fn the_chats_of_a_folder_share_its_stage_which_starts_from_their_own() {
+fn the_chats_of_a_folder_share_its_stage() {
     let folder = folder("stage");
     let socket = folder.join("run").join("coxd.sock");
     let home = folder.join("home");
     let project = folder.join("project");
     let path = folder.join("chats.sqlite");
-    // Two chats, each with a stage of its own, as an earlier Cox kept
-    // them.
+    // Two chats of a folder, whose stage has a tab of each.
     let store = Store::open(&path).unwrap();
     let kept_project = store.project(&project, "project").unwrap();
     let first = store.add_chat(Some(kept_project), "Chat 1").unwrap();
     let second = store.add_chat(Some(kept_project), "Chat 2").unwrap();
-    let own = |tabs, shown| KeptTabs {
-        tabs,
-        shown,
-        owners: Vec::new(),
-    };
     store
-        .keep_tabs(
-            first,
-            &own(
-                vec![KeptTab::Files { open: Vec::new() }, page("https://a/")],
-                1,
-            ),
-        )
-        .unwrap();
-    store
-        .keep_tabs(
-            second,
-            &own(
-                vec![
+        .keep_stage(
+            &project,
+            &KeptTabs {
+                tabs: vec![
                     KeptTab::Files { open: Vec::new() },
                     page("https://b/"),
-                    KeptTab::Terminal {
-                        title: "make".to_owned(),
-                    },
+                    page("https://a/"),
                 ],
-                2,
-            ),
+                shown: 0,
+                owners: vec![Some(second), Some(second), Some(first)],
+            },
         )
         .unwrap();
     let coxd = run_keeping(&socket, &home, Some(&path));
@@ -225,8 +209,8 @@ fn the_chats_of_a_folder_share_its_stage_which_starts_from_their_own() {
         panic!("the two chats are listed: {listing:?}");
     };
 
-    // The stage of the project's folder is the two chats' stages, merged,
-    // each tab of the chat it was of, the chat watched first.
+    // The stage of the project's folder is as it was kept, each tab of
+    // the chat it is of.
     let _ = window.link.to.send(ToDaemon::Watch { key: two });
     let told = until_settled(&mut window, 2)
         .into_iter()
@@ -235,7 +219,7 @@ fn the_chats_of_a_folder_share_its_stage_which_starts_from_their_own() {
             _ => None,
         })
         .expect("coxd tells the stage's tabs");
-    let merged = KeptTabs {
+    let shared = KeptTabs {
         tabs: vec![
             KeptTab::Files { open: Vec::new() },
             page("https://b/"),
@@ -244,11 +228,11 @@ fn the_chats_of_a_folder_share_its_stage_which_starts_from_their_own() {
         shown: 0,
         owners: vec![Some(two), Some(two), Some(one)],
     };
-    assert_eq!(told, Some(merged.clone()));
+    assert_eq!(told, Some(shared.clone()));
 
     // The window keeps the stage as it changes, by its folder, and the
     // other chat of the folder gets it as it was kept.
-    let changed = KeptTabs { shown: 2, ..merged };
+    let changed = KeptTabs { shown: 2, ..shared };
     let _ = window.link.to.send(ToDaemon::Tabs {
         folder: project.clone(),
         tabs: changed.clone(),

@@ -427,8 +427,8 @@ function pointing(e, a, b) {
 function renderTier(tierId) {
   const t = tier(tierId);
   const frame = t.frame || {};
-  const aboveIds = frame.above || frame.left || [];
-  const belowIds = frame.below || frame.right || [];
+  const aboveIds = frame.above || [];
+  const belowIds = frame.below || [];
   // The lines of cards the tier draws, from the top: the frame's cards of
   // the user's side, the tier's own rows, and the frame's cards of the
   // code's side, so that a tier reads from the top down as the top tier

@@ -42,10 +42,8 @@ fn folder_of(temp: &Path, pid: u32) -> PathBuf {
 }
 
 /// Takes away the folders that the runs of Cox that ended left among the
-/// system's temporary files: this Cox's, as `cox-<pid>`, and those an
-/// earlier Cox made each on its own, as `cox-<pid>-<number>` and
-/// `cox-cef-<pid>`. Only the human's folders are taken, of processes
-/// that no longer run.
+/// system's temporary files, as `cox-<pid>`. Only the human's folders
+/// are taken, of processes that no longer run.
 pub fn sweep() {
     sweep_in(&std::env::temp_dir(), &|pid| running(pid));
 }
@@ -78,19 +76,10 @@ fn sweep_in(temp: &Path, runs: &dyn Fn(u32) -> bool) {
 /// The process whose run of Cox left a folder named `name`, if a run of
 /// Cox names its folders so.
 fn left_by(name: &str) -> Option<u32> {
-    let digits = |text: &str| {
-        (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
-            .then(|| text.parse().ok())
-            .flatten()
-    };
-    let rest = name.strip_prefix("cox-")?;
-    if let Some(pid) = rest.strip_prefix("cef-") {
-        return digits(pid);
-    }
-    match rest.split_once('-') {
-        Some((pid, number)) => digits(number).and(digits(pid)),
-        None => digits(rest),
-    }
+    let pid = name.strip_prefix("cox-")?;
+    (!pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| pid.parse().ok())
+        .flatten()
 }
 
 /// Whether the process `pid` runs.
@@ -113,11 +102,10 @@ mod tests {
     #[test]
     fn tells_the_folders_runs_of_cox_leave() {
         assert_eq!(left_by("cox-4242"), Some(4242));
-        assert_eq!(left_by("cox-4242-3"), Some(4242));
-        assert_eq!(left_by("cox-cef-4242"), Some(4242));
         // What the tests of Cox make, and others.
         assert_eq!(left_by("cox-settings-4242"), None);
         assert_eq!(left_by("cox-4242-screenshot.png"), None);
+        assert_eq!(left_by("cox-4242-3"), None);
         assert_eq!(left_by("cox-"), None);
         assert_eq!(left_by("box-4242"), None);
     }
@@ -126,7 +114,7 @@ mod tests {
     fn takes_away_only_what_runs_that_ended_left() {
         let temp = std::env::temp_dir().join(format!("cox-scratch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp);
-        for name in ["cox-1", "cox-2", "cox-1-0", "cox-cef-1", "cox-mine-1"] {
+        for name in ["cox-1", "cox-2", "cox-mine-1"] {
             fs::create_dir_all(temp.join(name).join("inside")).unwrap();
         }
         fs::write(temp.join("cox-3"), "a file").unwrap();

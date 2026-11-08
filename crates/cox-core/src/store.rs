@@ -21,7 +21,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 9;
+const VERSION: i64 = 10;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -36,9 +36,6 @@ CREATE TABLE chats (
     name TEXT NOT NULL,
     -- When the chat was opened, in milliseconds since the epoch.
     created INTEGER NOT NULL,
-    -- Its stage's tabs, as JSON, as an earlier Cox kept a stage for each
-    -- chat, which the stage of its folder starts from (see stages).
-    tabs TEXT,
     -- The id its agent gave its session, once the agent has opened one.
     session TEXT,
     -- Who named it, as `Named` numbers them.
@@ -115,6 +112,9 @@ const UPGRADES: &[&str] = &[
          PRIMARY KEY (agent, setting)
      );",
     "CREATE TABLE stages (folder TEXT PRIMARY KEY, tabs TEXT NOT NULL);",
+    // Each chat kept a stage of its own, before the chats of a folder
+    // shared the stages.
+    "ALTER TABLE chats DROP COLUMN tabs;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -459,35 +459,6 @@ impl Store {
         Ok(())
     }
 
-    /// The tabs of `chat`'s own stage, if it had one, as an earlier Cox
-    /// kept a stage for each chat.
-    ///
-    /// # Errors
-    ///
-    /// When the database cannot be read, or holds tabs this Cox cannot.
-    pub fn tabs(&self, chat: ChatId) -> anyhow::Result<Option<KeptTabs>> {
-        let tabs: Option<String> =
-            self.connection
-                .query_row("SELECT tabs FROM chats WHERE id = ?1", [chat.0], |row| {
-                    row.get(0)
-                })?;
-        Ok(tabs.map(|tabs| serde_json::from_str(&tabs)).transpose()?)
-    }
-
-    /// Keeps `tabs` as those of `chat`'s own stage, as an earlier Cox
-    /// did.
-    ///
-    /// # Errors
-    ///
-    /// When the database cannot be written.
-    pub fn keep_tabs(&self, chat: ChatId, tabs: &KeptTabs) -> anyhow::Result<()> {
-        self.connection.execute(
-            "UPDATE chats SET tabs = ?2 WHERE id = ?1",
-            params![chat.0, serde_json::to_string(tabs)?],
-        )?;
-        Ok(())
-    }
-
     /// The tabs of the stage of `folder`, where its chats work, if it has
     /// one.
     ///
@@ -517,43 +488,6 @@ impl Store {
              ON CONFLICT (folder) DO UPDATE SET tabs = excluded.tabs",
             params![folder.to_string_lossy(), serde_json::to_string(tabs)?],
         )?;
-        Ok(())
-    }
-
-    /// Has the projects and the chats that were in the folder `from` be
-    /// in `to`, which it moved to: the projects' folders, the folders the
-    /// chats work in, the stages' folders, and the paths of their tabs.
-    ///
-    /// # Errors
-    ///
-    /// When the database cannot be written.
-    pub fn moved(&self, from: &Path, to: &Path) -> anyhow::Result<()> {
-        let (from, to) = (inside(from), inside(to));
-        // As JSON writes them, without the quotes.
-        let json = |path: &str| -> anyhow::Result<String> {
-            let quoted = serde_json::to_string(path)?;
-            Ok(quoted[1..quoted.len() - 1].to_owned())
-        };
-        let transaction = self.connection.unchecked_transaction()?;
-        transaction.execute(
-            "UPDATE projects SET folder = ?2 || substr(folder, length(?1) + 1)
-             WHERE substr(folder, 1, length(?1)) = ?1",
-            params![from, to],
-        )?;
-        transaction.execute(
-            "UPDATE chats SET setup = replace(setup, ?1, ?2), tabs = replace(tabs, ?1, ?2)",
-            params![json(&from)?, json(&to)?],
-        )?;
-        transaction.execute(
-            "UPDATE OR REPLACE stages SET folder = ?2 || substr(folder, length(?1) + 1)
-             WHERE substr(folder, 1, length(?1)) = ?1",
-            params![from, to],
-        )?;
-        transaction.execute(
-            "UPDATE stages SET tabs = replace(tabs, ?1, ?2)",
-            params![json(&from)?, json(&to)?],
-        )?;
-        transaction.commit()?;
         Ok(())
     }
 
@@ -718,15 +652,6 @@ impl Record {
         self.store.keep_entry(self.chat, number, entry)
     }
 
-    /// Keeps `tabs` as those of the chat's stage.
-    ///
-    /// # Errors
-    ///
-    /// When the database cannot be written.
-    pub fn tabs(&self, tabs: &KeptTabs) -> anyhow::Result<()> {
-        self.store.keep_tabs(self.chat, tabs)
-    }
-
     /// Keeps `session` as the id of the session of the chat's agent.
     ///
     /// # Errors
@@ -807,12 +732,6 @@ fn now() -> i64 {
 /// Makes the file at `path` for the human alone, and the directories it is
 /// in, if they are not there. `SQLite` makes the files beside it the same.
 #[cfg(unix)]
-/// What the paths inside `folder` start with: the folder and a `/`.
-fn inside(folder: &Path) -> String {
-    let folder = folder.to_string_lossy();
-    format!("{}/", folder.trim_end_matches('/'))
-}
-
 fn make_private(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 
@@ -843,7 +762,7 @@ mod tests {
     use super::*;
     use crate::diff::Line;
     use crate::entry::{Content, Step, StepState, ToolCallResult};
-    use crate::tabs::{KeptTab, Lines};
+    use crate::tabs::KeptTab;
 
     fn scratch(name: &str) -> PathBuf {
         let directory =
@@ -988,42 +907,6 @@ mod tests {
     }
 
     #[test]
-    fn keeps_the_tabs_of_a_chats_stage() {
-        let store = Store::in_memory().unwrap();
-        let chat = store.add_chat(None, "Chat 1").unwrap();
-        assert_eq!(store.tabs(chat).unwrap(), None);
-
-        let tabs = KeptTabs {
-            tabs: vec![
-                KeptTab::Page {
-                    url: "https://example.com/".to_owned(),
-                    title: "Example Domain".to_owned(),
-                },
-                KeptTab::Markdown {
-                    path: "/work/plan.md".into(),
-                },
-                KeptTab::Terminal {
-                    title: "cargo test".to_owned(),
-                },
-                KeptTab::File {
-                    path: "/work/src/main.rs".into(),
-                    lines: Some(Lines { first: 3, last: 9 }),
-                },
-                KeptTab::Files {
-                    open: vec!["/work/src".into()],
-                },
-                KeptTab::Changes {
-                    folder: "/work".into(),
-                },
-            ],
-            shown: 1,
-            owners: Vec::new(),
-        };
-        store.keep_tabs(chat, &tabs).unwrap();
-        assert_eq!(store.tabs(chat).unwrap(), Some(tabs));
-    }
-
-    #[test]
     fn keeps_the_stage_of_a_folder_with_the_chat_of_each_tab() {
         let store = Store::in_memory().unwrap();
         let chat = store.add_chat(None, "Chat 1").unwrap();
@@ -1123,91 +1006,6 @@ mod tests {
         // A chat its agent opens talks to the same agent.
         let child = store.add_chat_under(chat, None, "Chat 2", None).unwrap();
         assert_eq!(store.agent(child).unwrap().as_deref(), Some("codex"));
-    }
-
-    #[test]
-    fn chats_follow_the_sketches_they_work_in_to_where_they_moved() {
-        let store = Store::in_memory().unwrap();
-        let project = store
-            .project(Path::new("/data/cox-sketches/greet-2"), "greet-2")
-            .unwrap();
-        let elsewhere = store
-            .project(Path::new("/data/cox-sketches-old"), "old")
-            .unwrap();
-        let parent = store.add_chat(Some(project), "Chat 1").unwrap();
-        let chat = store
-            .add_chat_under(
-                parent,
-                None,
-                "Chat 2",
-                Some(r#"{"folder":"/data/cox-sketches/greet-1"}"#),
-            )
-            .unwrap();
-        let tabs = KeptTabs {
-            tabs: vec![KeptTab::Markdown {
-                path: "/data/cox-sketches/greet-1/notes.md".into(),
-            }],
-            shown: 0,
-            owners: Vec::new(),
-        };
-        store.keep_tabs(chat, &tabs).unwrap();
-        store
-            .keep_stage(Path::new("/data/cox-sketches/greet-1"), &tabs)
-            .unwrap();
-
-        store
-            .moved(
-                Path::new("/data/cox-sketches"),
-                Path::new("/data/cox-data/sketches"),
-            )
-            .unwrap();
-
-        let kept = store.chats().unwrap();
-        let setup = kept
-            .iter()
-            .find(|kept| kept.id == chat)
-            .unwrap()
-            .setup
-            .clone();
-        assert_eq!(
-            setup.as_deref(),
-            Some(r#"{"folder":"/data/cox-data/sketches/greet-1"}"#)
-        );
-        let Some(KeptTabs { tabs, .. }) = store.tabs(chat).unwrap() else {
-            panic!("the tabs are kept");
-        };
-        assert_eq!(
-            tabs,
-            [KeptTab::Markdown {
-                path: "/data/cox-data/sketches/greet-1/notes.md".into()
-            }]
-        );
-        assert_eq!(
-            store
-                .stage(Path::new("/data/cox-sketches/greet-1"))
-                .unwrap(),
-            None
-        );
-        let Some(KeptTabs { tabs, .. }) = store
-            .stage(Path::new("/data/cox-data/sketches/greet-1"))
-            .unwrap()
-        else {
-            panic!("the stage moved with its folder");
-        };
-        assert_eq!(
-            tabs,
-            [KeptTab::Markdown {
-                path: "/data/cox-data/sketches/greet-1/notes.md".into()
-            }]
-        );
-        let folders: Vec<_> = store
-            .projects()
-            .unwrap()
-            .into_iter()
-            .map(|kept| (kept.id, kept.folder))
-            .collect();
-        assert!(folders.contains(&(project, "/data/cox-data/sketches/greet-2".into())));
-        assert!(folders.contains(&(elsewhere, "/data/cox-sketches-old".into())));
     }
 
     #[test]
@@ -1365,6 +1163,8 @@ mod tests {
         assert_eq!(store.agent(child).unwrap(), None);
         store.keep_choice("claude", "model", "small").unwrap();
         assert_eq!(store.choices("claude").unwrap().len(), 1);
+        // The stage each chat kept of its own is gone.
+        assert!(store.connection.prepare("SELECT tabs FROM chats").is_err());
         std::fs::remove_dir_all(&directory).unwrap();
     }
 

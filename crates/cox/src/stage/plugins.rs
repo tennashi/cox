@@ -537,9 +537,10 @@ mod tests {
     #[test]
     fn the_map_is_told_as_json() {
         let root = scratch("map");
-        std::fs::create_dir_all(root.join(".cox")).unwrap();
+        let maps = root.join(cox_editor::map::MAPS_FOLDER);
+        std::fs::create_dir_all(&maps).unwrap();
         std::fs::write(
-            root.join(cox_editor::map::MAP_FILE),
+            maps.join("map.json"),
             r#"{ "tiers": [{ "id": "whole", "name": "Whole", "rows": [{ "parts": ["one"] }] }],
                  "parts": { "one": { "name": "One", "holds": ["src"] } } }"#,
         )
@@ -563,10 +564,10 @@ mod tests {
     #[test]
     fn the_schedules_of_the_folder_are_told_among_its_triggers() {
         let root = scratch("schedules");
-        std::fs::create_dir_all(root.join(".cox/schedules")).unwrap();
+        std::fs::create_dir_all(root.join(".cox/triggers")).unwrap();
         std::fs::write(
-            root.join(".cox/schedules/triage.md"),
-            "---\nevery: every 6h\n---\n\nLook at what changed.\n",
+            root.join(".cox/triggers/triage.md"),
+            "---\non: {schedule: {cron: \"0 */6 * * *\"}}\n---\n\nLook at what changed.\n",
         )
         .unwrap();
         let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
@@ -578,8 +579,6 @@ mod tests {
         assert_eq!(triage["name"], "triage");
         assert_eq!(triage["scope"], "project");
         assert_eq!(triage["schedule"]["every"], "Every 6 hours");
-        assert_eq!(plugins.resource("cox://api/schedules"), None);
-        assert!(plugins.resource("cox://schedules/").is_none());
     }
 
     #[test]

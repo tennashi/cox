@@ -319,11 +319,6 @@ impl Stage {
             // it that opens again, or else the first after it.
             let show = index <= shown || stage.tabs.shown_index().is_none();
             match tab {
-                // The Schedules page of earlier runs opens as the page of
-                // the triggers, which took its place.
-                KeptTab::Page { url, .. } if url.starts_with("cox://schedules/") => {
-                    stage.open_tab(links::TRIGGERS_URL, show, window, cx);
-                }
                 KeptTab::Page { url, .. } => {
                     stage.open_tab(&url, show, window, cx);
                 }
@@ -357,23 +352,11 @@ impl Stage {
                     let tab = mac_window::reopened(app, title, cx);
                     stage.push_mac_window(tab, show, cx);
                 }
-                // The Workflow tab of earlier runs opens as the page of the
-                // triggers, which took its place.
-                KeptTab::Workflow => {
-                    stage.open_tab(links::TRIGGERS_URL, show, window, cx);
-                }
                 KeptTab::MacWindows => {
                     stage.push_windows(show, window, cx);
                 }
-                // The tabs Cox drew in earlier runs open as the pages that
-                // draw them now: the map at its top, since its tiers are
-                // not the crates the tab was open at.
-                KeptTab::Map { .. } => {
-                    stage.open_tab(links::MAP_URL, show, window, cx);
-                }
-                // The tab of the parts the chat ran with, which Cox no
-                // longer draws, does not open again.
-                KeptTab::Terminal { .. } | KeptTab::Parts => {}
+                // A terminal does not start again.
+                KeptTab::Terminal { .. } => {}
             }
         }
         stage.acting = None;

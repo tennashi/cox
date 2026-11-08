@@ -346,14 +346,11 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
             },
             KeptTab::Files { open } => format!("files, {} folders open", open.len()),
             KeptTab::Changes { folder } => format!("changes in {}", folder.display()),
-            KeptTab::Map { .. } => "map".to_owned(),
             KeptTab::Flow { call } => format!("flow of tool call {call}"),
             KeptTab::Android { device } => format!("android emulator {device}"),
             KeptTab::AndroidDevices => "android devices".to_owned(),
             KeptTab::MacWindow { app, title } => format!("mac window {app} {title:?}"),
             KeptTab::MacWindows => "mac windows".to_owned(),
-            KeptTab::Workflow => "workflow".to_owned(),
-            KeptTab::Parts => "parts the chat ran with".to_owned(),
             KeptTab::Terminal { title } => format!("terminal {title:?}"),
         };
         let _ = write!(told, " {}. {what}", index + 1);

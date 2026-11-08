@@ -1,7 +1,7 @@
 //! What the project's language server says a step of a flow calls, for
 //! the Map page to name a step by the function it runs where the boxes
 //! hold the code (see [`crate::stage::map`]): at the line the step is
-//! made at, its `at` in `.cox/map.json`, the function the line is in,
+//! made at, its `at` in the map's file, the function the line is in,
 //! and the functions it calls on that line, as the server's call
 //! hierarchy has them, or, where that names none, as the server says
 //! each name called on the line is defined. The page reads it as JSON from

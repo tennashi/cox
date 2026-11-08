@@ -278,7 +278,7 @@ of tool ACP says the call is, and those that run the usual tests
 the rest, since no human answers for it. The judge
 keeps one session while the goal lasts, so it remembers what it looked
 at, until the goal changes or Cox quits. A `.cox/goal.md` in the
-project's folder (or, as an earlier Cox read it, a `COX.goal.md`) replaces what the judge is told it is, for a project
+project's folder replaces what the judge is told it is, for a project
 that wants its goals judged in a way of its own; Cox still adds how to
 end the reply, and the goal. When the judge finds that one command
 decides the goal, passing just when it is met, it names the command on
@@ -532,9 +532,7 @@ learned: Markdown pages by topic, as `gpui-layout.md` or
 `~`, as `{"wiki": "~/notes/cox"}`, an Obsidian vault or a Git repository
 of theirs, or else `wiki` in the home the settings set, as
 `~/cox/wiki`, where the human sees it and every Cox of theirs finds it
-(`--home` is for its run, and does not move it); a wiki an earlier Cox
-kept in its data folder moves there as Cox starts, unless the home has
-one already, and so does a workflow. A chat's agent
+(`--home` is for its run, and does not move it). A chat's agent
 searches it with Cox's `wiki_search`, for the pages that have every word
 it looks for, reads a page with `wiki_read`, or the index without one,
 and writes a page whole with `wiki_write`, through Cox, which adds,
@@ -561,10 +559,7 @@ pages, then the human's, `wiki_read` reads the project's page of a
 name before the human's, unless asked for the human's, and the indexes
 of both without a page, and `wiki_write` writes the page where it is,
 or, with `keep_in_project`, in the project's wiki, or, set false, in
-the human's. A page of the human's wiki an earlier Cox kept in one
-project says so in its properties, the front matter Obsidian keeps
-between `---` lines at its top, as `only: <project>`, by the project's
-name, and only that project's chats see it either.
+the human's.
 
 So that the human need not remember to, Cox asks at a chat's
 milestones, when its goal is met and when a sketch ends, on a card in
@@ -596,8 +591,7 @@ so that what an agent wrote runs nothing on the stage. Cox marks, with
 no agent, the pages with links to no page, those no page links to, the
 index aside, those with no title, and those that say nowhere where they
 were used, as those the human wrote; chips over the pages narrow them
-to those of a mark. A page kept in one project says which, as the
-human sees every page. The sources are listed the last kept first,
+to those of a mark. The sources are listed the last kept first,
 each with its title, where it was read, the day it was kept and the
 chat that kept it, which the line at the top narrows too; and a source,
 at `cox://wiki/#raw:` and its name, drawn as a page is, with where it
@@ -824,11 +818,7 @@ gives its tabs back to the human. The tabs of the chats not shown are
 dimmer, and what the agent of a chat not shown opens there opens
 behind the tab shown, the stage staying as it was, until that chat is
 shown, which shows its last tab. A stage is kept with the chat each tab
-is of; an earlier Cox
-kept a stage for each chat, and the stage of a folder starts, the first
-time, from those of its chats not archived, that of the chat it is
-first shown for first, each tab of its chat but the terminals, and each
-page, file or view of the project once. The
+is of. The
 bar along its top keeps the views of the project in sight first, side
 by side: "Activity" (see below), "Map", when the project has a map, "Files",
 "Changes", when the project is in a Git repository, and the other
@@ -1060,9 +1050,8 @@ A project can have several maps, each a picture of it from a top of
 its own, as one of what it is made of and one of how it is deployed:
 each is a file in the project's folder, in `.cox/maps`, named after the
 map, as `.cox/maps/parts.json` for the map `parts`, with, at its top, a
-line on what it shows as against the others (`says`); `.cox/map.json`,
-as an earlier Cox read it, is the map `map`, first of them, and the rest
-follow by name. A map is written by
+line on what it shows as against the others (`says`), listed by name.
+A map is written by
 an agent once and kept up to date by the agents that change the code,
 so that it is there whenever the tab is opened, the same whatever
 changed; a project tracks them or not as it likes, and Cox's own
@@ -1295,9 +1284,8 @@ kind is kept apart
 ([`storage.rs`](crates/cox/src/storage.rs) lists them):
 
 - at its top, what the human writes or chooses: `settings.json`,
-  `agents.json` (the `workflow` and `wiki` an earlier Cox kept here
-  move into the home); beside them `sketches`, the folders the sketches
-  work in, and `logs`;
+  `agents.json`; beside them `sketches`, the folders the sketches work
+  in, and `logs`;
 - in `state`, what Cox would lose: the chats, in a SQLite database,
   `chats.sqlite`, the stage's profile, `stage`, when each schedule
   last ran, `schedules.json`, which triggers are off and their order,
@@ -1309,12 +1297,6 @@ kind is kept apart
   downloads, in `agents`, and `translations`;
 - in `run`, what is there only while Cox runs: `coxd.sock` and
   `inspect.sock`.
-
-A Cox from before kept them all at the top of the folder, and a Cox
-built in `target/` kept each beside it, as `cox-` and its name. Cox
-moves them where they go as it starts, and the chats that work in a
-sketch that moved follow it; while another Cox from the same place
-runs, it leaves them, and uses them where they are.
 
 The stage keeps its cookies, logins and storage in its profile, which
 lasts across runs. Only one Cox at a time can use a profile; a second
@@ -1447,14 +1429,6 @@ chat does. In the first line, `{name}` stands for the trigger's name,
 `{now}` for when it runs, and `{last}` for when it ran last, or
 `never`. A schedule runs on no other event, and no shell runs it.
 
-An earlier Cox kept schedules apart, in `schedules` in the workflow and
-`.cox/schedules` in a project, saying when they run with `every`:
-`daily` and a time, `weekly`, a day and a time, or `every` and a number
-of hours. Cox reads those as triggers too, `every` as the cron it means:
-`daily 09:00` as `0 9 * * *`, `weekly mon 09:00` as `0 9 * * 1`, and
-`every 6h` as `0 */6 * * *`, which runs on the clock's hours rather
-than six hours after it last ran.
-
 Every minute, coxd (see [coxd](#coxd)) runs each schedule that is due
 and turned on where it works, whether a window is there or not: one
 that never ran at once, and one a run of which Cox missed, as while the
@@ -1463,8 +1437,7 @@ last run is at work, it waits. Cox runs those of each project it has
 opened. A run is a chat named after the trigger and when it ran, as
 `rust-news 11/06 09:00`, whose first line goes in the human's place.
 When each last ran is kept in `state/schedules.json` in Cox's data
-folder, by its file's path, or, for one an earlier Cox kept in the
-workflow's `schedules`, by its name, as it kept them. One Cox cannot
+folder, by its file's path. One Cox cannot
 read is said in coxd's log, and does not run.
 
 "Triggers" on the stage's bar lists them under "Schedule", in the
