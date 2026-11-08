@@ -21,8 +21,14 @@
 //! agent asks, it posts to `/act`, a [`ToDaemon`] as JSON, as the window
 //! says it, which coxd does as the window's (see [`done_on_the_page`]
 //! for which).
+//!
+//! The page asks, too, to be told of the chats that need the human while
+//! they are away from the Mac, with Web Push (see [`super::push`]): it
+//! reads coxd's key on `/push`, and posts where to push to it there, or
+//! to `/push/end` to be told no more, its service worker, `/sw.js`,
+//! showing what is pushed.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
 use std::io::Read as _;
 use std::path::Path;
@@ -41,6 +47,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::Internal;
+use super::push::{self, Notice, Pushed, Pushes, Subscription};
 use super::wire::{FromDaemon, ToDaemon};
 use crate::storage::{self, Kept};
 
@@ -64,9 +71,9 @@ const NOT_PAIRED: &str = "<!doctype html><meta charset=\"utf-8\"><meta name=\"vi
     <button>Pair</button></form></main>";
 
 /// The files a phone gets before it is paired: the page's look, for the
-/// page that pairs it, and what puts the page on its home screen, which
-/// the browser asks for without the cookie.
-const PUBLIC: &[&str] = &["/app.css", "/manifest.webmanifest", "/icon.svg"];
+/// page that pairs it, and what puts the page on its home screen, and the
+/// service worker, which the browser asks for without the cookie.
+const PUBLIC: &[&str] = &["/app.css", "/manifest.webmanifest", "/icon.svg", "/sw.js"];
 
 /// The page's files, built into Cox: its path, its type, and what it
 /// holds.
@@ -85,6 +92,11 @@ const FILES: &[(&str, &str, &str)] = &[
         "/app.css",
         "text/css; charset=utf-8",
         include_str!("phone/app.css"),
+    ),
+    (
+        "/sw.js",
+        "text/javascript; charset=utf-8",
+        include_str!("phone/sw.js"),
     ),
     (
         "/manifest.webmanifest",
@@ -214,12 +226,26 @@ pub async fn listen(port: u16) -> anyhow::Result<TcpListener> {
 
 /// Serves the page on `listener` to the phones paired with `token`,
 /// telling the daemon, on `internal`, of the phones that follow the
-/// chats.
-pub async fn serve(listener: TcpListener, token: String, internal: UnboundedSender<Internal>) {
+/// chats, and, with `pushes`, pushing to them what it says of the chats.
+pub async fn serve(
+    listener: TcpListener,
+    token: String,
+    pushes: Option<Pushes>,
+    internal: UnboundedSender<Internal>,
+) {
+    let pushes = pushes.map(|pushes| {
+        let pushes = Rc::new(RefCell::new(pushes));
+        let (to, notices) = unbounded_channel();
+        if internal.send(Internal::Push { to }).is_ok() {
+            tokio::task::spawn_local(push_all(Rc::clone(&pushes), notices));
+        }
+        pushes
+    });
     let page = Rc::new(Page {
         token,
         internal,
         last: Cell::new(0),
+        pushes,
     });
     loop {
         let stream = match listener.accept().await {
@@ -234,12 +260,11 @@ pub async fn serve(listener: TcpListener, token: String, internal: UnboundedSend
             let service = hyper::service::service_fn(move |request: Request<Incoming>| {
                 let page = Rc::clone(&page);
                 async move {
-                    let answer =
-                        if request.method() == Method::POST && request.uri().path() == "/act" {
-                            page.act(request).await
-                        } else {
-                            page.answer(&request)
-                        };
+                    let answer = if request.method() == Method::POST {
+                        page.posted(request).await
+                    } else {
+                        page.answer(&request)
+                    };
                     Ok::<_, Infallible>(answer)
                 }
             });
@@ -259,6 +284,8 @@ struct Page {
     internal: UnboundedSender<Internal>,
     /// The number of the last phone that followed the chats.
     last: Cell<u64>,
+    /// coxd's key and the phones it pushes to, unless it pushes nothing.
+    pushes: Option<Rc<RefCell<Pushes>>>,
 }
 
 impl Page {
@@ -278,6 +305,16 @@ impl Page {
                 NOT_PAIRED,
             );
         }
+        if path == "/push" {
+            return match &self.pushes {
+                Some(pushes) => answer(
+                    StatusCode::OK,
+                    "application/json",
+                    serde_json::json!({ "key": pushes.borrow().public_key() }).to_string(),
+                ),
+                None => answer(StatusCode::NOT_FOUND, TEXT, "coxd pushes nothing"),
+            };
+        }
         if path == "/events" {
             let chat = request.uri().query().and_then(|query| {
                 query
@@ -288,31 +325,75 @@ impl Page {
             return self.events(chat);
         }
         match FILES.iter().find(|(at, _, _)| *at == path) {
-            Some((_, kind, text)) => answer(StatusCode::OK, kind, text),
-            None => answer(
-                StatusCode::NOT_FOUND,
-                "text/plain; charset=utf-8",
-                "Not found",
-            ),
+            Some((_, kind, text)) => answer(StatusCode::OK, kind, *text),
+            None => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
         }
     }
 
-    /// Does what the human did on the page, as `request` says it, a
-    /// [`ToDaemon`] as JSON, as the window would: only what the page
-    /// does, and only from the page itself.
-    async fn act(&self, request: Request<Incoming>) -> Response<Body> {
-        const TEXT: &str = "text/plain; charset=utf-8";
+    /// Does what the page posted, as `request` says it, from the page
+    /// itself: at `/act`, what the human did on it; at `/push`, where to
+    /// push to the phone; and at `/push/end`, where to push no more.
+    async fn posted(&self, request: Request<Incoming>) -> Response<Body> {
         if !self.paired(&request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
         }
         if !from_the_page(&request) {
             return answer(StatusCode::FORBIDDEN, TEXT, "Not from the page");
         }
+        let path = request.uri().path().to_owned();
         let body = http_body_util::Limited::new(request.into_body(), MOST);
         let Ok(body) = http_body_util::BodyExt::collect(body).await else {
             return answer(StatusCode::PAYLOAD_TOO_LARGE, TEXT, "Too long");
         };
-        let Ok(message) = serde_json::from_slice::<ToDaemon>(&body.to_bytes()) else {
+        let body = body.to_bytes();
+        match path.as_str() {
+            "/act" => self.act(&body),
+            "/push" => self.subscribe(&body),
+            "/push/end" => self.unsubscribe(&body),
+            _ => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
+        }
+    }
+
+    /// Pushes to the phone where `body` says, a `PushSubscription` as
+    /// JSON, from now on.
+    fn subscribe(&self, body: &[u8]) -> Response<Body> {
+        let Some(pushes) = &self.pushes else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "coxd pushes nothing");
+        };
+        let Ok(subscription) = serde_json::from_slice::<Subscription>(body) else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "Not understood");
+        };
+        let service = push::service(&subscription.endpoint);
+        match pushes.borrow_mut().subscribe(subscription) {
+            Ok(()) => {
+                tracing::info!(service, "a phone asked to be told of the chats");
+                answer(StatusCode::NO_CONTENT, TEXT, "")
+            }
+            Err(why) => answer(StatusCode::BAD_REQUEST, TEXT, why),
+        }
+    }
+
+    /// Pushes no more where `body` says, `{"endpoint": ...}`.
+    fn unsubscribe(&self, body: &[u8]) -> Response<Body> {
+        #[derive(serde::Deserialize)]
+        struct Ended {
+            endpoint: String,
+        }
+        let Some(pushes) = &self.pushes else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "coxd pushes nothing");
+        };
+        let Ok(ended) = serde_json::from_slice::<Ended>(body) else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "Not understood");
+        };
+        pushes.borrow_mut().unsubscribe(&ended.endpoint);
+        answer(StatusCode::NO_CONTENT, TEXT, "")
+    }
+
+    /// Does what the human did on the page, as `body` says it, a
+    /// [`ToDaemon`] as JSON, as the window would: only what the page
+    /// does.
+    fn act(&self, body: &[u8]) -> Response<Body> {
+        let Ok(message) = serde_json::from_slice::<ToDaemon>(body) else {
             return answer(StatusCode::BAD_REQUEST, TEXT, "Not understood");
         };
         if !done_on_the_page(&message) {
@@ -333,7 +414,7 @@ impl Page {
                 NOT_PAIRED,
             );
         }
-        let mut response = answer(StatusCode::SEE_OTHER, "text/plain; charset=utf-8", "Paired");
+        let mut response = answer(StatusCode::SEE_OTHER, TEXT, "Paired");
         let headers = response.headers_mut();
         headers.insert(header::LOCATION, HeaderValue::from_static("/"));
         // Browsers keep a cookie 400 days at most.
@@ -397,6 +478,34 @@ impl Page {
 /// How long what the page does may be, as a line sent, at most.
 const MOST: usize = 256 * 1024;
 
+/// The type of the answers in words.
+const TEXT: &str = "text/plain; charset=utf-8";
+
+/// Pushes each of the `notices` to the phones that asked, forgetting a
+/// phone whose push service says it is gone.
+async fn push_all(pushes: Rc<RefCell<Pushes>>, mut notices: UnboundedReceiver<Notice>) {
+    while let Some(notice) = notices.recv().await {
+        let ready = pushes.borrow().pushes(&notice);
+        let chat = notice.key;
+        for ready in ready {
+            let pushes = Rc::clone(&pushes);
+            tokio::task::spawn_local(async move {
+                let endpoint = ready.endpoint.clone();
+                let service = push::service(&endpoint);
+                match tokio::task::spawn_blocking(move || push::send(&ready)).await {
+                    Ok(Pushed::Done) => tracing::info!(service, chat, "pushed"),
+                    Ok(Pushed::Gone) => {
+                        tracing::info!(service, "a phone takes pushes no more");
+                        pushes.borrow_mut().unsubscribe(&endpoint);
+                    }
+                    Ok(Pushed::Failed(why)) => tracing::error!(service, "cannot push: {why}"),
+                    Err(error) => tracing::error!(service, "cannot push: {error}"),
+                }
+            });
+        }
+    }
+}
+
 /// Whether `request` comes from the page itself, and not from another
 /// page that the phone's browser, or the Mac's, has open: the page says
 /// so in a header of its own, which another page could send only after
@@ -454,8 +563,8 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// An answer of `status`, holding `text` of the type `kind`.
-fn answer(status: StatusCode, kind: &'static str, text: &'static str) -> Response<Body> {
-    let mut response = Response::new(Body::Whole(Some(Bytes::from_static(text.as_bytes()))));
+fn answer(status: StatusCode, kind: &'static str, text: impl Into<Bytes>) -> Response<Body> {
+    let mut response = Response::new(Body::Whole(Some(text.into())));
     *response.status_mut() = status;
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
@@ -499,6 +608,15 @@ impl http_body::Body for Body {
             Self::Events(events) => events
                 .poll(context)
                 .map(|bytes| bytes.map(|bytes| Ok(Frame::data(bytes)))),
+        }
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        match self {
+            Self::Whole(bytes) => http_body::SizeHint::with_exact(
+                bytes.as_ref().map_or(0, |bytes| bytes.len() as u64),
+            ),
+            Self::Events(_) => http_body::SizeHint::default(),
         }
     }
 }
@@ -594,7 +712,7 @@ mod tests {
                 let listener = listen(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 let (internal, mut heard) = unbounded_channel();
-                tokio::task::spawn_local(serve(listener, "secret".to_owned(), internal));
+                tokio::task::spawn_local(serve(listener, "secret".to_owned(), None, internal));
 
                 let unpaired = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", "").await;
                 assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
@@ -675,6 +793,79 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
             .expect("the page answers in time");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tells_the_phone_coxd_key_and_keeps_where_to_push() {
+        let folder = std::env::temp_dir().join(format!("cox-phone-push-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let pushes = Pushes::open_at(&folder.join("push-key"), folder.join("pushes.json")).unwrap();
+        let key = pushes.public_key();
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, mut heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(listener, "secret".to_owned(), Some(pushes), internal));
+            assert!(
+                matches!(heard.recv().await, Some(Internal::Push { .. })),
+                "the daemon is not told where to push"
+            );
+
+            let worker = ask(port, "GET /sw.js HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", "").await;
+            assert!(worker.starts_with("HTTP/1.1 200"), "{worker}");
+            let unpaired = ask(port, "GET /push HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", "").await;
+            assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
+            let told = ask(
+                port,
+                "GET /push HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\nConnection: close\r\n\r\n",
+                "",
+            )
+            .await;
+            assert!(told.ends_with(&format!(r#"{{"key":"{key}"}}"#)), "{told}");
+
+            let posting = |path: &str, headers: &str, body: &str| {
+                format!(
+                    "POST {path} HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n{headers}\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            };
+            let point = format!("BA{}", "A".repeat(85));
+            let subscription = |endpoint: &str| {
+                format!(
+                    r#"{{"endpoint":"{endpoint}","expirationTime":null,"keys":{{"p256dh":"{point}","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}}}"#
+                )
+            };
+            let ours = subscription("https://web.push.apple.com/QAbc");
+            let unsaid = ask(port, &posting("/push", "", &ours), "").await;
+            assert!(unsaid.starts_with("HTTP/1.1 403"), "{unsaid}");
+            let elsewhere = ask(
+                port,
+                &posting("/push", "X-Cox: phone\r\n", &subscription("https://127.0.0.1/a")),
+                "",
+            )
+            .await;
+            assert!(elsewhere.starts_with("HTTP/1.1 400"), "{elsewhere}");
+            let done = ask(port, &posting("/push", "X-Cox: phone\r\n", &ours), "").await;
+            assert!(done.starts_with("HTTP/1.1 204"), "{done}");
+            let kept = std::fs::read_to_string(folder.join("pushes.json")).unwrap();
+            assert!(kept.contains("https://web.push.apple.com/QAbc"), "{kept}");
+
+            let ended = ask(
+                port,
+                &posting("/push/end", "X-Cox: phone\r\n", r#"{"endpoint":"https://web.push.apple.com/QAbc"}"#),
+                "",
+            )
+            .await;
+            assert!(ended.starts_with("HTTP/1.1 204"), "{ended}");
+            let kept = std::fs::read_to_string(folder.join("pushes.json")).unwrap();
+            assert!(!kept.contains("web.push.apple.com"), "{kept}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 
     #[test]

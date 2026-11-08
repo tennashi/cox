@@ -1310,8 +1310,10 @@ kind is kept apart
   `triggers.json`, how each last ran, `trigger-runs.json`, what a chat
   of each folder said last as its turn ended, `last-turns.json`, the
   pictures of the regions handed to the chats, `pictures`, the
-  icons the human gave the projects, `icons`, and the secret the
-  human's phones are paired with, `phone-token`;
+  icons the human gave the projects, `icons`, the secret the
+  human's phones are paired with, `phone-token`, the key what is
+  pushed to them is signed with, `push-key`, and where to push to
+  them, `pushes.json`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it
   downloads, in `agents`, and `translations`;
 - in `run`, what is there only while Cox runs: `coxd.sock` and
@@ -1442,6 +1444,20 @@ browser's "Add to Home Screen" puts it there, gets it as an app of its
 own; an iPhone keeps the cookies of such an app apart from Safari's, so
 the page there asks for the link, pasted. To pair the phones no more, take the file away and start coxd
 again.
+
+The phone tells the human of a chat that comes to wait for them, or
+whose turn ends, while they are away from the Mac, as the Mac's
+notifications do while they are at it, once the bell at the head of the
+list of chats asked for it; a tap on the notification shows the chat.
+coxd takes the human to be away when no window is there, or, on macOS,
+when they have not used the Mac's keyboard, mouse or trackpad for two
+minutes, and does not tell of a chat a phone shows. It pushes through
+the push service of the phone's browser, with Web Push, encrypted for
+that phone alone and signed with a key of coxd's own, which it makes
+the first time and keeps in `state/push-key`, keeping where to push to
+each phone in `state/pushes.json`. An iPhone takes them only on a page
+opened from its home screen; another browser, as Safari's own tab, has
+no bell to ask with. A tap on the bell again asks no more.
 
 ## Schedules
 

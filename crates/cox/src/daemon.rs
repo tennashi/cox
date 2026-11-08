@@ -21,12 +21,14 @@
 //! - [`process`] runs the daemon as a process of its own, coxd, which a
 //!   window reaches on a socket, and [`client`] is how the window does.
 //! - [`phone`] serves the human's phone a page of the chats, which watches
-//!   them beside the window.
+//!   them beside the window, and [`push`] tells the phone of the chats that
+//!   need the human while they are away from the Mac.
 
 pub mod chat;
 pub mod client;
 pub mod phone;
 pub mod process;
+pub mod push;
 pub mod wire;
 
 use std::collections::{HashMap, HashSet};
@@ -61,6 +63,11 @@ const COX: &str = "Cox";
 /// How long a chat's name grows, in characters, when the agent or the
 /// first line names it.
 pub const NAME_LENGTH: usize = 80;
+
+/// How long the human has not used the Mac for, before Cox takes them to
+/// be away from it, and pushes to their phones what the window would
+/// tell them.
+const AWAY: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// Why a command an agent asks to run does not run while no window is
 /// open.
@@ -167,6 +174,10 @@ pub enum Internal {
     /// The human did `message` on their phone, as they would in the
     /// window (see [`phone`]).
     Act { message: ToDaemon },
+    /// What the chats that need the human come to is to be pushed to
+    /// their phones, on `to`, while they are away from the Mac (see
+    /// [`push`]).
+    Push { to: UnboundedSender<push::Notice> },
     /// The daemon is to stop, with its chats' agents.
     Quit,
     /// It is time to look which of the triggers on a schedule are due,
@@ -302,6 +313,9 @@ pub struct Daemon {
     window_watches: HashSet<u64>,
     /// The phones there, by their connections (see [`phone`]).
     viewers: HashMap<u64, Viewer>,
+    /// Where what the chats that need the human come to is pushed to
+    /// their phones, if anywhere (see [`push`]).
+    push: Option<UnboundedSender<push::Notice>>,
     /// What the window was last told of the projects and chats.
     listed: Option<Listing>,
     /// The commands the window runs, by their numbers, with where their
@@ -448,6 +462,7 @@ impl Daemon {
             window: None,
             window_watches: HashSet::new(),
             viewers: HashMap::new(),
+            push: None,
             listed: None,
             running: HashMap::new(),
             seeing: HashMap::new(),
@@ -796,6 +811,37 @@ impl Daemon {
         if self.window_watches.contains(&key) {
             self.tell(FromDaemon::Patch { key, patch });
         }
+    }
+
+    /// Pushes the news `message` to the human's phones, unless they are at
+    /// the Mac, which tells them itself, or look at the chat on a phone.
+    fn push(&self, message: &FromDaemon) {
+        let (Some(push), FromDaemon::News { key, name, body }) = (&self.push, message) else {
+            return;
+        };
+        if self.at_the_mac() {
+            tracing::debug!(chat = key, "not pushed: the human is at the Mac");
+            return;
+        }
+        if self
+            .viewers
+            .values()
+            .any(|viewer| viewer.watches == Some(*key))
+        {
+            tracing::debug!(chat = key, "not pushed: the human looks at it on a phone");
+            return;
+        }
+        let _ = push.send(push::Notice {
+            key: *key,
+            title: name.clone(),
+            body: body.clone(),
+        });
+    }
+
+    /// Whether the human is at the Mac: a window is there, and they used
+    /// the Mac lately, where Cox can tell.
+    fn at_the_mac(&self) -> bool {
+        self.window.is_some() && cox_mac::idle().is_none_or(|idle| idle < AWAY)
     }
 
     /// Tells the phones `message`, as the window is told it.
@@ -1392,6 +1438,7 @@ impl Daemon {
                 self.view_chat(id, key);
             }
             Internal::Act { message } => self.act(message),
+            Internal::Push { to } => self.push = Some(to),
             Internal::Unview { id } => {
                 if self.viewers.remove(&id).is_some() {
                     tracing::info!(phone = id, "a phone went");
@@ -2410,6 +2457,7 @@ impl Daemon {
             }
         }
         for message in news {
+            self.push(&message);
             self.tell_phones(&message);
             self.tell(message);
         }

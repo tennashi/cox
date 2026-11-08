@@ -72,9 +72,15 @@ pub fn run(
                 Ok(token) => match super::phone::listen(port).await {
                     Ok(phone) => {
                         tracing::info!(port, "coxd serves the phone");
+                        let pushes = super::push::Pushes::open()
+                            .inspect_err(|error| {
+                                tracing::error!("nothing is pushed to the phones: {error:#}");
+                            })
+                            .ok();
                         tokio::task::spawn_local(super::phone::serve(
                             phone,
                             token,
+                            pushes,
                             internal.clone(),
                         ));
                     }

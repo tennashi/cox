@@ -50,17 +50,22 @@ function el(tag, props, ...children) {
   return node;
 }
 
+// Posts `body` to coxd at `path`, as JSON, from the page itself.
+async function post(path, body) {
+  const answer = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Cox": "phone" },
+    body: JSON.stringify(body),
+  });
+  if (!answer.ok) throw new Error(await answer.text());
+}
+
 // Does `message` in coxd, as the window would: a ToDaemon, as serde
 // writes it. Says so under the input when coxd would not.
 async function act(message) {
   compose.failed.hidden = true;
   try {
-    const answer = await fetch("/act", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Cox": "phone" },
-      body: JSON.stringify(message),
-    });
-    if (!answer.ok) throw new Error(await answer.text());
+    await post("/act", message);
     return true;
   } catch (error) {
     compose.failed.textContent = `Not done: ${error.message}`;
@@ -114,6 +119,7 @@ function hear(told) {
 }
 
 function draw() {
+  drawPush();
   if (chat) drawChat();
   else drawHome();
 }
@@ -621,12 +627,165 @@ window.addEventListener("hashchange", () => {
   hold(null);
   compose.goal.hidden = true;
   compose.failed.hidden = true;
+  say("");
   connect();
   window.scrollTo(0, 0);
 });
-// A phone puts a page away when it goes behind another app, and the
-// stream with it.
+// A phone puts a page away when it goes behind another app: the stream
+// goes with it, so that coxd pushes to the phone what the page would
+// have shown, and comes again with the page.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && (!events || events.readyState === EventSource.CLOSED)) connect();
+  if (document.visibilityState === "hidden") {
+    if (events) events.close();
+    events = null;
+  } else if (!events || events.readyState === EventSource.CLOSED) {
+    connect();
+  }
 });
+
+// Being told of the chats that need the human while they are away from
+// the Mac, with Web Push: the bell on the list of chats asks for it, or
+// asks no more, and the service worker shows what coxd pushes.
+const push = {
+  button: document.getElementById("push-button"),
+  note: document.getElementById("note"),
+  on: false,
+  can: "serviceWorker" in navigator && "PushManager" in window && "Notification" in window,
+};
+let worker = null; // the service worker's registration
+
+// Says `text` under the head, or nothing.
+function say(text) {
+  push.note.textContent = text;
+  push.note.hidden = !text;
+}
+
+function drawPush() {
+  push.button.hidden = chat !== null;
+  push.button.setAttribute("aria-pressed", push.on ? "true" : "false");
+  push.button.classList.toggle("on", push.on);
+}
+
+// The bytes of `text`, in URL-safe base64.
+function bytesOf(text) {
+  const base64 = text.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (text.length % 4)) % 4);
+  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+}
+
+// coxd's key, which what it pushes is signed with.
+async function pushKey() {
+  const answer = await fetch("/push");
+  if (!answer.ok) throw new Error(await answer.text());
+  return (await answer.json()).key;
+}
+
+// Whether `subscription` was made with coxd's `key`, as when coxd's data
+// folder was made again it was not.
+function madeWith(subscription, key) {
+  const had = subscription.options && subscription.options.applicationServerKey;
+  if (!had) return true;
+  const ours = bytesOf(key);
+  const theirs = new Uint8Array(had);
+  return theirs.length === ours.length && theirs.every((byte, at) => byte === ours[at]);
+}
+
+// Tells coxd again where to push to this phone, as the browser has it,
+// so that coxd keeps it whatever it forgot.
+async function followPushes() {
+  if (!push.can) return;
+  try {
+    worker = await navigator.serviceWorker.register("/sw.js");
+    const subscription = await worker.pushManager.getSubscription();
+    if (subscription && Notification.permission === "granted") {
+      if (madeWith(subscription, await pushKey())) {
+        await post("/push", subscription.toJSON());
+        push.on = true;
+      } else {
+        await subscription.unsubscribe();
+      }
+    }
+  } catch (error) {
+    say(`Notifications: ${error.message}`);
+  }
+  drawPush();
+}
+
+push.button.addEventListener("click", async () => {
+  say("");
+  if (!push.can) {
+    say(navigator.standalone === false
+      ? "To be told of the chats, add Cox to the Home Screen from Safari's Share menu, and open it there."
+      : "This browser cannot be told of the chats.");
+    return;
+  }
+  try {
+    if (push.on) {
+      const subscription = await (worker || await navigator.serviceWorker.ready).pushManager.getSubscription();
+      if (subscription) {
+        await post("/push/end", { endpoint: subscription.endpoint });
+        await subscription.unsubscribe();
+      }
+      push.on = false;
+      say("This phone is told of the chats no more.");
+    } else {
+      // Asked first, while the tap lasts, as a phone has it.
+      if (await Notification.requestPermission() !== "granted") {
+        say("Cox may not notify this phone: allow it in the phone's settings.");
+        return;
+      }
+      worker = worker || await navigator.serviceWorker.ready;
+      const subscription = await worker.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: bytesOf(await pushKey()),
+      });
+      await post("/push", subscription.toJSON());
+      push.on = true;
+      say("This phone is told of the chats that need you while you are away from the Mac.");
+    }
+  } catch (error) {
+    say(`Not done: ${error.message}`);
+  }
+  drawPush();
+});
+
+// A tap on a notice shows its chat: the service worker posts it to the
+// page, and keeps it too, for an iPhone, which hands a page put away
+// nothing posted to it, so the page reads it as it comes to the front.
+// What is kept goes once read, and goes stale after a minute, so that a
+// tap shows its chat once.
+const TAPPED_FOR = 60 * 1000;
+
+function showTapped(hash) {
+  if (hash && location.hash !== hash) location.hash = hash;
+}
+
+async function readTapped() {
+  if (!("caches" in window)) return;
+  try {
+    const kept = await caches.open("cox");
+    const tapped = await kept.match("/tapped");
+    if (!tapped) return;
+    await kept.delete("/tapped");
+    const { show, at } = await tapped.json();
+    if (typeof show === "string" && Date.now() - at < TAPPED_FOR) showTapped(show);
+  } catch (_) {
+    // Nothing kept to read: the page stays where it is.
+  }
+}
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && typeof event.data.show === "string") {
+      showTapped(event.data.show);
+      readTapped();
+    }
+  });
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") readTapped();
+});
+window.addEventListener("focus", readTapped);
+readTapped();
+
 connect();
+followPushes();
