@@ -22,14 +22,15 @@ use cox_core::tabs::KeptTab;
 use cox_editor::changes;
 use cox_editor::changes::changed_files;
 use gpui::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, ScrollHandle, Task,
-    Window, div, prelude::*, px, rgb,
+    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
+    ScrollHandle, StyledText, Task, Window, div, prelude::*, px, rgb,
 };
 
 use crate::logs::flow::{self, Lane, Step};
 use crate::stage::heading::{INSET, body, card, heading, note};
 use crate::stage::tab::Shows;
-use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
+use crate::ui::markdown;
+use crate::ui::theme::{ACCENT, BORDER, CODE, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
 
 /// What a link to the flow of a tool call starts with, followed by the
 /// call's id.
@@ -246,7 +247,7 @@ impl Flow {
                 div()
                     .pl(px(TIME_WIDTH))
                     .text_color(rgb(FOREGROUND))
-                    .child(step.said.clone()),
+                    .child(said(&step.said)),
             );
         match opens {
             Some((path, line)) => row
@@ -460,6 +461,24 @@ impl Render for Flow {
             .children(error)
             .children(lanes)
     }
+}
+
+/// What a step says, the names between its backticks drawn as code, as
+/// the conversation draws code in a line.
+fn said(text: &str) -> StyledText {
+    let noted = markdown::Text::noted(text);
+    let code = HighlightStyle {
+        color: Some(rgb(CODE).into()),
+        background_color: Some(rgb(RAISED).into()),
+        ..HighlightStyle::default()
+    };
+    let highlights: Vec<_> = noted
+        .runs
+        .iter()
+        .filter(|(_, style)| style.code)
+        .map(|(range, _)| (range.clone(), code))
+        .collect();
+    StyledText::new(noted.text).with_highlights(highlights)
 }
 
 #[cfg(test)]

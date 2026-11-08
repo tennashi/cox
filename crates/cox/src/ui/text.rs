@@ -538,6 +538,12 @@ impl Writer {
         self.text(&markdown::Text::plain(text), joined)
     }
 
+    /// `text` as a note of Cox's, its commands between backticks drawn as
+    /// code (see [`markdown::Text::noted`]).
+    pub fn noted(&mut self, text: &str, joined: &'static str) -> SelectableText {
+        self.text(&markdown::Text::noted(text), joined)
+    }
+
     /// `markdown`, block by block.
     pub fn markdown(&mut self, markdown: &str) -> gpui::Div {
         self.blocks(&markdown::parse(markdown))

@@ -129,6 +129,31 @@ impl Text {
         plain.link_bare();
         plain
     }
+
+    /// The text as [`Text::plain`] has it, but for what it puts between
+    /// backticks, which is code, without them, as Cox's notes write a
+    /// command: "Goal met: `cargo test` passed." A backtick with no other
+    /// after it stays as it is.
+    #[must_use]
+    pub fn noted(text: &str) -> Self {
+        let code = Style {
+            code: true,
+            ..Style::default()
+        };
+        let mut noted = Self::default();
+        let mut rest = text;
+        while let Some(start) = rest.find('`') {
+            let Some(length) = rest[start + 1..].find('`') else {
+                break;
+            };
+            noted.push(&rest[..start], &Style::default());
+            noted.push(&rest[start + 1..start + 1 + length], &code);
+            rest = &rest[start + 2 + length..];
+        }
+        noted.push(rest, &Style::default());
+        noted.link_bare();
+        noted
+    }
 }
 
 /// Whether `url` is an address on the web, which the stage can open.
@@ -607,6 +632,25 @@ mod tests {
             text: text.to_owned(),
             runs: vec![(0..text.len(), Style::default())],
         }
+    }
+
+    #[test]
+    fn a_note_draws_what_is_between_backticks_as_code() {
+        let code = Style {
+            code: true,
+            ..Style::default()
+        };
+        let noted = Text::noted("Goal met: `cargo test` passed.");
+        assert_eq!(noted.text, "Goal met: cargo test passed.");
+        assert_eq!(
+            noted.runs,
+            vec![
+                (0..10, Style::default()),
+                (10..20, code),
+                (20..28, Style::default()),
+            ]
+        );
+        assert_eq!(Text::noted("a lone ` stays"), plain("a lone ` stays"));
     }
 
     #[test]

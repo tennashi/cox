@@ -29,9 +29,10 @@ use crate::chat::view::ChatView;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::text::Writer;
 use crate::ui::theme::{
-    ACCENT, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER, BORDER_STRONG, BUTTON,
-    BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND, FAILED_MARK, FAINT, FOREGROUND,
-    GROUND, LINK, OFFERING_BUTTON, OFFERING_EDGE, OFFERING_GROUND, RAISED, SURFACE,
+    ACCENT, ADDED_GROUND, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER, BORDER_STRONG,
+    BUTTON, BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND, FAILED_MARK, FAINT,
+    FOREGROUND, GROUND, LINK, OFFERING_BUTTON, OFFERING_EDGE, OFFERING_GROUND, RAISED,
+    REMOVED_GROUND, SURFACE,
 };
 
 /// How tall what a tool call shows grows before it scrolls on its own.
@@ -706,7 +707,7 @@ impl ChatView {
             Entry::Note(text) => div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
-                .child(writer.plain(text, "\n\n"))
+                .child(writer.noted(text, "\n\n"))
                 .into_any_element(),
             Entry::Switched { from, to } => div()
                 .text_size(px(12.))
@@ -1280,12 +1281,7 @@ fn render_content(
         .iter()
         .map(|content| match content {
             Content::Text(text) => writer.markdown(text),
-            Content::Diff { path, lines } => div()
-                .flex()
-                .flex_col()
-                .font_family(CODE_FONT)
-                .child(div().text_color(rgb(DIM)).child(writer.plain(path, "\n")))
-                .children(lines.iter().map(|line| render_line(line, writer))),
+            Content::Diff { path, lines } => render_diff(path, lines, writer),
         })
         .collect();
     let content = div()
@@ -1304,21 +1300,95 @@ fn render_content(
     Some(content.into_any_element())
 }
 
-/// One line of a change, its mark in a column of its own, so that a line
-/// too long for the conversation wraps clear of it, and copies without it.
-fn render_line(line: &Line, writer: &mut Writer) -> gpui::Div {
-    let (color, mark, text) = match line {
-        Line::Same(text) => (DIM, "", text.clone()),
-        Line::Removed(text) => (FAILED, "-", text.clone()),
-        Line::Added(text) => (ACCENT, "+", text.clone()),
-        Line::Skipped(1) => (DIM, "", "⋯ 1 line".to_owned()),
-        Line::Skipped(count) => (DIM, "", format!("⋯ {count} lines")),
-    };
+/// A change to the file at `path`, as the Changes tab draws one: a card
+/// headed by the path and the lines it gains and loses, over its lines.
+fn render_diff(path: &str, lines: &[Line], writer: &mut Writer) -> gpui::Div {
+    let added = lines
+        .iter()
+        .filter(|line| matches!(line, Line::Added(_)))
+        .count();
+    let removed = lines
+        .iter()
+        .filter(|line| matches!(line, Line::Removed(_)))
+        .count();
     div()
         .flex()
-        .text_color(rgb(color))
-        .child(div().flex_shrink_0().w(px(14.)).child(mark))
-        .child(div().flex_1().min_w_0().child(writer.plain(&text, "\n")))
+        .flex_col()
+        .border_1()
+        .border_color(rgb(BORDER))
+        .rounded(px(8.))
+        .overflow_hidden()
+        .font_family(CODE_FONT)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .px_2()
+                .py_1()
+                .bg(rgb(RAISED))
+                .border_b_1()
+                .border_color(rgb(BORDER))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(rgb(DIM))
+                        .child(writer.plain(path, "\n")),
+                )
+                .child(crate::stage::changes::counts(added, removed)),
+        )
+        .children(lines.iter().map(|line| render_line(line, writer)))
+}
+
+/// One line of a change, on the ground of what the change did to it, its
+/// mark in a column of its own, so that a line too long for the
+/// conversation wraps clear of it, and copies without it.
+fn render_line(line: &Line, writer: &mut Writer) -> gpui::Div {
+    let (mark, ground, sign, text) = match line {
+        Line::Same(text) => (None, None, "", text.clone()),
+        Line::Removed(text) => (
+            Some((FAILED_MARK, FAILED)),
+            Some(REMOVED_GROUND),
+            "−",
+            text.clone(),
+        ),
+        Line::Added(text) => (
+            Some((ACCENT, ACCENT)),
+            Some(ADDED_GROUND),
+            "+",
+            text.clone(),
+        ),
+        Line::Skipped(1) => (None, None, "", "⋯ 1 line".to_owned()),
+        Line::Skipped(count) => (None, None, "", format!("⋯ {count} lines")),
+    };
+    let skipped = matches!(line, Line::Skipped(_));
+    div()
+        .flex()
+        .when_some(ground, |row, ground| row.bg(rgb(ground)))
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(2.))
+                .when_some(mark, |bar, (mark, _)| bar.bg(rgb(mark))),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(18.))
+                .flex()
+                .justify_center()
+                .when_some(mark, |sign, (_, color)| sign.text_color(rgb(color)))
+                .child(sign),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .pr_2()
+                .text_color(rgb(if skipped { DIM } else { FOREGROUND }))
+                .child(writer.plain(&text, "\n")),
+        )
 }
 
 /// A chip of what the human handed the chat, named `id`: where it is

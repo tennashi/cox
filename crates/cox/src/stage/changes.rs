@@ -261,7 +261,7 @@ impl Changes {
 
 /// `+added −removed`, in the colors of what they mean, leaving out a
 /// count of none.
-fn counts(added: usize, removed: usize) -> impl IntoElement {
+pub(crate) fn counts(added: usize, removed: usize) -> impl IntoElement {
     div()
         .flex()
         .gap(px(8.))
