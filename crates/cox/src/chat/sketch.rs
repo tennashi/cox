@@ -549,6 +549,23 @@ fn remove_worktree(top: &Path) -> Result<(), String> {
     .map(drop)
 }
 
+/// Tells Git that the repository of the project in `folder` moved there,
+/// for each of `sketches`, the folders of sketches from the project,
+/// worktrees of the repository that would not find it otherwise.
+pub fn repair(folder: &Path, sketches: &[PathBuf]) {
+    for works in sketches {
+        // A sketch of a project in a folder of its repository works in
+        // that folder of the worktree.
+        let Some(top) = works.ancestors().find(|path| path.join(".git").exists()) else {
+            continue;
+        };
+        let top = top.to_string_lossy();
+        if let Err(error) = git(folder, &["worktree", "repair", &top]) {
+            tracing::error!("the sketch in {top} does not find its repository: {error}");
+        }
+    }
+}
+
 /// Makes the first folder in `sketches` named `name`, a dash and a number
 /// that is not there yet, making `sketches` if it is not there, and
 /// answers where it is. Making it claims it, so two sketches made at once
@@ -675,6 +692,37 @@ mod tests {
             &root.join("elsewhere"),
         );
         assert!(error.is_err_and(|error| error.starts_with("a sketch of the project needs")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_sketch_finds_its_repository_again_once_told_it_moved() {
+        let root = scratch("moved");
+        let project = root.join("greet");
+        std::fs::create_dir_all(project.join("app")).unwrap();
+        let run = |args: &[&str]| git(&project, args).unwrap();
+        run(&["init", "-q"]);
+        std::fs::write(project.join("app/main.rs"), "fn main() {}\n").unwrap();
+        run(&["add", "."]);
+        run(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "first",
+        ]);
+        let sketches = root.join("sketches");
+        let sketch = make(Sketch::Project, &project.join("app"), &sketches).unwrap();
+
+        let moved = root.join("greet-2");
+        std::fs::rename(&project, &moved).unwrap();
+        assert!(git(&sketch, &["status"]).is_err());
+        repair(&moved.join("app"), std::slice::from_ref(&sketch));
+        assert!(git(&sketch, &["status"]).is_ok());
+        assert!(changes::read(&sketch).is_ok());
         let _ = std::fs::remove_dir_all(root);
     }
 

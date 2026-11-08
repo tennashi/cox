@@ -65,9 +65,12 @@ use crate::chat::region::{self, AddRegionToChat, CancelRegion};
 use crate::chat::sketch::{self, Sketch};
 use crate::chat::view::{ChatView, OpenLink, Row, StageView};
 use crate::daemon::Link;
-use crate::daemon::wire::{ChatRow, FromDaemon, Listing, StageAsk, ToDaemon};
+use crate::daemon::wire::{ChatRow, FromDaemon, Listing, ProjectRow, StageAsk, ToDaemon};
 use crate::notices::AppNotices;
 use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView};
+
+mod project_card;
+
 use crate::stage::owners::ShowChat;
 use crate::stage::{NewPage, NewTerminal, OpenFile, Stage};
 use crate::ui::ellipsis::ellipsis;
@@ -80,6 +83,7 @@ use crate::ui::theme::{
 };
 use crate::ui::{card, tip};
 use crate::workflow;
+use project_card::{MoveTo, ProjectCard, Standing};
 
 actions!(
     cox,
@@ -133,8 +137,10 @@ const NO_TERMINAL: &str = "its terminal went away";
 /// whose stage went before it answered.
 const NO_TAB: &str = "the stage went away before it answered";
 
-/// Binds the keys that open chats and move between them.
+/// Binds the keys that open chats and move between them, and the one
+/// that closes the card of a project.
 pub fn bind_keys(cx: &mut App) {
+    project_card::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("secondary-n", NewChat, Some("Workspace")),
         KeyBinding::new("secondary-o", OpenFolder, Some("Workspace")),
@@ -165,6 +171,8 @@ pub struct Project {
     /// The icon the human gave it, which the rail draws in place of a
     /// folder (see [`crate::project_icon`]).
     icon: Option<Arc<Image>>,
+    /// Whether its folder is not there, as when the human moved it.
+    missing: bool,
 }
 
 impl Project {
@@ -404,6 +412,8 @@ pub struct Workspace {
     home_given: bool,
     /// The settings screen, while it is open.
     settings: Option<(Entity<SettingsView>, [Subscription; 2])>,
+    /// The card where the human edits a project, while it is open.
+    project_card: Option<(Entity<ProjectCard>, [Subscription; 2])>,
     /// The sheet over the window the human drags a region on, for the
     /// chat shown, while it is laid.
     region: Option<Sheet>,
@@ -481,6 +491,7 @@ impl Workspace {
                 folder: home,
                 last: None,
                 icon: None,
+                missing: false,
             }],
             chats: List::new(),
             archived: Vec::new(),
@@ -496,6 +507,7 @@ impl Workspace {
             renaming: None,
             home_given,
             settings: None,
+            project_card: None,
             region: None,
             link,
             stages,
@@ -576,29 +588,7 @@ impl Workspace {
             chats,
             archived,
         } = listing;
-        let lasts: Vec<_> = self.projects.iter().map(|project| project.last).collect();
-        // The icons read already, read again only when they change.
-        let icons: HashMap<ProjectId, Option<Arc<Image>>> = self
-            .projects
-            .iter_mut()
-            .filter_map(|project| Some((project.id?, project.icon.take())))
-            .collect();
-        self.projects = projects
-            .into_iter()
-            .enumerate()
-            .map(|(index, row)| Project {
-                id: row.id,
-                name: row.name.into(),
-                folder: row.folder,
-                last: lasts.get(index).copied().flatten(),
-                icon: row.id.and_then(|id| {
-                    icons
-                        .get(&id)
-                        .cloned()
-                        .unwrap_or_else(|| crate::project_icon::read(id))
-                }),
-            })
-            .collect();
+        self.list_projects(projects);
         self.project_menu = self
             .project_menu
             .filter(|(_, index)| self.projects.get(*index).is_some_and(|p| p.id.is_some()));
@@ -669,10 +659,72 @@ impl Workspace {
             self.view(key, cx);
         }
         self.stage_chosen();
+        self.follow_project_card(cx);
         self.sight(cx);
         self.at_work(cx);
         self.badge(cx);
         cx.notify();
+    }
+
+    /// Shows the projects as the daemon lists them now, `projects`, each
+    /// with the chat of it shown last and its icon.
+    fn list_projects(&mut self, projects: Vec<ProjectRow>) {
+        let lasts: Vec<_> = self.projects.iter().map(|project| project.last).collect();
+        self.forget_moved(&projects);
+        // The icons read already, read again only when they change.
+        let icons: HashMap<ProjectId, Option<Arc<Image>>> = self
+            .projects
+            .iter_mut()
+            .filter_map(|project| Some((project.id?, project.icon.take())))
+            .collect();
+        self.projects = projects
+            .into_iter()
+            .enumerate()
+            .map(|(index, row)| Project {
+                id: row.id,
+                name: row.name.into(),
+                folder: row.folder,
+                last: lasts.get(index).copied().flatten(),
+                icon: row.id.and_then(|id| {
+                    icons
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| crate::project_icon::read(id))
+                }),
+                missing: row.missing,
+            })
+            .collect();
+    }
+
+    /// Lets go of the stages of the projects whose folders moved, as
+    /// `projects` lists them now, with the chats' hold on them, so that
+    /// each chat gets the stage of where its project is now, as the daemon
+    /// tells it its tabs again.
+    fn forget_moved(&mut self, projects: &[ProjectRow]) {
+        let moved: Vec<(usize, PathBuf)> = self
+            .projects
+            .iter()
+            .enumerate()
+            .filter(|(_, project)| project.id.is_some())
+            .filter_map(|(index, project)| {
+                let now = projects.iter().find(|row| row.id == project.id)?;
+                (now.folder != project.folder).then(|| (index, project.folder.clone()))
+            })
+            .collect();
+        for (index, from) in moved {
+            let keys: Vec<u64> = self
+                .chats
+                .iter()
+                .chain(&self.archived)
+                .filter(|chat| chat.project == index && self.cwd_of(chat) == from)
+                .map(|chat| chat.key)
+                .collect();
+            for key in keys {
+                self.staged.remove(&key);
+            }
+            self.folders.remove(&from);
+            self.asked_stages.remove(&from);
+        }
     }
 
     /// How `chat` stands, as its view shows it.
@@ -682,6 +734,11 @@ impl Workspace {
             again: chat.again,
             agent: chat.agent.clone(),
             cwd: self.cwd_of(chat),
+            gone: chat
+                .setup
+                .as_ref()
+                .is_none_or(|setup| setup.folder.is_none())
+                && self.projects[chat.project].missing,
         }
     }
 
@@ -1287,6 +1344,97 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The card where the human edits a project, while it is open.
+    #[must_use]
+    pub fn project_card(&self) -> Option<&Entity<ProjectCard>> {
+        self.project_card.as_ref().map(|(card, _)| card)
+    }
+
+    /// How the project at `index` stands, for its card.
+    fn standing(&self, index: usize) -> Standing {
+        let project = &self.projects[index];
+        Standing {
+            folder: project.folder.clone(),
+            missing: project.missing,
+            at_work: self
+                .chats
+                .iter()
+                .chain(&self.archived)
+                .any(|chat| chat.project == index && crate::daemon::working(chat.state)),
+            taken: self
+                .projects
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .map(|(_, other)| other.folder.clone())
+                .collect(),
+        }
+    }
+
+    /// Opens the card of the project at `index` over the window, with the
+    /// keyboard in its input.
+    pub fn open_project_card(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.project_menu = None;
+        self.menu = None;
+        self.switching = false;
+        let Some(project) = self.projects.get(index) else {
+            return;
+        };
+        let Some(id) = project.id else {
+            return;
+        };
+        let name = project.name.to_string();
+        let standing = self.standing(index);
+        let card = cx.new(|cx| ProjectCard::new(id, name, standing, window, cx));
+        let moves = cx.subscribe(&card, |workspace, card, MoveTo(folder), cx| {
+            let project = card.read(cx).project();
+            workspace.tell(ToDaemon::MoveProject {
+                project,
+                folder: folder.clone(),
+            });
+        });
+        let dismissed = cx.subscribe_in(
+            &card,
+            window,
+            |workspace, _, project_card::Dismissed, window, cx| {
+                workspace.close_project_card(window, cx);
+            },
+        );
+        window.focus(&card.focus_handle(cx));
+        self.project_card = Some((card, [moves, dismissed]));
+        cx.notify();
+    }
+
+    /// Closes the card of the project, giving the keyboard back to the
+    /// chat shown.
+    pub fn close_project_card(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.project_card.take().is_some() {
+            window.focus(&self.focus_handle(cx));
+            cx.notify();
+        }
+    }
+
+    /// Has the card of the project follow it as the daemon lists it now,
+    /// or closes it once the project is gone.
+    fn follow_project_card(&mut self, cx: &mut Context<Self>) {
+        let Some((card, _)) = &self.project_card else {
+            return;
+        };
+        let card = card.clone();
+        let id = card.read(cx).project();
+        let Some(index) = self
+            .projects
+            .iter()
+            .position(|project| project.id == Some(id))
+        else {
+            self.project_card = None;
+            return;
+        };
+        let name = self.projects[index].name.to_string();
+        let standing = self.standing(index);
+        card.update(cx, |card, cx| card.follow(name, standing, cx));
+    }
+
     /// Closes the settings screen, giving the keyboard back to the chat
     /// shown.
     pub fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1730,6 +1878,34 @@ impl Workspace {
         )
     }
 
+    /// The card of a project, over the window and dimming it, while it is
+    /// open: a click beside it closes it.
+    fn render_project_card(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let (card, _) = self.project_card.as_ref()?;
+        Some(
+            deferred(
+                div()
+                    .id("project-card-backdrop")
+                    .occlude()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .p(px(GAP * 2.))
+                    .bg(gpui::rgba(BACKDROP))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|workspace, _, window, cx| {
+                            workspace.close_project_card(window, cx);
+                        }),
+                    )
+                    .child(card.clone()),
+            )
+            .with_priority(3),
+        )
+    }
+
     /// The button of the project at `index` on the rail: its icon, or a
     /// folder, in a square, and its name under it, or Cox's icon alone for
     /// Cox's own, with its folder where the mouse rests, after its name
@@ -1768,6 +1944,8 @@ impl Workspace {
             .when(self.project_menu.is_none(), |button| {
                 button.tooltip(tip(if home {
                     format!("{} ({folder})", project.name)
+                } else if project.missing {
+                    format!("{folder}\nThis folder is not there: Edit project… says where it went.")
                 } else if drawing {
                     format!("{folder}\nAn agent draws its icon…")
                 } else if let Some(why) = project.id.and_then(|id| self.not_drawn.get(&id)) {
@@ -1810,7 +1988,8 @@ impl Workspace {
                     .map(|square| project_square(square, project, home, chosen, drawing))
                     .when(waiting > 0, |square| {
                         square.child(waiting_badge(index, waiting, asking > 0))
-                    }),
+                    })
+                    .when(project.missing, |square| square.child(missing_badge(index))),
             )
             .when(!home, |button| {
                 button.child(
@@ -2265,6 +2444,12 @@ fn project_square(square: Div, project: &Project, home: bool, chosen: bool, draw
         .border_color(rgb(edge))
         .when(drawing, |square| {
             square.border_dashed().border_color(rgb(ACCENT))
+        })
+        .when(project.missing, |square| {
+            square
+                .border_dashed()
+                .border_color(rgb(ASKING))
+                .opacity(0.7)
         });
     match project.icon.clone() {
         Some(picture) => square.child(
@@ -2277,6 +2462,28 @@ fn project_square(square: Div, project: &Project, home: bool, chosen: bool, draw
             .when(!chosen, |square| square.hover(|style| style.bg(rgb(HOVER))))
             .child(icon(Icon::Folder, 18., ink)),
     }
+}
+
+/// The mark over the bottom right of the square of the project at
+/// `index`, on the rail, whose folder is not there.
+fn missing_badge(index: usize) -> Div {
+    div()
+        .debug_selector(move || format!("project-{}-missing", index + 1))
+        .absolute()
+        .bottom(px(-5.))
+        .right(px(-5.))
+        .size(px(17.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(9.))
+        .border_2()
+        .border_color(rgb(GROUND))
+        .bg(rgb(ASKING))
+        .text_color(rgb(GROUND))
+        .text_size(px(11.))
+        .font_weight(FontWeight::BOLD)
+        .child("?")
 }
 
 /// The count over the top right of the project's square, on the rail, at
@@ -2437,6 +2644,9 @@ impl Workspace {
                 workspace.project_menu = None;
                 cx.notify();
             }))
+            .child(item("edit-project", "Edit project…").on_click(cx.listener(
+                move |workspace, _, window, cx| workspace.open_project_card(index, window, cx),
+            )))
             .child(item("choose-icon", "Choose icon…").on_click(cx.listener(
                 move |workspace, _, window, cx| workspace.choose_icon(index, window, cx),
             )))
@@ -2514,6 +2724,9 @@ impl Focusable for Workspace {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         if let Some((settings, _)) = &self.settings {
             return settings.focus_handle(cx);
+        }
+        if let Some((card, _)) = &self.project_card {
+            return card.focus_handle(cx);
         }
         if self.folded {
             return self.focus_handle.clone();
@@ -2602,6 +2815,7 @@ impl Render for Workspace {
             )
             .children(self.render_menu(cx))
             .children(self.render_project_menu(cx))
+            .children(self.render_project_card(cx))
             .children(self.render_settings(cx))
             .children(self.render_sheet(cx))
             .children(

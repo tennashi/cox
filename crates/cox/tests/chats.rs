@@ -854,6 +854,8 @@ fn kept_chat(
 ) -> (KeptStore, cox_core::store::ChatId) {
     let name = folder.file_name().unwrap().to_string_lossy();
     let store = kept_store(&format!("kept-{name}"));
+    // Its chats start again in it while it is there.
+    std::fs::create_dir_all(folder).unwrap();
     let project = store.project(folder, "project").unwrap();
     let kept = store.add_chat(Some(project), "Chat 1").unwrap();
     for (number, entry) in said().iter().enumerate() {
@@ -905,6 +907,59 @@ async fn a_closed_chat_goes_on_with_its_session_when_the_human_sends_to_it(
     say(cx, &workspace, "more").await;
     assert_eq!(agents.borrow().len(), 1);
     assert_eq!(agent.prompts(), ["again", "more"]);
+}
+
+#[gpui::test]
+async fn a_chat_whose_folder_moved_starts_again_where_the_human_says(cx: &mut TestAppContext) {
+    let folder = scratch("moved-from");
+    let (store, kept) = kept_chat(&folder, Some("session-1"));
+    let moved = scratch("moved-to");
+    std::fs::rename(&folder, &moved).unwrap();
+    let (agents, workspace, cx) =
+        open_window_resuming(cx, scratch("moved-home"), store.clone(), Resumes::Resume);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.show(FIRST_KEPT, window, cx);
+    });
+    let view = shown(cx, &workspace);
+    // Its folder is not there, so its agent does not start again.
+    let waiting = view.read_with(cx, |view, _| view.waiting());
+    assert_eq!(
+        waiting.as_deref(),
+        Some("Its folder is gone: Edit project… on the rail.")
+    );
+
+    // The human says where the folder went.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open_project_card(1, window, cx);
+    });
+    let card = workspace.read_with(cx, |workspace, _| {
+        workspace.project_card().expect("the card is open").clone()
+    });
+    let input = card.read_with(cx, |card, _| card.input().clone());
+    let typed = moved.display().to_string();
+    input.update(cx, |input, cx| input.set_text(&typed, cx));
+    cx.simulate_keystrokes("enter");
+    settled(cx, &workspace);
+    let projects = store.projects().unwrap();
+    assert_eq!(projects[0].folder, moved);
+    assert_eq!(store.session(kept).unwrap(), None);
+    cx.simulate_keystrokes("escape");
+    assert!(workspace.read_with(cx, |workspace, _| workspace.project_card().is_none()));
+
+    say(cx, &workspace, "again").await;
+    let agent = Arc::clone(&agents.borrow()[0]);
+    // The agent starts afresh where the folder is now, told the
+    // conversation so far.
+    assert_eq!(agent.cwd(), Some(moved.clone()));
+    assert_eq!(agent.resumed(), Vec::<String>::new());
+    assert_eq!(agent.sessions_opened(), 1);
+    let entries = store.entries(kept).unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Note(note) if note.starts_with("The project's folder moved"))),
+        "{entries:?}"
+    );
 }
 
 #[gpui::test]
