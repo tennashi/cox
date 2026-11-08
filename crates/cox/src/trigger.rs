@@ -90,6 +90,11 @@ pub enum On {
     /// started the human's last line with: `plan.changed`.
     #[serde(rename = "plan.changed")]
     PlanChanged,
+    /// A chat's agent asks the human's permission for a tool call:
+    /// `permission.asked`. Its triggers gather what the human needs to
+    /// answer, and the human is asked once they did.
+    #[serde(rename = "permission.asked")]
+    PermissionAsked,
     /// The times a cron says, in no chat, as `schedule: {cron: "0 9 * * *"}`
     /// (see [`crate::schedule`]).
     #[serde(rename = "schedule")]
@@ -107,12 +112,13 @@ impl On {
             "sketch.end" => Ok(Self::SketchEnd),
             "chat.open" => Ok(Self::ChatOpen),
             "plan.changed" => Ok(Self::PlanChanged),
+            "permission.asked" => Ok(Self::PermissionAsked),
             "schedule" => {
                 Err("schedule says when under it, as schedule: {cron: \"0 9 * * *\"}".to_owned())
             }
             other => Err(format!(
                 "{other:?} is no event Cox knows: turn.end, goal.met, wiki.written, \
-                 sketch.end, chat.open, plan.changed or schedule"
+                 sketch.end, chat.open, plan.changed, permission.asked or schedule"
             )),
         };
         match value {
@@ -191,6 +197,7 @@ impl On {
             Self::SketchEnd => "sketch.end",
             Self::ChatOpen => "chat.open",
             Self::PlanChanged => "plan.changed",
+            Self::PermissionAsked => "permission.asked",
             Self::Schedule { .. } => "schedule",
         }
     }
@@ -719,6 +726,31 @@ const PROTOCOL: &str = "End every reply with one line of its own: `PASS` when yo
 /// what `reject` names.
 #[must_use]
 pub fn setup(text: &str, allow: &[String], reject: &[String]) -> Setup {
+    set_up(&format!("{STANCE}\n\n{PROTOCOL}"), text, allow, reject)
+}
+
+/// How the agent of a trigger that runs as a chat's agent asks the
+/// human's permission is set up, to gather what `text` asks for the
+/// human to answer with, as [`setup`] says otherwise.
+#[must_use]
+pub fn gathers(text: &str, allow: &[String], reject: &[String]) -> Setup {
+    set_up(GATHERS, text, allow, reject)
+}
+
+/// What the agent of a trigger that gathers what the human needs to
+/// answer is told it is.
+const GATHERS: &str = "You run as a trigger, as another chat's agent asks the human's \
+    permission for a tool call: an agent of its own, which the human does not talk to. The \
+    chat works in this same folder. Each time its agent asks, gather what you are asked \
+    below, for the human to answer with, as it says, and unless it says otherwise, change \
+    nothing. The human may be away from the Mac, reading on a phone: start your reply with \
+    one line of its own that says what matters most, which they read first, and keep the \
+    rest short.";
+
+/// The agent of a trigger set up as `stance` says, asked `text`, allowed
+/// what `allow` names, or, with none, what the judge of a goal is, and
+/// refused what `reject` names.
+fn set_up(stance: &str, text: &str, allow: &[String], reject: &[String]) -> Setup {
     let allow = if allow.is_empty() {
         crate::chat::judge::ALLOWED
             .iter()
@@ -729,7 +761,7 @@ pub fn setup(text: &str, allow: &[String], reject: &[String]) -> Setup {
     };
     Setup {
         context: Some(format!(
-            "{STANCE}\n\n{PROTOCOL}\n\nWhat you are asked:\n\n{}\n",
+            "{stance}\n\nWhat you are asked:\n\n{}\n",
             text.trim()
         )),
         tools: Some(Vec::new()),
@@ -768,6 +800,13 @@ pub fn asked_of(about: &str) -> String {
         "{}\n\nDo what you were asked, and end with PASS or FAIL: what to act on.",
         about.trim()
     )
+}
+
+/// What the agent of a trigger that gathers is asked as the chat's agent
+/// asks the human's permission, as `about` tells it.
+#[must_use]
+pub fn asked_to_gather(about: &str) -> String {
+    format!("{}\n\nGather what you were asked.", about.trim())
 }
 
 /// Which triggers the human turned off in a folder, and the order they
@@ -1498,11 +1537,12 @@ mod tests {
         assert!(!wiki.runs_on(&written("gpui-layout"), false));
         assert!(!wiki.runs_on(&On::TurnEnd, false));
         let any = parse(
-            "---\non: [wiki.written, sketch.end, chat.open, plan.changed]\nby: shell\n---\nmake\n",
+            "---\non: [wiki.written, sketch.end, chat.open, plan.changed, permission.asked]\nby: shell\n---\nmake\n",
         )
         .unwrap();
         assert!(any.runs_on(&written("gpui-layout"), false));
         assert!(any.runs_on(&On::PlanChanged, false));
+        assert!(any.runs_on(&On::PermissionAsked, false));
         assert!(any.runs_on(&On::SketchEnd, false));
         assert!(any.runs_on(&On::ChatOpen, false));
         assert!(!any.runs_on(&On::GoalMet, false));

@@ -1666,6 +1666,69 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
     assert_eq!(shown(cx, &workspace), first);
 }
 
+#[gpui::test]
+async fn the_triggers_of_a_permission_request_gather_before_the_human_is_told(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch("gather");
+    let triggers = home.join(".cox/triggers");
+    std::fs::create_dir_all(&triggers).unwrap();
+    std::fs::write(
+        triggers.join("touches.md"),
+        "---\non: permission.asked\nby: shell\n---\nprintf 'Only x.txt changes\\nNothing else.\\n'\n",
+    )
+    .unwrap();
+    let (_, workspace, cx) = open_window(cx, home.clone());
+    let recorded = Rc::new(Recorded::default());
+    let notices = Rc::clone(&recorded);
+    cx.update(|window, cx| {
+        cx.set_global(AppNotices(notices));
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let told = || recorded.0.borrow_mut().drain(..).collect::<Vec<_>>();
+    cx.simulate_keystrokes("secondary-n");
+    let first = shown(cx, &workspace);
+    // Asked while another chat is shown, which the human sees.
+    cx.simulate_input("slow permission");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("secondary-n");
+
+    wait_until(cx, &first, |conversation| {
+        conversation.state() == State::Asking && !conversation.gathering()
+    })
+    .await;
+    settle_on(cx, &workspace).await;
+
+    // The human hears of the request once the trigger gathered what they
+    // need to answer it, its headline with it.
+    let key = workspace.read_with(cx, |workspace, _| workspace.chats(0).next().unwrap().key());
+    let notices: Vec<Told> = told()
+        .into_iter()
+        .filter(|told| matches!(told, Told::Notice(..)))
+        .collect();
+    assert_eq!(
+        notices,
+        [Told::Notice(
+            key,
+            "slow permission".to_owned(),
+            "Asks you: Edit x.txt\nOnly x.txt changes".to_owned()
+        )]
+    );
+    let entries = first.read_with(cx, |view, _| view.conversation().entries().to_vec());
+    let Some(Entry::Permission { gathered, .. }) = entries.last() else {
+        panic!("{entries:?}");
+    };
+    assert_eq!(gathered.len(), 1, "{gathered:?}");
+    assert_eq!(gathered[0].name, "touches");
+    assert_eq!(gathered[0].state, CheckState::Passed);
+    assert_eq!(
+        gathered[0].said.as_deref(),
+        Some("Only x.txt changes\nNothing else.")
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// A command that fails the first time it runs, leaving a mark in
 /// `folder`, and passes from then on. It mentions "tool", so that the
 /// fake agent, told what it printed, calls a tool.

@@ -447,6 +447,7 @@ fn describe_entry(entry: &Entry) -> String {
             options,
             chosen,
             by_setup,
+            gathered,
             ..
         } => {
             let options: Vec<String> = options
@@ -454,13 +455,18 @@ fn describe_entry(entry: &Entry) -> String {
                 .enumerate()
                 .map(|(index, option)| format!("{} {option}", index + 1))
                 .collect();
+            let gathered = if gathered.is_empty() {
+                String::new()
+            } else {
+                format!("; {}", describe_checks("gathered", gathered))
+            };
             let chosen = match chosen {
                 Some(chosen) if *by_setup => format!("; Cox chose {}, as set up", chosen + 1),
                 Some(chosen) => format!("; chosen {}", chosen + 1),
                 None => "; waiting for the choice".to_owned(),
             };
             format!(
-                "permission {title:?}: options {}{chosen}{}",
+                "permission {title:?}: options {}{chosen}{gathered}{}",
                 options.join(", "),
                 contents(content)
             )

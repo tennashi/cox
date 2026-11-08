@@ -21,6 +21,7 @@ const EVENTS = {
   "sketch.end": "Sketch ended",
   "chat.open": "Chat opened",
   "plan.changed": "Plan changed",
+  "permission.asked": "Permission asked",
   schedule: "Schedule",
 };
 

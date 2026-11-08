@@ -68,6 +68,7 @@ fn event_label(on: &str) -> &'static str {
         "sketch.end" => "SKETCH ENDED",
         "chat.open" => "CHAT OPENED",
         "plan.changed" => "PLAN CHANGED",
+        "permission.asked" => "PERMISSION ASKED",
         _ => "TRIGGERS",
     }
 }
@@ -604,7 +605,7 @@ impl ChatView {
         if asking {
             let title = conversation::login_title(failed);
             let names: Vec<String> = options.iter().map(conversation::login_label).collect();
-            return render_asking(index, &title, &[], &names, writer, cx);
+            return render_asking(index, (&title, &[], &[]), &names, writer, cx);
         }
         let chosen = chosen
             .and_then(|chosen| options.get(chosen))
@@ -730,13 +731,15 @@ impl ChatView {
                 options,
                 chosen,
                 by_setup,
+                gathered,
                 ..
             } => {
                 let asking = self.conversation.state() == State::Asking
                     && chosen.is_none()
                     && index + 1 == self.conversation.entries().len();
                 if asking {
-                    render_asking(index, title, content, options, &mut writer, cx)
+                    let asked = (title.as_str(), content.as_slice(), gathered.as_slice());
+                    render_asking(index, asked, options, &mut writer, cx)
                 } else {
                     let answer = chosen
                         .and_then(|chosen| options.get(chosen))
@@ -747,7 +750,8 @@ impl ChatView {
                     } else {
                         answer.to_owned()
                     };
-                    self.render_answered(index, title, content, answer, &mut writer, cx)
+                    let asked = (title.as_str(), content.as_slice(), gathered.as_slice());
+                    self.render_answered(index, asked, answer, &mut writer, cx)
                 }
             }
         }
@@ -758,8 +762,7 @@ impl ChatView {
     fn render_answered(
         &self,
         index: usize,
-        title: &str,
-        content: &[Content],
+        (title, content, gathered): (&str, &[Content], &[Check]),
         answer: String,
         writer: &mut Writer,
         cx: &mut Context<Self>,
@@ -767,7 +770,7 @@ impl ChatView {
         // What was asked was read when it was answered.
         let fold = Fold::Content(index);
         let open = self.folds.is_open(fold, false);
-        let opens = (!content.is_empty()).then_some(open);
+        let opens = (!content.is_empty() || !gathered.is_empty()).then_some(open);
         let line = line_of(index, opens, ("?", ASKING), title, writer).child(
             div()
                 .flex_shrink_0()
@@ -781,7 +784,9 @@ impl ChatView {
             .gap_1()
             .child(line)
             .when(open, |asked| {
-                asked.children(render_content(index, content, writer))
+                asked
+                    .children(render_gathered(index, gathered, writer))
+                    .children(render_content(index, content, writer))
             })
             .into_any_element()
     }
@@ -1144,8 +1149,7 @@ fn render_keep(
 /// its options, to click, or to choose by their numbers.
 fn render_asking(
     index: usize,
-    title: &str,
-    content: &[Content],
+    (title, content, gathered): (&str, &[Content], &[Check]),
     options: &[String],
     writer: &mut Writer,
     cx: &mut Context<ChatView>,
@@ -1163,8 +1167,95 @@ fn render_asking(
         .on_click(cx.listener(move |view, _, _, cx| view.choose(i, cx)))
     });
     let head = line_of(index, None, ("?", ASKING), title, writer);
-    let shows = render_content(index, content, writer);
-    answer_card(ASKING_TONE, head, "waiting for you", shows, options).into_any_element()
+    // What the triggers gathered is what the human reads first.
+    let shows = render_gathered(index, gathered, writer)
+        .into_iter()
+        .chain(render_content(index, content, writer));
+    let gathering = gathered
+        .iter()
+        .any(|check| check.state == CheckState::Running);
+    let tag = if gathering {
+        "gathering"
+    } else {
+        "waiting for you"
+    };
+    answer_card(ASKING_TONE, head, tag, shows, options).into_any_element()
+}
+
+/// What the triggers that run as the agent asks the human's permission
+/// gathered for the human to answer with, each by its name, with a mark of
+/// how it went, and what it said: its headline first, which the human
+/// reads first, as on the phone. One that gathers yet says so, dimmer.
+fn render_gathered(index: usize, gathered: &[Check], writer: &mut Writer) -> Option<AnyElement> {
+    if gathered.is_empty() {
+        return None;
+    }
+    let each = gathered.iter().map(|check| {
+        let (dot, filled) = match check.state {
+            CheckState::Waiting => (DISABLED, false),
+            CheckState::Running => (LINK, false),
+            CheckState::Passed => (ACCENT, true),
+            CheckState::Failed => (ASKING, true),
+            CheckState::Broken => (FAILED_MARK, true),
+        };
+        let name = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .font_family(CODE_FONT)
+            .text_color(rgb(DIM))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .size(px(7.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(rgb(dot))
+                    .when(filled, |mark| mark.bg(rgb(dot))),
+            )
+            .child(SharedString::from(check.name.clone()));
+        let said = match (check.state, check.said.as_deref()) {
+            (CheckState::Running, _) => div()
+                .text_size(px(13.))
+                .text_color(rgb(FAINT))
+                .child("Gathering what you need to answer…"),
+            (_, Some(said)) => {
+                let headline = conversation::headline(said).unwrap_or_default();
+                let rest = said
+                    .trim()
+                    .split_once('\n')
+                    .map_or("", |(_, rest)| rest.trim());
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .text_size(px(13.))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(writer.plain(headline, "\n")),
+                    )
+                    .when(!rest.is_empty(), |said| {
+                        said.child(div().text_color(rgb(DIM)).child(writer.markdown(rest)))
+                    })
+            }
+            (_, None) => div()
+                .text_size(px(13.))
+                .text_color(rgb(FAINT))
+                .child("It said nothing."),
+        };
+        div().flex().flex_col().gap_1().child(name).child(said)
+    });
+    Some(
+        div()
+            .debug_selector(move || format!("gathered-{index}"))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .children(each)
+            .into_any_element(),
+    )
 }
 
 /// The line of a tool call or a permission request: whether what it

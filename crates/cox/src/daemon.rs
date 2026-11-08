@@ -47,7 +47,7 @@ use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited,
 use crate::agent::setup::{Policy, Setup, StageUse, keeps_in_wiki};
 use crate::agent::{self, Agent, AgentEvent, Start};
 use crate::agents::Agents;
-use crate::chat::conversation::{Conversation, Entry, Patch, State};
+use crate::chat::conversation::{Conversation, Entry, Gathered, Patch, State};
 use crate::chat::judge::{Heard, Starts};
 use crate::chat::sketch::{self, Sketch};
 use crate::stage::terminal::run_unseen;
@@ -144,6 +144,16 @@ pub enum Internal {
         file: PathBuf,
         heard: Heard,
     },
+    /// The trigger of `file` that gathers what the human needs to answer
+    /// the permission request the chat's agent waits on came back so.
+    Gathered {
+        key: u64,
+        generation: u64,
+        file: PathBuf,
+        gathered: Gathered,
+    },
+    /// The time the human waits on the triggers that gather is up.
+    GatheredEnough { key: u64, generation: u64 },
     /// The command `id`, which the window runs, is not waited for any more.
     Cancel { id: u64 },
     /// A window came, as the connection `id`, saying `hello`, to hear
@@ -232,6 +242,9 @@ struct Slot {
     /// How many times its agent had changed a step of the plan the human
     /// left it to when last looked at, as its conversation counts them.
     plan_changes: usize,
+    /// Whether the human was told the chat's agent asks them, as it
+    /// waits on them, once what the triggers gather for it came.
+    asks: bool,
     goal: Option<Goal>,
     parent: Option<u64>,
     setup: Option<Setup>,
@@ -556,6 +569,7 @@ impl Daemon {
                 state: State::Closed,
                 unread: false,
                 plan_changes: 0,
+                asks: false,
                 goal: chat.goal,
                 parent,
                 setup,
@@ -1025,6 +1039,7 @@ impl Daemon {
             state: State::Idle,
             unread: false,
             plan_changes: 0,
+            asks: false,
             goal: None,
             parent: from.map(|(parent, _)| parent),
             setup: setup.clone(),
@@ -1491,6 +1506,7 @@ impl Daemon {
     }
 
     /// Does what the daemon's chats' tasks heard.
+    #[expect(clippy::too_many_lines, reason = "one arm for each thing heard")]
     fn hear(&mut self, event: Internal) {
         match event {
             Internal::Agent {
@@ -1547,6 +1563,21 @@ impl Daemon {
             } => {
                 if let Some(chat) = self.chat(key) {
                     chat.heard_trigger(generation, &file, heard);
+                }
+            }
+            Internal::Gathered {
+                key,
+                generation,
+                file,
+                gathered,
+            } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.heard_gathered(generation, &file, gathered);
+                }
+            }
+            Internal::GatheredEnough { key, generation } => {
+                if let Some(chat) = self.chat(key) {
+                    chat.gathered_enough(generation);
                 }
             }
             Internal::Cancel { id } => {
@@ -2554,9 +2585,17 @@ impl Daemon {
             if ended && shown != Some(slot.key) {
                 slot.unread = true;
             }
-            let told = if state == State::Asking && slot.state != state {
+            // A permission request is news once what its triggers gather
+            // came, or the time is up.
+            let asks = state == State::Asking && !conversation.gathering();
+            let told = if asks && !slot.asks {
                 let asked = conversation.asking_for().unwrap_or("permission");
-                Some(format!("Asks you: {asked}"))
+                let mut told = format!("Asks you: {asked}");
+                for headline in conversation.headlines() {
+                    told.push('\n');
+                    told.push_str(headline);
+                }
+                Some(told)
             } else if ended {
                 Some(
                     conversation
@@ -2575,6 +2614,7 @@ impl Daemon {
                     .then(|| format!("The plan changed:\n{}", change.unwrap_or_default()))
             });
             slot.plan_changes = changes;
+            slot.asks = asks;
             slot.state = state;
             slot.goal = conversation.goal().map(|goal| goal.what().clone());
             let about = match (conversation.title(), conversation.first_line()) {

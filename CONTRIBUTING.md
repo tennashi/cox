@@ -355,7 +355,9 @@ writes a page of a wiki, or, as `wiki.written: {page: "research/*"}`,
 one of the pages the globs name; `sketch.end`, as a sketch ends, in the
 chat that goes on with it; `chat.open`, as a chat opens, once its agent
 has started; `plan.changed`, as a chat's agent adds, removes or changes a
-step of the plan the human left it to (see below); or `schedule`, which opens a chat at the times it says
+step of the plan the human left it to (see below); `permission.asked`,
+as a chat's agent asks the human's permission, to gather what the human
+needs to answer (see below); or `schedule`, which opens a chat at the times it says
 (see [Schedules](#schedules)). `when` narrows it:
 `changed`, globs of the chat's folder, those that start `!` leaving
 files out, which run it only when a file they match changed since it
@@ -397,6 +399,22 @@ ENDED`, `CHAT OPENED` or `PLAN CHANGED`, with a dot each as at a turn's end: wha
 find stays there, and the chat's agent is not told it. An agent of
 such a trigger, `by: new`, is told what happened, as which page was
 written.
+
+The triggers of `permission.asked` decide nothing: they gather what the
+human needs to answer what the chat's agent asks, all at once, as soon
+as it asks, so that the human, away from the Mac too, answers without
+first working out what the request is about. A trigger `by: shell` runs
+its command, and what it prints is what it gathered; one `by: new` asks
+its agent, told the call, what it is to do, as the change it makes, and
+the options, to gather what the trigger says, its reply's first line
+saying what matters most; and one `by: this`, whose agent waits on the
+human, does not run. The card of the request shows each under its
+name, with a dot as at a turn's end, its first line as a headline
+first, and, while it gathers, says so, dimmer, the card answering all
+the while, for the human at the Mac. The human is told of the request,
+on the Mac and on the phone, once each has gathered, with the
+headlines, or once a minute went, without what has not come, which no
+longer counts.
 
 "Triggers", a tab of the stage (see below), lists the triggers of the
 stage's folder, under the event they run on, in the order they run in

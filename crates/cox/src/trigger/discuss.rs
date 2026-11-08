@@ -206,6 +206,9 @@ const STANCE: &str = "You help the human write one trigger of Cox, on its card, 
     `on: plan.changed` run it as a chat's goal is met, its agent writes a page of the wiki, \
     a sketch beside it ends, it opens, or its agent changes a step of the plan it started \
     the human's last line with, and what it finds stays on the chat's line, untold. \
+    `on: permission.asked` runs it as a chat's agent asks the human's permission, to gather \
+    what the human needs to answer: its first line is the headline the human reads first, \
+    and the human is asked once the triggers have answered, or a minute went. \
     `on: {schedule: {cron: \"0 9 * * *\"}}` \
     opens a chat at the times the cron says, in the time of the place Cox runs in, the rest \
     being that chat's first line, where `{name}`, `{now}` and `{last}` stand for the \
