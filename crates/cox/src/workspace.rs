@@ -392,6 +392,11 @@ pub struct Workspace {
     /// The menu of the right button on the rail, where it opened in the
     /// window, for the project at an index among the projects.
     project_menu: Option<(Point<Pixels>, usize)>,
+    /// The projects an agent draws an icon for now, by how they are kept.
+    drawing: HashSet<ProjectId>,
+    /// Why the agent drew no icon for a project, the last time it was
+    /// asked, until it is asked again.
+    not_drawn: HashMap<ProjectId, String>,
     /// The chat at an index in the list being renamed, in an input.
     renaming: Option<(usize, Entity<LineInput>, Subscription)>,
     /// Whether `--home` gave the home, where Cox's own chats work, for this
@@ -486,6 +491,8 @@ impl Workspace {
             badged: 0,
             menu: None,
             project_menu: None,
+            drawing: HashSet::new(),
+            not_drawn: HashMap::new(),
             renaming: None,
             home_given,
             settings: None,
@@ -1142,6 +1149,50 @@ impl Workspace {
         .detach();
     }
 
+    /// Has the agent a new chat talks to read the project at `index` and
+    /// draw it an icon, in the background, its square marked meanwhile
+    /// (see [`crate::project_icon::generate`]).
+    fn generate_icon(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.project_menu = None;
+        cx.notify();
+        let Some(project) = self.projects.get(index) else {
+            return;
+        };
+        let (Some(id), Some(agents)) = (project.id, self.agents.clone()) else {
+            return;
+        };
+        if !self.drawing.insert(id) {
+            return;
+        }
+        self.not_drawn.remove(&id);
+        let name = project.name.to_string();
+        let folder = project.folder.clone();
+        // The agent takes as long as it reads the project, which is no
+        // work for the executor's own threads.
+        let (drawn, heard) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name("project-icon".to_owned())
+            .spawn(move || {
+                let _ = drawn.send(crate::project_icon::generate(&agents, id, &name, &folder));
+            })
+            .expect("a thread starts");
+        cx.spawn(async move |this, cx| {
+            let drawn = heard
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("the drawing stopped")));
+            this.update(cx, |workspace, cx| {
+                workspace.drawing.remove(&id);
+                if let Err(error) = drawn {
+                    tracing::error!("no icon was drawn for the project: {error:#}");
+                    workspace.not_drawn.insert(id, format!("{error:#}"));
+                }
+                workspace.read_icon(id, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Takes away the icon of the project at `index`, which the rail then
     /// draws as a folder.
     pub fn remove_icon(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1701,6 +1752,7 @@ impl Workspace {
         let label = if chosen { LINK } else { FAINT };
         let folder = shortened(&project.folder);
         let home = project.id.is_none();
+        let drawing = project.id.is_some_and(|id| self.drawing.contains(&id));
         div()
             .id(("project", index))
             .debug_selector(move || format!("project-{}", index + 1))
@@ -1716,6 +1768,10 @@ impl Workspace {
             .when(self.project_menu.is_none(), |button| {
                 button.tooltip(tip(if home {
                     format!("{} ({folder})", project.name)
+                } else if drawing {
+                    format!("{folder}\nAn agent draws its icon…")
+                } else if let Some(why) = project.id.and_then(|id| self.not_drawn.get(&id)) {
+                    format!("{folder}\nNo icon was drawn: {why}")
                 } else {
                     folder
                 }))
@@ -1751,7 +1807,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .map(|square| project_square(square, project, home, chosen))
+                    .map(|square| project_square(square, project, home, chosen, drawing))
                     .when(waiting > 0, |square| {
                         square.child(waiting_badge(index, waiting, asking > 0))
                     }),
@@ -2193,8 +2249,8 @@ fn dot(chat: &Chat) -> Option<(u32, bool, &'static str)> {
 /// What the square of `project` on the rail shows: Cox's icon for Cox's
 /// own, the home's, or else the icon the human gave the project, filling
 /// the square inside its edge, or else a folder; the edge marks it
-/// chosen.
-fn project_square(square: Div, project: &Project, home: bool, chosen: bool) -> Div {
+/// chosen, and, dashed in the accent, that an agent draws it an icon.
+fn project_square(square: Div, project: &Project, home: bool, chosen: bool, drawing: bool) -> Div {
     let (ground, edge, ink) = if chosen {
         (ACCENT_GROUND, ACCENT, ACCENT)
     } else {
@@ -2206,7 +2262,10 @@ fn project_square(square: Div, project: &Project, home: bool, chosen: bool) -> D
     let square = square
         .rounded(px(PROJECT_RADIUS))
         .border_1()
-        .border_color(rgb(edge));
+        .border_color(rgb(edge))
+        .when(drawing, |square| {
+            square.border_dashed().border_color(rgb(ACCENT))
+        });
     match project.icon.clone() {
         Some(picture) => square.child(
             img(picture)
@@ -2367,7 +2426,10 @@ impl Workspace {
     /// open: to choose its icon, and to take it away.
     fn render_project_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (at, index) = self.project_menu?;
-        let has_icon = self.projects.get(index)?.has_icon();
+        let project = self.projects.get(index)?;
+        let has_icon = project.has_icon();
+        let draws =
+            self.agents.is_some() && project.id.is_some_and(|id| !self.drawing.contains(&id));
         let item = |id: &'static str, label: &'static str| crate::ui::menu::item(id, label, "");
         let menu = crate::ui::menu::menu()
             .min_w(px(160.))
@@ -2378,6 +2440,11 @@ impl Workspace {
             .child(item("choose-icon", "Choose icon…").on_click(cx.listener(
                 move |workspace, _, window, cx| workspace.choose_icon(index, window, cx),
             )))
+            .when(draws, |menu| {
+                menu.child(item("generate-icon", "Generate icon").on_click(
+                    cx.listener(move |workspace, _, _, cx| workspace.generate_icon(index, cx)),
+                ))
+            })
             .when(has_icon, |menu| {
                 menu.child(item("remove-icon", "Remove icon").on_click(
                     cx.listener(move |workspace, _, _, cx| workspace.remove_icon(index, cx)),

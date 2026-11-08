@@ -1,7 +1,8 @@
 //! What Cox tells a chat's agent in the human's place at the turns of a
 //! sketch: as it starts, as a sketch an agent opened is open, and before
 //! it is discarded; and as the human asks it to keep what the chat
-//! learned in their wiki (see [`crate::wiki`]). Each is the human's to say, since how they work with
+//! learned in their wiki (see [`crate::wiki`]), and as it asks an agent to
+//! draw a project's icon (see [`crate::project_icon`]). Each is the human's to say, since how they work with
 //! sketches is theirs: a file of their workflow's folder (see
 //! [`crate::settings::workflow`]), as `sketch/start.md`, or else Cox's own,
 //! in `workflow/` beside this file. A file says where Cox puts what it
@@ -55,8 +56,21 @@ pub const WIKI_SAVE: Text = Text {
     own: include_str!("workflow/wiki/save.md"),
 };
 
+/// What the agent that draws a project's icon is asked (see
+/// [`crate::project_icon::generate`]), with `{name}`, the project's name.
+pub const ICON_GENERATE: Text = Text {
+    name: "icon/generate.md",
+    own: include_str!("workflow/icon/generate.md"),
+};
+
 /// The texts Cox has of its own, by where the human keeps theirs.
-const OWN: [&Text; 4] = [&SKETCH_START, &SKETCH_OPENED, &SKETCH_DISCARD, &WIKI_SAVE];
+const OWN: [&Text; 5] = [
+    &SKETCH_START,
+    &SKETCH_OPENED,
+    &SKETCH_DISCARD,
+    &WIKI_SAVE,
+    &ICON_GENERATE,
+];
 
 /// The text the human keeps as `name` in their workflow, or else Cox's
 /// own of that name, with `values` in place of the names they stand for;

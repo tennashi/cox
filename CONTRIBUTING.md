@@ -52,8 +52,15 @@ picture, as a PNG, a JPEG, a WebP or an SVG, which Cox crops to a
 square at its middle, or draws, for an SVG, and keeps, 256 pixels
 square, in `state/icons` in Cox's data folder (see
 [The stage](#the-stage)), named after the number the project is kept
-by, so that the project's folder stays as it is; "Remove icon" takes it
-away. A project is a folder:
+by, so that the project's folder stays as it is; "Generate icon" has
+an agent draw one, the agent a new chat talks to, in the project's
+folder: not a chat, so not in the list, which reads the project, as the
+judge of a goal does (see below), and answers with an SVG, which Cox
+draws and keeps the same way, the square's edge dashed in the accent
+meanwhile, and where the mouse rests, why when it drew none. What the
+agent is asked is the workflow's `icon/generate.md` (see below), or else
+Cox's own ([`workflow/icon/generate.md`](crates/cox/src/workflow/icon/generate.md)),
+with `{name}`, the project's name. "Remove icon" takes the icon away. A project is a folder:
 "Open folder…", the + at the foot of the rail (Command-O on macOS,
 Control-O elsewhere), opens a chat in the project of a folder of your
 choice, and "New chat" in the list opens another chat in the project
@@ -1594,7 +1601,8 @@ Its `commands` are the commands the agent runs, as ACP's
 opens; the tour has three, and answers `/compact`. The agent takes
 files whole, and pictures, and reads the files a line points to as
 `claude-agent-acp` does, a link to each and its text, which a turn's
-`when` can match: the tour answers a line that points to a file.
+`when` can match: the tour answers a line that points to a file, and
+draws an icon when asked to (see [The stage](#the-stage)).
 Its `authMethods` are the ways to log in it offers, as ACP's
 `initialize` says them: with them, the agent asks Cox to log in, before
 it opens a session, or, with `"authRequired": "prompt"`, as it takes a
