@@ -20,13 +20,16 @@
 //! - [`wire`] says what the window and the daemon say to each other.
 //! - [`process`] runs the daemon as a process of its own, coxd, which a
 //!   window reaches on a socket, and [`client`] is how the window does.
+//! - [`phone`] serves the human's phone a page of the chats, which watches
+//!   them beside the window.
 
 pub mod chat;
 pub mod client;
+pub mod phone;
 pub mod process;
 pub mod wire;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -42,7 +45,7 @@ use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited,
 use crate::agent::setup::{Policy, Setup, StageUse, keeps_in_wiki};
 use crate::agent::{self, Agent, AgentEvent, Start};
 use crate::agents::Agents;
-use crate::chat::conversation::{Conversation, Entry, State};
+use crate::chat::conversation::{Conversation, Entry, Patch, State};
 use crate::chat::judge::{Heard, Starts};
 use crate::chat::sketch::{self, Sketch};
 use crate::stage::terminal::run_unseen;
@@ -149,6 +152,18 @@ pub enum Internal {
     },
     /// The window of the connection `id` went.
     Detach { id: u64 },
+    /// A phone came, as the connection `id`, to hear on `phone` the
+    /// projects and chats, and how the conversation it watches changes
+    /// (see [`phone`]).
+    View {
+        id: u64,
+        phone: UnboundedSender<FromDaemon>,
+    },
+    /// The phone of the connection `id` watches the conversation of the
+    /// chat `key` from now on, or none.
+    ViewChat { id: u64, key: Option<u64> },
+    /// The phone of the connection `id` went.
+    Unview { id: u64 },
     /// The daemon is to stop, with its chats' agents.
     Quit,
     /// It is time to look which of the triggers on a schedule are due,
@@ -244,6 +259,15 @@ impl Slot {
     }
 }
 
+/// A phone that looks at the chats beside the window (see [`phone`]).
+struct Viewer {
+    /// What it is told: the projects and chats, how the conversation it
+    /// watches changes, and what the chats come to.
+    tell: UnboundedSender<FromDaemon>,
+    /// The chat whose conversation it watches, if it watches one.
+    watches: Option<u64>,
+}
+
 /// An agent on its way to start, once the window gives its stage a relay.
 struct Preparing {
     key: u64,
@@ -271,6 +295,10 @@ pub struct Daemon {
     internal: UnboundedSender<Internal>,
     /// The window, while one is there.
     window: Option<UnboundedSender<FromDaemon>>,
+    /// The chats whose conversations the window watches.
+    window_watches: HashSet<u64>,
+    /// The phones there, by their connections (see [`phone`]).
+    viewers: HashMap<u64, Viewer>,
     /// What the window was last told of the projects and chats.
     listed: Option<Listing>,
     /// The commands the window runs, by their numbers, with where their
@@ -415,6 +443,8 @@ impl Daemon {
             spawns,
             internal,
             window: None,
+            window_watches: HashSet::new(),
+            viewers: HashMap::new(),
             listed: None,
             running: HashMap::new(),
             seeing: HashMap::new(),
@@ -687,7 +717,18 @@ impl Daemon {
             chat.flush();
         }
         if watched {
-            self.watch(key);
+            if self.window_watches.contains(&key) {
+                self.watch(key);
+            }
+            let phones: Vec<u64> = self
+                .viewers
+                .iter()
+                .filter(|(_, viewer)| viewer.watches == Some(key))
+                .map(|(&id, _)| id)
+                .collect();
+            for id in phones {
+                self.view_chat(id, Some(key));
+            }
         }
     }
 
@@ -701,8 +742,64 @@ impl Daemon {
         let tabs = self
             .slot(key)
             .and_then(|slot| self.stage_in(&self.cwd(slot)));
+        self.window_watches.insert(key);
         self.tell(FromDaemon::Tabs { key, tabs });
         self.tell(FromDaemon::Patch { key, patch });
+    }
+
+    /// Has the phone of the connection `id` hear on `phone` the projects
+    /// and chats, as the window does.
+    fn view(&mut self, id: u64, phone: UnboundedSender<FromDaemon>) {
+        tracing::info!(phone = id, "a phone came");
+        if let Some(listing) = &self.listed {
+            let _ = phone.send(FromDaemon::Listing(listing.clone()));
+        }
+        self.viewers.insert(
+            id,
+            Viewer {
+                tell: phone,
+                watches: None,
+            },
+        );
+        if self.listed.is_none() {
+            self.tell_listing();
+        }
+    }
+
+    /// Has the phone of the connection `id` watch the chat `key`, or none:
+    /// tells it all of the chat's conversation.
+    fn view_chat(&mut self, id: u64, key: Option<u64>) {
+        let patch = key.and_then(|key| Some((key, self.chat(key)?.watch())));
+        let Some(viewer) = self.viewers.get_mut(&id) else {
+            return;
+        };
+        viewer.watches = key;
+        if let Some((key, patch)) = patch {
+            let _ = viewer.tell.send(FromDaemon::Patch { key, patch });
+        }
+    }
+
+    /// Tells how the conversation of the chat `key` changed to the window
+    /// and the phones that watch it.
+    fn tell_patch(&self, key: u64, patch: Patch) {
+        for viewer in self.viewers.values() {
+            if viewer.watches == Some(key) {
+                let _ = viewer.tell.send(FromDaemon::Patch {
+                    key,
+                    patch: patch.clone(),
+                });
+            }
+        }
+        if self.window_watches.contains(&key) {
+            self.tell(FromDaemon::Patch { key, patch });
+        }
+    }
+
+    /// Tells the phones `message`, as the window is told it.
+    fn tell_phones(&self, message: &FromDaemon) {
+        for viewer in self.viewers.values() {
+            let _ = viewer.tell.send(message.clone());
+        }
     }
 
     /// The tabs of the stage of `folder`, each of a chat by its key, as
@@ -1283,6 +1380,13 @@ impl Daemon {
                     self.detach();
                 }
             }
+            Internal::View { id, phone } => self.view(id, phone),
+            Internal::ViewChat { id, key } => self.view_chat(id, key),
+            Internal::Unview { id } => {
+                if self.viewers.remove(&id).is_some() {
+                    tracing::info!(phone = id, "a phone went");
+                }
+            }
             Internal::Quit => self.done = true,
             Internal::Schedules => {
                 self.run_schedules(&crate::settings::workflow(), &jiff::Zoned::now());
@@ -1405,6 +1509,7 @@ impl Daemon {
             .command(command, crate::settings::agent().as_deref());
         self.window = Some(window);
         self.window_id = Some(id);
+        self.window_watches.clear();
         self.listed = None;
         self.shown = None;
         FromDaemon::Welcome
@@ -1416,7 +1521,7 @@ impl Daemon {
         tracing::info!("the window went; the chats go on");
         self.window = None;
         self.window_id = None;
-        self.listed = None;
+        self.window_watches.clear();
         self.shown = None;
         for (_, ran) in self.running.drain() {
             ran.send(Err(NO_WINDOW.to_owned())).ok();
@@ -2161,7 +2266,7 @@ impl Daemon {
                 .and_then(|slot| slot.chat.as_mut())
                 .and_then(Chat::flush);
             if let Some(patch) = patch {
-                self.tell(FromDaemon::Patch { key, patch });
+                self.tell_patch(key, patch);
             }
         }
         self.tell_listing();
@@ -2183,7 +2288,7 @@ impl Daemon {
     /// was last told.
     fn tell_listing(&mut self) {
         let agents = self.spawns.agents();
-        let listing = Listing {
+        let mut listing = Listing {
             projects: self
                 .projects
                 .iter()
@@ -2204,9 +2309,25 @@ impl Daemon {
                 .iter()
                 .map(|slot| self.row(slot, &agents))
                 .collect(),
+            agents: std::collections::BTreeMap::new(),
         };
+        let ids: HashSet<&str> = listing
+            .chats
+            .iter()
+            .chain(&listing.archived)
+            .map(|row| row.agent.as_str())
+            .collect();
+        let names = agents
+            .all()
+            .into_iter()
+            .filter(|known| ids.contains(known.id.as_str()))
+            .map(|known| (known.id, known.name))
+            .collect();
+        listing.agents = names;
         if self.listed.as_ref() != Some(&listing) {
-            self.tell(FromDaemon::Listing(listing.clone()));
+            let told = FromDaemon::Listing(listing.clone());
+            self.tell_phones(&told);
+            self.tell(told);
             self.listed = Some(listing);
         }
     }
@@ -2279,6 +2400,7 @@ impl Daemon {
             }
         }
         for message in news {
+            self.tell_phones(&message);
             self.tell(message);
         }
         for (key, stands) in stands {

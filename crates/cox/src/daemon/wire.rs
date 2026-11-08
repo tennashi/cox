@@ -3,6 +3,7 @@
 //! [`FromDaemon`]. Both go as JSON, a message a line, once the window
 //! talks to a daemon of its own process (see [`crate::daemon`]).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use cox_core::entry::Attachment;
@@ -75,6 +76,10 @@ pub struct Listing {
     pub chats: Vec<ChatRow>,
     /// The chats the human put away.
     pub archived: Vec<ChatRow>,
+    /// The names the human knows the agents of the chats by, by their
+    /// ids, for a page that knows no agents, as the phone's.
+    #[serde(default)]
+    pub agents: BTreeMap<String, String>,
 }
 
 /// What an agent's tools ask of its chat's stage, as Cox's

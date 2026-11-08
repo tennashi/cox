@@ -20,7 +20,9 @@
 //! The agents run `cox` too, as `cox --mcp <socket>`, the MCP server of
 //! Cox's own tools that `cox::agent::mcp` hands them. An agent that debugs
 //! Cox runs `cox [--data <dir>] --inspect <tool>` to ask a running Cox how
-//! it stands, and to drive it (see `cox::inspect`). Cox reads a web page
+//! it stands, and to drive it (see `cox::inspect`). `cox [--data <dir>]
+//! --phone-link` prints the link that pairs a phone with the page coxd
+//! serves it (see `cox::daemon::phone`). Cox reads a web page
 //! for `raw_keep` as `cox --read-page <url>`, apart from itself (see
 //! `cox::raw::page`). And on Linux, CEF runs
 //! `cox` for its helper processes, which `cox_browser` tells apart.
@@ -95,6 +97,21 @@ fn main() -> ExitCode {
             };
             match cox::inspect::client::run(&socket, &args) {
                 Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("cox: {error:#}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        Mode::PhoneLink { data } => {
+            if let Some(data) = &data {
+                cox::storage::keep_in(data);
+            }
+            match cox::daemon::phone::link() {
+                Ok(link) => {
+                    print!("{link}");
+                    ExitCode::SUCCESS
+                }
                 Err(error) => {
                     eprintln!("cox: {error:#}");
                     ExitCode::from(1)

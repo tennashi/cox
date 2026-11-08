@@ -1309,8 +1309,9 @@ kind is kept apart
   last ran, `schedules.json`, which triggers are off and their order,
   `triggers.json`, how each last ran, `trigger-runs.json`, what a chat
   of each folder said last as its turn ended, `last-turns.json`, the
-  pictures of the regions handed to the chats, `pictures`, and the
-  icons the human gave the projects, `icons`;
+  pictures of the regions handed to the chats, `pictures`, the
+  icons the human gave the projects, `icons`, and the secret the
+  human's phones are paired with, `phone-token`;
 - in `cache`, what Cox can make again: `registry.json`, the agents it
   downloads, in `agents`, and `translations`;
 - in `run`, what is there only while Cox runs: `coxd.sock` and
@@ -1382,7 +1383,8 @@ environment of the human's login shell, as a Cox the Finder opens does
 `launchctl bootout gui/$(id -u)/com.github.tennashi.cox.coxd` and take
 the file away, or `systemctl --user disable coxd.service`.
 
-coxd takes one window at a time: a second Cox from the same place says
+coxd takes one window at a time, and the human's phones beside it (see
+[On the phone](#on-the-phone)): a second Cox from the same place says
 another window has the chats, and stops. The window closing leaves
 coxd, and the agents at work, running; the next window to open shows
 the chats as they are then. While no window is there, coxd runs a
@@ -1405,6 +1407,34 @@ replaced since it started, as `cargo xtask install` replaces it, and
 no chat is at work, the next window to come has it stop, and starts the
 new one; while a chat is at work, it goes on as it was, until a window
 comes once none is.
+
+## On the phone
+
+The human follows the chats from their phone, away from the Mac, on a
+page coxd serves when `settings.json` names a port for it, as
+`{"phone": {"port": 7421}}`, which coxd reads as it starts: the
+projects, each with its chats and how each stands, as the window's
+list has them, those that wait for the human first, under "Waits for
+you"; and a chat's conversation, as it goes on, the agent's tool calls
+and thoughts folded under a line of their chips, as the window folds
+them, which a tap opens, and the plan, what the agent asks, and what
+ran as a turn ended, in sight. The page only reads, for now: the human
+answers on the Mac.
+
+coxd serves it on the Mac's own address alone, `127.0.0.1`, and the
+phone reaches it through [Tailscale](https://tailscale.com), as
+`tailscale serve --bg 7421` hands it to the human's tailnet, over HTTPS,
+with the tailnet's certificate. Since any page in a browser on the Mac
+reaches `127.0.0.1` too, the page answers only a phone that holds the
+secret coxd keeps in `state/phone-token` in Cox's data folder (see
+[The stage](#the-stage)), made the first time, which the phone gets by
+opening once the link `cox [--data <dir>] --phone-link` prints, as
+`https://<the Mac's name in the tailnet>/pair/<secret>`, and keeps in a
+cookie. A phone that opens the page from its home screen, as the
+browser's "Add to Home Screen" puts it there, gets it as an app of its
+own; an iPhone keeps the cookies of such an app apart from Safari's, so
+the page there asks for the link, pasted. To pair the phones no more, take the file away and start coxd
+again.
 
 ## Schedules
 

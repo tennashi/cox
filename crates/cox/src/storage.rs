@@ -78,11 +78,14 @@ pub enum Kept {
     /// What a chat last said as its turn ended, folder by folder, for a
     /// trigger to be tried on (see [`crate::trigger::card`]).
     LastTurns,
+    /// The secret a phone is paired with, to read the chats on the page
+    /// coxd serves it (see [`crate::daemon::phone`]).
+    PhoneToken,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Settings,
         Self::Agents,
         Self::Sketches,
@@ -100,6 +103,7 @@ impl Kept {
         Self::Triggers,
         Self::TriggerRuns,
         Self::LastTurns,
+        Self::PhoneToken,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -123,6 +127,7 @@ impl Kept {
             Self::Triggers => "state/triggers.json",
             Self::TriggerRuns => "state/trigger-runs.json",
             Self::LastTurns => "state/last-turns.json",
+            Self::PhoneToken => "state/phone-token",
         }
     }
 }

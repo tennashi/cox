@@ -587,6 +587,7 @@ impl Workspace {
             projects,
             chats,
             archived,
+            ..
         } = listing;
         self.list_projects(projects);
         self.project_menu = self
