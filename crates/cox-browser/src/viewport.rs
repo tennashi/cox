@@ -2,13 +2,21 @@
 //! pixels at the window's scale, and the size CEF paints at, which
 //! follows it one resize at a time, since CEF holds its pictures back
 //! after a resize until one of the size it was told arrives.
+//!
+//! A page is made at the size the stage last told any page, which is
+//! its own size, or near it, and at the window's scale, before the
+//! stage has drawn the page; and the stage gets no picture of the page
+//! until one of the size the stage told it comes, so that a page does
+//! not first show at the size CEF made it, small in the stage's corner
+//! on a display of two pixels a point, and then grow.
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cef::ImplBrowserHost as _;
 use cef::sys::cef_paint_element_type_t;
 
-use super::Browser;
+use super::{Browser, Frame, Shared, lock};
 
 /// The stage's size in logical pixels, and the window's scale factor.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,6 +82,20 @@ pub(super) struct Resizing {
     nudged: Option<Instant>,
 }
 
+impl Resizing {
+    /// CEF was told of a size at `since`.
+    pub(super) fn new(since: Instant) -> Self {
+        Self {
+            since,
+            nudged: None,
+        }
+    }
+}
+
+/// The size the stage last told any of its pages, which a new page is
+/// made at, shared by the pages of one CEF.
+pub(super) type StageSize = Arc<Mutex<Option<Viewport>>>;
+
 /// What to ask CEF for in [`Browser::settle_resize`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Ask {
@@ -88,11 +110,17 @@ impl Browser {
     /// factor. CEF hears of one size at a time: the next waits until a
     /// picture of this one came (see [`Browser::settle_resize`]).
     pub fn resize(&self, width: i32, height: i32, scale: f32) {
-        self.shared().wanted = Viewport {
+        let wanted = Viewport {
             width,
             height,
             scale,
         };
+        {
+            let mut shared = self.shared();
+            shared.wanted = wanted;
+            shared.told = true;
+        }
+        *lock(&self.stage_size) = Some(wanted);
         self.settle_resize();
     }
 
@@ -116,10 +144,7 @@ impl Browser {
         let ask = match shared.resizing {
             None if shared.wanted != shared.reported => {
                 shared.reported = shared.wanted;
-                shared.resizing = Some(Resizing {
-                    since: now,
-                    nudged: None,
-                });
+                shared.resizing = Some(Resizing::new(now));
                 Ask::Resize
             }
             Some(resizing) if now.duration_since(resizing.since) >= RESIZE_TIMEOUT => {
@@ -129,10 +154,7 @@ impl Browser {
                     return;
                 };
                 shared.reported = Viewport::painted_as(painted, was.scale);
-                shared.resizing = Some(Resizing {
-                    since: now,
-                    nudged: None,
-                });
+                shared.resizing = Some(Resizing::new(now));
                 Ask::Picture
             }
             Some(resizing)
@@ -166,9 +188,78 @@ impl Browser {
     }
 }
 
+impl Shared {
+    /// The newest picture, if the stage is to draw it: once the stage
+    /// told the page its size, and a picture of the size CEF was told
+    /// then came, every picture is, so that the page follows the stage
+    /// as it resizes; before that, none is, as those are of the size
+    /// the page was made at. A size CEF did not paint within
+    /// [`RESIZE_TIMEOUT`] is given up for the size it painted, as
+    /// [`Browser::settle_resize`] says, which then fits.
+    pub(super) fn take_frame(&mut self) -> Option<Frame> {
+        if !self.fitted {
+            let fits = self.told
+                && self.frame.as_ref().is_some_and(|frame| {
+                    (frame.width, frame.height) == self.reported.device_size()
+                });
+            if !fits {
+                return None;
+            }
+            self.fitted = true;
+        }
+        self.frame.take()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Viewport;
+    use super::{Frame, Shared, Viewport};
+
+    fn frame(width: u32, height: u32) -> Frame {
+        Frame {
+            width,
+            height,
+            bgra: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_stage_gets_no_picture_until_one_of_the_size_it_told() {
+        let stage = Viewport {
+            width: 682,
+            height: 786,
+            scale: 2.0,
+        };
+        let mut shared = Shared::new("cox://wiki/", None);
+        // Painted at the size the page was made at, before the stage
+        // told its own.
+        shared.frame = Some(frame(800, 600));
+        assert!(shared.take_frame().is_none());
+        shared.told = true;
+        shared.wanted = stage;
+        shared.reported = stage;
+        assert!(shared.take_frame().is_none());
+        shared.frame = Some(frame(1364, 1572));
+        assert!(shared.take_frame().is_some());
+        // From then on, the page follows the stage as it resizes.
+        shared.frame = Some(frame(1000, 1572));
+        assert!(shared.take_frame().is_some());
+    }
+
+    #[test]
+    fn a_page_is_made_at_the_size_the_stage_last_told() {
+        let stage = Viewport {
+            width: 682,
+            height: 786,
+            scale: 2.0,
+        };
+        let mut shared = Shared::new("cox://wiki/", Some(stage));
+        assert_eq!(shared.reported, stage);
+        shared.frame = Some(frame(1364, 1572));
+        assert!(shared.take_frame().is_none());
+        shared.told = true;
+        assert!(shared.take_frame().is_some());
+    }
 
     #[test]
     fn device_size_rounds_up() {

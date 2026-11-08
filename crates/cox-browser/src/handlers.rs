@@ -499,8 +499,21 @@ wrap_life_span_handler! {
         fn on_after_created(&self, browser: Option<&mut cef::Browser>) {
             if let Some(browser) = browser {
                 let host = browser.host();
+                {
+                    // CEF lays the page out again at the size reported
+                    // from here on, which may have changed since CEF
+                    // made the page: the stage's next size waits for a
+                    // picture of it, as after any resize.
+                    let mut shared = lock(&self.shared);
+                    shared.host.clone_from(&host);
+                    shared.resizing = Some(Resizing::new(Instant::now()));
+                }
                 let mut devtools = None;
                 if let Some(host) = &host {
+                    // The scale too: on macOS CEF asks for it here, on
+                    // this thread, which locks `shared`, so the lock is
+                    // gone by then.
+                    host.notify_screen_info_changed();
                     host.was_resized();
                     host.set_focus(1);
                     let mut observer = TargetObserver::new(Arc::clone(&self.target));
@@ -512,7 +525,6 @@ wrap_life_span_handler! {
                     );
                 }
                 let mut shared = lock(&self.shared);
-                shared.host = host;
                 shared.devtools = devtools;
                 drop(shared);
                 let _ = self.events.send(Event::Created);
