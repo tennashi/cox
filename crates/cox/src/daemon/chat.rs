@@ -518,6 +518,14 @@ impl Chat {
         }
     }
 
+    /// Asks the agent, in the human's place, to merge what it made, with
+    /// `text`, closing the work the human's last line left it.
+    pub fn merge(&mut self, text: &str) {
+        if let Some(command) = self.conversation.merge(text) {
+            self.send(command);
+        }
+    }
+
     /// The human sent `text`. Answers whether it went: not while a turn
     /// runs, unless the agent takes it into the turn.
     pub fn submit(&mut self, text: &str, attached: Vec<Attachment>) -> bool {

@@ -393,11 +393,13 @@ fn describe_attached(attached: &[Attachment]) -> String {
 
 /// One entry of a conversation, on a line, or on more where its text
 /// has them.
+#[expect(clippy::too_many_lines, reason = "one arm for each kind of entry")]
 fn describe_entry(entry: &Entry) -> String {
     match entry {
         Entry::Human(text) => format!("human: {}", text_of(text)),
         Entry::Attached(attached) => format!("attached: {}", describe_attached(attached)),
         Entry::Cox(text) => format!("cox, in the human's place: {}", text_of(text)),
+        Entry::Merge => "merge: the human asked the agent to merge what it made".to_owned(),
         Entry::Reply(text) => format!("reply: {}", text_of(text)),
         Entry::Thought(text) => format!("thought: {}", text_of(text)),
         Entry::Note(text) => format!("note: {}", text_of(text)),

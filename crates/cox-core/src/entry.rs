@@ -20,6 +20,10 @@ pub enum Entry {
     /// A line Cox sent the agent in the human's place, as the agent's
     /// next turn: what the chat's goal asks while it is not met.
     Cox(String),
+    /// The human, done looking at what the agent made since their last
+    /// line, asked it to merge it, as the line after this says, which
+    /// closes that work.
+    Merge,
     /// The agent's reply, as much of it as has arrived.
     Reply(String),
     /// What the agent thought on its way to the reply, as much of it as

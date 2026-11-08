@@ -230,6 +230,8 @@ function drawChat() {
   if (goal) nodes.push(el("div", { class: "goal" }, "◎ ", goal.startsWith("$ ") ? el("code", {}, goal) : goal));
   if (!chat.came) nodes.push(el("p", { class: "empty" }, "Reading the conversation…"));
   nodes.push(...conversation(chat.entries, agent));
+  const closes = closing(chat.entries, row);
+  if (closes) nodes.push(closes);
   // The sketch's pages, where the human reads on, to try them.
   if (row) {
     findMocks(row);
@@ -242,6 +244,86 @@ function drawChat() {
   }
   main.replaceChildren(...nodes);
   if (atEnd) window.scrollTo(0, document.body.scrollHeight);
+}
+
+// Whether the agent of the chat `row` merges what it made when asked:
+// one that works in the project, not a sketch's, which ends its own ways.
+function merges(row) {
+  return !(row.setup && (row.setup.folder || row.setup.sketch));
+}
+
+// When the chat waits for the human after the work their last line left
+// it, what they close the work on, in one place: what the agent showed,
+// what it decided on its own, against the plan it started with, and how
+// the checks went as its turn ended, with Merge, which asks the agent,
+// in the human's place, to merge it.
+function closing(entries, row) {
+  if (!row || !chat.came || working(chat.state) || chat.state === "Asking" || (chat.state === "Closed" && !row.again)) return null;
+  if (!merges(row)) return null;
+  const from = lastIndexOf(entries, "human");
+  // Once merged, until the human's next line.
+  if (from < 0 || lastIndexOf(entries, "merge") > from) return null;
+  const shown = [];
+  let drift = null;
+  let ended = null;
+  const met = [];
+  for (const entry of entries.slice(from + 1)) {
+    if (!entry) continue;
+    const [kind, value] = kindOf(entry);
+    if (kind === "media") shown.push(value);
+    else if (kind === "plan_changed") drift = value;
+    else if (kind === "checks") ended = value;
+    else if (kind === "event" && value.on === "goal.met") met.push(value);
+  }
+  const decided = drift ? drift.added.length + drift.removed.length : 0;
+  if (!shown.length && !decided && !ended) return null;
+  const parts = [el("div", { class: "label" }, "Close the work")];
+  if (shown.length) {
+    parts.push(el("div", { class: "part" }, el("h3", {}, "To see"),
+      el("div", { class: "shown" }, shown.map((one) => {
+        const source = `/media/${encodeURIComponent(one.file)}`;
+        return el("a", { href: source, target: "_blank", rel: "noopener noreferrer", title: one.caption || one.from },
+          one.kind === "video" ? el("span", { class: "video" }, "▶") : el("img", { src: source, alt: one.caption || one.from, loading: "lazy" }));
+      }))));
+  }
+  if (decided) {
+    parts.push(el("div", { class: "part" }, el("h3", {}, "Decided on its own"),
+      el("ul", { class: "plan" },
+        drift.added.map((step) => el("li", { class: "added" }, el("span", { class: "state" }, "+"), step)),
+        drift.removed.map((step) => el("li", { class: "removed" }, el("span", { class: "state" }, "−"), step)))));
+  }
+  if (ended) {
+    const all = ended.concat(...met.map((event) => event.checks));
+    const passed = all.every((check) => check.state === "passed");
+    parts.push(el("div", { class: "part" }, el("h3", {}, passed ? "Checks passed" : "Checks"),
+      checks("", all)));
+  }
+  const button = el("button", { type: "button", class: "merge" }, "Merge");
+  let armed = null;
+  button.addEventListener("click", async () => {
+    // A second tap merges, so that a tap by mistake does not.
+    if (!armed) {
+      button.textContent = "Tap again to merge";
+      button.classList.add("armed");
+      armed = setTimeout(() => {
+        armed = null;
+        button.textContent = "Merge";
+        button.classList.remove("armed");
+      }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    button.disabled = true;
+    button.textContent = "Asking to merge…";
+    if (!(await act({ Merge: { key: chat.key } }))) {
+      armed = null;
+      button.disabled = false;
+      button.textContent = "Merge";
+      button.classList.remove("armed");
+    }
+  });
+  parts.push(button, el("p", { class: "hint" }, "Asks the agent to merge it, as the project merges its work."));
+  return el("div", { class: "entry card closing" }, parts);
 }
 
 // Asks coxd for the pages of the sketch `row` works in, if it works in
@@ -362,6 +444,10 @@ function conversation(entries, agent) {
       case "human":
         speak("YOU", "you");
         nodes.push(el("div", { class: "human" }, value));
+        break;
+      case "merge":
+        speaker = null;
+        nodes.push(el("p", { class: "entry note" }, "You asked the agent to merge what it made."));
         break;
       case "cox":
         speak("COX", "cox");

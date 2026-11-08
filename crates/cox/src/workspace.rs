@@ -1633,6 +1633,28 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Asks the agent of the chat at `index`, in the human's place, to
+    /// merge what it made, the human being done looking at it.
+    pub fn merge(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        if !self.merges(index) {
+            return;
+        }
+        self.show(index, window, cx);
+        if let Some(chat) = self.chats.get(index) {
+            self.tell(ToDaemon::Merge { key: chat.key });
+        }
+        cx.notify();
+    }
+
+    /// Whether the human can ask the agent of the chat at `index` to
+    /// merge what it made: it is not at work, nor a sketch's.
+    fn merges(&self, index: usize) -> bool {
+        self.chats.get(index).is_some_and(|chat| {
+            !crate::daemon::working(chat.state) && crate::daemon::merges(chat.setup.as_ref())
+        })
+    }
+
     /// Whether the human can ask the agent of the chat at `index` to keep
     /// what it learned in the wiki: it is not at work, and has the tool.
     fn saves_to_wiki(&self, index: usize) -> bool {
@@ -2691,6 +2713,7 @@ impl Workspace {
         let endings = self.endings(index);
         let starts_sketch = self.starts_sketch(index);
         let saves_to_wiki = self.saves_to_wiki(index);
+        let merges = self.merges(index);
         let item = |id: &'static str, label: &'static str| crate::ui::menu::item(id, label, "");
         let menu = crate::ui::menu::menu()
             .min_w(px(160.))
@@ -2720,6 +2743,11 @@ impl Workspace {
                 menu.child(item("save-to-wiki", "Save to wiki").on_click(cx.listener(
                     move |workspace, _, window, cx| workspace.save_to_wiki(index, window, cx),
                 )))
+            })
+            .when(merges, |menu| {
+                menu.child(item("merge", "Merge").on_click(
+                    cx.listener(move |workspace, _, window, cx| workspace.merge(index, window, cx)),
+                ))
             })
             .children(endings.into_iter().enumerate().map(|(at, ending)| {
                 crate::ui::menu::item(("sketch-ending", at), ending.name.clone(), "").on_click(

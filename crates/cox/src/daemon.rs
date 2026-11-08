@@ -1224,6 +1224,7 @@ impl Daemon {
                     self.reveals.push(key);
                 }
             }
+            ToDaemon::Merge { key } => self.merge(key),
             ToDaemon::EndSketch { key, ending } => {
                 self.end_sketch_as(key, ending);
             }
@@ -1488,6 +1489,15 @@ impl Daemon {
     /// Sends `text` to the agent of the chat `key` in the human's place,
     /// starting it again first if it is closed and can be.
     fn go_on(&mut self, key: u64, text: &str) {
+        self.start_again(key);
+        if let Some(chat) = self.chat(key) {
+            chat.told(text);
+        }
+    }
+
+    /// Starts the agent of the chat `key` again, if it is closed and can
+    /// be.
+    fn start_again(&mut self, key: u64) {
         let Some(chat) = self.chat(key) else {
             return;
         };
@@ -1499,9 +1509,6 @@ impl Daemon {
                 setup,
             } = again;
             self.start_agent(key, Start::again(&cwd, session, &earlier, setup));
-        }
-        if let Some(chat) = self.chat(key) {
-            chat.told(text);
         }
     }
 
@@ -1965,6 +1972,24 @@ impl Daemon {
         let line = workflow::WIKI_SAVE.say(&[]);
         self.go_on(key, &line);
         true
+    }
+
+    /// Asks the agent of the chat `key`, in the human's place, to merge
+    /// what it made, as the human's workflow says, unless it is at work,
+    /// or is a sketch, which ends its own ways.
+    fn merge(&mut self, key: u64) {
+        let merges = self
+            .chats
+            .iter()
+            .find(|slot| slot.key == key)
+            .is_some_and(|slot| !working(slot.state) && merges(slot.setup.as_ref()));
+        if merges {
+            let line = workflow::CLOSE_MERGE.say(&[]);
+            self.start_again(key);
+            if let Some(chat) = self.chat(key) {
+                chat.merge(&line);
+            }
+        }
     }
 
     /// Whether the human can ask the agent of the chat `key` to keep what
@@ -2705,6 +2730,14 @@ fn make_sketch(sketch: Sketch, from: &Path) -> Result<PathBuf, String> {
     let sketches =
         storage::path(storage::Kept::Sketches).ok_or("Cox cannot tell where to keep sketches")?;
     sketch::make(sketch, from, &sketches)
+}
+
+/// Whether a chat set up as `setup` merges what it made when the human
+/// asks: one that works in the project, and not in a sketch's folder, as
+/// a sketch, which ends its own ways, or a chat a sketch opened.
+#[must_use]
+pub fn merges(setup: Option<&Setup>) -> bool {
+    setup.is_none_or(|setup| setup.folder.is_none() && setup.sketch.is_none())
 }
 
 /// Whether an agent that stands as `state` is at work.
