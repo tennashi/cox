@@ -41,6 +41,7 @@ pub mod profile;
 pub mod quit;
 pub mod relay;
 pub mod scheme;
+mod timeline;
 mod viewport;
 
 use std::os::raw::c_int;
@@ -75,6 +76,7 @@ use crate::events::{
     KeyKind, button_flag, button_type, event_flags, key_character, key_event, mouse_event,
 };
 use crate::profile::Profile;
+pub use crate::timeline::{KeptUp, STUCK_AFTER, Stuck};
 use crate::viewport::{Resizing, StageSize, Viewport};
 
 /// One picture CEF painted: the whole view, or the whole popup, in BGRA,
@@ -223,6 +225,8 @@ struct Shared {
     pacing: frames::Pacing,
     /// What is left of the wheel's scrolling under a pixel.
     wheel: events::Wheel,
+    /// When the wheel scrolled the page, and when CEF painted it, lately.
+    timeline: timeline::Timeline,
 }
 
 impl Shared {
@@ -255,6 +259,7 @@ impl Shared {
             favicons: favicon::Favicons::default(),
             pacing: frames::Pacing::default(),
             wheel: events::Wheel::default(),
+            timeline: timeline::Timeline::default(),
         }
     }
 }
@@ -503,6 +508,28 @@ impl Cef {
     #[must_use]
     pub fn devtools_port(&self) -> Option<u16> {
         self.devtools_port
+    }
+
+    /// How the pictures of each page that is open kept up with the wheel
+    /// over the last `over`, with the page's address, for an agent that
+    /// debugs Cox to ask.
+    #[must_use]
+    pub fn kept_up(&self, over: Duration) -> Vec<(String, KeptUp)> {
+        let open: Vec<SharedRef> = lock(&self.browsers)
+            .all
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect();
+        let now = Instant::now();
+        open.iter()
+            .map(|shared| {
+                let shared = lock(shared);
+                (
+                    shared.navigation.url.clone(),
+                    shared.timeline.kept_up(now, over),
+                )
+            })
+            .collect()
     }
 
     /// Opens a browser showing `url`, whose pages get what `serve` answers
@@ -775,8 +802,12 @@ impl Browser {
     pub fn wheel(&self, x: i32, y: i32, dx: f32, dy: f32, modifiers: Modifiers) {
         let (host, (dx, dy)) = {
             let mut shared = self.shared();
-            shared.pacing.stirred(Instant::now());
+            let now = Instant::now();
+            shared.pacing.stirred(now);
             let whole = shared.wheel.scroll(dx, dy);
+            if whole != (0, 0) {
+                shared.timeline.wheeled(now);
+            }
             (shared.host.clone(), whole)
         };
         if let Some(host) = host

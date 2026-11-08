@@ -38,6 +38,7 @@ use crate::agent::mcp::{self, Answered, INVALID_PARAMS, Serves, answered};
 use crate::workspace::Workspace;
 
 pub mod client;
+mod frames;
 mod state;
 
 pub use state::describe;
@@ -51,6 +52,7 @@ const KEY: &str = "key";
 const TYPE: &str = "type";
 const CLICK: &str = "click";
 const ACTION: &str = "action";
+const FRAMES: &str = "frames";
 
 /// What a tool asks of the window.
 enum Inquiry {
@@ -91,7 +93,12 @@ struct Known {
 /// Opens the socket, answering for `window`, until Cox quits. Without
 /// a place to keep what lasts, or with the socket in another Cox's use,
 /// Cox answers nowhere, and says so.
-pub fn start(window: WindowHandle<Workspace>, devtools: Option<u16>, cx: &mut App) {
+pub fn start(
+    window: WindowHandle<Workspace>,
+    devtools: Option<u16>,
+    cef: cox_browser::Cef,
+    cx: &mut App,
+) {
     let Some(socket) = crate::storage::path(crate::storage::Kept::Inspect) else {
         tracing::error!("Cox cannot be asked how it stands: it has no place for the socket");
         return;
@@ -104,7 +111,10 @@ pub fn start(window: WindowHandle<Workspace>, devtools: Option<u16>, cx: &mut Ap
         }
     };
     let (asks, mut inquiries) = unbounded_channel::<Inquiry>();
-    let inspector = Arc::new(Inspector { asks: asks.clone() });
+    let inspector = Arc::new(Inspector {
+        asks: asks.clone(),
+        cef,
+    });
     let span = tracing::info_span!("inspect");
     let stops = socket.clone();
     thread::spawn(move || {
@@ -215,6 +225,8 @@ fn act(name: &str, window: &mut Window, cx: &mut App) -> Result<String, String> 
 /// The server's tools: each asks the window, and answers what it said.
 struct Inspector {
     asks: UnboundedSender<Inquiry>,
+    /// The browser, whose pages the `frames` tool tells of.
+    cef: cox_browser::Cef,
 }
 
 impl Serves for Inspector {
@@ -256,6 +268,20 @@ impl Inspector {
             ACTION => {
                 let name = string(arguments, "name")?;
                 self.ask(|answer| Inquiry::Action { name, answer }).await
+            }
+            FRAMES => {
+                let over = arguments
+                    .get("seconds")
+                    .and_then(Value::as_f64)
+                    .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+                    .map_or(frames::OVER, |seconds| {
+                        std::time::Duration::from_secs_f64(seconds.min(60.0))
+                    });
+                Ok(Ok(frames::tell(
+                    over,
+                    &crate::busy::seen(over),
+                    &self.cef.kept_up(over),
+                )))
             }
             _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
         }?;
@@ -488,6 +514,23 @@ fn tools() -> Value {
                 "required": ["name"],
             },
         },
+        {
+            "name": FRAMES,
+            "description": "How the window kept up lately, for finding where it stuck as the \
+                human used it, and when, to read what the log said then: each while the \
+                window's thread, which draws the window and on macOS gives CEF its turns, was \
+                busy for 100 ms or more, with what when Cox knows; and each page of the \
+                stages, by its address, with how many times the wheel scrolled it, how many \
+                pictures CEF painted of it, and the waits of 50 ms or more from a turn of the \
+                wheel to the next picture, which the human sees as the page sticking. A page \
+                the wheel cannot scroll further, at its end, paints nothing either.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "seconds": { "type": "number", "description": "How far back to look, up to 60; 10 unless given." },
+                },
+            },
+        },
     ])
 }
 
@@ -510,10 +553,10 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, [STATE, SCREENSHOT, KEY, TYPE, CLICK, ACTION]);
+        assert_eq!(names, [STATE, SCREENSHOT, KEY, TYPE, CLICK, ACTION, FRAMES]);
         for name in names {
             let words: &[&str] = match name {
-                STATE | SCREENSHOT => &[name],
+                STATE | SCREENSHOT | FRAMES => &[name],
                 KEY => &[name, "ctrl-n"],
                 TYPE => &[name, "hello"],
                 CLICK => &[name, "1", "2"],

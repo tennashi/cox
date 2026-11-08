@@ -20,6 +20,7 @@ Usage: cox [--data <dir>] --inspect [<tool> [<arguments>...]]
   type <text>                          types text, a newline pressing Enter
   click <x> <y> [left|right|middle] [<count>]
   action <name>                        dispatches a GPUI action, as cox::NewChat
+  frames [<seconds>]                   where the window and its pages stuck lately, 10 s unless given
 With no tool, the tools are listed, as the Cox asked tells them.";
 
 /// What the client is to call: a tool, with its arguments, and where an
@@ -76,6 +77,15 @@ impl Call {
                 ("click", arguments)
             }
             ["action", name] => ("action", json!({ "name": name })),
+            ["frames"] => ("frames", json!({})),
+            ["frames", seconds] => {
+                let seconds: f64 = seconds
+                    .parse()
+                    .ok()
+                    .filter(|seconds: &f64| seconds.is_finite() && *seconds > 0.0)
+                    .ok_or_else(|| format!("{seconds} is not a number of seconds"))?;
+                ("frames", json!({ "seconds": seconds }))
+            }
             _ => return Err(USAGE.to_owned()),
         };
         Ok(Self::Tool {
@@ -259,6 +269,11 @@ mod tests {
             parse(&["action", "cox::NewChat"]),
             Ok(tool("action", json!({ "name": "cox::NewChat" })))
         );
+        assert_eq!(parse(&["frames"]), Ok(tool("frames", json!({}))));
+        assert_eq!(
+            parse(&["frames", "30"]),
+            Ok(tool("frames", json!({ "seconds": 30.0 })))
+        );
         assert_eq!(
             parse(&["screenshot", "shot.png"]),
             Ok(Call::Tool {
@@ -276,6 +291,10 @@ mod tests {
         assert_eq!(
             parse(&["state", "x"]),
             Err("x is not the number of a chat".to_owned())
+        );
+        assert_eq!(
+            parse(&["frames", "-1"]),
+            Err("-1 is not a number of seconds".to_owned())
         );
     }
 }
