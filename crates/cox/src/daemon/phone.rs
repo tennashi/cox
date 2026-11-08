@@ -48,7 +48,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-mod tailnet;
+pub mod mocks;
+pub(crate) mod tailnet;
 
 use super::Internal;
 use super::push::{self, Notice, Pushed, Pushes, Subscription};
@@ -236,7 +237,7 @@ pub fn link() -> anyhow::Result<String> {
         ));
     };
     let mut told = String::new();
-    if let Err(why) = tailnet::serve(program, port) {
+    if let Err(why) = tailnet::serve(program, port, 443) {
         let _ = write!(told, "The tailnet does not serve the page yet: {why}\n\n");
     }
     if !magic_dns {
@@ -254,12 +255,19 @@ pub fn link() -> anyhow::Result<String> {
     Ok(told)
 }
 
-/// Has the tailnet hand the page on `port` to the phone, and keeps
-/// `owner`, the Mac's login there, as Tailscale says it, every few
-/// minutes, so that a phone of that login comes in.
-pub async fn follow_tailnet(port: u16, owner: Rc<RefCell<Option<tailnet::Owner>>>) {
-    let mut served = false;
-    let mut why_not = None;
+/// Has the tailnet hand the page on `port` to the phone, at the Mac's
+/// name there, and the sketches' mocks on `mocks`, at that port of it,
+/// and keeps `owner`, the Mac's login there, as Tailscale says it, every
+/// few minutes, so that a phone of that login comes in.
+pub async fn follow_tailnet(
+    port: u16,
+    mocks: Option<u16>,
+    owner: Rc<RefCell<Option<tailnet::Owner>>>,
+) {
+    let mut serving: Vec<(u16, u16, bool, Option<String>)> = std::iter::once((port, 443))
+        .chain(mocks.map(|mocks| (mocks, mocks)))
+        .map(|(port, https)| (port, https, false, None))
+        .collect();
     let mut told_dns = false;
     loop {
         let status = tokio::task::spawn_blocking(tailnet::status)
@@ -276,17 +284,20 @@ pub async fn follow_tailnet(port: u16, owner: Rc<RefCell<Option<tailnet::Owner>>
                 }
                 // Again until it does, as once Serve is on in the
                 // tailnet, saying why not only when that changes.
-                if !served {
-                    match tokio::task::spawn_blocking(move || tailnet::serve(program, port)).await {
+                for (port, https, served, why_not) in serving.iter_mut().filter(|one| !one.2) {
+                    let (port, https) = (*port, *https);
+                    match tokio::task::spawn_blocking(move || tailnet::serve(program, port, https))
+                        .await
+                    {
                         Ok(Ok(done)) => {
-                            served = true;
+                            *served = true;
                             tracing::info!("{done}");
                         }
                         Ok(Err(why)) => {
                             if why_not.as_ref() != Some(&why) {
                                 tracing::warn!("the tailnet does not serve the phone: {why}");
                             }
-                            why_not = Some(why);
+                            *why_not = Some(why);
                         }
                         Err(error) => tracing::error!("cannot ask tailscale: {error}"),
                     }
@@ -323,12 +334,14 @@ pub async fn listen(port: u16) -> anyhow::Result<TcpListener> {
 /// Serves the page on `listener` to the phones of the Mac's login in the
 /// tailnet, as `owner` has it, and those paired with `token`, telling the
 /// daemon, on `internal`, of the phones that follow the chats, and, with
-/// `pushes`, pushing to them what it says of the chats.
+/// `pushes`, pushing to them what it says of the chats; the sketches'
+/// mocks it frames being served on `mocks`, if they are (see
+/// [`mocks`]).
 pub async fn serve(
     listener: TcpListener,
     token: String,
     owner: Rc<RefCell<Option<tailnet::Owner>>>,
-    pushes: Option<Pushes>,
+    (pushes, mocks): (Option<Pushes>, Option<u16>),
     internal: UnboundedSender<Internal>,
 ) {
     let pushes = pushes.map(|pushes| {
@@ -345,6 +358,7 @@ pub async fn serve(
         internal,
         last: Cell::new(0),
         pushes,
+        mocks,
     });
     loop {
         let stream = match listener.accept().await {
@@ -388,6 +402,8 @@ struct Page {
     last: Cell<u64>,
     /// coxd's key and the phones it pushes to, unless it pushes nothing.
     pushes: Option<Rc<RefCell<Pushes>>>,
+    /// The port the sketches' mocks are served on, if they are.
+    mocks: Option<u16>,
 }
 
 impl Page {
@@ -420,6 +436,9 @@ impl Page {
         if let Some(file) = path.strip_prefix("/media/") {
             return media(file, request.headers().get(header::RANGE));
         }
+        if path == "/mocks" {
+            return self.mocks(request.uri().query().unwrap_or_default());
+        }
         if path == "/events" {
             let chat = request.uri().query().and_then(|query| {
                 query
@@ -430,8 +449,46 @@ impl Page {
             return self.events(chat);
         }
         match FILES.iter().find(|(at, _, _)| *at == path) {
-            Some((_, kind, text)) => answer(StatusCode::OK, kind, *text),
+            Some((at, kind, text)) => {
+                let mut response = answer(StatusCode::OK, kind, *text);
+                if *at == "/" {
+                    self.frame_mocks(request.headers(), &mut response);
+                }
+                response
+            }
             None => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
+        }
+    }
+
+    /// Lets the page frame the sketches' mocks, served at the Mac's name
+    /// the page came for, with `headers`, on their port.
+    fn frame_mocks(&self, headers: &hyper::HeaderMap, response: &mut Response<Body>) {
+        let (Some(mocks), Some(name)) = (self.mocks, mocks::host_name(headers)) else {
+            return;
+        };
+        let policy =
+            format!("{PAGE_POLICY}; frame-src https://{name}:{mocks} http://{name}:{mocks}");
+        if let Ok(policy) = HeaderValue::from_str(&policy) {
+            response
+                .headers_mut()
+                .insert(header::CONTENT_SECURITY_POLICY, policy);
+        }
+    }
+
+    /// The mocks of the sketch whose folder `query`, `folder=<path>`,
+    /// names, as JSON: the port they are served on, the sketch's name,
+    /// and the paths of its pages.
+    fn mocks(&self, query: &str) -> Response<Body> {
+        let folder = url::form_urlencoded::parse(query.as_bytes())
+            .find_map(|(name, value)| (name == "folder").then(|| value.into_owned()));
+        let told = self.mocks.zip(folder).and_then(|(port, folder)| {
+            let sketches = storage::path(Kept::Sketches)?;
+            let (sketch, pages) = mocks::pages(&sketches, Path::new(&folder))?;
+            Some(serde_json::json!({ "port": port, "sketch": sketch, "pages": pages }))
+        });
+        match told {
+            Some(told) => answer(StatusCode::OK, "application/json", told.to_string()),
+            None => answer(StatusCode::NOT_FOUND, TEXT, "No sketch's mocks"),
         }
     }
 
@@ -533,22 +590,9 @@ impl Page {
         response
     }
 
-    /// Whether `request` is the human's: of the Mac's login in the
-    /// tailnet, or holding the secret in its cookie.
+    /// Whether `request` is the human's (see [`paired`]).
     fn paired(&self, request: &Request<Incoming>) -> bool {
-        if let Some(owner) = &*self.owner.borrow()
-            && tailnet::of_the_owner(request.headers(), owner)
-        {
-            return true;
-        }
-        request
-            .headers()
-            .get_all(header::COOKIE)
-            .iter()
-            .filter_map(|cookies| cookies.to_str().ok())
-            .flat_map(|cookies| cookies.split(';'))
-            .filter_map(|cookie| cookie.trim().strip_prefix(COOKIE)?.strip_prefix('='))
-            .any(|token| same(token.as_bytes(), self.token.as_bytes()))
+        paired(request.headers(), &self.owner, &self.token, 443)
     }
 
     /// The stream of events of a phone that follows the chats, watching
@@ -615,6 +659,29 @@ async fn push_all(pushes: Rc<RefCell<Pushes>>, mut notices: UnboundedReceiver<No
             });
         }
     }
+}
+
+/// Whether a request with `headers` is the human's: of the Mac's login
+/// in the tailnet, for its port `https` there, as `owner` has it, or
+/// holding the secret, `token`, in its cookie.
+fn paired(
+    headers: &hyper::HeaderMap,
+    owner: &RefCell<Option<tailnet::Owner>>,
+    token: &str,
+    https: u16,
+) -> bool {
+    if let Some(owner) = &*owner.borrow()
+        && tailnet::of_the_owner(headers, owner, https)
+    {
+        return true;
+    }
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|cookies| cookies.to_str().ok())
+        .flat_map(|cookies| cookies.split(';'))
+        .filter_map(|cookie| cookie.trim().strip_prefix(COOKIE)?.strip_prefix('='))
+        .any(|given| same(given.as_bytes(), token.as_bytes()))
 }
 
 /// Whether `request` comes from the page itself, and not from another
@@ -742,17 +809,18 @@ fn answer(status: StatusCode, kind: &'static str, text: impl Into<Bytes>) -> Res
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
     );
-    // What the agents write shows as text: the page runs only its own
-    // script.
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; \
-             frame-ancestors 'none'",
-        ),
+        HeaderValue::from_static(PAGE_POLICY),
     );
     response
 }
+
+/// What the page may do: what the agents write shows as text, so the
+/// page runs only its own script, and no page frames it, a sketch's mock
+/// included.
+const PAGE_POLICY: &str = "default-src 'self'; img-src 'self' data:; object-src 'none'; \
+    base-uri 'none'; frame-ancestors 'none'";
 
 /// What an answer holds: a file whole, or the stream of events.
 enum Body {
@@ -901,7 +969,7 @@ mod tests {
                     host: "mac.tail1234.ts.net".to_owned(),
                     login: "me@github".to_owned(),
                 })));
-                tokio::task::spawn_local(serve(listener, "secret".to_owned(), owner, None, internal));
+                tokio::task::spawn_local(serve(listener, "secret".to_owned(), owner, (None, None), internal));
 
                 let unpaired = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", "").await;
                 assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
@@ -1009,7 +1077,7 @@ mod tests {
                 listener,
                 "secret".to_owned(),
                 Rc::new(RefCell::new(None)),
-                Some(pushes),
+                (Some(pushes), None),
                 internal,
             ));
             assert!(

@@ -28,6 +28,9 @@ const head = {
 };
 
 let listing = null;
+// The pages of the sketch the chat shown works in, for the human to try
+// them: { key, asked, told: { port, sketch, pages } }, as coxd lists them.
+let mocks = null;
 let chat = null; // { key, entries, state, steers, title, goal }
 let events = null;
 let drawing = false;
@@ -104,6 +107,8 @@ function hear(told) {
     const patch = told.Patch.patch;
     chat.entries.length = patch.len;
     for (const [at, entry] of patch.entries) chat.entries[at] = entry;
+    // A turn that ended may have made the sketch's pages.
+    if (working(chat.state) && !working(patch.state) && mocks) mocks.asked = false;
     chat.state = patch.state;
     chat.steers = patch.steers;
     chat.title = patch.title;
@@ -225,12 +230,77 @@ function drawChat() {
   if (goal) nodes.push(el("div", { class: "goal" }, "◎ ", goal.startsWith("$ ") ? el("code", {}, goal) : goal));
   if (!chat.came) nodes.push(el("p", { class: "empty" }, "Reading the conversation…"));
   nodes.push(...conversation(chat.entries, agent));
+  // The sketch's pages, where the human reads on, to try them.
+  if (row) {
+    findMocks(row);
+    const tried = mockBar();
+    if (tried) nodes.push(tried);
+  }
   if (chat.state === "Busy" || chat.state === "Checking" || chat.state === "Stopping") {
     nodes.push(el("p", { class: "waits" }, el("span", { class: "dot busy" }),
       chat.state === "Checking" ? "Checking the turn…" : `${titleCase(agent)} is at work…`));
   }
   main.replaceChildren(...nodes);
   if (atEnd) window.scrollTo(0, document.body.scrollHeight);
+}
+
+// Asks coxd for the pages of the sketch `row` works in, if it works in
+// one, unless it was asked since the chat was shown or its turn last
+// ended.
+function findMocks(row) {
+  // A sketch's chats work in its folder, as its setup says.
+  const folder = (row.setup && row.setup.folder) || row.folder;
+  if (!folder) return;
+  if (mocks && mocks.key === row.key && mocks.asked) return;
+  mocks = { key: row.key, asked: true, told: mocks && mocks.key === row.key ? mocks.told : null };
+  const asked = mocks;
+  fetch(`/mocks?folder=${encodeURIComponent(folder)}`)
+    .then((answer) => (answer.ok ? answer.json() : null))
+    .catch(() => null)
+    .then((told) => {
+      if (mocks !== asked) return;
+      const before = JSON.stringify(asked.told);
+      asked.told = told;
+      if (JSON.stringify(told) !== before && chat && chat.key === asked.key) draw();
+    });
+}
+
+// The pages of the sketch, for the human to try, each a chip.
+function mockBar() {
+  const told = mocks && chat && mocks.key === chat.key && mocks.told;
+  if (!told || !told.pages.length) return null;
+  return el("div", { class: "mocks" },
+    el("span", { class: "label" }, "Try it"),
+    told.pages.map((page) => el("button", { type: "button", class: "chip", onclick: () => openMock(told, page) }, page)));
+}
+
+// Where coxd serves `page` of the sketch `told` names: the Mac's name the
+// page came for, at the port of the mocks, another origin than the page.
+function mockAddress(told, page) {
+  const path = [told.sketch, ...page.split("/")].map(encodeURIComponent).join("/");
+  return `${location.protocol}//${location.hostname}:${told.port}/${path}`;
+}
+
+// Shows `page` of the sketch over the chat, in a frame, as the human
+// tries it: it runs as it would on its own, but cannot reach the page
+// that frames it.
+function openMock(told, page) {
+  const address = mockAddress(told, page);
+  const frame = el("iframe", {
+    src: address,
+    title: page,
+    sandbox: "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads",
+  });
+  const close = () => { viewer.remove(); document.body.classList.remove("trying"); };
+  const viewer = el("div", { id: "mock", role: "dialog", "aria-label": page },
+    el("div", { class: "bar" },
+      el("button", { type: "button", "aria-label": "Back to the chat", onclick: close }, "‹"),
+      el("span", { class: "page" }, page),
+      el("button", { type: "button", "aria-label": "Load again", onclick: () => { frame.src = address; } }, "↻"),
+      el("a", { href: address, target: "_blank", rel: "noopener noreferrer", "aria-label": "Open on its own" }, "↗")),
+    frame);
+  document.body.classList.add("trying");
+  document.body.append(viewer);
 }
 
 function working(state) {
@@ -684,6 +754,9 @@ head.back.addEventListener("click", (event) => {
   location.hash = "";
 });
 window.addEventListener("hashchange", () => {
+  const trying = document.getElementById("mock");
+  if (trying) trying.remove();
+  document.body.classList.remove("trying");
   opened.clear();
   compose.line.value = "";
   hold(null);

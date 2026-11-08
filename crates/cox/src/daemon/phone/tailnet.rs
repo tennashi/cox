@@ -93,31 +93,33 @@ fn status_in(bytes: &[u8]) -> Option<Status> {
 }
 
 /// Whether a request with `headers` is the human's, of `owner`'s login
-/// and for the Mac's name in the tailnet, as `tailscale serve` passes
-/// one on.
-pub fn of_the_owner(headers: &HeaderMap, owner: &Owner) -> bool {
+/// and for the Mac's name in the tailnet at the port `https`, as
+/// `tailscale serve` passes one on.
+pub fn of_the_owner(headers: &HeaderMap, owner: &Owner, https: u16) -> bool {
     let login = headers.get(LOGIN).and_then(|login| login.to_str().ok());
     let host = headers
         .get(header::HOST)
-        .and_then(|host| host.to_str().ok())
-        .map(|host| host.strip_suffix(":443").unwrap_or(host));
-    login == Some(owner.login.as_str()) && host == Some(owner.host.as_str())
+        .and_then(|host| host.to_str().ok());
+    let at_port = format!("{}:{https}", owner.host);
+    let came = host.is_some_and(|host| host == at_port || (https == 443 && host == owner.host));
+    login == Some(owner.login.as_str()) && came
 }
 
-/// How the tailnet hands the page on `port` to the phone.
+/// How the tailnet hands what coxd serves on `port` to the phone.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Served {
-    /// `tailscale serve` passes `https://<host>/` on to the page.
+    /// `tailscale serve` passes it on already.
     Already,
-    /// Something else is served at `https://<host>/`, which coxd leaves.
+    /// Something else is served at the address it would be, which coxd
+    /// leaves.
     Other(String),
     /// Nothing is served there.
     Nothing,
 }
 
-/// What `tailscale serve status --json` says, in `bytes`, of how the page
-/// on `port` is served.
-fn served_in(bytes: &[u8], port: u16) -> Served {
+/// What `tailscale serve status --json` says, in `bytes`, of how what
+/// coxd serves on `port` is served, at the port `https` of the tailnet.
+fn served_in(bytes: &[u8], port: u16, https: u16) -> Served {
     let Ok(config) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return Served::Nothing;
     };
@@ -145,7 +147,7 @@ fn served_in(bytes: &[u8], port: u16) -> Served {
             if proxy.is_some_and(|proxy| page.iter().any(|page| page == proxy)) {
                 return Served::Already;
             }
-            if path == "/" && at.ends_with(":443") {
+            if path == "/" && at.ends_with(&format!(":{https}")) {
                 root = Some(format!("https://{}/", at.trim_end_matches(":443")));
             }
         }
@@ -153,32 +155,38 @@ fn served_in(bytes: &[u8], port: u16) -> Served {
     root.map_or(Served::Nothing, Served::Other)
 }
 
-/// Has `tailscale serve` hand the page on `port` to the tailnet, unless
-/// it does, through `program`: what coxd did, in words, or why it did
-/// not.
+/// Has `tailscale serve` hand what coxd serves on `port` to the
+/// tailnet, at its port `https`, unless it does, through `program`: what
+/// coxd did, in words, or why it did not.
 ///
 /// # Errors
 ///
 /// When something else is served at the Mac's name, or `tailscale serve`
 /// fails, as in a tailnet that has Serve off, when it says where to turn
 /// it on.
-pub fn serve(program: &str, port: u16) -> Result<&'static str, String> {
+pub fn serve(program: &str, port: u16, https: u16) -> Result<String, String> {
     let status = run(program, &["serve", "status", "--json"], ASKS)
         .filter(|ran| ran.ok)
-        .map_or(Served::Nothing, |ran| served_in(&ran.out, port));
+        .map_or(Served::Nothing, |ran| served_in(&ran.out, port, https));
+    let at = if https == 443 {
+        String::new()
+    } else {
+        format!("--https={https} ")
+    };
     match status {
-        Served::Already => return Ok("tailscale serves the page already"),
-        Served::Other(at) => {
+        Served::Already => return Ok(format!("tailscale serves port {port} already")),
+        Served::Other(there) => {
             return Err(format!(
-                "tailscale serves something else at {at}, which coxd leaves: \
-                 run `tailscale serve --bg {port}` to serve the page there"
+                "tailscale serves something else at {there}, which coxd leaves: \
+                 run `tailscale serve --bg {at}{port}` to serve port {port} there"
             ));
         }
         Served::Nothing => {}
     }
-    let port = port.to_string();
-    match run(program, &["serve", "--bg", &port], ASKS) {
-        Some(ran) if ran.ok => Ok("tailscale serves the page now"),
+    let https = format!("--https={https}");
+    let port_said = port.to_string();
+    match run(program, &["serve", "--bg", &https, &port_said], ASKS) {
+        Some(ran) if ran.ok => Ok(format!("tailscale serves port {port} now")),
         Some(ran) if ran.ended => Err(said(&ran)),
         // As in a tailnet with Serve off, which it says where to turn on.
         Some(ran) => Err(format!("`tailscale serve` waits: {}", said(&ran))),
@@ -306,38 +314,58 @@ mod tests {
         };
         assert!(of_the_owner(
             &headers("mac.tail1234.ts.net", Some("someone@github")),
-            &owner
+            &owner,
+            443
         ));
         assert!(of_the_owner(
             &headers("mac.tail1234.ts.net:443", Some("someone@github")),
-            &owner
+            &owner,
+            443
         ));
         // Someone else the Mac is shared with.
         assert!(!of_the_owner(
             &headers("mac.tail1234.ts.net", Some("other@github")),
-            &owner
+            &owner,
+            443
         ));
         // A page whose own name was turned to 127.0.0.1.
         assert!(!of_the_owner(
             &headers("evil.example:7421", Some("someone@github")),
-            &owner
+            &owner,
+            443
         ));
-        assert!(!of_the_owner(&headers("mac.tail1234.ts.net", None), &owner));
+        assert!(!of_the_owner(
+            &headers("mac.tail1234.ts.net", None),
+            &owner,
+            443
+        ));
+        // The sketches, served at a port of their own.
+        assert!(of_the_owner(
+            &headers("mac.tail1234.ts.net:7422", Some("someone@github")),
+            &owner,
+            7422
+        ));
+        assert!(!of_the_owner(
+            &headers("mac.tail1234.ts.net", Some("someone@github")),
+            &owner,
+            7422
+        ));
     }
 
     #[test]
     fn tells_how_the_page_is_served() {
         let served = br#"{"TCP": {"443": {"HTTPS": true}}, "Web": {"mac.tail1234.ts.net:443":
             {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7421"}}}}}"#;
-        assert_eq!(served_in(served, 7421), Served::Already);
+        assert_eq!(served_in(served, 7421, 443), Served::Already);
+        assert_eq!(served_in(served, 7422, 7422), Served::Nothing);
         let other = br#"{"Web": {"mac.tail1234.ts.net:443":
             {"Handlers": {"/": {"Proxy": "http://127.0.0.1:3000"}}}}}"#;
         assert_eq!(
-            served_in(other, 7421),
+            served_in(other, 7421, 443),
             Served::Other("https://mac.tail1234.ts.net/".to_owned())
         );
-        assert_eq!(served_in(b"{}", 7421), Served::Nothing);
-        assert_eq!(served_in(b"", 7421), Served::Nothing);
+        assert_eq!(served_in(b"{}", 7421, 443), Served::Nothing);
+        assert_eq!(served_in(b"", 7421, 443), Served::Nothing);
     }
 
     #[test]

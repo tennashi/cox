@@ -78,9 +78,11 @@ pub fn run(
                             })
                             .ok();
                         let owner = std::rc::Rc::new(std::cell::RefCell::new(None));
+                        let mocks = serve_mocks(port, &token, &owner).await;
                         if super::phone::tailscale() {
                             tokio::task::spawn_local(super::phone::follow_tailnet(
                                 port,
+                                mocks,
                                 std::rc::Rc::clone(&owner),
                             ));
                         }
@@ -88,7 +90,7 @@ pub fn run(
                             phone,
                             token,
                             owner,
-                            pushes,
+                            (pushes, mocks),
                             internal.clone(),
                         ));
                     }
@@ -116,6 +118,33 @@ pub fn run(
     })
 }
 
+/// Serves the sketches' mocks to the phone, on the port after the page's
+/// `port`, with the page's `token` and `owner`: the port, unless it
+/// cannot be listened on.
+async fn serve_mocks(
+    port: u16,
+    token: &str,
+    owner: &std::rc::Rc<std::cell::RefCell<Option<super::phone::tailnet::Owner>>>,
+) -> Option<u16> {
+    use super::phone::{listen, mocks};
+    let mocks = mocks::port(port)?;
+    match listen(mocks).await {
+        Ok(listener) => {
+            tokio::task::spawn_local(mocks::serve(
+                listener,
+                token.to_owned(),
+                std::rc::Rc::clone(owner),
+                port,
+                mocks,
+            ));
+            Some(mocks)
+        }
+        Err(error) => {
+            tracing::warn!("the sketches are not served to the phone: {error:#}");
+            None
+        }
+    }
+}
 /// Listens on `socket`, unless a coxd answers there already: a socket no
 /// coxd answers at was left by one that ended.
 fn listen(socket: &Path) -> anyhow::Result<UnixListener> {
