@@ -26,9 +26,9 @@ const EVERY = 2000;
 const NS = "http://www.w3.org/2000/svg";
 const DEFS =
   '<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker>' +
-  '<marker id="arrlit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--hold)"/></marker>' +
+  '<marker id="arrlit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>' +
   '<marker id="back" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="currentColor" stroke-width="1.4"/></marker>' +
-  '<marker id="backlit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="var(--hold)" stroke-width="1.6"/></marker></defs>';
+  '<marker id="backlit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="var(--accent)" stroke-width="1.6"/></marker></defs>';
 
 const app = document.getElementById("app");
 let data = null;
@@ -921,8 +921,8 @@ function renderLeaf(tierId, id) {
   app.innerHTML = `${headEl()}${mapsEl()}${crumbs(chain)}
     <div class="says"><b style="color:var(--foreground);font-weight:500">${esc(p.name)}.</b> ${esc(p.says)}${p.each ? ` <span class="each" style="font-size:10.5px;border:1px solid var(--border);border-radius:999px;padding:0 7px">${esc(p.each)}</span>` : ""}</div>
     ${p.kinds && p.kinds.length ? `<div class="says" style="font-family:var(--mono);font-size:11.5px">${p.kinds.map(esc).join(" · ")}</div>` : ""}
-    ${p.note ? `<div class="says" style="color:var(--note)"><b>note</b> ${esc(p.note)}</div>` : ""}
-    ${f.stale.length ? `<div class="says" style="color:var(--stale)"><b>stale</b> the project no longer has ${f.stale.map(esc).join(", ")}; an agent is to bring the map up to date</div>` : ""}
+    ${p.note ? `<div class="says" style="color:var(--dim)"><b>note</b> ${esc(p.note)}</div>` : ""}
+    ${f.stale.length ? `<div class="says" style="color:var(--failed)"><b>stale</b> the project no longer has ${f.stale.map(esc).join(", ")}; an agent is to bring the map up to date</div>` : ""}
     ${flowEls}
     <div class="leaf">${holds || '<div class="says">This box holds no paths.</div>'}</div>
     <div class="foot">${flow ? "<span>a column is a function the flow runs, as the language server says of where each step is made; it opens on a tab</span><span>·</span><span>← → go from step to step</span><span>·</span>" : ""}<span>a file, or a symbol in it, opens on a tab of the stage, at its line</span><span>·</span><span>the symbols and their uses are as the project's language server says</span></div>`;

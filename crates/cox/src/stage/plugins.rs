@@ -60,6 +60,10 @@
 //!   the folder, and `triggers/tried/<card>` tells how it went (see
 //!   [`crate::trigger::discuss`]).
 //!
+//! A plugin draws in the window's colors by linking the stylesheet at
+//! `cox://api/theme.css`, whose custom properties on `:root` are the
+//! colors of [`crate::ui::theme`], named after them, as `--asking-ground`.
+//!
 //! A plugin shows a chat of the window by going to `cox://chat/<key>`,
 //! the number the Activity page is told it by.
 //!
@@ -226,6 +230,12 @@ impl Plugins {
     fn resource(&self, url: &str) -> Option<Resource> {
         let (host, path) = split(url)?;
         if host == "api" {
+            if path == "theme.css" {
+                return Some(Resource {
+                    mime: "text/css".to_owned(),
+                    body: crate::ui::theme::css().into_bytes(),
+                });
+            }
             return self.api(path);
         }
         let path = if path.is_empty() || path.ends_with('/') {
