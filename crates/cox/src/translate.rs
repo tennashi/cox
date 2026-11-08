@@ -420,6 +420,7 @@ impl Worker {
             let start = Start::New {
                 instructions: None,
                 setup: Some(setup()),
+                also: Vec::new(),
             };
             let agent = crate::chat::launcher::spawn(known, self.cwd.clone(), Vec::new(), start);
             self.agent = Some((named.map(str::to_owned), agent));

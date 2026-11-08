@@ -162,8 +162,21 @@ struct Project {
     id: Option<ProjectId>,
     name: String,
     folder: PathBuf,
+    /// The other folders its chats work in too.
+    also: Vec<PathBuf>,
     /// How many chats were opened in it, which numbers the next.
     opened: usize,
+}
+
+impl Project {
+    /// Its folders but `cwd`, which a chat working there works in too.
+    fn beside(&self, cwd: &Path) -> Vec<PathBuf> {
+        std::iter::once(&self.folder)
+            .chain(&self.also)
+            .filter(|folder| *folder != cwd)
+            .cloned()
+            .collect()
+    }
 }
 
 /// How far a sketch the human ends is on its way to its end.
@@ -190,6 +203,9 @@ struct Slot {
     goal: Option<Goal>,
     parent: Option<u64>,
     setup: Option<Setup>,
+    /// The folder it works in, when it is not its project's, as one that
+    /// opened before another folder of the project became the project's.
+    folder: Option<PathBuf>,
     ending: Option<(Ends, workflow::Ending)>,
     /// The chat, once it was read or opened in this run.
     chat: Option<Chat>,
@@ -240,6 +256,7 @@ impl Slot {
             setup: self.setup.clone(),
             ending: self.ending.is_some(),
             agent,
+            folder: self.folder.clone(),
         }
     }
 }
@@ -403,6 +420,7 @@ impl Daemon {
                 id: None,
                 name: COX.to_owned(),
                 folder: home,
+                also: Vec::new(),
                 opened: 0,
             }],
             chats: Vec::new(),
@@ -449,6 +467,7 @@ impl Daemon {
                 id: Some(project.id),
                 name: project.name,
                 folder: project.folder,
+                also: project.also,
                 opened: 0,
             }));
         for chat in chats {
@@ -488,6 +507,7 @@ impl Daemon {
                 goal: chat.goal,
                 parent,
                 setup,
+                folder: chat.folder,
                 ending: None,
                 chat: None,
             };
@@ -613,7 +633,22 @@ impl Daemon {
         slot.setup
             .as_ref()
             .and_then(|setup| setup.folder.clone())
+            .or_else(|| slot.folder.clone())
             .unwrap_or_else(|| self.projects[slot.project].folder.clone())
+    }
+
+    /// The other folders of its project the chat of `slot` works in too,
+    /// beside its own: none for a sketch's, which works apart from the
+    /// project.
+    fn also(&self, slot: &Slot) -> Vec<PathBuf> {
+        if slot
+            .setup
+            .as_ref()
+            .is_some_and(|setup| setup.folder.is_some())
+        {
+            return Vec::new();
+        }
+        self.projects[slot.project].beside(&self.cwd(slot))
     }
 
     /// Reads the closed chat `key` from what is kept of it, unless it was
@@ -746,6 +781,7 @@ impl Daemon {
             id,
             name,
             folder,
+            also: Vec::new(),
             opened: 0,
         });
         self.projects.len() - 1
@@ -769,6 +805,12 @@ impl Daemon {
         from: Option<(u64, Option<ChatId>)>,
         setup: Option<Setup>,
     ) -> u64 {
+        // A chat opened from a chat that keeps to another folder of the
+        // project works there too.
+        let folder = from
+            .and_then(|(parent, _)| self.slot(parent))
+            .and_then(|parent| parent.folder.clone())
+            .filter(|_| setup.as_ref().is_none_or(|setup| setup.folder.is_none()));
         let project = &mut self.projects[index];
         if index == 0 {
             // The agent's session fails to open, and says so, if the home
@@ -777,7 +819,14 @@ impl Daemon {
                 tracing::error!("cannot make {}: {error}", project.folder.display());
             }
         }
-        let instructions = Instructions::read(&project.folder);
+        let cwd = folder.clone().unwrap_or_else(|| project.folder.clone());
+        let instructions = Instructions::read(&cwd);
+        let also = match &setup {
+            Some(Setup {
+                folder: Some(_), ..
+            }) => Vec::new(),
+            _ => project.beside(&cwd),
+        };
         project.opened += 1;
         let name = format!("Chat {}", project.opened);
         let project_id = project.id;
@@ -792,12 +841,17 @@ impl Daemon {
         }
         .inspect_err(|error| tracing::error!("the chat is not kept: {error:#}"))
         .ok();
+        if let (Some(kept), Some(folder)) = (kept, &folder)
+            && let Err(error) = self.store.keep_folder(kept, Some(folder))
+        {
+            tracing::error!("the chat's folder is not kept: {error:#}");
+        }
         let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
         let key = self.next_key();
         let agents = self.spawns.agents();
         let chosen = agent_of(&agents, kept, &self.store);
         let starts = self.spawns.starts(&chosen);
-        let conversation = Chat::opening(&instructions.paths(), setup.as_ref());
+        let conversation = Chat::opening(&instructions.paths(), setup.as_ref(), &also);
         let chat = Chat::new(
             key,
             conversation,
@@ -818,6 +872,7 @@ impl Daemon {
             goal: None,
             parent: from.map(|(parent, _)| parent),
             setup: setup.clone(),
+            folder,
             ending: None,
             chat: Some(chat),
         });
@@ -831,6 +886,7 @@ impl Daemon {
             Start::New {
                 instructions: Some(instructions),
                 setup,
+                also: Vec::new(),
             },
         );
         key
@@ -844,6 +900,7 @@ impl Daemon {
             return;
         };
         let cwd = start_cwd(&start).unwrap_or_else(|| self.cwd(slot));
+        let start = start.working_also(self.also(slot));
         let drives = start
             .setup()
             .is_none_or(|setup| setup.stage == StageUse::Drive);
@@ -1044,6 +1101,9 @@ impl Daemon {
                 }
             }
             ToDaemon::MoveProject { project, folder } => self.move_project(project, &folder),
+            ToDaemon::AddFolder { project, folder } => self.add_folder(project, folder),
+            ToDaemon::RemoveFolder { project, folder } => self.remove_folder(project, &folder),
+            ToDaemon::MakePrimary { project, folder } => self.make_primary(project, &folder),
             ToDaemon::Sync { id } => {
                 // What came before is done, but for what it changed, which
                 // is told before this.
@@ -1059,11 +1119,7 @@ impl Daemon {
     /// unless it works in a sketch's folder. Nothing moves while its
     /// folder is still there, or while one of its chats is at work.
     fn move_project(&mut self, project: ProjectId, folder: &Path) {
-        let Some(index) = self
-            .projects
-            .iter()
-            .position(|kept| kept.id == Some(project))
-        else {
+        let Some(index) = self.index_of(project) else {
             return;
         };
         let from = self.projects[index].folder.clone();
@@ -1116,7 +1172,9 @@ impl Daemon {
         let mut sketches = Vec::new();
         let store = Rc::clone(&self.store);
         for slot in self.chats.iter_mut().chain(&mut self.archived) {
-            if slot.project != index {
+            // A chat that keeps to another folder of the project stays
+            // there.
+            if slot.project != index || slot.folder.is_some() {
                 continue;
             }
             // A chat of a sketch works in the sketch's folder, which
@@ -1158,6 +1216,78 @@ impl Daemon {
         for key in moving {
             self.read_again(key);
         }
+    }
+
+    /// The chats of the project kept as `project` work in `folder` too,
+    /// beside its own, from the next time each starts its agent.
+    fn add_folder(&mut self, project: ProjectId, folder: PathBuf) {
+        let Some(index) = self.index_of(project) else {
+            return;
+        };
+        if let Err(error) = self.store.add_folder(project, &folder) {
+            tracing::error!("the folder is not added: {error:#}");
+            return;
+        }
+        tracing::info!(folder = %folder.display(), "a folder is added to the project");
+        self.projects[index].also.push(folder);
+        self.tell_listing();
+    }
+
+    /// The chats of the project kept as `project` work in `folder`, one
+    /// beside its own, no more, from the next time each starts its agent.
+    /// A chat that keeps to it stays there.
+    fn remove_folder(&mut self, project: ProjectId, folder: &Path) {
+        let Some(index) = self.index_of(project) else {
+            return;
+        };
+        if let Err(error) = self.store.remove_folder(project, folder) {
+            tracing::error!("the folder is not taken out: {error:#}");
+            return;
+        }
+        tracing::info!(folder = %folder.display(), "a folder is taken out of the project");
+        self.projects[index].also.retain(|also| also != folder);
+        self.tell_listing();
+    }
+
+    /// `folder`, one beside the project's own, is the project's from now
+    /// on: the chats it opens work there, and those it has go on where
+    /// they work, each keeping to its folder.
+    fn make_primary(&mut self, project: ProjectId, folder: &Path) {
+        let Some(index) = self.index_of(project) else {
+            return;
+        };
+        let from = self.projects[index].folder.clone();
+        if let Err(error) = self.store.make_primary(project, folder) {
+            tracing::error!("the folder is not made the project's: {error:#}");
+            return;
+        }
+        tracing::info!(from = %from.display(), to = %folder.display(), "the project works in another folder");
+        let kept = &mut self.projects[index];
+        folder.clone_into(&mut kept.folder);
+        for also in &mut kept.also {
+            if also == folder {
+                from.clone_into(also);
+            }
+        }
+        // As the store keeps them: each chat goes on in its folder.
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            if slot.project != index {
+                continue;
+            }
+            slot.folder = match slot.folder.take() {
+                None => Some(from.clone()),
+                Some(own) if own == folder => None,
+                Some(own) => Some(own),
+            };
+        }
+        self.tell_listing();
+    }
+
+    /// The project kept as `project`, by its place in the projects.
+    fn index_of(&self, project: ProjectId) -> Option<usize> {
+        self.projects
+            .iter()
+            .position(|kept| kept.id == Some(project))
     }
 
     /// The human sent `text` in the chat `key`: a closed chat's agent
@@ -2192,6 +2322,7 @@ impl Daemon {
                     name: project.name.clone(),
                     folder: project.folder.clone(),
                     missing: project.id.is_some() && !project.folder.is_dir(),
+                    also: project.also.clone(),
                 })
                 .collect(),
             chats: self

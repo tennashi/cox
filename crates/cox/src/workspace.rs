@@ -83,7 +83,7 @@ use crate::ui::theme::{
 };
 use crate::ui::{card, tip};
 use crate::workflow;
-use project_card::{MoveTo, ProjectCard, Standing};
+use project_card::{Edit, ProjectCard, Standing};
 
 actions!(
     cox,
@@ -173,6 +173,8 @@ pub struct Project {
     icon: Option<Arc<Image>>,
     /// Whether its folder is not there, as when the human moved it.
     missing: bool,
+    /// The other folders its chats work in too.
+    also: Vec<PathBuf>,
 }
 
 impl Project {
@@ -231,6 +233,8 @@ pub struct Chat {
     ending: bool,
     /// The id of the agent it talks to.
     agent: String,
+    /// The folder it works in, when it is not its project's.
+    folder: Option<PathBuf>,
     /// Its view, once the window showed it, or something asked of its
     /// stage.
     view: Option<Entity<ChatView>>,
@@ -254,6 +258,7 @@ impl Chat {
             setup,
             ending,
             agent,
+            folder,
         } = row;
         Self {
             key,
@@ -270,6 +275,7 @@ impl Chat {
             setup,
             ending,
             agent,
+            folder,
             view,
         }
     }
@@ -492,6 +498,7 @@ impl Workspace {
                 last: None,
                 icon: None,
                 missing: false,
+                also: Vec::new(),
             }],
             chats: List::new(),
             archived: Vec::new(),
@@ -692,6 +699,7 @@ impl Workspace {
                         .unwrap_or_else(|| crate::project_icon::read(id))
                 }),
                 missing: row.missing,
+                also: row.also,
             })
             .collect();
     }
@@ -708,7 +716,10 @@ impl Workspace {
             .filter(|(_, project)| project.id.is_some())
             .filter_map(|(index, project)| {
                 let now = projects.iter().find(|row| row.id == project.id)?;
-                (now.folder != project.folder).then(|| (index, project.folder.clone()))
+                // A folder that stays one of the project's, as once
+                // another became the project's, did not move.
+                let kept = now.folder == project.folder || now.also.contains(&project.folder);
+                (!kept).then(|| (index, project.folder.clone()))
             })
             .collect();
         for (index, from) in moved {
@@ -738,15 +749,18 @@ impl Workspace {
                 .setup
                 .as_ref()
                 .is_none_or(|setup| setup.folder.is_none())
+                && chat.folder.is_none()
                 && self.projects[chat.project].missing,
         }
     }
 
-    /// Where `chat` works: the folder of its sketch, or its project's.
+    /// Where `chat` works: the folder of its sketch, or the folder of its
+    /// project it keeps to, or its project's.
     fn cwd_of(&self, chat: &Chat) -> PathBuf {
         chat.setup
             .as_ref()
             .and_then(|setup| setup.folder.clone())
+            .or_else(|| chat.folder.clone())
             .unwrap_or_else(|| self.projects[chat.project].folder.clone())
     }
 
@@ -1356,6 +1370,7 @@ impl Workspace {
         Standing {
             folder: project.folder.clone(),
             missing: project.missing,
+            also: project.also.clone(),
             at_work: self
                 .chats
                 .iter()
@@ -1386,11 +1401,13 @@ impl Workspace {
         let name = project.name.to_string();
         let standing = self.standing(index);
         let card = cx.new(|cx| ProjectCard::new(id, name, standing, window, cx));
-        let moves = cx.subscribe(&card, |workspace, card, MoveTo(folder), cx| {
+        let edits = cx.subscribe(&card, |workspace, card, edit: &Edit, cx| {
             let project = card.read(cx).project();
-            workspace.tell(ToDaemon::MoveProject {
-                project,
-                folder: folder.clone(),
+            workspace.tell(match edit.clone() {
+                Edit::MoveTo(folder) => ToDaemon::MoveProject { project, folder },
+                Edit::Add(folder) => ToDaemon::AddFolder { project, folder },
+                Edit::Remove(folder) => ToDaemon::RemoveFolder { project, folder },
+                Edit::MakePrimary(folder) => ToDaemon::MakePrimary { project, folder },
             });
         });
         let dismissed = cx.subscribe_in(
@@ -1401,7 +1418,7 @@ impl Workspace {
             },
         );
         window.focus(&card.focus_handle(cx));
-        self.project_card = Some((card, [moves, dismissed]));
+        self.project_card = Some((card, [edits, dismissed]));
         cx.notify();
     }
 

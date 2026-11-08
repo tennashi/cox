@@ -276,6 +276,7 @@ fn talk(card: &Card, context: &str, lines: &Receiver<String>, told: &Mutex<Told>
     let start = Start::New {
         instructions: None,
         setup: Some(setup),
+        also: Vec::new(),
     };
     let mut agent = crate::chat::launcher::spawn(known, card.folder.clone(), Vec::new(), start);
     while let Ok(prompt) = lines.recv() {
@@ -510,6 +511,7 @@ fn tried_on(tried: &Try, last: Option<&Path>) -> Tried {
             let start = Start::New {
                 instructions: None,
                 setup: Some(setup),
+                also: Vec::new(),
             };
             let mut agent = crate::chat::launcher::spawn(
                 agents.of(None),

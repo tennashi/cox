@@ -94,7 +94,7 @@ impl From<McpServer> for AcpMcpServer {
     }
 }
 
-/// Connects to `agent`, opens a session working in `cwd` with
+/// Connects to `agent`, opens a session working in `roots` with
 /// `mcp_servers` for the agent to use, and runs `talk` with it. The
 /// connection closes when `talk` returns.
 ///
@@ -118,7 +118,7 @@ impl From<McpServer> for AcpMcpServer {
 /// the agent refuses to open a session, or `login` gives up.
 pub async fn connect<T>(
     agent: impl Transport,
-    cwd: PathBuf,
+    roots: Roots,
     mcp_servers: Vec<McpServer>,
     resume: Option<String>,
     heard: impl Fn(News) + Send + Sync,
@@ -173,7 +173,7 @@ pub async fn connect<T>(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, async |cx: ConnectionTo<Agent>| {
-            let started = match start(&cx, cwd, mcp_servers, resume, &login).await {
+            let started = match start(&cx, roots, mcp_servers, resume, &login).await {
                 Ok(started) => started,
                 Err(error) => {
                     outcome = Some(Err(error));
@@ -228,14 +228,39 @@ struct Started {
     images: bool,
 }
 
+/// Where a session works: in `cwd`, and in the folders of `also` too, as
+/// roots beside it (ACP's `additionalDirectories`), when the agent says
+/// it takes them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Roots {
+    pub cwd: PathBuf,
+    pub also: Vec<PathBuf>,
+}
+
+impl Roots {
+    /// The folders beside `cwd` the session is asked to work in: those of
+    /// `also`, when the agent says it takes them, or else none.
+    fn also(&self, capabilities: &AgentCapabilities) -> Vec<PathBuf> {
+        if capabilities
+            .session_capabilities
+            .additional_directories
+            .is_some()
+        {
+            self.also.clone()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 /// Initializes the connection, saying Cox runs the agent's command in a
 /// terminal for the human to log in, and opens a session working in
-/// `cwd`, or resumes the session `resume` when the agent can. When the
+/// `roots`, or resumes the session `resume` when the agent can. When the
 /// agent asks the human to log in first, `login` says how, and the session
 /// is asked for again once they have.
 async fn start(
     cx: &ConnectionTo<Agent>,
-    cwd: PathBuf,
+    roots: Roots,
     mcp_servers: Vec<McpServer>,
     resume: Option<String>,
     login: &impl AsyncFn(Vec<LoginMethod>, Option<String>) -> anyhow::Result<Login>,
@@ -256,12 +281,15 @@ async fn start(
         .embedded_context;
     let images = initialized.agent_capabilities.prompt_capabilities.image;
     let mcp_servers: Vec<AcpMcpServer> = mcp_servers.into_iter().map(Into::into).collect();
+    let also = roots.also(&initialized.agent_capabilities);
+    let cwd = roots.cwd;
     if let Some(id) = resume
         && let Some(options) = resumed(
             cx,
             &initialized.agent_capabilities,
             SessionId::new(id.clone()),
             &cwd,
+            &also,
             &mcp_servers,
         )
         .await
@@ -277,7 +305,9 @@ async fn start(
     }
     let mut failed = None;
     let session = loop {
-        let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers.clone());
+        let request = NewSessionRequest::new(cwd.clone())
+            .additional_directories(also.clone())
+            .mcp_servers(mcp_servers.clone());
         match cx.send_request(request).block_task().await {
             Ok(session) => break session,
             Err(error) if error.code == ErrorCode::AuthRequired => {
@@ -371,8 +401,8 @@ pub fn needs_login(error: &anyhow::Error) -> bool {
     })
 }
 
-/// Asks the agent to go on with session `id`, working in `cwd` with
-/// `mcp_servers`, and returns, when it does, the settings it says the
+/// Asks the agent to go on with session `id`, working in `cwd`, and the
+/// folders of `also` beside it, with `mcp_servers`, and returns, when it does, the settings it says the
 /// session has, if it says. An agent that can resume a session without
 /// telling its past is asked to, since the past is not shown again; one
 /// that can only load it, telling its past, is asked to load it. An agent
@@ -382,14 +412,19 @@ async fn resumed(
     capabilities: &AgentCapabilities,
     id: SessionId,
     cwd: &std::path::Path,
+    also: &[PathBuf],
     mcp_servers: &[AcpMcpServer],
 ) -> Option<Option<Vec<SessionConfigOption>>> {
     if capabilities.session_capabilities.resume.is_some() {
-        let request = ResumeSessionRequest::new(id, cwd).mcp_servers(mcp_servers.to_vec());
+        let request = ResumeSessionRequest::new(id, cwd)
+            .additional_directories(also.to_vec())
+            .mcp_servers(mcp_servers.to_vec());
         let response = cx.send_request(request).block_task().await.ok()?;
         Some(response.config_options)
     } else if capabilities.load_session {
-        let request = LoadSessionRequest::new(id, cwd).mcp_servers(mcp_servers.to_vec());
+        let request = LoadSessionRequest::new(id, cwd)
+            .additional_directories(also.to_vec())
+            .mcp_servers(mcp_servers.to_vec());
         let response = cx.send_request(request).block_task().await.ok()?;
         Some(response.config_options)
     } else {

@@ -146,9 +146,11 @@ impl Spawns for FakeSpawns {
             Start::New {
                 instructions,
                 setup,
+                also,
             } => Start::New {
                 instructions: instructions.filter(|_| fakes.instructions),
                 setup: setup.or_else(|| fakes.setup.clone()),
+                also,
             },
             again @ Start::Again { .. } => again,
         };
