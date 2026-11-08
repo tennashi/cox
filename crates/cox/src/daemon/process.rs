@@ -77,9 +77,17 @@ pub fn run(
                                 tracing::error!("nothing is pushed to the phones: {error:#}");
                             })
                             .ok();
+                        let owner = std::rc::Rc::new(std::cell::RefCell::new(None));
+                        if super::phone::tailscale() {
+                            tokio::task::spawn_local(super::phone::follow_tailnet(
+                                port,
+                                std::rc::Rc::clone(&owner),
+                            ));
+                        }
                         tokio::task::spawn_local(super::phone::serve(
                             phone,
                             token,
+                            owner,
                             pushes,
                             internal.clone(),
                         ));

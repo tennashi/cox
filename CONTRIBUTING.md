@@ -1449,21 +1449,31 @@ window's.
 coxd serves it on the Mac's own address alone, `127.0.0.1`, and the
 phone reaches it through [Tailscale](https://tailscale.com), as
 `tailscale serve --bg 7421` hands it to the human's tailnet, over HTTPS,
-with the tailnet's certificate: the tailnet has MagicDNS on, for the
-phone to find the Mac by its name, and HTTPS and Serve, which
+with the tailnet's certificate, which coxd has it do as it starts,
+unless something else is served there, or `settings.json` says not, as
+`{"phone": {"tailscale": false}}`, or `tailscale` is not on its `PATH`
+nor in `/Applications/Tailscale.app`. The tailnet has MagicDNS on, for
+the phone to find the Mac by its name, and HTTPS and Serve, which
 `tailscale serve` asks to turn on the first time, with a link to the
-admin console, while Funnel, which would hand the page to the whole
-internet, stays off. Since any page in a browser on the Mac
-reaches `127.0.0.1` too, the page answers only a phone that holds the
-secret coxd keeps in `state/phone-token` in Cox's data folder (see
-[The stage](#the-stage)), made the first time, which the phone gets by
-opening once the link `cox [--data <dir>] --phone-link` prints, as
-`https://<the Mac's name in the tailnet>/pair/<secret>`, and keeps in a
-cookie. A phone that opens the page from its home screen, as the
+admin console, which coxd's log, and `cox [--data <dir>] --phone-link`,
+say, while Funnel, which would hand the page to the whole internet,
+stays off. A phone logged in to Tailscale as the Mac is, as
+`tailscale serve` says who comes, in `Tailscale-User-Login`, which no
+one fakes through it, opens the page as it is, at `https://<the Mac's
+name in the tailnet>/`, which `--phone-link` prints. Any page in a
+browser on the Mac reaches `127.0.0.1` too, but sends no such header
+without asking first, as browsers have it, nor for the Mac's name in
+the tailnet, so that comes only from Tailscale or from what runs on
+the Mac as the human. Another phone, as one of another login, or one
+that comes some other way, pairs once with the secret coxd keeps in
+`state/phone-token` in Cox's data folder (see [The stage](#the-stage)),
+made the first time, by opening the link `--phone-link` prints, as
+`https://<the Mac's name in the tailnet>/pair/<secret>`, and keeps it in
+a cookie. A phone that opens the page from its home screen, as the
 browser's "Add to Home Screen" puts it there, gets it as an app of its
 own; an iPhone keeps the cookies of such an app apart from Safari's, so
-the page there asks for the link, pasted. To pair the phones no more, take the file away and start coxd
-again.
+the page there asks for the link, pasted. To pair the phones no more,
+take the file away and start coxd again.
 
 The phone tells the human of a chat that comes to wait for them, or
 whose turn ends, while they are away from the Mac, as the Mac's
