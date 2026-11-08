@@ -824,10 +824,13 @@ others, and kept there while its tab is open, each button by its icon,
 named where the mouse rests, but that of the view shown, which names
 it. The other tabs are in a column along the stage's left, under the
 bar, one under another in the order they were opened, each with an icon of what it shows, a page, a
-Markdown file, code, a terminal, the flow of a tool call, and its
+Markdown file, code, a terminal, the flow of a tool call, or, for a
+page, the icon of its site, as a browser's tab shows it, the first of
+those the page names, or the site's `/favicon.ico`, that loads, the
+last page's staying while the next loads, and its
 title, and, where the mouse rests or for the tab shown, the × that
 closes it; a tab an agent is at work on, as its chat takes a turn, has
-its icon in a color of the chat's own, one of eight of the accent's
+the icon of what it shows, a page's too, in a color of the chat's own, one of eight of the accent's
 lightness, the first chat's the accent, and a ring of it beside its
 title, which names the chat where the mouse rests, and is not dimmer
 for being another chat's. The ‹ at the column's foot folds it to the tabs' icons,

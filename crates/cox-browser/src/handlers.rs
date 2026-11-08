@@ -346,6 +346,32 @@ wrap_load_handler! {
             }
             let _ = self.events.send(Event::Navigated);
         }
+
+        /// Another page started to load in the browser: not a frame of the
+        /// page, nor the page moving within itself, as to an anchor.
+        fn on_load_start(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            frame: Option<&mut cef::Frame>,
+            _transition_type: cef::TransitionType,
+        ) {
+            if frame.is_some_and(|frame| frame.is_main() == 1) {
+                lock(&self.shared).favicons.loading();
+            }
+        }
+
+        /// The page loaded: if it named no icon, it has none.
+        fn on_load_end(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            frame: Option<&mut cef::Frame>,
+            _http_status_code: c_int,
+        ) {
+            if frame.is_some_and(|frame| frame.is_main() == 1) {
+                let next = lock(&self.shared).favicons.loaded();
+                favicon::follow(&self.shared, &self.events, next);
+            }
+        }
     }
 }
 
@@ -407,6 +433,25 @@ wrap_display_handler! {
             lock(&self.shared).navigation.title =
                 title.map(ToString::to_string).unwrap_or_default();
             let _ = self.events.send(Event::Navigated);
+        }
+
+        /// The page names its icons, or CEF the site's `/favicon.ico`
+        /// for a page that names none: its tab shows the first that loads.
+        fn on_favicon_urlchange(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            icon_urls: Option<&mut cef::CefStringList>,
+        ) {
+            let urls = icon_urls
+                .map(|urls| {
+                    let urls: *mut cef::sys::_cef_string_list_t = urls.into();
+                    // Borrowed from CEF, which frees it.
+                    cef::CefStringList::from(urls).into_iter().collect()
+                })
+                .unwrap_or_default();
+            tracing::debug!(?urls, "the page names its icons");
+            let next = lock(&self.shared).favicons.named(urls);
+            favicon::follow(&self.shared, &self.events, next);
         }
     }
 }

@@ -9,10 +9,12 @@
 //! kind, matching on [`TabContent`].
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use cox_core::tabs::{KeptTab, Lines};
 use gpui::{
-    AnyView, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Render, Subscription,
+    AnyView, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Image, Render,
+    Subscription,
 };
 
 use super::android::Android;
@@ -175,6 +177,12 @@ impl TabContent {
             | Self::MacWindow(_)
             | Self::Windows(_) => None,
         }
+    }
+
+    /// The icon of the site of the page the tab shows, once the site gave
+    /// one.
+    pub(super) fn favicon(&self, cx: &App) -> Option<Arc<Image>> {
+        self.page()?.read(cx).favicon().cloned()
     }
 
     /// Whether it is a terminal where a command of the agent's ended.

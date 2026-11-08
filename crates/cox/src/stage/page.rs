@@ -25,8 +25,9 @@ use cox_core::entry::Attachment;
 use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Div, Entity, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, IntoElement, Pixels, Point, RenderImage, Stateful, Subscription, Task,
-    UTF16Selection, Window, anchored, deferred, div, point, prelude::*, px, rgb, size,
+    FocusHandle, Focusable, Image, ImageFormat, IntoElement, Pixels, Point, RenderImage, Stateful,
+    Subscription, Task, UTF16Selection, Window, anchored, deferred, div, point, prelude::*, px,
+    rgb, size,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -51,6 +52,9 @@ pub struct Page {
     composing: Option<String>,
     /// Where the browser is, as of the last `Navigated` event.
     navigation: Navigation,
+    /// The page's icon, as of the last `Favicon` event, which its tab
+    /// shows.
+    favicon: Option<Arc<Image>>,
     /// The line the human types an address into.
     address: Entity<LineInput>,
     /// The address last put in that line by the browser, to tell the
@@ -114,6 +118,7 @@ impl Page {
                 let shown = this.update(cx, |page, cx| {
                     match event {
                         Event::Navigated => page.navigated(cx),
+                        Event::Favicon => page.favicon_changed(),
                         Event::Popup(url) => cx.emit(Opens::Tab(url)),
                         Event::FileLink(url) => cx.emit(Opens::File(url)),
                         Event::ShowChat(key) => cx.emit(Opens::Chat(key)),
@@ -154,6 +159,7 @@ impl Page {
             composing: None,
             address_shown: navigation.url.clone(),
             navigation,
+            favicon: None,
             address,
             pointer: AgentPointer::default(),
             look: None,
@@ -183,6 +189,22 @@ impl Page {
     #[must_use]
     pub fn navigation(&self) -> &Navigation {
         &self.navigation
+    }
+
+    /// The page's icon, once the site gave one.
+    #[must_use]
+    pub fn favicon(&self) -> Option<&Arc<Image>> {
+        self.favicon.as_ref()
+    }
+
+    /// The page's icon changed. GPUI keeps an image it decoded by what
+    /// it holds, so a site's icon is decoded once, however many of its
+    /// pages show it.
+    fn favicon_changed(&mut self) {
+        self.favicon = self
+            .browser
+            .favicon()
+            .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png.to_vec())));
     }
 
     /// The agent sent `input` to the page.

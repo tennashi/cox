@@ -21,7 +21,8 @@
 //! - [`handlers`] is what CEF calls into on its threads, [`viewport`]
 //!   fits the page to the stage's size, [`events`] makes CEF's mouse
 //!   and key events of the stage's, and [`links`] tells which of a
-//!   page's navigations is a link to a file.
+//!   page's navigations is a link to a file, and [`favicon`] fetches the
+//!   page's icon, which its tab shows.
 //! - [`scheme`] serves the `cox:` addresses a stage's pages read what Cox
 //!   knows from, as the stage [serves](scheme::Serve) them.
 //! - [`quit`] lets signals, and CEF on macOS, ask the app to quit, and
@@ -29,6 +30,7 @@
 
 mod cursor;
 mod events;
+mod favicon;
 mod frames;
 mod handlers;
 mod links;
@@ -116,6 +118,8 @@ pub enum Event {
     ShowChat(u64),
     /// The page asks for another cursor: see [`Browser::cursor`].
     Cursor,
+    /// The page's icon changed: see [`Browser::favicon`].
+    Favicon,
     /// The human pressed the right button over text selected in the page,
     /// at this point of the page, for the stage to offer what to do with
     /// the text: the browser shows no menu of its own.
@@ -207,6 +211,8 @@ struct Shared {
     /// The cursor the page asks for where the mouse is.
     cursor: Cursor,
     navigation: Navigation,
+    /// The page's icon.
+    favicons: favicon::Favicons,
     /// When CEF was last asked for a picture, and until when the page is
     /// lively (see [`crate::frames`]).
     pacing: frames::Pacing,
@@ -238,6 +244,7 @@ impl Shared {
                 url: url.to_owned(),
                 ..Default::default()
             },
+            favicons: favicon::Favicons::default(),
             pacing: frames::Pacing::default(),
             wheel: events::Wheel::default(),
         }
@@ -626,6 +633,12 @@ impl Browser {
     #[must_use]
     pub fn navigation(&self) -> Navigation {
         self.shared().navigation.clone()
+    }
+
+    /// The page's icon, as PNG, once the site gave one: see [`favicon`].
+    #[must_use]
+    pub fn favicon(&self) -> Option<Arc<[u8]>> {
+        self.shared().favicons.png()
     }
 
     fn browser(&self) -> Option<cef::Browser> {

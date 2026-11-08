@@ -1,7 +1,8 @@
 //! The column along the left of the stage, under its bar: the tabs that
 //! are not views of the project, one under another in the order they
-//! were opened, each with an icon of what it shows and its title, and
-//! those of the chats not shown dimmer. A tab an agent is at work on is
+//! were opened, each with an icon of what it shows, or the icon of its
+//! site for a page that has one, and its title, and those of the chats
+//! not shown dimmer. A tab an agent is at work on is
 //! marked with a ring of a color of its chat's own, and its icon in it.
 //! Folded, the column is the tabs' icons alone, named where the mouse
 //! rests, which every stage folds or unfolds together.
@@ -9,8 +10,8 @@
 use std::cell::Cell;
 
 use gpui::{
-    App, Context, Div, Global, MouseButton, MouseDownEvent, ScrollHandle, SharedString, Stateful,
-    div, prelude::*, px, rgb,
+    AnyElement, App, Context, Div, Global, MouseButton, MouseDownEvent, ScrollHandle, SharedString,
+    Stateful, StyledImage, div, img, prelude::*, px, rgb,
 };
 
 use super::tab::{Tab, TabContent};
@@ -127,8 +128,8 @@ impl Stage {
             )
     }
 
-    /// The row of the tab at `index`: an icon of what it shows, its
-    /// title, and, while a chat's agent is at work on it, its icon in the
+    /// The row of the tab at `index`: an icon of what it shows, or its
+    /// site's for a page, its title, and, while a chat's agent is at work on it, its icon in the
     /// chat's color and a ring of it, which names the chat where the mouse
     /// rests, and, where the mouse rests or for the tab shown, the button
     /// that closes it, unless it is the last; folded, its icon alone. A
@@ -144,7 +145,6 @@ impl Stage {
         let number = index + 1;
         let title = tab.content.title(cx);
         let title: String = title.chars().take(TITLE_LENGTH).collect();
-        let glyph = glyph(&tab.content);
         let shown = self.tabs.shown_index() == Some(index);
         let others = tab.owner.is_some_and(|owner| Some(owner) != self.showing);
         let worker = self.at_work_on(tab);
@@ -176,15 +176,7 @@ impl Stage {
                     stage.open_tab_menu(index, event.position, cx);
                 }),
             )
-            .child(icon(
-                glyph,
-                14.,
-                match worker {
-                    Some(chat) => chat_color(chat),
-                    None if shown => DIM,
-                    None => FAINT,
-                },
-            ));
+            .child(render_glyph(tab, worker, shown, cx));
         if folded {
             return row.w(px(32.)).justify_center().tooltip(tip(title));
         }
@@ -245,6 +237,31 @@ impl Stage {
                 cx.stop_propagation();
                 let _ = stage.close_tab(index, window, cx);
             }))
+    }
+}
+
+/// How big a tab's icon is.
+const GLYPH_SIZE: f32 = 14.;
+
+/// The icon of the tab: its site's, for a page whose site gave one, or
+/// else the icon of what it shows. While a chat's agent is at work on
+/// it, it is the icon of what it shows, in the chat's color, so that the
+/// column shows whose turn the tab is in, folded too.
+fn render_glyph(tab: &Tab, worker: Option<u64>, shown: bool, cx: &App) -> AnyElement {
+    let glyph = glyph(&tab.content);
+    let color = match worker {
+        Some(chat) => chat_color(chat),
+        None if shown => DIM,
+        None => FAINT,
+    };
+    match tab.content.favicon(cx).filter(|_| worker.is_none()) {
+        Some(favicon) => img(favicon)
+            .size(px(GLYPH_SIZE))
+            .flex_none()
+            .with_loading(move || icon(glyph, GLYPH_SIZE, color).into_any_element())
+            .with_fallback(move || icon(glyph, GLYPH_SIZE, color).into_any_element())
+            .into_any_element(),
+        None => icon(glyph, GLYPH_SIZE, color).into_any_element(),
     }
 }
 
