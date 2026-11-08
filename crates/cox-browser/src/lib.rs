@@ -454,6 +454,10 @@ pub fn start(profile: Option<PathBuf>) -> Cef {
         external_message_pump: 1,
         // 0 leaves the port closed.
         remote_debugging_port: devtools_port.map_or(0, i32::from),
+        // White, as a browser draws a page that sets no background of its
+        // own. CEF's default, with no alpha, draws such a page see-through
+        // when it has no window, its black text on the stage's dark card.
+        background_color: 0xFFFF_FFFF,
         root_cache_path: profile_path.clone(),
         // Left empty, CEF keeps cookies and storage in memory only, which
         // a throwaway profile may as well.

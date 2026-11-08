@@ -82,6 +82,10 @@ impl Code {
             .children(server.map(|server| {
                 div()
                     .debug_selector(|| "code-server".to_owned())
+                    // A row, so that the line is as wide as the box: in a
+                    // block of its own, under a `max_w`, it was laid out
+                    // with no room, and showed only "…".
+                    .flex()
                     .min_w_0()
                     .max_w(px(240.))
                     .overflow_hidden()

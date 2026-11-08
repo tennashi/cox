@@ -9,7 +9,8 @@
 
 use gpui::{
     App, AvailableSpace, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, SharedString, Style, TextAlign, TextRun, Window, point, size,
+    IntoElement, LayoutId, Pixels, SharedString, Style, TextAlign, TextRun, Window, point, px,
+    size,
 };
 
 /// What ends a line that does not fit.
@@ -26,11 +27,13 @@ pub struct Ellipsis {
     text: SharedString,
 }
 
-/// The text, its run in the style of where it is, the size of its font
-/// and line, and which side it keeps to, as the element was laid out.
+/// The text, its run in the style of where it is, how wide it is whole,
+/// the size of its font and line, and which side it keeps to, as the
+/// element was laid out.
 pub struct Laid {
     text: SharedString,
     run: TextRun,
+    width: Pixels,
     font_size: Pixels,
     line_height: Pixels,
     align: TextAlign,
@@ -92,6 +95,7 @@ impl Element for Ellipsis {
             Laid {
                 text,
                 run,
+                width,
                 font_size,
                 line_height,
                 align,
@@ -121,10 +125,19 @@ impl Element for Ellipsis {
         cx: &mut App,
     ) {
         let mut runs = vec![line.run.clone()];
-        let text = window
-            .text_system()
-            .line_wrapper(line.run.font.clone(), line.font_size)
-            .truncate_line(line.text.clone(), bounds.size.width, SUFFIX, &mut runs);
+        // Whole where it fits as shaped. GPUI's `truncate_line` adds up
+        // each character's width on its own, which comes to more than the
+        // line shaped, as its pairs are kerned, and so it cut a line the
+        // row was laid out just wide enough for, as "COX.md" to "COX….".
+        // The layout's rounding takes off less than a pixel.
+        let text = if line.width <= bounds.size.width + px(1.) {
+            line.text.clone()
+        } else {
+            window
+                .text_system()
+                .line_wrapper(line.run.font.clone(), line.font_size)
+                .truncate_line(line.text.clone(), bounds.size.width, SUFFIX, &mut runs)
+        };
         let shaped = window
             .text_system()
             .shape_line(text, line.font_size, &runs, None);
