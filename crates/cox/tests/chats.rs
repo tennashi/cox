@@ -837,6 +837,33 @@ async fn stopping_with_the_button_leaves_the_keyboard_in_the_input(cx: &mut Test
     assert_eq!(input_text(cx, &view), "next");
 }
 
+#[gpui::test]
+async fn a_line_sent_while_the_agent_works_goes_into_its_turn(cx: &mut TestAppContext) {
+    let (agents, workspace, cx) = open_window(cx, scratch("steer"));
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+
+    cx.simulate_input("wait");
+    cx.simulate_keystrokes("enter");
+    settle(cx).await;
+    cx.condition(&view, |view, _| view.conversation().steers())
+        .await;
+    say(cx, &workspace, "and then this").await;
+
+    assert_eq!(input_text(cx, &view), "");
+    assert_eq!(agents.borrow()[0].cancels(), 0);
+    let entries = cx.read(|cx| view.read(cx).conversation().entries().to_vec());
+    assert_eq!(
+        entries,
+        [
+            Entry::Human("wait".to_owned()),
+            Entry::Reply("waiting".to_owned()),
+            Entry::Human("and then this".to_owned()),
+            Entry::Reply("echo: and then this".to_owned()),
+        ]
+    );
+}
+
 /// What the closed chat of [`kept_chat`] showed.
 fn said() -> Vec<Entry> {
     vec![

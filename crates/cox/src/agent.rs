@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use cox_acp::{
     Block, Login, LoginMethod, McpServer, News, PermissionAnswer, PermissionKind, PlanEntry,
-    PlanState, Session, SlashCommand, StopReason, ToolCallContent, Transport, Update,
+    PlanState, Session, SlashCommand, Steered, StopReason, ToolCallContent, Transport, Update,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -46,8 +46,14 @@ use crate::process::close_on_exec;
 /// What the agent side tells the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentEvent {
-    /// The agent opened the session `id`, to resume later, as `how` says.
-    Opened { id: String, how: Opened },
+    /// The agent opened the session `id`, to resume later, as `how` says,
+    /// and `steers` the turn it takes with a line the human sends while
+    /// it runs ([`Command::Steer`]), or not.
+    Opened {
+        id: String,
+        how: Opened,
+        steers: bool,
+    },
     /// The agent gave the session a title, in place of any it gave before.
     Titled(String),
     /// The commands the agent runs when a line starts with `/` and one of
@@ -111,6 +117,11 @@ pub enum AgentEvent {
     /// Cox tells the human what it does on the way to the agent, as when
     /// it downloads the agent's program.
     Note(String),
+    /// The agent side took a line the window steered into the turn
+    /// ([`Command::Steer`]): it is the agent's now, in the turn that runs,
+    /// or in one that starts for it, which ends with a
+    /// [`AgentEvent::TurnEnded`] of its own.
+    Steered,
     /// The turn ended.
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
@@ -145,6 +156,12 @@ pub enum Opened {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     Prompt(Prompt),
+    /// A line the human sent while a turn runs, which the agent takes into
+    /// the turn, for an agent that steers (see [`AgentEvent::Opened`]), or
+    /// else once it ends, before the turn counts as ended. With no turn
+    /// running, it starts one, as a prompt does. Each is answered with an
+    /// [`AgentEvent::Steered`].
+    Steer(Prompt),
     Answer(PermissionAnswer),
     /// Asks the agent to stop the turn it is taking.
     Cancel,
@@ -443,6 +460,7 @@ async fn run<T: Transport + 'static>(
             let _ = events.send(AgentEvent::Opened {
                 id: session.id(),
                 how,
+                steers: session.steers(),
             });
             let _ = events.send(AgentEvent::Settings(shown_settings(session.settings())));
             session
@@ -452,13 +470,13 @@ async fn run<T: Transport + 'static>(
                 // An answer with no permission request waiting has nothing to
                 // answer, and a cancel with no turn running nothing to stop.
                 match command {
-                    Command::Prompt(Prompt { text, attached }) => {
+                    Command::Prompt(prompt) => {
                         // What goes ahead of the first prompt goes once,
                         // and not ahead of a command, which the agent
                         // knows by the prompt's first block: it waits for
                         // the next line.
                         let command = runs_command(
-                            &text,
+                            &prompt.text,
                             &commands_known.lock().expect("no one panics holding it"),
                         );
                         let ahead = if command {
@@ -466,14 +484,10 @@ async fn run<T: Transport + 'static>(
                         } else {
                             std::mem::take(&mut ahead)
                         };
-                        // The files the line points to go after it.
-                        let files = mention::files(&text, &folder);
                         let prompt = ahead
                             .into_iter()
-                            .chain([text])
                             .map(Block::Text)
-                            .chain(attached.into_iter().flat_map(handed_blocks))
-                            .chain(files.into_iter().map(Block::File));
+                            .chain(line(prompt, &folder));
                         take_turn(
                             &mut session,
                             prompt,
@@ -481,8 +495,15 @@ async fn run<T: Transport + 'static>(
                             &settings,
                             &mut commands,
                             events,
+                            &folder,
                         )
                         .await?;
+                    }
+                    // The turn the line was steered into ended before the
+                    // agent side heard it: it starts a turn of its own.
+                    Command::Steer(prompt) => {
+                        let _ = events.send(AgentEvent::Steered);
+                        commands.held.push_front(Command::Prompt(prompt));
                     }
                     Command::Set { id, value } => {
                         let set = async |id: &str, value: &str| session.set(id, value).await;
@@ -528,7 +549,7 @@ async fn logged_in(
             Some(Command::Cancel) | None => anyhow::bail!("the human did not log in"),
             // A line sent, or a setting set, before the agent asked waits
             // for the session, which opens once the human has logged in.
-            Some(command @ (Command::Prompt(_) | Command::Set { .. })) => {
+            Some(command @ (Command::Prompt(_) | Command::Steer(_) | Command::Set { .. })) => {
                 commands.held.push_back(command);
             }
             Some(Command::Answer(_)) => {}
@@ -705,6 +726,21 @@ async fn set_setting(
     let _ = events.send(event);
 }
 
+/// The blocks of `prompt`, a line for the agent: its text, what the
+/// human handed the chat with it, and the files it points to, in
+/// `folder`.
+fn line(prompt: Prompt, folder: &Path) -> impl Iterator<Item = Block> + use<> {
+    let Prompt { text, attached } = prompt;
+    let files = mention::files(&text, folder);
+    std::iter::once(Block::Text(text))
+        .chain(attached.into_iter().flat_map(handed_blocks))
+        .chain(files.into_iter().map(Block::File))
+}
+
+/// Sends `prompt`, and passes on what the agent sends until the turn
+/// ends, with the turns that start for the lines steered into it that
+/// the agent did not take, as when it was ending (see [`Command::Steer`]),
+/// which the turn ends with.
 async fn take_turn(
     session: &mut Session,
     prompt: impl IntoIterator<Item = Block>,
@@ -712,12 +748,46 @@ async fn take_turn(
     settings: &Mutex<Vec<cox_acp::Setting>>,
     commands: &mut Commands,
     events: &UnboundedSender<AgentEvent>,
+    folder: &Path,
 ) -> anyhow::Result<()> {
-    let prompt: Vec<Block> = prompt.into_iter().collect();
+    let mut prompt: Vec<Block> = prompt.into_iter().collect();
     let mut failed = None;
     loop {
-        match take_one_turn(session, prompt.clone(), policy, settings, commands, events).await? {
-            Some(Err(error)) if cox_acp::needs_login(&error) => {
+        let Some(Ended { how, later }) = take_one_turn(
+            session,
+            prompt.clone(),
+            policy,
+            settings,
+            commands,
+            events,
+            folder,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        let login = matches!(&how, Err(error) if cox_acp::needs_login(error));
+        let went_on = matches!(how, Ok(reason) if reason != StopReason::Cancelled);
+        if !went_on && !login {
+            for prompt in &later {
+                let _ = events.send(AgentEvent::Note(format!(
+                    "The agent did not get this line, as the turn stopped: {}",
+                    prompt.text
+                )));
+            }
+        } else if !later.is_empty() {
+            let later = later.into_iter().flat_map(|prompt| line(prompt, folder));
+            if login {
+                // A prompt the agent refused until the human logs in goes
+                // again, with the lines steered into it.
+                prompt.extend(later);
+            } else {
+                prompt = later.collect();
+                continue;
+            }
+        }
+        match how {
+            Err(error) if cox_acp::needs_login(&error) => {
                 // Once the human has logged in, the prompt goes again.
                 let methods = session.login_methods().to_vec();
                 match logged_in(&methods, failed.take(), commands, events).await {
@@ -730,21 +800,29 @@ async fn take_turn(
                     }
                 }
             }
-            Some(Err(error)) => {
+            Err(error) => {
                 let _ = events.send(AgentEvent::TurnFailed(format!("{error:#}")));
                 return Ok(());
             }
-            Some(Ok(reason)) => {
+            Ok(reason) => {
                 let _ = events.send(AgentEvent::TurnEnded(reason));
                 return Ok(());
             }
-            None => return Ok(()),
         }
     }
 }
 
+/// How a turn ended, with the lines steered into it that the agent did
+/// not take, to go once it has.
+struct Ended {
+    how: anyhow::Result<StopReason>,
+    later: Vec<Prompt>,
+}
+
 /// Sends `prompt` and passes on what the agent sends until the turn ends,
-/// and answers how it ended, or `None` when the window is gone.
+/// and answers how it ended, or `None` when the window is gone. A line
+/// steered into it goes to the agent as it runs, for an agent that steers,
+/// and else waits for it to end; the files it points to are in `folder`.
 async fn take_one_turn(
     session: &mut Session,
     prompt: Vec<Block>,
@@ -752,13 +830,17 @@ async fn take_one_turn(
     settings: &Mutex<Vec<cox_acp::Setting>>,
     commands: &mut Commands,
     events: &UnboundedSender<AgentEvent>,
-) -> anyhow::Result<Option<anyhow::Result<StopReason>>> {
+    folder: &Path,
+) -> anyhow::Result<Option<Ended>> {
     let send = |event| {
         let _ = events.send(event);
     };
+    let steers = session.steers();
     let mut turn = session.send(prompt);
     // Whether the human has asked to stop the turn.
     let mut cancelled = false;
+    // The lines steered into the turn that wait for it to end.
+    let mut later = Vec::new();
     loop {
         let update = tokio::select! {
             update = turn.next() => update,
@@ -772,9 +854,13 @@ async fn take_one_turn(
                         let set = async |id: &str, value: &str| turn.set(id, value).await;
                         set_setting(set, settings, &id, &value, events).await;
                     }
-                    // The window sends no prompt while a turn runs, no
-                    // answer while no permission request waits, and one
-                    // cancel at most.
+                    Some(Command::Steer(prompt)) => {
+                        let now = steers && !cancelled;
+                        steer(&turn, prompt, now, folder, &mut later, events).await;
+                    }
+                    // The window sends no prompt while a turn runs, but
+                    // steers it, no answer while no permission request
+                    // waits, and one cancel at most.
                     Some(_) => {}
                     // The window is gone, and the agent goes with it.
                     None => return Ok(None),
@@ -834,6 +920,12 @@ async fn take_one_turn(
                             let set = async |id: &str, value: &str| turn.set(id, value).await;
                             set_setting(set, settings, &id, &value, events).await;
                         }
+                        // A line steered into the turn goes to the agent
+                        // as one would while it runs: the agent takes it
+                        // once the human has answered.
+                        Some(Command::Steer(prompt)) => {
+                            steer(&turn, prompt, steers, folder, &mut later, events).await;
+                        }
                         // The window sends no prompt while a turn runs, and
                         // no login while the agent does not ask for one.
                         Some(Command::Prompt(_) | Command::LogIn(_)) => {}
@@ -844,7 +936,40 @@ async fn take_one_turn(
             }
         }
     }
-    Ok(Some(turn.end().await))
+    Ok(Some(Ended {
+        how: turn.end().await,
+        later,
+    }))
+}
+
+/// Takes `prompt`, a line the human steered into `turn`, and steers it
+/// into the turn `now`, the files it points to being in `folder`, or
+/// else has it go `later`, once the turn has ended, as a line the agent
+/// did not take does.
+async fn steer(
+    turn: &cox_acp::Turn<'_>,
+    prompt: Prompt,
+    now: bool,
+    folder: &Path,
+    later: &mut Vec<Prompt>,
+    events: &UnboundedSender<AgentEvent>,
+) {
+    let _ = events.send(AgentEvent::Steered);
+    if !now {
+        later.push(prompt);
+        return;
+    }
+    match turn.steer(line(prompt.clone(), folder)).await {
+        Ok(Steered::Taken) => {}
+        Ok(Steered::TooLate) => later.push(prompt),
+        Err(error) => {
+            tracing::warn!("the agent did not take a line into its turn: {error:#}");
+            let _ = events.send(AgentEvent::Note(format!(
+                "The agent did not take the line into its turn ({error:#}): it goes once the turn ends."
+            )));
+            later.push(prompt);
+        }
+    }
 }
 
 /// What a tool call shows, made ready for the window here, on the agent

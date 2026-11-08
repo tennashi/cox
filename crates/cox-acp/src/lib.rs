@@ -36,6 +36,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
 use agent_client_protocol::{
     AcpAgent, Agent, Client, ConnectTo, ConnectionTo, ErrorCode, LineDirection, Responder,
+    UntypedMessage,
 };
 use anyhow::Context;
 use base64::Engine as _;
@@ -185,8 +186,7 @@ pub async fn connect<T>(
                 resumed,
                 settings,
                 login_methods,
-                embeds,
-                images,
+                takes,
             } = started;
             let mut received = received;
             if resumed {
@@ -200,8 +200,7 @@ pub async fn connect<T>(
                 resumed,
                 settings,
                 login_methods,
-                embeds,
-                images,
+                takes,
                 received,
                 tool_calls: HashMap::new(),
             };
@@ -221,11 +220,20 @@ struct Started {
     settings: Vec<Setting>,
     /// The ways the agent offers to log in.
     login_methods: Vec<LoginMethod>,
-    /// Whether the agent takes a file's text in the prompt, rather than
-    /// a link to it (ACP's `embeddedContext`).
-    embeds: bool,
-    /// Whether the agent takes pictures in the prompt (ACP's `image`).
-    images: bool,
+    takes: Takes,
+}
+
+/// What the agent takes, as it said as the connection started.
+#[derive(Clone, Copy, Debug)]
+struct Takes {
+    /// Whether it takes a file's text in the prompt, rather than a link
+    /// to it (ACP's `embeddedContext`).
+    files: bool,
+    /// Whether it takes pictures in the prompt (ACP's `image`).
+    pictures: bool,
+    /// Whether it takes a line into the turn it is taking: see
+    /// [`Session::steers`].
+    lines: bool,
 }
 
 /// Where a session works: in `cwd`, and in the folders of `also` too, as
@@ -275,11 +283,16 @@ async fn start(
         .iter()
         .map(LoginMethod::from)
         .collect();
-    let embeds = initialized
-        .agent_capabilities
-        .prompt_capabilities
-        .embedded_context;
-    let images = initialized.agent_capabilities.prompt_capabilities.image;
+    let prompts = &initialized.agent_capabilities.prompt_capabilities;
+    let takes = Takes {
+        files: prompts.embedded_context,
+        pictures: prompts.image,
+        lines: initialized
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("steering")?.get("supported")?.as_bool())
+            .unwrap_or(false),
+    };
     let mcp_servers: Vec<AcpMcpServer> = mcp_servers.into_iter().map(Into::into).collect();
     let also = roots.also(&initialized.agent_capabilities);
     let cwd = roots.cwd;
@@ -299,8 +312,7 @@ async fn start(
             resumed: true,
             settings: settings(options.unwrap_or_default()),
             login_methods,
-            embeds,
-            images,
+            takes,
         });
     }
     let mut failed = None;
@@ -325,8 +337,7 @@ async fn start(
         resumed: false,
         settings: settings(session.config_options.unwrap_or_default()),
         login_methods,
-        embeds,
-        images,
+        takes,
     })
 }
 
@@ -701,10 +712,7 @@ pub struct Session {
     resumed: bool,
     settings: Vec<Setting>,
     login_methods: Vec<LoginMethod>,
-    /// Whether the agent takes a file's text in the prompt.
-    embeds: bool,
-    /// Whether the agent takes pictures in the prompt.
-    images: bool,
+    takes: Takes,
     received: UnboundedReceiver<Received>,
     /// What is known of each tool call of the turn that has not ended yet.
     tool_calls: HashMap<ToolCallId, Known>,
@@ -729,6 +737,16 @@ impl Session {
     #[must_use]
     pub fn settings(&self) -> &[Setting] {
         &self.settings
+    }
+
+    /// Whether the agent takes a line the human sends while it takes a
+    /// turn into that turn, as it goes ([`Turn::steer`]), rather than
+    /// only as a turn of its own once the turn ends: an agent that does
+    /// says so as the connection starts (`_meta.steering.supported`, as
+    /// `claude-agent-acp` says it).
+    #[must_use]
+    pub fn steers(&self) -> bool {
+        self.takes.lines
     }
 
     /// The ways the agent offers the human to log in.
@@ -763,28 +781,45 @@ impl Session {
 
     /// Sends `blocks` to the agent as a prompt, starting a turn.
     pub fn send(&mut self, blocks: impl IntoIterator<Item = Block>) -> Turn<'_> {
-        let prompt = PromptRequest::new(
-            self.id.clone(),
-            blocks
-                .into_iter()
-                .map(|block| match block {
-                    Block::Text(text) => ContentBlock::Text(TextContent::new(text)),
-                    Block::File(path) => file_block(&path, self.embeds),
-                    Block::Quote { uri, text } => quote_block(uri, text, self.embeds),
-                    Block::Picture(path) => picture_block(&path, self.images),
-                })
-                .collect(),
-        );
+        let prompt = PromptRequest::new(self.id.clone(), content(blocks, self.takes));
         self.tool_calls.clear();
         Turn {
             cx: &self.cx,
             session: &self.id,
+            takes: self.takes,
             received: &mut self.received,
             tool_calls: &mut self.tool_calls,
             response: Box::pin(self.cx.send_request(prompt).block_task()),
             answer: None,
         }
     }
+}
+
+/// `blocks` as the agent `takes` them.
+fn content(blocks: impl IntoIterator<Item = Block>, takes: Takes) -> Vec<ContentBlock> {
+    blocks
+        .into_iter()
+        .map(|block| match block {
+            Block::Text(text) => ContentBlock::Text(TextContent::new(text)),
+            Block::File(path) => file_block(&path, takes.files),
+            Block::Quote { uri, text } => quote_block(uri, text, takes.files),
+            Block::Picture(path) => picture_block(&path, takes.pictures),
+        })
+        .collect()
+}
+
+/// The method of the request that steers a turn, as `claude-agent-acp`
+/// names it.
+const STEER: &str = "_session/steering";
+
+/// How a line steered into a turn went (see [`Turn::steer`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Steered {
+    /// The agent took it into the turn, which goes on with it.
+    Taken,
+    /// The turn was ending, so the agent did not take it: it goes as a
+    /// prompt of its own once the turn has ended.
+    TooLate,
 }
 
 /// A block of a prompt.
@@ -885,6 +920,7 @@ pub fn file_uri(path: &Path) -> String {
 pub struct Turn<'s> {
     cx: &'s ConnectionTo<Agent>,
     session: &'s SessionId,
+    takes: Takes,
     received: &'s mut UnboundedReceiver<Received>,
     tool_calls: &'s mut HashMap<ToolCallId, Known>,
     response: Pin<Box<dyn Future<Output = agent_client_protocol::Result<PromptResponse>> + Send>>,
@@ -1028,6 +1064,29 @@ impl Turn<'_> {
         Ok(())
     }
 
+    /// Hands the agent `blocks`, a line the human sent while the turn
+    /// runs, to take into it, for an agent that [`Session::steers`]: the
+    /// agent goes on with the line in the turn, which ends once it has
+    /// answered it too. It does not start a turn of its own when the turn
+    /// is ending: the answer says so, for the line to go as a prompt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent refuses, or the connection fails.
+    pub async fn steer(&self, blocks: impl IntoIterator<Item = Block>) -> anyhow::Result<Steered> {
+        let params = serde_json::json!({
+            "sessionId": self.session,
+            "prompt": content(blocks, self.takes),
+            "_meta": { "steering": { "idleBehavior": "promptRequired" } },
+        });
+        let answer = self
+            .cx
+            .send_request(UntypedMessage::new(STEER, params)?)
+            .block_task()
+            .await?;
+        steered(&answer)
+    }
+
     /// Asks the agent to set the setting `id` to `value` while the turn
     /// runs, as [`Session::set`] does.
     ///
@@ -1052,6 +1111,15 @@ impl Turn<'_> {
             }
             self.next().await;
         }
+    }
+}
+
+/// How the agent `answer`ed a line steered into a turn.
+fn steered(answer: &serde_json::Value) -> anyhow::Result<Steered> {
+    match answer["outcome"].as_str() {
+        Some("injected") => Ok(Steered::Taken),
+        Some("promptRequired") => Ok(Steered::TooLate),
+        _ => anyhow::bail!("the agent answered the steered line with {answer}"),
     }
 }
 

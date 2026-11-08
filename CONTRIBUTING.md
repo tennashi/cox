@@ -193,7 +193,15 @@ conversation so far, as Cox kept it, ahead of that line, and the chat
 notes that the agent could not resume. A chat with no session to go on
 with, as one that moved into a sketch or out of one, starts a new
 session the same way, without the note.
-Escape in a chat's
+A line sent while the agent takes a turn goes into that turn, for an
+agent that takes it so, as `claude-agent-acp` says it does as it starts
+(`_meta.steering.supported`), which Cox hands it with
+`_session/steering`: the line shows in the conversation as the human's,
+the agent goes on with it as it works, as when the human sees it go
+wrong, and the turn ends once the agent has answered it too, the goal
+and the triggers then running as for a turn on that line. The input
+says so while the agent works. Of another agent, the line waits in the
+input until the turn ends. Escape in a chat's
 conversation, or its Stop button, stops the turn its agent is taking; the
 conversation stays, and the next line can be sent once the agent has
 stopped. A click on a link in a chat's conversation opens it on that
@@ -1437,7 +1445,8 @@ you"; and a chat's conversation, as it goes on, the agent's tool calls
 and thoughts folded under a line of their chips, as the window folds
 them, which a tap opens, and the plan, what the agent asks, and what
 ran as a turn ended, in sight. From there the human sends a line, as
-in the window, which waits while the agent is at work; answers what the
+in the window, which goes into the turn the agent takes, or waits for
+it to end, as in the window; answers what the
 agent asks, a tap on an option; sets or dismisses a goal the agent
 proposes, and says whether to keep what was learned in the wiki; stops
 a turn; and sets the chat's goal, with ◎ at the page's head, as "Set
@@ -1681,7 +1690,9 @@ opens; the tour has three, and answers `/compact`. The agent takes
 files whole, and pictures, and reads the files a line points to as
 `claude-agent-acp` does, a link to each and its text, which a turn's
 `when` can match: the tour answers a line that points to a file, and
-draws an icon when asked to (see [The stage](#the-stage)).
+draws an icon when asked to (see [The stage](#the-stage)). It takes a
+line Cox steers into a turn as `claude-agent-acp` does, and plays the
+line's turn once the turn's own steps have gone, before the turn ends.
 Its `authMethods` are the ways to log in it offers, as ACP's
 `initialize` says them: with them, the agent asks Cox to log in, before
 it opens a session, or, with `"authRequired": "prompt"`, as it takes a

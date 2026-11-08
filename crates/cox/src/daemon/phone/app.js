@@ -28,7 +28,7 @@ const head = {
 };
 
 let listing = null;
-let chat = null; // { key, entries, state, title, goal }
+let chat = null; // { key, entries, state, steers, title, goal }
 let events = null;
 let drawing = false;
 const opened = new Set(); // the folded groups the human opened, by their first entry
@@ -83,7 +83,7 @@ function shownKey() {
 function connect() {
   if (events) events.close();
   const key = shownKey();
-  chat = key === null ? null : { key, entries: [], state: null, title: null, goal: null, came: false };
+  chat = key === null ? null : { key, entries: [], state: null, steers: false, title: null, goal: null, came: false };
   events = new EventSource(key === null ? "/events" : `/events?chat=${key}`);
   events.onopen = () => { head.lost.hidden = true; };
   events.onerror = () => {
@@ -105,10 +105,11 @@ function hear(told) {
     chat.entries.length = patch.len;
     for (const [at, entry] of patch.entries) chat.entries[at] = entry;
     chat.state = patch.state;
+    chat.steers = patch.steers;
     chat.title = patch.title;
     chat.goal = patch.goal;
     chat.came = true;
-    if (held !== null && takesLines(chat.state)) sendHeld();
+    if (held !== null && takesLines(chat)) sendHeld();
   } else {
     return;
   }
@@ -244,6 +245,7 @@ function drawCompose(row) {
   compose.stop.hidden = !busy;
   compose.stop.disabled = state === "Stopping";
   compose.line.placeholder = state === "Asking" ? "Answer above first…"
+    : busy && chat.steers && state === "Busy" ? "Goes into this turn…"
     : busy ? "Waits for this turn to end…"
       : row.open || row.again ? "A line to the agent…" : "This chat cannot start again";
 }
@@ -567,9 +569,11 @@ function goalOf(text) {
   return { Words: line };
 }
 
-// Whether the chat takes a line now, rather than once its turn ends.
-function takesLines(state) {
-  return state === "Idle" || state === "Closed";
+// Whether the chat takes a line now, rather than once its turn ends: an
+// agent that steers takes it into the turn it takes.
+function takesLines(chat) {
+  if (chat.state === "Idle" || chat.state === "Closed") return true;
+  return Boolean(chat.steers) && (chat.state === "Busy" || chat.state === "Asking");
 }
 
 function hold(text) {
@@ -591,7 +595,7 @@ compose.form.addEventListener("submit", async (event) => {
   compose.line.value = "";
   grow();
   hold(text);
-  if (takesLines(chat.state)) await sendHeld();
+  if (takesLines(chat)) await sendHeld();
 });
 compose.stop.addEventListener("click", () => {
   if (chat) act({ Stop: { key: chat.key } });

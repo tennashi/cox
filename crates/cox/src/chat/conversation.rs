@@ -39,7 +39,7 @@ use cox_core::settings::Setting;
 use cox_core::store::ChatId;
 
 use crate::agent::mcp::{Ended, Ran};
-use crate::agent::{AgentEvent, Command, Opened};
+use crate::agent::{AgentEvent, Command, Opened, Prompt};
 use crate::chat::judge::{self, Verdict};
 
 /// Whose move it is.
@@ -194,6 +194,10 @@ pub struct Patch {
     pub commands: Vec<SlashCommand>,
     pub before_login: State,
     pub keeps: bool,
+    /// Whether the agent takes a line into the turn it takes: from a
+    /// daemon of before it was said, it does not.
+    #[serde(default)]
+    pub steers: bool,
 }
 
 /// The conversation the window shows.
@@ -223,6 +227,13 @@ pub struct Conversation {
     /// Whether the chat's agent can keep what it learned in the wiki, so
     /// that the chat asks the human whether to at its milestones.
     keeps: bool,
+    /// Whether the agent takes a line the human sends while it takes a
+    /// turn into that turn, as its session said as it opened.
+    steers: bool,
+    /// How many lines the human steered into the turn that the agent
+    /// side has not taken yet: a turn that ends meanwhile is not the end
+    /// of the human's line, as the agent goes on with them.
+    steering: usize,
     /// The triggers due as the turn that runs ends, as the host said.
     due: Vec<Due>,
     /// What runs now, as the turn ended, while something does.
@@ -286,6 +297,8 @@ impl Conversation {
             commands: Vec::new(),
             before_login: State::Idle,
             keeps: true,
+            steers: false,
+            steering: 0,
             due: Vec::new(),
             at: None,
             rest: VecDeque::new(),
@@ -331,6 +344,8 @@ impl Conversation {
             commands: Vec::new(),
             before_login: State::Idle,
             keeps: true,
+            steers: false,
+            steering: 0,
             due: Vec::new(),
             at: None,
             rest: VecDeque::new(),
@@ -489,6 +504,7 @@ impl Conversation {
             commands: self.commands.clone(),
             before_login: self.before_login,
             keeps: self.keeps,
+            steers: self.steers,
         }
     }
 
@@ -513,6 +529,7 @@ impl Conversation {
             commands,
             before_login,
             keeps,
+            steers,
         } = patch;
         self.entries.truncate(len);
         for (index, entry) in entries {
@@ -529,6 +546,7 @@ impl Conversation {
         self.commands = commands;
         self.before_login = before_login;
         self.keeps = keeps;
+        self.steers = steers;
     }
 
     fn push(&mut self, entry: Entry) {
@@ -568,15 +586,49 @@ impl Conversation {
     /// Takes what the human entered, with what they handed the chat with
     /// it, and returns the prompt to send the agent, when it waits for
     /// one.
+    /// one, or, for an agent that [`Conversation::steers`], into the turn
+    /// it takes.
     pub fn submit_with(&mut self, input: &str, attached: Vec<Attachment>) -> Option<Command> {
-        let Command::Prompt(mut prompt) = self.start_turn(input, Entry::Human)? else {
-            return None;
+        let command = match self.steer(input) {
+            Some(command) => command,
+            None => self.start_turn(input, Entry::Human)?,
         };
         if !attached.is_empty() {
             self.push(Entry::Attached(attached.clone()));
         }
-        prompt.attached = attached;
-        Some(Command::Prompt(prompt))
+        Some(match command {
+            Command::Prompt(prompt) => Command::Prompt(Prompt { attached, ..prompt }),
+            Command::Steer(prompt) => Command::Steer(Prompt { attached, ..prompt }),
+            command => command,
+        })
+    }
+
+    /// Whether a line the human sends now goes into the turn the agent
+    /// takes, as it goes, rather than waiting for it to end: the agent
+    /// takes lines so, and a turn runs that the human has not stopped.
+    #[must_use]
+    pub fn steers(&self) -> bool {
+        self.steers && matches!(self.state, State::Busy | State::Asking)
+    }
+
+    /// Whether the agent side has yet to take a line the human steered
+    /// into the turn: a turn that ends meanwhile does not end their line.
+    #[must_use]
+    pub fn steering(&self) -> bool {
+        self.steering > 0
+    }
+
+    /// Steers `text`, a line of the human's, into the turn the agent
+    /// takes, when it [`Conversation::steers`]: the line counts as the
+    /// human's last, as one that starts a turn does.
+    fn steer(&mut self, text: &str) -> Option<Command> {
+        if !self.steers() || text.trim().is_empty() {
+            return None;
+        }
+        self.push(Entry::Human(text.to_owned()));
+        self.steering += 1;
+        self.new_line();
+        Some(Command::Steer(text.to_owned().into()))
     }
 
     /// Takes `text`, a line Cox sends in the human's place, such as the
@@ -594,13 +646,18 @@ impl Conversation {
         }
         self.push(entry(text.to_owned()));
         self.state = State::Busy;
+        self.new_line();
+        Some(Command::Prompt(text.to_owned().into()))
+    }
+
+    /// Counts what runs from now on toward a new line of the human's.
+    fn new_line(&mut self) {
         self.turns = 1;
         self.told_line.clear();
         self.raised_line.clear();
         if let Some(goal) = &mut self.goal {
             goal.turns = 1;
         }
-        Some(Command::Prompt(text.to_owned().into()))
     }
 
     /// What the chat works until, if the human set a goal.
@@ -1287,6 +1344,12 @@ impl Conversation {
         if let Some(note) = ended(reason) {
             self.push(Entry::Note(note.to_owned()));
         }
+        // A line steered into the turn, which the agent side has not
+        // taken yet, starts a turn of its own, which ends the human's line.
+        if self.steering() {
+            self.state = State::Busy;
+            return;
+        }
         // A trigger by: this tells the agent once for a line, so that the
         // turn it starts does not tell it again.
         let mut due = std::mem::take(&mut self.due);
@@ -1509,6 +1572,38 @@ impl Conversation {
         }
     }
 
+    /// Notes how the agent's session opened, as `how` says.
+    fn opened(&mut self, how: Opened) {
+        match how {
+            Opened::New => {}
+            Opened::Resumed => {
+                self.push(Entry::Note(
+                    "Resumed: the agent goes on from here.".to_owned(),
+                ));
+            }
+            Opened::Retold {
+                lost,
+                instructions,
+                context,
+            } => {
+                // A chat with no session to go on with, as one that
+                // moved into a sketch, goes on as if it had one.
+                if lost {
+                    self.push(Entry::Note(
+                    "The agent could not resume its session: a new one is told the conversation so far."
+                        .to_owned(),
+                ));
+                }
+                for path in instructions {
+                    self.push(Entry::Note(instructions_note(&path)));
+                }
+                if let Some(context) = context {
+                    self.push(Entry::Note(context_note(&context)));
+                }
+            }
+        }
+    }
+
     /// Shows what the agent side sent.
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
@@ -1520,34 +1615,11 @@ impl Conversation {
                     "The agent did not set {name}: {error}"
                 )));
             }
-            AgentEvent::Opened { how, .. } => match how {
-                Opened::New => {}
-                Opened::Resumed => {
-                    self.push(Entry::Note(
-                        "Resumed: the agent goes on from here.".to_owned(),
-                    ));
-                }
-                Opened::Retold {
-                    lost,
-                    instructions,
-                    context,
-                } => {
-                    // A chat with no session to go on with, as one that
-                    // moved into a sketch, goes on as if it had one.
-                    if lost {
-                        self.push(Entry::Note(
-                            "The agent could not resume its session: a new one is told the conversation so far."
-                                .to_owned(),
-                        ));
-                    }
-                    for path in instructions {
-                        self.push(Entry::Note(instructions_note(&path)));
-                    }
-                    if let Some(context) = context {
-                        self.push(Entry::Note(context_note(&context)));
-                    }
-                }
-            },
+            AgentEvent::Steered => self.steering = self.steering.saturating_sub(1),
+            AgentEvent::Opened { how, steers, .. } => {
+                self.steers = steers;
+                self.opened(how);
+            }
             AgentEvent::ReplyText(text) => {
                 if let Some(Entry::Reply(reply)) = self.entries.last_mut() {
                     reply.push_str(&text);
@@ -1598,7 +1670,13 @@ impl Conversation {
             AgentEvent::Note(note) => self.push(Entry::Note(note)),
             AgentEvent::TurnFailed(error) => {
                 self.push(Entry::Note(format!("The turn failed: {error}")));
-                self.state = State::Idle;
+                // A line steered into it, which the agent side has not
+                // taken yet, starts a turn of its own.
+                self.state = if self.steering() {
+                    State::Busy
+                } else {
+                    State::Idle
+                };
             }
             AgentEvent::Closed(error) => self.agent_closed(error),
         }
@@ -1612,6 +1690,7 @@ impl Conversation {
         };
         self.push(Entry::Note(note));
         self.state = State::Closed;
+        self.steering = 0;
         // A closed agent runs no command.
         self.commands.clear();
     }
@@ -1856,6 +1935,7 @@ mod tests {
         conversation.apply(AgentEvent::Opened {
             id: "session-1".to_owned(),
             how: Opened::Resumed,
+            steers: false,
         });
         assert_eq!(conversation.take_changed(), [2, 3]);
         assert_eq!(
@@ -1877,6 +1957,97 @@ mod tests {
         );
         assert_eq!(conversation.state(), State::Busy);
         assert_eq!(conversation.submit("again"), None);
+    }
+
+    /// A conversation whose agent steers, as its session said as it
+    /// opened.
+    fn steering() -> Conversation {
+        let mut conversation = Conversation::new();
+        conversation.apply(AgentEvent::Opened {
+            id: "session-1".to_owned(),
+            how: Opened::New,
+            steers: true,
+        });
+        conversation
+    }
+
+    #[test]
+    fn steers_a_line_into_the_turn_of_an_agent_that_takes_it() {
+        let mut conversation = steering();
+        assert!(!conversation.steers());
+        conversation.submit("hello");
+        assert!(conversation.steers());
+        conversation.apply(AgentEvent::ReplyText("Working".to_owned()));
+
+        let attached = vec![Attachment {
+            label: "main.rs:1".to_owned(),
+            uri: "file:///main.rs#L1".to_owned(),
+            text: "fn main() {}".to_owned(),
+            picture: None,
+        }];
+        assert_eq!(
+            conversation.submit_with("and this too", attached.clone()),
+            Some(Command::Steer(Prompt {
+                text: "and this too".to_owned(),
+                attached: attached.clone(),
+            }))
+        );
+        assert_eq!(conversation.state(), State::Busy);
+        assert!(conversation.steering());
+        conversation.apply(AgentEvent::Steered);
+        assert!(!conversation.steering());
+        conversation.apply(AgentEvent::ReplyText("Both done.".to_owned()));
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+
+        assert_eq!(
+            conversation.entries(),
+            [
+                Entry::Human("hello".to_owned()),
+                Entry::Reply("Working".to_owned()),
+                Entry::Human("and this too".to_owned()),
+                Entry::Attached(attached),
+                Entry::Reply("Both done.".to_owned()),
+            ]
+        );
+        assert_eq!(conversation.state(), State::Idle);
+        assert!(!conversation.steers());
+    }
+
+    #[test]
+    fn holds_a_line_while_an_agent_that_does_not_steer_takes_a_turn() {
+        let mut conversation = Conversation::new();
+        conversation.submit("hello");
+
+        assert!(!conversation.steers());
+        assert_eq!(conversation.submit("and this too"), None);
+        assert_eq!(conversation.entries(), [Entry::Human("hello".to_owned())]);
+    }
+
+    #[test]
+    fn a_turn_that_ends_before_the_agent_side_took_a_steered_line_goes_on() {
+        let mut conversation = steering();
+        conversation.submit("hello");
+        conversation.submit("and this too");
+
+        // The turn ended before the agent side heard the line, which
+        // starts a turn of its own.
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+        assert_eq!(conversation.state(), State::Busy);
+        conversation.apply(AgentEvent::Steered);
+        conversation.apply(AgentEvent::ReplyText("Done too.".to_owned()));
+        conversation.apply(AgentEvent::TurnEnded(StopReason::EndTurn));
+
+        assert_eq!(conversation.state(), State::Idle);
+    }
+
+    #[test]
+    fn steers_no_line_into_a_turn_the_human_stopped() {
+        let mut conversation = steering();
+        conversation.submit("hello");
+        conversation.cancel();
+
+        assert!(!conversation.steers());
+        assert_eq!(conversation.submit("and this too"), None);
     }
 
     #[test]
