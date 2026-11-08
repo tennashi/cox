@@ -75,7 +75,7 @@ use crate::events::{
     KeyKind, button_flag, button_type, event_flags, key_character, key_event, mouse_event,
 };
 use crate::profile::Profile;
-use crate::viewport::{Resizing, Viewport};
+use crate::viewport::{Resizing, StageSize, Viewport};
 
 /// One picture CEF painted: the whole view, or the whole popup, in BGRA,
 /// in device pixels.
@@ -194,6 +194,11 @@ struct Shared {
     reported: Viewport,
     /// The resize in flight, if any.
     resizing: Option<Resizing>,
+    /// Whether the stage told the page its size yet.
+    told: bool,
+    /// Whether the stage got a picture of the size it told yet: until
+    /// it did, it gets none (see [`Shared::take_frame`]).
+    fitted: bool,
     /// The size of the last picture, in device pixels.
     painted: Option<(u32, u32)>,
     /// The newest picture, until the stage takes it.
@@ -221,17 +226,20 @@ struct Shared {
 }
 
 impl Shared {
-    fn new(url: &str) -> Self {
-        // CEF is told the stage's size once it is laid out.
-        let initial = Viewport {
+    /// A page showing `url`, made at the size the stage last told any
+    /// page, if it told one, until it tells this one its own.
+    fn new(url: &str, stage_size: Option<Viewport>) -> Self {
+        let initial = stage_size.unwrap_or(Viewport {
             width: 800,
             height: 600,
             scale: 1.0,
-        };
+        });
         Self {
             wanted: initial,
             reported: initial,
             resizing: None,
+            told: false,
+            fitted: false,
             painted: None,
             frame: None,
             popup: None,
@@ -378,6 +386,7 @@ pub struct Cef {
     /// The port agents connect to with the Chrome `DevTools` Protocol (CDP),
     /// if one was free.
     devtools_port: Option<u16>,
+    stage_size: StageSize,
 }
 
 /// A stage's handle to its browser. Cloning it shares the same browser.
@@ -385,6 +394,7 @@ pub struct Cef {
 pub struct Browser {
     shared: SharedRef,
     target: TargetId,
+    stage_size: StageSize,
 }
 
 /// Starts CEF, and returns the handle to it.
@@ -471,6 +481,7 @@ pub fn start(profile: Option<PathBuf>) -> Cef {
         browsers,
         profile: Arc::new(profile),
         devtools_port,
+        stage_size: StageSize::default(),
     }
 }
 
@@ -500,7 +511,8 @@ impl Cef {
         url: &str,
         serve: Option<scheme::Serve>,
     ) -> (Browser, UnboundedReceiver<Event>) {
-        let shared = Arc::new(Mutex::new(Shared::new(url)));
+        let stage_size = *lock(&self.stage_size);
+        let shared = Arc::new(Mutex::new(Shared::new(url, stage_size)));
         let (events, receiver) = unbounded_channel();
         let (target, target_id) = watch::channel(None);
         let new = NewBrowser {
@@ -525,6 +537,7 @@ impl Cef {
             Browser {
                 shared,
                 target: target_id,
+                stage_size: Arc::clone(&self.stage_size),
             },
             receiver,
         )
@@ -616,10 +629,11 @@ impl Browser {
         self.shared().host.is_some()
     }
 
-    /// The newest picture CEF painted since the last call, if any.
+    /// The newest picture CEF painted since the last call, if any, once
+    /// one of the size [`Browser::resize`] told came.
     #[must_use]
     pub fn take_frame(&self) -> Option<Frame> {
-        self.shared().frame.take()
+        self.shared().take_frame()
     }
 
     /// The cursor the page asks for where the mouse is, which the stage
