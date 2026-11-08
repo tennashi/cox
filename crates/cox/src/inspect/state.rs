@@ -172,9 +172,14 @@ fn list(told: &mut String, workspace: &Workspace) {
             } else {
                 ""
             };
+            let icon = if named.has_icon() {
+                ", with an icon"
+            } else {
+                ""
+            };
             let _ = writeln!(
                 told,
-                "  {} ({}){chosen}",
+                "  {} ({}){chosen}{icon}",
                 named.name(),
                 named.folder().display()
             );

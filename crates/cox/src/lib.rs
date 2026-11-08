@@ -58,6 +58,7 @@ pub mod login;
 pub mod logs;
 pub mod notices;
 pub mod process;
+pub mod project_icon;
 pub mod raw;
 pub mod schedule;
 pub mod scratch;

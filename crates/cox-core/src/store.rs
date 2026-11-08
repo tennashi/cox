@@ -125,6 +125,13 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 #[serde(transparent)]
 pub struct ProjectId(i64);
 
+/// The number the project is kept by, as its icon is named after it.
+impl std::fmt::Display for ProjectId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// A chat kept, which an entry of another chat's conversation can name,
 /// as the number it is kept by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
