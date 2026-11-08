@@ -963,6 +963,94 @@ async fn a_chat_whose_folder_moved_starts_again_where_the_human_says(cx: &mut Te
 }
 
 #[gpui::test]
+async fn a_project_works_in_other_folders_and_its_chats_go_on_where_they_work(
+    cx: &mut TestAppContext,
+) {
+    let app = scratch("folders-app");
+    let lib = scratch("folders-lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    let (store, kept) = kept_chat(&app, None);
+    let (agents, workspace, cx) =
+        open_window_resuming(cx, scratch("folders-home"), store.clone(), Resumes::Resume);
+    let card = |cx: &mut VisualTestContext| {
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.open_project_card(1, window, cx);
+        });
+        workspace.read_with(cx, |workspace, _| {
+            workspace.project_card().expect("the card is open").clone()
+        })
+    };
+
+    // The human adds a folder to the project.
+    let input = card(cx).read_with(cx, |card, _| card.input().clone());
+    let typed = lib.display().to_string();
+    input.update(cx, |input, cx| input.set_text(&typed, cx));
+    cx.simulate_keystrokes("enter");
+    settled(cx, &workspace);
+    assert_eq!(
+        store.projects().unwrap()[0].also,
+        std::slice::from_ref(&lib)
+    );
+    cx.simulate_keystrokes("escape");
+
+    // A new chat's agent works in it too, beside the project's folder.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(app.clone()), window, cx);
+    });
+    say(cx, &workspace, "one").await;
+    let agent = Arc::clone(agents.borrow().last().unwrap());
+    assert_eq!(
+        (agent.cwd(), agent.also()),
+        (Some(app.clone()), vec![lib.clone()])
+    );
+    let notes = shown_entries(cx, &workspace);
+    assert!(
+        notes.contains(&Entry::Note(format!("Also works in: {}", lib.display()))),
+        "{notes:?}"
+    );
+
+    // Made the project's, the folder is where the chats it opens work.
+    card(cx);
+    click(cx, "make-primary-1");
+    settled(cx, &workspace);
+    let projects = store.projects().unwrap();
+    assert_eq!(
+        (&projects[0].folder, &projects[0].also),
+        (&lib, &vec![app.clone()])
+    );
+    cx.simulate_keystrokes("escape");
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(lib.clone()), window, cx);
+    });
+    say(cx, &workspace, "two").await;
+    let agent = Arc::clone(agents.borrow().last().unwrap());
+    assert_eq!(
+        (agent.cwd(), agent.also()),
+        (Some(lib.clone()), vec![app.clone()])
+    );
+
+    // The chats it had go on where they worked, the others beside them.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.show(FIRST_KEPT, window, cx);
+    });
+    say(cx, &workspace, "again").await;
+    let agent = Arc::clone(agents.borrow().last().unwrap());
+    assert_eq!(
+        (agent.cwd(), agent.also()),
+        (Some(app.clone()), vec![lib.clone()])
+    );
+    let folder = store
+        .chats()
+        .unwrap()
+        .into_iter()
+        .find(|chat| chat.id == kept)
+        .unwrap()
+        .folder;
+    assert_eq!(folder, Some(app.clone()));
+    assert_eq!(agents.borrow().len(), 3);
+}
+
+#[gpui::test]
 async fn what_an_agent_tells_of_a_session_it_loads_is_not_shown_again(cx: &mut TestAppContext) {
     let folder = scratch("load");
     let (store, _) = kept_chat(&folder, Some("session-1"));

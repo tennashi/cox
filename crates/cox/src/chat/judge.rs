@@ -253,6 +253,7 @@ impl Judge {
         let start = Start::New {
             instructions: Instructions::project(&cwd),
             setup: Some(setup),
+            also: Vec::new(),
         };
         let Agent {
             commands,

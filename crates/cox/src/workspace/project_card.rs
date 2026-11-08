@@ -1,26 +1,33 @@
 //! The card where the human edits a project, over the window, which
 //! "Edit project…" in the menu of the right button on the project, on
-//! the rail, opens: the folder its chats work in, in an input, where
-//! Enter moves the project to the folder typed, whole or from `~`, as
-//! when the human moved or renamed its folder, and "Choose…" asks for a
-//! folder and moves it there. A project whose folder is not there says
-//! so; one whose folder is there does not move, since another folder is
-//! another project. Escape, the ×, or a click beside the card closes it.
+//! the rail, opens: the project's folders, its own first, which its chats
+//! work in, and the others, which their agents work in too, each of which
+//! can become the project's or be taken out; and an input, where Enter
+//! adds the folder typed, whole or from `~`, and "Choose…" asks for one.
+//! A project whose folder is not there says so, and the input moves the
+//! project to where the folder went instead; one whose folder is there
+//! does not move, since another folder is another project. Escape, the ×,
+//! or a click beside the card closes it.
 
 use std::path::{Path, PathBuf};
 
 use cox_core::store::ProjectId;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
-    MouseButton, PathPromptOptions, Subscription, Window, actions, div, prelude::*, px, rgb,
+    MouseButton, PathPromptOptions, SharedString, Subscription, Window, actions, div, prelude::*,
+    px, rgb,
 };
 
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::card;
+use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK};
+use crate::ui::theme::{
+    ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED,
+};
+use crate::ui::tip;
 
 actions!(
     cox,
@@ -36,6 +43,9 @@ const KEY_CONTEXT: &str = "ProjectCard";
 /// How wide the card is.
 const WIDTH: f32 = 560.;
 
+/// How tall a row of the folders is.
+const ROW_HEIGHT: f32 = 34.;
+
 /// Binds the key that closes the card.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new(
@@ -45,20 +55,43 @@ pub fn bind_keys(cx: &mut App) {
     )]);
 }
 
-/// The human asked to move the project to this folder.
-pub struct MoveTo(pub PathBuf);
+/// What the human asked of the project's folders.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Edit {
+    /// Move the project to this folder, where its own went.
+    MoveTo(PathBuf),
+    /// Have its chats work in this folder too.
+    Add(PathBuf),
+    /// Have its chats work in this folder, one beside its own, no more.
+    Remove(PathBuf),
+    /// Make this folder, one beside its own, the project's.
+    MakePrimary(PathBuf),
+}
+
+impl Edit {
+    /// Whether the project stands as the edit leaves it.
+    fn done(&self, standing: &Standing) -> bool {
+        match self {
+            Self::MoveTo(folder) | Self::MakePrimary(folder) => standing.folder == *folder,
+            Self::Add(folder) => standing.also.contains(folder),
+            Self::Remove(folder) => !standing.also.contains(folder),
+        }
+    }
+}
 
 /// The human closed the card.
 pub struct Dismissed;
 
 /// What the window knows of the project and the others, for the card to
-/// say whether the project can move to a folder.
+/// say what can be done with its folders.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Standing {
     /// The folder its chats work in.
     pub folder: PathBuf,
     /// Whether its folder is not there.
     pub missing: bool,
+    /// The other folders its chats work in too.
+    pub also: Vec<PathBuf>,
     /// Whether one of its chats is at work, while which it does not move.
     pub at_work: bool,
     /// The folders of the other projects, and Cox's home.
@@ -68,13 +101,13 @@ pub struct Standing {
 /// What the line under the input says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Told {
-    /// How to move the project.
+    /// What the input does.
     Hint,
-    /// The project is on its way to this folder.
-    Moving(PathBuf),
-    /// The project moved to this folder.
-    Moved(PathBuf),
-    /// The project cannot move to what the human typed.
+    /// The edit is on its way.
+    Asked(Edit),
+    /// The project stands as the edit leaves it.
+    Done(Edit),
+    /// The edit cannot be made.
     Failed(String),
 }
 
@@ -99,7 +132,8 @@ impl ProjectCard {
     ) -> Self {
         let input = cx.new(|cx| {
             let mut input = LineInput::new(cx);
-            input.set_text(&shortened(&standing.folder), cx);
+            input.set_placeholder("Another folder, whole or from ~", cx);
+            input.set_text(&filled(&standing), cx);
             input
         });
         let submitted = cx.subscribe_in(&input, window, |card, _, Submitted, _, cx| {
@@ -128,49 +162,85 @@ impl ProjectCard {
     }
 
     /// Follows the project as the window lists it now, named `name`: once
-    /// it is where the human moved it, says so.
+    /// it stands as the human asked, says so.
     pub fn follow(&mut self, name: String, standing: Standing, cx: &mut Context<Self>) {
-        if self.standing.folder != standing.folder {
-            let shown = shortened(&standing.folder);
-            self.input
-                .update(cx, |input, cx| input.set_text(&shown, cx));
+        if self.standing.folder != standing.folder || self.standing.missing != standing.missing {
+            self.fill(&standing, cx);
         }
-        if matches!(&self.told, Told::Moving(to) if *to == standing.folder) {
-            self.told = Told::Moved(standing.folder.clone());
+        if let Told::Asked(edit) = &self.told
+            && edit.done(&standing)
+        {
+            if matches!(edit, Edit::Add(_)) {
+                self.input.update(cx, LineInput::clear);
+            }
+            self.told = Told::Done(edit.clone());
         }
         self.name = name;
         self.standing = standing;
         cx.notify();
     }
 
+    /// Fills the input as the project standing as `standing` has it.
+    fn fill(&self, standing: &Standing, cx: &mut Context<Self>) {
+        let text = filled(standing);
+        self.input.update(cx, |input, cx| input.set_text(&text, cx));
+    }
+
     /// What the card shows, a line each, for `cox --inspect state`.
     #[must_use]
     pub fn described(&self, cx: &App) -> Vec<String> {
-        vec![
-            format!("Project card of {}", self.name),
-            format!("Folder input holding {:?}", self.input.read(cx).text()),
-            format!("Under it: {}", self.told().0),
-        ]
+        std::iter::once(format!("Project card of {}", self.name))
+            .chain(std::iter::once(format!(
+                "Folder {} (primary{})",
+                shortened(&self.standing.folder),
+                if self.standing.missing {
+                    ", not there"
+                } else {
+                    ""
+                }
+            )))
+            .chain(
+                self.standing
+                    .also
+                    .iter()
+                    .map(|folder| format!("Folder {}", shortened(folder))),
+            )
+            .chain([
+                format!("Folder input holding {:?}", self.input.read(cx).text()),
+                format!("Under it: {}", self.told().0),
+            ])
+            .collect()
     }
 
-    /// Moves the project to the folder the input names, if it can.
+    /// Does with the folder the input names what the input does, if it
+    /// can.
     fn submit(&mut self, cx: &mut Context<Self>) {
         let user = std::env::var_os("HOME").map(PathBuf::from);
         let text = self.input.read(cx).text().to_owned();
         match crate::settings::folder_of(&text, user.as_deref()) {
-            Ok(folder) => self.move_to(&folder, cx),
+            Ok(folder) => self.take(&folder, cx),
             Err(why) => self.tell(Told::Failed(why.to_owned()), cx),
         }
     }
 
-    /// Moves the project to `folder`, if it can.
-    fn move_to(&mut self, folder: &Path, cx: &mut Context<Self>) {
+    /// Moves the project to `folder`, while its own is not there, or else
+    /// adds `folder` to it, if it can.
+    fn take(&mut self, folder: &Path, cx: &mut Context<Self>) {
         let folder: PathBuf = folder.components().collect();
-        if let Some(why) = why_not(&self.standing, &folder) {
+        if self.standing.missing {
+            self.ask(why_not(&self.standing, &folder), Edit::MoveTo(folder), cx);
+        } else {
+            self.ask(why_not_add(&self.standing, &folder), Edit::Add(folder), cx);
+        }
+    }
+
+    /// Asks for `edit`, unless `why_not` says why it cannot be made.
+    fn ask(&mut self, why_not: Option<&'static str>, edit: Edit, cx: &mut Context<Self>) {
+        if let Some(why) = why_not {
             return self.tell(Told::Failed(why.to_owned()), cx);
         }
-        self.tell(Told::Moving(folder.clone()), cx);
-        cx.emit(MoveTo(folder));
+        self.tell(Told::Asked(edit.clone()), cx);
+        cx.emit(edit);
     }
 
     fn tell(&mut self, told: Told, cx: &mut Context<Self>) {
@@ -178,7 +248,7 @@ impl ProjectCard {
         cx.notify();
     }
 
-    /// Asks the human for a folder, and moves the project to it.
+    /// Asks the human for a folder, and does with it what the input does.
     fn choose(window: &mut Window, cx: &mut Context<Self>) {
         let chosen = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -195,7 +265,7 @@ impl ProjectCard {
                 }
                 _ => return,
             };
-            this.update(cx, |card, cx| card.move_to(&folder, cx)).ok();
+            this.update(cx, |card, cx| card.take(&folder, cx)).ok();
         })
         .detach();
     }
@@ -204,14 +274,8 @@ impl ProjectCard {
     fn told(&self) -> (String, u32) {
         match &self.told {
             Told::Failed(why) => (why.clone(), FAILED),
-            Told::Moving(_) => ("Moving…".to_owned(), FAINT),
-            Told::Moved(folder) => (
-                format!(
-                    "Moved: its chats work in {} from now on.",
-                    shortened(folder)
-                ),
-                ACCENT,
-            ),
+            Told::Asked(_) => ("…".to_owned(), FAINT),
+            Told::Done(edit) => (done(edit), ACCENT),
             Told::Hint if self.standing.missing => (
                 "Cox cannot find this folder. Type where it is now, and Enter moves the \
                  project there."
@@ -219,8 +283,8 @@ impl ProjectCard {
                 ASKING,
             ),
             Told::Hint => (
-                "Once you move or rename the folder, type where it is now, and Enter moves the \
-                 project there; Escape closes."
+                "Type another folder, or choose one, and Enter adds it: each chat's agent \
+                 works in it too, from the next time it starts."
                     .to_owned(),
                 FAINT,
             ),
@@ -260,6 +324,151 @@ impl ProjectCard {
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))),
             )
     }
+
+    /// The project's folders, a row each, its own first.
+    fn render_folders(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let own = {
+            let (tag, color) = if self.standing.missing {
+                ("NOT THERE", ASKING)
+            } else {
+                ("PRIMARY", FAINT)
+            };
+            folder_row(0, &self.standing.folder).child(
+                div()
+                    .flex_shrink_0()
+                    .px_1()
+                    .text_size(px(10.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(color))
+                    .child(tag),
+            )
+        };
+        let others = self
+            .standing
+            .also
+            .iter()
+            .enumerate()
+            .map(|(index, folder)| {
+                let number = index + 1;
+                let made = folder.clone();
+                let removed = folder.clone();
+                folder_row(number, folder)
+                    .child(
+                        button(("make-primary", number), "Make primary", Kind::Plain)
+                            .h(px(26.))
+                            .text_size(px(12.))
+                            .tooltip(tip(
+                                "The chats opened from then on work in it; those the project has \
+                             go on where they are",
+                            ))
+                            .on_click(cx.listener(move |card, _, _, cx| {
+                                let why = why_not_primary(&card.standing, &made);
+                                card.ask(why, Edit::MakePrimary(made.clone()), cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(("remove-folder", number))
+                            .debug_selector(move || format!("remove-folder-{number}"))
+                            .flex_shrink_0()
+                            .size(px(26.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(HOVER)))
+                            .child(icon(Icon::Close, 13., FAINT))
+                            .tooltip(tip("Take it out of the project"))
+                            .on_click(cx.listener(move |card, _, _, cx| {
+                                card.ask(None, Edit::Remove(removed.clone()), cx);
+                            })),
+                    )
+            });
+        div()
+            .flex()
+            .flex_col()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(RAISED))
+            .child(own)
+            .children(others)
+    }
+}
+
+/// What the input holds first for the project that stands as `standing`:
+/// its folder while that is not there, for the human to say where it
+/// went, or else nothing, for another folder.
+fn filled(standing: &Standing) -> String {
+    if standing.missing {
+        shortened(&standing.folder)
+    } else {
+        String::new()
+    }
+}
+
+/// A row of the project's folders, the `number`th, from 0, which shows
+/// `folder`, by its name and then its path, which gives way where the
+/// row is too narrow, for what it offers after it.
+fn folder_row(number: usize, folder: &Path) -> gpui::Div {
+    let name: SharedString = named(folder).into();
+    div()
+        .debug_selector(move || format!("project-folder-{number}"))
+        .h(px(ROW_HEIGHT))
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .when(number > 0, |row| row.border_t_1().border_color(rgb(BORDER)))
+        .child(icon(Icon::Folder, 14., DIM))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(13.))
+                .text_color(rgb(FOREGROUND))
+                .child(name),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .text_size(px(12.))
+                .text_color(rgb(FAINT))
+                .child(ellipsis(shortened(folder))),
+        )
+}
+
+/// What `folder` is called: its name, or its path when it has none.
+fn named(folder: &Path) -> String {
+    folder
+        .file_name()
+        .map_or_else(|| folder.to_string_lossy(), |name| name.to_string_lossy())
+        .into_owned()
+}
+
+/// What the line under the input says once `edit` is made.
+fn done(edit: &Edit) -> String {
+    match edit {
+        Edit::MoveTo(folder) => format!(
+            "Moved: its chats work in {} from now on.",
+            shortened(folder)
+        ),
+        Edit::Add(folder) => format!(
+            "Added {}: each chat's agent works in it too, from the next time it starts.",
+            named(folder)
+        ),
+        Edit::Remove(folder) => format!(
+            "Took out {}: each chat's agent works in it no more, from the next time it starts.",
+            named(folder)
+        ),
+        Edit::MakePrimary(folder) => format!(
+            "The chats opened from now on work in {}; those the project has go on where they \
+             are.",
+            named(folder)
+        ),
+    }
 }
 
 /// Why the project that stands as `standing` cannot move to `folder`, if
@@ -292,7 +501,35 @@ fn why_not(standing: &Standing, folder: &Path) -> Option<&'static str> {
     None
 }
 
-impl EventEmitter<MoveTo> for ProjectCard {}
+/// Why the project that stands as `standing` cannot work in `folder` too,
+/// if it cannot.
+fn why_not_add(standing: &Standing, folder: &Path) -> Option<&'static str> {
+    if folder == standing.folder {
+        return Some("That is the project's folder already.");
+    }
+    if standing.also.iter().any(|also| also == folder) {
+        return Some("The project has that folder already.");
+    }
+    if !folder.is_dir() {
+        return Some("There is no folder there.");
+    }
+    None
+}
+
+/// Why `folder`, one beside the project's own, cannot become the
+/// project's, if it cannot.
+fn why_not_primary(standing: &Standing, folder: &Path) -> Option<&'static str> {
+    if !folder.is_dir() {
+        return Some("That folder is not there.");
+    }
+    // Another project's folder is that project's.
+    if standing.taken.iter().any(|taken| taken == folder) {
+        return Some("Another project is in that folder, or Cox's own chats are.");
+    }
+    None
+}
+
+impl EventEmitter<Edit> for ProjectCard {}
 impl EventEmitter<Dismissed> for ProjectCard {}
 
 impl Focusable for ProjectCard {
@@ -334,15 +571,15 @@ impl Render for ProjectCard {
                             .text_size(px(11.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(rgb(FAINT))
-                            .child("FOLDER"),
+                            .child("FOLDERS"),
                     )
                     .child(div().text_size(px(13.)).text_color(rgb(DIM)).child(
-                        "The folder the project's chats work in. Once you move or rename \
-                             it, say where it is now: the chats, the tabs of the stage, the \
-                             icon and how the triggers are arranged go with it, and each \
-                             chat's agent starts again there, told the conversation so far. \
-                             No file moves.",
+                        "The project's chats work in its primary folder, and their agents in \
+                         the others too. Once you move or rename the primary, say where it is \
+                         now: the chats, the tabs of the stage, the icon and how the triggers \
+                         are arranged go with it. No file moves.",
                     ))
+                    .child(self.render_folders(cx))
                     .child(
                         div()
                             .mt_1()
@@ -393,7 +630,9 @@ impl Render for ProjectCard {
 
 #[cfg(test)]
 mod tests {
-    use super::{Standing, why_not};
+    use std::path::PathBuf;
+
+    use super::{Edit, Standing, why_not, why_not_add, why_not_primary};
 
     #[test]
     fn a_project_moves_only_to_a_folder_that_is_there_and_no_one_elses() {
@@ -403,6 +642,7 @@ mod tests {
         let standing = Standing {
             folder: root.join("app"),
             missing: true,
+            also: Vec::new(),
             at_work: false,
             taken: vec![root.join("other")],
         };
@@ -422,6 +662,42 @@ mod tests {
             ..busy
         };
         assert!(why_not(&there, &root.join("app-2")).is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_project_works_in_folders_that_are_there_and_makes_one_its_own_unless_taken() {
+        let root = std::env::temp_dir().join(format!("cox-project-folders-{}", std::process::id()));
+        for folder in ["app", "lib", "other", "docs"] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        let standing = Standing {
+            folder: root.join("app"),
+            missing: false,
+            also: vec![root.join("lib"), root.join("other")],
+            at_work: true,
+            taken: vec![root.join("other")],
+        };
+        // Another project's folder is one a project works in too.
+        assert_eq!(why_not_add(&standing, &root.join("docs")), None);
+        assert!(why_not_add(&standing, &root.join("app")).is_some());
+        assert!(why_not_add(&standing, &root.join("lib")).is_some());
+        assert!(why_not_add(&standing, &root.join("nowhere")).is_some());
+        // A chat at work goes on where it works.
+        assert_eq!(why_not_primary(&standing, &root.join("lib")), None);
+        assert!(why_not_primary(&standing, &root.join("other")).is_some());
+        assert!(why_not_primary(&standing, &root.join("nowhere")).is_some());
+
+        assert!(Edit::Add(root.join("lib")).done(&standing));
+        assert!(!Edit::Remove(root.join("lib")).done(&standing));
+        assert!(!Edit::MakePrimary(root.join("lib")).done(&standing));
+        let made = Standing {
+            folder: root.join("lib"),
+            also: vec![root.join("app"), root.join("other")],
+            ..standing
+        };
+        assert!(Edit::MakePrimary(root.join("lib")).done(&made));
+        assert!(Edit::Remove(PathBuf::from("/elsewhere")).done(&made));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -69,6 +69,7 @@ pub fn generate(agents: &Agents, id: ProjectId, name: &str, folder: &Path) -> an
     let start = Start::New {
         instructions: None,
         setup: Some(drawer()),
+        also: Vec::new(),
     };
     let mut agent =
         crate::chat::launcher::spawn(agents.of(None), folder.to_owned(), Vec::new(), start);

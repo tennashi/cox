@@ -29,6 +29,9 @@ pub struct ProjectRow {
     /// them to say where it went.
     #[serde(default)]
     pub missing: bool,
+    /// The other folders its chats work in too, beside `folder`.
+    #[serde(default)]
+    pub also: Vec<PathBuf>,
 }
 
 /// A chat, as the window lists it in its tabs.
@@ -63,6 +66,10 @@ pub struct ChatRow {
     pub ending: bool,
     /// The id of the agent it talks to.
     pub agent: String,
+    /// The folder it works in, when it is not its project's, as one that
+    /// opened before another folder of the project became the project's.
+    #[serde(default)]
+    pub folder: Option<PathBuf>,
 }
 
 /// The projects and chats, as the window shows them.
@@ -273,6 +280,15 @@ pub enum ToDaemon {
     /// The project kept as `project` works in `folder` from now on, as
     /// when the human moved its folder there.
     MoveProject { project: ProjectId, folder: PathBuf },
+    /// The chats of the project kept as `project` work in `folder` too,
+    /// beside its own.
+    AddFolder { project: ProjectId, folder: PathBuf },
+    /// The chats of the project kept as `project` no longer work in
+    /// `folder`, one beside its own.
+    RemoveFolder { project: ProjectId, folder: PathBuf },
+    /// `folder`, one beside the project's own, is the project's from now
+    /// on, and the chats it has go on where they work.
+    MakePrimary { project: ProjectId, folder: PathBuf },
     /// Answer [`FromDaemon::Settled`] with `id` once all asked before is
     /// done.
     Sync { id: u64 },

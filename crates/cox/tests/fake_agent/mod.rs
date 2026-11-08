@@ -31,11 +31,12 @@ use agent_client_protocol::schema::v1::{
     NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry,
     PlanEntryPriority, PlanEntryStatus, PromptCapabilities, PromptRequest, PromptResponse,
     RequestPermissionOutcome, RequestPermissionRequest, ResumeSessionRequest,
-    ResumeSessionResponse, SessionCapabilities, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigSelectOption, SessionId, SessionInfoUpdate, SessionNotification,
-    SessionResumeCapabilities, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallContent,
-    ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    ResumeSessionResponse, SessionAdditionalDirectoriesCapabilities, SessionCapabilities,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption, SessionId,
+    SessionInfoUpdate, SessionNotification, SessionResumeCapabilities, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
+    ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo, Error, Responder, Result};
 use cox::agent::instructions;
@@ -122,7 +123,7 @@ pub struct FakeAgent {
     /// The sessions Cox asked to go on with, in order.
     asked_to_resume: Arc<Mutex<Vec<String>>>,
     sessions_opened: Arc<AtomicUsize>,
-    cwd: Arc<Mutex<Option<PathBuf>>>,
+    cwd: Arc<Mutex<Option<cox_acp::Roots>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Prompts>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
@@ -292,7 +293,21 @@ impl FakeAgent {
 
     /// The directory Cox opened the session in.
     pub fn cwd(&self) -> Option<PathBuf> {
-        self.cwd.lock().unwrap().clone()
+        self.cwd
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|roots| roots.cwd.clone())
+    }
+
+    /// The directories Cox opened the session in beside its own.
+    pub fn also(&self) -> Vec<PathBuf> {
+        self.cwd
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|roots| roots.also.clone())
+            .unwrap_or_default()
     }
 
     /// The MCP servers Cox handed over when it opened the session.
@@ -386,7 +401,7 @@ async fn serve(
     resumes: Resumes,
     asked_to_resume: Arc<Mutex<Vec<String>>>,
     sessions_opened: Arc<AtomicUsize>,
-    cwd: Arc<Mutex<Option<PathBuf>>>,
+    cwd: Arc<Mutex<Option<cox_acp::Roots>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Prompts>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
@@ -457,7 +472,10 @@ async fn serve(
                     return responder.respond_with_error(Error::auth_required());
                 }
                 sessions_opened.fetch_add(1, Ordering::SeqCst);
-                *cwd.lock().unwrap() = Some(request.cwd);
+                *cwd.lock().unwrap() = Some(cox_acp::Roots {
+                    cwd: request.cwd,
+                    also: request.additional_directories,
+                });
                 *mcp_servers.lock().unwrap() = request.mcp_servers;
                 // The agent's commands, told ahead of the session's
                 // answer, so that Cox knows them before any line is sent.
@@ -570,12 +588,16 @@ async fn take_turn(
 fn capabilities(resumes: Resumes) -> AgentCapabilities {
     // It takes the files a prompt points to whole.
     let prompts = PromptCapabilities::new().embedded_context(true);
+    // It works in other folders beside its own.
+    let sessions = SessionCapabilities::new()
+        .additional_directories(SessionAdditionalDirectoriesCapabilities::new());
     let capabilities = match resumes {
-        Resumes::Never => AgentCapabilities::new(),
-        Resumes::Load => AgentCapabilities::new().load_session(true),
-        Resumes::Resume | Resumes::Refuse => AgentCapabilities::new().session_capabilities(
-            SessionCapabilities::new().resume(SessionResumeCapabilities::new()),
-        ),
+        Resumes::Never => AgentCapabilities::new().session_capabilities(sessions),
+        Resumes::Load => AgentCapabilities::new()
+            .load_session(true)
+            .session_capabilities(sessions),
+        Resumes::Resume | Resumes::Refuse => AgentCapabilities::new()
+            .session_capabilities(sessions.resume(SessionResumeCapabilities::new())),
     };
     capabilities.prompt_capabilities(prompts)
 }
