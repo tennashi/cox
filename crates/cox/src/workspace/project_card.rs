@@ -1,8 +1,9 @@
 //! The card where the human edits a project, over the window, which
 //! "Edit project…" in the menu of the right button on the project, on
 //! the rail, opens: the project's name, its folder's, which Enter
-//! changes, as the card does as it closes, renaming the folder; and the
-//! project's directories, in `directories` in its folder, which Enter
+//! changes, as the card does as it closes, renaming the folder; its
+//! icon, which the human chooses, has an agent draw, or takes away; and
+//! the project's directories, in `directories` in its folder, which Enter
 //! makes, named as the project unless named otherwise, or clones a
 //! repository into, each of which can be renamed, become a Git
 //! repository and be linked to a remote. A project whose folder is not
@@ -13,11 +14,12 @@ mod directory;
 use directory::Directory;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use cox_core::store::ProjectId;
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
-    MouseButton, SharedString, Subscription, Window, actions, div, prelude::*, px, rgb,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Image, KeyBinding,
+    MouseButton, SharedString, Subscription, Window, actions, div, img, prelude::*, px, rgb,
 };
 
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
@@ -48,6 +50,9 @@ const WIDTH: f32 = 560.;
 /// How tall a row of the directories is.
 const ROW_HEIGHT: f32 = 34.;
 
+/// How big the square of the project's icon is.
+const ICON_SIZE: f32 = 44.;
+
 /// Binds the key that closes the card.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new(
@@ -63,6 +68,18 @@ pub struct Rename(pub String);
 /// The human closed the card.
 pub struct Dismissed;
 
+/// What the human asks of the project's icon (see
+/// [`crate::project_icon`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToIcon {
+    /// A picture they choose, as its icon.
+    Choose,
+    /// An agent to read the project and draw it one.
+    Generate,
+    /// Its icon taken away, the rail drawing a folder again.
+    Remove,
+}
+
 /// What the window knows of the project, for the card to say what can be
 /// done with it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +91,23 @@ pub struct Standing {
     /// Whether one of its chats is at work, while which it is not
     /// renamed.
     pub at_work: bool,
+    /// The icon the human gave it, if they did.
+    pub icon: Option<Arc<Image>>,
+    /// Whether an agent draws it one.
+    pub drawing: Drawing,
+}
+
+/// Whether an agent draws a project an icon.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Drawing {
+    /// None can, as while Cox does not know its agents.
+    Unable,
+    /// One can, when the human asks.
+    Ready,
+    /// One draws it now.
+    Now,
+    /// The one asked last drew none, for this reason; another can.
+    NotDrawn(String),
 }
 
 /// The box of `input`, as the card draws its inputs, named `selector`.
@@ -512,6 +546,7 @@ impl ProjectCard {
                     .map(|why| format!(": {why}"))
                     .unwrap_or_default()
             )))
+            .chain(std::iter::once(self.described_icon()))
             .chain(self.directories.iter().map(|directory| {
                 format!(
                     "Directory {}{}",
@@ -617,6 +652,127 @@ impl ProjectCard {
                     .child(self.name.clone()),
             )
             .child(div().text_size(px(12.)).text_color(rgb(color)).child(said))
+    }
+
+    /// What the line under the project's icon says, and in which color.
+    fn said_of_icon(&self) -> (String, u32) {
+        match &self.standing.drawing {
+            Drawing::Now => {
+                return (
+                    "An agent reads the project and draws its icon…".to_owned(),
+                    FAINT,
+                );
+            }
+            Drawing::NotDrawn(why) => return (format!("No icon was drawn: {why}"), FAILED),
+            Drawing::Unable | Drawing::Ready => {}
+        }
+        (
+            "The rail shows it in place of a folder: a picture, cropped square, or one an \
+             agent draws from what it reads of the project. Cox keeps it apart from the \
+             project's folder."
+                .to_owned(),
+            FAINT,
+        )
+    }
+
+    /// The line `cox --inspect state` says of the project's icon.
+    fn described_icon(&self) -> String {
+        let standing = &self.standing;
+        format!(
+            "Icon: {}{}",
+            if standing.icon.is_some() {
+                "given"
+            } else {
+                "none, a folder"
+            },
+            if matches!(standing.drawing, Drawing::Now | Drawing::NotDrawn(_)) {
+                format!("; {}", self.said_of_icon().0)
+            } else {
+                String::new()
+            }
+        )
+    }
+
+    /// The project's icon, in its square, under its heading, with what
+    /// can be done with it and what is said of it.
+    fn render_icon(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let standing = &self.standing;
+        let square = div()
+            .debug_selector(|| "project-icon".to_owned())
+            .flex_shrink_0()
+            .size(px(ICON_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .when(standing.drawing == Drawing::Now, |square| {
+                square.border_dashed().border_color(rgb(ACCENT))
+            });
+        let square = match standing.icon.clone() {
+            Some(picture) => square.child(img(picture).size(px(ICON_SIZE - 2.)).rounded(px(9.))),
+            None => square.bg(rgb(RAISED)).child(icon(Icon::Folder, 20., FAINT)),
+        };
+        let ask = |to: ToIcon, label: &'static str, said: &'static str, cx: &Context<Self>| {
+            let selector = match to {
+                ToIcon::Choose => "project-icon-choose",
+                ToIcon::Generate => "project-icon-generate",
+                ToIcon::Remove => "project-icon-remove",
+            };
+            button(selector, label, Kind::Plain)
+                .debug_selector(move || selector.to_owned())
+                .h(px(26.))
+                .text_size(px(12.))
+                .tooltip(tip(said))
+                .on_click(cx.listener(move |_, _, _, cx| cx.emit(to)))
+        };
+        let (said, color) = self.said_of_icon();
+        div()
+            .mb_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(label("ICON"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(square)
+                    .child(ask(
+                        ToIcon::Choose,
+                        "Choose…",
+                        "A PNG, a JPEG, a WebP or an SVG",
+                        cx,
+                    ))
+                    .when(
+                        matches!(standing.drawing, Drawing::Ready | Drawing::NotDrawn(_)),
+                        |row| {
+                            row.child(ask(
+                                ToIcon::Generate,
+                                "Generate",
+                                "Have an agent read the project and draw one",
+                                cx,
+                            ))
+                        },
+                    )
+                    .when(standing.icon.is_some(), |row| {
+                        row.child(ask(
+                            ToIcon::Remove,
+                            "Remove",
+                            "Take it away, for a folder again",
+                            cx,
+                        ))
+                    }),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "project-icon-told".to_owned())
+                    .text_size(px(12.))
+                    .text_color(rgb(color))
+                    .child(said),
+            )
     }
 
     /// The row of `directory`, the `index`th, with what can be done with
@@ -787,6 +943,7 @@ fn named(folder: &Path) -> String {
 
 impl EventEmitter<Rename> for ProjectCard {}
 impl EventEmitter<Dismissed> for ProjectCard {}
+impl EventEmitter<ToIcon> for ProjectCard {}
 
 /// What the card says of the project whose folder, `folder`, is not
 /// there.
@@ -839,6 +996,7 @@ impl Render for ProjectCard {
                     .gap_2()
                     .children(missing)
                     .child(self.render_name(cx))
+                    .child(self.render_icon(cx))
                     .child(self.render_directories(cx)),
             )
     }
@@ -855,7 +1013,7 @@ fn label(text: &'static str) -> gpui::Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{Standing, why_not_renamed};
+    use super::{Drawing, Standing, why_not_renamed};
 
     #[test]
     fn a_project_whose_folder_is_not_there_keeps_its_name() {
@@ -866,6 +1024,8 @@ mod tests {
             folder: root.join("app"),
             missing: false,
             at_work: false,
+            icon: None,
+            drawing: Drawing::Unable,
         };
         assert_eq!(why_not_renamed(&standing, "shop"), None);
         assert_eq!(why_not_renamed(&standing, "app"), None);
@@ -874,7 +1034,7 @@ mod tests {
         let gone = Standing {
             folder: root.join("gone"),
             missing: true,
-            at_work: false,
+            ..standing.clone()
         };
         assert!(why_not_renamed(&gone, "shop").is_some());
         let busy = Standing {

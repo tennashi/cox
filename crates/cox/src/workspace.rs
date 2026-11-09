@@ -84,7 +84,7 @@ use crate::ui::theme::{
 use crate::ui::{card, tip};
 use crate::workflow;
 pub use project_card::Gives;
-use project_card::{ProjectCard, Rename, Standing};
+use project_card::{Drawing, ProjectCard, Rename, Standing, ToIcon};
 
 actions!(
     cox,
@@ -435,7 +435,7 @@ pub struct Workspace {
     /// The settings screen, while it is open.
     settings: Option<(Entity<SettingsView>, [Subscription; 2])>,
     /// The card where the human edits a project, while it is open.
-    project_card: Option<(Entity<ProjectCard>, [Subscription; 2])>,
+    project_card: Option<(Entity<ProjectCard>, [Subscription; 3])>,
     /// The sheet over the window the human drags a region on, for the
     /// chat shown, while it is laid.
     region: Option<Sheet>,
@@ -1263,6 +1263,7 @@ impl Workspace {
         self.not_drawn.remove(&id);
         let name = project.name.to_string();
         let folder = project.folder.clone();
+        self.follow_project_card(cx);
         // The agent takes as long as it reads the project, which is no
         // work for the executor's own threads.
         let (drawn, heard) = tokio::sync::oneshot::channel();
@@ -1370,6 +1371,7 @@ impl Workspace {
         if let Some(project) = self.projects.iter_mut().find(|p| p.id == Some(id)) {
             project.icon = crate::project_icon::read(id);
         }
+        self.follow_project_card(cx);
         cx.notify();
     }
 
@@ -1440,6 +1442,16 @@ impl Workspace {
         Standing {
             folder: project.folder.clone(),
             missing: project.missing,
+            icon: project.icon.clone(),
+            drawing: match project.id {
+                _ if self.agents.is_none() => Drawing::Unable,
+                Some(id) if self.drawing.contains(&id) => Drawing::Now,
+                Some(id) => self
+                    .not_drawn
+                    .get(&id)
+                    .map_or(Drawing::Ready, |why| Drawing::NotDrawn(why.clone())),
+                None => Drawing::Unable,
+            },
             at_work: self
                 .chats
                 .iter()
@@ -1475,8 +1487,26 @@ impl Workspace {
                 workspace.close_project_card(window, cx);
             },
         );
+        let iconed = cx.subscribe_in(
+            &card,
+            window,
+            move |workspace, _, to: &ToIcon, window, cx| {
+                let Some(index) = workspace
+                    .projects
+                    .iter()
+                    .position(|project| project.id == Some(id))
+                else {
+                    return;
+                };
+                match to {
+                    ToIcon::Choose => workspace.choose_icon(index, window, cx),
+                    ToIcon::Generate => workspace.generate_icon(index, cx),
+                    ToIcon::Remove => workspace.remove_icon(index, cx),
+                }
+            },
+        );
         window.focus(&card.focus_handle(cx));
-        self.project_card = Some((card, [renamed, dismissed]));
+        self.project_card = Some((card, [renamed, dismissed, iconed]));
         cx.notify();
     }
 
@@ -2869,13 +2899,10 @@ impl Workspace {
     }
 
     /// The menu of the right button on a project of the rail, if it is
-    /// open: to choose its icon, and to take it away.
+    /// open: to edit it, to put it away, and to delete it.
     fn render_project_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (at, index) = self.project_menu?;
-        let project = self.projects.get(index)?;
-        let has_icon = project.has_icon();
-        let draws =
-            self.agents.is_some() && project.id.is_some_and(|id| !self.drawing.contains(&id));
+        self.projects.get(index)?;
         // Deleting takes a second click, so that one by mistake does not.
         let delete = match self.deleting {
             Some(deleting) if deleting == index && self.project_at_work(index) => {
@@ -2894,19 +2921,6 @@ impl Workspace {
             .child(item("edit-project", "Edit project…").on_click(cx.listener(
                 move |workspace, _, window, cx| workspace.open_project_card(index, window, cx),
             )))
-            .child(item("choose-icon", "Choose icon…").on_click(cx.listener(
-                move |workspace, _, window, cx| workspace.choose_icon(index, window, cx),
-            )))
-            .when(draws, |menu| {
-                menu.child(item("generate-icon", "Generate icon").on_click(
-                    cx.listener(move |workspace, _, _, cx| workspace.generate_icon(index, cx)),
-                ))
-            })
-            .when(has_icon, |menu| {
-                menu.child(item("remove-icon", "Remove icon").on_click(
-                    cx.listener(move |workspace, _, _, cx| workspace.remove_icon(index, cx)),
-                ))
-            })
             .child(
                 item("archive-project", "Archive project").on_click(cx.listener(
                     move |workspace, _, window, cx| {
