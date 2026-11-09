@@ -1151,6 +1151,19 @@ impl Daemon {
             ToDaemon::Open { folder } => {
                 self.open(folder);
             }
+            ToDaemon::NewChat { folder } => {
+                // Only in a project the human has, whose folder is there.
+                let index = match folder {
+                    None => Some(0),
+                    Some(folder) => self
+                        .projects
+                        .iter()
+                        .position(|project| project.folder == folder),
+                };
+                if let Some(index) = index.filter(|&index| self.projects[index].folder.is_dir()) {
+                    self.open_in(index, None, None);
+                }
+            }
             ToDaemon::Shown { key } => {
                 self.shown = key;
                 if let Some(slot) = key.and_then(|key| self.slot_mut(key)) {

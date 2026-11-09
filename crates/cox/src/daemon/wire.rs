@@ -202,6 +202,10 @@ pub enum ToDaemon {
     /// Open a chat in the project of `folder`, or of Cox's own, and show
     /// it.
     Open { folder: Option<PathBuf> },
+    /// Open a chat in the project of `folder`, one the human has, or of
+    /// Cox's own, as from the phone: the window lists it, but goes on
+    /// showing what it shows.
+    NewChat { folder: Option<PathBuf> },
     /// The window shows the chat `key`, or none.
     Shown { key: Option<u64> },
     /// The window shows the conversation of the chat `key` from now on:
