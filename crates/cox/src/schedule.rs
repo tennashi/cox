@@ -11,7 +11,7 @@
 //!   schedule:
 //!     cron: "0 9 * * *"
 //! by: new
-//! folder: ~/notes
+//! project: notes
 //! allow: [fetch:*, search:*]
 //! ---
 //!

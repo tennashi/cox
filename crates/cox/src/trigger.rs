@@ -255,9 +255,10 @@ pub enum By {
         allow: Vec<String>,
         /// The patterns of those it is refused.
         reject: Vec<String>,
-        /// Where a schedule of the human's works, from `~` or whole, or,
-        /// when `None`, Cox's home; a project's works in the project.
-        folder: Option<PathBuf>,
+        /// The project a schedule of the human's works in, by its name, in
+        /// the projects of Cox's home, or, when `None`, Cox's home; a
+        /// project's works in the project.
+        project: Option<String>,
     },
 }
 
@@ -377,24 +378,33 @@ impl Trigger {
         };
         let allow = list(&mut properties, "allow")?;
         let reject = list(&mut properties, "reject")?;
-        let folder = match key(&mut properties, "folder") {
+        if key(&mut properties, "folder").is_some() {
+            return Err(
+                "a schedule's chat works in a project of Cox's home, as project: notes, and \
+                 in no other folder"
+                    .to_owned(),
+            );
+        }
+        let project = match key(&mut properties, "project") {
             None => None,
             Some(_) if !scheduled => {
                 return Err(
-                    "folder is where a schedule's chat works, and only a schedule \
+                    "project is where a schedule's chat works, and only a schedule \
                      has one"
                         .to_owned(),
                 );
             }
             // A project's works in the project, whatever it says.
             Some(_) if scope == Scope::Project => None,
-            Some(folder) => {
-                let user = std::env::var_os("HOME").map(PathBuf::from);
-                let folder = folder.one().map_err(|why| format!("folder {why}"))?;
-                Some(
-                    crate::settings::folder_of(folder, user.as_deref())
-                        .map_err(|why| format!("folder: {why}"))?,
-                )
+            Some(project) => {
+                let project = project.one().map_err(|why| format!("project {why}"))?;
+                if project.is_empty() || project.starts_with('.') || project.contains(['/', '\\']) {
+                    return Err(format!(
+                        "project: {project:?} is no project's name, as its folder is named: \
+                         no / in it, nor a . first"
+                    ));
+                }
+                Some(project.to_owned())
             }
         };
         let by = match key(&mut properties, "by") {
@@ -416,7 +426,7 @@ impl Trigger {
             "new" => By::New {
                 allow,
                 reject,
-                folder,
+                project,
             },
             "this" if scheduled => {
                 return Err(
@@ -461,15 +471,15 @@ impl Trigger {
         })
     }
 
-    /// Where a schedule of the human's works: the folder it says, or else
-    /// `home`.
+    /// Where a schedule of the human's works: the folder of the project
+    /// it names, in the projects of `home`, or else `home`.
     #[must_use]
     pub fn works_in(&self, home: &Path) -> PathBuf {
         match &self.by {
             By::New {
-                folder: Some(folder),
+                project: Some(project),
                 ..
-            } => folder.clone(),
+            } => home.join(crate::settings::PROJECTS).join(project),
             _ => home.to_owned(),
         }
     }
@@ -1293,21 +1303,20 @@ mod tests {
 
     /// The schedules of a workflow in `root`, and of a project: one that
     /// works in the project, one that works in the home, one that works
-    /// in a folder no project has, and the project's own. Answers the home, the
-    /// project, that folder and the workflow.
+    /// in a project Cox has not opened, and the project's own. Answers the
+    /// home, the project, that project's folder and the workflow.
     fn schedules_in(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let _ = std::fs::remove_dir_all(root);
-        let (home, project, elsewhere) = (root.join("home"), root.join("app"), root.join("notes"));
+        let home = root.join("home");
+        let projects = home.join(crate::settings::PROJECTS);
+        let (project, elsewhere) = (projects.join("app"), projects.join("notes"));
         let workflow = root.join("workflow");
         for folder in [workflow.join(TRIGGERS), project.join(PROJECT_TRIGGERS)] {
             std::fs::create_dir_all(folder).unwrap();
         }
         std::fs::write(
             workflow.join(TRIGGERS).join("news.md"),
-            format!(
-                "---\non:\n  schedule:\n    cron: \"0 9 * * *\"\nby: new\nfolder: {}\n---\nNews since {{last}}.\n",
-                project.display()
-            ),
+            "---\non:\n  schedule:\n    cron: \"0 9 * * *\"\nby: new\nproject: app\n---\nNews since {last}.\n",
         )
         .unwrap();
         std::fs::write(
@@ -1317,15 +1326,12 @@ mod tests {
         .unwrap();
         std::fs::write(
             workflow.join(TRIGGERS).join("away.md"),
-            format!(
-                "---\non: {{schedule: {{cron: \"0 9 * * 1-5\"}}}}\nfolder: {}\n---\nAway.\n",
-                elsewhere.display()
-            ),
+            "---\non: {schedule: {cron: \"0 9 * * 1-5\"}}\nproject: notes\n---\nAway.\n",
         )
         .unwrap();
         std::fs::write(
             project.join(PROJECT_TRIGGERS).join("triage.md"),
-            "---\non: {schedule: {cron: \"0 9 * * *\"}}\nfolder: ~/ignored\n---\nTriage.\n",
+            "---\non: {schedule: {cron: \"0 9 * * *\"}}\nproject: ignored\n---\nTriage.\n",
         )
         .unwrap();
         (home, project, elsewhere, workflow)
@@ -1483,7 +1489,7 @@ mod tests {
             By::New {
                 allow: vec!["read:*".to_owned(), "execute:git diff*".to_owned()],
                 reject: Vec::new(),
-                folder: None,
+                project: None,
             }
         );
         assert_eq!(trigger.text, "Read the diff.");
@@ -1569,10 +1575,16 @@ mod tests {
                 .contains("when")
         );
         assert!(
-            parse("---\non: turn.end\nby: new\nfolder: ~/x\n---\nhi\n")
+            parse("---\non: turn.end\nby: new\nproject: x\n---\nhi\n")
                 .unwrap_err()
-                .contains("folder")
+                .contains("project")
         );
+        assert!(
+            scheduled("folder: ~/notes\n")
+                .unwrap_err()
+                .contains("project: notes")
+        );
+        assert!(scheduled("project: a/b\n").unwrap_err().contains("no /"));
         assert!(
             parse("---\non: {schedule: {cron: \"0 9 * *\"}}\n---\nhi\n")
                 .unwrap_err()
@@ -1604,7 +1616,7 @@ mod tests {
         );
         assert_eq!(cron("---\non:\n  schedule: 0 9 * * 1,3\n---\nhi\n"), want);
         let trigger = parse(
-            "---\non: {schedule: {cron: \"0 9 * * *\"}}\nfolder: /notes\nallow:\n  - fetch:*\n---\nhi\n",
+            "---\non: {schedule: {cron: \"0 9 * * *\"}}\nproject: notes\nallow:\n  - fetch:*\n---\nhi\n",
         )
         .unwrap();
         assert_eq!(
@@ -1612,10 +1624,13 @@ mod tests {
             By::New {
                 allow: vec!["fetch:*".to_owned()],
                 reject: Vec::new(),
-                folder: Some("/notes".into()),
+                project: Some("notes".to_owned()),
             }
         );
-        assert_eq!(trigger.works_in(Path::new("/home")), Path::new("/notes"));
+        assert_eq!(
+            trigger.works_in(Path::new("/home")),
+            Path::new("/home/projects/notes")
+        );
         assert!(!trigger.runs_on(&On::TurnEnd, false));
     }
 

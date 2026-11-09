@@ -17,7 +17,8 @@
 //! Once the human has what they wanted of it, the sketch ends, in the
 //! ways the human's workflow says (see [`crate::workflow::Sketch`]): as
 //! Cox's own says, a sketch from nothing is opened as a project of its
-//! own, or the sketch is discarded, its folder with it, its agent first
+//! own, its folder moving into the project as a directory, or the sketch
+//! is discarded, its folder with it, its agent first
 //! summing it up in the conversation, and what it changed kept apart,
 //! but for the files too big to keep. The chat goes on, in the project.
 

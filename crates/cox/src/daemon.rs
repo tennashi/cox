@@ -60,10 +60,6 @@ use wire::{ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 /// What the project of chats with no folder is called.
 const COX: &str = "Cox";
 
-/// The folder of Cox's home the projects are made in, each in a folder
-/// of its own.
-const PROJECTS: &str = "projects";
-
 /// How long a chat's name grows, in characters, when the agent or the
 /// first line names it.
 pub const NAME_LENGTH: usize = 80;
@@ -962,12 +958,12 @@ impl Daemon {
         key
     }
 
-    /// Makes a project with nothing set yet, in a folder of its own,
-    /// `untitled-` and the first number no folder there has yet, in the
-    /// projects of Cox's home, and opens a chat in it.
-    fn new_project(&mut self) {
-        let projects = self.projects[0].folder.join(PROJECTS);
-        let folder = (1..=u32::MAX)
+    /// The folder of a project with nothing set yet, `untitled-` and the
+    /// first number no folder there has yet, in the projects of Cox's
+    /// home.
+    fn untitled(&self) -> PathBuf {
+        let projects = self.projects[0].folder.join(crate::settings::PROJECTS);
+        (1..=u32::MAX)
             .map(|number| projects.join(format!("untitled-{number}")))
             .find(|folder| {
                 !folder.exists()
@@ -976,7 +972,13 @@ impl Daemon {
                         .iter()
                         .all(|project| project.folder != *folder)
             })
-            .expect("some number is free");
+            .expect("some number is free")
+    }
+
+    /// Makes a project with nothing set yet, in a folder of its own (see
+    /// [`Self::untitled`]), and opens a chat in it.
+    fn new_project(&mut self) {
+        let folder = self.untitled();
         if let Err(error) = std::fs::create_dir_all(&folder) {
             tracing::error!("cannot make {}: {error}", folder.display());
             return;
@@ -2430,9 +2432,10 @@ impl Daemon {
     }
 
     /// Ends the sketch `key`, whose agent has summed it up if its ending
-    /// asked, as the ending says. Its folder is opened as a project of its
-    /// own, to go on with what the sketch made, for an ending that opens
-    /// it; or else it goes, what the sketch changed kept apart first if
+    /// asked, as the ending says. Its folder moves into a project of its
+    /// own, as a directory named as the project is, to go on with what the
+    /// sketch made, for an ending that opens it (see
+    /// [`Self::open_as_project`]); or else it goes, what the sketch changed kept apart first if
     /// the ending says to (see [`sketch::discard`]), and the sketch ends,
     /// its chat going on in the project toward the ending's goal, if it
     /// has one, its agent told what the ending says then.
@@ -2444,15 +2447,7 @@ impl Daemon {
             return;
         };
         if ending.open {
-            // A project now, what changed in it is what changed since its
-            // last commit.
-            if let Err(error) = cox_editor::changes::forget(&folder) {
-                tracing::warn!(
-                    "{} still counts changes from nothing: {error}",
-                    folder.display()
-                );
-            }
-            self.open(Some(folder));
+            self.open_as_project(key, &folder);
             return;
         }
         let Some(slot) = self.slot(key) else {
@@ -2617,6 +2612,50 @@ impl Daemon {
             self.read_again(ended);
         }
         true
+    }
+
+    /// Moves `folder`, of the sketch `key`, into a project with nothing set
+    /// yet (see [`Self::untitled`]), as the directory of the project's
+    /// name, and opens a chat in the project; the sketch ends, its chats
+    /// going on where they were opened.
+    fn open_as_project(&mut self, key: u64, folder: &Path) {
+        let project = self.untitled();
+        let name = project
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let directory = project.join(crate::settings::DIRECTORIES).join(&name);
+        let moved = directory
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::rename(folder, &directory))
+            .map_err(|error| {
+                let _ = std::fs::remove_dir_all(&project);
+                format!(
+                    "Cox cannot move {} into {}: {error}",
+                    folder.display(),
+                    directory.display()
+                )
+            });
+        if moved.is_ok() {
+            // A repository of the project now, what changed in it is what
+            // changed since its last commit.
+            if let Err(error) = cox_editor::changes::forget(&directory) {
+                tracing::warn!(
+                    "{} still counts changes from nothing: {error}",
+                    directory.display()
+                );
+            }
+        }
+        let ended = moved.map(|()| {
+            format!(
+                "The sketch was opened as the project {name}, whose directory {name} holds what \
+                 it made."
+            )
+        });
+        if self.end_sketch(key, folder, ended) {
+            self.open(Some(project));
+        }
     }
 
     /// Keeps and tells what changed: each chat's conversation, how each

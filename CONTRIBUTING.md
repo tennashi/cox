@@ -540,10 +540,12 @@ menu of the right button on a sketch ends it once the human has what
 they wanted of it, in the ways the human's workflow says, in its
 `sketch.json`, or else as Cox's own
 ([`sketch.json`](crates/cox/src/workflow/sketch.json)) does: "Open as
-project", for a sketch from nothing, opens its folder as a project, with
-a chat in it, to go on with what it made; and "Discard sketch" takes its
-folder away, unless it was opened as a project, which the human goes
-on with. Before it does, once the turn that goes on has ended, Cox asks
+project", for a sketch from nothing, makes a project with nothing set
+yet, as "New project" does, and moves its folder there, as the
+directory named as the project is, as
+`~/cox/projects/untitled-2/directories/untitled-2`, with a chat in the
+project, to go on with what it made; and "Discard sketch" takes its
+folder away. Before it does, once the turn that goes on has ended, Cox asks
 the sketch's agent, in the human's place, to sum the sketch up in the
 conversation, for it to be done again from the conversation alone:
 what it tried, how, the commands it ran and what they showed, what it
@@ -1669,7 +1671,7 @@ on:
   schedule:
     cron: "0 9 * * *"
 by: new
-folder: ~/notes
+project: notes
 allow: [fetch:*, search:*]
 ---
 
@@ -1683,9 +1685,10 @@ any of them with a step, as `*/6`, or a list of those, as `1,3`, months
 and days named by their first three letters too; `0 9 * * 1-5` is nine
 on each weekday, and `0 */6 * * *` every six hours, from midnight.
 `on` also takes it on one line, as `{schedule: {cron: "0 9 * * *"}}`.
-`folder`, whole or from `~`, is where the chat works, in the project of
-that folder, which Cox makes if it is not there; with none, the chat
-works in the home, as Cox's own, and a project's works in the project.
+`project` is the project the chat works in, by its name, in
+`projects` in Cox's home, as `~/cox/projects/notes`, whose folder Cox
+makes if it is not there; with none, the chat works in the home, as
+Cox's own, and a project's works in the project.
 `allow` and `reject` list the patterns of the permission requests Cox
 answers in the human's place, as `open_chat`'s take them (see
 [The stage](#the-stage)); the rest the agent asks the human, as any
@@ -1705,8 +1708,8 @@ folder, by its file's path. One Cox cannot
 read is said in coxd's log, and does not run.
 
 "Triggers" on the stage's bar lists them under "Schedule", in the
-folder where their chats work, and in the home, those whose folder is
-no project's: each with how it runs in words, as `Daily 09:00`, where
+folder where their chats work, and in the home, those whose project
+Cox has not opened yet: each with how it runs in words, as `Daily 09:00`, where
 its chat works when that is elsewhere, when it ran last and when it
 runs next, or that it is due, and a switch that turns it on or off;
 its card says its cron, where its chat works, and what its agent does

@@ -9,7 +9,7 @@ mod fake_daemon;
 
 use std::cell::RefCell;
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -3009,27 +3009,54 @@ async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
     let save = workflow::WIKI_SAVE.say(&[]);
     assert!(self::entries(cx, &sketch).contains(&Entry::Cox(save)));
 
-    // Another opens as a project of its own, which the human goes on
-    // with, so it is no longer discarded.
+    // Another opens as a project of its own, in the projects of the home,
+    // its folder a directory of it named as it is, which the human goes
+    // on with, so it is no longer discarded.
     let empty = open_sketch(cx, &workspace, &asks, Sketch::Empty, 4).await;
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.end_sketch_as(3, own_ending("Open as project"), window, cx);
         workspace.end_sketch_as(3, own_ending("Discard sketch"), window, cx);
     });
     settled(cx, &workspace);
+    assert!(!empty.exists());
+    let project = opened_as_project(cx, &workspace, &home);
+
+    let _ = std::fs::remove_dir_all(&project);
+    let _ = std::fs::remove_dir_all(&folder);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
+}
+
+/// The project the sketch at 3 was opened as, the first with nothing
+/// set yet in the projects of `home`, after checking that the window
+/// lists it, that the sketch's folder is its directory named as it is,
+/// and that the sketch says so.
+fn opened_as_project(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    home: &Path,
+) -> PathBuf {
+    let project = home.join("projects").join("untitled-1");
     let opened = workspace.read_with(cx, |workspace, _| {
         workspace
             .projects()
             .iter()
-            .any(|project| project.folder() == empty.as_path())
+            .any(|kept| kept.folder() == project.as_path())
     });
     assert!(opened);
-    assert!(empty.exists());
-
-    let _ = std::fs::remove_dir_all(&empty);
-    let _ = std::fs::remove_dir_all(&folder);
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
+    assert!(
+        project
+            .join("directories")
+            .join("untitled-1")
+            .join(".git")
+            .exists()
+    );
+    let sketch = view_at(cx, workspace, 3);
+    assert!(
+        self::entries(cx, &sketch).iter().any(|entry| matches!(entry,
+            Entry::Note(note) if note.starts_with("The sketch was opened as the project untitled-1"))),
+    );
+    project
 }
 
 /// Opens a chat from the first chat, on `text`, set up with nothing, as

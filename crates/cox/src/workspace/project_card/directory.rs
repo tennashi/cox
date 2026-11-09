@@ -7,8 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// The folder of a project's directories, in its own.
-pub const DIRECTORIES: &str = "directories";
+pub use crate::settings::DIRECTORIES;
 
 /// A directory of a project, as it stands.
 #[derive(Clone, Debug, PartialEq, Eq)]

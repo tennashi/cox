@@ -216,7 +216,7 @@ function find(folder, file) {
 // stands on what a chat here said last as its turn ended.
 
 /// The fields of a card, as Cox's draft names them.
-const FIELDS = ["name", "scope", "on", "pages", "cron", "folder", "changed", "sketch", "by", "allow", "reject", "text"];
+const FIELDS = ["name", "scope", "on", "pages", "cron", "project", "changed", "sketch", "by", "allow", "reject", "text"];
 
 /// The card open, while one is: the folder it is shown in, its file, if
 /// it has one yet, the draft as saved and as the human changed it, which
@@ -234,7 +234,7 @@ function sent(draft) {
     d.by = "new";
   } else {
     d.cron = "";
-    d.folder = "";
+    d.project = "";
   }
   if (d.by !== "new") {
     d.allow = [];
@@ -259,7 +259,7 @@ const marked = () => (card.file ? changes() : new Set());
 function openCard(folder, t) {
   const saved = t
     ? structuredClone(t.draft)
-    : { name: "", scope: "project", on: "turn.end", pages: [], cron: "", folder: "", changed: [], sketch: null, by: "new", allow: [], reject: [], text: "" };
+    : { name: "", scope: "project", on: "turn.end", pages: [], cron: "", project: "", changed: [], sketch: null, by: "new", allow: [], reject: [], text: "" };
   card = {
     id: t ? t.file : `new-${Date.now()}`,
     folder,
@@ -314,7 +314,7 @@ function settingsOpen() {
   const when = [line("Event", "on", chips("on", EVENT_NAMES))];
   if (d.on === "schedule") {
     when.push(line("Cron", "cron", `<input data-input="cron" class="mono" value="${esc(d.cron)}" placeholder="0 9 * * *" spellcheck="false">`));
-    when.push(line("Folder", "folder", `<input data-input="folder" class="mono" value="${esc(d.folder)}" placeholder="The home" spellcheck="false">`));
+    when.push(line("Project", "project", `<input data-input="project" class="mono" value="${esc(d.project)}" placeholder="The home" spellcheck="false">`));
   } else {
     if (d.on === "wiki.written") {
       when.push(line("Pages", "pages", `<input data-input="pages" class="mono" value="${esc(d.pages.join(" "))}" placeholder="Any" spellcheck="false">`));
@@ -344,7 +344,7 @@ function settingsFolded(changed) {
   if (d.on === "schedule") {
     cells.push(cell("By", "by", "A new chat"));
     cells.push(cell("Cron", "cron", `<code>${esc(d.cron)}</code>`));
-    cells.push(cell("Folder", "folder", esc(d.folder || "The home")));
+    cells.push(cell("Project", "project", esc(d.project || "The home")));
   } else {
     cells.push(cell("By", "by", WHO.find(([by]) => by === d.by)?.[1] ?? esc(d.by)));
     if (d.on === "wiki.written") cells.push(cell("Pages", "pages", d.pages.length ? codes(d.pages) : "Any"));
