@@ -555,7 +555,7 @@ body.trying { overflow: hidden; }
 
 /* The input, as the window's box: the line, with Stop and Send at its
    end. */
-#goal-form, #compose {
+#goal-form, #sketch-form, #compose {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -568,7 +568,12 @@ body.trying { overflow: hidden; }
 #compose { flex-direction: row; align-items: flex-end; }
 #goal-form { border-color: var(--offering-edge); padding: 10px 16px; border-radius: 20px; }
 #goal-form label { font-size: 11px; font-weight: 600; color: var(--faint); }
-#line, #goal-line {
+#sketch-form { border-color: var(--offering-edge); padding: 10px 16px; border-radius: 20px; }
+#sketch-form label { font-size: 11px; font-weight: 600; color: var(--faint); }
+.sketch-row { display: flex; align-items: center; gap: 8px; }
+#sketch-from { flex-shrink: 0; font: inherit; font-size: 12px; }
+#sketch-endings { display: flex; flex-wrap: wrap; gap: 8px; }
+#line, #goal-line, #sketch-line {
   flex: 1;
   width: 100%;
   min-width: 0;
@@ -584,7 +589,7 @@ body.trying { overflow: hidden; }
   line-height: 1.4;
   resize: none;
 }
-#line::placeholder, #goal-line::placeholder { color: var(--faint); }
+#line::placeholder, #goal-line::placeholder, #sketch-line::placeholder { color: var(--faint); }
 #line { align-self: center; }
 .compose-row { display: flex; align-items: center; gap: 6px; }
 #send, #stop {
