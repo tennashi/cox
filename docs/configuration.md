@@ -110,7 +110,7 @@ a good starting point to copy.
 | `sketch.json` | How sketches end. See [`sketch.json`](#sketchjson). | [`sketch.json`](../crates/cox/src/workflow/sketch.json) |
 | `wiki/save.md` | What "Save to wiki" asks the agent. | [`wiki/save.md`](../crates/cox/src/workflow/wiki/save.md) |
 | `close/merge.md` | What "Merge" asks the agent. | [`close/merge.md`](../crates/cox/src/workflow/close/merge.md) |
-| `icon/generate.md` | What "Generate icon" asks an agent. `{name}` stands for the project's name. | [`icon/generate.md`](../crates/cox/src/workflow/icon/generate.md) |
+| `icon/generate.md` | What "Generate", under the icon on a project's card, asks an agent. `{name}` stands for the project's name. | [`icon/generate.md`](../crates/cox/src/workflow/icon/generate.md) |
 | `triggers/*.md` | Triggers that run in every project. See [Triggers](#triggers). | none |
 
 ## Triggers

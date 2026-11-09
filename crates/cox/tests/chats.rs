@@ -1296,6 +1296,12 @@ fn directories_are_made_cloned_and_linked_on_the_projects_card(cx: &mut TestAppC
     });
     let described = |cx: &mut VisualTestContext| cx.read(|cx| card.read(cx).described(cx));
     let input = card.read_with(cx, |card, _| card.directory_input().clone());
+    // The card has the project's icon too, which it has none of yet.
+    let said = described(cx);
+    assert!(
+        said.contains(&"Icon: none, a folder".to_owned()),
+        "{said:?}"
+    );
     let enter = |text: &str, input: &Entity<LineInput>, cx: &mut VisualTestContext| {
         input.update(cx, |input, cx| input.set_text(text, cx));
         cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
