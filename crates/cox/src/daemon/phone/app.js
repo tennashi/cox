@@ -15,6 +15,12 @@ const compose = {
   goalLine: document.getElementById("goal-line"),
   goalButton: document.getElementById("goal-button"),
   changesButton: document.getElementById("changes-button"),
+  sketch: document.getElementById("sketch-form"),
+  sketchLabel: document.getElementById("sketch-label"),
+  sketchLine: document.getElementById("sketch-line"),
+  sketchFrom: document.getElementById("sketch-from"),
+  sketchEndings: document.getElementById("sketch-endings"),
+  sketchButton: document.getElementById("sketch-button"),
   changesCount: document.getElementById("changes-count"),
   failed: document.getElementById("failed"),
   held: document.getElementById("held"),
@@ -41,6 +47,13 @@ let mocks = null;
 // shows it: { key, asked, told: { since, files } or { error } }, as coxd
 // tells it.
 let changes = null;
+// What the human may do of sketches in the chat shown, as the window's
+// menu offers it: { key, asked, told: { start } or { endings } or {} },
+// as coxd tells it.
+let sketching = null;
+// What a sketch the human starts beside the chat starts from, "project"
+// or "empty", as the input's chip has it.
+let sketchFrom = "project";
 let chat = null; // { key, entries, state, steers, title, goal, settings }
 let events = null;
 let drawing = false;
@@ -137,6 +150,8 @@ function hear(told) {
   if (told === null || typeof told !== "object") return;
   if (told.Listing) {
     listing = told.Listing;
+    // A sketch opened as a project, or on its way to an end, ends no more.
+    if (sketching) sketching.asked = false;
     showOpened();
   } else if (told.Patch && chat && told.Patch.key === chat.key) {
     const patch = told.Patch.patch;
@@ -146,6 +161,8 @@ function hear(told) {
     if (working(chat.state) && !working(patch.state) && mocks) mocks.asked = false;
     // And changed the files.
     if (working(chat.state) && !working(patch.state) && changes) changes.asked = false;
+    // And ended a sketch.
+    if (working(chat.state) && !working(patch.state) && sketching) sketching.asked = false;
     chat.state = patch.state;
     chat.steers = patch.steers;
     chat.title = patch.title;
@@ -267,7 +284,9 @@ async function newChat(button, index) {
 }
 
 function showOpened() {
-  if (!opening || chat) return;
+  // A chat opened from the list shows from the list; a sketch, from the
+  // chat it was opened beside.
+  if (!opening || (chat && chat.key !== opening.from)) return;
   const opened = listing.chats.find((row) => row.project === opening.project && !opening.known.has(row.key));
   if (!opened) return;
   opening = null;
@@ -379,6 +398,8 @@ function drawHome() {
   compose.goal.hidden = true;
   compose.goalButton.hidden = true;
   compose.changesButton.hidden = true;
+  compose.sketchButton.hidden = true;
+  compose.sketch.hidden = true;
   drawHead(null);
   document.title = "Cox";
   const shelves = [];
@@ -413,6 +434,8 @@ function drawChat() {
   compose.goalButton.hidden = !row;
   if (row) findChanges(row);
   drawChangesButton();
+  if (row) findSketching(row);
+  drawSketchButton();
   if (row) drawCompose(row);
   if (listing && !row) {
     main.replaceChildren(el("p", { class: "empty" }, "This chat is not there any more. ",
@@ -600,6 +623,88 @@ function findChanges(row) {
       if (chat && chat.key === asked.key) draw();
       drawChanges();
     });
+}
+
+// Asks coxd what the human may do of sketches in the chat of `row`, as
+// the window's menu offers it, unless it asked already.
+function findSketching(row) {
+  if (sketching && sketching.key === row.key && sketching.asked) return;
+  sketching = { key: row.key, asked: true, told: sketching && sketching.key === row.key ? sketching.told : null };
+  const asked = sketching;
+  fetch(`/sketch?chat=${row.key}`)
+    .then((answer) => (answer.ok ? answer.json() : null))
+    .catch(() => null)
+    .then((told) => {
+      if (sketching !== asked) return;
+      const before = JSON.stringify(asked.told);
+      asked.told = told;
+      if (JSON.stringify(told) === before) return;
+      if (told && told.start && compose.sketch.hidden) sketchFrom = told.start;
+      drawSketchButton();
+      if (!compose.sketch.hidden) drawSketch();
+    });
+}
+
+// What coxd last told of sketches in the chat shown.
+function sketchingTold() {
+  return sketching && chat && sketching.key === chat.key ? sketching.told : null;
+}
+
+// The head's button for sketches, as the window's menu has "Start
+// sketch…" and the ways a sketch ends: there while the chat can start one,
+// or end.
+function drawSketchButton() {
+  const told = sketchingTold();
+  const starts = Boolean(told && told.start);
+  const ends = Boolean(told && told.endings && told.endings.length);
+  compose.sketchButton.hidden = !starts && !ends;
+  compose.sketchButton.setAttribute("aria-label", ends ? "End the sketch" : "Start a sketch");
+  if (!starts && !ends) compose.sketch.hidden = true;
+}
+
+// Above the input, as the window's: for a chat, what a sketch beside it is
+// to try, and what it starts from, which Enter opens; for a sketch, the
+// ways it ends, each tapped twice, as the window's menu offers them.
+function drawSketch() {
+  const told = sketchingTold() || {};
+  const ends = told.endings && told.endings.length ? told.endings : null;
+  compose.sketchLine.hidden = Boolean(ends);
+  compose.sketchFrom.hidden = Boolean(ends);
+  compose.sketchLabel.textContent = ends ? "END THE SKETCH" : "SKETCH · WHAT IT TRIES · ENTER STARTS IT";
+  compose.sketchFrom.textContent = sketchFrom === "project" ? "from the project" : "from nothing";
+  compose.sketchEndings.replaceChildren(...(ends || []).map(endingButton));
+  compose.sketchEndings.hidden = !ends;
+}
+
+// A way the sketch ends, as the window's menu offers it: a second tap
+// ends it so, since what the sketch made may go with it.
+function endingButton(ending) {
+  const button = el("button", { type: "button" }, ending.name);
+  let armed = null;
+  button.addEventListener("click", async () => {
+    if (!armed) {
+      button.textContent = `Tap again: ${ending.name}`;
+      button.classList.add("armed");
+      armed = setTimeout(() => {
+        armed = null;
+        button.textContent = ending.name;
+        button.classList.remove("armed");
+      }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    button.disabled = true;
+    if (await act({ EndSketch: { key: chat.key, ending } })) {
+      compose.sketch.hidden = true;
+      if (sketching) sketching.asked = false;
+    } else {
+      armed = null;
+      button.disabled = false;
+      button.textContent = ending.name;
+      button.classList.remove("armed");
+    }
+  });
+  return button;
 }
 
 // How many files changed where the chat shown works, as coxd last told.
@@ -1372,6 +1477,7 @@ compose.stop.addEventListener("click", () => {
 });
 compose.goalButton.addEventListener("click", () => {
   if (!chat) return;
+  compose.sketch.hidden = true;
   compose.goal.hidden = !compose.goal.hidden;
   if (!compose.goal.hidden) {
     compose.goalLine.value = goalText(chat.goal) || "";
@@ -1382,6 +1488,38 @@ compose.goal.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (chat && await act({ SetGoal: { key: chat.key, goal: goalOf(compose.goalLine.value) } })) {
     compose.goal.hidden = true;
+  }
+});
+compose.sketchButton.addEventListener("click", () => {
+  if (!chat) return;
+  compose.goal.hidden = true;
+  compose.sketch.hidden = !compose.sketch.hidden;
+  if (compose.sketch.hidden) return;
+  const told = sketchingTold();
+  if (told && told.start) sketchFrom = told.start;
+  compose.sketchLine.value = "";
+  drawSketch();
+  if (!compose.sketchLine.hidden) compose.sketchLine.focus();
+});
+compose.sketchFrom.addEventListener("click", () => {
+  sketchFrom = sketchFrom === "project" ? "empty" : "project";
+  drawSketch();
+  compose.sketchLine.focus();
+});
+compose.sketch.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const what = compose.sketchLine.value.trim();
+  if (!chat || !what || compose.sketchLine.hidden) return;
+  const row = listing && listing.chats.find((one) => one.key === chat.key);
+  const known = new Set(listing ? listing.chats.map((one) => one.key) : []);
+  if (await act({ StartSketch: { key: chat.key, sketch: sketchFrom, what } })) {
+    compose.sketch.hidden = true;
+    // The sketch opens in the chat's project, and shows, as the window
+    // shows it.
+    if (row) {
+      opening = { project: row.project, known, from: chat.key };
+      showOpened();
+    }
   }
 });
 // The line grows with what is written in it, up to a few lines.
@@ -1403,6 +1541,7 @@ window.addEventListener("hashchange", () => {
   compose.line.value = "";
   hold(null);
   compose.goal.hidden = true;
+  compose.sketch.hidden = true;
   compose.failed.hidden = true;
   say("");
   connect();

@@ -1532,8 +1532,15 @@ chat's folder, and asks again each time a turn ends.
 "New chat", under a project's chats, opens a chat in the project, as
 the window's list does, and shows it on the phone, while the window
 goes on showing what it shows. A chat looked at on the phone counts as
-seen. What else the window does, as handing the chat a selection,
-opening a project or a sketch, is the window's.
+seen. A sketch starts and ends from the phone too, where the human
+tries a way out as they plan it, with the branch at the page's head, as
+"Start sketch…" and the ways a sketch ends in the window's menu: for a
+chat, it opens an input above the chat's own, for what the sketch is to
+try, with what it starts from, which a tap switches, and Enter opens the
+sketch and shows it; for a sketch, it lists the ways it ends, as the
+human's workflow says them, each tapped twice, so that a tap by mistake
+does not end it. What else the window does, as handing the chat a
+selection or opening a project, is the window's.
 
 The page is drawn as the window's panel is, for the human to find on
 the phone what they know from the Mac: filling the phone's screen, with

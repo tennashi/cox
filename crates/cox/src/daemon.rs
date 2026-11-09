@@ -102,6 +102,16 @@ pub struct Spawned {
     pub stage: Option<UnboundedReceiver<ToolRequest>>,
 }
 
+/// What the human may do of sketches in a chat, as the window's menu
+/// offers it (see [`Internal::Sketching`]).
+#[derive(Debug)]
+pub enum Sketching {
+    /// Start one beside it, from the project of `project`, or from nothing.
+    Starts { project: PathBuf },
+    /// End it, a sketch from `from`.
+    Ends { from: Sketch },
+}
+
 /// What the daemon's chats' tasks heard, marked with the chat's key and
 /// the generation of its agent.
 pub enum Internal {
@@ -189,6 +199,13 @@ pub enum Internal {
     Folder {
         key: u64,
         answer: oneshot::Sender<Option<PathBuf>>,
+    },
+    /// What the human may do of sketches in the chat `key`, for the phone
+    /// to offer it as the window's menu does, told on `answer`, or nothing
+    /// of a chat that can neither start one nor end.
+    Sketching {
+        key: u64,
+        answer: oneshot::Sender<Option<Sketching>>,
     },
     /// What the chats that need the human come to is to be pushed to
     /// their phones, on `to`, while they are away from the Mac (see
@@ -1639,6 +1656,9 @@ impl Daemon {
             Internal::Folder { key, answer } => {
                 answer.send(self.slot(key).map(|slot| self.cwd(slot))).ok();
             }
+            Internal::Sketching { key, answer } => {
+                answer.send(self.sketching(key)).ok();
+            }
             Internal::Push { to } => self.push = Some(to),
             Internal::Unview { id } => {
                 if self.viewers.remove(&id).is_some() {
@@ -2264,6 +2284,22 @@ impl Daemon {
         let setup = self.slot(key)?.setup.as_ref()?;
         let folder = setup.folder.clone().filter(|folder| folder.exists())?;
         Some((setup.sketch?, folder))
+    }
+
+    /// What the human may do of sketches in the chat `key`, as the window's
+    /// menu offers it: start one beside it, unless it is a sketch, or end
+    /// it, a sketch that can end.
+    fn sketching(&self, key: u64) -> Option<Sketching> {
+        let slot = self.slot(key)?;
+        match slot.setup.as_ref().and_then(|setup| setup.sketch) {
+            None => Some(Sketching::Starts {
+                project: self.projects[slot.project].folder.clone(),
+            }),
+            Some(_) => self
+                .sketch_of(key)
+                .filter(|_| self.ends_sketch(key))
+                .map(|(from, _)| Sketching::Ends { from }),
+        }
     }
 
     /// Whether the sketch `key` can end: its folder is there, and was not

@@ -51,9 +51,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 pub mod mocks;
 pub(crate) mod tailnet;
 
-use super::Internal;
 use super::push::{self, Notice, Pushed, Pushes, Subscription};
 use super::wire::{FromDaemon, ToDaemon};
+use super::{Internal, Sketching};
 use crate::storage::{self, Kept};
 use crate::ui::theme;
 
@@ -385,6 +385,8 @@ pub async fn serve(
                         page.posted(request).await
                     } else if request.uri().path() == "/changes" {
                         page.changes(&request).await
+                    } else if request.uri().path() == "/sketch" {
+                        page.sketch(&request).await
                     } else {
                         page.answer(&request)
                     };
@@ -515,12 +517,7 @@ impl Page {
         if !self.paired(request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
         }
-        let key = request.uri().query().and_then(|query| {
-            url::form_urlencoded::parse(query.as_bytes())
-                .find_map(|(name, value)| (name == "chat").then(|| value.parse::<u64>().ok()))
-                .flatten()
-        });
-        let Some(key) = key else {
+        let Some(key) = chat_asked(request) else {
             return answer(StatusCode::BAD_REQUEST, TEXT, "No chat");
         };
         let (asked, folder) = tokio::sync::oneshot::channel();
@@ -545,6 +542,38 @@ impl Page {
                 "application/json",
                 serde_json::json!({ "error": error }).to_string(),
             ),
+            Err(error) => answer(StatusCode::INTERNAL_SERVER_ERROR, TEXT, error.to_string()),
+        }
+    }
+
+    /// What the human may do of sketches in the chat `request` names,
+    /// `?chat=<key>`, as JSON, as the window's menu offers it (see
+    /// [`told_sketching`]).
+    async fn sketch(&self, request: &Request<Incoming>) -> Response<Body> {
+        if !self.paired(request) {
+            return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
+        }
+        let Some(key) = chat_asked(request) else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "No chat");
+        };
+        let (asked, sketching) = tokio::sync::oneshot::channel();
+        if self
+            .internal
+            .send(Internal::Sketching { key, answer: asked })
+            .is_err()
+        {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        }
+        let Ok(sketching) = sketching.await else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
+        };
+        // Whether the project is in a Git repository asks Git, and the
+        // workflow's endings are read from its folder.
+        let told = tokio::task::spawn_blocking(move || {
+            told_sketching(sketching.as_ref(), &crate::workflow::sketch().endings)
+        });
+        match told.await {
+            Ok(told) => answer(StatusCode::OK, "application/json", told.to_string()),
             Err(error) => answer(StatusCode::INTERNAL_SERVER_ERROR, TEXT, error.to_string()),
         }
     }
@@ -617,6 +646,17 @@ impl Page {
         };
         if !done_on_the_page(&message) {
             return answer(StatusCode::FORBIDDEN, TEXT, "Not done from the phone");
+        }
+        // A sketch ends only in a way the human's workflow says, as the
+        // window's menu offers it.
+        if let ToDaemon::EndSketch { ending, .. } = &message
+            && !crate::workflow::sketch().endings.contains(ending)
+        {
+            return answer(
+                StatusCode::FORBIDDEN,
+                TEXT,
+                "Not a way the workflow ends a sketch",
+            );
         }
         if self.internal.send(Internal::Act { message }).is_err() {
             return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
@@ -831,8 +871,38 @@ fn done_on_the_page(message: &ToDaemon) -> bool {
         | ToDaemon::AnswerKeep { .. }
         | ToDaemon::Merge { .. }
         | ToDaemon::Set { .. }
+        | ToDaemon::StartSketch { .. }
+        | ToDaemon::EndSketch { .. }
         | ToDaemon::NewChat { .. } => true,
         _ => false,
+    }
+}
+
+/// The chat the query of `request` names, `chat=<key>`.
+fn chat_asked(request: &Request<Incoming>) -> Option<u64> {
+    let query = request.uri().query()?;
+    url::form_urlencoded::parse(query.as_bytes())
+        .find_map(|(name, value)| (name == "chat").then(|| value.parse::<u64>().ok()))
+        .flatten()
+}
+
+/// What the human may do of sketches in a chat, as the page offers it:
+/// `{"start": "project"}`, or `"empty"`, what a sketch started beside the
+/// chat starts from at first, as the window's input has it; or
+/// `{"endings": [...]}`, the ways the sketch ends, of `endings`, as the
+/// window's menu offers them; or `{}`, neither.
+fn told_sketching(
+    sketching: Option<&Sketching>,
+    endings: &[crate::workflow::Ending],
+) -> serde_json::Value {
+    match sketching {
+        Some(Sketching::Starts { project }) => {
+            serde_json::json!({ "start": crate::chat::sketch::from_at_first(project) })
+        }
+        Some(Sketching::Ends { from }) => serde_json::json!({
+            "endings": endings.iter().filter(|ending| ending.ends(*from)).collect::<Vec<_>>(),
+        }),
+        None => serde_json::json!({}),
     }
 }
 
@@ -1356,6 +1426,52 @@ mod tests {
     }
 
     #[test]
+    fn tells_how_a_sketch_starts_or_the_ways_it_ends() {
+        use crate::chat::sketch::Sketch;
+        let ending = |name: &str, from: Option<Sketch>, open: bool| crate::workflow::Ending {
+            name: name.to_owned(),
+            from,
+            sum_up: None,
+            keep: false,
+            open,
+            then: None,
+            goal: None,
+        };
+        let endings = [
+            ending("Open as project", None, true),
+            ending("Rewrite in project", Some(Sketch::Project), false),
+            ending("Discard sketch", None, false),
+        ];
+        let names = |told: &serde_json::Value| -> Vec<String> {
+            told["endings"]
+                .as_array()
+                .map(|endings| {
+                    endings
+                        .iter()
+                        .map(|ending| ending["name"].to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let ends = |from| told_sketching(Some(&Sketching::Ends { from }), &endings);
+        assert_eq!(
+            names(&ends(Sketch::Project)),
+            [r#""Rewrite in project""#, r#""Discard sketch""#]
+        );
+        assert_eq!(
+            names(&ends(Sketch::Empty)),
+            [r#""Open as project""#, r#""Discard sketch""#]
+        );
+        assert_eq!(ends(Sketch::Project)["endings"][0]["from"], "project");
+        // A folder in no Git repository starts its sketches from nothing.
+        let project = std::env::temp_dir().join("cox-no-repository");
+        std::fs::create_dir_all(&project).ok();
+        let starts = told_sketching(Some(&Sketching::Starts { project }), &endings);
+        assert_eq!(starts, serde_json::json!({ "start": "empty" }));
+        assert_eq!(told_sketching(None, &endings), serde_json::json!({}));
+    }
+
+    #[test]
     fn does_only_what_the_page_does() {
         let line = |attached: Vec<cox_core::entry::Attachment>| ToDaemon::Submit {
             key: 1,
@@ -1370,6 +1486,11 @@ mod tests {
             key: 1,
             id: "model".to_owned(),
             value: "opus".to_owned(),
+        }));
+        assert!(done_on_the_page(&ToDaemon::StartSketch {
+            key: 1,
+            sketch: crate::chat::sketch::Sketch::Empty,
+            what: "a mock".to_owned(),
         }));
         assert!(done_on_the_page(&ToDaemon::NewChat { folder: None }));
         assert!(!done_on_the_page(&ToDaemon::Open { folder: None }));
