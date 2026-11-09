@@ -874,7 +874,8 @@ fn done_on_the_page(message: &ToDaemon) -> bool {
         | ToDaemon::Set { .. }
         | ToDaemon::StartSketch { .. }
         | ToDaemon::EndSketch { .. }
-        | ToDaemon::NewChat { .. } => true,
+        | ToDaemon::NewChat { .. }
+        | ToDaemon::NewProjectAside => true,
         _ => false,
     }
 }
@@ -1494,6 +1495,8 @@ mod tests {
             what: "a mock".to_owned(),
         }));
         assert!(done_on_the_page(&ToDaemon::NewChat { folder: None }));
+        assert!(done_on_the_page(&ToDaemon::NewProjectAside));
+        assert!(!done_on_the_page(&ToDaemon::NewProject));
         assert!(!done_on_the_page(&ToDaemon::Open { folder: None }));
         assert!(!done_on_the_page(&ToDaemon::Archive {
             key: 1,

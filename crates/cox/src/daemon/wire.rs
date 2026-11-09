@@ -201,6 +201,10 @@ pub enum ToDaemon {
     /// Make a project, with nothing set yet, in a folder of its own in
     /// the projects of Cox's home, and open a chat in it, and show it.
     NewProject,
+    /// Make a project as [`ToDaemon::NewProject`] does, and open a chat
+    /// in it, as from the phone: the window lists them, but goes on
+    /// showing what it shows.
+    NewProjectAside,
     /// Open a chat in the project of `folder`, one the human has, or of
     /// Cox's own, as from the phone: the window lists it, but goes on
     /// showing what it shows.
