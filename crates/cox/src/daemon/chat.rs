@@ -1217,6 +1217,29 @@ impl Chat {
         self.conversation.answer_name_proposal(index, answer);
     }
 
+    /// Shows the project named `name`, which the agent proposes to make of
+    /// the chat, on a card in the conversation, with `why`, and the folder
+    /// of the sketch that goes into it, `sketch`, if any.
+    pub fn propose_project(&mut self, name: &str, why: Option<String>, sketch: Option<PathBuf>) {
+        self.conversation.propose_project(name, why, sketch);
+    }
+
+    /// The project proposed at `index`, its name and the folder of the
+    /// sketch that goes into it, if any, while the human has not answered
+    /// it.
+    #[must_use]
+    pub fn proposed_project(&self, index: usize) -> Option<(String, Option<PathBuf>)> {
+        self.conversation
+            .proposed_project(index)
+            .map(|(name, sketch)| (name.to_owned(), sketch.map(Path::to_path_buf)))
+    }
+
+    /// The human answered the project proposed at `index`: made it, or let
+    /// it be.
+    pub fn answer_project_proposal(&mut self, index: usize, answer: Answer) {
+        self.conversation.answer_project_proposal(index, answer);
+    }
+
     /// The human chose, on the card at `index`, whether to keep what a
     /// chat learned in the wiki: answers which chat is to keep it, `None`
     /// for this one, when they chose to.

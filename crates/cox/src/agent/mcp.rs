@@ -187,6 +187,17 @@ pub enum ChatRequest {
         why: Option<String>,
         answer: oneshot::Sender<Result<String, String>>,
     },
+    /// Show the human the project named `name`, proposed to be made of the
+    /// chat, which is in none, for them to make, the chat moving into it,
+    /// or to let be, with `why`, if the agent said, and the files of the
+    /// sketch of the chat numbered `sketch` going into it, if given;
+    /// answer where the project is to be, or why it cannot be proposed.
+    ProposeProject {
+        name: String,
+        why: Option<String>,
+        sketch: Option<u64>,
+        answer: oneshot::Sender<Result<PathBuf, String>>,
+    },
     /// Open a chat in the chat's project, under it in the list, whose
     /// agent is set up as `setup` says, works until `goal` is met if
     /// given, and gets `text` as its first line; answer how the chat goes
@@ -518,21 +529,18 @@ static STARTED: AtomicU64 = AtomicU64::new(0);
 /// Starts the server of a chat working in `cwd`, an absolute path, which
 /// the paths the agent gives are taken from, serving the tools named in
 /// `only`, or all of them when `None`, but those of a project when the
-/// chat is in none, as `in_project` says.
+/// chat is in none, and the one that makes a project of a chat when it is
+/// in one, as `in_project` says.
 ///
 /// # Errors
 ///
 /// When the socket cannot be made.
 pub fn start(
     cwd: PathBuf,
-    only: Option<Vec<String>>,
+    only: Option<&[String]>,
     in_project: bool,
 ) -> anyhow::Result<ToolServer> {
-    let only = if in_project {
-        only
-    } else {
-        Some(calls::outside_projects(only.as_deref()))
-    };
+    let only = Some(calls::for_chat(only, in_project));
     let directory = private_directory()?;
     let socket = directory.join("mcp");
     let listener = listen(&socket).inspect_err(|_| {
@@ -875,7 +883,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 17 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 18 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();

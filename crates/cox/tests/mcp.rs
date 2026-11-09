@@ -165,7 +165,7 @@ fn the_agent_gets_only_the_tools_its_setup_names() {
     let cwd = scratch("only");
     std::fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
     let only = Some(vec!["show_markdown".to_owned()]);
-    let server = cox::agent::mcp::start(cwd.clone(), only, true).unwrap();
+    let server = cox::agent::mcp::start(cwd.clone(), only.as_deref(), true).unwrap();
     let mut agent = Agent::start(&server);
     let mut requests = server.requests;
 
@@ -195,6 +195,28 @@ fn the_agent_gets_only_the_tools_its_setup_names() {
 }
 
 #[test]
+fn a_chat_in_a_project_gets_no_tool_to_make_one_of_it() {
+    let cwd = scratch("in-project");
+    let server = cox::agent::mcp::start(cwd.clone(), None, true).unwrap();
+    let mut agent = Agent::start(&server);
+
+    let listed = agent.ask(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"propose_project"), "{names:?}");
+    assert!(names.contains(&"propose_name"), "{names:?}");
+    agent.call(3, "propose_project", &json!({ "name": "anything" }));
+    let refused = agent.hear();
+    assert_eq!(refused["error"]["message"], "no tool propose_project");
+    drop(agent);
+    std::fs::remove_dir_all(cwd).unwrap();
+}
+
+#[test]
 fn a_chat_in_no_project_gets_no_tool_to_name_its_project() {
     let cwd = scratch("no-project");
     let server = cox::agent::mcp::start(cwd.clone(), None, false).unwrap();
@@ -208,7 +230,8 @@ fn a_chat_in_no_project_gets_no_tool_to_name_its_project() {
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
     assert!(!names.contains(&"propose_name"), "{names:?}");
-    // It gets the rest.
+    // It gets the one that makes a project of it, and the rest.
+    assert!(names.contains(&"propose_project"), "{names:?}");
     assert!(names.contains(&"show_markdown"), "{names:?}");
     agent.call(3, "propose_name", &json!({ "name": "anything" }));
     let refused = agent.hear();

@@ -554,6 +554,20 @@ impl Store {
         Ok(())
     }
 
+    /// Keeps that `chat` is of `project` now, or of none, as a chat of
+    /// Cox's own.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn move_chat(&self, chat: ChatId, project: Option<ProjectId>) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET project = ?2 WHERE id = ?1",
+            params![chat.0, project.map(|project| project.0)],
+        )?;
+        Ok(())
+    }
+
     /// Keeps that the human put `project` away, off the rail, or brought it
     /// back.
     ///
