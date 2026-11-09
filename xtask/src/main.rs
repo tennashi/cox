@@ -1,5 +1,7 @@
 //! Development tasks for the Cox workspace, run as `cargo xtask <task>`.
 
+mod identity;
+
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
@@ -18,6 +20,10 @@ Tasks:
             Build Cox and assemble Cox.app, the macOS app bundle, next to
             the executables under target/
     ci      Run every check that CI runs: format, lint, test and dependencies
+    identity new <folder> | identity import <folder>
+            macOS: make the certificate Cox is signed with, put it in the
+            login keychain, and write it into <folder>, a new folder, to
+            keep; or put one kept in <folder> in the login keychain
     install
             Build Cox for release and install it apart from target/:
             ~/Applications/Cox.app on macOS, ~/.local/bin/cox on Linux,
@@ -37,6 +43,7 @@ fn main() -> anyhow::Result<()> {
     match env::args().nth(1).as_deref() {
         Some("bundle") => bundle(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("ci") => ci(&sh),
+        Some("identity") => identity::run(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("install") => install(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("run") => run(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("setup") => setup(&sh),
@@ -179,38 +186,31 @@ fn assemble(sh: &Shell, build: &Build) -> anyhow::Result<PathBuf> {
     Ok(app)
 }
 
-/// The name of the certificate Cox is signed with when the human's
-/// keychain has it, so that macOS knows each build for the same app.
-const SIGNING: &str = "Cox Local Signing";
-
-/// What to sign Cox with: `COX_SIGNING_IDENTITY` if set, or else
-/// [`SIGNING`] if the keychain has it, or else `-`, ad hoc. macOS keeps
-/// what the human allowed an app, as to record the screen, for the app it
-/// knows by its signature: by the certificate and the bundle's identifier
-/// for an app signed with one, but by the build's very hash for one signed
-/// ad hoc, which each build changes, so that each asks again.
+/// What to sign Cox with: `COX_SIGNING_IDENTITY` if set, or else the
+/// certificate `cargo xtask identity` makes, if the login keychain has it,
+/// or else `-`, ad hoc. macOS keeps what the human allowed an app, as to
+/// record the screen, for the app it knows by its signature: by the
+/// certificate and the bundle's identifier for an app signed with one, but
+/// by the build's very hash for one signed ad hoc, which each build
+/// changes, so that each asks again.
 fn signing_identity(sh: &Shell) -> String {
     if let Ok(identity) = env::var("COX_SIGNING_IDENTITY")
         && !identity.is_empty()
     {
         return identity;
     }
-    // Without `-v`: a certificate of one's own is not one the system
-    // trusts, which codesign signs with all the same.
-    let found = cmd!(sh, "security find-identity -p codesigning")
-        .quiet()
-        .ignore_stderr()
-        .read()
-        .unwrap_or_default();
-    if found.contains(&format!("\"{SIGNING}\"")) {
-        SIGNING.to_owned()
-    } else {
-        println!(
-            "Signing ad hoc: macOS asks again for what it allowed the last build. \
-             See CONTRIBUTING.md for a certificate of {SIGNING:?}."
-        );
-        "-".to_owned()
+    if let Some(hash) = identity::login_keychain()
+        .ok()
+        .and_then(|keychain| identity::find(sh, &keychain))
+    {
+        return hash;
     }
+    println!(
+        "Signing ad hoc: macOS asks again for what it allowed the last build. \
+         Run `cargo xtask identity new <folder>` to sign with a certificate of {:?}.",
+        identity::NAME
+    );
+    "-".to_owned()
 }
 
 /// What Cox needs of the CEF distribution on Linux when it runs: CEF and
