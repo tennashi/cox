@@ -830,6 +830,7 @@ fn done_on_the_page(message: &ToDaemon) -> bool {
         | ToDaemon::ChangeProposal { .. }
         | ToDaemon::AnswerKeep { .. }
         | ToDaemon::Merge { .. }
+        | ToDaemon::Set { .. }
         | ToDaemon::NewChat { .. } => true,
         _ => false,
     }
@@ -1365,6 +1366,11 @@ mod tests {
         assert!(done_on_the_page(&ToDaemon::Choose { key: 1, index: 0 }));
         assert!(done_on_the_page(&ToDaemon::Stop { key: 1 }));
         assert!(done_on_the_page(&ToDaemon::Merge { key: 1 }));
+        assert!(done_on_the_page(&ToDaemon::Set {
+            key: 1,
+            id: "model".to_owned(),
+            value: "opus".to_owned(),
+        }));
         assert!(done_on_the_page(&ToDaemon::NewChat { folder: None }));
         assert!(!done_on_the_page(&ToDaemon::Open { folder: None }));
         assert!(!done_on_the_page(&ToDaemon::Archive {
