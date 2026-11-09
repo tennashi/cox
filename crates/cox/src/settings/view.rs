@@ -7,7 +7,8 @@
 //! kept (see [`super::keep_home`]), and the window opens the chats in no
 //! project there from then on. Under it are the folders of the human's
 //! workflow and wiki (see [`folder`]), the agents they run (see
-//! [`agents`]), and the language they read in (see [`translation`]).
+//! [`agents`]), the language they read in (see [`translation`]), and the
+//! code a phone pairs with (see [`phone`]).
 //! What the screen says the human selects, copies and translates (see
 //! [`words`]).
 //! Escape, the ×, or a click beside the card closes it,
@@ -16,6 +17,7 @@
 
 mod agents;
 mod folder;
+mod phone;
 mod translation;
 mod words;
 
@@ -28,6 +30,7 @@ use gpui::{
 
 use self::agents::AgentsSection;
 use self::folder::FolderField;
+use self::phone::PhoneSection;
 use self::translation::TranslationSection;
 use self::words::Words;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
@@ -91,6 +94,7 @@ pub struct SettingsView {
     wiki: Entity<FolderField>,
     agents: Entity<AgentsSection>,
     translation: Entity<TranslationSection>,
+    phone: Entity<PhoneSection>,
     /// What the screen says, as the human selects it.
     words: Words,
     /// What has the keyboard while the human selects the words.
@@ -142,6 +146,7 @@ impl SettingsView {
             }),
             agents: cx.new(|cx| AgentsSection::new(words.clone(), cx)),
             translation: cx.new(|cx| TranslationSection::new(words.clone(), cx)),
+            phone: cx.new(|_| PhoneSection::new(words.clone())),
             words,
             focus: cx.focus_handle(),
             _submitted: submitted,
@@ -173,6 +178,7 @@ impl SettingsView {
             ),
             format!("Wiki input holding {:?}", self.wiki.read(cx).text(cx)),
             self.translation.read(cx).described(cx),
+            self.phone.read(cx).described(),
         ]
     }
 
@@ -416,7 +422,8 @@ impl Render for SettingsView {
                     .child(div().mt_4().child(self.workflow.clone()))
                     .child(div().mt_4().child(self.wiki.clone()))
                     .child(div().mt_4().child(self.agents.clone()))
-                    .child(div().mt_4().child(self.translation.clone())),
+                    .child(div().mt_4().child(self.translation.clone()))
+                    .child(div().mt_4().child(self.phone.clone())),
             )
     }
 }

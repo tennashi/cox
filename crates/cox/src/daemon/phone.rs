@@ -216,6 +216,58 @@ fn token_at(file: &Path) -> anyhow::Result<String> {
     Ok(token)
 }
 
+/// Where a phone opens the page, and the link that pairs it, as the
+/// settings show them: through the tailnet when `tailscale` tells the
+/// Mac's name there, or else on the Mac itself. It has no `Debug`, so
+/// that the secret is not logged by mistake.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Pairing {
+    /// The page, as a phone of the Mac's login opens it, with no pairing.
+    pub page: String,
+    /// The link that pairs a phone of another login, or one that comes
+    /// some other way, with the secret in it.
+    pub pair: String,
+    /// The Mac's login in the tailnet, whose phones need no pairing; none
+    /// when `tailscale` does not say the Mac's name there.
+    pub login: Option<String>,
+    /// Whether the tailnet's devices find each other by name, which the
+    /// phone needs to find the Mac by its name.
+    pub magic_dns: bool,
+}
+
+/// Where a phone opens the page, and the link that pairs it, without
+/// having the tailnet serve it, which coxd does as it starts.
+///
+/// # Errors
+///
+/// When the settings turn the page off, or the secret cannot be had.
+pub fn pairing() -> anyhow::Result<Pairing> {
+    let port =
+        port().context("settings.json turns the phone's page off, with {\"phone\": false}")?;
+    let token = token()?;
+    let status = tailscale().then(tailnet::status).flatten();
+    Ok(match status {
+        Some((
+            _,
+            tailnet::Status {
+                owner: Some(owner),
+                magic_dns,
+            },
+        )) => Pairing {
+            page: format!("https://{}/", owner.host),
+            pair: format!("https://{}/pair/{token}", owner.host),
+            login: Some(owner.login),
+            magic_dns,
+        },
+        _ => Pairing {
+            page: format!("http://127.0.0.1:{port}/"),
+            pair: format!("http://127.0.0.1:{port}/pair/{token}"),
+            login: None,
+            magic_dns: false,
+        },
+    })
+}
+
 /// What `cox --phone-link` prints: where the phone opens the page,
 /// through the tailnet when `tailscale` tells the Mac's name there, with
 /// what the tailnet lacks for it, and the link that pairs a phone of
