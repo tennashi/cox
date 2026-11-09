@@ -55,6 +55,9 @@ const INDENT: f32 = 16.;
 pub(super) enum Shown {
     Entry(usize),
     Work(Range<usize>),
+    /// What the human closes the work on, after the entries, which
+    /// number this many (see [`closing`]).
+    Closing(usize),
 }
 
 /// Who says an entry, as the timeline of the conversation names them.
@@ -120,7 +123,7 @@ impl Place {
     /// place grows, as work does with each step.
     pub(super) fn first(&self) -> usize {
         match &self.shown {
-            Shown::Entry(index) => *index,
+            Shown::Entry(index) | Shown::Closing(index) => *index,
             Shown::Work(work) => work.start,
         }
     }
@@ -237,6 +240,57 @@ pub(super) fn shown(entries: &[Entry]) -> Vec<Shown> {
     shown
 }
 
+/// What the human closes the work their last line left the agent on, in
+/// one place, as the phone gathers it: what the agent showed, what it
+/// decided on its own, against the plan it started with, and how the
+/// checks went as its last turn ended, with those of the goal met.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Closing<'a> {
+    /// The pictures and videos shown, by the indexes of their entries.
+    pub shown: Vec<usize>,
+    /// The steps the agent added and removed, as the plan stands last.
+    pub decided: Option<(&'a [String], &'a [String])>,
+    pub checks: Vec<&'a Check>,
+}
+
+/// What the human closes the work on, from what `entries` holds since
+/// the human's last line: none before they sent one, once they asked the
+/// agent to merge it, until their next line, or when the work has nothing
+/// to close on.
+pub(super) fn closing(entries: &[Entry]) -> Option<Closing<'_>> {
+    let from = entries
+        .iter()
+        .rposition(|entry| matches!(entry, Entry::Human(_)))?;
+    let mut closing = Closing {
+        shown: Vec::new(),
+        decided: None,
+        checks: Vec::new(),
+    };
+    let mut ended: Option<&[Check]> = None;
+    let mut met = Vec::new();
+    for (index, entry) in entries.iter().enumerate().skip(from + 1) {
+        match entry {
+            Entry::Merge => return None,
+            Entry::Media { .. } => closing.shown.push(index),
+            Entry::PlanChanged { added, removed } => {
+                closing.decided = Some((added.as_slice(), removed.as_slice()));
+            }
+            Entry::Checks(checks) => ended = Some(checks),
+            Entry::Event { on, checks } if on == "goal.met" => met.extend(checks),
+            _ => {}
+        }
+    }
+    closing.decided = closing
+        .decided
+        .filter(|(added, removed)| !added.is_empty() || !removed.is_empty());
+    if let Some(ended) = ended {
+        closing.checks.extend(ended);
+        closing.checks.extend(met);
+    }
+    (!closing.shown.is_empty() || closing.decided.is_some() || !closing.checks.is_empty())
+        .then_some(closing)
+}
+
 /// A part of the conversation that the human opens and closes: what the
 /// entry at an index shows under its line, the work folded from the
 /// entry at an index on, or the line of the tool call at an index under
@@ -282,7 +336,7 @@ impl ChatView {
         let mut places = Vec::new();
         for shown in shown(entries) {
             let first = match &shown {
-                Shown::Entry(index) => *index,
+                Shown::Entry(index) | Shown::Closing(index) => *index,
                 Shown::Work(work) => work.start,
             };
             let entry = &entries[first];
@@ -324,7 +378,29 @@ impl ChatView {
             };
             places.push(Place { shown, mark, name });
         }
+        if self.closes() {
+            places.push(Place {
+                shown: Shown::Closing(entries.len()),
+                mark: None,
+                name: None,
+            });
+        }
         places
+    }
+
+    /// Whether the chat shows what the human closes the work on: it waits
+    /// for them after the work their last line left it, its agent merges
+    /// what it made, as one that works in the project does and a sketch's
+    /// does not, and the work has something to close on.
+    fn closes(&self) -> bool {
+        let waits = match self.conversation.state() {
+            State::Idle => true,
+            State::Closed => self.row.again,
+            _ => false,
+        };
+        waits
+            && crate::daemon::merges(self.row.setup.as_ref())
+            && closing(self.conversation.entries()).is_some()
     }
 
     /// Place `place` of the conversation, as [`Self::places`] last worked
@@ -342,6 +418,7 @@ impl ChatView {
                 }
             }
             Shown::Work(work) => self.render_work(work, name, cx),
+            Shown::Closing(index) => self.render_closing(index, cx),
         };
         // The list lays each place out on its own, so each keeps the
         // conversation's margins itself.
@@ -521,46 +598,8 @@ impl ChatView {
         let chips = checks.iter().enumerate().map(|(at, check)| {
             let fold = Fold::Check(index, at);
             let open = check.said.is_some() && self.folds.is_open(fold, false);
-            // A ring while it waits or runs, and a dot once it went:
-            // passed, found something, or could not run.
-            let (dot, filled, text) = match check.state {
-                CheckState::Waiting => (DISABLED, false, FAINT),
-                CheckState::Running => (LINK, false, DIM),
-                CheckState::Passed => (ACCENT, true, DIM),
-                CheckState::Failed => (ASKING, true, DIM),
-                CheckState::Broken => (FAILED_MARK, true, FAILED),
-            };
-            div()
-                .id(SharedString::from(format!("check-{index}-{at}")))
-                .debug_selector(move || format!("check-{index}-{at}"))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .h(px(24.))
-                .px(px(10.))
-                .max_w(px(240.))
-                .rounded_full()
-                .bg(rgb(RAISED))
-                .border_1()
+            check_chip(format!("check-{index}-{at}"), check)
                 .border_color(rgb(if open { BORDER_STRONG } else { RAISED }))
-                .text_color(rgb(text))
-                .text_size(px(12.))
-                .font_family(CODE_FONT)
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .size(px(7.))
-                        .rounded_full()
-                        .border_1()
-                        .border_color(rgb(dot))
-                        .when(filled, |mark| mark.bg(rgb(dot))),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .child(ellipsis(SharedString::from(check.name.clone()))),
-                )
                 .when(check.said.is_some(), |chip| {
                     chip.cursor_pointer()
                         .hover(|style| style.border_color(rgb(BORDER_STRONG)))
@@ -593,6 +632,96 @@ impl ChatView {
             )
             .children(render_content(index, &said, writer))
             .into_any_element()
+    }
+
+    /// What the human closes the work on, as [`closing`] gathers it, on a
+    /// card after the conversation, whose entries number `entries`: what
+    /// the agent showed, which a click opens on the stage, what it decided
+    /// on its own, and how the checks went, with Merge, which asks the
+    /// agent, in the human's place, to merge what it made.
+    fn render_closing(&self, entries: usize, cx: &mut Context<Self>) -> AnyElement {
+        let all = self.conversation.entries();
+        let Some(closing) = closing(all) else {
+            return div().into_any_element();
+        };
+        let mut writer = self.reading.writer(entries);
+        let part = |name: &'static str| label().child(name);
+        let mut shows = Vec::new();
+        if !closing.shown.is_empty() {
+            let thumbnails = closing.shown.iter().filter_map(|&index| {
+                let Entry::Media {
+                    file, kind, from, ..
+                } = all.get(index)?
+                else {
+                    return None;
+                };
+                Some(render_thumbnail(index, file, *kind, from, cx))
+            });
+            shows.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(part("TO SEE"))
+                    .child(div().flex().flex_wrap().gap(px(8.)).children(thumbnails))
+                    .into_any_element(),
+            );
+        }
+        if let Some((added, removed)) = closing.decided {
+            shows.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(part("DECIDED ON ITS OWN"))
+                    .children(drift_steps(added, removed, &mut writer))
+                    .into_any_element(),
+            );
+        }
+        if !closing.checks.is_empty() {
+            let passed = closing
+                .checks
+                .iter()
+                .all(|check| check.state == CheckState::Passed);
+            let chips = closing
+                .checks
+                .iter()
+                .enumerate()
+                .map(|(at, check)| check_chip(format!("closing-check-{at}"), check));
+            shows.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(part(if passed { "CHECKS PASSED" } else { "CHECKS" }))
+                    .child(div().flex().flex_wrap().gap(px(6.)).children(chips))
+                    .into_any_element(),
+            );
+        }
+        shows.push(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child(writer.plain(
+                    "Merge asks the agent to merge it, as the project merges its work.",
+                    "\n",
+                ))
+                .into_any_element(),
+        );
+        let merge = answer_button("merge", "merge".to_owned(), "Merge", true, OFFERING_TONE)
+            .on_click(cx.listener(|view, _, _, cx| {
+                view.merge();
+                cx.notify();
+            }));
+        answer_card(
+            OFFERING_TONE,
+            card_head("✓", OFFERING_TONE, "Close the work"),
+            "for you to merge",
+            shows,
+            [merge],
+        )
+        .debug_selector(|| "closing".to_owned())
+        .into_any_element()
     }
 
     /// The card that asks the human to log in, one of the ways of
@@ -895,6 +1024,19 @@ fn render_drift(
     removed: &[String],
     writer: &mut Writer,
 ) -> AnyElement {
+    div()
+        .debug_selector(move || format!("plan-changed-{index}"))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(label().child("PLAN CHANGED"))
+        .children(drift_steps(added, removed, writer))
+        .into_any_element()
+}
+
+/// The steps of how the plan differs from the one the human left the
+/// agent to, as [`render_drift`] shows them.
+fn drift_steps(added: &[String], removed: &[String], writer: &mut Writer) -> Vec<gpui::Div> {
     let step = |mark: &'static str, color: u32, text: &str, writer: &mut Writer| {
         div()
             .flex()
@@ -917,14 +1059,51 @@ fn render_drift(
             writer,
         ));
     }
+    steps
+}
+
+/// A chip of one of what ran as a turn ended, `check`, which a test finds
+/// as `selector`: its name, after a ring while it waits or runs, and a
+/// dot once it went: passed, found something, or could not run.
+fn check_chip(selector: String, check: &Check) -> Stateful<gpui::Div> {
+    let (dot, filled, text) = match check.state {
+        CheckState::Waiting => (DISABLED, false, FAINT),
+        CheckState::Running => (LINK, false, DIM),
+        CheckState::Passed => (ACCENT, true, DIM),
+        CheckState::Failed => (ASKING, true, DIM),
+        CheckState::Broken => (FAILED_MARK, true, FAILED),
+    };
     div()
-        .debug_selector(move || format!("plan-changed-{index}"))
+        .id(SharedString::from(selector.clone()))
+        .debug_selector(move || selector)
         .flex()
-        .flex_col()
-        .gap_1()
-        .child(label().child("PLAN CHANGED"))
-        .children(steps)
-        .into_any_element()
+        .items_center()
+        .gap(px(6.))
+        .h(px(24.))
+        .px(px(10.))
+        .max_w(px(240.))
+        .rounded_full()
+        .bg(rgb(RAISED))
+        .border_1()
+        .border_color(rgb(RAISED))
+        .text_color(rgb(text))
+        .text_size(px(12.))
+        .font_family(CODE_FONT)
+        .child(
+            div()
+                .flex_shrink_0()
+                .size(px(7.))
+                .rounded_full()
+                .border_1()
+                .border_color(rgb(dot))
+                .when(filled, |mark| mark.bg(rgb(dot))),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .child(ellipsis(SharedString::from(check.name.clone()))),
+        )
 }
 
 /// The colors of a card that waits for the human to answer: in amber
@@ -1272,6 +1451,45 @@ fn render_media(
                 .text_color(rgb(DIM))
                 .child(SharedString::from(under)),
         )
+        .on_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .into_any_element()
+}
+
+/// How big a picture or video shown is drawn on the card the human closes
+/// the work on, square.
+const THUMBNAIL: f32 = 80.;
+
+/// The picture or video `file` the agent showed, at `index`, small and
+/// square, for the card the human closes the work on: a click opens it
+/// on the stage, as the picture in the conversation does.
+fn render_thumbnail(
+    index: usize,
+    file: &str,
+    kind: MediaKind,
+    from: &str,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let link = format!("cox://api/media/{file}");
+    let shown = match (kind, crate::media::kept(file)) {
+        (MediaKind::Image, Some((path, _))) => gpui::img(path)
+            .size(px(THUMBNAIL))
+            .object_fit(gpui::ObjectFit::Cover)
+            .into_any_element(),
+        _ => div().text_color(rgb(LINK)).child("▶").into_any_element(),
+    };
+    div()
+        .id(("thumbnail", index))
+        .debug_selector(move || format!("thumbnail-{index}"))
+        .size(px(THUMBNAIL))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(8.))
+        .overflow_hidden()
+        .bg(rgb(RAISED))
+        .cursor_pointer()
+        .child(shown)
+        .tooltip(crate::ui::tip(from.to_owned()))
         .on_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
         .into_any_element()
 }
@@ -1730,6 +1948,82 @@ mod tests {
                 Shown::Work(3..6),
                 Shown::Entry(6),
             ]
+        );
+    }
+
+    fn shown_media(file: &str) -> Entry {
+        Entry::Media {
+            file: file.to_owned(),
+            kind: MediaKind::Image,
+            from: "shot.png".to_owned(),
+            caption: None,
+            size: None,
+        }
+    }
+
+    fn passed(name: &str) -> Check {
+        Check {
+            name: name.to_owned(),
+            state: CheckState::Passed,
+            said: None,
+        }
+    }
+
+    #[test]
+    fn closes_the_work_of_the_last_line_on_what_it_showed_decided_and_checked() {
+        let added = vec!["Fall back to there".to_owned()];
+        let entries = [
+            Entry::Human("first".to_owned()),
+            shown_media("old"),
+            Entry::Human("fix the greeting".to_owned()),
+            call("call-1"),
+            shown_media("new"),
+            Entry::PlanChanged {
+                added: added.clone(),
+                removed: Vec::new(),
+            },
+            Entry::Checks(vec![passed("goal")]),
+            Entry::Event {
+                on: "goal.met".to_owned(),
+                checks: vec![passed("smoke")],
+            },
+        ];
+
+        let closing = closing(&entries).expect("the work closes");
+        assert_eq!(closing.shown, [4]);
+        assert_eq!(closing.decided, Some((added.as_slice(), &[][..])));
+        assert_eq!(
+            closing
+                .checks
+                .iter()
+                .map(|check| check.name.as_str())
+                .collect::<Vec<_>>(),
+            ["goal", "smoke"]
+        );
+    }
+
+    #[test]
+    fn closes_nothing_before_a_line_after_a_merge_or_with_nothing_to_close_on() {
+        assert_eq!(closing(&[shown_media("before")]), None);
+        assert_eq!(
+            closing(&[
+                Entry::Human("fix it".to_owned()),
+                shown_media("shot"),
+                Entry::Merge,
+                Entry::Cox("Merge it.".to_owned()),
+            ]),
+            None
+        );
+        assert_eq!(
+            closing(&[
+                Entry::Human("what is this?".to_owned()),
+                Entry::Reply("A greeter.".to_owned()),
+                Entry::PlanChanged {
+                    added: Vec::new(),
+                    removed: Vec::new(),
+                },
+            ]),
+            None
         );
     }
 

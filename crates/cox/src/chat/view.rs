@@ -142,6 +142,10 @@ pub struct Row {
     /// Whether the folder of its project is not there, as when the human
     /// moved it, so that it does not start again until they say where.
     pub gone: bool,
+    /// How its agent is set up, if the chat that opened it said: whether
+    /// it merges what it made when the human asks, as one that works in
+    /// the project does, and a sketch's, which ends its own ways, does not.
+    pub setup: Option<crate::agent::setup::Setup>,
 }
 
 pub struct ChatView {
@@ -533,6 +537,12 @@ impl ChatView {
             index,
             keep,
         });
+    }
+
+    /// Asks the agent, in the human's place, to merge what it made, the
+    /// human being done looking at it.
+    fn merge(&self) {
+        self.tell(ToDaemon::Merge { key: self.key });
     }
 
     /// Opens the input that sets the goal on the goal proposed at `index`,

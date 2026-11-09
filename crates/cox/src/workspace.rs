@@ -752,6 +752,7 @@ impl Workspace {
                 .is_none_or(|setup| setup.folder.is_none())
                 && chat.folder.is_none()
                 && self.projects[chat.project].missing,
+            setup: chat.setup.clone(),
         }
     }
 
@@ -2090,6 +2091,7 @@ impl Workspace {
                     .gap_1()
                     .p(px(6.))
                     .child(self.render_switcher(cx))
+                    .children(self.render_goal_button(cx))
                     .child(
                         div()
                             .id("fold-chat")
@@ -2129,6 +2131,39 @@ impl Workspace {
                     .child(body)
                     .children(self.switching.then(|| self.render_list(cx))),
             )
+    }
+
+    /// The button at the head of the panel that sets the goal of the chat
+    /// shown, as "Set goal…" in its menu does, so that what the work is to
+    /// come to is a click away, as on the phone: in the accent while the
+    /// chat has a goal.
+    fn render_goal_button(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let index = self.chats.shown_index()?;
+        let has_goal = self.chats.get(index)?.goal().is_some();
+        Some(
+            div()
+                .id("goal-button")
+                .debug_selector(|| "goal-button".to_owned())
+                .flex_shrink_0()
+                .size(px(ROW_HEIGHT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(ROW_RADIUS))
+                .text_color(rgb(if has_goal { ACCENT } else { FAINT }))
+                .text_size(px(15.))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
+                .tooltip(tip(if has_goal {
+                    "Change the goal"
+                } else {
+                    "Set goal…"
+                }))
+                .child("◎")
+                .on_click(cx.listener(move |workspace, _, window, cx| {
+                    workspace.edit_goal(index, window, cx);
+                })),
+        )
     }
 
     /// The button at the head of the panel that opens the list of the
