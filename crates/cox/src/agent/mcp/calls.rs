@@ -35,6 +35,7 @@ const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const PROPOSE_NAME: &str = "propose_name";
+const PROPOSE_PROJECT: &str = "propose_project";
 const START_SKETCH: &str = "start_sketch";
 const WIKI_SEARCH: &str = "wiki_search";
 const WIKI_READ: &str = "wiki_read";
@@ -111,16 +112,22 @@ pub(super) fn tools(only: Option<&[String]>) -> Value {
     tools
 }
 
-/// The names of the tools a chat of Cox's own, in no project, gets: those
-/// named in `only`, or all of them, but the one that proposes a name for
-/// the chat's project, which it has none of.
-pub(super) fn outside_projects(only: Option<&[String]>) -> Vec<String> {
+/// The names of the tools a chat gets, in a project or in none, as
+/// `in_project` says: those named in `only`, or all of them, but the one
+/// that proposes a name for the chat's project, for a chat in none, and
+/// the one that proposes a project to make of the chat, for a chat in one.
+pub(super) fn for_chat(only: Option<&[String]>, in_project: bool) -> Vec<String> {
+    let left_out = if in_project {
+        PROPOSE_PROJECT
+    } else {
+        PROPOSE_NAME
+    };
     tools(only)
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|tool| tool.get("name")?.as_str())
-        .filter(|&name| name != PROPOSE_NAME)
+        .filter(|&name| name != left_out)
         .map(str::to_owned)
         .collect()
 }
@@ -223,6 +230,7 @@ fn all_tools() -> Value {
     show_media_tool(),
     propose_goal_tool(),
     propose_name_tool(),
+    propose_project_tool(),
     start_sketch_tool(),
     ]);
     if let Some(all) = tools.as_array_mut() {
@@ -623,6 +631,45 @@ fn propose_name_tool() -> Value {
     })
 }
 
+/// The tool that proposes a project to make of a chat in none, as the
+/// agent learns of it.
+fn propose_project_tool() -> Value {
+    json!(
+    {
+        "name": PROPOSE_PROJECT,
+        "description": "Proposes to the human a project to make of this chat, which is \
+            in no project: once you and the human have agreed what the work is to be, \
+            propose a short name for it, as a folder is named, with no / in it nor a . \
+            first. The human sees it on a card in the conversation, and makes the project \
+            or lets it be: made, the project is a folder of that name in Cox's home, and \
+            this chat, and the chats opened under it, move into it, the chat stopping, to \
+            go on there, with the conversation so far, from the human's next line. When a \
+            sketch from nothing opened under this chat holds what the project starts \
+            from, give its chat's number as `sketch`: its files move into the project, \
+            as its directory of the project's name, and the sketch ends. It answers at \
+            once, with where the project is to be.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The project's name, as its folder is to be named.",
+                },
+                "why": {
+                    "type": "string",
+                    "description": "Why this project, in a sentence, for the human to weigh it.",
+                },
+                "sketch": {
+                    "type": "integer",
+                    "description": "The number of the chat of a sketch from nothing, opened \
+                        under this chat, whose files the project starts from.",
+                },
+            },
+            "required": ["name"],
+        },
+    })
+}
+
 /// The tool that opens a chat, as the agent learns of it.
 fn open_chat_tool() -> Value {
     json!(
@@ -745,6 +792,7 @@ pub(super) async fn call(
         WAIT_CHAT => wait_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
+        PROPOSE_PROJECT => propose_project(arguments, chats).await,
         SHOW_MEDIA => show_media(arguments, cwd, chats).await,
         START_SKETCH => start_sketch(arguments, chats).await,
         WIKI_SEARCH => wiki_search(arguments, chats).await,
@@ -1336,6 +1384,51 @@ async fn propose_name(
     ))
 }
 
+/// Asks the window to show the human the project `arguments` propose to
+/// make of the chat, and tells the agent where it is to be.
+async fn propose_project(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let name = arguments
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or("no name: give the project's name as `name`")?
+        .to_owned();
+    let why = match arguments.get("why") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(why)) => Some(why.clone()),
+        Some(_) => return Err("`why` is not a string".to_owned()),
+    };
+    let sketch = match arguments.get("sketch") {
+        None | Some(Value::Null) => None,
+        Some(sketch) => Some(
+            sketch
+                .as_u64()
+                .ok_or("`sketch` is not the number of a chat")?,
+        ),
+    };
+    let (answer, made) = oneshot::channel();
+    chats
+        .send(ChatRequest::ProposeProject {
+            name,
+            why,
+            sketch,
+            answer,
+        })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let folder = made
+        .await
+        .map_err(|_| "the chat closed before it showed the project".to_owned())??;
+    Ok(format!(
+        "The project is on a card in the conversation, for the human to make or let be; this \
+         chat is in no project until they make it. Made, it is in {}.",
+        folder.display()
+    ))
+}
+
 /// Asks the window to open a sketch beside the chat, as `arguments` say,
 /// and tells the agent how it goes by.
 async fn start_sketch(
@@ -1836,7 +1929,8 @@ mod tests {
         assert_eq!(listed[5]["name"], OPEN_CHAT);
         assert_eq!(listed[7]["name"], SHOW_MEDIA);
         assert_eq!(listed[9]["name"], PROPOSE_NAME);
-        assert_eq!(listed[10]["name"], START_SKETCH);
+        assert_eq!(listed[10]["name"], PROPOSE_PROJECT);
+        assert_eq!(listed[11]["name"], START_SKETCH);
     }
 
     #[test]

@@ -1025,6 +1025,8 @@ function entryNode(at, kind, value, asks) {
       return proposal(value, at);
     case "name_proposal":
       return nameProposal(value, at);
+    case "project_proposal":
+      return projectProposal(value, at);
     case "keep":
       return keep(value, at);
     case "checks":
@@ -1392,6 +1394,25 @@ function nameProposal(proposed, index) {
     buttons([
       ["Rename", { AnswerNameProposal: { key: chat.key, index, answer: "set" } }, true],
       ["Dismiss", { AnswerNameProposal: { key: chat.key, index, answer: "dismissed" } }],
+    ]));
+}
+
+// A project the agent proposed to make of the chat: while the human has
+// not answered it, a card in the accent, with why, to make it, the chat
+// moving into it, or let it be; then its line, which says what they did.
+function projectProposal(proposed, index) {
+  const answers = { set: "made", changed: "made", dismissed: "let be" };
+  if (proposed.answer) {
+    return line(`project-proposal-${index}`, "✦", "var(--link)", `Proposed project: ${proposed.name}`, answers[proposed.answer], false);
+  }
+  return el("div", { class: "card-offer" },
+    cardHead("✦", "Proposed project", "this chat moves into it"),
+    el("div", {}, proposed.name),
+    proposed.why ? el("div", { class: "why" }, proposed.why) : null,
+    proposed.sketch ? el("div", { class: "why" }, "The sketch's files go into it, as its directory.") : null,
+    buttons([
+      ["Make project", { AnswerProjectProposal: { key: chat.key, index, answer: "set" } }, true],
+      ["Dismiss", { AnswerProjectProposal: { key: chat.key, index, answer: "dismissed" } }],
     ]));
 }
 

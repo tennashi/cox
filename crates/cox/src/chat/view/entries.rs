@@ -855,6 +855,20 @@ impl ChatView {
             Entry::NameProposal { name, why, answer } => {
                 render_name_proposal(index, name, why.as_deref(), *answer, &mut writer, cx)
             }
+            Entry::ProjectProposal {
+                name,
+                why,
+                sketch,
+                answer,
+            } => render_project_proposal(
+                index,
+                name,
+                why.as_deref(),
+                sketch.is_some(),
+                *answer,
+                &mut writer,
+                cx,
+            ),
             Entry::Keep { why, kept, .. } => render_keep(index, why, *kept, &mut writer, cx),
             Entry::Media {
                 file,
@@ -1372,6 +1386,84 @@ fn render_name_proposal(
         buttons,
     )
     .debug_selector(move || format!("name-proposal-{index}"))
+    .into_any_element()
+}
+
+/// A project the agent proposed to make of the chat: while the human has
+/// not answered it, a card with why the agent proposes it, and whether a
+/// sketch's files go into it, and buttons to make it, the chat moving
+/// into it, or to let it be; then a line that says what they did.
+fn render_project_proposal(
+    index: usize,
+    name: &str,
+    why: Option<&str>,
+    with_sketch: bool,
+    answer: Option<Answer>,
+    writer: &mut Writer,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let title = format!("Proposed project: {name}");
+    if let Some(answer) = answer {
+        let answer = match answer {
+            Answer::Set | Answer::Changed => "made",
+            Answer::Dismissed => "let be",
+        };
+        return line_of(index, None, ("✦", LINK), &title, writer)
+            .debug_selector(move || format!("project-proposal-{index}"))
+            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
+            .into_any_element();
+    }
+    let button = |name: &'static str, label: &'static str, first: bool| {
+        let id = format!("{name}-{index}");
+        answer_button(
+            SharedString::from(id.clone()),
+            id,
+            label,
+            first,
+            OFFERING_TONE,
+        )
+    };
+    let buttons = [
+        button("make-project", "Make project", true).on_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_project_proposal(index, Answer::Set, cx);
+            },
+        )),
+        button("dismiss-project", "Dismiss", false).on_click(cx.listener(move |view, _, _, cx| {
+            view.answer_project_proposal(index, Answer::Dismissed, cx);
+        })),
+    ];
+    let shows = [
+        Some(
+            div()
+                .text_size(px(14.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(SharedString::from(name.to_owned()))
+                .into_any_element(),
+        ),
+        why.map(|why| {
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child(writer.markdown(why))
+                .into_any_element()
+        }),
+        with_sketch.then(|| {
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child("The sketch's files go into it, as its directory.")
+                .into_any_element()
+        }),
+    ];
+    answer_card(
+        OFFERING_TONE,
+        card_head("✦", OFFERING_TONE, "Proposed project"),
+        "this chat moves into it",
+        shows.into_iter().flatten(),
+        buttons,
+    )
+    .debug_selector(move || format!("project-proposal-{index}"))
     .into_any_element()
 }
 

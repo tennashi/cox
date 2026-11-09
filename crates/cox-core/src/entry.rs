@@ -120,6 +120,22 @@ pub enum Entry {
         /// be.
         answer: Option<Answer>,
     },
+    /// A project the agent of a chat in no project proposed to make of
+    /// it, named `name`, for the human to make, the chat moving into it,
+    /// or to let be.
+    ProjectProposal {
+        /// The project's name, which its folder is named.
+        name: String,
+        /// Why the agent proposes it, if it said.
+        why: Option<String>,
+        /// The folder of the sketch from nothing whose files go into the
+        /// project, as its directory, if the agent named one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sketch: Option<std::path::PathBuf>,
+        /// What the human did with it, once they did: made it, or let it
+        /// be.
+        answer: Option<Answer>,
+    },
     /// Cox asks the human whether to keep what a chat learned in the
     /// wiki, at a milestone of it, as when its goal is met, or a sketch
     /// ended.

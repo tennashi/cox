@@ -77,7 +77,7 @@ impl Spawns for Launcher {
         in_project: bool,
     ) -> Spawned {
         // 1. The server of Cox's own tools, with the `cox` that reaches it.
-        let only = start.setup().and_then(|setup| setup.tools.clone());
+        let only = start.setup().and_then(|setup| setup.tools.as_deref());
         let server = self.server(&cwd, only, in_project);
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(&cwd, relay, server.as_ref());
@@ -120,7 +120,7 @@ impl Launcher {
     fn server(
         &self,
         cwd: &std::path::Path,
-        only: Option<Vec<String>>,
+        only: Option<&[String]>,
         in_project: bool,
     ) -> Option<(PathBuf, ToolServer)> {
         let exe = self.exe.clone()?;

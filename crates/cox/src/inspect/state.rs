@@ -539,6 +539,26 @@ fn describe_entry(entry: &Entry) -> String {
                 None => format!("name proposal {name:?}, {answer}"),
             }
         }
+        Entry::ProjectProposal {
+            name,
+            why,
+            sketch,
+            answer,
+        } => {
+            let answer = match answer {
+                None => "open",
+                Some(Answer::Set | Answer::Changed) => "made",
+                Some(Answer::Dismissed) => "dismissed",
+            };
+            let mut line = format!("project proposal {name:?}, {answer}");
+            if let Some(sketch) = sketch {
+                let _ = write!(line, ", with the sketch {}", sketch.display());
+            }
+            if let Some(why) = why {
+                let _ = write!(line, ": {}", text_of(why));
+            }
+            line
+        }
         Entry::Keep { why, chat, kept } => describe_keep(why, *chat, *kept),
         Entry::Checks(checks) => describe_checks("turn end", checks),
         Entry::Event { on, checks } => describe_checks(on, checks),

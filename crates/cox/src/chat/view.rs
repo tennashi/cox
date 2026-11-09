@@ -529,6 +529,16 @@ impl ChatView {
         });
     }
 
+    /// The human answered the project proposed at `index`: make it, the
+    /// chat moving into it, or let it be.
+    fn answer_project_proposal(&mut self, index: usize, answer: Answer, _: &mut Context<Self>) {
+        self.tell(ToDaemon::AnswerProjectProposal {
+            key: self.key,
+            index,
+            answer,
+        });
+    }
+
     /// The human answered the name proposed at `index` for the project:
     /// rename it so, or let it be.
     fn answer_name_proposal(&mut self, index: usize, answer: Answer, _: &mut Context<Self>) {

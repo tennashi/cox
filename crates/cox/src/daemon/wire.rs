@@ -252,6 +252,13 @@ pub enum ToDaemon {
         index: usize,
         answer: Answer,
     },
+    /// The human answered the project proposed at `index` in the chat
+    /// `key`: make it, the chat moving into it, or let it be.
+    AnswerProjectProposal {
+        key: u64,
+        index: usize,
+        answer: Answer,
+    },
     /// The human chose, on the card at `index` of the chat `key`, whether
     /// to keep what a chat learned in the wiki.
     AnswerKeep { key: u64, index: usize, keep: bool },

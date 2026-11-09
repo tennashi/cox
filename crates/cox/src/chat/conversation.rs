@@ -834,6 +834,48 @@ impl Conversation {
         }
     }
 
+    /// Shows the project named `name`, which the agent proposes to make of
+    /// the chat, for the human to make or to let be, with `why` the agent
+    /// proposes it, if it said, and the folder of the sketch whose files
+    /// go into it, `sketch`, if it named one.
+    pub fn propose_project(&mut self, name: &str, why: Option<String>, sketch: Option<PathBuf>) {
+        self.push(Entry::ProjectProposal {
+            name: name.to_owned(),
+            why: why.filter(|why| !why.trim().is_empty()),
+            sketch,
+            answer: None,
+        });
+    }
+
+    /// The project proposed at `index`, its name and the folder of the
+    /// sketch that goes into it, if any, while the human has not answered
+    /// it.
+    #[must_use]
+    pub fn proposed_project(&self, index: usize) -> Option<(&str, Option<&Path>)> {
+        match self.entries.get(index)? {
+            Entry::ProjectProposal {
+                name,
+                sketch,
+                answer: None,
+                ..
+            } => Some((name, sketch.as_deref())),
+            _ => None,
+        }
+    }
+
+    /// Takes the human's `answer` to the project proposed at `index`,
+    /// unless they answered it already. Making the project is the
+    /// caller's.
+    pub fn answer_project_proposal(&mut self, index: usize, answer: Answer) {
+        if self.proposed_project(index).is_none() {
+            return;
+        }
+        if let Some(Entry::ProjectProposal { answer: taken, .. }) = self.entries.get_mut(index) {
+            *taken = Some(answer);
+            self.changed.insert(index);
+        }
+    }
+
     /// Hands the conversation the triggers due as the turn that runs
     /// ends, which run after the goal, in order, if it ends as the agent
     /// ends it.

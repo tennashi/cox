@@ -1254,6 +1254,132 @@ async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
     );
 }
 
+/// Has the agent of the chat whose asks are at `from` propose the project
+/// `name`, starting from the sketch of the chat `sketch`, if given, and
+/// answers where the project is to be, or why not, once it is told.
+fn propose_project(
+    asks: &Asks,
+    from: usize,
+    name: &str,
+    sketch: Option<u64>,
+) -> tokio::sync::oneshot::Receiver<Result<PathBuf, String>> {
+    let (answer, folder) = tokio::sync::oneshot::channel();
+    asks.borrow()[from]
+        .send(ChatRequest::ProposeProject {
+            name: name.to_owned(),
+            why: Some("We agreed on it.".to_owned()),
+            sketch,
+            answer,
+        })
+        .unwrap();
+    folder
+}
+
+#[gpui::test]
+async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
+    cx: &mut TestAppContext,
+) {
+    let home = repository("propose-project-home");
+    let store = kept_store("propose-project-kept");
+    let (agents, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let made = open_sketch(cx, &workspace, &asks, Sketch::Empty, 2).await;
+    std::fs::write(made.join("index.html"), "<p>shop</p>\n").unwrap();
+    let (first, sketch) = workspace.read_with(cx, |workspace, _| {
+        let mut chats = workspace.chats(0).map(Chat::key);
+        (chats.next().unwrap(), chats.next().unwrap())
+    });
+
+    // A chat that is no sketch of the chat's is no sketch to start from.
+    let refused = propose_project(&asks, 0, "shop", Some(first));
+    settled(cx, &workspace);
+    let refused = refused.await.unwrap();
+    assert!(refused.is_err_and(|why| why.contains("no sketch from nothing")));
+    // The agent hears where the project is to be, and it shows on a card.
+    let projects = home.join("projects");
+    let market = propose_project(&asks, 0, "market", None);
+    settled(cx, &workspace);
+    assert_eq!(market.await.unwrap(), Ok(projects.join("market")));
+    let shop = propose_project(&asks, 0, "shop", Some(sketch));
+    settled(cx, &workspace);
+    assert_eq!(shop.await.unwrap(), Ok(projects.join("shop")));
+    let shop = projects.join("shop");
+    let cards: Vec<(usize, Option<PathBuf>)> = shown_entries(cx, &workspace)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, entry)| match entry {
+            Entry::ProjectProposal { sketch, .. } => Some((index, sketch)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cards.len(), 2, "{cards:?}");
+    assert_eq!(cards[1].1.as_ref(), Some(&made));
+    let (market, at) = (cards[0].0, cards[1].0);
+
+    // Dismiss lets one be; Make project makes the other, the sketch's
+    // files its directory, and the chat and its sketch move into it.
+    click(
+        cx,
+        Box::leak(format!("dismiss-project-{market}").into_boxed_str()),
+    );
+    settled(cx, &workspace);
+    assert!(!projects.join("market").exists());
+    click(cx, Box::leak(format!("make-project-{at}").into_boxed_str()));
+    settled(cx, &workspace);
+    assert_eq!(
+        std::fs::read_to_string(shop.join("directories/shop/index.html")).unwrap(),
+        "<p>shop</p>\n"
+    );
+    assert!(!made.exists());
+    let kept = store.projects().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].folder, shop);
+    let chats = store.chats().unwrap();
+    assert_eq!(chats.len(), 2);
+    assert!(chats.iter().all(|chat| chat.project == Some(kept[0].id)));
+    workspace.read_with(cx, |workspace, _| {
+        assert_eq!(workspace.chats(0).count(), 0);
+        assert_eq!(workspace.chats(1).count(), 2);
+        assert_eq!(workspace.shown().map(Chat::key), Some(first));
+    });
+    let entries = shown_entries(cx, &workspace);
+    assert!(
+        matches!(
+            &entries[market],
+            Entry::ProjectProposal {
+                answer: Some(Answer::Dismissed),
+                ..
+            }
+        ) && matches!(
+            &entries[at],
+            Entry::ProjectProposal {
+                answer: Some(Answer::Set),
+                ..
+            }
+        ),
+        "{entries:?}"
+    );
+    assert!(
+        entries.iter().any(|entry| matches!(entry, Entry::Note(note)
+            if note.starts_with("The chat moved into the project shop"))),
+        "{entries:?}"
+    );
+
+    // The next line starts its agent again in the project's folder, where
+    // it has a project already.
+    say(cx, &workspace, "go on").await;
+    assert_eq!(agents.borrow().last().unwrap().cwd(), Some(shop.clone()));
+    let last = asks.borrow().len() - 1;
+    let again = propose_project(&asks, last, "shop-2", None);
+    settled(cx, &workspace);
+    let again = again.await.unwrap();
+    assert!(again.is_err_and(|why| why.contains("in a project already")));
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
+}
+
 /// Makes a Git repository at `folder` with one commit, on `main`.
 fn repository_with_a_commit(folder: &Path) {
     let git = |args: &[&str]| {

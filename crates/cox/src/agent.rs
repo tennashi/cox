@@ -948,8 +948,8 @@ fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usiz
 /// characters: past it, the start is left out.
 const RETOLD_LENGTH: usize = 100_000;
 
-/// What the agent is told of a goal or a name it proposed, and what the
-/// human did with it.
+/// What the agent is told of a goal, a name or a project it proposed,
+/// and what the human did with it.
 fn told_of_proposal(entry: &Entry) -> Option<String> {
     match entry {
         Entry::Proposal { goal, answer, .. } => {
@@ -969,6 +969,18 @@ fn told_of_proposal(entry: &Entry) -> Option<String> {
             };
             Some(format!(
                 "[you proposed the project's name: {name}; {answer}]"
+            ))
+        }
+        Entry::ProjectProposal { name, answer, .. } => {
+            let answer = match answer {
+                Some(Answer::Set | Answer::Changed) => {
+                    "the human made it, and the chat moved into it"
+                }
+                Some(Answer::Dismissed) => "the human let it be",
+                None => "the human has not answered",
+            };
+            Some(format!(
+                "[you proposed making the chat the project {name}; {answer}]"
             ))
         }
         _ => None,
@@ -1048,7 +1060,9 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
                     "[you asked permission for: {title}; {who} chose: {chosen}]"
                 ))
             }
-            Entry::Proposal { .. } | Entry::NameProposal { .. } => told_of_proposal(entry),
+            Entry::Proposal { .. } | Entry::NameProposal { .. } | Entry::ProjectProposal { .. } => {
+                told_of_proposal(entry)
+            }
             Entry::Switched { from, to } => Some(format!(
                 "[the human switched the chat from the agent {from} to the agent {to}]"
             )),

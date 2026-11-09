@@ -1254,6 +1254,9 @@ impl Daemon {
             ToDaemon::AnswerNameProposal { key, index, answer } => {
                 self.answer_name_proposal(key, index, answer);
             }
+            ToDaemon::AnswerProjectProposal { key, index, answer } => {
+                self.answer_project_proposal(key, index, answer);
+            }
             ToDaemon::AnswerKeep { key, index, keep } => {
                 let keeps = self
                     .chat(key)
@@ -1527,6 +1530,274 @@ impl Daemon {
         {
             chat.note(format!("The project is not renamed {name}: {why}"));
         }
+    }
+
+    /// Shows the project named `name`, which the agent of the chat `key`,
+    /// in no project, proposes to make of it, on a card in the chat's
+    /// conversation, the files of the sketch of the chat `sketch` going
+    /// into it, if given; and answers where the project is to be, or why
+    /// it cannot be proposed.
+    fn propose_project(
+        &mut self,
+        key: u64,
+        name: &str,
+        why: Option<String>,
+        sketch: Option<u64>,
+    ) -> Result<PathBuf, String> {
+        let name = name.trim();
+        let folder = self.made_project(key, name)?;
+        let sketch = sketch
+            .map(|sketch| {
+                self.sketch_of_project(key, sketch).ok_or(format!(
+                    "Chat {sketch} is no sketch from nothing, opened under this chat, that can \
+                     end: give the number of one, or no sketch."
+                ))
+            })
+            .transpose()?;
+        self.chat(key)
+            .ok_or("the chat has closed")?
+            .propose_project(name, why, sketch);
+        Ok(folder)
+    }
+
+    /// The folder of the project named `name` to be made of the chat `key`,
+    /// in no project, or why it cannot be.
+    fn made_project(&self, key: u64, name: &str) -> Result<PathBuf, String> {
+        let slot = self.slot(key).ok_or("the chat has closed")?;
+        if slot.project != 0 {
+            return Err("This chat is in a project already.".to_owned());
+        }
+        if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\']) {
+            return Err(
+                "The name is the project's folder's: no / or \\ in it, nor a . first.".to_owned(),
+            );
+        }
+        let folder = self.projects[0]
+            .folder
+            .join(crate::settings::PROJECTS)
+            .join(name);
+        let taken = folder.exists()
+            || self
+                .projects
+                .iter()
+                .any(|project| !project.deleted && project.folder == folder);
+        if taken {
+            return Err(format!("There is a project {name} already."));
+        }
+        Ok(folder)
+    }
+
+    /// The chat `key` and the chats opened under it, and under those, by
+    /// their keys.
+    fn under(&self, key: u64) -> Vec<u64> {
+        let mut keys = vec![key];
+        let mut at = 0;
+        while let Some(&parent) = keys.get(at) {
+            keys.extend(
+                self.chats
+                    .iter()
+                    .chain(&self.archived)
+                    .filter(|slot| slot.parent == Some(parent) && !keys.contains(&slot.key))
+                    .map(|slot| slot.key)
+                    .collect::<Vec<_>>(),
+            );
+            at += 1;
+        }
+        keys
+    }
+
+    /// The folder of the sketch `sketch`, when it is one from nothing,
+    /// opened under the chat `key`, that can end.
+    fn sketch_of_project(&self, key: u64, sketch: u64) -> Option<PathBuf> {
+        if sketch == key || !self.under(key).contains(&sketch) || !self.ends_sketch(sketch) {
+            return None;
+        }
+        self.sketch_of(sketch)
+            .filter(|(from, _)| *from == Sketch::Empty)
+            .map(|(_, folder)| folder)
+    }
+
+    /// The human answered the project proposed at `index` in the chat
+    /// `key`: makes it, the chat and those under it moving into it, or
+    /// lets it be; or, when it cannot be made, notes why, the card staying
+    /// for them to answer.
+    fn answer_project_proposal(&mut self, key: u64, index: usize, answer: Answer) {
+        let Some((name, sketch)) = self.chat(key).and_then(|chat| chat.proposed_project(index))
+        else {
+            return;
+        };
+        if answer == Answer::Dismissed {
+            if let Some(chat) = self.chat(key) {
+                chat.answer_project_proposal(index, answer);
+            }
+            return;
+        }
+        let made = self.made_project(key, &name).and_then(|folder| {
+            let sketch = match sketch {
+                None => None,
+                Some(folder) => Some(
+                    self.chats
+                        .iter()
+                        .find(|slot| {
+                            slot.setup
+                                .as_ref()
+                                .is_some_and(|setup| setup.folder.as_ref() == Some(&folder))
+                        })
+                        .map(|slot| slot.key)
+                        .filter(|&sketch| {
+                            self.sketch_of_project(key, sketch).as_ref() == Some(&folder)
+                        })
+                        .map(|sketch| (sketch, folder))
+                        .ok_or("the sketch has ended")?,
+                ),
+            };
+            let at_work = self
+                .under(key)
+                .into_iter()
+                .any(|key| self.slot(key).is_some_and(|slot| working(slot.state)));
+            if at_work {
+                return Err(
+                    "This chat, or one under it, is at work: make it once the turn ends."
+                        .to_owned(),
+                );
+            }
+            Ok((folder, sketch))
+        });
+        let (folder, sketch) = match made {
+            Ok(made) => made,
+            Err(why) => {
+                if let Some(chat) = self.chat(key) {
+                    chat.note(format!("The project {name} is not made: {why}"));
+                }
+                return;
+            }
+        };
+        if let Some(chat) = self.chat(key) {
+            chat.answer_project_proposal(index, Answer::Set);
+        }
+        if let Err(why) = self.make_project_of(key, &name, &folder, sketch)
+            && let Some(chat) = self.chat(key)
+        {
+            chat.note(format!("The project {name} is not made: {why}"));
+        }
+    }
+
+    /// Makes the project named `name` in `folder` of the chat `key`, in no
+    /// project, the files of the sketch `sketch`, its key and folder, going
+    /// into it as its directory of its name, if given, and the sketch
+    /// ending; the chat and those under it move into the project, each
+    /// closed, its agent stopped, to go on there from the next line sent,
+    /// with the conversation so far.
+    fn make_project_of(
+        &mut self,
+        key: u64,
+        name: &str,
+        folder: &Path,
+        sketch: Option<(u64, PathBuf)>,
+    ) -> Result<(), String> {
+        std::fs::create_dir_all(folder)
+            .map_err(|error| format!("Cox cannot make {}: {error}", folder.display()))?;
+        // The chats the sketch ends are told so as it ends.
+        let mut told = Vec::new();
+        if let Some((sketch, from)) = sketch {
+            told = self
+                .chats
+                .iter()
+                .chain(&self.archived)
+                .filter(|slot| {
+                    slot.setup
+                        .as_ref()
+                        .and_then(|setup| setup.folder.as_ref())
+                        .is_some_and(|works| works.starts_with(&from))
+                })
+                .map(|slot| slot.key)
+                .collect();
+            let directory = folder.join(crate::settings::DIRECTORIES).join(name);
+            let moved = directory
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::rename(&from, &directory));
+            if let Err(error) = moved {
+                let _ = std::fs::remove_dir_all(folder);
+                return Err(format!(
+                    "Cox cannot move {} into {}: {error}",
+                    from.display(),
+                    directory.display()
+                ));
+            }
+            // A repository of the project now, what changed in it is what
+            // changed since its last commit.
+            if let Err(error) = cox_editor::changes::forget(&directory) {
+                tracing::warn!(
+                    "{} still counts changes from nothing: {error}",
+                    directory.display()
+                );
+            }
+            self.end_sketch(
+                sketch,
+                &from,
+                Ok(format!(
+                    "The sketch moved into the project {name}, as its directory {name}."
+                )),
+            );
+        }
+        let index = self.project(folder.to_owned());
+        let project = self.projects[index].id;
+        let note = format!(
+            "The chat moved into the project {name}, in {}. A line sent starts the agent again \
+             there, with the conversation so far.",
+            folder.display()
+        );
+        let moving = self.under(key);
+        let store = Rc::clone(&self.store);
+        for slot in self.chats.iter_mut().chain(&mut self.archived) {
+            if !moving.contains(&slot.key) {
+                continue;
+            }
+            slot.project = index;
+            let kept_to = slot.folder.take();
+            if let Some(kept) = slot.kept {
+                if let Err(error) = store.move_chat(kept, project) {
+                    tracing::error!("the chat's project is not kept: {error:#}");
+                }
+                // It works in the project's folder now.
+                if kept_to.is_some()
+                    && let Err(error) = store.keep_folder(kept, None)
+                {
+                    tracing::error!("the chat's folder is not kept: {error:#}");
+                }
+                // The agent's session was of the folder it worked in; a
+                // sketch's goes on working in its own.
+                let sketch = slot
+                    .setup
+                    .as_ref()
+                    .is_some_and(|setup| setup.folder.is_some());
+                if !sketch && let Err(error) = store.forget_session(kept) {
+                    tracing::error!("the chat's session is not forgotten: {error:#}");
+                }
+            }
+            slot.state = State::Closed;
+            if told.contains(&slot.key) {
+                continue;
+            }
+            if let Some(chat) = &mut slot.chat {
+                chat.close(note.clone());
+            } else if let Some(kept) = slot.kept {
+                let entries = store.entries(kept).map(|entries| entries.len());
+                if let Ok(number) = entries
+                    && let Err(error) = store.keep_entry(kept, number, &Entry::Note(note.clone()))
+                {
+                    tracing::error!("the chat is not kept as it goes: {error:#}");
+                }
+            }
+        }
+        // The window hears of the project before it hears the chats again.
+        self.tell_listing();
+        for moved in moving {
+            self.read_again(moved);
+        }
+        self.reveals.push(key);
+        Ok(())
     }
 
     /// Whether a chat of the project at `index` is at work.
@@ -2148,6 +2419,16 @@ impl Daemon {
             }
             ChatRequest::ProposeName { name, why, answer } => {
                 answer.send(self.propose_name(key, &name, why)).ok();
+            }
+            ChatRequest::ProposeProject {
+                name,
+                why,
+                sketch,
+                answer,
+            } => {
+                answer
+                    .send(self.propose_project(key, &name, why, sketch))
+                    .ok();
             }
             ChatRequest::OpenChat {
                 text,
