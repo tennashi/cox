@@ -1653,8 +1653,15 @@ impl Daemon {
             );
         }
         let folder = self.projects[index].folder.clone();
-        if folder.exists() {
-            crate::trash::put(&folder)?;
+        if folder.exists()
+            && let Err(why) = crate::trash::put(&folder)
+        {
+            // The trash can fail after it took the folder, as for a name
+            // it was given beside it; the folder gone is what counts.
+            if folder.exists() {
+                return Err(why);
+            }
+            tracing::warn!("the trash took the folder, but said: {why}");
         }
         tracing::info!(folder = %folder.display(), "the project is deleted");
         if let Err(error) = self.store.delete_project(id) {
