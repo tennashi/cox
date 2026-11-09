@@ -40,6 +40,13 @@
       ]
     },
     {
+      "when": "Name the project",
+      "steps": [
+        { "say": "It sells things, so I'd call it shop." },
+        { "call": { "tool": "propose_name", "arguments": { "name": "shop", "why": "The project is a shop, and the name is short." } } }
+      ]
+    },
+    {
       "when": "/compact",
       "steps": [{ "say": "Summed up the conversation so far." }]
     },

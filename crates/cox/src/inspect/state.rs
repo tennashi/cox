@@ -514,6 +514,17 @@ fn describe_entry(entry: &Entry) -> String {
                 None => format!("proposal {goal:?}, {answer}"),
             }
         }
+        Entry::NameProposal { name, why, answer } => {
+            let answer = match answer {
+                None => "open",
+                Some(Answer::Set | Answer::Changed) => "renamed",
+                Some(Answer::Dismissed) => "dismissed",
+            };
+            match why {
+                Some(why) => format!("name proposal {name:?}, {answer}: {}", text_of(why)),
+                None => format!("name proposal {name:?}, {answer}"),
+            }
+        }
         Entry::Keep { why, chat, kept } => describe_keep(why, *chat, *kept),
         Entry::Checks(checks) => describe_checks("turn end", checks),
         Entry::Event { on, checks } => describe_checks(on, checks),

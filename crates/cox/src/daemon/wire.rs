@@ -238,6 +238,13 @@ pub enum ToDaemon {
     /// The human changed the goal proposed at `index` in the chat `key`
     /// into `goal`, and set it.
     ChangeProposal { key: u64, index: usize, goal: Goal },
+    /// The human answered the name proposed at `index` in the chat `key`
+    /// for its project: rename it so, or let it be.
+    AnswerNameProposal {
+        key: u64,
+        index: usize,
+        answer: Answer,
+    },
     /// The human chose, on the card at `index` of the chat `key`, whether
     /// to keep what a chat learned in the wiki.
     AnswerKeep { key: u64, index: usize, keep: bool },

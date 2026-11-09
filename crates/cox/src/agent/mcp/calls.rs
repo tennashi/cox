@@ -34,6 +34,7 @@ const RUN_COMMAND: &str = "run_command";
 const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
+const PROPOSE_NAME: &str = "propose_name";
 const START_SKETCH: &str = "start_sketch";
 const WIKI_SEARCH: &str = "wiki_search";
 const WIKI_READ: &str = "wiki_read";
@@ -207,6 +208,7 @@ fn all_tools() -> Value {
     },
     show_media_tool(),
     propose_goal_tool(),
+    propose_name_tool(),
     start_sketch_tool(),
     ]);
     if let Some(all) = tools.as_array_mut() {
@@ -576,6 +578,37 @@ fn propose_goal_tool() -> Value {
     })
 }
 
+/// The tool that proposes a name for the chat's project, as the agent
+/// learns of it.
+fn propose_name_tool() -> Value {
+    json!(
+    {
+        "name": PROPOSE_NAME,
+        "description": "Proposes a name for this chat's project to the human, which is the \
+            name of the project's folder too. A new project starts with no name of its own, \
+            as `untitled-1`, for you and the human to work out what it is to be: once that \
+            is clear, propose a short name for it, as a folder is named, with no / in it nor \
+            a . first. The human sees it on a card in the conversation, and renames the \
+            project to it or lets it be; it is not the project's name until they do. \
+            Renaming the project moves its folder, so this chat stops, and goes on there \
+            from the human's next line. It answers at once, with the project's name now.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The name, as the project's folder is to be named.",
+                },
+                "why": {
+                    "type": "string",
+                    "description": "Why this name, in a sentence, for the human to weigh it.",
+                },
+            },
+            "required": ["name"],
+        },
+    })
+}
+
 /// The tool that opens a chat, as the agent learns of it.
 fn open_chat_tool() -> Value {
     json!(
@@ -697,6 +730,7 @@ pub(super) async fn call(
         OPEN_CHAT => open_chat(arguments, chats).await,
         WAIT_CHAT => wait_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
+        PROPOSE_NAME => propose_name(arguments, chats).await,
         SHOW_MEDIA => show_media(arguments, cwd, chats).await,
         START_SKETCH => start_sketch(arguments, chats).await,
         WIKI_SEARCH => wiki_search(arguments, chats).await,
@@ -1257,6 +1291,37 @@ async fn propose_goal(
     Ok(told)
 }
 
+/// Asks the window to show the human the name `arguments` propose for the
+/// chat's project, and tells the agent the project's name now.
+async fn propose_name(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let name = arguments
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or("no name: give the name to propose as `name`")?
+        .to_owned();
+    let why = match arguments.get("why") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(why)) => Some(why.clone()),
+        Some(_) => return Err("`why` is not a string".to_owned()),
+    };
+    let (answer, now) = oneshot::channel();
+    chats
+        .send(ChatRequest::ProposeName { name, why, answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let now = now
+        .await
+        .map_err(|_| "the chat closed before it showed the name".to_owned())??;
+    Ok(format!(
+        "The name is on a card in the conversation, for the human to rename the project to \
+         or let be; it is not the project's name until they do. The project's name now: {now}"
+    ))
+}
+
 /// Asks the window to open a sketch beside the chat, as `arguments` say,
 /// and tells the agent how it goes by.
 async fn start_sketch(
@@ -1756,7 +1821,8 @@ mod tests {
         assert_eq!(listed[4]["name"], RUN_COMMAND);
         assert_eq!(listed[5]["name"], OPEN_CHAT);
         assert_eq!(listed[7]["name"], SHOW_MEDIA);
-        assert_eq!(listed[9]["name"], START_SKETCH);
+        assert_eq!(listed[9]["name"], PROPOSE_NAME);
+        assert_eq!(listed[10]["name"], START_SKETCH);
     }
 
     #[test]
@@ -2271,6 +2337,57 @@ mod tests {
         assert!(told.contains("is no picture or video Cox shows"), "{told}");
         drop(chats);
         assert!(asked.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn proposes_a_name_to_the_human_and_tells_the_name_now() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let mut proposed = Vec::new();
+            for now in [
+                Ok("untitled-1".to_owned()),
+                Err("This chat is in no project.".to_owned()),
+            ] {
+                let Some(ChatRequest::ProposeName { name, why, answer }) = asked.recv().await
+                else {
+                    panic!("the window was not asked");
+                };
+                proposed.push((name, why));
+                let _ = answer.send(now);
+            }
+            proposed
+        });
+        let propose = |arguments: Value| {
+            let params = json!({ "name": PROPOSE_NAME, "arguments": arguments });
+            let (sent, chats) = (sent.clone(), chats.clone());
+            async move {
+                call(&params, Path::new("/work"), None, &sent, &chats)
+                    .await
+                    .unwrap()
+            }
+        };
+        let first = propose(json!({ "name": " shop ", "why": "It sells things." })).await;
+        assert_eq!(first["isError"], false);
+        let told = first["content"][0]["text"].as_str().unwrap();
+        assert!(
+            told.ends_with("The project's name now: untitled-1"),
+            "{told}"
+        );
+        let second = propose(json!({ "name": "shop" })).await;
+        assert_eq!(second["isError"], true);
+        let told = second["content"][0]["text"].as_str().unwrap();
+        assert!(told.contains("in no project"), "{told}");
+        // A name that is blank is no name to propose, and asks nothing.
+        let blank = propose(json!({ "name": " " })).await;
+        assert_eq!(blank["isError"], true);
+        assert_eq!(
+            window.await.unwrap(),
+            [
+                ("shop".to_owned(), Some("It sells things.".to_owned())),
+                ("shop".to_owned(), None),
+            ]
+        );
     }
 
     #[tokio::test]

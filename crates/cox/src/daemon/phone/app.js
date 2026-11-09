@@ -990,6 +990,8 @@ function entryNode(at, kind, value, asks) {
       return permission(at, value, asks);
     case "proposal":
       return proposal(value, at);
+    case "name_proposal":
+      return nameProposal(value, at);
     case "keep":
       return keep(value, at);
     case "checks":
@@ -1339,6 +1341,24 @@ function proposal(proposed, index) {
     buttons([
       ["Set goal", { AnswerProposal: { key: chat.key, index, answer: "set" } }, true],
       ["Dismiss", { AnswerProposal: { key: chat.key, index, answer: "dismissed" } }],
+    ]));
+}
+
+// A name the agent proposed for the project: while the human has not
+// answered it, a card in the accent, with why, to rename the project so or
+// let it be; then its line, which says what they did.
+function nameProposal(proposed, index) {
+  const answers = { set: "renamed", changed: "renamed", dismissed: "let be" };
+  if (proposed.answer) {
+    return line(`name-proposal-${index}`, "✎", "var(--link)", `Proposed name: ${proposed.name}`, answers[proposed.answer], false);
+  }
+  return el("div", { class: "card-offer" },
+    cardHead("✎", "Proposed name", "for the project, and its folder"),
+    el("div", {}, proposed.name),
+    proposed.why ? el("div", { class: "why" }, proposed.why) : null,
+    buttons([
+      ["Rename", { AnswerNameProposal: { key: chat.key, index, answer: "set" } }, true],
+      ["Dismiss", { AnswerNameProposal: { key: chat.key, index, answer: "dismissed" } }],
     ]));
 }
 

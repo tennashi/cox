@@ -1205,6 +1205,24 @@ impl Chat {
         self.set_goal(Some(goal));
     }
 
+    /// Shows `name`, which the agent proposes for the chat's project, on
+    /// a card in the conversation, with `why`.
+    pub fn propose_name(&mut self, name: &str, why: Option<String>) {
+        self.conversation.propose_name(name, why);
+    }
+
+    /// The name proposed at `index`, while the human has not answered it.
+    #[must_use]
+    pub fn proposed_name(&self, index: usize) -> Option<String> {
+        self.conversation.proposed_name(index).map(str::to_owned)
+    }
+
+    /// The human answered the name proposed at `index`: renamed the
+    /// project so, or let it be.
+    pub fn answer_name_proposal(&mut self, index: usize, answer: Answer) {
+        self.conversation.answer_name_proposal(index, answer);
+    }
+
     /// The human chose, on the card at `index`, whether to keep what a
     /// chat learned in the wiki: answers which chat is to keep it, `None`
     /// for this one, when they chose to.

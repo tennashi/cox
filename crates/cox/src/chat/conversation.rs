@@ -800,6 +800,40 @@ impl Conversation {
         Some(proposed)
     }
 
+    /// Shows `name`, which the agent proposes for the chat's project, for
+    /// the human to rename it to or to let be, with `why` the agent
+    /// proposes it, if it said.
+    pub fn propose_name(&mut self, name: &str, why: Option<String>) {
+        self.push(Entry::NameProposal {
+            name: name.to_owned(),
+            why: why.filter(|why| !why.trim().is_empty()),
+            answer: None,
+        });
+    }
+
+    /// The name proposed at `index`, while the human has not answered it.
+    #[must_use]
+    pub fn proposed_name(&self, index: usize) -> Option<&str> {
+        match self.entries.get(index)? {
+            Entry::NameProposal {
+                name, answer: None, ..
+            } => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Takes the human's `answer` to the name proposed at `index`, unless
+    /// they answered it already. Renaming the project is the caller's.
+    pub fn answer_name_proposal(&mut self, index: usize, answer: Answer) {
+        if self.proposed_name(index).is_none() {
+            return;
+        }
+        if let Some(Entry::NameProposal { answer: taken, .. }) = self.entries.get_mut(index) {
+            *taken = Some(answer);
+            self.changed.insert(index);
+        }
+    }
+
     /// Hands the conversation the triggers due as the turn that runs
     /// ends, which run after the goal, in order, if it ends as the agent
     /// ends it.
