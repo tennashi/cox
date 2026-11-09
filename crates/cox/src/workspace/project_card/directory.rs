@@ -2,7 +2,9 @@
 //! in its folder, each by its name, which the human makes there, or has
 //! Git clone there, so that the rest of the project's folder is the
 //! human's to put anything in. A directory is a Git repository or not,
-//! and a repository is linked to a remote, as `origin`, or not.
+//! and a repository is linked to a remote, as `origin`, or not. A
+//! directory named as its project is renamed with it, until the human
+//! names it otherwise.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -89,6 +91,25 @@ pub fn listed(project: &Path) -> Vec<Directory> {
         .collect();
     directories.sort_by(|a, b| a.name.cmp(&b.name));
     directories
+}
+
+/// Renames the directory `from` of the project in `project` `to`,
+/// unless the project has a directory of that name already, or `to` is
+/// no folder's name.
+pub fn rename(project: &Path, from: &str, to: &str) -> Result<(), String> {
+    if let Some(why) = why_not_named(to) {
+        return Err(why.to_owned());
+    }
+    let (from, to) = (folder_of(project, from), folder_of(project, to));
+    if to == from {
+        return Ok(());
+    }
+    // A name that differs only in case is the same folder where the disk
+    // does not tell cases apart, as on macOS.
+    if to.exists() && to.canonicalize().ok() != from.canonicalize().ok() {
+        return Err("The project has a directory of that name already.".to_owned());
+    }
+    std::fs::rename(&from, &to).map_err(|error| format!("The directory is not renamed: {error}"))
 }
 
 /// Makes the directory `into`, which is not there yet.
@@ -275,6 +296,14 @@ mod tests {
         make(&fresh).unwrap();
         init(&fresh).unwrap();
         assert_eq!(link(&fresh, empty.to_str().unwrap()), Ok(Linked::Added));
+
+        // A directory is renamed, but not over another, nor out of the
+        // project's directories.
+        assert!(rename(&project, "fresh", "lib").is_err());
+        assert!(rename(&project, "fresh", "../out").is_err());
+        assert_eq!(rename(&project, "fresh", "fresher"), Ok(()));
+        assert!(!fresh.exists());
+        assert!(folder_of(&project, "fresher").join(".git").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -1360,22 +1360,72 @@ impl Daemon {
     }
 
     /// Renames the project at `index` `name`, and its folder with it, or
-    /// answers why not.
+    /// answers why not. Its directory named as it was is renamed with it,
+    /// unless it has one of the new name already.
     fn rename(&mut self, index: usize, name: &str) -> Result<(), String> {
         let to = self.renamed(index, name)?;
         let from = self.projects[index].folder.clone();
         if to == from {
             return Ok(());
         }
-        std::fs::rename(&from, &to)
-            .map_err(|error| format!("{} is not renamed: {error}", from.display()))?;
+        let directory = self.rename_directory(&from, &to);
+        if let Err(error) = std::fs::rename(&from, &to) {
+            if let Some(directory) = directory {
+                self.name_back(&from, &directory);
+            }
+            return Err(format!("{} is not renamed: {error}", from.display()));
+        }
         if !self.relocate(index, &to) {
             if let Err(error) = std::fs::rename(&to, &from) {
                 tracing::error!("{} is not named back: {error}", to.display());
+            } else if let Some(directory) = directory {
+                self.name_back(&from, &directory);
             }
             return Err("The project does not move.".to_owned());
         }
         Ok(())
+    }
+
+    /// Renames the directory of the project in `from` named as it is,
+    /// as the project is renamed, its folder going to `to`, and has what
+    /// Cox keeps of the stage there name where it is now; answers the
+    /// directory renamed, if one is.
+    fn rename_directory(&self, from: &Path, to: &Path) -> Option<Renamed> {
+        let directories = from.join(crate::settings::DIRECTORIES);
+        let was = directories.join(from.file_name()?);
+        let now = directories.join(to.file_name()?);
+        // A name that differs only in case is the same folder where the
+        // disk does not tell cases apart, as on macOS.
+        if !was.is_dir() || now.exists() && now.canonicalize().ok() != was.canonicalize().ok() {
+            return None;
+        }
+        let renamed = Renamed { was, now };
+        self.move_directory(from, &renamed.was, &renamed.now)
+            .then_some(renamed)
+    }
+
+    /// Names the directory of the project in `project` that `renamed`
+    /// says was renamed as it was again, as when the project is not
+    /// renamed after all.
+    fn name_back(&self, project: &Path, renamed: &Renamed) {
+        self.move_directory(project, &renamed.now, &renamed.was);
+    }
+
+    /// Moves the directory `from` of the project in `project` to `to`,
+    /// with what Cox keeps of the stage there; answers whether it moved.
+    fn move_directory(&self, project: &Path, from: &Path, to: &Path) -> bool {
+        if let Err(error) = std::fs::rename(from, to) {
+            tracing::error!("{} is not renamed: {error}", from.display());
+            return false;
+        }
+        let moved = cox_core::moved::Moved { from, to };
+        if let Err(error) = self.store.move_in_stage(project, moved) {
+            tracing::error!("the stage's tabs do not follow the directory: {error:#}");
+        }
+        if let Err(error) = storage::moved(moved) {
+            tracing::error!("what Cox keeps of the directory does not move: {error}");
+        }
+        true
     }
 
     /// Shows `name`, which the agent of the chat `key` proposes for its
@@ -2913,4 +2963,10 @@ pub fn working(state: State) -> bool {
 #[must_use]
 pub fn at_work(state: State) -> bool {
     matches!(state, State::Busy | State::Stopping | State::Checking)
+}
+
+/// A directory of a project renamed with it, from `was` to `now`.
+struct Renamed {
+    was: PathBuf,
+    now: PathBuf,
 }
