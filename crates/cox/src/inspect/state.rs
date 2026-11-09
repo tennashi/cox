@@ -136,10 +136,13 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
             return format!("the settings' text, {:?} selected", settings.selected());
         }
     }
-    if let Some(card) = workspace.project_card()
-        && focused == card.read(cx).input().focus_handle(cx)
-    {
-        return "the project card's input".to_owned();
+    if let Some(card) = workspace.project_card().map(|card| card.read(cx)) {
+        if focused == card.input().focus_handle(cx) {
+            return "the project card's input".to_owned();
+        }
+        if focused == card.name_input().focus_handle(cx) {
+            return "the project card's name".to_owned();
+        }
     }
     if workspace.is_folded() && focused == workspace.focus_handle(cx) {
         return "the window, the chat folded away".to_owned();

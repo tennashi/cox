@@ -33,8 +33,8 @@ use fake_daemon::{
     open_again, settle, settle_on, settled,
 };
 use gpui::{
-    Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, TestAppContext,
-    VisualTestContext,
+    Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
+    TestAppContext, VisualTestContext,
 };
 
 /// Where a test keeps its chats, which it opens too, to keep chats there
@@ -1023,6 +1023,73 @@ async fn a_chat_whose_folder_moved_starts_again_where_the_human_says(cx: &mut Te
 }
 
 #[gpui::test]
+async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
+    let projects = scratch("rename-projects");
+    let app = projects.join("untitled-1");
+    let (store, kept) = kept_chat(&app, Some("session-1"));
+    std::fs::create_dir_all(projects.join("taken")).unwrap();
+    let (agents, workspace, cx) =
+        open_window_resuming(cx, scratch("rename-home"), store.clone(), Resumes::Resume);
+    let name = |cx: &mut VisualTestContext| {
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.open_project_card(1, window, cx);
+        });
+        let card = workspace.read_with(cx, |workspace, _| {
+            workspace.project_card().expect("the card is open").clone()
+        });
+        card.read_with(cx, |card, _| card.name_input().clone())
+    };
+
+    // The card holds the folder's name.
+    let input = name(cx);
+    assert_eq!(
+        input.read_with(cx, |input, _| input.text().to_owned()),
+        "untitled-1"
+    );
+    // A name another folder there has is not taken, nor one that is no
+    // folder's.
+    for refused in ["taken", "a/b", ".hidden", ""] {
+        input.update(cx, |input, cx| input.set_text(refused, cx));
+        cx.simulate_keystrokes("enter");
+        settled(cx, &workspace);
+        assert_eq!(store.projects().unwrap()[0].folder, app, "{refused:?}");
+    }
+
+    // Enter renames the project, and its folder with it.
+    input.update(cx, |input, cx| input.set_text("shop", cx));
+    cx.simulate_keystrokes("enter");
+    settled(cx, &workspace);
+    let shop = projects.join("shop");
+    let kept_projects = store.projects().unwrap();
+    assert_eq!(
+        (kept_projects[0].name.as_str(), &kept_projects[0].folder),
+        ("shop", &shop)
+    );
+    assert!(shop.is_dir() && !app.exists());
+    assert_eq!(store.session(kept).unwrap(), None);
+    cx.simulate_keystrokes("escape");
+
+    // Closing the card renames it too.
+    let input = name(cx);
+    input.update(cx, |input, cx| input.set_text("store", cx));
+    cx.simulate_keystrokes("escape");
+    settled(cx, &workspace);
+    let store_folder = projects.join("store");
+    assert_eq!(store.projects().unwrap()[0].folder, store_folder);
+    assert!(store_folder.is_dir());
+
+    // Its chat starts again there, told the conversation so far.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.show(FIRST_KEPT, window, cx);
+    });
+    say(cx, &workspace, "again").await;
+    let agent = Arc::clone(&agents.borrow()[0]);
+    assert_eq!(agent.cwd(), Some(store_folder));
+    assert_eq!(agent.resumed(), Vec::<String>::new());
+    let _ = std::fs::remove_dir_all(&projects);
+}
+
+#[gpui::test]
 async fn a_project_works_in_other_folders_and_its_chats_go_on_where_they_work(
     cx: &mut TestAppContext,
 ) {
@@ -1045,6 +1112,7 @@ async fn a_project_works_in_other_folders_and_its_chats_go_on_where_they_work(
     let input = card(cx).read_with(cx, |card, _| card.input().clone());
     let typed = lib.display().to_string();
     input.update(cx, |input, cx| input.set_text(&typed, cx));
+    cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
     cx.simulate_keystrokes("enter");
     settled(cx, &workspace);
     assert_eq!(

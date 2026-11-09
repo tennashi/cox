@@ -1336,6 +1336,7 @@ impl Daemon {
                 }
             }
             ToDaemon::MoveProject { project, folder } => self.move_project(project, &folder),
+            ToDaemon::RenameProject { project, name } => self.rename_project(project, &name),
             ToDaemon::AddFolder { project, folder } => self.add_folder(project, folder),
             ToDaemon::RemoveFolder { project, folder } => self.remove_folder(project, &folder),
             ToDaemon::MakePrimary { project, folder } => self.make_primary(project, &folder),
@@ -1366,14 +1367,67 @@ impl Daemon {
             tracing::error!("the project does not move while its folder is there");
             return;
         }
-        if self
-            .chats
+        self.relocate(index, folder);
+    }
+
+    /// Renames the project kept as `project` `name`, and its folder with
+    /// it, in the folder it is in, unless the name is no folder's, a
+    /// folder there has it already, or one of its chats is at work.
+    fn rename_project(&mut self, project: ProjectId, name: &str) {
+        let Some(index) = self.index_of(project).filter(|&index| index != 0) else {
+            return;
+        };
+        let name = name.trim();
+        if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\']) {
+            tracing::error!(name, "a project is not named so");
+            return;
+        }
+        let from = self.projects[index].folder.clone();
+        let to = from.with_file_name(name);
+        if to == from {
+            return;
+        }
+        // A name that differs only in case is the same folder where the
+        // disk does not tell cases apart, as on macOS.
+        if to.exists() && to.canonicalize().ok() != from.canonicalize().ok() {
+            tracing::error!(to = %to.display(), "the project is not renamed: the folder is there");
+            return;
+        }
+        if self.at_work(index) {
+            tracing::error!("the project is not renamed while a chat of it is at work");
+            return;
+        }
+        if let Err(error) = std::fs::rename(&from, &to) {
+            tracing::error!("{} is not renamed: {error}", from.display());
+            return;
+        }
+        if !self.relocate(index, &to)
+            && let Err(error) = std::fs::rename(&to, &from)
+        {
+            tracing::error!("{} is not named back: {error}", to.display());
+        }
+    }
+
+    /// Whether a chat of the project at `index` is at work.
+    fn at_work(&self, index: usize) -> bool {
+        self.chats
             .iter()
             .chain(&self.archived)
             .any(|slot| slot.project == index && working(slot.state))
-        {
+    }
+
+    /// Has the project at `index`, whose folder is now `folder`, work
+    /// there, its chats noting it and starting again there, and answers
+    /// whether it does, which it does not while one of its chats is at
+    /// work.
+    fn relocate(&mut self, index: usize, folder: &Path) -> bool {
+        let Some(project) = self.projects[index].id else {
+            return false;
+        };
+        let from = self.projects[index].folder.clone();
+        if self.at_work(index) {
             tracing::error!("the project does not move while a chat of it is at work");
-            return;
+            return false;
         }
         let name = folder.file_name().map_or_else(
             || folder.to_string_lossy().into_owned(),
@@ -1381,7 +1435,7 @@ impl Daemon {
         );
         if let Err(error) = self.store.move_project(project, folder, &name) {
             tracing::error!("the project does not move: {error:#}");
-            return;
+            return false;
         }
         let moved = cox_core::moved::Moved {
             from: &from,
@@ -1451,6 +1505,7 @@ impl Daemon {
         for key in moving {
             self.read_again(key);
         }
+        true
     }
 
     /// The chats of the project kept as `project` work in `folder` too,
