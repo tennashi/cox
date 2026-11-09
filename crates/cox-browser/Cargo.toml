@@ -21,7 +21,7 @@ cef-dll-sys = "=152.3.0"
 # `src/relay.rs`.
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 # Signal handlers in place of CEF's: see `src/quit.rs`.
-libc = "0.2.188"
+libc.workspace = true
 # Reading only the head of what the browser sends the agent: see
 # `src/relay.rs`.
 serde = { version = "1.0.229", features = ["derive"] }

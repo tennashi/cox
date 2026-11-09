@@ -48,8 +48,7 @@ Then:
    cargo xtask run
    ```
 
-`cargo xtask help` lists the other development tasks. Do not update
-`libc` past 0.2.188 in `Cargo.lock`.
+`cargo xtask help` lists the other development tasks.
 
 ## Investigating
 

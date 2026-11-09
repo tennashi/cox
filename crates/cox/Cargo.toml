@@ -81,7 +81,7 @@ qrcodegen = "1.8.0"
 cef-dll-sys = "=152.3.0"
 # Keeping Cox's open files from the agent (`src/agent.rs`), and the
 # terminals' pseudoterminals (`src/stage/terminal/pty.rs`).
-libc = "0.2.188"
+libc.workspace = true
 # Cox's own MCP server: see `src/agent/mcp.rs`.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
