@@ -22,13 +22,15 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 13;
+const VERSION: i64 = 14;
 
 const TABLES: &str = "
 CREATE TABLE projects (
     id INTEGER PRIMARY KEY,
     folder TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    -- Whether the human put it away, off the rail.
+    archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE chats (
     id INTEGER PRIMARY KEY,
@@ -132,6 +134,7 @@ const UPGRADES: &[&str] = &[
     // A project worked in folders beside its own, before it kept to its
     // own.
     "DROP TABLE folders;",
+    "ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -168,6 +171,8 @@ pub struct KeptProject {
     /// The folder its chats work in.
     pub folder: PathBuf,
     pub name: String,
+    /// Whether the human put it away, off the rail.
+    pub archived: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -297,12 +302,13 @@ impl Store {
     pub fn projects(&self) -> anyhow::Result<Vec<KeptProject>> {
         let mut statement = self
             .connection
-            .prepare("SELECT id, folder, name FROM projects ORDER BY id")?;
+            .prepare("SELECT id, folder, name, archived FROM projects ORDER BY id")?;
         let projects = statement.query_map([], |row| {
             Ok(KeptProject {
                 id: ProjectId(row.get(0)?),
                 folder: PathBuf::from(row.get::<_, String>(1)?),
                 name: row.get(2)?,
+                archived: row.get(3)?,
             })
         })?;
         Ok(projects.collect::<Result<_, _>>()?)
@@ -545,6 +551,56 @@ impl Store {
             "UPDATE chats SET archived = ?2 WHERE id = ?1",
             params![chat.0, archived],
         )?;
+        Ok(())
+    }
+
+    /// Keeps that the human put `project` away, off the rail, or brought it
+    /// back.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn archive_project(&self, project: ProjectId, archived: bool) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE projects SET archived = ?2 WHERE id = ?1",
+            params![project.0, archived],
+        )?;
+        Ok(())
+    }
+
+    /// Forgets `project`, its chats and what they showed, and the tabs
+    /// of the stage of its folder, as when the human deletes it.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written, leaving it as it was.
+    pub fn delete_project(&self, project: ProjectId) -> anyhow::Result<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let chats = "SELECT id FROM chats WHERE project = ?1";
+        transaction.execute(
+            &format!("DELETE FROM entries WHERE chat IN ({chats})"),
+            [project.0],
+        )?;
+        // A chat of another project, or of Cox's own, that one of these
+        // opened forgets which did.
+        transaction.execute(
+            &format!(
+                "UPDATE chats SET parent = NULL
+                 WHERE parent IN ({chats}) AND (project IS NOT ?1)"
+            ),
+            [project.0],
+        )?;
+        transaction.execute(
+            "UPDATE chats SET parent = NULL WHERE project = ?1",
+            [project.0],
+        )?;
+        transaction.execute("DELETE FROM chats WHERE project = ?1", [project.0])?;
+        transaction.execute(
+            "DELETE FROM stages WHERE folder = (SELECT folder FROM projects WHERE id = ?1)",
+            [project.0],
+        )?;
+        transaction.execute("DELETE FROM projects WHERE id = ?1", [project.0])?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -971,11 +1027,13 @@ mod tests {
                     id: cox,
                     folder: "/src/cox".into(),
                     name: "cox".to_owned(),
+                    archived: false,
                 },
                 KeptProject {
                     id: notes,
                     folder: "/notes".into(),
                     name: "notes".to_owned(),
+                    archived: false,
                 },
             ]
         );
@@ -1111,6 +1169,60 @@ mod tests {
         store.keep_stage(folder, &shown).unwrap();
         assert_eq!(store.stage(folder).unwrap(), Some(shown));
         assert_eq!(store.stage(Path::new("/elsewhere")).unwrap(), None);
+    }
+
+    #[test]
+    fn a_project_is_archived_and_deleted_with_its_chats() {
+        let store = Store::in_memory().unwrap();
+        let app = store.project(Path::new("/work/app"), "app").unwrap();
+        let notes = store.project(Path::new("/work/notes"), "notes").unwrap();
+        let opener = store.add_chat(Some(app), "Chat 1").unwrap();
+        store
+            .add_chat_under(opener, Some(app), "Chat 2", None)
+            .unwrap();
+        let elsewhere = store
+            .add_chat_under(opener, Some(notes), "Chat 1", None)
+            .unwrap();
+        store
+            .keep_entry(opener, 0, &Entry::Human("hello".to_owned()))
+            .unwrap();
+        store
+            .keep_stage(Path::new("/work/app"), &KeptTabs::default())
+            .unwrap();
+
+        store.archive_project(app, true).unwrap();
+        let archived = |store: &Store| {
+            store
+                .projects()
+                .unwrap()
+                .into_iter()
+                .map(|project| (project.name, project.archived))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            archived(&store),
+            [("app".to_owned(), true), ("notes".to_owned(), false)]
+        );
+        store.archive_project(app, false).unwrap();
+        assert_eq!(
+            archived(&store),
+            [("app".to_owned(), false), ("notes".to_owned(), false)]
+        );
+
+        store.delete_project(app).unwrap();
+        assert_eq!(archived(&store), [("notes".to_owned(), false)]);
+        let chats = store.chats().unwrap();
+        assert_eq!(
+            chats
+                .iter()
+                .map(|chat| (chat.id, chat.parent))
+                .collect::<Vec<_>>(),
+            [(elsewhere, None)]
+        );
+        assert_eq!(store.entries(opener).unwrap(), []);
+        assert_eq!(store.stage(Path::new("/work/app")).unwrap(), None);
+        // Its folder can be a project again.
+        assert_ne!(store.project(Path::new("/work/app"), "app").unwrap(), app);
     }
 
     #[test]

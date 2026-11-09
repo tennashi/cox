@@ -200,9 +200,14 @@ fn list(told: &mut String, workspace: &Workspace) {
             } else {
                 ""
             };
+            let archived = if named.is_archived() {
+                ", archived"
+            } else {
+                ""
+            };
             let _ = writeln!(
                 told,
-                "  {} ({}){chosen}{icon}",
+                "  {} ({}){chosen}{icon}{archived}",
                 named.name(),
                 named.folder().display()
             );
@@ -212,6 +217,15 @@ fn list(told: &mut String, workspace: &Workspace) {
     }
     if project.is_none() {
         told.push_str("  none\n");
+    }
+    let archived: Vec<&str> = workspace
+        .projects()
+        .iter()
+        .filter(|project| project.is_archived())
+        .map(crate::workspace::Project::name)
+        .collect();
+    if !archived.is_empty() {
+        let _ = writeln!(told, "Archived projects: {}", archived.join(", "));
     }
     if !workspace.archived().is_empty() {
         told.push_str("Archived:\n");

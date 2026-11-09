@@ -28,6 +28,13 @@ pub struct ProjectRow {
     /// Whether its folder is not there, as when the human moved it.
     #[serde(default)]
     pub missing: bool,
+    /// Whether the human put it away, off the rail.
+    #[serde(default)]
+    pub archived: bool,
+    /// Whether the human deleted it, while the daemon runs: it stays in
+    /// the list, so that the projects after it keep their places.
+    #[serde(default)]
+    pub deleted: bool,
 }
 
 /// A chat, as the window lists it in its tabs.
@@ -298,6 +305,13 @@ pub enum ToDaemon {
     /// Rename the project kept as `project` `name`, and its folder with
     /// it, unless one of its chats is at work.
     RenameProject { project: ProjectId, name: String },
+    /// Put the project kept as `project` away, off the rail, its chats
+    /// going on as they were, or bring it back.
+    ArchiveProject { project: ProjectId, archived: bool },
+    /// Delete the project kept as `project`: its folder goes to the
+    /// trash, and its chats stop and are forgotten, unless one of them is
+    /// at work.
+    DeleteProject { project: ProjectId },
     /// Answer [`FromDaemon::Settled`] with `id` once all asked before is
     /// done.
     Sync { id: u64 },
