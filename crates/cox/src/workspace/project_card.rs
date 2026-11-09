@@ -484,10 +484,7 @@ fn why_not(standing: &Standing, folder: &Path) -> Option<&'static str> {
     // A project goes only where its folder went: another folder, while
     // its own is there, is another project.
     if !standing.missing {
-        return Some(
-            "The project's folder is still there, so it has not moved. To work in another \
-             folder, open it with Open folder….",
-        );
+        return Some("The project's folder is still there, so it has not moved.");
     }
     if !folder.is_dir() {
         return Some("There is no folder there.");

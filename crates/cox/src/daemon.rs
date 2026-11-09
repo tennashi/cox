@@ -60,6 +60,10 @@ use wire::{ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 /// What the project of chats with no folder is called.
 const COX: &str = "Cox";
 
+/// The folder of Cox's home the projects are made in, each in a folder
+/// of its own.
+const PROJECTS: &str = "projects";
+
 /// How long a chat's name grows, in characters, when the agent or the
 /// first line names it.
 pub const NAME_LENGTH: usize = 80;
@@ -988,6 +992,28 @@ impl Daemon {
         key
     }
 
+    /// Makes a project with nothing set yet, in a folder of its own,
+    /// `untitled-` and the first number no folder there has yet, in the
+    /// projects of Cox's home, and opens a chat in it.
+    fn new_project(&mut self) {
+        let projects = self.projects[0].folder.join(PROJECTS);
+        let folder = (1..=u32::MAX)
+            .map(|number| projects.join(format!("untitled-{number}")))
+            .find(|folder| {
+                !folder.exists()
+                    && self
+                        .projects
+                        .iter()
+                        .all(|project| project.folder != *folder)
+            })
+            .expect("some number is free");
+        if let Err(error) = std::fs::create_dir_all(&folder) {
+            tracing::error!("cannot make {}: {error}", folder.display());
+            return;
+        }
+        self.open(Some(folder));
+    }
+
     /// Opens a chat in the project at `index`, under the chat `from` names
     /// by its key, and how it is kept, when an agent opens it, set up as
     /// `setup` says; and answers its key.
@@ -1174,6 +1200,7 @@ impl Daemon {
             ToDaemon::Open { folder } => {
                 self.open(folder);
             }
+            ToDaemon::NewProject => self.new_project(),
             ToDaemon::NewChat { folder } => {
                 // Only in a project the human has, whose folder is there.
                 let index = match folder {

@@ -90,8 +90,8 @@ actions!(
     [
         /// Opens a chat of Cox's own, in no project.
         NewChat,
-        /// Asks for a folder, and opens a chat in its project.
-        OpenFolder,
+        /// Makes a project with nothing set yet, and opens a chat in it.
+        NewProject,
         NextChat,
         PreviousChat,
         /// Leaves the chat's name as it was.
@@ -143,7 +143,7 @@ pub fn bind_keys(cx: &mut App) {
     project_card::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("secondary-n", NewChat, Some("Workspace")),
-        KeyBinding::new("secondary-o", OpenFolder, Some("Workspace")),
+        KeyBinding::new("secondary-shift-n", NewProject, Some("Workspace")),
         KeyBinding::new("secondary-,", OpenSettings, Some("Workspace")),
         KeyBinding::new("ctrl-tab", NextChat, Some("Workspace")),
         KeyBinding::new("ctrl-shift-tab", PreviousChat, Some("Workspace")),
@@ -1287,29 +1287,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Asks the human for a folder, and opens a chat in its project.
-    pub fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Open".into()),
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let folder = match chosen.await {
-                Ok(Ok(Some(mut paths))) if !paths.is_empty() => paths.swap_remove(0),
-                Ok(Err(error)) => {
-                    tracing::error!("no folder chosen: {error:#}");
-                    return;
-                }
-                _ => return,
-            };
-            this.update_in(cx, |workspace, window, cx| {
-                workspace.open(Some(folder), window, cx);
-            })
-            .ok();
-        })
-        .detach();
+    /// Makes a project with nothing set yet, in a folder of its own in
+    /// the projects of Cox's home, and opens a chat in it, for the human
+    /// and the agent to work out what the project is to be.
+    pub fn new_project(&self) {
+        self.tell(ToDaemon::NewProject);
     }
 
     /// Where Cox's own chats work: Cox's home.
@@ -1852,8 +1834,8 @@ impl Workspace {
             .child(div().flex_1())
             .child(
                 div()
-                    .id("open-folder")
-                    .debug_selector(|| "open-folder".to_owned())
+                    .id("new-project")
+                    .debug_selector(|| "new-project".to_owned())
                     .flex_shrink_0()
                     .size(px(PROJECT_SIZE))
                     .flex()
@@ -1867,10 +1849,10 @@ impl Workspace {
                     .text_size(px(18.))
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
-                    .tooltip(tip("Open folder…"))
+                    .tooltip(tip("New project"))
                     .child(icon(Icon::Plus, 16., FAINT))
-                    .on_click(cx.listener(|workspace, _, window, cx| {
-                        workspace.choose_folder(window, cx);
+                    .on_click(cx.listener(|workspace, _, _, _| {
+                        workspace.new_project();
                     })),
             )
             .child(self.render_settings_button(cx))
@@ -2859,8 +2841,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|workspace, _: &NewChat, window, cx| {
                 workspace.open(None, window, cx);
             }))
-            .on_action(cx.listener(|workspace, _: &OpenFolder, window, cx| {
-                workspace.choose_folder(window, cx);
+            .on_action(cx.listener(|workspace, _: &NewProject, _, _| {
+                workspace.new_project();
             }))
             .on_action(cx.listener(|workspace, _: &OpenSettings, window, cx| {
                 workspace.open_settings(window, cx);
