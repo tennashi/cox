@@ -15,7 +15,7 @@ use crate::chat::conversation::{
 };
 use crate::chat::view::ChatView;
 use crate::ui::translation::Shown;
-use crate::workspace::{Chat, Workspace};
+use crate::workspace::{Chat, Gives, Workspace};
 
 /// The most of a reply, a thought or a note the state tells; the rest is
 /// counted.
@@ -143,11 +143,14 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
         if focused == card.directory_input().focus_handle(cx) {
             return "the project card's directory".to_owned();
         }
-        if card
-            .link_input()
-            .is_some_and(|input| focused == input.focus_handle(cx))
+        if let Some((gives, input)) = card.row_input()
+            && focused == input.focus_handle(cx)
         {
-            return "the project card's remote".to_owned();
+            return match gives {
+                Gives::Remote => "the project card's remote",
+                Gives::Name => "the project card's directory's name",
+            }
+            .to_owned();
         }
     }
     if workspace.is_folded() && focused == workspace.focus_handle(cx) {

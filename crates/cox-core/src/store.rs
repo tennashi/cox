@@ -425,6 +425,35 @@ impl Store {
         Ok(())
     }
 
+    /// Keeps the tabs of the stage of `folder` naming where a folder in
+    /// it moved, as `moved` says, as a directory of a project renamed.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read or written.
+    pub fn move_in_stage(&self, folder: &Path, moved: Moved<'_>) -> anyhow::Result<()> {
+        let folder = folder.to_string_lossy();
+        let tabs: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT tabs FROM stages WHERE folder = ?1",
+                [&folder],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(tabs) = tabs else {
+            return Ok(());
+        };
+        let mut tabs: serde_json::Value = serde_json::from_str(&tabs)?;
+        if moved.json(&mut tabs) {
+            self.connection.execute(
+                "UPDATE stages SET tabs = ?2 WHERE folder = ?1",
+                params![folder, serde_json::to_string(&tabs)?],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Keeps `folder` as the one `chat` works in, when it is not its
     /// project's, or that it works in its project's.
     ///
@@ -1081,6 +1110,40 @@ mod tests {
         let shown = KeptTabs { shown: 0, ..tabs };
         store.keep_stage(folder, &shown).unwrap();
         assert_eq!(store.stage(folder).unwrap(), Some(shown));
+        assert_eq!(store.stage(Path::new("/elsewhere")).unwrap(), None);
+    }
+
+    #[test]
+    fn the_tabs_of_a_stage_follow_a_folder_in_it_that_moved() {
+        let store = Store::in_memory().unwrap();
+        let folder = Path::new("/work/app");
+        let tabs = |path: &str| KeptTabs {
+            tabs: vec![
+                KeptTab::File {
+                    path: path.into(),
+                    lines: None,
+                },
+                KeptTab::Markdown {
+                    path: "/work/app/directories/lib/plan.md".into(),
+                },
+            ],
+            shown: 0,
+            owners: vec![None, None],
+        };
+        store
+            .keep_stage(folder, &tabs("/work/app/directories/app/src/main.rs"))
+            .unwrap();
+        let moved = Moved {
+            from: Path::new("/work/app/directories/app"),
+            to: Path::new("/work/app/directories/shop"),
+        };
+        store.move_in_stage(folder, moved).unwrap();
+        assert_eq!(
+            store.stage(folder).unwrap(),
+            Some(tabs("/work/app/directories/shop/src/main.rs"))
+        );
+        // A folder with no stage kept has none still.
+        store.move_in_stage(Path::new("/elsewhere"), moved).unwrap();
         assert_eq!(store.stage(Path::new("/elsewhere")).unwrap(), None);
     }
 

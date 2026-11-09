@@ -83,6 +83,7 @@ use crate::ui::theme::{
 };
 use crate::ui::{card, tip};
 use crate::workflow;
+pub use project_card::Gives;
 use project_card::{ProjectCard, Rename, Standing};
 
 actions!(

@@ -1015,6 +1015,9 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
     let app = projects.join("untitled-1");
     let (store, kept) = kept_chat(&app, Some("session-1"));
     std::fs::create_dir_all(projects.join("taken")).unwrap();
+    // Its directory named as it follows its name, and the others stay.
+    std::fs::create_dir_all(app.join("directories").join("untitled-1")).unwrap();
+    std::fs::create_dir_all(app.join("directories").join("lib")).unwrap();
     let (agents, workspace, cx) =
         open_window_resuming(cx, scratch("rename-home"), store.clone(), Resumes::Resume);
     let name = |cx: &mut VisualTestContext| {
@@ -1053,6 +1056,9 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
         ("shop", &shop)
     );
     assert!(shop.is_dir() && !app.exists());
+    assert!(shop.join("directories").join("shop").is_dir());
+    assert!(!shop.join("directories").join("untitled-1").exists());
+    assert!(shop.join("directories").join("lib").is_dir());
     assert_eq!(store.session(kept).unwrap(), None);
     cx.simulate_keystrokes("escape");
 
@@ -1064,6 +1070,7 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
     let store_folder = projects.join("store");
     assert_eq!(store.projects().unwrap()[0].folder, store_folder);
     assert!(store_folder.is_dir());
+    assert!(store_folder.join("directories").join("store").is_dir());
 
     // Its chat starts again there, told the conversation so far.
     workspace.update_in(cx, |workspace, window, cx| {
@@ -1181,34 +1188,36 @@ async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
-fn directories_are_made_cloned_and_linked_on_the_projects_card(cx: &mut TestAppContext) {
-    let root = scratch("directories");
-    let origin = root.join("origin.git");
-    let git = |args: &[&str], at: &std::path::Path| {
+/// Makes a Git repository at `folder` with one commit, on `main`.
+fn repository_with_a_commit(folder: &Path) {
+    let git = |args: &[&str]| {
         let status = std::process::Command::new("git")
             .args(args)
-            .current_dir(at)
+            .current_dir(folder)
             .status()
             .unwrap();
         assert!(status.success());
     };
-    std::fs::create_dir_all(&origin).unwrap();
-    git(&["init", "-q", "--initial-branch=main"], &origin);
-    git(
-        &[
-            "-c",
-            "user.name=Cox",
-            "-c",
-            "user.email=cox@example.com",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "first",
-        ],
-        &origin,
-    );
+    std::fs::create_dir_all(folder).unwrap();
+    git(&["init", "-q", "--initial-branch=main"]);
+    git(&[
+        "-c",
+        "user.name=Cox",
+        "-c",
+        "user.email=cox@example.com",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "first",
+    ]);
+}
+
+#[gpui::test]
+fn directories_are_made_cloned_and_linked_on_the_projects_card(cx: &mut TestAppContext) {
+    let root = scratch("directories");
+    let origin = root.join("origin.git");
+    repository_with_a_commit(&origin);
     let app = root.join("projects").join("untitled-1");
     let directories = app.join("directories");
     let (store, _) = kept_chat(&app, None);
@@ -1270,7 +1279,9 @@ fn directories_are_made_cloned_and_linked_on_the_projects_card(cx: &mut TestAppC
     // And, linked to a remote while it has nothing yet, takes its branch.
     click(cx, "project-directory-action-0");
     let remote = card
-        .read_with(cx, |card, _| card.link_input().cloned())
+        .read_with(cx, |card, _| {
+            card.row_input().map(|(_, input)| input.clone())
+        })
         .expect("the remote's input is open");
     enter(&url, &remote, cx);
     let said = described(cx);
@@ -1279,7 +1290,28 @@ fn directories_are_made_cloned_and_linked_on_the_projects_card(cx: &mut TestAppC
             && said.contains(&"Under it: Linked app to its remote, and took its main.".to_owned()),
         "{said:?}"
     );
-    assert!(card.read_with(cx, |card, _| card.link_input().is_none()));
+    assert!(card.read_with(cx, |card, _| card.row_input().is_none()));
+
+    // Nothing typed makes a directory named as the project.
+    enter("", &input, cx);
+    assert!(directories.join("untitled-1").is_dir());
+
+    // A directory is renamed on its row, its folder with it.
+    click(cx, "project-directory-rename-0");
+    let name = card
+        .read_with(cx, |card, _| {
+            card.row_input().map(|(_, input)| input.clone())
+        })
+        .expect("the name's input is open");
+    enter("web", &name, cx);
+    assert!(directories.join("web").join(".git").is_dir());
+    assert!(!directories.join("app").exists());
+    let said = described(cx);
+    assert!(
+        said.contains(&format!("Directory web (Git, remote {url})"))
+            && said.contains(&"Under it: Renamed app to web.".to_owned()),
+        "{said:?}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -3037,13 +3069,21 @@ fn opened_as_project(
     home: &Path,
 ) -> PathBuf {
     let project = home.join("projects").join("untitled-1");
-    let opened = workspace.read_with(cx, |workspace, _| {
+    let listed: Vec<PathBuf> = workspace.read_with(cx, |workspace, _| {
         workspace
             .projects()
             .iter()
-            .any(|kept| kept.folder() == project.as_path())
+            .map(|kept| kept.folder().to_owned())
+            .collect()
     });
-    assert!(opened);
+    // What the sketch says of how it ended tells why, when it did not.
+    let sketch = view_at(cx, workspace, 3);
+    let said = self::entries(cx, &sketch);
+    assert!(
+        listed.contains(&project),
+        "{} is not among {listed:?}: {said:?}",
+        project.display()
+    );
     assert!(
         project
             .join("directories")
@@ -3051,9 +3091,8 @@ fn opened_as_project(
             .join(".git")
             .exists()
     );
-    let sketch = view_at(cx, workspace, 3);
     assert!(
-        self::entries(cx, &sketch).iter().any(|entry| matches!(entry,
+        said.iter().any(|entry| matches!(entry,
             Entry::Note(note) if note.starts_with("The sketch was opened as the project untitled-1"))),
     );
     project

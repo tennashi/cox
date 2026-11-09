@@ -3,7 +3,8 @@
 //! the rail, opens: the project's name, its folder's, which Enter
 //! changes, as the card does as it closes, renaming the folder; and the
 //! project's directories, in `directories` in its folder, which Enter
-//! makes, or clones a repository into, each of which can become a Git
+//! makes, named as the project unless named otherwise, or clones a
+//! repository into, each of which can be renamed, become a Git
 //! repository and be linked to a remote. A project whose folder is not
 //! there says so. Escape, the ×, or a click beside the card closes it.
 
@@ -104,9 +105,20 @@ enum Making {
     Failed(String),
 }
 
-/// The directory whose remote the human gives, and the input of it.
-struct Linking {
+/// What the human gives of a directory in the input under its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gives {
+    /// The URL of its remote.
+    Remote,
+    /// Its new name.
+    Name,
+}
+
+/// The directory of which the human gives what `gives` says, and the
+/// input of it.
+struct Editing {
     name: String,
+    gives: Gives,
     input: Entity<LineInput>,
     _submitted: Subscription,
 }
@@ -122,8 +134,9 @@ pub struct ProjectCard {
     directory: Entity<LineInput>,
     /// What the line under it says.
     making: Making,
-    /// The directory whose remote the human gives, if they do.
-    linking: Option<Linking>,
+    /// The directory of which the human gives its remote or its name, if
+    /// they do.
+    editing: Option<Editing>,
     _submitted: [Subscription; 3],
 }
 
@@ -144,7 +157,10 @@ impl ProjectCard {
         });
         let directory = cx.new(|cx| {
             let mut input = LineInput::new(cx);
-            input.set_placeholder("A directory's name, or a Git repository's URL", cx);
+            input.set_placeholder(
+                "A directory's name, the project's unless given, or a Git repository's URL",
+                cx,
+            );
             input
         });
         let named = cx.subscribe_in(&name, window, |card, _, Submitted, _, cx| {
@@ -162,7 +178,7 @@ impl ProjectCard {
             name,
             directory,
             making: Making::Hint,
-            linking: None,
+            editing: None,
             _submitted: [named, made, typed],
         }
     }
@@ -185,17 +201,23 @@ impl ProjectCard {
         &self.directory
     }
 
-    /// The input of the remote of the directory being linked, if one is.
+    /// The input under the row of a directory, if one is open, and what
+    /// the human gives in it.
     #[must_use]
-    pub fn link_input(&self) -> Option<&Entity<LineInput>> {
-        self.linking.as_ref().map(|linking| &linking.input)
+    pub fn row_input(&self) -> Option<(Gives, &Entity<LineInput>)> {
+        self.editing
+            .as_ref()
+            .map(|editing| (editing.gives, &editing.input))
     }
 
-    /// Makes the directory whose name the input holds, or clones the
-    /// repository whose URL it holds into one named after it, in the
-    /// background, if it can.
+    /// Makes the directory whose name the input holds, or, when it holds
+    /// none, the project's, or clones the repository whose URL it holds
+    /// into one named after it, in the background, if it can.
     fn make_directory(&mut self, cx: &mut Context<Self>) {
-        let typed = self.directory.read(cx).text().trim().to_owned();
+        let mut typed = self.directory.read(cx).text().trim().to_owned();
+        if typed.is_empty() {
+            typed = named(&self.standing.folder);
+        }
         let url = directory::is_url(&typed);
         let name = if url {
             match directory::name_of(&typed) {
@@ -273,45 +295,96 @@ impl ProjectCard {
         );
     }
 
-    /// Opens the input of the remote of the repository `name`, under its
-    /// row, holding the remote it has; or closes it, if it is open.
-    fn start_linking(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens the input under the row of the directory `name`, where the
+    /// human gives what `gives` says, holding what it has: the remote of
+    /// a repository, or its name; or closes it, if it is open.
+    fn start_editing(
+        &mut self,
+        name: String,
+        gives: Gives,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self
-            .linking
+            .editing
             .take()
-            .is_some_and(|linking| linking.name == name)
+            .is_some_and(|editing| editing.name == name && editing.gives == gives)
         {
             cx.notify();
             return;
         }
-        let remote = self
-            .directories
-            .iter()
-            .find(|directory| directory.name == name)
-            .and_then(|directory| directory.remote.clone())
-            .unwrap_or_default();
+        let (placeholder, text) = match gives {
+            Gives::Remote => (
+                "The URL of its remote",
+                self.directories
+                    .iter()
+                    .find(|directory| directory.name == name)
+                    .and_then(|directory| directory.remote.clone())
+                    .unwrap_or_default(),
+            ),
+            Gives::Name => ("Its new name", name.clone()),
+        };
         let input = cx.new(|cx| {
             let mut input = LineInput::new(cx);
-            input.set_placeholder("The URL of its remote", cx);
-            input.set_text(&remote, cx);
+            input.set_placeholder(placeholder, cx);
+            input.set_text(&text, cx);
             input
         });
         let submitted = cx.subscribe_in(&input, window, |card, _, Submitted, _, cx| {
-            card.link(cx);
+            match card.editing.as_ref().map(|editing| editing.gives) {
+                Some(Gives::Remote) => card.link(cx),
+                Some(Gives::Name) => card.rename_directory(cx),
+                None => {}
+            }
         });
         window.focus(&input.focus_handle(cx));
-        self.linking = Some(Linking {
+        self.editing = Some(Editing {
             name,
+            gives,
             input,
             _submitted: submitted,
         });
         cx.notify();
     }
 
+    /// Renames the directory being renamed as its input says, in the
+    /// background, unless a chat of the project is at work in it.
+    fn rename_directory(&mut self, cx: &mut Context<Self>) {
+        let Some(editing) = &self.editing else {
+            return;
+        };
+        let to = editing.input.read(cx).text().trim().to_owned();
+        let from = editing.name.clone();
+        if to == from {
+            self.editing = None;
+            return cx.notify();
+        }
+        if let Some(why) = directory::why_not_named(&to) {
+            return self.say(Making::Failed(why.to_owned()), cx);
+        }
+        if self.standing.at_work {
+            return self.say(
+                Making::Failed(
+                    "A chat of the project is at work: rename it once the turn ends.".to_owned(),
+                ),
+                cx,
+            );
+        }
+        let project = self.standing.folder.clone();
+        self.go(
+            format!("Renaming {from}…"),
+            move || {
+                directory::rename(&project, &from, &to)?;
+                Ok(format!("Renamed {from} to {to}."))
+            },
+            cx,
+        );
+    }
+
     /// Links the repository being linked to the remote its input holds,
     /// in the background.
     fn link(&mut self, cx: &mut Context<Self>) {
-        let Some(linking) = &self.linking else {
+        let Some(linking) = &self.editing else {
             return;
         };
         let url = linking.input.read(cx).text().trim().to_owned();
@@ -361,7 +434,7 @@ impl ProjectCard {
                 match done {
                     Ok(done) => {
                         card.directory.update(cx, LineInput::clear);
-                        card.linking = None;
+                        card.editing = None;
                         card.say(Making::Done(done), cx);
                     }
                     Err(why) => card.say(Making::Failed(why), cx),
@@ -382,8 +455,9 @@ impl ProjectCard {
     fn said_of_making(&self) -> (String, u32) {
         match &self.making {
             Making::Hint => (
-                "Enter makes a directory of a name, where the project's agents work, or \
-                 clones the Git repository a URL names into one named after it."
+                "Enter makes a directory of a name, or of the project's, where the project's \
+                 agents work, or clones the Git repository a URL names into one named after it. \
+                 A directory named as the project is renamed with it."
                     .to_owned(),
                 FAINT,
             ),
@@ -421,7 +495,7 @@ impl ProjectCard {
             let text = named(&standing.folder);
             self.name.update(cx, |input, cx| input.set_text(&text, cx));
             self.directories = directory::listed(&standing.folder);
-            self.linking = None;
+            self.editing = None;
         }
         self.standing = standing;
         cx.notify();
@@ -449,11 +523,15 @@ impl ProjectCard {
                     }
                 )
             }))
-            .chain(self.linking.as_ref().map(|linking| {
+            .chain(self.editing.as_ref().map(|editing| {
                 format!(
-                    "Remote input of {} holding {:?}",
-                    linking.name,
-                    linking.input.read(cx).text()
+                    "{} input of {} holding {:?}",
+                    match editing.gives {
+                        Gives::Remote => "Remote",
+                        Gives::Name => "Name",
+                    },
+                    editing.name,
+                    editing.input.read(cx).text()
                 )
             }))
             .chain([
@@ -541,81 +619,106 @@ impl ProjectCard {
             .child(div().text_size(px(12.)).text_color(rgb(color)).child(said))
     }
 
+    /// The row of `directory`, the `index`th, with what can be done with
+    /// it, and the input under it, if the human gives its name or its
+    /// remote.
+    fn render_directory(
+        &self,
+        index: usize,
+        directory: &Directory,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let name = directory.name.clone();
+        let (what, action): (SharedString, _) = match (&directory.git, &directory.remote) {
+            (false, _) => (SharedString::default(), "Make repository"),
+            (true, None) => ("Git, no remote".into(), "Link…"),
+            (true, Some(remote)) => (remote.clone().into(), "Link…"),
+        };
+        let git = directory.git;
+        let renamed = name.clone();
+        let row = div()
+            .debug_selector(move || format!("project-directory-{index}"))
+            .h(px(ROW_HEIGHT))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(icon(Icon::Folder, 14., DIM))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(13.))
+                    .text_color(rgb(FOREGROUND))
+                    .child(SharedString::from(directory.name.clone())),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .text_color(rgb(FAINT))
+                    .child(ellipsis(what)),
+            )
+            .child(
+                button(("directory-rename", index), "Rename…", Kind::Plain)
+                    .debug_selector(move || format!("project-directory-rename-{index}"))
+                    .h(px(26.))
+                    .text_size(px(12.))
+                    .tooltip(tip("Rename it, and its folder"))
+                    .on_click(cx.listener(move |card, _, window, cx| {
+                        card.start_editing(renamed.clone(), Gives::Name, window, cx);
+                    })),
+            )
+            .child(
+                button(("directory-action", index), action, Kind::Plain)
+                    .debug_selector(move || format!("project-directory-action-{index}"))
+                    .h(px(26.))
+                    .text_size(px(12.))
+                    .tooltip(tip(if git {
+                        "Link it to a remote, as its origin"
+                    } else {
+                        "Make it a Git repository, with no remote yet"
+                    }))
+                    .on_click(cx.listener(move |card, _, window, cx| {
+                        if git {
+                            card.start_editing(name.clone(), Gives::Remote, window, cx);
+                        } else {
+                            card.make_repository(name.clone(), cx);
+                        }
+                    })),
+            );
+        let editing = self
+            .editing
+            .as_ref()
+            .filter(|editing| editing.name == directory.name)
+            .map(|editing| {
+                div().px_2().pb_2().child(input_box(
+                    match editing.gives {
+                        Gives::Remote => "project-directory-remote",
+                        Gives::Name => "project-directory-name",
+                    },
+                    &editing.input,
+                ))
+            });
+        div()
+            .flex()
+            .flex_col()
+            .when(index > 0, |row| row.border_t_1().border_color(rgb(BORDER)))
+            .child(row)
+            .children(editing)
+    }
+
     /// The project's directories, a row each, under their heading, each
     /// with what can be done with it, and the input of another's name, or
     /// a repository's URL, with what it does.
     fn render_directories(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (said, color) = self.said_of_making();
-        let rows = self
+        let rows: Vec<gpui::Div> = self
             .directories
             .iter()
             .enumerate()
-            .map(|(index, directory)| {
-                let name = directory.name.clone();
-                let (what, action): (SharedString, _) = match (&directory.git, &directory.remote) {
-                    (false, _) => (SharedString::default(), "Make repository"),
-                    (true, None) => ("Git, no remote".into(), "Link…"),
-                    (true, Some(remote)) => (remote.clone().into(), "Link…"),
-                };
-                let git = directory.git;
-                let row = div()
-                    .debug_selector(move || format!("project-directory-{index}"))
-                    .h(px(ROW_HEIGHT))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(icon(Icon::Folder, 14., DIM))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(px(13.))
-                            .text_color(rgb(FOREGROUND))
-                            .child(SharedString::from(directory.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_size(px(12.))
-                            .text_color(rgb(FAINT))
-                            .child(ellipsis(what)),
-                    )
-                    .child(
-                        button(("directory-action", index), action, Kind::Plain)
-                            .debug_selector(move || format!("project-directory-action-{index}"))
-                            .h(px(26.))
-                            .text_size(px(12.))
-                            .tooltip(tip(if git {
-                                "Link it to a remote, as its origin"
-                            } else {
-                                "Make it a Git repository, with no remote yet"
-                            }))
-                            .on_click(cx.listener(move |card, _, window, cx| {
-                                if git {
-                                    card.start_linking(name.clone(), window, cx);
-                                } else {
-                                    card.make_repository(name.clone(), cx);
-                                }
-                            })),
-                    );
-                let linking = self
-                    .linking
-                    .as_ref()
-                    .filter(|linking| linking.name == directory.name)
-                    .map(|linking| {
-                        div()
-                            .px_2()
-                            .pb_2()
-                            .child(input_box("project-directory-remote", &linking.input))
-                    });
-                div()
-                    .flex()
-                    .flex_col()
-                    .when(index > 0, |row| row.border_t_1().border_color(rgb(BORDER)))
-                    .child(row)
-                    .children(linking)
-            });
+            .map(|(index, directory)| self.render_directory(index, directory, cx))
+            .collect();
         div()
             .mb_3()
             .flex()
