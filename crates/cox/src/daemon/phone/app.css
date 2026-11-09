@@ -214,6 +214,9 @@ button.pill:active { background: var(--hover); }
 }
 .shelf-head .label { margin: 0; }
 .shelf.asking .shelf-head .label { color: var(--asking); }
+/* The projects, apart from Cox's own, past a line, as the window's rail
+   has them. */
+.projects-head { margin: 20px 0 0; padding: 12px 4px 0; border-top: 1px solid var(--border); }
 .square {
   flex-shrink: 0;
   width: 30px;

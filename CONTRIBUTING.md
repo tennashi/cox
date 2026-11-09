@@ -99,7 +99,8 @@ chosen. "New chat" (Command-N, Control-N)
 opens one of Cox's own, in no project, which works in Cox's home: `<dir>`
 when given, or else the folder the settings set, or else `~/cox`. The
 rail shows Cox first, by its icon, with no name under it, as a place of
-its own, whose chats are Cox's own. The gear at the foot of the rail (Command-, on macOS, Control-,
+its own, whose chats are Cox's own, a line setting it apart from the
+projects under it. The gear at the foot of the rail (Command-, on macOS, Control-,
 elsewhere) opens the settings, on a card over the window, where the
 human sets the home: a path typed in its input, whole or from `~`, which
 Enter sets, or a folder "Choose…" asks for. The settings are kept in
@@ -1551,9 +1552,10 @@ the goal's bar, and the plan in sight under the head, folded to its
 line; the conversation down a line on its left, who speaks named where
 they start, the agent's steps as chips, and what asks the human, or
 what Cox offers, on the window's cards; and the input in the window's
-box. Its list puts each project under its square, as the rail draws it,
-with the icon the human gave it, and each chat on a row, as the
-window's list has them.
+box. Its list puts Cox's own chats first, under "Cox's own", as a place
+of their own, and then, past a line, under "Projects", each project
+under its square, as the rail draws it, with the icon the human gave
+it, and each chat on a row, as the window's list has them.
 
 A chat of a sketch lists the sketch's HTML pages under its
 conversation, "Try it", for the human to try a mock the agent made as

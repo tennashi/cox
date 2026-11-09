@@ -1818,11 +1818,25 @@ impl Workspace {
     /// chats that wait for the human, and at its foot the button that
     /// opens a folder, and the gear that opens the settings.
     fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // Cox's own, a place of its own rather than a project, stands apart
+        // from the projects under it, past a line.
         let projects = self
             .projects
             .iter()
             .enumerate()
-            .map(|(index, project)| self.render_project(index, project, cx));
+            .flat_map(|(index, project)| {
+                let apart = project.id.is_none().then(|| {
+                    div()
+                        .flex_shrink_0()
+                        .w(px(PROJECT_SIZE * 0.6))
+                        .h(px(1.))
+                        .bg(rgb(BORDER_STRONG))
+                        .into_any_element()
+                });
+                std::iter::once(self.render_project(index, project, cx).into_any_element())
+                    .chain(apart)
+            })
+            .collect::<Vec<_>>();
         div()
             .id("projects")
             .w(px(RAIL_WIDTH))

@@ -412,16 +412,29 @@ function drawHome() {
         el("div", { class: "shelf-head" }, el("span", { class: "label" }, "Waits for you")),
         el("ul", { class: "chats" }, asking.map((row) => chatRow(row, { project: true })))));
     }
-    listing.projects.forEach((project, index) => {
+    // Cox's own chats first, of no project, as the window's rail has Cox
+    // first, apart from the projects; then the projects, each under its
+    // square.
+    const shelf = (index, head) => {
+      const project = listing.projects[index];
       const rows = listing.chats.filter((row) => row.project === index);
-      shelves.push(el("section", { class: "shelf" },
-        el("div", { class: "shelf-head" }, square(index), el("span", {}, projectName(index))),
+      return el("section", { class: project.id === null ? "shelf own" : "shelf" },
+        head,
         el("ul", { class: "chats" },
           rows.map((row) => chatRow(row, { child: true })),
           project.missing ? null : el("li", { class: "new" },
             el("button", { type: "button", onclick: (event) => newChat(event.currentTarget, index) },
-              el("span", { class: "plus" }, "+"), "New chat")))));
-    });
+              el("span", { class: "plus" }, "+"), "New chat"))));
+    };
+    const own = listing.projects.findIndex((project) => project.id === null);
+    if (own >= 0) {
+      shelves.push(shelf(own, el("div", { class: "shelf-head" }, el("span", { class: "label" }, "Cox's own"))));
+    }
+    const projects = listing.projects.map((_, index) => index).filter((index) => index !== own);
+    if (projects.length) shelves.push(el("div", { class: "projects-head" }, el("span", { class: "label" }, "Projects")));
+    for (const index of projects) {
+      shelves.push(shelf(index, el("div", { class: "shelf-head" }, square(index), el("span", {}, projectName(index)))));
+    }
   }
   main.replaceChildren(...shelves);
 }
