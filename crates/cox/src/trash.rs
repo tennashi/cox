@@ -42,9 +42,12 @@ pub fn put(path: &Path) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn put_on_macos(path: &Path) -> Result<(), String> {
     use std::process::Command;
+    // `trash` takes `--` for a file too, so the path goes whole, from `/`,
+    // which no option starts with.
+    let path = &std::path::absolute(path).map_err(|error| error.to_string())?;
     let trash = Path::new("/usr/bin/trash");
     let output = if trash.exists() {
-        Command::new(trash).arg("--").arg(path).output()
+        Command::new(trash).arg(path).output()
     } else {
         let quoted = path
             .to_string_lossy()
