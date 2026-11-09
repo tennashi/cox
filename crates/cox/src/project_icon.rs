@@ -36,6 +36,15 @@ pub fn path(id: ProjectId) -> Option<PathBuf> {
     Some(storage::path(Kept::Icons)?.join(format!("{id}.png")))
 }
 
+/// Where the icon of the project kept by the number `id` names is, as a
+/// page asks for it, whether it is there or not, or `None` when `id` is no
+/// number.
+#[must_use]
+pub fn named(id: &str) -> Option<PathBuf> {
+    let id: i64 = id.parse().ok()?;
+    Some(storage::path(Kept::Icons)?.join(format!("{id}.png")))
+}
+
 /// The icon of the project kept as `id`, for GPUI to draw, if it has one.
 #[must_use]
 pub fn read(id: ProjectId) -> Option<Arc<Image>> {

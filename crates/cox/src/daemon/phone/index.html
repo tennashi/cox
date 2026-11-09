@@ -10,43 +10,56 @@
 <title>Cox</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/theme.css">
 <link rel="stylesheet" href="/app.css">
 <script src="/app.js" defer></script>
 </head>
 <body>
 <header id="head">
-  <a id="back" href="#" aria-label="Back to the chats" hidden>
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
-  </a>
-  <div id="titles">
-    <span id="over"></span>
-    <h1 id="title">Cox</h1>
+  <div class="card">
+    <div class="bar">
+      <a id="back" class="icon-button" href="#" aria-label="Back to the chats" hidden>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
+      </a>
+      <a id="switcher" href="#">
+        <img id="app-icon" src="/icon.svg" alt="">
+        <span id="dot" class="dot" hidden></span>
+        <span id="title">Cox</span>
+        <span id="waiting" class="badge" hidden></span>
+      </a>
+      <button id="goal-button" class="icon-button" type="button" aria-label="Set the chat's goal" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"></path></svg>
+      </button>
+      <button id="push-button" class="icon-button" type="button" aria-label="Tell me of the chats that need me" aria-pressed="false" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>
+      </button>
+    </div>
+    <details id="plan" hidden></details>
+    <p id="lost" hidden>Cox cannot be reached. Trying again…</p>
+    <p id="note" hidden></p>
   </div>
-  <button id="push-button" type="button" aria-label="Tell me of the chats that need me" aria-pressed="false" hidden>
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>
-  </button>
-  <button id="goal-button" type="button" aria-label="Set the chat's goal" hidden>◎</button>
-  <span id="dot" class="dot" hidden></span>
 </header>
-<p id="lost" hidden>Cox cannot be reached. Trying again…</p>
-<p id="note" hidden></p>
 <main id="main"></main>
 <footer id="bottom">
-  <form id="goal-form" hidden>
-    <label for="goal-line">Goal: <code>$ </code> and a command, or words. Empty clears it.</label>
-    <input id="goal-line" autocomplete="off" enterkeyhint="done" placeholder="$ cargo xtask ci">
-  </form>
-  <p id="failed" hidden></p>
-  <p id="held" hidden></p>
-  <form id="compose" hidden>
-    <textarea id="line" rows="1" aria-label="A line to the agent"></textarea>
-    <button id="stop" type="button" aria-label="Stop the turn" hidden>
-      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect width="14" height="14" rx="3" fill="currentColor"></rect></svg>
-    </button>
-    <button id="send" type="submit" aria-label="Send">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>
-    </button>
-  </form>
+  <div class="card">
+    <p id="failed" hidden></p>
+    <p id="held" hidden></p>
+    <form id="goal-form" hidden>
+      <label for="goal-line">GOAL · WORDS, OR $ AND A COMMAND · EMPTY CLEARS IT</label>
+      <input id="goal-line" autocomplete="off" enterkeyhint="done" placeholder="$ cargo xtask ci">
+    </form>
+    <form id="compose" hidden>
+      <textarea id="line" rows="1" aria-label="A line to the agent"></textarea>
+      <div class="compose-row">
+        <button id="stop" type="button" aria-label="Stop the turn" hidden>
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="currentColor"></rect></svg>
+        </button>
+        <button id="send" type="submit" aria-label="Send">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="M6 11l6-6 6 6"></path></svg>
+        </button>
+      </div>
+    </form>
+  </div>
 </footer>
 </body>
 </html>

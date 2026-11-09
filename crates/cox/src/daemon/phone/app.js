@@ -1,6 +1,7 @@
 // The phone's page: the projects and chats coxd runs, and a chat's
-// conversation, as coxd tells them on /events. Everything the agents
-// wrote is put in as text, never as HTML.
+// conversation, as coxd tells them on /events, drawn as the window draws
+// its list of chats and its chat's panel. Everything the agents wrote is
+// put in as text, never as HTML.
 
 "use strict";
 
@@ -21,9 +22,12 @@ const compose = {
 let held = null;
 const head = {
   back: document.getElementById("back"),
-  over: document.getElementById("over"),
+  switcher: document.getElementById("switcher"),
+  icon: document.getElementById("app-icon"),
   title: document.getElementById("title"),
   dot: document.getElementById("dot"),
+  waiting: document.getElementById("waiting"),
+  plan: document.getElementById("plan"),
   lost: document.getElementById("lost"),
 };
 
@@ -31,10 +35,17 @@ let listing = null;
 // The pages of the sketch the chat shown works in, for the human to try
 // them: { key, asked, told: { port, sketch, pages } }, as coxd lists them.
 let mocks = null;
-let chat = null; // { key, entries, state, steers, title, goal }
+let chat = null; // { key, entries, state, steers, title, goal, settings }
 let events = null;
 let drawing = false;
-const opened = new Set(); // the folded groups the human opened, by their first entry
+// What the human opened of the conversation, folded otherwise, as the
+// window keeps it: the work at its first entry, a step, a line.
+const opened = new Set();
+// Whether the human opened the plan under the head.
+let planOpen = false;
+// How many turns toward its goal a chat takes on a line of the human's,
+// as the window's bar counts them.
+const GOAL_TURNS = 10;
 
 // An element of `tag`, with `props` set and `children` in it: strings as
 // text, nodes as they are.
@@ -51,6 +62,23 @@ function el(tag, props, ...children) {
     node.append(typeof child === "string" ? document.createTextNode(child) : child);
   }
   return node;
+}
+
+// The window's icons, as its own SVGs draw them, in the color of the text
+// around them.
+const ICONS = {
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+};
+function icon(name, size) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const [key, value] of Object.entries({
+    width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+    "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true",
+  })) svg.setAttribute(key, value);
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", ICONS[name]);
+  svg.append(path);
+  return svg;
 }
 
 // Posts `body` to coxd at `path`, as JSON, from the page itself.
@@ -86,7 +114,7 @@ function shownKey() {
 function connect() {
   if (events) events.close();
   const key = shownKey();
-  chat = key === null ? null : { key, entries: [], state: null, steers: false, title: null, goal: null, came: false };
+  chat = key === null ? null : { key, entries: [], state: null, steers: false, title: null, goal: null, settings: [], came: false };
   events = new EventSource(key === null ? "/events" : `/events?chat=${key}`);
   events.onopen = () => { head.lost.hidden = true; };
   events.onerror = () => {
@@ -113,11 +141,16 @@ function hear(told) {
     chat.steers = patch.steers;
     chat.title = patch.title;
     chat.goal = patch.goal;
+    chat.settings = patch.settings || [];
     chat.came = true;
     if (held !== null && takesLines(chat)) sendHeld();
   } else {
     return;
   }
+  redraw();
+}
+
+function redraw() {
   if (!drawing) {
     drawing = true;
     requestAnimationFrame(() => { drawing = false; draw(); });
@@ -142,6 +175,10 @@ function standing(row) {
   return { dot: "", words: "idle" };
 }
 
+function waits(row) {
+  return row.state === "Asking" || row.unread;
+}
+
 // A goal as the input that sets it reads it: the chat's, as the list
 // has it, or as its conversation has it, with the turns it took.
 function goalText(goal) {
@@ -157,44 +194,107 @@ function projectName(index) {
   return project.id === null ? "Cox" : project.name;
 }
 
-function chatRow(row, child) {
+// The square of the project at `index`, as the rail draws it: Cox's own
+// by its icon, another by the icon the human gave it, or a folder. Each
+// is made once, so that its picture is asked for once.
+const squares = new Map();
+function square(index) {
+  const project = listing.projects[index];
+  const id = project.id === null ? "home" : String(project.id);
+  let made = squares.get(id);
+  if (!made) {
+    if (project.id === null) {
+      made = el("span", { class: "square home" }, el("img", { src: "/icon.svg", alt: "" }));
+    } else {
+      const picture = el("img", { src: `/project-icon/${encodeURIComponent(id)}`, alt: "" });
+      made = el("span", { class: "square" }, picture);
+      picture.addEventListener("error", () => picture.replaceWith(icon("folder", 16)));
+    }
+    squares.set(id, made);
+  }
+  made.classList.toggle("missing", Boolean(project.missing));
+  return made;
+}
+
+// The row of a chat, as the window's list draws it: a dot of how it
+// stands, ↳ for one an agent opened, its name, and whether it is a sketch
+// and has a goal; in the shelf of those that wait, its project too.
+function chatRow(row, opts) {
   const stands = standing(row);
-  const goal = goalText(row.goal);
-  const about = [stands.words, goal && `◎ ${goal}`].filter(Boolean).join(" · ");
-  return el("li", { class: row.open ? null : "closed" },
-    el("a", { href: `#chat/${row.key}`, class: child ? "child" : null },
+  const sketch = row.setup && row.setup.sketch;
+  return el("li", { class: [row.open ? null : "closed", waits(row) ? "waits" : null].filter(Boolean).join(" ") || null },
+    el("a", { href: `#chat/${row.key}`, title: stands.words },
+      opts.child && row.parent !== null ? el("span", { class: "small" }, "↳") : null,
       el("span", { class: `dot ${stands.dot}` }),
-      el("span", { class: "names" },
-        el("span", { class: "name" }, row.parent !== null ? `↳ ${row.name}` : row.name),
-        el("span", { class: "about" }, about))));
+      el("span", { class: "name" }, row.name),
+      sketch ? el("span", { class: "small" }, "sketch") : null,
+      row.goal ? el("span", { class: "small" }, "◎") : null,
+      opts.project ? el("span", { class: "project" }, projectName(row.project)) : null));
+}
+
+function drawHead(row) {
+  head.back.hidden = !chat;
+  head.icon.hidden = Boolean(chat);
+  head.dot.hidden = !row;
+  head.switcher.setAttribute("href", "#");
+  if (!chat) {
+    head.title.textContent = "Cox";
+    head.waiting.hidden = true;
+    head.plan.hidden = true;
+    return;
+  }
+  if (row) {
+    const stands = standing({ ...row, state: chat.state || row.state });
+    head.title.textContent = row.name;
+    head.dot.className = `dot ${stands.dot}`;
+    head.dot.title = stands.words;
+    // How many of the project's other chats wait, as the window's head
+    // counts them.
+    const others = listing.chats.filter((one) => one.project === row.project && one.key !== row.key && waits(one));
+    head.waiting.hidden = !others.length;
+    head.waiting.textContent = `${others.length} waiting`;
+    head.waiting.classList.toggle("asks", others.some((one) => one.state === "Asking"));
+  } else {
+    head.title.textContent = listing ? "No such chat" : "Cox";
+    head.waiting.hidden = true;
+  }
+  drawPlan();
+}
+
+// The agent the chat talks to and what its session is set to, as the
+// window's pill names them.
+function pill(row) {
+  const agent = row && listing.agents && listing.agents[row.agent];
+  const set = chat.settings.map((setting) => {
+    const choice = setting.choices.find((one) => one.id === setting.value);
+    return choice ? choice.name : setting.value;
+  });
+  if (!agent && !set.length) return null;
+  return el("div", { class: "pills" }, el("span", { class: "pill" }, [agent, ...set].filter(Boolean).join(" · ")));
 }
 
 function drawHome() {
   compose.form.hidden = true;
   compose.goal.hidden = true;
   compose.goalButton.hidden = true;
-  head.back.hidden = true;
-  head.over.textContent = "";
-  head.title.textContent = "Cox";
-  head.dot.hidden = true;
+  drawHead(null);
   document.title = "Cox";
   const shelves = [];
   if (!listing) {
     shelves.push(el("p", { class: "empty" }, "Reaching Cox…"));
   } else {
-    const asking = listing.chats.filter((row) => row.state === "Asking" || row.unread);
+    const asking = listing.chats.filter(waits);
     if (asking.length) {
       shelves.push(el("section", { class: "shelf asking" },
-        el("h2", {}, "Waits for you"),
-        el("ul", { class: "chats" }, asking.map((row) =>
-          chatRow({ ...row, name: `${row.name}`, parent: null }, false)))));
+        el("div", { class: "shelf-head" }, el("span", { class: "label" }, "Waits for you")),
+        el("ul", { class: "chats" }, asking.map((row) => chatRow(row, { project: true })))));
     }
     listing.projects.forEach((project, index) => {
       const rows = listing.chats.filter((row) => row.project === index);
       if (!rows.length) return;
       shelves.push(el("section", { class: "shelf" },
-        el("h2", {}, projectName(index)),
-        el("ul", { class: "chats" }, rows.map((row) => chatRow(row, row.parent !== null)))));
+        el("div", { class: "shelf-head" }, square(index), el("span", {}, projectName(index))),
+        el("ul", { class: "chats" }, rows.map((row) => chatRow(row, { child: true })))));
     });
     if (!shelves.length) shelves.push(el("p", { class: "empty" }, "No chats yet. Open one on the Mac."));
   }
@@ -203,18 +303,8 @@ function drawHome() {
 
 function drawChat() {
   const row = listing && listing.chats.concat(listing.archived).find((one) => one.key === chat.key);
-  head.back.hidden = false;
-  head.dot.hidden = !row;
-  if (row) {
-    const stands = standing({ ...row, state: chat.state || row.state });
-    head.over.textContent = `${projectName(row.project)} · ${stands.words}`;
-    head.title.textContent = row.name;
-    head.dot.className = `dot ${stands.dot}`;
-    document.title = row.name;
-  } else {
-    head.over.textContent = "";
-    head.title.textContent = listing ? "No such chat" : "Cox";
-  }
+  drawHead(row);
+  document.title = row ? row.name : "Cox";
   compose.form.hidden = !row;
   compose.goalButton.hidden = !row;
   if (row) drawCompose(row);
@@ -224,26 +314,75 @@ function drawChat() {
     return;
   }
   const atEnd = window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
-  const agent = ((row && listing.agents && listing.agents[row.agent]) || "Agent").toUpperCase();
-  const nodes = [];
-  const goal = goalText(chat.goal);
-  if (goal) nodes.push(el("div", { class: "goal" }, "◎ ", goal.startsWith("$ ") ? el("code", {}, goal) : goal));
+  const agent = (row && listing.agents && listing.agents[row.agent]) || "Agent";
+  const nodes = [pill(row)];
+  const goal = goalBar(chat.goal);
+  if (goal) nodes.push(goal);
   if (!chat.came) nodes.push(el("p", { class: "empty" }, "Reading the conversation…"));
-  nodes.push(...conversation(chat.entries, agent));
+  const places = conversation(chat.entries, agent);
   const closes = closing(chat.entries, row);
-  if (closes) nodes.push(closes);
+  if (closes) places.push(place(closes, null, null, false));
   // The sketch's pages, where the human reads on, to try them.
   if (row) {
     findMocks(row);
     const tried = mockBar();
-    if (tried) nodes.push(tried);
+    if (tried) places.push(place(tried, null, null, false));
   }
-  if (chat.state === "Busy" || chat.state === "Checking" || chat.state === "Stopping") {
-    nodes.push(el("p", { class: "waits" }, el("span", { class: "dot busy" }),
-      chat.state === "Checking" ? "Checking the turn…" : `${titleCase(agent)} is at work…`));
+  if (working(chat.state)) {
+    places.push(place(el("p", { class: "waits" }, el("span", { class: "dot busy" }),
+      chat.state === "Checking" ? "Checking the turn…" : `${agent} is at work…`), null, null, false));
   }
+  nodes.push(el("div", { class: "conversation" }, places));
   main.replaceChildren(...nodes);
   if (atEnd) window.scrollTo(0, document.body.scrollHeight);
+}
+
+// The goal over the conversation, as the window's bar: what it is, and,
+// while the agent works toward it, a mark for each turn a line gets.
+function goalBar(goal) {
+  const text = goalText(goal);
+  if (!text) return null;
+  const turns = (goal && goal.turns) || 0;
+  const target = el("span", { class: "sign" });
+  target.style.color = "var(--accent)";
+  target.textContent = "◎";
+  return el("div", { class: "goal" }, target,
+    el("span", { class: "what" }, text.startsWith("$ ") ? el("code", {}, text.slice(2)) : text),
+    turns > 0 ? el("span", { class: "turns" }, Array.from({ length: GOAL_TURNS }, (_, at) =>
+      el("span", { class: at + 1 < turns ? "failed" : at + 1 === turns ? "now" : null }))) : null,
+    turns > 0 ? el("span", { class: "count" }, `${turns} / ${GOAL_TURNS}`) : null);
+}
+
+// The plan the agent works to since the human's last line, under the
+// head, as the window keeps it in sight over the conversation: its line,
+// with the step under way, which a tap opens to its steps.
+function drawPlan() {
+  const entries = chat.entries;
+  const from = lastIndexOf(entries, "human");
+  let steps = null;
+  for (let at = entries.length - 1; at > from; at--) {
+    if (entries[at] && kindOf(entries[at])[0] === "plan") { steps = kindOf(entries[at])[1]; break; }
+  }
+  head.plan.hidden = !steps;
+  if (!steps) return;
+  const now = steps.find((step) => step.state === "in_progress") || steps.find((step) => step.state === "pending");
+  const summary = el("summary", {},
+    el("span", { class: "fold" }, planOpen ? "▾" : "▸"),
+    el("span", {}, `≡ Plan ${progress(steps)}`),
+    now ? el("span", { class: "now" }, now.text) : null);
+  head.plan.open = planOpen;
+  head.plan.replaceChildren(summary, stepsList(steps));
+}
+head.plan.addEventListener("toggle", () => {
+  if (planOpen !== head.plan.open) {
+    planOpen = head.plan.open;
+    redraw();
+  }
+});
+
+// How far the plan of `steps` has gone, as `2/3`.
+function progress(steps) {
+  return `${steps.filter((step) => step.state === "completed").length}/${steps.length}`;
 }
 
 // Whether the agent of the chat `row` merges what it made when asked:
@@ -277,7 +416,7 @@ function closing(entries, row) {
   }
   const decided = drift ? drift.added.length + drift.removed.length : 0;
   if (!shown.length && !decided && !ended) return null;
-  const parts = [el("div", { class: "label" }, "Close the work")];
+  const parts = [];
   if (shown.length) {
     parts.push(el("div", { class: "part" }, el("h3", {}, "To see"),
       el("div", { class: "shown" }, shown.map((one) => {
@@ -287,18 +426,17 @@ function closing(entries, row) {
       }))));
   }
   if (decided) {
-    parts.push(el("div", { class: "part" }, el("h3", {}, "Decided on its own"),
-      el("ul", { class: "plan" },
-        drift.added.map((step) => el("li", { class: "added" }, el("span", { class: "state" }, "+"), step)),
-        drift.removed.map((step) => el("li", { class: "removed" }, el("span", { class: "state" }, "−"), step)))));
+    parts.push(el("div", { class: "part" }, el("h3", {}, "Decided on its own"), driftList(drift)));
   }
   if (ended) {
     const all = ended.concat(...met.map((event) => event.checks));
     const passed = all.every((check) => check.state === "passed");
     parts.push(el("div", { class: "part" }, el("h3", {}, passed ? "Checks passed" : "Checks"),
-      checks("", all)));
+      el("div", { class: "chips" }, all.map(checkChip))));
   }
-  const button = el("button", { type: "button", class: "merge" }, "Merge");
+  const answers = el("div", { class: "answers" });
+  const button = el("button", { type: "button", class: "first merge" }, "Merge");
+  answers.append(button);
   let armed = null;
   button.addEventListener("click", async () => {
     // A second tap merges, so that a tap by mistake does not.
@@ -322,8 +460,11 @@ function closing(entries, row) {
       button.classList.remove("armed");
     }
   });
-  parts.push(button, el("p", { class: "hint" }, "Asks the agent to merge it, as the project merges its work."));
-  return el("div", { class: "entry card closing" }, parts);
+  return el("div", { class: "card-offer closing" },
+    cardHead("✓", "Close the work", "for you to merge"),
+    parts,
+    answers,
+    el("p", { class: "hint" }, "Asks the agent to merge it, as the project merges its work."));
 }
 
 // Asks coxd for the pages of the sketch `row` works in, if it works in
@@ -353,7 +494,7 @@ function mockBar() {
   if (!told || !told.pages.length) return null;
   return el("div", { class: "mocks" },
     el("span", { class: "label" }, "Try it"),
-    told.pages.map((page) => el("button", { type: "button", class: "chip", onclick: () => openMock(told, page) }, page)));
+    told.pages.map((page) => el("button", { type: "button", onclick: () => openMock(told, page) }, page)));
 }
 
 // Where coxd serves `page` of the sketch `told` names: the Mac's name the
@@ -376,10 +517,10 @@ function openMock(told, page) {
   const close = () => { viewer.remove(); document.body.classList.remove("trying"); };
   const viewer = el("div", { id: "mock", role: "dialog", "aria-label": page },
     el("div", { class: "bar" },
-      el("button", { type: "button", "aria-label": "Back to the chat", onclick: close }, "‹"),
+      el("button", { type: "button", class: "icon-button", "aria-label": "Back to the chat", onclick: close }, "‹"),
       el("span", { class: "page" }, page),
-      el("button", { type: "button", "aria-label": "Load again", onclick: () => { frame.src = address; } }, "↻"),
-      el("a", { href: address, target: "_blank", rel: "noopener noreferrer", "aria-label": "Open on its own" }, "↗")),
+      el("button", { type: "button", class: "icon-button", "aria-label": "Load again", onclick: () => { frame.src = address; } }, "↻"),
+      el("a", { href: address, class: "icon-button", target: "_blank", rel: "noopener noreferrer", "aria-label": "Open on its own" }, "↗")),
     frame);
   document.body.classList.add("trying");
   document.body.append(viewer);
@@ -389,21 +530,18 @@ function working(state) {
   return state === "Busy" || state === "Checking" || state === "Stopping";
 }
 
-// The input under the conversation: the line to send, or Stop while the
-// agent is at work.
+// The input under the conversation: the line to send, and Stop while
+// the agent is at work. While it is empty, it tells what the chat waits
+// for, as the window's does.
 function drawCompose(row) {
   const state = chat.state || row.state;
   const busy = working(state);
   compose.stop.hidden = !busy;
   compose.stop.disabled = state === "Stopping";
-  compose.line.placeholder = state === "Asking" ? "Answer above first…"
-    : busy && chat.steers && state === "Busy" ? "Goes into this turn…"
-    : busy ? "Waits for this turn to end…"
-      : row.open || row.again ? "A line to the agent…" : "This chat cannot start again";
-}
-
-function titleCase(word) {
-  return word.charAt(0) + word.slice(1).toLowerCase();
+  compose.line.placeholder = state === "Asking" ? "Answer above first"
+    : busy && chat.steers && state === "Busy" ? "Goes into this turn"
+    : busy ? "Waits for this turn to end"
+      : row.open || row.again ? "Reply" : "This chat cannot start again";
 }
 
 // The kind of an entry and what it holds, as serde writes it: a unit
@@ -414,113 +552,115 @@ function kindOf(entry) {
   return [kind, entry[kind]];
 }
 
-const WORK = new Set(["tool_call", "thought"]);
+// Work the agent does on its way to a reply, which folds, as the window
+// folds it.
+const WORK = new Set(["tool_call", "thought", "plan"]);
 
-function conversation(entries, agent) {
-  const nodes = [];
-  let speaker = null;
-  const speak = (who, kind) => {
-    if (speaker === who) return;
-    speaker = who;
-    nodes.push(el("div", { class: `who ${kind}` }, who));
-  };
+// Who says an entry, as the window has it: none for Cox's notes, which go
+// with whoever spoke last.
+function speakerOf(kind) {
+  if (kind === "human" || kind === "attached") return "you";
+  if (kind === "cox" || kind === "keep" || kind === "checks" || kind === "event") return "cox";
+  if (kind === "note" || kind === "switched" || kind === "merge") return null;
+  return "agent";
+}
+
+// One place of the conversation, on the line down its left: `node`, and
+// a dot of `who` where they start, named `name` over it, or the amber dot
+// of what asks the human.
+function place(node, who, name, starts) {
+  return el("div", { class: starts ? "place starts" : "place" },
+    who ? el("span", { class: `tdot ${who}` }) : null,
+    name ? el("div", { class: "label" }, name) : null,
+    node);
+}
+
+// The conversation, as the window lays it out: each entry, or the work
+// the agent did one after another, a place on the line, who speaks named
+// where they start.
+function conversation(entries, current) {
+  // The agent speaking, as the chat switched from one to another.
+  let agent = current;
+  const switched = entries.find((entry) => entry && kindOf(entry)[0] === "switched");
+  if (switched) agent = kindOf(switched)[1].from;
+  const places = [];
+  let speaking = null;
+  const asking = chat.state === "Asking";
   for (let at = 0; at < entries.length; at++) {
     const entry = entries[at];
     if (!entry) continue;
     const [kind, value] = kindOf(entry);
-    if (WORK.has(kind)) {
-      const group = [];
-      let end = at;
-      while (end < entries.length && entries[end] && WORK.has(kindOf(entries[end])[0])) {
-        group.push(kindOf(entries[end]));
-        end++;
-      }
-      speak(agent, "agent");
-      nodes.push(work(at, group));
+    if (kind === "switched") agent = value.to;
+    // Two entries of work or more in a row fold into one place, and so
+    // does a tool call alone, to show as a step.
+    let end = at;
+    while (end < entries.length && entries[end] && WORK.has(kindOf(entries[end])[0])) end++;
+    const folds = end - at > 1 || kind === "tool_call";
+    const speaker = speakerOf(kind);
+    const starts = speaker !== null && speaker !== speaking;
+    if (speaker !== null) speaking = speaker;
+    const name = { you: "YOU", cox: "COX", agent: agent.toUpperCase() }[speaker];
+    const asks = kind === "permission" && (value.chosen === null || value.chosen === undefined)
+      && asking && at === entries.length - 1;
+    if (folds) {
+      places.push(place(work(at, entries.slice(at, end).map(kindOf), starts ? name : null), starts ? speaker : null, null, starts));
       at = end - 1;
       continue;
     }
-    switch (kind) {
-      case "human":
-        speak("YOU", "you");
-        nodes.push(el("div", { class: "human" }, value));
-        break;
-      case "merge":
-        speaker = null;
-        nodes.push(el("p", { class: "entry note" }, "You asked the agent to merge what it made."));
-        break;
-      case "cox":
-        speak("COX", "cox");
-        nodes.push(el("div", { class: "human cox" }, value));
-        break;
-      case "attached":
-        nodes.push(el("div", { class: "entry checks" }, value.map((one) => el("span", { class: "chip" }, one.label))));
-        break;
-      case "reply":
-        speak(agent, "agent");
-        nodes.push(markdown(value));
-        break;
-      case "plan":
-        speak(agent, "agent");
-        nodes.push(plan(value));
-        break;
-      case "plan_changed":
-        speaker = null;
-        nodes.push(planChanged(value));
-        break;
-      case "media":
-        nodes.push(media(value));
-        break;
-      case "permission":
-        speak(agent, "agent");
-        nodes.push(permission(value, at === lastIndexOf(entries, "permission")));
-        break;
-      case "proposal":
-        speak(agent, "agent");
-        nodes.push(proposal(value, at));
-        break;
-      case "keep":
-        speak("COX", "cox");
-        nodes.push(el("div", { class: `entry card ${value.kept === null || value.kept === undefined ? "asks" : ""}` },
-          el("div", { class: "label" }, "Keep in the wiki?"),
-          el("div", { class: "why" }, value.why),
-          value.kept === null || value.kept === undefined
-            ? buttons([
-              ["Save to wiki", { AnswerKeep: { key: chat.key, index: at, keep: true } }, true],
-              ["Not now", { AnswerKeep: { key: chat.key, index: at, keep: false } }],
-            ])
-            : el("p", { class: "hint" }, value.kept ? "You saved it." : "Not now.")));
-        break;
-      case "checks":
-        speaker = null;
-        nodes.push(checks("Turn end", value));
-        break;
-      case "event":
-        speaker = null;
-        nodes.push(checks(value.on.replace(".", " "), value.checks));
-        break;
-      case "note":
-        speaker = null;
-        nodes.push(el("p", { class: "entry note" }, value));
-        break;
-      case "switched":
-        speaker = null;
-        nodes.push(el("p", { class: "entry note" }, `Switched from ${value.from} to ${value.to}.`));
-        break;
-      case "login":
-        speaker = null;
-        nodes.push(el("div", { class: "entry card asks" },
-          el("div", { class: "label" }, "Log in"),
-          el("ul", { class: "options" }, value.options.map((option, index) =>
-            el("li", { class: value.chosen === index ? "chosen" : null }, option.name))),
-          value.failed ? el("p", { class: "hint" }, value.failed) : null,
-          value.chosen === null ? el("p", { class: "hint" }, "Log in on the Mac.") : null));
-        break;
-      default:
-        break;
-    }
+    const node = entryNode(at, kind, value, asks);
+    if (!node) continue;
+    // What asks the human is marked by its amber dot alone.
+    if (asks) places.push(place(node, "asking", null, false));
+    else places.push(place(node, starts ? speaker : null, starts ? name : null, starts));
   }
-  return nodes;
+  return places;
+}
+
+// What the entry at `at`, of `kind`, holding `value`, shows.
+function entryNode(at, kind, value, asks) {
+  switch (kind) {
+    case "human":
+      return el("div", { class: "human" }, value);
+    case "merge":
+      return el("p", { class: "note" }, "You asked the agent to merge what it made.");
+    case "cox":
+      return el("div", { class: "cox-line" }, value);
+    case "attached":
+      return el("div", { class: "chips" }, value.map((one) => el("span", { class: "chip" }, el("span", {}, one.label))));
+    case "reply":
+      return markdown(value);
+    case "thought":
+      return thought(at, value);
+    case "plan":
+      return planLine(at, value);
+    case "plan_changed":
+      return el("div", { class: "plan-changed" }, el("div", { class: "label" }, "Plan changed"), driftList(value));
+    case "media":
+      return media(value);
+    case "permission":
+      return permission(at, value, asks);
+    case "proposal":
+      return proposal(value, at);
+    case "keep":
+      return keep(value, at);
+    case "checks":
+      return checks("Turn end", value);
+    case "event":
+      return checks(value.on.replace(".", " "), value.checks);
+    case "note":
+      return el("p", { class: "note" }, value);
+    case "switched":
+      return el("p", { class: "note" }, `Switched from ${value.from} to ${value.to}.`);
+    case "login":
+      return el("div", { class: "card-ask" },
+        cardHead("?", "Log in", value.chosen === null ? "waiting for you" : null),
+        value.failed ? el("p", { class: "why" }, value.failed) : null,
+        el("ul", { class: "steps-list" }, value.options.map((option, index) =>
+          el("li", {}, el("span", { class: "state" }, value.chosen === index ? "✓" : `${index + 1}`), option.name))),
+        value.chosen === null ? el("p", { class: "hint" }, "Log in on the Mac.") : null);
+    default:
+      return null;
+  }
 }
 
 function lastIndexOf(entries, kind) {
@@ -530,6 +670,8 @@ function lastIndexOf(entries, kind) {
   return -1;
 }
 
+// The mark of how a call goes, as the window's: a ring while it runs,
+// then a dot, in the accent once done, or in red when it failed.
 function mark(result) {
   if (result === null || result === undefined) return el("span", { class: "mark" });
   if (result === "completed") return el("span", { class: "mark done" });
@@ -537,30 +679,122 @@ function mark(result) {
   return el("span", { class: "mark stopped" });
 }
 
-// The agent's tool calls and thoughts, one after another, folded under
-// a line of chips.
-function work(first, group) {
-  const calls = group.filter(([kind]) => kind === "tool_call").map(([, call]) => call);
-  const thoughts = group.filter(([kind]) => kind === "thought").map(([, thought]) => thought);
-  if (!calls.length) return el("div", { class: "entry thought" }, thoughts.join("\n\n"));
-  const details = el("details", { class: "entry work", open: opened.has(first) });
-  details.addEventListener("toggle", () => {
-    if (details.open) opened.add(first);
-    else opened.delete(first);
-  });
-  const summary = el("summary", {},
-    el("span", { class: "label" }, `${calls.length} ${calls.length === 1 ? "step" : "steps"}`),
-    calls.map((call) => el("span", { class: `chip ${call.result === "failed" ? "failed" : ""}` },
-      mark(call.result), shorten(call.title, 40))),
-    thoughts.length ? el("span", { class: "last-thought" }, shorten(firstLine(thoughts[thoughts.length - 1]), 120)) : null);
-  const steps = el("div", { class: "steps" }, group.map(([kind, value]) => {
-    if (kind === "thought") return el("div", { class: "step thought" }, value);
-    return el("div", { class: "step" },
-      el("div", { class: "head" }, mark(value.result), value.title),
-      value.content.map(content));
-  }));
-  details.append(summary, steps);
-  return details;
+// A call's title, short, as its chip names it in the window: each path
+// in it by its last part.
+function short(title) {
+  return title.split(/\s+/).filter(Boolean).map((word) => {
+    const bare = word.replace(/^`+|`+$/g, "");
+    const cut = bare.lastIndexOf("/");
+    return /^[\p{L}\p{N}/._\-~@+]+$/u.test(bare) && cut >= 0 && cut < bare.length - 1 ? bare.slice(cut + 1) : bare;
+  }).join(" ");
+}
+
+// Opens or closes what the human opened at `key`, and draws it so.
+function flip(key) {
+  if (opened.has(key)) opened.delete(key);
+  else opened.add(key);
+  redraw();
+}
+
+// A line that opens, as the window's: ▸ or ▾, `sign` in its color, and
+// `what`, with `answer` at its end; or, with nothing to open, the line
+// alone.
+function line(key, sign, signColor, what, answer, opens) {
+  const signNode = el("span", {}, sign);
+  if (signColor) signNode.style.color = signColor;
+  const parts = [
+    el("span", { class: "fold" }, opens ? (opened.has(key) ? "▾" : "▸") : ""),
+    signNode,
+    el("span", { class: "what" }, what),
+    answer ? el("span", { class: "answer" }, answer) : null,
+  ];
+  if (!opens) return el("div", { class: "line" }, parts);
+  return el("button", { type: "button", class: "line", onclick: () => flip(key) }, parts);
+}
+
+// The agent's work, one entry after another, under a line that names it
+// where it starts, `name`, counts its steps and tells how far its plan
+// has gone: closed, each call as a chip, which opens the call's line
+// under the chips, and the last thought; open, each entry on its line.
+function work(first, group, name) {
+  const key = `work-${first}`;
+  const open = opened.has(key);
+  const calls = [];
+  group.forEach(([kind, value], offset) => { if (kind === "tool_call") calls.push([first + offset, value]); });
+  const thoughts = group.filter(([kind]) => kind === "thought");
+  const plans = group.filter(([kind]) => kind === "plan");
+  const told = name ? [name] : [];
+  if (calls.length) told.push(`${calls.length} ${calls.length === 1 ? "STEP" : "STEPS"}`);
+  else if (thoughts.length) told.push(`${thoughts.length} ${thoughts.length === 1 ? "THOUGHT" : "THOUGHTS"}`);
+  if (plans.length) told.push(`PLAN ${progress(plans[plans.length - 1][1])}`);
+  const header = el("button", { type: "button", class: "work-head label", onclick: () => flip(key) },
+    told.join(" · "), el("span", {}, open ? "▾" : "▸"));
+  const body = [];
+  if (open) {
+    group.forEach(([kind, value], offset) => {
+      const at = first + offset;
+      if (kind === "tool_call") body.push(call(at, value));
+      else if (kind === "thought") body.push(thought(at, value));
+      else body.push(planLine(at, value));
+    });
+  } else {
+    if (calls.length) {
+      body.push(el("div", { class: "chips" }, calls.map(([at, value]) => {
+        const how = value.result === "failed" ? "failed" : value.result === "cancelled" ? "stopped" : "";
+        return el("button", {
+          type: "button",
+          class: `chip ${how} ${opened.has(`call-${at}`) ? "open" : ""}`,
+          onclick: () => flip(`call-${at}`),
+        }, mark(value.result), el("span", {}, short(value.title)));
+      })));
+      for (const [at, value] of calls) if (opened.has(`call-${at}`)) body.push(call(at, value));
+    }
+    const last = group.map(([kind, value], offset) => [kind, first + offset, value]).filter(([kind]) => kind === "thought").pop();
+    if (last) body.push(thought(last[1], last[2]));
+  }
+  return el("div", { class: "work" }, header, body);
+}
+
+// A tool call on its line, as the window's: how it went, its title, and
+// what it showed, which opens under it, from the start for one that failed.
+function call(at, value) {
+  const key = `content-${at}`;
+  const marks = { completed: ["✓", "var(--accent)"], failed: ["✗", "var(--failed)"], cancelled: ["–", "var(--dim)"] };
+  const [sign, color] = marks[value.result] || ["●", "var(--link)"];
+  const shows = value.content.map(content).filter(Boolean);
+  if (value.result === "failed" && !opened.has(`seen-${key}`)) {
+    opened.add(`seen-${key}`);
+    opened.add(key);
+  }
+  return el("div", { class: "call" },
+    line(key, sign, color, value.title, null, shows.length > 0),
+    shows.length && opened.has(key) ? shows : null);
+}
+
+// What the agent thought, as an aside: its start, in italics, which a tap
+// opens to all of it, open while it arrives.
+function thought(at, text) {
+  const key = `thought-${at}`;
+  const arriving = working(chat.state) && at === chat.entries.length - 1;
+  const open = opened.has(key) || arriving;
+  return el("div", { class: "thought", onclick: () => flip(key) },
+    open ? "Thinking" : shorten(firstLine(text), 120),
+    open ? el("div", { class: "full" }, text) : null);
+}
+
+// The plan the agent worked to, on a line that tells how far it went,
+// opening to its steps.
+function planLine(at, steps) {
+  const key = `plan-${at}`;
+  return el("div", { class: "call" },
+    line(key, "≡", null, `Plan ${progress(steps)}`, null, true),
+    opened.has(key) ? stepsList(steps) : null);
+}
+
+function stepsList(steps) {
+  const marks = { completed: "✓", in_progress: "●", pending: "○" };
+  return el("ul", { class: "steps-list" }, steps.map((step) =>
+    el("li", { class: step.state }, el("span", { class: "state" }, marks[step.state] || ""), step.text)));
 }
 
 function content(one) {
@@ -579,43 +813,48 @@ function content(one) {
   return null;
 }
 
-function plan(steps) {
-  const marks = { completed: "✓", in_progress: "◌", pending: "" };
-  return el("ul", { class: "entry plan" }, steps.map((step) =>
-    el("li", { class: step.state }, el("span", { class: "state" }, marks[step.state] || ""), step.text)));
-}
-
 // How the plan differs from the one the human left the agent to: the
-// steps it added, as what it decided on its own, and those it removed.
-function planChanged(changed) {
+// steps it added, in amber, as what it decided on its own, and those it
+// removed, dimmer.
+function driftList(changed) {
   const steps = [
     ...changed.added.map((step) => el("li", { class: "added" }, el("span", { class: "state" }, "+"), step)),
     ...changed.removed.map((step) => el("li", { class: "removed" }, el("span", { class: "state" }, "−"), step)),
   ];
-  if (!steps.length) steps.push(el("li", { class: "removed" }, el("span", { class: "state" }, "="), "Back to the plan the line started with."));
-  return el("div", { class: "entry plan-changed" },
-    el("div", { class: "label" }, "Plan changed"),
-    el("ul", { class: "plan" }, steps));
+  if (!steps.length) steps.push(el("li", { class: "removed" }, el("span", { class: "state" }, "="), "The plan is back to the one the line started with."));
+  return el("ul", { class: "steps-list" }, steps);
 }
 
-function permission(asked, last) {
-  const waiting = asked.chosen === null || asked.chosen === undefined;
-  const asks = waiting && last && chat.state === "Asking";
-  const gathering = (asked.gathered || []).some((check) => check.state === "running");
-  return el("div", { class: `entry card ${asks ? "asks" : ""}` },
-    el("div", { class: "label" }, asks ? (gathering ? "Asks you · gathering" : "Asks you") : "Asked"),
-    el("div", { class: "what" }, asked.title),
-    gathered(asked.gathered),
-    asked.content.map(content),
-    el("ul", { class: "options" }, asked.options.map((option, index) => {
-      let how = null;
-      if (asks && index === 0) how = "first";
-      else if (asked.chosen === index) how = "chosen";
-      const label = `${index + 1} · ${option}`;
-      if (!asks) return el("li", { class: how }, label);
-      return el("li", { class: how }, el("button", { onclick: (event) => choose(event, index) }, label));
-    })),
-    asked.by_setup ? el("p", { class: "hint" }, "Cox answered in your place, as the chat is set up.") : null);
+// The head of a card that waits for the human: `sign` and `what`, with
+// `tag` at its right, in the card's tone.
+function cardHead(sign, what, tag) {
+  return el("div", { class: "card-head" },
+    el("span", { class: "sign" }, sign),
+    el("span", { class: "what" }, what),
+    tag ? el("span", { class: "tag" }, tag) : null);
+}
+
+// A permission request: while the agent waits on it, the amber card with
+// what triggers gathered, what it shows and its options; answered, its
+// line, which opens to what was asked.
+function permission(at, asked, asks) {
+  if (asks) {
+    const gathering = (asked.gathered || []).some((check) => check.state === "running");
+    return el("div", { class: "card-ask" },
+      cardHead("?", asked.title, gathering ? "gathering" : "waiting for you"),
+      gathered(asked.gathered),
+      asked.content.map(content),
+      el("div", { class: "answers options" }, asked.options.map((option, index) =>
+        el("button", { type: "button", class: index === 0 ? "first" : null, onclick: (event) => choose(event, index) },
+          `${index + 1} · ${option}`))));
+  }
+  const chosen = asked.chosen === null || asked.chosen === undefined ? "no answer" : asked.options[asked.chosen];
+  const answer = asked.by_setup ? `${chosen}, as the chat is set up` : chosen;
+  const key = `content-${at}`;
+  const shows = [gathered(asked.gathered), ...asked.content.map(content)].filter(Boolean);
+  return el("div", { class: "call" },
+    line(key, "?", "var(--asking)", asked.title, answer, shows.length > 0),
+    shows.length && opened.has(key) ? shows : null);
 }
 
 // A picture or a video shown in the conversation, with its caption, or
@@ -629,7 +868,7 @@ function media(shown) {
       // Its size, when Cox knows it, keeps its room while it loads.
       ...(shown.size ? { width: shown.size[0], height: shown.size[1] } : {}),
     });
-  return el("figure", { class: "entry media" }, seen, el("figcaption", {}, shown.caption || shown.from));
+  return el("figure", { class: "media" }, seen, el("figcaption", {}, shown.caption || shown.from));
 }
 
 // What the triggers gathered for the human to answer with, each by its
@@ -637,7 +876,6 @@ function media(shown) {
 function gathered(list) {
   if (!list || !list.length) return null;
   return el("div", { class: "gathered" }, list.map((check) => {
-    const state = { waiting: "", running: "", passed: "done", failed: "found", broken: "failed" }[check.state];
     let said;
     if (check.state === "running") said = el("p", { class: "hint" }, "Gathering what you need to answer…");
     else if (!check.said) said = el("p", { class: "hint" }, "It said nothing.");
@@ -649,24 +887,27 @@ function gathered(list) {
       said = [el("div", { class: "headline" }, headline), rest ? markdown(rest) : null];
     }
     return el("div", { class: "gather" },
-      el("span", { class: "check" }, el("span", { class: `mark ${state}` }), check.name),
+      el("span", { class: "check" }, el("span", { class: `mark ${checkMark(check.state)}` }), check.name),
       said);
   }));
 }
 
 // Answers what the agent asks with the option at `index`, once.
 function choose(event, index) {
-  for (const button of event.target.closest(".options").querySelectorAll("button")) button.disabled = true;
+  const row = event.target.closest(".options");
+  for (const button of row.querySelectorAll("button")) button.disabled = true;
   act({ Choose: { key: chat.key, index } }).then((done) => {
-    if (!done) for (const button of event.target.closest(".options").querySelectorAll("button")) button.disabled = false;
+    if (!done) for (const button of row.querySelectorAll("button")) button.disabled = false;
   });
 }
 
-// Buttons that each do a message once, all of them off while it goes.
+// Buttons that each do a message once, all of them off while it goes,
+// the first standing out, as the one most likely tapped.
 function buttons(list) {
   const row = el("div", { class: "answers" });
   for (const [label, message, first] of list) {
     row.append(el("button", {
+      type: "button",
       class: first ? "first" : null,
       onclick: () => {
         for (const button of row.querySelectorAll("button")) button.disabled = true;
@@ -679,25 +920,54 @@ function buttons(list) {
   return row;
 }
 
+// A goal the agent proposed: while the human has not answered it, a card
+// in the accent, with why, to set it or let it be; then its line, which
+// says what they did.
 function proposal(proposed, index) {
-  const answers = { set: "You set it.", changed: "You changed it, then set it.", dismissed: "You let it be." };
-  return el("div", { class: `entry card ${proposed.answer ? "" : "asks"}` },
-    el("div", { class: "label" }, "Proposes a goal"),
-    el("div", { class: "what" }, proposed.goal),
+  const answers = { set: "set", changed: "changed, and set", dismissed: "let be" };
+  if (proposed.answer) {
+    return line(`proposal-${index}`, "◎", "var(--link)", `Proposed goal: ${proposed.goal}`, answers[proposed.answer], false);
+  }
+  return el("div", { class: "card-offer" },
+    cardHead("◎", "Proposed goal", "for you to set"),
+    el("div", {}, proposed.goal),
     proposed.why ? el("div", { class: "why" }, proposed.why) : null,
-    proposed.answer ? el("p", { class: "hint" }, answers[proposed.answer]) : buttons([
+    buttons([
       ["Set goal", { AnswerProposal: { key: chat.key, index, answer: "set" } }, true],
       ["Dismiss", { AnswerProposal: { key: chat.key, index, answer: "dismissed" } }],
     ]));
 }
 
+// Cox's card asking whether to keep what the chat learned in the wiki, or,
+// once answered, its line.
+function keep(asked, index) {
+  if (asked.kept !== null && asked.kept !== undefined) {
+    return line(`keep-${index}`, "✎", "var(--link)", `${asked.why} Keep it in the wiki?`, asked.kept ? "asked to save" : "not now", false);
+  }
+  return el("div", { class: "card-offer" },
+    cardHead("✎", asked.why, "keep it?"),
+    el("div", { class: "why" }, "Keep what was learned in the wiki, for the agents of every project to find again?"),
+    buttons([
+      ["Save to wiki", { AnswerKeep: { key: chat.key, index, keep: true } }, true],
+      ["Not now", { AnswerKeep: { key: chat.key, index, keep: false } }],
+    ]));
+}
+
+function checkMark(state) {
+  return { waiting: "waiting", running: "", passed: "done", failed: "found", broken: "failed" }[state];
+}
+
+// A check of a turn's end, or of what happened, as the window's chip: a
+// ring while it waits or runs, then a dot of how it went.
+function checkChip(check) {
+  return el("span", { class: `chip ${check.state === "broken" ? "failed" : ""}`, title: check.said || null },
+    el("span", { class: `mark ${checkMark(check.state)}` }), el("span", {}, check.name));
+}
+
+// What ran as a turn ended, or as something else happened, on a line:
+// `title`, then a chip for each.
 function checks(title, list) {
-  return el("div", { class: "entry checks" },
-    el("span", { class: "label" }, title),
-    list.map((check) => {
-      const state = { waiting: "", running: "", passed: "done", failed: "found", broken: "failed" }[check.state];
-      return el("span", { class: "check", title: check.said || null }, el("span", { class: `mark ${state}` }), check.name);
-    }));
+  return el("div", { class: "checks" }, el("span", { class: "label" }, title), list.map(checkChip));
 }
 
 function firstLine(text) {
