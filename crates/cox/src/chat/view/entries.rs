@@ -271,7 +271,7 @@ pub(super) fn closing(entries: &[Entry]) -> Option<Closing<'_>> {
     for (index, entry) in entries.iter().enumerate().skip(from + 1) {
         match entry {
             Entry::Merge => return None,
-            Entry::Media { .. } => closing.shown.push(index),
+            Entry::Media { .. } | Entry::Shown { .. } => closing.shown.push(index),
             Entry::PlanChanged { added, removed } => {
                 closing.decided = Some((added.as_slice(), removed.as_slice()));
             }
@@ -664,15 +664,10 @@ impl ChatView {
             );
         }
         if !closing.shown.is_empty() {
-            let thumbnails = closing.shown.iter().filter_map(|&index| {
-                let Entry::Media {
-                    file, kind, from, ..
-                } = all.get(index)?
-                else {
-                    return None;
-                };
-                Some(render_thumbnail(index, file, *kind, from, cx))
-            });
+            let thumbnails = closing
+                .shown
+                .iter()
+                .filter_map(|&index| render_tile(index, all.get(index)?, cx));
             shows.push(
                 div()
                     .flex()
@@ -865,6 +860,12 @@ impl ChatView {
                 caption,
                 size,
             } => render_media(index, (file, *kind, from, caption.as_deref()), *size, cx),
+            Entry::Shown {
+                path,
+                markdown,
+                lines,
+                ..
+            } => render_shown(index, path, *markdown, *lines, cx),
             Entry::Checks(checks) => self.render_checks(index, "TURN END", checks, &mut writer, cx),
             Entry::Event { on, checks } => {
                 self.render_checks(index, event_label(on), checks, &mut writer, cx)
@@ -1510,6 +1511,135 @@ fn render_changed(changed: usize, cx: &mut Context<ChatView>) -> AnyElement {
         .into_any_element()
 }
 
+/// What the agent showed of the work at `index`, `entry`, as a tile of the
+/// card the human closes the work on: a picture, a video or a file.
+fn render_tile(index: usize, entry: &Entry, cx: &mut Context<ChatView>) -> Option<AnyElement> {
+    match entry {
+        Entry::Media {
+            file, kind, from, ..
+        } => Some(render_thumbnail(index, file, *kind, from, cx)),
+        Entry::Shown {
+            path,
+            markdown,
+            lines,
+            ..
+        } => Some(render_shown_tile(index, path, *markdown, *lines, cx)),
+        _ => None,
+    }
+}
+
+/// Where the file the agent showed at `path` opens, at `lines`: as
+/// Markdown, or as code at the lines, as a path in the conversation does.
+fn shown_link(path: &str, lines: Option<(usize, usize)>) -> String {
+    match lines {
+        Some((first, last)) if first == last => format!("{path}:{first}"),
+        Some((first, last)) => format!("{path}:{first}-{last}"),
+        None => path.to_owned(),
+    }
+}
+
+/// What a file the agent showed is called, with its lines, if it named
+/// them, as `main.rs:12-20`.
+fn shown_name(path: &str, lines: Option<(usize, usize)>) -> String {
+    let name = std::path::Path::new(path).file_name().map_or_else(
+        || path.to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    match lines {
+        Some((first, last)) if first == last => format!("{name}:{first}"),
+        Some((first, last)) => format!("{name}:{first}-{last}"),
+        None => name,
+    }
+}
+
+/// A file the agent showed the human on the stage, as a row of the
+/// conversation, which a click opens there again.
+fn render_shown(
+    index: usize,
+    path: &str,
+    markdown: bool,
+    lines: Option<(usize, usize)>,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let link = shown_link(path, lines);
+    let at = lines.map(|_| shown_name(path, lines));
+    div()
+        .id(("shown", index))
+        .debug_selector(move || format!("shown-{index}"))
+        .flex()
+        .items_center()
+        .gap_2()
+        .px(px(12.))
+        .py(px(8.))
+        .rounded(px(8.))
+        .bg(rgb(RAISED))
+        .cursor_pointer()
+        .hover(|row| row.bg(rgb(HOVER)))
+        .child(
+            div()
+                .text_color(rgb(LINK))
+                .child(if markdown { "≡" } else { "‹›" }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(ellipsis(SharedString::from(path.to_owned()))),
+        )
+        .children(at.map(|at| {
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child(SharedString::from(at))
+        }))
+        .on_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .into_any_element()
+}
+
+/// A file the agent showed, as a tile of the card the human closes the
+/// work on, beside the pictures, which a click opens on the stage.
+fn render_shown_tile(
+    index: usize,
+    path: &str,
+    markdown: bool,
+    lines: Option<(usize, usize)>,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let link = shown_link(path, lines);
+    let name = shown_name(path, lines);
+    div()
+        .id(("shown-tile", index))
+        .debug_selector(move || format!("shown-tile-{index}"))
+        .size(px(THUMBNAIL))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .p_1()
+        .rounded(px(8.))
+        .overflow_hidden()
+        .bg(rgb(RAISED))
+        .cursor_pointer()
+        .child(
+            div()
+                .text_size(px(18.))
+                .text_color(rgb(LINK))
+                .child(if markdown { "≡" } else { "‹›" }),
+        )
+        .child(
+            div()
+                .w_full()
+                .text_size(px(11.))
+                .text_color(rgb(DIM))
+                .text_center()
+                .child(ellipsis(SharedString::from(name))),
+        )
+        .tooltip(crate::ui::tip(path.to_owned()))
+        .on_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .into_any_element()
+}
+
 fn render_thumbnail(
     index: usize,
     file: &str,
@@ -2026,6 +2156,12 @@ mod tests {
             Entry::Human("fix the greeting".to_owned()),
             call("call-1"),
             shown_media("new"),
+            Entry::Shown {
+                file: "0123.md".to_owned(),
+                path: "docs/report.md".to_owned(),
+                markdown: true,
+                lines: None,
+            },
             Entry::PlanChanged {
                 added: added.clone(),
                 removed: Vec::new(),
@@ -2038,7 +2174,7 @@ mod tests {
         ];
 
         let closing = closing(&entries).expect("the work closes");
-        assert_eq!(closing.shown, [4]);
+        assert_eq!(closing.shown, [4, 5]);
         assert_eq!(closing.decided, Some((added.as_slice(), &[][..])));
         assert_eq!(
             closing

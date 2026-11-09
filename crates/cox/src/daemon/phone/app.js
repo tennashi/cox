@@ -456,7 +456,7 @@ function closing(entries, row) {
   for (const entry of entries.slice(from + 1)) {
     if (!entry) continue;
     const [kind, value] = kindOf(entry);
-    if (kind === "media") shown.push(value);
+    if (kind === "media" || kind === "shown") shown.push([kind, value]);
     else if (kind === "plan_changed") drift = value;
     else if (kind === "checks") ended = value;
     else if (kind === "event" && value.on === "goal.met") met.push(value);
@@ -471,7 +471,12 @@ function closing(entries, row) {
   }
   if (shown.length) {
     parts.push(el("div", { class: "part" }, el("h3", {}, "To see"),
-      el("div", { class: "shown" }, shown.map((one) => {
+      el("div", { class: "shown" }, shown.map(([kind, one]) => {
+        if (kind === "shown") {
+          return el("button", { type: "button", class: "file", title: one.path, onclick: () => openShown(one) },
+            el("span", { class: "icon" }, one.markdown ? "≡" : "‹›"),
+            el("span", { class: "name" }, shownName(one)));
+        }
         const source = `/media/${encodeURIComponent(one.file)}`;
         return el("a", { href: source, target: "_blank", rel: "noopener noreferrer", title: one.caption || one.from },
           one.kind === "video" ? el("span", { class: "video" }, "▶") : el("img", { src: source, alt: one.caption || one.from, loading: "lazy" }));
@@ -802,6 +807,8 @@ function entryNode(at, kind, value, asks) {
       return el("div", { class: "plan-changed" }, el("div", { class: "label" }, "Plan changed"), driftList(value));
     case "media":
       return media(value);
+    case "shown":
+      return shownRow(value);
     case "permission":
       return permission(at, value, asks);
     case "proposal":
@@ -1034,6 +1041,61 @@ function media(shown) {
       ...(shown.size ? { width: shown.size[0], height: shown.size[1] } : {}),
     });
   return el("figure", { class: "media" }, seen, el("figcaption", {}, shown.caption || shown.from));
+}
+
+// What a file the agent showed is called, with its lines, if it named
+// them, as `main.rs:12-20`.
+function shownName(shown) {
+  const name = shown.path.split("/").pop() || shown.path;
+  if (!shown.lines) return name;
+  const [first, last] = shown.lines;
+  return first === last ? `${name}:${first}` : `${name}:${first}-${last}`;
+}
+
+// A file the agent showed the human on the stage, which the phone has
+// none of: a row that opens it over the chat, as it was then.
+function shownRow(shown) {
+  return el("button", { type: "button", class: "shown-file", onclick: () => openShown(shown) },
+    el("span", { class: "icon" }, shown.markdown ? "≡" : "‹›"),
+    el("span", { class: "path" }, shown.path),
+    shown.lines ? el("span", { class: "lines-at" }, shownName(shown).split(":").pop()) : null,
+    el("span", { class: "go" }, "›"));
+}
+
+// Shows the file the agent showed over the chat, as it was then: drawn
+// as Markdown, or as code with the numbers of its lines, the lines it
+// named marked, and scrolled to.
+function openShown(shown) {
+  const close = () => { viewer.remove(); document.body.classList.remove("trying"); };
+  const body = el("div", { class: "files" }, el("p", { class: "empty" }, "Reading the file…"));
+  const viewer = el("div", { id: "reading", role: "dialog", "aria-label": shown.path },
+    el("div", { class: "bar" },
+      el("button", { type: "button", class: "icon-button", "aria-label": "Back to the chat", onclick: close }, "‹"),
+      el("span", { class: "page" }, shown.path)),
+    body);
+  document.getElementById("reading")?.remove();
+  document.body.classList.add("trying");
+  document.body.append(viewer);
+  fetch(`/media/${encodeURIComponent(shown.file)}`)
+    .then((answer) => (answer.ok ? answer.text() : Promise.reject(new Error(answer.statusText))))
+    .then((text) => {
+      if (shown.markdown) {
+        body.replaceChildren(el("div", { class: "document" }, markdown(text)));
+        return;
+      }
+      const [first, last] = shown.lines || [0, -1];
+      const rows = text.replace(/\n$/, "").split("\n").map((line, index) => {
+        const number = index + 1;
+        const marked = number >= first && number <= last;
+        return el("div", { class: marked ? "marked" : null },
+          el("span", { class: "number" }, String(number)),
+          el("span", { class: "text" }, line));
+      });
+      body.replaceChildren(el("div", { class: "code" }, rows));
+      const at = body.querySelector(".marked");
+      if (at) at.scrollIntoView({ block: "center" });
+    })
+    .catch((error) => body.replaceChildren(el("p", { class: "empty" }, `Cannot read it: ${error.message}`)));
 }
 
 // What the triggers gathered for the human to answer with, each by its

@@ -1004,6 +1004,35 @@ impl Chat {
         self.conversation.show_media(shown, from, caption);
     }
 
+    /// Notes in the conversation that the agent showed the human `text`,
+    /// the file at `path`, from `cwd` where the chat works, Markdown if it
+    /// is `markdown`, or else code at `lines`, keeping a copy of it as it
+    /// is now, for the human to read on the phone too, where there is no
+    /// stage.
+    pub fn show_file(
+        &mut self,
+        (path, cwd): (&Path, &Path),
+        text: &str,
+        markdown: bool,
+        lines: Option<(usize, usize)>,
+    ) {
+        let file = match crate::media::keep_text(text, markdown, None) {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!("{} is not kept to read: {error}", path.display());
+                return;
+            }
+        };
+        let real = std::fs::canonicalize(cwd).ok();
+        let shown = path
+            .strip_prefix(cwd)
+            .ok()
+            .or_else(|| path.strip_prefix(real.as_ref()?).ok())
+            .unwrap_or(path);
+        self.conversation
+            .show_file(file, shown.display().to_string(), markdown, lines);
+    }
+
     /// Shows the pictures and videos a trigger's command printed as
     /// Markdown does, `![caption](path)`, its paths from the chat's
     /// folder, noting those it cannot.

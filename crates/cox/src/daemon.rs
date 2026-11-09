@@ -1804,6 +1804,18 @@ impl Daemon {
     /// window, coxd runs the command itself, on a terminal no one sees,
     /// unless it asks the human, which then cannot run.
     fn ask_stage(&mut self, key: u64, request: ToolRequest) {
+        if let ToolRequest::ShowMarkdown { path, text } | ToolRequest::ShowFile { path, text, .. } =
+            &request
+            && let Some(cwd) = self.slot(key).map(|slot| self.cwd(slot))
+            && let Some(chat) = self.chat(key)
+        {
+            let lines = match &request {
+                ToolRequest::ShowFile { lines, .. } => lines.map(|lines| (lines.first, lines.last)),
+                _ => None,
+            };
+            let markdown = matches!(request, ToolRequest::ShowMarkdown { .. });
+            chat.show_file((path, &cwd), text, markdown, lines);
+        }
         let ask = match request {
             ToolRequest::ShowMarkdown { path, text } => StageAsk::ShowMarkdown { path, text },
             ToolRequest::ShowFile { path, text, lines } => StageAsk::ShowFile { path, text, lines },

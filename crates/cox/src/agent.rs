@@ -1046,6 +1046,7 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
                 Some(caption) => format!("[shown to the human: {from}, {caption}]"),
                 None => format!("[shown to the human: {from}]"),
             }),
+            Entry::Shown { path, .. } => Some(format!("[you showed the human {path}]")),
             Entry::Reply(text) => Some(format!("[you]\n{text}")),
             Entry::ToolCall { title, result, .. } => {
                 let result = result.map_or_else(|| "not ended".to_owned(), |r| format!("{r:?}"));

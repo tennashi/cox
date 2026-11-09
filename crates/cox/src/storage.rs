@@ -66,7 +66,7 @@ pub enum Kept {
     /// The pictures of the regions of the window the human handed the
     /// chats (see [`crate::chat::region`]).
     Pictures,
-    /// The pictures and videos shown in the conversations (see
+    /// The pictures, videos and files shown in the conversations (see
     /// [`crate::media`]).
     Media,
     /// The icons the human gave the projects, as the rail draws them (see
