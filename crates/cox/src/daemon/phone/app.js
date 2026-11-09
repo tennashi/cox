@@ -14,6 +14,8 @@ const compose = {
   goal: document.getElementById("goal-form"),
   goalLine: document.getElementById("goal-line"),
   goalButton: document.getElementById("goal-button"),
+  changesButton: document.getElementById("changes-button"),
+  changesCount: document.getElementById("changes-count"),
   failed: document.getElementById("failed"),
   held: document.getElementById("held"),
 };
@@ -35,6 +37,10 @@ let listing = null;
 // The pages of the sketch the chat shown works in, for the human to try
 // them: { key, asked, told: { port, sketch, pages } }, as coxd lists them.
 let mocks = null;
+// What changed where the chat shown works, as the window's "Changes" tab
+// shows it: { key, asked, told: { since, files } or { error } }, as coxd
+// tells it.
+let changes = null;
 let chat = null; // { key, entries, state, steers, title, goal, settings }
 let events = null;
 let drawing = false;
@@ -138,6 +144,8 @@ function hear(told) {
     for (const [at, entry] of patch.entries) chat.entries[at] = entry;
     // A turn that ended may have made the sketch's pages.
     if (working(chat.state) && !working(patch.state) && mocks) mocks.asked = false;
+    // And changed the files.
+    if (working(chat.state) && !working(patch.state) && changes) changes.asked = false;
     chat.state = patch.state;
     chat.steers = patch.steers;
     chat.title = patch.title;
@@ -311,6 +319,7 @@ function drawHome() {
   compose.form.hidden = true;
   compose.goal.hidden = true;
   compose.goalButton.hidden = true;
+  compose.changesButton.hidden = true;
   drawHead(null);
   document.title = "Cox";
   const shelves = [];
@@ -343,6 +352,8 @@ function drawChat() {
   document.title = row ? row.name : "Cox";
   compose.form.hidden = !row;
   compose.goalButton.hidden = !row;
+  if (row) findChanges(row);
+  drawChangesButton();
   if (row) drawCompose(row);
   if (listing && !row) {
     main.replaceChildren(el("p", { class: "empty" }, "This chat is not there any more. ",
@@ -451,8 +462,13 @@ function closing(entries, row) {
     else if (kind === "event" && value.on === "goal.met") met.push(value);
   }
   const decided = drift ? drift.added.length + drift.removed.length : 0;
-  if (!shown.length && !decided && !ended) return null;
+  const changed = changedFiles();
+  if (!shown.length && !decided && !ended && !changed) return null;
   const parts = [];
+  if (changed) {
+    parts.push(el("div", { class: "part" }, el("h3", {}, "Changed"),
+      el("button", { type: "button", class: "changed", onclick: openChanges }, changedSummary(changes.told), el("span", { class: "go" }, "›"))));
+  }
   if (shown.length) {
     parts.push(el("div", { class: "part" }, el("h3", {}, "To see"),
       el("div", { class: "shown" }, shown.map((one) => {
@@ -501,6 +517,119 @@ function closing(entries, row) {
     parts,
     answers,
     el("p", { class: "hint" }, "Asks the agent to merge it, as the project merges its work."));
+}
+
+// Asks coxd what changed where the chat `row` works, unless it was asked
+// since the chat was shown or its turn last ended.
+function findChanges(row) {
+  if (changes && changes.key === row.key && changes.asked) return;
+  changes = { key: row.key, asked: true, told: changes && changes.key === row.key ? changes.told : null };
+  const asked = changes;
+  fetch(`/changes?chat=${row.key}`)
+    .then((answer) => (answer.ok ? answer.json() : null))
+    .catch(() => null)
+    .then((told) => {
+      if (changes !== asked) return;
+      const before = JSON.stringify(asked.told);
+      asked.told = told;
+      if (JSON.stringify(told) === before) return;
+      if (chat && chat.key === asked.key) draw();
+      drawChanges();
+    });
+}
+
+// How many files changed where the chat shown works, as coxd last told.
+function changedFiles() {
+  const told = changes && chat && changes.key === chat.key && changes.told;
+  return told && told.files ? told.files.length : 0;
+}
+
+// What changed in all, as `3 files · +40 −12`.
+function changedSummary(told) {
+  const added = told.files.reduce((sum, file) => sum + file.added, 0);
+  const removed = told.files.reduce((sum, file) => sum + file.removed, 0);
+  return el("span", { class: "counts" },
+    `${told.files.length} ${told.files.length === 1 ? "file" : "files"} · `,
+    el("span", { class: "gained" }, `+${added}`), " ",
+    el("span", { class: "lost" }, `−${removed}`));
+}
+
+// The button at the head that opens what changed, counting the files,
+// as the window's bar counts them on "Changes".
+function drawChangesButton() {
+  const count = changedFiles();
+  compose.changesButton.hidden = !count;
+  compose.changesCount.textContent = String(count);
+}
+compose.changesButton.addEventListener("click", () => openChanges());
+
+// Shows what changed over the chat, file by file and line by line, as
+// the window's "Changes" tab does, asking coxd again for what it is now.
+function openChanges() {
+  if (!chat) return;
+  const close = () => {
+    viewer.remove();
+    document.body.classList.remove("trying");
+  };
+  const viewer = el("div", { id: "changes", role: "dialog", "aria-label": "Changes" },
+    el("div", { class: "bar" },
+      el("button", { type: "button", class: "icon-button", "aria-label": "Back to the chat", onclick: close }, "‹"),
+      el("span", { class: "page" }, "Changes")),
+    el("div", { class: "files" }));
+  document.getElementById("changes")?.remove();
+  document.body.classList.add("trying");
+  document.body.append(viewer);
+  drawChanges();
+  if (changes && changes.key === chat.key) changes.asked = false;
+  const row = listing && listing.chats.concat(listing.archived).find((one) => one.key === chat.key);
+  if (row) findChanges(row);
+}
+
+// What changed, in the viewer, if it is open.
+function drawChanges() {
+  const files = document.querySelector("#changes .files");
+  if (!files) return;
+  const told = changes && chat && changes.key === chat.key ? changes.told : null;
+  if (!told) {
+    files.replaceChildren(el("p", { class: "empty" }, "Reading what changed…"));
+    return;
+  }
+  if (told.error) {
+    files.replaceChildren(el("p", { class: "empty" }, told.error));
+    return;
+  }
+  if (!told.files.length) {
+    files.replaceChildren(el("p", { class: "empty" }, `Nothing changed ${told.since}.`));
+    return;
+  }
+  // A few files open at once; more fold to their heads, for the human
+  // to open the one they look for.
+  const open = told.files.length <= 3;
+  files.replaceChildren(
+    el("p", { class: "since" }, changedSummary(told), ` ${told.since}`),
+    ...told.files.map((file) => changedFile(file, open)));
+}
+
+// A file that changed, as a card: how it changed, its path and the lines
+// it gained and lost, over its lines.
+function changedFile(file, open) {
+  const lines = file.binary ? el("p", { class: "note" }, "A binary file.")
+    : file.cut ? el("p", { class: "note" }, "Too long to show here.")
+      : el("div", { class: "lines" }, file.lines.map((line) => {
+        if (line.kind === "stretch") return el("div", { class: "stretch" }, line.text);
+        const sign = line.kind === "added" ? "+" : line.kind === "removed" ? "−" : " ";
+        return el("div", { class: line.kind },
+          el("span", { class: "number" }, String(line.new ?? line.old ?? "")),
+          el("span", { class: "sign" }, sign),
+          el("span", { class: "text" }, line.text));
+      }));
+  return el("details", { class: "file", open },
+    el("summary", {},
+      el("span", { class: `how how-${file.how}` }, file.how),
+      el("span", { class: "path" }, file.was ? `${file.was} → ${file.path}` : file.path),
+      el("span", { class: "gained" }, `+${file.added}`),
+      el("span", { class: "lost" }, `−${file.removed}`)),
+    lines);
 }
 
 // Asks coxd for the pages of the sketch `row` works in, if it works in

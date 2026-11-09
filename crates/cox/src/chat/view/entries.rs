@@ -32,7 +32,7 @@ use crate::ui::text::Writer;
 use crate::ui::theme::{
     ACCENT, ADDED_GROUND, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER, BORDER_STRONG,
     BUTTON, BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND, FAILED_MARK, FAINT,
-    FOREGROUND, GROUND, LINK, OFFERING_BUTTON, OFFERING_EDGE, OFFERING_GROUND, RAISED,
+    FOREGROUND, GROUND, HOVER, LINK, OFFERING_BUTTON, OFFERING_EDGE, OFFERING_GROUND, RAISED,
     REMOVED_GROUND, SURFACE,
 };
 
@@ -647,6 +647,22 @@ impl ChatView {
         let mut writer = self.reading.writer(entries);
         let part = |name: &'static str| label().child(name);
         let mut shows = Vec::new();
+        // What changed where the chat works, as the stage's bar counts it,
+        // which opens on "Changes", as on the phone.
+        if let Some(changed) = self
+            .stage()
+            .and_then(|stage| stage.read(cx).changed_files())
+        {
+            shows.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(part("CHANGED"))
+                    .child(render_changed(changed, cx))
+                    .into_any_element(),
+            );
+        }
         if !closing.shown.is_empty() {
             let thumbnails = closing.shown.iter().filter_map(|&index| {
                 let Entry::Media {
@@ -1462,6 +1478,38 @@ const THUMBNAIL: f32 = 80.;
 /// The picture or video `file` the agent showed, at `index`, small and
 /// square, for the card the human closes the work on: a click opens it
 /// on the stage, as the picture in the conversation does.
+/// The row of the closing card that says how many files changed where
+/// the chat works, which a click shows on the stage's "Changes".
+fn render_changed(changed: usize, cx: &mut Context<ChatView>) -> AnyElement {
+    let said = match changed {
+        0 => "No file changed".to_owned(),
+        1 => "1 file changed".to_owned(),
+        many => format!("{many} files changed"),
+    };
+    div()
+        .id("closing-changes")
+        .debug_selector(|| "closing-changes".to_owned())
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py(px(6.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(rgb(BORDER))
+        .bg(rgb(RAISED))
+        .cursor_pointer()
+        .hover(|row| row.bg(rgb(HOVER)))
+        .child(div().flex_1().child(said))
+        .child(div().text_color(rgb(DIM)).child("Changes ›"))
+        .on_click(cx.listener(|view, _, window, cx| {
+            if let Some(stage) = view.stage() {
+                stage.update(cx, |stage, cx| stage.show_folder_changes(window, cx));
+            }
+        }))
+        .into_any_element()
+}
+
 fn render_thumbnail(
     index: usize,
     file: &str,
