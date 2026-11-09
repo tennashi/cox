@@ -3069,13 +3069,21 @@ fn opened_as_project(
     home: &Path,
 ) -> PathBuf {
     let project = home.join("projects").join("untitled-1");
-    let opened = workspace.read_with(cx, |workspace, _| {
+    let listed: Vec<PathBuf> = workspace.read_with(cx, |workspace, _| {
         workspace
             .projects()
             .iter()
-            .any(|kept| kept.folder() == project.as_path())
+            .map(|kept| kept.folder().to_owned())
+            .collect()
     });
-    assert!(opened);
+    // What the sketch says of how it ended tells why, when it did not.
+    let sketch = view_at(cx, workspace, 3);
+    let said = self::entries(cx, &sketch);
+    assert!(
+        listed.contains(&project),
+        "{} is not among {listed:?}: {said:?}",
+        project.display()
+    );
     assert!(
         project
             .join("directories")
@@ -3083,9 +3091,8 @@ fn opened_as_project(
             .join(".git")
             .exists()
     );
-    let sketch = view_at(cx, workspace, 3);
     assert!(
-        self::entries(cx, &sketch).iter().any(|entry| matches!(entry,
+        said.iter().any(|entry| matches!(entry,
             Entry::Note(note) if note.starts_with("The sketch was opened as the project untitled-1"))),
     );
     project
