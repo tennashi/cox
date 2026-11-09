@@ -26,7 +26,7 @@ impl Spawns for NoAgents {
         Agents::new(vec!["fake".to_owned()], Vec::new(), Vec::new())
     }
 
-    fn chat(&self, _: PathBuf, _: Start, _: &str, _: Option<u16>) -> Spawned {
+    fn chat(&self, _: PathBuf, _: Start, _: &str, _: Option<u16>, _: bool) -> Spawned {
         unreachable!("no chat opens")
     }
 

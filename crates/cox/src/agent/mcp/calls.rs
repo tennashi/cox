@@ -111,6 +111,20 @@ pub(super) fn tools(only: Option<&[String]>) -> Value {
     tools
 }
 
+/// The names of the tools a chat of Cox's own, in no project, gets: those
+/// named in `only`, or all of them, but the one that proposes a name for
+/// the chat's project, which it has none of.
+pub(super) fn outside_projects(only: Option<&[String]>) -> Vec<String> {
+    tools(only)
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name")?.as_str())
+        .filter(|&name| name != PROPOSE_NAME)
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Every tool, as the agent learns of it.
 #[expect(clippy::too_many_lines, reason = "the tools, one after another")]
 fn all_tools() -> Value {

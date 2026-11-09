@@ -517,12 +517,22 @@ static STARTED: AtomicU64 = AtomicU64::new(0);
 
 /// Starts the server of a chat working in `cwd`, an absolute path, which
 /// the paths the agent gives are taken from, serving the tools named in
-/// `only`, or all of them when `None`.
+/// `only`, or all of them when `None`, but those of a project when the
+/// chat is in none, as `in_project` says.
 ///
 /// # Errors
 ///
 /// When the socket cannot be made.
-pub fn start(cwd: PathBuf, only: Option<Vec<String>>) -> anyhow::Result<ToolServer> {
+pub fn start(
+    cwd: PathBuf,
+    only: Option<Vec<String>>,
+    in_project: bool,
+) -> anyhow::Result<ToolServer> {
+    let only = if in_project {
+        only
+    } else {
+        Some(calls::outside_projects(only.as_deref()))
+    };
     let directory = private_directory()?;
     let socket = directory.join("mcp");
     let listener = listen(&socket).inspect_err(|_| {

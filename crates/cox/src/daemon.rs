@@ -87,8 +87,16 @@ pub trait Spawns {
     /// Starts the agent kept as `agent`, of a chat working in `cwd`, an
     /// absolute path, as `start` says, its browser tools reaching the
     /// chat's stage through the relay on `relay`, when given, and gives it
-    /// Cox's own tools, unless the chat's setup says otherwise.
-    fn chat(&self, cwd: PathBuf, start: Start, agent: &str, relay: Option<u16>) -> Spawned;
+    /// Cox's own tools, unless the chat's setup says otherwise, but those
+    /// of a project when the chat is in none, as `in_project` says.
+    fn chat(
+        &self,
+        cwd: PathBuf,
+        start: Start,
+        agent: &str,
+        relay: Option<u16>,
+        in_project: bool,
+    ) -> Spawned;
 
     /// What starts an agent with no chat, as the judge of a goal, of the
     /// agent kept as `agent`.
@@ -1152,7 +1160,9 @@ impl Daemon {
             return;
         };
         let agent = chat.agent_id().to_owned();
-        let Spawned { agent, stage } = self.spawns.chat(cwd, start, &agent, relay);
+        // The first project is Cox's own chats', in none.
+        let in_project = slot.project != 0;
+        let Spawned { agent, stage } = self.spawns.chat(cwd, start, &agent, relay, in_project);
         let also = stage
             .map(|mut stage| {
                 let internal = self.internal.clone();
