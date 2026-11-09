@@ -1509,8 +1509,13 @@ in the window, which goes into the turn the agent takes, or waits for
 it to end, as in the window; answers what the
 agent asks, a tap on an option; sets or dismisses a goal the agent
 proposes, and says whether to keep what was learned in the wiki; stops
-a turn; and sets the chat's goal, with ◎ at the page's head, as "Set
-goal…" takes it, `$ ` and a command, or words, emptied to clear it.
+a turn; sets the chat's goal, with ◎ at the page's head, as "Set
+goal…" takes it, `$ ` and a command, or words, emptied to clear it; and
+sets what the agent lets them choose of its session, as the model, the
+mode or how hard it thinks, with a tap on the pill, which lists them
+over the chat, each on a row a tap opens to what it can be set to,
+under the agent's groups, a tap on one setting it, as the window's
+pill does, while a turn runs too.
 A file the agent showed opens over the chat, with a tap on its row, as
 it was shown: a Markdown file drawn as the agent's replies are, and
 code with the numbers of its lines, the lines the agent named marked

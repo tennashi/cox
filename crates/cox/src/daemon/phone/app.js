@@ -312,7 +312,66 @@ function pill(row) {
     return choice ? choice.name : setting.value;
   });
   if (!agent && !set.length) return null;
-  return el("div", { class: "pills" }, el("span", { class: "pill" }, [agent, ...set].filter(Boolean).join(" · ")));
+  const said = [agent, ...set].filter(Boolean).join(" · ");
+  if (!chat.settings.length) return el("div", { class: "pills" }, el("span", { class: "pill" }, said));
+  return el("div", { class: "pills" },
+    el("button", { type: "button", class: "pill", "aria-label": `Session: ${said}`, onclick: () => openSettings(agent) }, said));
+}
+
+// What the agent lets the human choose of the chat's session, as the
+// window's pill lists it, over the chat: each setting on a row, with what
+// it is set to, which a tap opens to what it can be set to, under the
+// groups the agent puts them in; a tap on one sets it, while a turn runs
+// too, and closes the list.
+function openSettings(agent) {
+  const close = () => { viewer.remove(); document.body.classList.remove("trying"); };
+  const body = el("div", { class: "files" });
+  const viewer = el("div", { id: "settings", role: "dialog", "aria-label": "Session" },
+    el("div", { class: "bar" },
+      el("button", { type: "button", class: "icon-button", "aria-label": "Back to the chat", onclick: close }, "‹"),
+      el("span", { class: "page" }, agent ? `Session · ${agent}` : "Session")),
+    body);
+  document.getElementById("settings")?.remove();
+  document.body.classList.add("trying");
+  document.body.append(viewer);
+  let open = chat.settings.length === 1 ? chat.settings[0].id : null;
+  const draw = () => {
+    body.replaceChildren(el("ul", { class: "settings" }, chat.settings.map((setting) => {
+      const now = setting.choices.find((one) => one.id === setting.value);
+      const opened = open === setting.id;
+      const row = el("button", {
+        type: "button", class: "setting", "aria-expanded": opened ? "true" : "false",
+        onclick: () => { open = opened ? null : setting.id; draw(); },
+      },
+      el("span", { class: "name" }, setting.name),
+      el("span", { class: "value" }, now ? now.name : setting.value),
+      el("span", { class: "go" }, opened ? "▾" : "›"));
+      if (!opened) return el("li", {}, row);
+      const groups = [];
+      for (const choice of setting.choices) {
+        const group = choice.group || "";
+        let last = groups[groups.length - 1];
+        if (!last || last.name !== group) groups.push(last = { name: group, choices: [] });
+        last.choices.push(choice);
+      }
+      return el("li", {}, row, groups.map((group) => el("div", { class: "group" },
+        group.name ? el("div", { class: "label" }, group.name) : null,
+        group.choices.map((choice) => el("button", {
+          type: "button",
+          class: `choice ${choice.id === setting.value ? "chosen" : ""}`,
+          onclick: async () => {
+            if (choice.id !== setting.value && !(await act({ Set: { key: chat.key, id: setting.id, value: choice.id } }))) return;
+            setting.value = choice.id;
+            close();
+            redraw();
+          },
+        },
+        el("span", { class: "tick" }, choice.id === setting.value ? "✓" : ""),
+        el("span", { class: "words" }, el("span", {}, choice.name),
+          choice.description ? el("span", { class: "why" }, choice.description) : null))))));
+    })));
+  };
+  draw();
 }
 
 function drawHome() {
