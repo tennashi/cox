@@ -472,6 +472,39 @@ async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn a_new_project_is_made_in_the_projects_of_the_home(cx: &mut TestAppContext) {
+    let home = scratch("new-project-home");
+    let projects = home.join("projects");
+    // A folder there that is no project's is not taken.
+    std::fs::create_dir_all(projects.join("untitled-2")).unwrap();
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+
+    // The + at the foot of the rail makes one, and so do its keys.
+    click(cx, "new-project");
+    say(cx, &workspace, "one").await;
+    cx.simulate_keystrokes("secondary-shift-n");
+    say(cx, &workspace, "two").await;
+
+    let cwds: Vec<_> = agents.borrow().iter().map(|agent| agent.cwd()).collect();
+    assert_eq!(
+        cwds,
+        [
+            Some(projects.join("untitled-1")),
+            Some(projects.join("untitled-3"))
+        ]
+    );
+    assert_eq!(
+        names(cx, &workspace),
+        listed(&[
+            ("Cox", &[]),
+            ("untitled-1", &["one"]),
+            ("untitled-3", &["two"]),
+        ])
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[gpui::test]
 fn opening_the_home_as_a_folder_opens_a_chat_of_coxs_own(cx: &mut TestAppContext) {
     let home = scratch("home-folder");
     let (_agents, workspace, cx) = open_window(cx, home.clone());

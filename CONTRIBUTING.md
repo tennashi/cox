@@ -91,11 +91,13 @@ not while one of its chats is at work. A project whose folder
 is not there, as when the human moved it while Cox was closed, is
 marked on the rail, its square dashed in amber with a ?, and its chats
 do not start again, their input saying so, until the human says where
-the folder went. A project is a folder:
-"Open folder…", the + at the foot of the rail (Command-O on macOS,
-Control-O elsewhere), opens a chat in the project of a folder of your
-choice, and "New chat" in the list opens another chat in the project
-chosen. "New chat" (Command-N, Control-N)
+the folder went. A project is a folder of its own in `projects` in
+Cox's home: "New project", the + at the foot of the rail
+(Command-Shift-N on macOS, Control-Shift-N elsewhere), makes one with
+nothing set yet, in `untitled-` and the first number no folder there
+has yet, as `~/cox/projects/untitled-1`, and opens a chat in it, for
+the human and the agent to work out what the project is to be; and
+"New chat" in the list opens another chat in the project chosen. "New chat" (Command-N, Control-N)
 opens one of Cox's own, in no project, which works in Cox's home: `<dir>`
 when given, or else the folder the settings set, or else `~/cox`. The
 rail shows Cox first, by its icon, with no name under it, as a place of
@@ -517,8 +519,8 @@ does not say which, is asked of the human. A sketch from the project works in a 
 the project's last commit, so the project has to be in a Git
 repository; a sketch from nothing works in an empty folder, `scratch-`
 and a number, made a Git repository of its own, for a project of any
-kind or none, which "Open folder…" opens as a project once the human
-wants to go on with it. The chat notes where it works from then on,
+kind or none, which "Open as project" (see below) opens as a project
+once the human wants to go on with it. The chat notes where it works from then on,
 and the agent that opened a sketch with `open_chat` is told, to read
 what the sketch made and propose a goal from it. A chat a sketch opens works in the sketch's
 folder too, and a sketch goes on there once it is started again. The
@@ -1243,7 +1245,7 @@ one that ended, or a new tab. When the agent stops waiting for it, as when
 the human stops the turn, the command gets Control-C. Copying and
 pasting in a terminal is Command-C and Command-V on macOS, and
 Control-Shift-C and Control-Shift-V elsewhere, where Control-N,
-Control-O, Control-T, Control-P and Control-\\ go to the terminal too.
+Control-T, Control-P and Control-\\ go to the terminal too.
 
 A tab can be an Android emulator too, as Android Studio's "Running
 Devices" shows one, for the human to try an app they make for Android
