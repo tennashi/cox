@@ -645,9 +645,10 @@ fn propose_project_tool() -> Value {
             this chat, and the chats opened under it, move into it, the chat stopping, to \
             go on there, with the conversation so far, from the human's next line. When a \
             sketch from nothing opened under this chat holds what the project starts \
-            from, give its chat's number as `sketch`: its files move into the project, \
-            as its directory of the project's name, and the sketch ends. It answers at \
-            once, with where the project is to be.",
+            from, give its name as `sketch`, as the human's list shows it, which \
+            start_sketch answered: its files move into the project, as its directory of \
+            the project's name, and the sketch ends. It answers at once, with where the \
+            project is to be.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -660,9 +661,10 @@ fn propose_project_tool() -> Value {
                     "description": "Why this project, in a sentence, for the human to weigh it.",
                 },
                 "sketch": {
-                    "type": "integer",
-                    "description": "The number of the chat of a sketch from nothing, opened \
-                        under this chat, whose files the project starts from.",
+                    "type": "string",
+                    "description": "The name of a sketch from nothing, opened under this \
+                        chat, whose files the project starts from, as the human's list \
+                        shows it.",
                 },
             },
             "required": ["name"],
@@ -1402,13 +1404,12 @@ async fn propose_project(
         Some(Value::String(why)) => Some(why.clone()),
         Some(_) => return Err("`why` is not a string".to_owned()),
     };
+    // The sketch by its name, or by its chat's number, as Cox says it.
     let sketch = match arguments.get("sketch") {
         None | Some(Value::Null) => None,
-        Some(sketch) => Some(
-            sketch
-                .as_u64()
-                .ok_or("`sketch` is not the number of a chat")?,
-        ),
+        Some(Value::String(sketch)) => Some(sketch.trim().to_owned()),
+        Some(Value::Number(number)) => Some(number.to_string()),
+        Some(_) => return Err("`sketch` is not the name of a sketch".to_owned()),
     };
     let (answer, made) = oneshot::channel();
     chats

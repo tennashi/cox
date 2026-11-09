@@ -132,6 +132,10 @@ pub enum Entry {
         /// project, as its directory, if the agent named one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sketch: Option<std::path::PathBuf>,
+        /// The sketch's name, as the human's list shows it, if the agent
+        /// named one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sketch_name: Option<String>,
         /// What the human did with it, once they did: made it, or let it
         /// be.
         answer: Option<Answer>,

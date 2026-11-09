@@ -1218,9 +1218,14 @@ impl Chat {
     }
 
     /// Shows the project named `name`, which the agent proposes to make of
-    /// the chat, on a card in the conversation, with `why`, and the folder
-    /// of the sketch that goes into it, `sketch`, if any.
-    pub fn propose_project(&mut self, name: &str, why: Option<String>, sketch: Option<PathBuf>) {
+    /// the chat, on a card in the conversation, with `why`, and the sketch
+    /// that goes into it, `sketch`, its name and folder, if any.
+    pub fn propose_project(
+        &mut self,
+        name: &str,
+        why: Option<String>,
+        sketch: Option<(String, PathBuf)>,
+    ) {
         self.conversation.propose_project(name, why, sketch);
     }
 

@@ -190,12 +190,13 @@ pub enum ChatRequest {
     /// Show the human the project named `name`, proposed to be made of the
     /// chat, which is in none, for them to make, the chat moving into it,
     /// or to let be, with `why`, if the agent said, and the files of the
-    /// sketch of the chat numbered `sketch` going into it, if given;
-    /// answer where the project is to be, or why it cannot be proposed.
+    /// sketch named `sketch`, or of the chat of that number, going into
+    /// it, if given; answer where the project is to be, or why it cannot be
+    /// proposed.
     ProposeProject {
         name: String,
         why: Option<String>,
-        sketch: Option<u64>,
+        sketch: Option<String>,
         answer: oneshot::Sender<Result<PathBuf, String>>,
     },
     /// Open a chat in the chat's project, under it in the list, whose
