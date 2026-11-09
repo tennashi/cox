@@ -412,9 +412,9 @@ function drawHome() {
         el("div", { class: "shelf-head" }, el("span", { class: "label" }, "Waits for you")),
         el("ul", { class: "chats" }, asking.map((row) => chatRow(row, { project: true })))));
     }
-    // Cox's own chats first, of no project, as the window's rail has Cox
-    // first, apart from the projects; then the projects, each under its
-    // square.
+    // The chats of no project first, with no heading, as they work in the
+    // home the settings set, apart from the projects, as the window's rail
+    // has them first; then the projects, each under its square.
     const shelf = (index, head) => {
       const project = listing.projects[index];
       const rows = listing.chats.filter((row) => row.project === index);
@@ -427,9 +427,7 @@ function drawHome() {
               el("span", { class: "plus" }, "+"), "New chat"))));
     };
     const own = listing.projects.findIndex((project) => project.id === null);
-    if (own >= 0) {
-      shelves.push(shelf(own, el("div", { class: "shelf-head" }, el("span", { class: "label" }, "Cox's own"))));
-    }
+    if (own >= 0) shelves.push(shelf(own, null));
     const projects = listing.projects.map((_, index) => index).filter((index) => index !== own);
     if (projects.length) shelves.push(el("div", { class: "projects-head" }, el("span", { class: "label" }, "Projects")));
     for (const index of projects) {
