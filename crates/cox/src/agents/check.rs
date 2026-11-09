@@ -107,10 +107,7 @@ pub fn check(command: Vec<String>, cwd: &Path) -> Checked {
         };
         let session = cox_acp::connect(
             agent,
-            cox_acp::Roots {
-                cwd: cwd.to_owned(),
-                also: Vec::new(),
-            },
+            cwd.to_owned(),
             Vec::new(),
             None,
             |_| {},

@@ -125,7 +125,7 @@ pub struct FakeAgent {
     /// The sessions Cox asked to go on with, in order.
     asked_to_resume: Arc<Mutex<Vec<String>>>,
     sessions_opened: Arc<AtomicUsize>,
-    cwd: Arc<Mutex<Option<cox_acp::Roots>>>,
+    cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Prompts>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
@@ -299,21 +299,7 @@ impl FakeAgent {
 
     /// The directory Cox opened the session in.
     pub fn cwd(&self) -> Option<PathBuf> {
-        self.cwd
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|roots| roots.cwd.clone())
-    }
-
-    /// The directories Cox opened the session in beside its own.
-    pub fn also(&self) -> Vec<PathBuf> {
-        self.cwd
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|roots| roots.also.clone())
-            .unwrap_or_default()
+        self.cwd.lock().unwrap().clone()
     }
 
     /// The MCP servers Cox handed over when it opened the session.
@@ -407,7 +393,7 @@ async fn serve(
     resumes: Resumes,
     asked_to_resume: Arc<Mutex<Vec<String>>>,
     sessions_opened: Arc<AtomicUsize>,
-    cwd: Arc<Mutex<Option<cox_acp::Roots>>>,
+    cwd: Arc<Mutex<Option<PathBuf>>>,
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Prompts>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
@@ -485,10 +471,7 @@ async fn serve(
                     return responder.respond_with_error(Error::auth_required());
                 }
                 sessions_opened.fetch_add(1, Ordering::SeqCst);
-                *cwd.lock().unwrap() = Some(cox_acp::Roots {
-                    cwd: request.cwd,
-                    also: request.additional_directories,
-                });
+                *cwd.lock().unwrap() = Some(request.cwd);
                 *mcp_servers.lock().unwrap() = request.mcp_servers;
                 // The agent's commands, told ahead of the session's
                 // answer, so that Cox knows them before any line is sent.

@@ -137,9 +137,6 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
         }
     }
     if let Some(card) = workspace.project_card().map(|card| card.read(cx)) {
-        if focused == card.input().focus_handle(cx) {
-            return "the project card's input".to_owned();
-        }
         if focused == card.name_input().focus_handle(cx) {
             return "the project card's name".to_owned();
         }
