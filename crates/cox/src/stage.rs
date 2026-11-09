@@ -376,6 +376,21 @@ impl Stage {
         }
     }
 
+    /// How many files changed in the stage's folder, as its bar last
+    /// counted them while the stage was open; none until then, or out of
+    /// Git.
+    #[must_use]
+    pub fn changed_files(&self) -> Option<usize> {
+        self.changed
+    }
+
+    /// Shows what changed in the stage's folder, as "Changes" on its bar
+    /// does.
+    pub fn show_folder_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cwd = self.cwd.clone();
+        self.show_changes(cwd, window, cx);
+    }
+
     /// The chat `chat` is shown, of those that work on the stage: the human
     /// hands their tabs to it from now on, and the stage shows its last
     /// tab, unless the tab shown is of it or the human's.

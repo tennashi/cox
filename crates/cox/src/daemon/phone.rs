@@ -383,6 +383,8 @@ pub async fn serve(
                 async move {
                     let answer = if request.method() == Method::POST {
                         page.posted(request).await
+                    } else if request.uri().path() == "/changes" {
+                        page.changes(&request).await
                     } else {
                         page.answer(&request)
                     };
@@ -503,6 +505,47 @@ impl Page {
         match told {
             Some(told) => answer(StatusCode::OK, "application/json", told.to_string()),
             None => answer(StatusCode::NOT_FOUND, TEXT, "No sketch's mocks"),
+        }
+    }
+
+    /// What changed where the chat `request` names works, `?chat=<key>`,
+    /// as JSON, as the window's "Changes" tab shows it (see
+    /// [`told_changes`]).
+    async fn changes(&self, request: &Request<Incoming>) -> Response<Body> {
+        if !self.paired(request) {
+            return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
+        }
+        let key = request.uri().query().and_then(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .find_map(|(name, value)| (name == "chat").then(|| value.parse::<u64>().ok()))
+                .flatten()
+        });
+        let Some(key) = key else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "No chat");
+        };
+        let (asked, folder) = tokio::sync::oneshot::channel();
+        if self
+            .internal
+            .send(Internal::Folder { key, answer: asked })
+            .is_err()
+        {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        }
+        let Ok(Some(folder)) = folder.await else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
+        };
+        match tokio::task::spawn_blocking(move || cox_editor::changes::read(&folder)).await {
+            Ok(Ok(diff)) => answer(
+                StatusCode::OK,
+                "application/json",
+                told_changes(&diff).to_string(),
+            ),
+            Ok(Err(error)) => answer(
+                StatusCode::OK,
+                "application/json",
+                serde_json::json!({ "error": error }).to_string(),
+            ),
+            Err(error) => answer(StatusCode::INTERNAL_SERVER_ERROR, TEXT, error.to_string()),
         }
     }
 
@@ -642,6 +685,60 @@ impl Page {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         response
     }
+}
+
+/// The most lines of what changed the phone is told, in all: the files
+/// past them are told by their paths and counts alone, as the window's
+/// tab would scroll to them.
+const MOST_LINES: usize = 4000;
+
+/// What changed, as `diff` says it, as the page is told it: what the
+/// files changed since, and each file, with how it changed, the lines it
+/// gained and lost, and its lines, but past [`MOST_LINES`], where a file
+/// is `cut` instead.
+fn told_changes(diff: &cox_editor::changes::Diff) -> serde_json::Value {
+    use cox_editor::changes::Kind;
+    let mut left = MOST_LINES;
+    let files: Vec<_> = diff
+        .files
+        .iter()
+        .map(|file| {
+            let cut = file.lines.len() > left;
+            let lines: Vec<_> = if cut {
+                Vec::new()
+            } else {
+                left -= file.lines.len();
+                file.lines
+                    .iter()
+                    .map(|line| {
+                        let kind = match line.kind {
+                            Kind::Stretch => "stretch",
+                            Kind::Same => "same",
+                            Kind::Added => "added",
+                            Kind::Removed => "removed",
+                        };
+                        serde_json::json!({
+                            "kind": kind,
+                            "old": line.old,
+                            "new": line.new,
+                            "text": line.text,
+                        })
+                    })
+                    .collect()
+            };
+            serde_json::json!({
+                "path": file.path,
+                "was": file.was,
+                "how": file.how.letter().to_string(),
+                "binary": file.binary,
+                "added": file.added,
+                "removed": file.removed,
+                "cut": cut,
+                "lines": lines,
+            })
+        })
+        .collect();
+    serde_json::json!({ "since": diff.since.said(), "files": files })
 }
 
 /// How long what the page does may be, as a line sent, at most.
@@ -1212,6 +1309,49 @@ mod tests {
         );
         assert_eq!(pasted(&format!("link={secret}+")), secret);
         assert_eq!(pasted("link=short"), "short");
+    }
+
+    #[test]
+    fn tells_what_changed_up_to_as_many_lines_as_it_shows() {
+        use cox_editor::changes::{Diff, File, How, Kind, Line, Since};
+        let line = |kind, text: &str| Line {
+            kind,
+            old: None,
+            new: Some(1),
+            at: 1,
+            text: text.to_owned(),
+        };
+        let file = |path: &str, lines: Vec<Line>| File {
+            path: path.into(),
+            was: None,
+            how: How::Changed,
+            added: lines.iter().filter(|line| line.kind == Kind::Added).count(),
+            removed: 0,
+            lines,
+            binary: false,
+        };
+        let many = (0..MOST_LINES).map(|_| line(Kind::Same, "x")).collect();
+        let diff = Diff {
+            top: "/work".into(),
+            since: Since::Head("abc1234".to_owned()),
+            files: vec![
+                file(
+                    "a.rs",
+                    vec![line(Kind::Stretch, "@@"), line(Kind::Added, "fn a() {}")],
+                ),
+                file("b.rs", many),
+            ],
+        };
+        let told = told_changes(&diff);
+        assert_eq!(told["since"], "since the last commit, abc1234");
+        assert_eq!(told["files"][0]["path"], "a.rs");
+        assert_eq!(told["files"][0]["how"], "M");
+        assert_eq!(told["files"][0]["added"], 1);
+        assert_eq!(told["files"][0]["cut"], false);
+        assert_eq!(told["files"][0]["lines"][1]["kind"], "added");
+        assert_eq!(told["files"][0]["lines"][1]["text"], "fn a() {}");
+        assert_eq!(told["files"][1]["cut"], true);
+        assert_eq!(told["files"][1]["lines"].as_array().map(Vec::len), Some(0));
     }
 
     #[test]

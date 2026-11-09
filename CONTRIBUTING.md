@@ -1503,6 +1503,15 @@ agent asks, a tap on an option; sets or dismisses a goal the agent
 proposes, and says whether to keep what was learned in the wiki; stops
 a turn; and sets the chat's goal, with ◎ at the page's head, as "Set
 goal…" takes it, `$ ` and a command, or words, emptied to clear it.
+What changed where the chat works, as "Changes" on the stage's bar
+shows it, the phone shows too, where there is no stage: ± at the
+page's head, counting the files that changed, opens it over the chat,
+a card for each file, headed by how it changed, its path and the lines
+it gained and lost, over its lines, as Git tells them, without the
+colors of their syntax nor the words that differ, with ‹ back to the
+chat; past 4,000 lines in all, a file shows by its head alone. coxd
+tells the page what changed, at `/changes?chat=<key>`, only for a
+chat's folder, and asks again each time a turn ends.
 "New chat", under a project's chats, opens a chat in the project, as
 the window's list does, and shows it on the phone, while the window
 goes on showing what it shows. A chat looked at on the phone counts as
@@ -1537,8 +1546,9 @@ folder can hold the project's code.
 
 Once a chat waits for the human after the work their last line left
 it, the phone gathers, on a card under the conversation, what they
-close that work on: what the agent showed of it, as pictures and
-videos, which a tap opens; what it decided on its own, the steps it
+close that work on: what changed where the chat works, as the files and
+the lines they gained and lost, which a tap opens, as ± does; what the
+agent showed of it, as pictures and videos, which a tap opens; what it decided on its own, the steps it
 added to the plan it started with and those it took out, as `PLAN
 CHANGED` says them; and how the checks went as its last turn ended,
 with the goal's when it was met. "Merge" on the card, tapped twice, so
@@ -1551,7 +1561,8 @@ the way the project merges its work, as its `COX.md` or
 review. The conversation notes that the human asked, and the card
 shows no more until their next line. The window shows the same card
 after the conversation, whose "Merge" a click asks with, as "Merge" in
-the menu of the right button on a chat does. A sketch, which ends its
+the menu of the right button on a chat does, and whose files changed,
+as the stage's bar counts them, a click shows on "Changes". A sketch, which ends its
 own ways, and a chat it opened, have none.
 
 coxd serves it on the Mac's own address alone, `127.0.0.1`, and the

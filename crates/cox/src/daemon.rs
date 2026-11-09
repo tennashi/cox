@@ -184,6 +184,12 @@ pub enum Internal {
     /// The human did `message` on their phone, as they would in the
     /// window (see [`phone`]).
     Act { message: ToDaemon },
+    /// Where the chat `key` works, for the phone to show what changed
+    /// there, told on `answer`, or nothing of a chat there is none of.
+    Folder {
+        key: u64,
+        answer: oneshot::Sender<Option<PathBuf>>,
+    },
     /// What the chats that need the human come to is to be pushed to
     /// their phones, on `to`, while they are away from the Mac (see
     /// [`push`]).
@@ -1630,6 +1636,9 @@ impl Daemon {
                 self.view_chat(id, key);
             }
             Internal::Act { message } => self.act(message),
+            Internal::Folder { key, answer } => {
+                answer.send(self.slot(key).map(|slot| self.cwd(slot))).ok();
+            }
             Internal::Push { to } => self.push = Some(to),
             Internal::Unview { id } => {
                 if self.viewers.remove(&id).is_some() {
