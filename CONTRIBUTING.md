@@ -275,7 +275,8 @@ session opens, the agent closes.
 A chat can have a goal, which the chat works until it is met: a
 command, such as `cargo xtask ci`, which has to pass, or words, such as
 "The greeting names the user.", which an agent judges. "Set goal…" in
-the menu of the right button opens an input above the chat's own for
+the menu of the right button, or ◎ at the head of the panel, in the
+accent while the chat has a goal, opens an input above the chat's own for
 the goal (Enter sets it, Escape leaves it as it was, and emptied, it
 clears the goal), where `$ ` and a command is the command, and any
 other text is a goal in words; "Clear goal" clears it; its row in the list marks a
@@ -1477,6 +1478,12 @@ comes once none is.
 
 ## On the phone
 
+At the Mac, the human works on the stage, and the chat helps them
+there; on the phone, where there is no stage, they talk with the
+chats: to plan the work, and to look at what it came to. What makes
+those easy on the phone, the window has too: the card to close the work
+on (see below), and the goal a click away at the head of the panel.
+
 The human follows the chats from their phone, away from the Mac, on a
 page coxd serves, on port 7421, unless `settings.json` turns it off, as
 `{"phone": false}`, or names another port, as `{"phone": {"port":
@@ -1542,9 +1549,10 @@ else Cox's own
 the way the project merges its work, as its `COX.md` or
 `CONTRIBUTING.md` says, stopping at what the merge waits for, as a
 review. The conversation notes that the human asked, and the card
-shows no more until their next line. "Merge" in the menu of the right
-button on a chat asks the same from the window. A sketch, which ends
-its own ways, and a chat it opened, have none.
+shows no more until their next line. The window shows the same card
+after the conversation, whose "Merge" a click asks with, as "Merge" in
+the menu of the right button on a chat does. A sketch, which ends its
+own ways, and a chat it opened, have none.
 
 coxd serves it on the Mac's own address alone, `127.0.0.1`, and the
 phone reaches it through [Tailscale](https://tailscale.com), as
