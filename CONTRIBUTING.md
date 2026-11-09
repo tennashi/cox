@@ -1495,10 +1495,12 @@ it to end, as in the window; answers what the
 agent asks, a tap on an option; sets or dismisses a goal the agent
 proposes, and says whether to keep what was learned in the wiki; stops
 a turn; and sets the chat's goal, with ◎ at the page's head, as "Set
-goal…" takes it, `$ ` and a command, or words, emptied to clear it. A
-chat looked at on the phone counts as seen. What else the window does,
-as handing the chat a selection, opening a chat or a sketch, is the
-window's.
+goal…" takes it, `$ ` and a command, or words, emptied to clear it.
+"New chat", under a project's chats, opens a chat in the project, as
+the window's list does, and shows it on the phone, while the window
+goes on showing what it shows. A chat looked at on the phone counts as
+seen. What else the window does, as handing the chat a selection,
+opening a project or a sketch, is the window's.
 
 The page is drawn as the window's panel is, for the human to find on
 the phone what they know from the Mac: on a card, in the window's own

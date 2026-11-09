@@ -131,6 +131,7 @@ function hear(told) {
   if (told === null || typeof told !== "object") return;
   if (told.Listing) {
     listing = told.Listing;
+    showOpened();
   } else if (told.Patch && chat && told.Patch.key === chat.key) {
     const patch = told.Patch.patch;
     chat.entries.length = patch.len;
@@ -232,6 +233,39 @@ function chatRow(row, opts) {
       opts.project ? el("span", { class: "project" }, projectName(row.project)) : null));
 }
 
+// The chat the human opened from the phone, in the project at `project`,
+// to show once coxd lists it: the one of the project it did not list
+// before.
+let opening = null;
+
+// Opens a chat in the project at `index`, as the window's list does,
+// and shows it once coxd lists it.
+async function newChat(button, index) {
+  const project = listing.projects[index];
+  button.disabled = true;
+  opening = { project: index, known: new Set(listing.chats.map((row) => row.key)) };
+  if (!(await act({ NewChat: { folder: project.id === null ? null : project.folder } }))) {
+    opening = null;
+    button.disabled = false;
+    say(compose.failed.textContent);
+    return;
+  }
+  setTimeout(() => {
+    if (opening && opening.project === index) {
+      opening = null;
+      button.disabled = false;
+    }
+  }, 10000);
+}
+
+function showOpened() {
+  if (!opening || chat) return;
+  const opened = listing.chats.find((row) => row.project === opening.project && !opening.known.has(row.key));
+  if (!opened) return;
+  opening = null;
+  location.hash = `#chat/${opened.key}`;
+}
+
 function drawHead(row) {
   head.back.hidden = !chat;
   head.icon.hidden = Boolean(chat);
@@ -291,12 +325,14 @@ function drawHome() {
     }
     listing.projects.forEach((project, index) => {
       const rows = listing.chats.filter((row) => row.project === index);
-      if (!rows.length) return;
       shelves.push(el("section", { class: "shelf" },
         el("div", { class: "shelf-head" }, square(index), el("span", {}, projectName(index))),
-        el("ul", { class: "chats" }, rows.map((row) => chatRow(row, { child: true })))));
+        el("ul", { class: "chats" },
+          rows.map((row) => chatRow(row, { child: true })),
+          project.missing ? null : el("li", { class: "new" },
+            el("button", { type: "button", onclick: (event) => newChat(event.currentTarget, index) },
+              el("span", { class: "plus" }, "+"), "New chat")))));
     });
-    if (!shelves.length) shelves.push(el("p", { class: "empty" }, "No chats yet. Open one on the Mac."));
   }
   main.replaceChildren(...shelves);
 }

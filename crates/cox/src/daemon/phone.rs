@@ -732,7 +732,8 @@ fn done_on_the_page(message: &ToDaemon) -> bool {
         | ToDaemon::AnswerProposal { .. }
         | ToDaemon::ChangeProposal { .. }
         | ToDaemon::AnswerKeep { .. }
-        | ToDaemon::Merge { .. } => true,
+        | ToDaemon::Merge { .. }
+        | ToDaemon::NewChat { .. } => true,
         _ => false,
     }
 }
@@ -1224,6 +1225,7 @@ mod tests {
         assert!(done_on_the_page(&ToDaemon::Choose { key: 1, index: 0 }));
         assert!(done_on_the_page(&ToDaemon::Stop { key: 1 }));
         assert!(done_on_the_page(&ToDaemon::Merge { key: 1 }));
+        assert!(done_on_the_page(&ToDaemon::NewChat { folder: None }));
         assert!(!done_on_the_page(&ToDaemon::Open { folder: None }));
         assert!(!done_on_the_page(&ToDaemon::Archive {
             key: 1,
