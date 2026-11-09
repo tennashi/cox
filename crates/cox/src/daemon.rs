@@ -226,6 +226,12 @@ struct Project {
     folder: PathBuf,
     /// How many chats were opened in it, which numbers the next.
     opened: usize,
+    /// Whether the human put it away, off the rail.
+    archived: bool,
+    /// Whether the human deleted it: it stays in the projects, so that
+    /// the chats of those after it keep the places they are listed by,
+    /// with none of its own.
+    deleted: bool,
 }
 
 /// How far a sketch the human ends is on its way to its end.
@@ -492,6 +498,8 @@ impl Daemon {
                 name: COX.to_owned(),
                 folder: home,
                 opened: 0,
+                archived: false,
+                deleted: false,
             }],
             chats: Vec::new(),
             archived: Vec::new(),
@@ -541,6 +549,8 @@ impl Daemon {
                 name: project.name,
                 folder: project.folder,
                 opened: 0,
+                archived: project.archived,
+                deleted: false,
             }));
         for chat in chats {
             let Some(index) = self
@@ -927,8 +937,12 @@ impl Daemon {
         if let Some(index) = self
             .projects
             .iter()
-            .position(|project| project.folder == folder)
+            .position(|project| project.folder == folder && !project.deleted)
         {
+            // A project put away comes back as its folder is opened again.
+            if self.projects[index].archived {
+                self.put_away(index, false);
+            }
             return index;
         }
         let name = folder.file_name().map_or_else(
@@ -945,6 +959,8 @@ impl Daemon {
             name,
             folder,
             opened: 0,
+            archived: false,
+            deleted: false,
         });
         self.projects.len() - 1
     }
@@ -970,7 +986,7 @@ impl Daemon {
                     && self
                         .projects
                         .iter()
-                        .all(|project| project.folder != *folder)
+                        .all(|project| project.deleted || project.folder != *folder)
             })
             .expect("some number is free")
     }
@@ -1313,6 +1329,18 @@ impl Daemon {
                 }
             }
             ToDaemon::RenameProject { project, name } => self.rename_project(project, &name),
+            ToDaemon::ArchiveProject { project, archived } => {
+                if let Some(index) = self.index_of(project) {
+                    self.put_away(index, archived);
+                }
+            }
+            ToDaemon::DeleteProject { project } => {
+                if let Some(index) = self.index_of(project)
+                    && let Err(why) = self.delete_project(index)
+                {
+                    tracing::error!("the project is not deleted: {why}");
+                }
+            }
             ToDaemon::Sync { id } => {
                 // What came before is done, but for what it changed, which
                 // is told before this.
@@ -1595,7 +1623,65 @@ impl Daemon {
     fn index_of(&self, project: ProjectId) -> Option<usize> {
         self.projects
             .iter()
-            .position(|kept| kept.id == Some(project))
+            .position(|kept| kept.id == Some(project) && !kept.deleted)
+    }
+
+    /// Puts the project at `index` away, off the rail, its chats going on
+    /// as they were, or brings it back.
+    fn put_away(&mut self, index: usize, archived: bool) {
+        let Some(id) = self.projects[index].id else {
+            return;
+        };
+        if let Err(error) = self.store.archive_project(id, archived) {
+            tracing::error!("whether the project is archived is not kept: {error:#}");
+            return;
+        }
+        self.projects[index].archived = archived;
+    }
+
+    /// Deletes the project at `index`, unless one of its chats is at
+    /// work: its folder goes to the trash, whole, for the human to take
+    /// back from there; its chats stop, and are forgotten with what they
+    /// showed, the tabs of its stage and its icon.
+    fn delete_project(&mut self, index: usize) -> Result<(), String> {
+        let Some(id) = self.projects[index].id else {
+            return Err("Cox's own chats are in no project.".to_owned());
+        };
+        if self.at_work(index) {
+            return Err(
+                "A chat of the project is at work: delete it once the turn ends.".to_owned(),
+            );
+        }
+        let folder = self.projects[index].folder.clone();
+        if folder.exists() {
+            crate::trash::put(&folder)?;
+        }
+        tracing::info!(folder = %folder.display(), "the project is deleted");
+        if let Err(error) = self.store.delete_project(id) {
+            tracing::error!("the project's chats are not forgotten: {error:#}");
+        }
+        if let Err(error) = crate::project_icon::remove(id) {
+            tracing::error!("the project's icon is not removed: {error:#}");
+        }
+        let mut gone = HashSet::new();
+        for chats in [&mut self.chats, &mut self.archived] {
+            for mut slot in chats.extract_if(.., |slot| slot.project == index) {
+                if let Some(chat) = &mut slot.chat {
+                    chat.close("The project was deleted.".to_owned());
+                }
+                gone.insert(slot.key);
+            }
+        }
+        // An agent that waits for one of them waits no more.
+        for (_, answer) in self.waiting.extract_if(.., |(key, _)| gone.contains(key)) {
+            answer
+                .send(Err("the chat's project was deleted".to_owned()))
+                .ok();
+        }
+        let project = &mut self.projects[index];
+        project.deleted = true;
+        project.archived = false;
+        Ok(())
     }
 
     /// The human sent `text` in the chat `key`: a closed chat's agent
@@ -1782,8 +1868,10 @@ impl Daemon {
     fn run_schedules(&mut self, workflow: &Path, now: &jiff::Zoned) {
         // The first is Cox's own, in the home.
         let home = self.projects[0].folder.clone();
+        // A project put away, or deleted, runs none of its own.
         let projects: Vec<PathBuf> = self.projects[1..]
             .iter()
+            .filter(|project| !project.archived && !project.deleted)
             .map(|project| project.folder.clone())
             .collect();
         let scheduled = crate::trigger::scheduled(workflow, &home, &projects);
@@ -2771,7 +2859,9 @@ impl Daemon {
                     id: project.id,
                     name: project.name.clone(),
                     folder: project.folder.clone(),
-                    missing: project.id.is_some() && !project.folder.is_dir(),
+                    missing: project.id.is_some() && !project.deleted && !project.folder.is_dir(),
+                    archived: project.archived,
+                    deleted: project.deleted,
                 })
                 .collect(),
             chats: self

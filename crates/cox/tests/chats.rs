@@ -1084,6 +1084,72 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_project_is_archived_and_deleted_from_its_menu(cx: &mut TestAppContext) {
+    let root = scratch("project-away");
+    let trash = root.join("Trash");
+    cox::trash::keep_in(trash.clone());
+    let app = root.join("projects").join("away-app");
+    let (store, _) = kept_chat(&app, None);
+    std::fs::write(app.join("notes.md"), "kept\n").unwrap();
+    let (_, workspace, cx) =
+        open_window_resuming(cx, root.join("home"), store.clone(), Resumes::Resume);
+    let rail = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| {
+            workspace
+                .projects()
+                .iter()
+                .filter(|project| project.is_archived())
+                .count()
+        })
+    };
+
+    // Archived, it leaves the rail for the menu of those put away, its
+    // chats kept, and comes back from there.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.archive_project(1, true, window, cx);
+    });
+    settled(cx, &workspace);
+    assert!(store.projects().unwrap()[0].archived);
+    assert_eq!(rail(cx), 1);
+    assert!(drawn(cx, "archived-projects"));
+    assert_eq!(store.chats().unwrap().len(), 1);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.archive_project(1, false, window, cx);
+    });
+    settled(cx, &workspace);
+    assert!(!store.projects().unwrap()[0].archived);
+    assert_eq!(rail(cx), 0);
+    assert_eq!(
+        workspace.read_with(cx, |workspace, _| workspace.chosen()),
+        1
+    );
+
+    // Deleted on a second click, its folder goes to the trash whole, and
+    // its chats are forgotten.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.delete_project(1, window, cx);
+    });
+    settled(cx, &workspace);
+    assert!(app.is_dir(), "one click does not delete it");
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.delete_project(1, window, cx);
+    });
+    settled(cx, &workspace);
+    assert!(!app.exists());
+    assert_eq!(
+        std::fs::read_to_string(trash.join("files").join("away-app").join("notes.md")).unwrap(),
+        "kept\n"
+    );
+    assert_eq!(store.projects().unwrap(), []);
+    assert_eq!(store.chats().unwrap(), []);
+    workspace.read_with(cx, |workspace, _| {
+        assert_eq!(workspace.chosen(), 0);
+        assert_eq!(workspace.chats(1).count(), 0);
+    });
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[gpui::test]
 async fn an_agent_proposes_the_projects_name_which_the_human_renames_it_to(
     cx: &mut TestAppContext,
 ) {

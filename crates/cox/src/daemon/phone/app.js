@@ -290,7 +290,7 @@ async function newProject(button) {
   button.disabled = true;
   const made = {
     project: null,
-    folders: new Set(listing.projects.map((project) => project.folder)),
+    folders: new Set(listing.projects.filter((project) => !project.deleted).map((project) => project.folder)),
     known: new Set(listing.chats.map((row) => row.key)),
   };
   opening = made;
@@ -456,7 +456,9 @@ function drawHome() {
     };
     const own = listing.projects.findIndex((project) => project.id === null);
     if (own >= 0) shelves.push(shelf(own, null));
-    const projects = listing.projects.map((_, index) => index).filter((index) => index !== own);
+    // A project put away, or deleted, is off the list, as off the rail.
+    const projects = listing.projects.map((_, index) => index)
+      .filter((index) => index !== own && !listing.projects[index].archived && !listing.projects[index].deleted);
     shelves.push(el("div", { class: "projects-head" }, el("span", { class: "label" }, "Projects")));
     for (const index of projects) {
       shelves.push(shelf(index, el("div", { class: "shelf-head" }, square(index), el("span", {}, projectName(index)))));

@@ -174,12 +174,23 @@ pub struct Project {
     icon: Option<Arc<Image>>,
     /// Whether its folder is not there, as when the human moved it.
     missing: bool,
+    /// Whether the human put it away, off the rail.
+    archived: bool,
+    /// Whether the human deleted it, while Cox runs.
+    deleted: bool,
 }
 
 impl Project {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Whether the human put it away, off the rail, and has not deleted
+    /// it since.
+    #[must_use]
+    pub fn is_archived(&self) -> bool {
+        self.archived && !self.deleted
     }
 
     /// The directory its chats work in.
@@ -405,6 +416,12 @@ pub struct Workspace {
     /// The menu of the right button on the rail, where it opened in the
     /// window, for the project at an index among the projects.
     project_menu: Option<(Point<Pixels>, usize)>,
+    /// The project of the menu whose "Delete project…" was clicked once,
+    /// which a second click deletes, by its index among the projects.
+    deleting: Option<usize>,
+    /// The menu of the projects put away, where it opened in the window,
+    /// while it is open.
+    archived_projects: Option<Point<Pixels>>,
     /// The projects an agent draws an icon for now, by how they are kept.
     drawing: HashSet<ProjectId>,
     /// Why the agent drew no icon for a project, the last time it was
@@ -497,6 +514,8 @@ impl Workspace {
                 last: None,
                 icon: None,
                 missing: false,
+                archived: false,
+                deleted: false,
             }],
             chats: List::new(),
             archived: Vec::new(),
@@ -507,6 +526,8 @@ impl Workspace {
             badged: 0,
             menu: None,
             project_menu: None,
+            deleting: None,
+            archived_projects: None,
             drawing: HashSet::new(),
             not_drawn: HashMap::new(),
             renaming: None,
@@ -632,7 +653,11 @@ impl Workspace {
         self.renaming = renaming.and_then(|(key, input, subscription)| {
             Some((self.index_of(key)?, input, subscription))
         });
-        if self.chosen >= self.projects.len() {
+        if self
+            .projects
+            .get(self.chosen)
+            .is_none_or(|project| project.deleted)
+        {
             self.chosen = 0;
         }
         // The chat shown stays shown, or the one in its place is.
@@ -698,23 +723,27 @@ impl Workspace {
                         .unwrap_or_else(|| crate::project_icon::read(id))
                 }),
                 missing: row.missing,
+                archived: row.archived,
+                deleted: row.deleted,
             })
             .collect();
     }
 
-    /// Lets go of the stages of the projects whose folders moved, as
-    /// `projects` lists them now, with the chats' hold on them, so that
-    /// each chat gets the stage of where its project is now, as the daemon
-    /// tells it its tabs again.
+    /// Lets go of the stages of the projects whose folders moved, or that
+    /// were deleted, as `projects` lists them now, with the chats' hold on
+    /// them, so that each chat gets the stage of where its project is now,
+    /// as the daemon tells it its tabs again.
     fn forget_moved(&mut self, projects: &[ProjectRow]) {
+        // A project deleted is gone from where it was too.
         let moved: Vec<(usize, PathBuf)> = self
             .projects
             .iter()
             .enumerate()
-            .filter(|(_, project)| project.id.is_some())
+            .filter(|(_, project)| project.id.is_some() && !project.deleted)
             .filter_map(|(index, project)| {
-                let now = projects.iter().find(|row| row.id == project.id)?;
-                (now.folder != project.folder).then(|| (index, project.folder.clone()))
+                let now = projects.get(index).filter(|row| row.id == project.id)?;
+                (now.folder != project.folder || now.deleted)
+                    .then(|| (index, project.folder.clone()))
             })
             .collect();
         for (index, from) in moved {
@@ -1273,6 +1302,69 @@ impl Workspace {
         self.read_icon(id, cx);
     }
 
+    /// Puts the project at `index` away, off the rail, its chats going on
+    /// as they were, or brings it back, choosing it; putting the project
+    /// chosen away chooses Cox's own.
+    pub fn archive_project(
+        &mut self,
+        index: usize,
+        archived: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.project_menu = None;
+        self.archived_projects = None;
+        let Some(project) = self.projects.get_mut(index) else {
+            return;
+        };
+        let Some(id) = project.id else {
+            return;
+        };
+        project.archived = archived;
+        self.tell(ToDaemon::ArchiveProject {
+            project: id,
+            archived,
+        });
+        if !archived {
+            self.choose(index, window, cx);
+        } else if self.chosen == index {
+            self.choose(0, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Deletes the project at `index`, as the second click on "Delete
+    /// project…" in its menu asks, unless one of its chats is at work: its
+    /// folder goes to the trash, and its chats stop and are forgotten.
+    pub fn delete_project(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.deleting != Some(index) {
+            self.deleting = Some(index);
+            cx.notify();
+            return;
+        }
+        if self.project_at_work(index) {
+            return;
+        }
+        self.project_menu = None;
+        self.deleting = None;
+        let Some(id) = self.projects.get(index).and_then(|project| project.id) else {
+            return;
+        };
+        self.tell(ToDaemon::DeleteProject { project: id });
+        if self.chosen == index {
+            self.choose(0, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Whether a chat of the project at `index` is at work.
+    fn project_at_work(&self, index: usize) -> bool {
+        self.chats
+            .iter()
+            .chain(&self.archived)
+            .any(|chat| chat.project == index && crate::daemon::working(chat.state))
+    }
+
     /// Reads again the icon of the project kept as `id`, as it is now.
     fn read_icon(&mut self, id: ProjectId, cx: &mut Context<Self>) {
         if let Some(project) = self.projects.iter_mut().find(|p| p.id == Some(id)) {
@@ -1788,10 +1880,12 @@ impl Workspace {
     fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // Cox's own, a place of its own rather than a project, stands apart
         // from the projects under it, past a line.
+        // A project put away, or deleted, is off the rail.
         let projects = self
             .projects
             .iter()
             .enumerate()
+            .filter(|(_, project)| !project.archived && !project.deleted)
             .flat_map(|(index, project)| {
                 let apart = project.id.is_none().then(|| {
                     div()
@@ -1818,6 +1912,7 @@ impl Workspace {
             .overflow_y_scroll()
             .children(projects)
             .child(div().flex_1())
+            .children(self.render_archived_projects_button(cx))
             .child(
                 div()
                     .id("new-project")
@@ -1842,6 +1937,92 @@ impl Workspace {
                     })),
             )
             .child(self.render_settings_button(cx))
+    }
+
+    /// The button at the foot of the rail that opens the menu of the
+    /// projects put away, while there are any, lit while it is open.
+    fn render_archived_projects_button(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let count = self
+            .projects
+            .iter()
+            .filter(|project| project.archived && !project.deleted)
+            .count();
+        if count == 0 {
+            return None;
+        }
+        let open = self.archived_projects.is_some();
+        let ink = if open { FOREGROUND } else { FAINT };
+        Some(
+            div()
+                .id("archived-projects")
+                .debug_selector(|| "archived-projects".to_owned())
+                .flex_shrink_0()
+                .size(px(32.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(10.))
+                .cursor_pointer()
+                .when(open, |button| button.bg(rgb(SELECTED)))
+                .hover(|style| style.bg(rgb(HOVER)))
+                // Not over its menu, while that is open.
+                .when(!open, |button| {
+                    button.tooltip(tip(format!("Archived projects ({count})")))
+                })
+                .child(icon(Icon::Inbox, 18., ink))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|workspace, event: &MouseDownEvent, _, cx| {
+                        workspace.archived_projects = match workspace.archived_projects {
+                            Some(_) => None,
+                            None => Some(event.position),
+                        };
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                ),
+        )
+    }
+
+    /// The menu of the projects put away, if it is open: a click on one
+    /// brings it back to the rail, and chooses it.
+    fn render_archived_projects(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let at = self.archived_projects?;
+        let rows = self
+            .projects
+            .iter()
+            .enumerate()
+            .filter(|(_, project)| project.archived && !project.deleted)
+            .map(|(index, project)| {
+                crate::ui::menu::item(("archived-project", index), project.name.clone(), "")
+                    .tooltip(tip(format!(
+                        "{}\nBring it back to the rail",
+                        shortened(&project.folder)
+                    )))
+                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                        workspace.archive_project(index, false, window, cx);
+                    }))
+            });
+        let menu = crate::ui::menu::menu()
+            .min_w(px(160.))
+            .on_mouse_down_out(cx.listener(|workspace, _, _, cx| {
+                workspace.archived_projects = None;
+                cx.notify();
+            }))
+            .children(rows);
+        // It opens upward, from the foot of the rail.
+        Some(
+            deferred(
+                anchored()
+                    .anchor(gpui::Corner::BottomLeft)
+                    .position(at)
+                    .child(menu),
+            )
+            .with_priority(2),
+        )
     }
 
     /// The gear at the foot of the rail, which opens the settings, lit
@@ -1985,6 +2166,7 @@ impl Workspace {
                     MouseButton::Right,
                     cx.listener(move |workspace, event: &MouseDownEvent, _, cx| {
                         workspace.project_menu = Some((event.position, index));
+                        workspace.deleting = None;
                         cx.notify();
                     }),
                 )
@@ -2694,6 +2876,14 @@ impl Workspace {
         let has_icon = project.has_icon();
         let draws =
             self.agents.is_some() && project.id.is_some_and(|id| !self.drawing.contains(&id));
+        // Deleting takes a second click, so that one by mistake does not.
+        let delete = match self.deleting {
+            Some(deleting) if deleting == index && self.project_at_work(index) => {
+                "A chat of it is at work: delete it once the turn ends"
+            }
+            Some(deleting) if deleting == index => "Click again to move it to the Trash",
+            _ => "Delete project…",
+        };
         let item = |id: &'static str, label: &'static str| crate::ui::menu::item(id, label, "");
         let menu = crate::ui::menu::menu()
             .min_w(px(160.))
@@ -2716,7 +2906,19 @@ impl Workspace {
                 menu.child(item("remove-icon", "Remove icon").on_click(
                     cx.listener(move |workspace, _, _, cx| workspace.remove_icon(index, cx)),
                 ))
-            });
+            })
+            .child(
+                item("archive-project", "Archive project").on_click(cx.listener(
+                    move |workspace, _, window, cx| {
+                        workspace.archive_project(index, true, window, cx);
+                    },
+                )),
+            )
+            .child(item("delete-project", delete).on_click(cx.listener(
+                move |workspace, _, window, cx| {
+                    workspace.delete_project(index, window, cx);
+                },
+            )));
         Some(deferred(anchored().position(at).child(menu)).with_priority(2))
     }
 
@@ -2878,6 +3080,7 @@ impl Render for Workspace {
             )
             .children(self.render_menu(cx))
             .children(self.render_project_menu(cx))
+            .children(self.render_archived_projects(cx))
             .children(self.render_project_card(cx))
             .children(self.render_settings(cx))
             .children(self.render_sheet(cx))

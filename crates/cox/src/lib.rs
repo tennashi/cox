@@ -68,6 +68,7 @@ pub mod settings;
 pub mod stage;
 pub mod storage;
 pub mod translate;
+pub mod trash;
 pub mod trigger;
 pub mod ui;
 pub mod wiki;
