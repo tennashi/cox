@@ -2138,17 +2138,6 @@ pub fn instructions_note(path: &Path) -> String {
     format!("Instructions: {}", crate::ui::paths::shortened(path))
 }
 
-/// The note that tells the human the agent works in the folders of
-/// `also` too, the other folders of its project.
-#[must_use]
-pub fn also_note(also: &[PathBuf]) -> String {
-    let folders: Vec<String> = also
-        .iter()
-        .map(|folder| crate::ui::paths::shortened(folder))
-        .collect();
-    format!("Also works in: {}", folders.join(", "))
-}
-
 /// The note that tells the human the context the agent was set up with,
 /// by the chat that opened its chat.
 #[must_use]

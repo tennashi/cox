@@ -25,13 +25,9 @@ pub struct ProjectRow {
     pub name: String,
     /// The folder its chats work in.
     pub folder: PathBuf,
-    /// Whether its folder is not there, as when the human moved it, for
-    /// them to say where it went.
+    /// Whether its folder is not there, as when the human moved it.
     #[serde(default)]
     pub missing: bool,
-    /// The other folders its chats work in too, beside `folder`.
-    #[serde(default)]
-    pub also: Vec<PathBuf>,
 }
 
 /// A chat, as the window lists it in its tabs.
@@ -295,21 +291,9 @@ pub enum ToDaemon {
     /// Cox's own chats opened from now on work in `home`, as the
     /// human set it, or as the settings say now when `set` is false.
     Home { home: PathBuf, set: bool },
-    /// The project kept as `project` works in `folder` from now on, as
-    /// when the human moved its folder there.
-    MoveProject { project: ProjectId, folder: PathBuf },
     /// Rename the project kept as `project` `name`, and its folder with
     /// it, unless one of its chats is at work.
     RenameProject { project: ProjectId, name: String },
-    /// The chats of the project kept as `project` work in `folder` too,
-    /// beside its own.
-    AddFolder { project: ProjectId, folder: PathBuf },
-    /// The chats of the project kept as `project` no longer work in
-    /// `folder`, one beside its own.
-    RemoveFolder { project: ProjectId, folder: PathBuf },
-    /// `folder`, one beside the project's own, is the project's from now
-    /// on, and the chats it has go on where they work.
-    MakePrimary { project: ProjectId, folder: PathBuf },
     /// Answer [`FromDaemon::Settled`] with `id` once all asked before is
     /// done.
     Sync { id: u64 },

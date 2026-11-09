@@ -227,9 +227,6 @@ pub enum Start {
     New {
         instructions: Option<Instructions>,
         setup: Option<Setup>,
-        /// The other folders of the project, which the agent works in
-        /// too, beside the one it works in.
-        also: Vec<PathBuf>,
     },
     /// For a closed chat the human sends to again: the agent goes on with
     /// the chat's `session`, when the chat had one and the agent can.
@@ -241,7 +238,6 @@ pub enum Start {
         instructions: Option<Instructions>,
         setup: Option<Setup>,
         earlier: Vec<Entry>,
-        also: Vec<PathBuf>,
     },
 }
 
@@ -262,24 +258,6 @@ impl Start {
             instructions: Some(Instructions::read(cwd)),
             setup,
             earlier: earlier.to_vec(),
-            also: Vec::new(),
-        }
-    }
-
-    /// The agent works in the folders of `also` too, beside its own.
-    #[must_use]
-    pub fn working_also(mut self, folders: Vec<PathBuf>) -> Self {
-        match &mut self {
-            Self::New { also, .. } | Self::Again { also, .. } => *also = folders,
-        }
-        self
-    }
-
-    /// The other folders the agent works in, beside its own.
-    #[must_use]
-    pub fn also(&self) -> &[PathBuf] {
-        match self {
-            Self::New { also, .. } | Self::Again { also, .. } => also,
         }
     }
 
@@ -443,10 +421,9 @@ async fn run<T: Transport + 'static>(
             *known.lock().expect("no one panics holding it") = changed;
         }
     };
-    let also = start.also().to_vec();
     cox_acp::connect(
         transport,
-        cox_acp::Roots { cwd, also },
+        cwd,
         mcp_servers,
         resume,
         heard,
@@ -591,21 +568,19 @@ fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
         Start::New {
             instructions,
             setup,
-            also,
-        } => (Opened::New, told(instructions, setup.as_ref(), &also)),
+        } => (Opened::New, told(instructions, setup.as_ref())),
         Start::Again { .. } if resumed => (Opened::Resumed, Vec::new()),
         Start::Again {
             session,
             instructions,
             setup,
             earlier,
-            also,
         } => {
             let lost = session.is_some();
             // A chat where nothing was said yet, as one that switched to
             // another agent before the human sent a line, starts anew.
             let Some(earlier) = retold(&earlier, lost) else {
-                return (Opened::New, told(instructions, setup.as_ref(), &also));
+                return (Opened::New, told(instructions, setup.as_ref()));
             };
             let how = Opened::Retold {
                 lost,
@@ -615,7 +590,7 @@ fn opened(start: Start, resumed: bool) -> (Opened, Vec<String>) {
                     .unwrap_or_default(),
                 context: setup.as_ref().and_then(|setup| setup.context.clone()),
             };
-            let mut ahead = told(instructions, setup.as_ref(), &also);
+            let mut ahead = told(instructions, setup.as_ref());
             ahead.push(earlier);
             (how, ahead)
         }
@@ -631,39 +606,14 @@ fn runs_command(line: &str, commands: &[String]) -> bool {
 }
 
 /// What a new session is told first: `instructions`, then the context of
-/// `setup`, then the other folders it works in, `also`, each when there
-/// is one.
-fn told(
-    instructions: Option<Instructions>,
-    setup: Option<&Setup>,
-    also: &[PathBuf],
-) -> Vec<String> {
+/// `setup`, each when there is one.
+fn told(instructions: Option<Instructions>, setup: Option<&Setup>) -> Vec<String> {
     instructions
         .map(|i| i.prompts())
         .into_iter()
         .flatten()
         .chain(setup.and_then(Setup::prompt))
-        .chain(also_prompt(also))
         .collect()
-}
-
-/// What tells the agent of the other folders of its project, `also`,
-/// which it works in too, when there are any: an agent that takes them
-/// as roots of its session (ACP's `additionalDirectories`) has them so
-/// as well, and one that does not knows of them from this alone.
-fn also_prompt(also: &[PathBuf]) -> Option<String> {
-    if also.is_empty() {
-        return None;
-    }
-    let folders: Vec<String> = also
-        .iter()
-        .map(|folder| format!("- {}", folder.display()))
-        .collect();
-    let folders = folders.join("\n");
-    Some(format!(
-        "This project has other folders too, which you work in as in this one, by their \
-         absolute paths:\n\n{folders}"
-    ))
 }
 
 /// The settings of the session as the window shows them.
@@ -1321,31 +1271,8 @@ mod tests {
             instructions: None,
             setup: None,
             earlier: entries.to_vec(),
-            also: Vec::new(),
         };
         assert_eq!(opened(start, false), (Opened::New, Vec::new()));
-    }
-
-    #[test]
-    fn a_new_session_is_told_the_projects_other_folders() {
-        let start = |also: Vec<PathBuf>| Start::New {
-            instructions: None,
-            setup: None,
-            also,
-        };
-        assert_eq!(opened(start(Vec::new()), false).1, Vec::<String>::new());
-        let (_, told) = opened(start(vec!["/work/lib".into(), "/work/docs".into()]), false);
-        assert_eq!(told.len(), 1);
-        assert!(
-            told[0].ends_with("\n\n- /work/lib\n- /work/docs"),
-            "{}",
-            told[0]
-        );
-        // Resumed, the session knows them already.
-        let again = Start::again(Path::new("/work/app"), Some("s".to_owned()), &[], None)
-            .working_also(vec!["/work/lib".into()]);
-        assert_eq!(again.also(), [PathBuf::from("/work/lib")]);
-        assert_eq!(opened(again, true).1, Vec::<String>::new());
     }
 
     /// Whether process `pid` is still running: there, and not a zombie.
@@ -1383,7 +1310,6 @@ mod tests {
             Start::New {
                 instructions: None,
                 setup: None,
-                also: Vec::new(),
             },
         );
         let mut pid = String::new();
@@ -1424,7 +1350,6 @@ mod tests {
             Start::New {
                 instructions: None,
                 setup: None,
-                also: Vec::new(),
             },
         );
         let mut seen = String::new();

@@ -66,8 +66,11 @@ name, its folder's, which Enter changes, as the card does as it closes,
 renaming the folder, where it is, with it, unless a folder there has
 the name already, or one of the project's chats is at work: each of
 its chats notes the move, its agent stops, and a line sent starts it
-again in the folder renamed, told the conversation so far, as when the
-folder moved (see below). Under it are the project's directories: the
+again in the folder renamed, told the conversation so far, as an agent
+that could not resume is; the tabs of its stage, its icon, how its
+triggers are arranged and last ran, and when its schedules ran go with
+it, and a chat of a sketch goes on in the sketch's folder, Git told
+that the repository of a sketch from the project moved. Under it are the project's directories: the
 folders in `directories` in its folder, as `~/cox/projects/shop/directories/app`,
 the rest of the project's folder being the human's to put anything in,
 as notes or what they try out, its agents working in all of it. Enter
@@ -81,36 +84,12 @@ which opens an input of the remote's URL under it, where Enter links it
 to that remote, a repository with nothing in it yet taking the
 remote's branch, as a clone would have. Git asks nothing there, so a
 repository it needs a login for that it has not got fails, the card
-saying what Git said. The card also has the project's
-folders: its own, the primary, which its chats work in, and the others
-the human added, which their agents work in too, as roots of their
-session beside their own (ACP's `additionalDirectories`), for an agent
-that takes them, and, for any agent, told of them ahead of the first
-line, the chat noting them at its top. A path typed in its input, whole
-or from `~`, which Enter adds, or a folder "Choose…" asks for, is
-another; × takes one out, and "Make primary" makes it the project's,
-where the chats opened from then on work, while each chat the project
-has goes on in the folder it works in, the primary among the others
-beside it, as a chat its agent opens from it does; a sketch's works
-in its own folder alone. Each chat's agent
-works in the folders as they are when it starts, a running one going
-on with those it had. Another project's folder is one a project works
-in too, but does not become its primary. The card also says where the
-primary is, as once the human moved or renamed it: typed in the input,
-or chosen, while the folder is not there. The project goes there, named
-after the folder, with its chats, the tabs of its stage, its icon, how
-its triggers are arranged and last ran, and when its schedules ran;
-each of its chats that works in the primary notes the move, its agent
-stops, and a line sent starts it again there, told the conversation so
-far, as an agent that could not resume is. A chat of a sketch goes on
-in the sketch's folder, Git told that the repository of a sketch from
-the project moved. Saying where the folder went moves no file, so a project moves only once its folder is not there, since
-another folder, while its own is there, is a project of its own, and
-not while one of its chats is at work. A project whose folder
+saying what Git said.
+A project whose folder
 is not there, as when the human moved it while Cox was closed, is
 marked on the rail, its square dashed in amber with a ?, and its chats
-do not start again, their input saying so, until the human says where
-the folder went. A project is a folder of its own in `projects` in
+do not start again, their input saying so, until the folder is back,
+the card saying so too. A project is a folder of its own in `projects` in
 Cox's home: "New project", the + at the foot of the rail
 (Command-Shift-N on macOS, Control-Shift-N elsewhere), makes one with
 nothing set yet, in `untitled-` and the first number no folder there

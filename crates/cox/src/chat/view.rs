@@ -841,7 +841,7 @@ impl ChatView {
                 Some("Closed. A line sent starts the agent again.".to_owned())
             }
             State::Closed if self.row.gone => {
-                Some("Its folder is gone: Edit project… on the rail.".to_owned())
+                Some("Its folder is gone: its agent starts again once it is back.".to_owned())
             }
             State::Closed => Some("Closed.".to_owned()),
         }

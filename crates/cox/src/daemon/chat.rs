@@ -201,14 +201,9 @@ impl Chat {
     }
 
     /// The conversation of a new chat whose agent gets the instructions
-    /// of `instructions`, set up as `setup` says, and works in the folders
-    /// of `also` too: it notes them.
+    /// of `instructions`, set up as `setup` says: it notes them.
     #[must_use]
-    pub fn opening(
-        instructions: &[PathBuf],
-        setup: Option<&Setup>,
-        also: &[PathBuf],
-    ) -> Conversation {
+    pub fn opening(instructions: &[PathBuf], setup: Option<&Setup>) -> Conversation {
         let notes = instructions
             .iter()
             .map(|path| conversation::instructions_note(path))
@@ -223,8 +218,7 @@ impl Chat {
                     .iter()
                     .filter_map(|setup| setup.context.as_deref())
                     .map(conversation::context_note),
-            )
-            .chain((!also.is_empty()).then(|| conversation::also_note(also)));
+            );
         Conversation::noting_each(notes).with_keeping(crate::agent::setup::keeps_in_wiki(setup))
     }
 

@@ -79,10 +79,7 @@ sleep 1"#;
     };
     let connected = cox_acp::connect(
         agent,
-        cox_acp::Roots {
-            cwd: std::env::temp_dir(),
-            also: Vec::new(),
-        },
+        std::env::temp_dir(),
         Vec::new(),
         None,
         |_| {},

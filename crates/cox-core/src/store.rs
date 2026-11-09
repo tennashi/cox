@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 12;
+const VERSION: i64 = 13;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -94,12 +94,6 @@ CREATE TABLE stages (
     -- Its tabs, as JSON, each with the chat it is of.
     tabs TEXT NOT NULL
 );
-CREATE TABLE folders (
-    -- The project whose chats work in the folder too, beside its own.
-    project INTEGER NOT NULL REFERENCES projects (id),
-    folder TEXT NOT NULL,
-    UNIQUE (project, folder)
-);
 ";
 
 /// What makes the tables of each earlier version into those of the next:
@@ -135,6 +129,9 @@ const UPGRADES: &[&str] = &[
          UNIQUE (project, folder)
      );",
     "ALTER TABLE chats ADD COLUMN baseline TEXT;",
+    // A project worked in folders beside its own, before it kept to its
+    // own.
+    "DROP TABLE folders;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -171,9 +168,6 @@ pub struct KeptProject {
     /// The folder its chats work in.
     pub folder: PathBuf,
     pub name: String,
-    /// The other folders its chats work in too, in the order the human
-    /// added them.
-    pub also: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,26 +303,9 @@ impl Store {
                 id: ProjectId(row.get(0)?),
                 folder: PathBuf::from(row.get::<_, String>(1)?),
                 name: row.get(2)?,
-                also: Vec::new(),
             })
         })?;
-        let mut projects: Vec<KeptProject> = projects.collect::<Result<_, _>>()?;
-        let mut statement = self
-            .connection
-            .prepare("SELECT project, folder FROM folders ORDER BY rowid")?;
-        let folders = statement.query_map([], |row| {
-            Ok((
-                ProjectId(row.get(0)?),
-                PathBuf::from(row.get::<_, String>(1)?),
-            ))
-        })?;
-        for folder in folders {
-            let (project, folder) = folder?;
-            if let Some(project) = projects.iter_mut().find(|kept| kept.id == project) {
-                project.also.push(folder);
-            }
-        }
-        Ok(projects)
+        Ok(projects.collect::<Result<_, _>>()?)
     }
 
     /// The chats, in the order they were opened.
@@ -444,100 +421,6 @@ impl Store {
                 params![to, serde_json::to_string(&tabs)?],
             )?;
         }
-        transaction.commit()?;
-        Ok(())
-    }
-
-    /// Keeps that the chats of `project` work in `folder` too, beside its
-    /// own.
-    ///
-    /// # Errors
-    ///
-    /// When `folder` is the project's already, or the database cannot be
-    /// written.
-    pub fn add_folder(&self, project: ProjectId, folder: &Path) -> anyhow::Result<()> {
-        let folder = folder.to_string_lossy();
-        let own: bool = self.connection.query_row(
-            "SELECT EXISTS (SELECT 1 FROM projects WHERE id = ?1 AND folder = ?2)
-                 OR EXISTS (SELECT 1 FROM folders WHERE project = ?1 AND folder = ?2)",
-            params![project.0, folder],
-            |row| row.get(0),
-        )?;
-        if own {
-            bail!("the project has {folder} already");
-        }
-        self.connection.execute(
-            "INSERT INTO folders (project, folder) VALUES (?1, ?2)",
-            params![project.0, folder],
-        )?;
-        Ok(())
-    }
-
-    /// Keeps that the chats of `project` no longer work in `folder`, one
-    /// of the folders beside its own.
-    ///
-    /// # Errors
-    ///
-    /// When the database cannot be written.
-    pub fn remove_folder(&self, project: ProjectId, folder: &Path) -> anyhow::Result<()> {
-        self.connection.execute(
-            "DELETE FROM folders WHERE project = ?1 AND folder = ?2",
-            params![project.0, folder.to_string_lossy()],
-        )?;
-        Ok(())
-    }
-
-    /// Keeps `folder`, one of the folders beside the project's own, as the
-    /// one the project's chats work in from now on, and the folder that
-    /// was as one beside it. The chats kept go on where they work.
-    ///
-    /// # Errors
-    ///
-    /// When `folder` is not one of the project's, or another project
-    /// works in it, or the database cannot be written.
-    pub fn make_primary(&self, project: ProjectId, folder: &Path) -> anyhow::Result<()> {
-        let to = folder.to_string_lossy();
-        let beside: bool = self.connection.query_row(
-            "SELECT EXISTS (SELECT 1 FROM folders WHERE project = ?1 AND folder = ?2)",
-            params![project.0, to],
-            |row| row.get(0),
-        )?;
-        if !beside {
-            bail!("{} is not one of the project's folders", folder.display());
-        }
-        let other: Option<i64> = self
-            .connection
-            .query_row(
-                "SELECT id FROM projects WHERE folder = ?1 AND id != ?2",
-                params![to, project.0],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if other.is_some() {
-            bail!("another project works in {}", folder.display());
-        }
-        let from: String = self.connection.query_row(
-            "SELECT folder FROM projects WHERE id = ?1",
-            [project.0],
-            |row| row.get(0),
-        )?;
-        let transaction = self.connection.unchecked_transaction()?;
-        // The chats kept go on in the folder they work in: those of the
-        // project's own keep to it, and those that kept to `folder` are
-        // the project's own again.
-        transaction.execute(
-            "UPDATE chats SET folder = CASE WHEN folder IS NULL THEN ?2 END
-             WHERE project = ?1 AND (folder IS NULL OR folder = ?3)",
-            params![project.0, from, to],
-        )?;
-        transaction.execute(
-            "UPDATE projects SET folder = ?2 WHERE id = ?1",
-            params![project.0, to],
-        )?;
-        transaction.execute(
-            "UPDATE folders SET folder = ?3 WHERE project = ?1 AND folder = ?2",
-            params![project.0, to, from],
-        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -1059,13 +942,11 @@ mod tests {
                     id: cox,
                     folder: "/src/cox".into(),
                     name: "cox".to_owned(),
-                    also: Vec::new(),
                 },
                 KeptProject {
                     id: notes,
                     folder: "/notes".into(),
                     name: "notes".to_owned(),
-                    also: Vec::new(),
                 },
             ]
         );
@@ -1244,68 +1125,6 @@ mod tests {
         assert_eq!(store.chats().unwrap()[0].project, Some(project));
         store.forget_session(chat).unwrap();
         assert_eq!(store.session(chat).unwrap(), None);
-    }
-
-    #[test]
-    fn a_project_works_in_other_folders_and_one_becomes_its_own() {
-        let store = Store::in_memory().unwrap();
-        let project = store.project(Path::new("/work/app"), "app").unwrap();
-        store.project(Path::new("/work/other"), "other").unwrap();
-        let before = store.add_chat(Some(project), "Chat 1").unwrap();
-        store.add_folder(project, Path::new("/work/lib")).unwrap();
-        store.add_folder(project, Path::new("/work/other")).unwrap();
-        store.add_folder(project, Path::new("/work/docs")).unwrap();
-        assert!(store.add_folder(project, Path::new("/work/app")).is_err());
-        assert!(store.add_folder(project, Path::new("/work/lib")).is_err());
-        store
-            .remove_folder(project, Path::new("/work/docs"))
-            .unwrap();
-        let also = |store: &Store| store.projects().unwrap()[0].also.clone();
-        assert_eq!(
-            also(&store),
-            [PathBuf::from("/work/lib"), PathBuf::from("/work/other")]
-        );
-
-        // Another project's folder stays that project's.
-        assert!(
-            store
-                .make_primary(project, Path::new("/work/other"))
-                .is_err()
-        );
-        assert!(store.make_primary(project, Path::new("/work/x")).is_err());
-        store.make_primary(project, Path::new("/work/lib")).unwrap();
-        let projects = store.projects().unwrap();
-        assert_eq!(projects[0].folder, Path::new("/work/lib"));
-        assert_eq!(projects[0].name, "app");
-        assert_eq!(
-            projects[0].also,
-            [PathBuf::from("/work/app"), PathBuf::from("/work/other")]
-        );
-        // The chat goes on where it was; a new one works in the project's.
-        let after = store.add_chat(Some(project), "Chat 2").unwrap();
-        let folder_of = |store: &Store, chat| {
-            store
-                .chats()
-                .unwrap()
-                .into_iter()
-                .find(|kept| kept.id == chat)
-                .unwrap()
-                .folder
-        };
-        assert_eq!(
-            folder_of(&store, before).as_deref(),
-            Some(Path::new("/work/app"))
-        );
-        assert_eq!(folder_of(&store, after), None);
-
-        // Made the project's again, its chat is the project's own again,
-        // and the chat that kept to the other goes on there.
-        store.make_primary(project, Path::new("/work/app")).unwrap();
-        assert_eq!(folder_of(&store, before), None);
-        assert_eq!(
-            folder_of(&store, after).as_deref(),
-            Some(Path::new("/work/lib"))
-        );
     }
 
     #[test]

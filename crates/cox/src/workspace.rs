@@ -83,7 +83,7 @@ use crate::ui::theme::{
 };
 use crate::ui::{card, tip};
 use crate::workflow;
-use project_card::{Edit, ProjectCard, Rename, Standing};
+use project_card::{ProjectCard, Rename, Standing};
 
 actions!(
     cox,
@@ -173,8 +173,6 @@ pub struct Project {
     icon: Option<Arc<Image>>,
     /// Whether its folder is not there, as when the human moved it.
     missing: bool,
-    /// The other folders its chats work in too.
-    also: Vec<PathBuf>,
 }
 
 impl Project {
@@ -419,7 +417,7 @@ pub struct Workspace {
     /// The settings screen, while it is open.
     settings: Option<(Entity<SettingsView>, [Subscription; 2])>,
     /// The card where the human edits a project, while it is open.
-    project_card: Option<(Entity<ProjectCard>, [Subscription; 3])>,
+    project_card: Option<(Entity<ProjectCard>, [Subscription; 2])>,
     /// The sheet over the window the human drags a region on, for the
     /// chat shown, while it is laid.
     region: Option<Sheet>,
@@ -498,7 +496,6 @@ impl Workspace {
                 last: None,
                 icon: None,
                 missing: false,
-                also: Vec::new(),
             }],
             chats: List::new(),
             archived: Vec::new(),
@@ -700,7 +697,6 @@ impl Workspace {
                         .unwrap_or_else(|| crate::project_icon::read(id))
                 }),
                 missing: row.missing,
-                also: row.also,
             })
             .collect();
     }
@@ -717,10 +713,7 @@ impl Workspace {
             .filter(|(_, project)| project.id.is_some())
             .filter_map(|(index, project)| {
                 let now = projects.iter().find(|row| row.id == project.id)?;
-                // A folder that stays one of the project's, as once
-                // another became the project's, did not move.
-                let kept = now.folder == project.folder || now.also.contains(&project.folder);
-                (!kept).then(|| (index, project.folder.clone()))
+                (now.folder != project.folder).then(|| (index, project.folder.clone()))
             })
             .collect();
         for (index, from) in moved {
@@ -1354,19 +1347,11 @@ impl Workspace {
         Standing {
             folder: project.folder.clone(),
             missing: project.missing,
-            also: project.also.clone(),
             at_work: self
                 .chats
                 .iter()
                 .chain(&self.archived)
                 .any(|chat| chat.project == index && crate::daemon::working(chat.state)),
-            taken: self
-                .projects
-                .iter()
-                .enumerate()
-                .filter(|(other, _)| *other != index)
-                .map(|(_, other)| other.folder.clone())
-                .collect(),
         }
     }
 
@@ -1384,15 +1369,6 @@ impl Workspace {
         };
         let standing = self.standing(index);
         let card = cx.new(|cx| ProjectCard::new(id, standing, window, cx));
-        let edits = cx.subscribe(&card, |workspace, card, edit: &Edit, cx| {
-            let project = card.read(cx).project();
-            workspace.tell(match edit.clone() {
-                Edit::MoveTo(folder) => ToDaemon::MoveProject { project, folder },
-                Edit::Add(folder) => ToDaemon::AddFolder { project, folder },
-                Edit::Remove(folder) => ToDaemon::RemoveFolder { project, folder },
-                Edit::MakePrimary(folder) => ToDaemon::MakePrimary { project, folder },
-            });
-        });
         let renamed = cx.subscribe(&card, move |workspace, _, Rename(name), _| {
             workspace.tell(ToDaemon::RenameProject {
                 project: id,
@@ -1407,7 +1383,7 @@ impl Workspace {
             },
         );
         window.focus(&card.focus_handle(cx));
-        self.project_card = Some((card, [edits, renamed, dismissed]));
+        self.project_card = Some((card, [renamed, dismissed]));
         cx.notify();
     }
 
