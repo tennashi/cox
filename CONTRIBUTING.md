@@ -32,14 +32,14 @@ Then:
 2. On a Mac, make a signing certificate, or macOS asks for its
    permissions (such as recording the screen) again after every build:
 
-   1. Open Keychain Access, and choose Certificate Assistant → Create a
-      Certificate….
-   2. Name it `Cox Local Signing`, with the identity type "Self Signed Root"
-      and the certificate type "Code Signing", in the login keychain.
-   3. Run `cargo xtask bundle`. When it asks for the login keychain's
-      password, choose "Always Allow" each time.
+   ```sh
+   cargo xtask identity new <folder>
+   ```
 
-   To sign with another certificate, name it in `COX_SIGNING_IDENTITY`.
+   It puts the certificate in the login keychain and writes it into
+   `<folder>`. To sign with the same certificate on another Mac, run
+   `cargo xtask identity import <folder>` there. To sign with another
+   certificate, name it in `COX_SIGNING_IDENTITY`.
 
 3. Build Cox and run it with [the fake agent](#the-fake-agent). The first
    build downloads CEF (Chromium), about 200 MB.
