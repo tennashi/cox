@@ -1342,7 +1342,9 @@ async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
         std::fs::read_to_string(shop.join("directories/shop/index.html")).unwrap(),
         "<p>shop</p>\n"
     );
-    assert!(!made.exists());
+    // Another test may make a sketch from nothing in a folder of the same
+    // name once this one is gone, so what is gone is what this sketch made.
+    assert!(!made.join("index.html").exists());
     let kept = store.projects().unwrap();
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].folder, shop);
