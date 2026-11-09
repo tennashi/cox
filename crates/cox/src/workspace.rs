@@ -83,7 +83,7 @@ use crate::ui::theme::{
 };
 use crate::ui::{card, tip};
 use crate::workflow;
-use project_card::{Edit, ProjectCard, Standing};
+use project_card::{Edit, ProjectCard, Rename, Standing};
 
 actions!(
     cox,
@@ -419,7 +419,7 @@ pub struct Workspace {
     /// The settings screen, while it is open.
     settings: Option<(Entity<SettingsView>, [Subscription; 2])>,
     /// The card where the human edits a project, while it is open.
-    project_card: Option<(Entity<ProjectCard>, [Subscription; 2])>,
+    project_card: Option<(Entity<ProjectCard>, [Subscription; 3])>,
     /// The sheet over the window the human drags a region on, for the
     /// chat shown, while it is laid.
     region: Option<Sheet>,
@@ -1382,9 +1382,8 @@ impl Workspace {
         let Some(id) = project.id else {
             return;
         };
-        let name = project.name.to_string();
         let standing = self.standing(index);
-        let card = cx.new(|cx| ProjectCard::new(id, name, standing, window, cx));
+        let card = cx.new(|cx| ProjectCard::new(id, standing, window, cx));
         let edits = cx.subscribe(&card, |workspace, card, edit: &Edit, cx| {
             let project = card.read(cx).project();
             workspace.tell(match edit.clone() {
@@ -1392,6 +1391,12 @@ impl Workspace {
                 Edit::Add(folder) => ToDaemon::AddFolder { project, folder },
                 Edit::Remove(folder) => ToDaemon::RemoveFolder { project, folder },
                 Edit::MakePrimary(folder) => ToDaemon::MakePrimary { project, folder },
+            });
+        });
+        let renamed = cx.subscribe(&card, move |workspace, _, Rename(name), _| {
+            workspace.tell(ToDaemon::RenameProject {
+                project: id,
+                name: name.clone(),
             });
         });
         let dismissed = cx.subscribe_in(
@@ -1402,14 +1407,19 @@ impl Workspace {
             },
         );
         window.focus(&card.focus_handle(cx));
-        self.project_card = Some((card, [edits, dismissed]));
+        self.project_card = Some((card, [edits, renamed, dismissed]));
         cx.notify();
     }
 
-    /// Closes the card of the project, giving the keyboard back to the
-    /// chat shown.
+    /// Closes the card of the project, renaming it as the human typed in
+    /// it, and giving the keyboard back to the chat shown.
     pub fn close_project_card(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.project_card.take().is_some() {
+        if let Some((card, _)) = self.project_card.take() {
+            let card = card.read(cx);
+            if let Some(Rename(name)) = card.renamed(cx) {
+                let project = card.project();
+                self.tell(ToDaemon::RenameProject { project, name });
+            }
             window.focus(&self.focus_handle(cx));
             cx.notify();
         }
@@ -1431,9 +1441,8 @@ impl Workspace {
             self.project_card = None;
             return;
         };
-        let name = self.projects[index].name.to_string();
         let standing = self.standing(index);
-        card.update(cx, |card, cx| card.follow(name, standing, cx));
+        card.update(cx, |card, cx| card.follow(standing, cx));
     }
 
     /// Closes the settings screen, giving the keyboard back to the chat

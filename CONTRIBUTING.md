@@ -62,6 +62,12 @@ agent is asked is the workflow's `icon/generate.md` (see below), or else
 Cox's own ([`workflow/icon/generate.md`](crates/cox/src/workflow/icon/generate.md)),
 with `{name}`, the project's name. "Remove icon" takes the icon away.
 "Edit project…" opens a card over the window with the project's
+name, its folder's, which Enter changes, as the card does as it closes,
+renaming the folder, where it is, with it, unless a folder there has
+the name already, or one of the project's chats is at work: each of
+its chats notes the move, its agent stops, and a line sent starts it
+again in the folder renamed, told the conversation so far, as when the
+folder moved (see below). The card also has the project's
 folders: its own, the primary, which its chats work in, and the others
 the human added, which their agents work in too, as roots of their
 session beside their own (ACP's `additionalDirectories`), for an agent
@@ -84,8 +90,7 @@ each of its chats that works in the primary notes the move, its agent
 stops, and a line sent starts it again there, told the conversation so
 far, as an agent that could not resume is. A chat of a sketch goes on
 in the sketch's folder, Git told that the repository of a sketch from
-the project moved. No file moves: the card only says where the folder
-went, so a project moves only once its folder is not there, since
+the project moved. Saying where the folder went moves no file, so a project moves only once its folder is not there, since
 another folder, while its own is there, is a project of its own, and
 not while one of its chats is at work. A project whose folder
 is not there, as when the human moved it while Cox was closed, is

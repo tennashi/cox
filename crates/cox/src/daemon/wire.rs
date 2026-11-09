@@ -291,6 +291,9 @@ pub enum ToDaemon {
     /// The project kept as `project` works in `folder` from now on, as
     /// when the human moved its folder there.
     MoveProject { project: ProjectId, folder: PathBuf },
+    /// Rename the project kept as `project` `name`, and its folder with
+    /// it, unless one of its chats is at work.
+    RenameProject { project: ProjectId, name: String },
     /// The chats of the project kept as `project` work in `folder` too,
     /// beside its own.
     AddFolder { project: ProjectId, folder: PathBuf },

@@ -1,13 +1,15 @@
 //! The card where the human edits a project, over the window, which
 //! "Edit project…" in the menu of the right button on the project, on
-//! the rail, opens: the project's folders, its own first, which its chats
-//! work in, and the others, which their agents work in too, each of which
-//! can become the project's or be taken out; and an input, where Enter
-//! adds the folder typed, whole or from `~`, and "Choose…" asks for one.
-//! A project whose folder is not there says so, and the input moves the
-//! project to where the folder went instead; one whose folder is there
-//! does not move, since another folder is another project. Escape, the ×,
-//! or a click beside the card closes it.
+//! the rail, opens: the project's name, its folder's, which Enter
+//! changes, as the card does as it closes, renaming the folder; the
+//! project's folders, its own first,
+//! which its chats work in, and the others, which their agents work in
+//! too, each of which can become the project's or be taken out; and an
+//! input, where Enter adds the folder typed, whole or from `~`, and
+//! "Choose…" asks for one. A project whose folder is not there says so,
+//! and the input moves the project to where the folder went instead; one
+//! whose folder is there does not move, since another folder is another
+//! project. Escape, the ×, or a click beside the card closes it.
 
 use std::path::{Path, PathBuf};
 
@@ -79,6 +81,9 @@ impl Edit {
     }
 }
 
+/// The human renamed the project, and so its folder.
+pub struct Rename(pub String);
+
 /// The human closed the card.
 pub struct Dismissed;
 
@@ -113,39 +118,51 @@ enum Told {
 
 pub struct ProjectCard {
     project: ProjectId,
-    name: String,
     standing: Standing,
+    /// The input of the project's name.
+    name: Entity<LineInput>,
+    /// The input of a folder.
     input: Entity<LineInput>,
     told: Told,
-    _submitted: Subscription,
+    _submitted: [Subscription; 3],
 }
 
 impl ProjectCard {
-    /// The card of the project kept as `project`, named `name`, which
-    /// stands as `standing` says.
+    /// The card of the project kept as `project`, which stands as
+    /// `standing` says.
     pub fn new(
         project: ProjectId,
-        name: String,
         standing: Standing,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let name = cx.new(|cx| {
+            let mut input = LineInput::new(cx);
+            input.set_placeholder("The project's name", cx);
+            input.set_text(&named(&standing.folder), cx);
+            input
+        });
         let input = cx.new(|cx| {
             let mut input = LineInput::new(cx);
             input.set_placeholder("Another folder, whole or from ~", cx);
             input.set_text(&filled(&standing), cx);
             input
         });
+        let named = cx.subscribe_in(&name, window, |card, _, Submitted, _, cx| {
+            card.submit_name(cx);
+        });
         let submitted = cx.subscribe_in(&input, window, |card, _, Submitted, _, cx| {
             card.submit(cx);
         });
+        // What the card says of the name follows it as it is typed.
+        let typed = cx.observe(&name, |_, _, cx| cx.notify());
         Self {
             project,
-            name,
             standing,
+            name,
             input,
             told: Told::Hint,
-            _submitted: submitted,
+            _submitted: [named, submitted, typed],
         }
     }
 
@@ -155,17 +172,48 @@ impl ProjectCard {
         self.project
     }
 
-    /// The input of the folder.
+    /// The input of the project's name.
+    #[must_use]
+    pub fn name_input(&self) -> &Entity<LineInput> {
+        &self.name
+    }
+
+    /// The input of a folder.
     #[must_use]
     pub fn input(&self) -> &Entity<LineInput> {
         &self.input
     }
 
-    /// Follows the project as the window lists it now, named `name`: once
-    /// it stands as the human asked, says so.
-    pub fn follow(&mut self, name: String, standing: Standing, cx: &mut Context<Self>) {
+    /// The name the input holds.
+    fn typed_name<'a>(&self, cx: &'a App) -> &'a str {
+        self.name.read(cx).text().trim()
+    }
+
+    /// The name the human typed for the project the card edits, while it
+    /// is not what the project is named, and the project can take it.
+    #[must_use]
+    pub fn renamed(&self, cx: &App) -> Option<Rename> {
+        let typed = self.typed_name(cx);
+        (typed != named(&self.standing.folder) && why_not_renamed(&self.standing, typed).is_none())
+            .then(|| Rename(typed.to_owned()))
+    }
+
+    /// Keeps the name typed.
+    fn submit_name(&mut self, cx: &mut Context<Self>) {
+        if let Some(rename) = self.renamed(cx) {
+            cx.emit(rename);
+        }
+    }
+
+    /// Follows the project as the window lists it now: once it stands as
+    /// the human asked, says so.
+    pub fn follow(&mut self, standing: Standing, cx: &mut Context<Self>) {
         if self.standing.folder != standing.folder || self.standing.missing != standing.missing {
             self.fill(&standing, cx);
+        }
+        if self.standing.folder != standing.folder {
+            let text = named(&standing.folder);
+            self.name.update(cx, |input, cx| input.set_text(&text, cx));
         }
         if let Told::Asked(edit) = &self.told
             && edit.done(&standing)
@@ -175,7 +223,6 @@ impl ProjectCard {
             }
             self.told = Told::Done(edit.clone());
         }
-        self.name = name;
         self.standing = standing;
         cx.notify();
     }
@@ -189,7 +236,14 @@ impl ProjectCard {
     /// What the card shows, a line each, for `cox --inspect state`.
     #[must_use]
     pub fn described(&self, cx: &App) -> Vec<String> {
-        std::iter::once(format!("Project card of {}", self.name))
+        std::iter::once(format!("Project card of {}", named(&self.standing.folder)))
+            .chain(std::iter::once(format!(
+                "Name input holding {:?}{}",
+                self.name.read(cx).text(),
+                why_not_renamed(&self.standing, self.typed_name(cx))
+                    .map(|why| format!(": {why}"))
+                    .unwrap_or_default()
+            )))
             .chain(std::iter::once(format!(
                 "Folder {} (primary{})",
                 shortened(&self.standing.folder),
@@ -307,7 +361,7 @@ impl ProjectCard {
                     .min_w_0()
                     .text_size(px(16.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(format!("Edit {}", self.name)),
+                    .child(format!("Edit {}", named(&self.standing.folder))),
             )
             .child(
                 div()
@@ -323,6 +377,42 @@ impl ProjectCard {
                     .child(icon(Icon::Close, 14., FAINT))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))),
             )
+    }
+
+    /// The input of the project's name, under its heading, with what it
+    /// does.
+    fn render_name(&self, cx: &App) -> impl IntoElement + use<> {
+        let typed = self.typed_name(cx);
+        let (said, color) = match why_not_renamed(&self.standing, typed) {
+            Some(why) if typed != named(&self.standing.folder) => (why, FAILED),
+            _ => (
+                "The project's folder is named so too. Enter renames both, as closing the card \
+                 does; its chats stop, and a line sent starts each again in the folder \
+                 renamed.",
+                FAINT,
+            ),
+        };
+        div()
+            .mb_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(label("NAME"))
+            .child(
+                div()
+                    .debug_selector(|| "project-name-input".to_owned())
+                    .h(px(INPUT_HEIGHT))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .border_1()
+                    .border_color(rgb(LINK))
+                    .rounded(px(10.))
+                    .text_size(px(13.))
+                    .text_color(rgb(FOREGROUND))
+                    .child(self.name.clone()),
+            )
+            .child(div().text_size(px(12.)).text_color(rgb(color)).child(said))
     }
 
     /// The project's folders, a row each, its own first.
@@ -395,6 +485,35 @@ impl ProjectCard {
             .child(own)
             .children(others)
     }
+}
+
+/// Why the project that stands as `standing` cannot be renamed `name`,
+/// and its folder with it, if it cannot.
+#[must_use]
+pub fn why_not_renamed(standing: &Standing, name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        return Some("A project needs a name.");
+    }
+    if name == "." || name == ".." || name.starts_with('.') || name.contains(['/', '\\']) {
+        return Some("The name is its folder's: no / in it, nor a . first.");
+    }
+    if name == named(&standing.folder) {
+        return None;
+    }
+    if standing.missing {
+        return Some("The project's folder is not there: say where it went first.");
+    }
+    if standing.at_work {
+        return Some("A chat of the project is at work: rename it once the turn ends.");
+    }
+    let to = standing.folder.with_file_name(name);
+    // A name that differs only in case is the same folder where the disk
+    // does not tell cases apart, as on macOS.
+    let same = to.canonicalize().ok() == standing.folder.canonicalize().ok();
+    if to.exists() && !same {
+        return Some("There is a folder of that name there already.");
+    }
+    None
 }
 
 /// What the input holds first for the project that stands as `standing`:
@@ -527,12 +646,19 @@ fn why_not_primary(standing: &Standing, folder: &Path) -> Option<&'static str> {
 }
 
 impl EventEmitter<Edit> for ProjectCard {}
+impl EventEmitter<Rename> for ProjectCard {}
 impl EventEmitter<Dismissed> for ProjectCard {}
 
 impl Focusable for ProjectCard {
-    /// The input, which has the keyboard while the card is open.
+    /// The input that has the keyboard as the card opens: the folder's,
+    /// while the project's is not there, for the human to say where it
+    /// went, or else the name's.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.input.focus_handle(cx)
+        if self.standing.missing {
+            self.input.focus_handle(cx)
+        } else {
+            self.name.focus_handle(cx)
+        }
     }
 }
 
@@ -563,18 +689,13 @@ impl Render for ProjectCard {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(FAINT))
-                            .child("FOLDERS"),
-                    )
+                    .child(self.render_name(cx))
+                    .child(label("FOLDERS"))
                     .child(div().text_size(px(13.)).text_color(rgb(DIM)).child(
                         "The project's chats work in its primary folder, and their agents in \
-                         the others too. Once you move or rename the primary, say where it is \
-                         now: the chats, the tabs of the stage, the icon and how the triggers \
-                         are arranged go with it. No file moves.",
+                         the others too. Once you move the primary elsewhere yourself, say where \
+                         it is now: the chats, the tabs of the stage, the icon and how the \
+                         triggers are arranged go with it. Saying so moves no file.",
                     ))
                     .child(self.render_folders(cx))
                     .child(
@@ -623,6 +744,15 @@ impl Render for ProjectCard {
                     ),
             )
     }
+}
+
+/// The heading of a part of the card, as `NAME`.
+fn label(text: &'static str) -> gpui::Div {
+    div()
+        .text_size(px(11.))
+        .font_weight(FontWeight::BOLD)
+        .text_color(rgb(FAINT))
+        .child(text)
 }
 
 #[cfg(test)]
