@@ -115,7 +115,8 @@ Cox's home: "New project", the + at the foot of the rail
 (Command-Shift-N on macOS, Control-Shift-N elsewhere), makes one with
 nothing set yet, in `untitled-` and the first number no folder there
 has yet, as `~/cox/projects/untitled-1`, and opens a chat in it, for
-the human and the agent to work out what the project is to be; and
+the human and the agent to work out what the project is to be, the
+agent proposing a name for it once it is clear (see below); and
 "New chat" in the list opens another chat in the project chosen. "New chat" (Command-N, Control-N)
 opens one of Cox's own, in no project, which works in Cox's home: `<dir>`
 when given, or else the folder the settings set, or else `~/cox`. The
@@ -325,6 +326,19 @@ then says which the human chose. Only the human sets a goal so: the
 agent hears at once that the goal is for the human to set, and which
 goal the chat has then, and goes on with its turn.
 
+A chat's agent proposes a name for its project the same way, with
+Cox's `propose_name` tool, once it and the human have worked out what a
+project made with no name is to be, as Cox's own `cox.md` tells it: a
+name, as its folder is named, and why. The name shows on a card in the
+conversation, with "Rename", which renames the project, and its folder
+with it, as its card does (see [The stage](#the-stage)), and "Dismiss",
+which lets it be; the card then says which the human chose. A project
+that cannot be renamed so, as while one of its chats is at work, is not,
+the chat noting why, and the card stays for the human to answer once
+it can. Only the human renames it: the agent hears at once that the name
+is for the human to set, and the project's name then. A chat of Cox's
+own, in no project, has no name to propose.
+
 A goal in words is judged by an agent Cox starts for it, of the same
 command as the chat's, in the project's folder: not a chat, so not in
 the list, and the human does not talk to it. Each time a turn ends, Cox
@@ -483,7 +497,7 @@ which chat opened it. The agent says how the chat's agent is set up:
 `context`, text the agent gets after the project's `COX.md` and ahead of
 the first line, which the chat notes at its top; `tools`, the names of
 the Cox tools it gets (`show_markdown`, `show_file`, `show_changes`, `show_map`, `show_media`, `run_command`,
-`open_chat`, `wait_chat`, `propose_goal`, `start_sketch`, `wiki_search`, `wiki_read`, `wiki_write`,
+`open_chat`, `wait_chat`, `propose_goal`, `propose_name`, `start_sketch`, `wiki_search`, `wiki_read`, `wiki_write`,
 `raw_keep`, `raw_search`, `raw_read`, and on macOS `mac_windows`, `mac_window_look`,
 `mac_window_click`, `mac_window_type`, `mac_window_key`, `mac_window_scroll`, and `android_devices`,
 `android_look`, `android_tap`, `android_swipe`, `android_type`, `android_key`), all of them unless given; `stage`, `drive` for the tools
@@ -1850,7 +1864,9 @@ opens; the tour has three, and answers `/compact`. The agent takes
 files whole, and pictures, and reads the files a line points to as
 `claude-agent-acp` does, a link to each and its text, which a turn's
 `when` can match: the tour answers a line that points to a file, and
-draws an icon when asked to (see [The stage](#the-stage)). It takes a
+draws an icon when asked to (see [The stage](#the-stage)), and
+proposes the name `shop` for its project when a line asks it to name the
+project. It takes a
 line Cox steers into a turn as `claude-agent-acp` does, and plays the
 line's turn once the turn's own steps have gone, before the turn ends.
 Its `authMethods` are the ways to log in it offers, as ACP's

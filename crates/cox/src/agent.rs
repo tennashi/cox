@@ -998,6 +998,33 @@ fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usiz
 /// characters: past it, the start is left out.
 const RETOLD_LENGTH: usize = 100_000;
 
+/// What the agent is told of a goal or a name it proposed, and what the
+/// human did with it.
+fn told_of_proposal(entry: &Entry) -> Option<String> {
+    match entry {
+        Entry::Proposal { goal, answer, .. } => {
+            let answer = match answer {
+                Some(Answer::Set) => "the human set it",
+                Some(Answer::Changed) => "the human changed it, and set that",
+                Some(Answer::Dismissed) => "the human let it be",
+                None => "the human has not answered",
+            };
+            Some(format!("[you proposed the goal: {goal}; {answer}]"))
+        }
+        Entry::NameProposal { name, answer, .. } => {
+            let answer = match answer {
+                Some(Answer::Set | Answer::Changed) => "the human renamed the project so",
+                Some(Answer::Dismissed) => "the human let it be",
+                None => "the human has not answered",
+            };
+            Some(format!(
+                "[you proposed the project's name: {name}; {answer}]"
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// The conversation so far, `entries`, as an agent is told it: what
 /// the human said, and Cox in their place, what the agent replied, and the
 /// tool calls it made, by their titles, and where the human switched the
@@ -1071,15 +1098,7 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
                     "[you asked permission for: {title}; {who} chose: {chosen}]"
                 ))
             }
-            Entry::Proposal { goal, answer, .. } => {
-                let answer = match answer {
-                    Some(Answer::Set) => "the human set it",
-                    Some(Answer::Changed) => "the human changed it, and set that",
-                    Some(Answer::Dismissed) => "the human let it be",
-                    None => "the human has not answered",
-                };
-                Some(format!("[you proposed the goal: {goal}; {answer}]"))
-            }
+            Entry::Proposal { .. } | Entry::NameProposal { .. } => told_of_proposal(entry),
             Entry::Switched { from, to } => Some(format!(
                 "[the human switched the chat from the agent {from} to the agent {to}]"
             )),

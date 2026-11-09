@@ -109,6 +109,17 @@ pub enum Entry {
         /// What the human did with it, once they did.
         answer: Option<Answer>,
     },
+    /// A name the agent proposed for the chat's project, which is its
+    /// folder's, for the human to rename the project to or to let be.
+    NameProposal {
+        /// The name.
+        name: String,
+        /// Why the agent proposes it, if it said.
+        why: Option<String>,
+        /// What the human did with it, once they did: set it, or let it
+        /// be.
+        answer: Option<Answer>,
+    },
     /// Cox asks the human whether to keep what a chat learned in the
     /// wiki, at a milestone of it, as when its goal is met, or a sketch
     /// ended.

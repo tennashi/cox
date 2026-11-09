@@ -179,6 +179,14 @@ pub enum ChatRequest {
         why: Option<String>,
         answer: oneshot::Sender<Option<Goal>>,
     },
+    /// Show the human `name`, proposed for the chat's project, for them to
+    /// rename it to or let be, with `why`, if the agent said; answer the
+    /// project's name now, or why it cannot be proposed.
+    ProposeName {
+        name: String,
+        why: Option<String>,
+        answer: oneshot::Sender<Result<String, String>>,
+    },
     /// Open a chat in the chat's project, under it in the list, whose
     /// agent is set up as `setup` says, works until `goal` is met if
     /// given, and gets `text` as its first line; answer how the chat goes
@@ -857,7 +865,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 16 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 17 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();

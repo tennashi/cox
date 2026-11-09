@@ -35,7 +35,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use cox_core::entry::Attachment;
+use cox_core::entry::{Answer, Attachment};
 use cox_core::goal::Goal;
 use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
 use cox_core::tabs::KeptTabs;
@@ -1251,6 +1251,9 @@ impl Daemon {
                     chat.change_proposal(index, goal);
                 }
             }
+            ToDaemon::AnswerNameProposal { key, index, answer } => {
+                self.answer_name_proposal(key, index, answer);
+            }
             ToDaemon::AnswerKeep { key, index, keep } => {
                 let keeps = self
                     .chat(key)
@@ -1374,37 +1377,118 @@ impl Daemon {
     /// it, in the folder it is in, unless the name is no folder's, a
     /// folder there has it already, or one of its chats is at work.
     fn rename_project(&mut self, project: ProjectId, name: &str) {
-        let Some(index) = self.index_of(project).filter(|&index| index != 0) else {
+        let Some(index) = self.index_of(project) else {
             return;
         };
+        if let Err(why) = self.rename(index, name) {
+            tracing::error!(name, "the project is not renamed: {why}");
+        }
+    }
+
+    /// The folder the project at `index` would have, renamed `name`, or
+    /// why it cannot be renamed so.
+    fn renamed(&self, index: usize, name: &str) -> Result<PathBuf, String> {
+        if index == 0 {
+            return Err("Cox's own chats are in no project.".to_owned());
+        }
         let name = name.trim();
         if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\']) {
-            tracing::error!(name, "a project is not named so");
-            return;
+            return Err("The name is its folder's: no / in it, nor a . first.".to_owned());
         }
-        let from = self.projects[index].folder.clone();
+        let from = &self.projects[index].folder;
         let to = from.with_file_name(name);
-        if to == from {
-            return;
-        }
         // A name that differs only in case is the same folder where the
         // disk does not tell cases apart, as on macOS.
-        if to.exists() && to.canonicalize().ok() != from.canonicalize().ok() {
-            tracing::error!(to = %to.display(), "the project is not renamed: the folder is there");
-            return;
+        if to != *from && to.exists() && to.canonicalize().ok() != from.canonicalize().ok() {
+            return Err("There is a folder of that name there already.".to_owned());
         }
         if self.at_work(index) {
-            tracing::error!("the project is not renamed while a chat of it is at work");
+            return Err(
+                "A chat of the project is at work: rename it once the turn ends.".to_owned(),
+            );
+        }
+        Ok(to)
+    }
+
+    /// Renames the project at `index` `name`, and its folder with it, or
+    /// answers why not.
+    fn rename(&mut self, index: usize, name: &str) -> Result<(), String> {
+        let to = self.renamed(index, name)?;
+        let from = self.projects[index].folder.clone();
+        if to == from {
+            return Ok(());
+        }
+        std::fs::rename(&from, &to)
+            .map_err(|error| format!("{} is not renamed: {error}", from.display()))?;
+        if !self.relocate(index, &to) {
+            if let Err(error) = std::fs::rename(&to, &from) {
+                tracing::error!("{} is not named back: {error}", to.display());
+            }
+            return Err("The project does not move.".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Shows `name`, which the agent of the chat `key` proposes for its
+    /// project, on a card in the chat's conversation, and answers the
+    /// project's name now, or why it cannot be named so.
+    fn propose_name(
+        &mut self,
+        key: u64,
+        name: &str,
+        why: Option<String>,
+    ) -> Result<String, String> {
+        let project = self.slot(key).ok_or("the chat has closed")?.project;
+        if project == 0 {
+            return Err(
+                "This chat is in no project: Cox's own chats have no name to propose.".to_owned(),
+            );
+        }
+        let name = name.trim();
+        if name.starts_with('.') || name.contains(['/', '\\']) {
+            return Err(
+                "The name is the project's folder's: no / or \\ in it, nor a . first.".to_owned(),
+            );
+        }
+        let now = self.projects[project]
+            .folder
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        self.chat(key)
+            .ok_or("the chat has closed")?
+            .propose_name(name, why);
+        Ok(now)
+    }
+
+    /// The human answered the name proposed at `index` in the chat `key`
+    /// for its project: renames it so, or lets it be; or, when it cannot
+    /// be renamed so, notes why, the card staying for them to answer.
+    fn answer_name_proposal(&mut self, key: u64, index: usize, answer: Answer) {
+        let Some(project) = self.slot(key).map(|slot| slot.project) else {
+            return;
+        };
+        let Some(name) = self.chat(key).and_then(|chat| chat.proposed_name(index)) else {
+            return;
+        };
+        if answer == Answer::Dismissed {
+            if let Some(chat) = self.chat(key) {
+                chat.answer_name_proposal(index, answer);
+            }
             return;
         }
-        if let Err(error) = std::fs::rename(&from, &to) {
-            tracing::error!("{} is not renamed: {error}", from.display());
+        if let Err(why) = self.renamed(project, &name) {
+            if let Some(chat) = self.chat(key) {
+                chat.note(format!("The project is not renamed {name}: {why}"));
+            }
             return;
         }
-        if !self.relocate(index, &to)
-            && let Err(error) = std::fs::rename(&to, &from)
+        if let Some(chat) = self.chat(key) {
+            chat.answer_name_proposal(index, Answer::Set);
+        }
+        if let Err(why) = self.rename(project, &name)
+            && let Some(chat) = self.chat(key)
         {
-            tracing::error!("{} is not named back: {error}", to.display());
+            chat.note(format!("The project is not renamed {name}: {why}"));
         }
     }
 
@@ -2022,6 +2106,9 @@ impl Daemon {
                     .chat(key)
                     .and_then(|chat| chat.propose_goal(&goal, why));
                 answer.send(now).ok();
+            }
+            ChatRequest::ProposeName { name, why, answer } => {
+                answer.send(self.propose_name(key, &name, why)).ok();
             }
             ChatRequest::OpenChat {
                 text,

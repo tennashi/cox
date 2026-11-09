@@ -529,6 +529,16 @@ impl ChatView {
         });
     }
 
+    /// The human answered the name proposed at `index` for the project:
+    /// rename it so, or let it be.
+    fn answer_name_proposal(&mut self, index: usize, answer: Answer, _: &mut Context<Self>) {
+        self.tell(ToDaemon::AnswerNameProposal {
+            key: self.key,
+            index,
+            answer,
+        });
+    }
+
     /// The human chose, on the card at `index`, whether to keep what a
     /// chat learned in the wiki.
     fn answer_keep(&mut self, index: usize, keep: bool, _: &mut Context<Self>) {

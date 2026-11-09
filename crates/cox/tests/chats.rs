@@ -24,6 +24,7 @@ use cox::notices::{AppNotices, Notices};
 use cox::ui::input::LineInput;
 use cox::workflow;
 use cox::workspace::{Chat, Workspace};
+use cox_core::entry::Answer;
 use cox_core::goal::Goal as KeptGoal;
 use cox_core::settings::{Choice, Setting};
 use cox_core::store::Named;
@@ -1088,6 +1089,111 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
     assert_eq!(agent.cwd(), Some(store_folder));
     assert_eq!(agent.resumed(), Vec::<String>::new());
     let _ = std::fs::remove_dir_all(&projects);
+}
+
+#[gpui::test]
+async fn an_agent_proposes_the_projects_name_which_the_human_renames_it_to(
+    cx: &mut TestAppContext,
+) {
+    let projects = scratch("propose-name-projects");
+    let app = projects.join("untitled-1");
+    let (store, _) = kept_chat(&app, Some("session-1"));
+    let (_, asks, workspace, cx) = open_window_asking(
+        cx,
+        scratch("propose-name-home"),
+        store.clone(),
+        Resumes::Resume,
+    );
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.show(FIRST_KEPT, window, cx);
+    });
+    say(cx, &workspace, "hello").await;
+    let propose = |name: &str, why: Option<&str>| {
+        let (answer, now) = tokio::sync::oneshot::channel();
+        asks.borrow()[0]
+            .send(ChatRequest::ProposeName {
+                name: name.to_owned(),
+                why: why.map(str::to_owned),
+                answer,
+            })
+            .unwrap();
+        now
+    };
+
+    // The agent hears the project's name now, and the name shows on a
+    // card, for the human to answer.
+    let now = propose("market", None);
+    settled(cx, &workspace);
+    assert_eq!(now.await.unwrap(), Ok("untitled-1".to_owned()));
+    let now = propose("shop", Some("It sells things."));
+    settled(cx, &workspace);
+    assert_eq!(now.await.unwrap(), Ok("untitled-1".to_owned()));
+    let proposed = |cx: &mut VisualTestContext| {
+        shown_entries(cx, &workspace)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match entry {
+                Entry::NameProposal { name, answer, .. } => Some((index, name, answer)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let cards = proposed(cx);
+    assert_eq!(cards.len(), 2, "{cards:?}");
+    let (market, shop) = (cards[0].0, cards[1].0);
+
+    // Dismiss lets one be.
+    click(
+        cx,
+        Box::leak(format!("dismiss-name-{market}").into_boxed_str()),
+    );
+    settled(cx, &workspace);
+    assert_eq!(proposed(cx)[0].2, Some(Answer::Dismissed));
+    assert!(app.is_dir());
+
+    // Rename renames the project, and its folder with it.
+    click(
+        cx,
+        Box::leak(format!("rename-project-{shop}").into_boxed_str()),
+    );
+    settled(cx, &workspace);
+    let renamed = projects.join("shop");
+    assert_eq!(store.projects().unwrap()[0].folder, renamed);
+    assert!(renamed.is_dir() && !app.exists());
+    assert_eq!(proposed(cx)[1].2, Some(Answer::Set));
+    let _ = std::fs::remove_dir_all(&projects);
+}
+
+#[gpui::test]
+async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
+    let home = scratch("propose-name-own");
+    let (_, asks, workspace, cx) = open_window_asking(
+        cx,
+        home,
+        kept_store("propose-name-own-kept"),
+        Resumes::Resume,
+    );
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let (answer, now) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::ProposeName {
+            name: "shop".to_owned(),
+            why: None,
+            answer,
+        })
+        .unwrap();
+    settled(cx, &workspace);
+    assert!(
+        now.await
+            .unwrap()
+            .is_err_and(|why| why.contains("in no project"))
+    );
+    assert!(
+        !shown_entries(cx, &workspace)
+            .iter()
+            .any(|entry| matches!(entry, Entry::NameProposal { .. }))
+    );
 }
 
 #[gpui::test]
