@@ -47,6 +47,13 @@
       ]
     },
     {
+      "when": "Say what the project is",
+      "steps": [
+        { "say": "Here is what I'd have every chat of the project told first." },
+        { "call": { "tool": "propose_about", "arguments": { "about": "A small online shop that sells tea, with a page for each tea and a cart.", "why": "That is what we agreed the project makes." } } }
+      ]
+    },
+    {
       "when": "/compact",
       "steps": [{ "say": "Summed up the conversation so far." }]
     },

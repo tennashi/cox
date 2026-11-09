@@ -1245,6 +1245,25 @@ impl Chat {
         self.conversation.answer_project_proposal(index, answer);
     }
 
+    /// Shows `about`, what the agent proposes the chat's project is, on a
+    /// card in the conversation, with `why`.
+    pub fn propose_about(&mut self, about: &str, why: Option<String>) {
+        self.conversation.propose_about(about, why);
+    }
+
+    /// What the project is as proposed at `index`, while the human has
+    /// not answered it.
+    #[must_use]
+    pub fn proposed_about(&self, index: usize) -> Option<String> {
+        self.conversation.proposed_about(index).map(str::to_owned)
+    }
+
+    /// The human answered what the project is as proposed at `index`: set
+    /// it, or let it be.
+    pub fn answer_about_proposal(&mut self, index: usize, answer: Answer) {
+        self.conversation.answer_about_proposal(index, answer);
+    }
+
     /// The human chose, on the card at `index`, whether to keep what a
     /// chat learned in the wiki: answers which chat is to keep it, `None`
     /// for this one, when they chose to.

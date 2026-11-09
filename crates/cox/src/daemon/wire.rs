@@ -35,6 +35,10 @@ pub struct ProjectRow {
     /// the list, so that the projects after it keep their places.
     #[serde(default)]
     pub deleted: bool,
+    /// What it is, in a sentence or two, as each chat's agent is told, if
+    /// the human set it.
+    #[serde(default)]
+    pub about: Option<String>,
 }
 
 /// A chat, as the window lists it in its tabs.
@@ -245,6 +249,13 @@ pub enum ToDaemon {
     /// The human changed the goal proposed at `index` in the chat `key`
     /// into `goal`, and set it.
     ChangeProposal { key: u64, index: usize, goal: Goal },
+    /// The human answered what the project of the chat `key` is, as
+    /// proposed at `index`: set it, or let it be.
+    AnswerAboutProposal {
+        key: u64,
+        index: usize,
+        answer: Answer,
+    },
     /// The human answered the name proposed at `index` in the chat `key`
     /// for its project: rename it so, or let it be.
     AnswerNameProposal {
@@ -312,6 +323,9 @@ pub enum ToDaemon {
     /// Rename the project kept as `project` `name`, and its folder with
     /// it, unless one of its chats is at work.
     RenameProject { project: ProjectId, name: String },
+    /// The human set what `project` is, or, blank, that it says nothing
+    /// of what it is.
+    SetAbout { project: ProjectId, about: String },
     /// Put the project kept as `project` away, off the rail, its chats
     /// going on as they were, or bring it back.
     ArchiveProject { project: ProjectId, archived: bool },

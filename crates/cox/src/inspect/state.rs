@@ -140,6 +140,9 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
         if focused == card.name_input().focus_handle(cx) {
             return "the project card's name".to_owned();
         }
+        if focused == card.about_input().focus_handle(cx) {
+            return "the project card's about".to_owned();
+        }
         if focused == card.directory_input().focus_handle(cx) {
             return "the project card's directory".to_owned();
         }
@@ -537,6 +540,17 @@ fn describe_entry(entry: &Entry) -> String {
             match why {
                 Some(why) => format!("name proposal {name:?}, {answer}: {}", text_of(why)),
                 None => format!("name proposal {name:?}, {answer}"),
+            }
+        }
+        Entry::AboutProposal { about, why, answer } => {
+            let answer = match answer {
+                None => "open",
+                Some(Answer::Set | Answer::Changed) => "set",
+                Some(Answer::Dismissed) => "dismissed",
+            };
+            match why {
+                Some(why) => format!("about proposal {about:?}, {answer}: {}", text_of(why)),
+                None => format!("about proposal {about:?}, {answer}"),
             }
         }
         Entry::ProjectProposal {

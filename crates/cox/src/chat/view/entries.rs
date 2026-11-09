@@ -855,6 +855,9 @@ impl ChatView {
             Entry::NameProposal { name, why, answer } => {
                 render_name_proposal(index, name, why.as_deref(), *answer, &mut writer, cx)
             }
+            Entry::AboutProposal { about, why, answer } => {
+                render_about_proposal(index, about, why.as_deref(), *answer, &mut writer, cx)
+            }
             Entry::ProjectProposal {
                 name,
                 why,
@@ -1387,6 +1390,72 @@ fn render_name_proposal(
         buttons,
     )
     .debug_selector(move || format!("name-proposal-{index}"))
+    .into_any_element()
+}
+
+/// What the agent proposed the project is: while the human has not
+/// answered it, a card with why the agent proposes it, and buttons to set
+/// it, or to let it be; then a line that says what they did.
+fn render_about_proposal(
+    index: usize,
+    about: &str,
+    why: Option<&str>,
+    answer: Option<Answer>,
+    writer: &mut Writer,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    if let Some(answer) = answer {
+        let title = format!("What the project is: {about}");
+        let answer = match answer {
+            Answer::Set | Answer::Changed => "set",
+            Answer::Dismissed => "let be",
+        };
+        return line_of(index, None, ("✎", LINK), &title, writer)
+            .debug_selector(move || format!("about-proposal-{index}"))
+            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
+            .into_any_element();
+    }
+    let button = |name: &'static str, label: &'static str, first: bool| {
+        let id = format!("{name}-{index}");
+        answer_button(
+            SharedString::from(id.clone()),
+            id,
+            label,
+            first,
+            OFFERING_TONE,
+        )
+    };
+    let buttons = [
+        button("set-about", "Set", true).on_click(cx.listener(move |view, _, _, cx| {
+            view.answer_about_proposal(index, Answer::Set, cx);
+        })),
+        button("dismiss-about", "Dismiss", false).on_click(cx.listener(move |view, _, _, cx| {
+            view.answer_about_proposal(index, Answer::Dismissed, cx);
+        })),
+    ];
+    let shows = [
+        Some(
+            div()
+                .text_size(px(14.))
+                .child(writer.markdown(about))
+                .into_any_element(),
+        ),
+        why.map(|why| {
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child(writer.markdown(why))
+                .into_any_element()
+        }),
+    ];
+    answer_card(
+        OFFERING_TONE,
+        card_head("✎", OFFERING_TONE, "About the project"),
+        "each chat is told it first",
+        shows.into_iter().flatten(),
+        buttons,
+    )
+    .debug_selector(move || format!("about-proposal-{index}"))
     .into_any_element()
 }
 

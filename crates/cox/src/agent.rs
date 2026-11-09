@@ -242,20 +242,20 @@ pub enum Start {
 }
 
 impl Start {
-    /// How the agent of a closed chat that worked in `cwd`, and showed
-    /// `earlier`, starts again: going on with `session` if it can, or else
-    /// told what the chat showed, with the project's instructions as they
-    /// are now, set up as `setup` says if the chat was opened from a chat.
+    /// How the agent of a closed chat that showed `earlier` starts again:
+    /// going on with `session` if it can, or else told what the chat
+    /// showed, with `instructions`, as they are now, set up as `setup`
+    /// says if the chat was opened from a chat.
     #[must_use]
     pub fn again(
-        cwd: &Path,
+        instructions: Instructions,
         session: Option<String>,
         earlier: &[Entry],
         setup: Option<Setup>,
     ) -> Self {
         Self::Again {
             session,
-            instructions: Some(Instructions::read(cwd)),
+            instructions: Some(instructions),
             setup,
             earlier: earlier.to_vec(),
         }
@@ -948,8 +948,8 @@ fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usiz
 /// characters: past it, the start is left out.
 const RETOLD_LENGTH: usize = 100_000;
 
-/// What the agent is told of a goal, a name or a project it proposed,
-/// and what the human did with it.
+/// What the agent is told of a goal, a name, what the project is or a
+/// project it proposed, and what the human did with it.
 fn told_of_proposal(entry: &Entry) -> Option<String> {
     match entry {
         Entry::Proposal { goal, answer, .. } => {
@@ -969,6 +969,16 @@ fn told_of_proposal(entry: &Entry) -> Option<String> {
             };
             Some(format!(
                 "[you proposed the project's name: {name}; {answer}]"
+            ))
+        }
+        Entry::AboutProposal { about, answer, .. } => {
+            let answer = match answer {
+                Some(Answer::Set | Answer::Changed) => "the human set it",
+                Some(Answer::Dismissed) => "the human let it be",
+                None => "the human has not answered",
+            };
+            Some(format!(
+                "[you proposed what the project is: {about}; {answer}]"
             ))
         }
         Entry::ProjectProposal { name, answer, .. } => {
@@ -1060,9 +1070,10 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
                     "[you asked permission for: {title}; {who} chose: {chosen}]"
                 ))
             }
-            Entry::Proposal { .. } | Entry::NameProposal { .. } | Entry::ProjectProposal { .. } => {
-                told_of_proposal(entry)
-            }
+            Entry::Proposal { .. }
+            | Entry::NameProposal { .. }
+            | Entry::AboutProposal { .. }
+            | Entry::ProjectProposal { .. } => told_of_proposal(entry),
             Entry::Switched { from, to } => Some(format!(
                 "[the human switched the chat from the agent {from} to the agent {to}]"
             )),

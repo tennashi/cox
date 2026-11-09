@@ -35,6 +35,7 @@ const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const PROPOSE_NAME: &str = "propose_name";
+const PROPOSE_ABOUT: &str = "propose_about";
 const PROPOSE_PROJECT: &str = "propose_project";
 const START_SKETCH: &str = "start_sketch";
 const WIKI_SEARCH: &str = "wiki_search";
@@ -114,20 +115,21 @@ pub(super) fn tools(only: Option<&[String]>) -> Value {
 
 /// The names of the tools a chat gets, in a project or in none, as
 /// `in_project` says: those named in `only`, or all of them, but the one
-/// that proposes a name for the chat's project, for a chat in none, and
-/// the one that proposes a project to make of the chat, for a chat in one.
+/// that propose a name for the chat's project and what it is, for a chat
+/// in none, and the one that proposes a project to make of the chat, for a
+/// chat in one.
 pub(super) fn for_chat(only: Option<&[String]>, in_project: bool) -> Vec<String> {
-    let left_out = if in_project {
-        PROPOSE_PROJECT
+    let left_out: &[&str] = if in_project {
+        &[PROPOSE_PROJECT]
     } else {
-        PROPOSE_NAME
+        &[PROPOSE_NAME, PROPOSE_ABOUT]
     };
     tools(only)
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|tool| tool.get("name")?.as_str())
-        .filter(|&name| name != left_out)
+        .filter(|name| !left_out.contains(name))
         .map(str::to_owned)
         .collect()
 }
@@ -230,6 +232,7 @@ fn all_tools() -> Value {
     show_media_tool(),
     propose_goal_tool(),
     propose_name_tool(),
+    propose_about_tool(),
     propose_project_tool(),
     start_sketch_tool(),
     ]);
@@ -631,6 +634,38 @@ fn propose_name_tool() -> Value {
     })
 }
 
+/// The tool that proposes what the chat's project is, as the agent learns
+/// of it.
+fn propose_about_tool() -> Value {
+    json!(
+    {
+        "name": PROPOSE_ABOUT,
+        "description": "Proposes to the human what this chat's project is, in a sentence \
+            or two: what it makes, and for whom or to what end, as a newcomer to it would \
+            need to hear first. Each chat's agent in the project is told it as its session \
+            starts, ahead of the project's instructions, so say what lasts, not the work \
+            of this chat. Use it once you and the human have worked out what the project \
+            is to be, or when what it is has changed from what you were told. The human \
+            sees it on a card in the conversation, and sets it as it is or lets it be; it \
+            is not what the project is until they do. It answers at once, with what the \
+            project is now, if it says.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "about": {
+                    "type": "string",
+                    "description": "What the project is, in a sentence or two.",
+                },
+                "why": {
+                    "type": "string",
+                    "description": "Why this, in a sentence, for the human to weigh it.",
+                },
+            },
+            "required": ["about"],
+        },
+    })
+}
+
 /// The tool that proposes a project to make of a chat in none, as the
 /// agent learns of it.
 fn propose_project_tool() -> Value {
@@ -794,6 +829,7 @@ pub(super) async fn call(
         WAIT_CHAT => wait_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
+        PROPOSE_ABOUT => propose_about(arguments, chats).await,
         PROPOSE_PROJECT => propose_project(arguments, chats).await,
         SHOW_MEDIA => show_media(arguments, cwd, chats).await,
         START_SKETCH => start_sketch(arguments, chats).await,
@@ -1386,6 +1422,44 @@ async fn propose_name(
     ))
 }
 
+/// Asks the window to show the human what `arguments` propose the chat's
+/// project is, and tells the agent what it is now.
+async fn propose_about(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let about = arguments
+        .get("about")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|about| !about.is_empty())
+        .ok_or("nothing to propose: give what the project is as `about`")?
+        .to_owned();
+    let why = match arguments.get("why") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(why)) => Some(why.clone()),
+        Some(_) => return Err("`why` is not a string".to_owned()),
+    };
+    let (answer, now) = oneshot::channel();
+    chats
+        .send(ChatRequest::ProposeAbout { about, why, answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let now = now
+        .await
+        .map_err(|_| "the chat closed before it showed what the project is".to_owned())??;
+    let mut told = "It is on a card in the conversation, for the human to set or let be; it is \
+                    not what the project is until they do."
+        .to_owned();
+    match now {
+        Some(now) => {
+            told.push_str(" What the project is now: ");
+            told.push_str(&now);
+        }
+        None => told.push_str(" The project says nothing of what it is now."),
+    }
+    Ok(told)
+}
+
 /// Asks the window to show the human the project `arguments` propose to
 /// make of the chat, and tells the agent where it is to be.
 async fn propose_project(
@@ -1930,8 +2004,9 @@ mod tests {
         assert_eq!(listed[5]["name"], OPEN_CHAT);
         assert_eq!(listed[7]["name"], SHOW_MEDIA);
         assert_eq!(listed[9]["name"], PROPOSE_NAME);
-        assert_eq!(listed[10]["name"], PROPOSE_PROJECT);
-        assert_eq!(listed[11]["name"], START_SKETCH);
+        assert_eq!(listed[10]["name"], PROPOSE_ABOUT);
+        assert_eq!(listed[11]["name"], PROPOSE_PROJECT);
+        assert_eq!(listed[12]["name"], START_SKETCH);
     }
 
     #[test]
@@ -2497,6 +2572,65 @@ mod tests {
                 ("shop".to_owned(), None),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn proposes_what_the_project_is_and_tells_what_it_is_now() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let mut proposed = Vec::new();
+            for now in [None, Some("A shop.".to_owned())] {
+                let Some(ChatRequest::ProposeAbout { about, why, answer }) = asked.recv().await
+                else {
+                    panic!("the window was not asked");
+                };
+                proposed.push((about, why));
+                let _ = answer.send(Ok(now));
+            }
+            proposed
+        });
+        let propose = |arguments: Value| {
+            let params = json!({ "name": PROPOSE_ABOUT, "arguments": arguments });
+            let (sent, chats) = (sent.clone(), chats.clone());
+            async move {
+                call(&params, Path::new("/work"), None, &sent, &chats)
+                    .await
+                    .unwrap()
+            }
+        };
+        let tea = "A shop that sells tea, online.";
+        let first = propose(json!({ "about": format!(" {tea} "), "why": "We agreed." })).await;
+        assert_eq!(first["isError"], false);
+        let told = first["content"][0]["text"].as_str().unwrap();
+        assert!(told.ends_with("says nothing of what it is now."), "{told}");
+        let second = propose(json!({ "about": tea })).await;
+        let told = second["content"][0]["text"].as_str().unwrap();
+        assert!(told.ends_with("What the project is now: A shop."), "{told}");
+        // Nothing to propose asks nothing.
+        let blank = propose(json!({ "about": " " })).await;
+        assert_eq!(blank["isError"], true);
+        assert_eq!(
+            window.await.unwrap(),
+            [
+                (tea.to_owned(), Some("We agreed.".to_owned())),
+                (tea.to_owned(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_chat_in_no_project_gets_no_tool_to_say_what_its_project_is() {
+        let none = for_chat(None, false);
+        assert!(
+            !none
+                .iter()
+                .any(|name| name == PROPOSE_ABOUT || name == PROPOSE_NAME)
+        );
+        assert!(none.iter().any(|name| name == PROPOSE_PROJECT));
+        let some = for_chat(None, true);
+        assert!(some.iter().any(|name| name == PROPOSE_ABOUT));
+        assert!(!some.iter().any(|name| name == PROPOSE_PROJECT));
     }
 
     #[tokio::test]
