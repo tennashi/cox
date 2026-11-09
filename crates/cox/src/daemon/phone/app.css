@@ -1,453 +1,592 @@
+/* The phone's page, drawn as the window draws the chat's panel: the
+   colors are the window's own, from /theme.css, and the sizes, the
+   timeline, the chips and the cards are those of the window's, made a
+   little bigger where a finger taps. */
+
 :root {
-  --ground: #0e0e0f;
-  --surface: #151517;
-  --raised: #1b1b1e;
-  --border: #242428;
-  --line: #323237;
-  --text: #e4e4e6;
-  --soft: #bdbdc2;
-  --muted: #a5a5ab;
-  --faint: #8e8e95;
-  --accent: #6fd3c5;
-  --accent-ground: #14201e;
-  --amber: #e5b46d;
-  --amber-ground: #2e2920;
-  --amber-border: #5a4a2e;
-  --red: #ec8580;
-  --red-ground: #2e1d1d;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --gap: 8px;
+  --card-radius: 18px;
+  --row-radius: 11px;
+  --mono: ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
 }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
-html, body {
+html { background: var(--ground); }
+body {
   margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 max(var(--gap), env(safe-area-inset-right)) 0 max(var(--gap), env(safe-area-inset-left));
   background: var(--ground);
-  color: var(--text);
-  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  color: var(--foreground);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, system-ui, "DejaVu Sans", sans-serif;
   -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
 }
 
 a { color: inherit; text-decoration: none; }
-button { font: inherit; color: inherit; }
+button { font: inherit; color: inherit; cursor: pointer; }
+svg { flex-shrink: 0; }
+
+/* The panel: a card on the window's ground, its head and its foot
+   staying in sight as the conversation scrolls between them. */
 
 #head {
   position: sticky;
   top: 0;
   z-index: 2;
+  padding-top: calc(env(safe-area-inset-top) + var(--gap));
+  background: var(--ground);
+}
+#head > .card {
+  display: flow-root;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--card-radius) var(--card-radius) 0 0;
+}
+main {
+  flex: 1;
+  padding: 0 14px 12px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+#bottom {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding-bottom: calc(env(safe-area-inset-bottom) + var(--gap));
+  background: var(--ground);
+}
+#bottom > .card {
+  min-height: var(--card-radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 var(--card-radius) var(--card-radius);
+}
+
+.bar {
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: 56px;
-  padding: calc(env(safe-area-inset-top) + 6px) 14px 6px max(14px, env(safe-area-inset-left));
-  background: var(--ground);
-  border-bottom: 1px solid var(--raised);
+  padding: 6px;
 }
 
-#back {
-  width: 44px;
-  height: 44px;
-  margin-left: -12px;
+/* A button of the head, as the window's: square, round at its corners,
+   faint until it is used. */
+.icon-button {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--row-radius);
+  background: none;
+  color: var(--faint);
+}
+.icon-button:active { background: var(--hover); color: var(--foreground); }
+#push-button.on { color: var(--accent); background: var(--accent-ground); }
+
+/* The chat shown, as the head of the window's panel names it. */
+#switcher {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--soft);
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: var(--row-radius);
+  font-size: 15px;
+  font-weight: 500;
 }
-
-#titles { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-#over { font-size: 12px; color: var(--muted); }
-#over:empty { display: none; }
+#switcher:active { background: var(--hover); }
+#app-icon { width: 26px; height: 26px; }
 #title {
-  margin: 0;
-  font-size: 17px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.badge {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 7px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--ground);
+  font-size: 11px;
+  font-weight: 700;
+}
+.badge.asks { background: var(--asking); }
+
+/* The pill of the agent the chat talks to, at the top of the
+   conversation. */
+.pills { display: flex; padding-top: 4px; }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 15px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.pill::before {
+  content: "";
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
 
-#lost {
-  margin: 0;
-  padding: 8px 14px;
-  background: var(--red-ground);
-  color: var(--red);
+/* The plan the agent works to, in sight under the head, as the window
+   keeps it over the conversation, folded to its line until a tap. */
+#plan {
+  margin: 0 12px 8px;
+  border-radius: 12px;
+  background: var(--raised);
+  border: 1px solid var(--border-strong);
   font-size: 13px;
 }
-
-main {
-  min-height: calc(100vh - 140px);
-  padding: 8px max(14px, env(safe-area-inset-right)) 24px max(14px, env(safe-area-inset-left));
+#plan > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  list-style: none;
+  color: var(--dim);
 }
+#plan > summary::-webkit-details-marker { display: none; }
+#plan .now { min-width: 0; flex: 1; color: var(--foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#plan[open] .now { display: none; }
+#plan .steps-list { padding: 0 12px 8px; }
 
+#lost, #note {
+  margin: 0 12px 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+}
+#lost { background: var(--failed-ground); color: var(--failed); }
+#note { background: var(--raised); color: var(--dim); }
+
+/* How a chat stands, as the window's dots: a ring while its agent is at
+   work, in the accent, or idle, in grey; filled when it waits for the
+   human, in amber, or finished a turn they have not seen, in the accent. */
 .dot {
   flex-shrink: 0;
-  width: 10px;
-  height: 10px;
-  border-radius: 5px;
-  border: 2px solid var(--faint);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--faint);
 }
 .dot.busy { border-color: var(--accent); }
-.dot.asks { border: 0; background: var(--amber); }
+.dot.asks { border: 0; background: var(--asking); }
 .dot.unread { border: 0; background: var(--accent); }
-.dot.closed { border: 0; }
+.dot.closed { border-color: transparent; }
 
-/* The chats */
+/* The chats, as the window's rail and list have them: each project
+   under its square and its name, each chat a row. */
 
-.shelf { margin: 14px 0 0; }
-.shelf h2, .label {
-  margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--faint);
+.shelf { margin: 12px 0 0; }
+.shelf-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 4px;
+  padding: 4px 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dim);
 }
-.shelf.asking h2 { color: var(--amber); }
-
-.chats {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.shelf-head .label { margin: 0; }
+.shelf.asking .shelf-head .label { color: var(--asking); }
+.square {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  border: 1px solid var(--border);
   background: var(--surface);
-  border-radius: 14px;
+  color: var(--faint);
   overflow: hidden;
 }
-.chats li + li { border-top: 1px solid var(--raised); }
+.square img { width: 100%; height: 100%; display: block; }
+.square.home { border: 0; background: none; }
+.square.missing { border-style: dashed; border-color: var(--asking); opacity: 0.7; }
+
+.chats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .chats a {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 52px;
-  padding: 8px 14px;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: var(--row-radius);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--dim);
 }
-.chats .names { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.chats .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chats .about { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chats .closed .name { color: var(--muted); }
-.chats .child { padding-left: 34px; }
-.empty { color: var(--muted); font-size: 14px; }
+.chats a:active { background: var(--hover); }
+.chats .waits a { color: var(--foreground); }
+.chats .name { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chats .closed .name { color: var(--faint); }
+.chats .project { flex-shrink: 0; max-width: 40%; font-size: 12px; font-weight: 400; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.small { flex-shrink: 0; font-size: 12px; color: var(--dim); }
+.empty { color: var(--faint); font-size: 14px; padding: 12px 4px; }
 
-/* The conversation */
-
-.goal {
-  margin: 4px 0 10px;
-  padding: 8px 12px;
-  border-radius: 12px;
-  background: var(--surface);
-  font-size: 13px;
-  color: var(--soft);
-}
-.goal code { font-family: var(--mono); font-size: 12.5px; }
-
-.entry { margin: 14px 0 0; }
-.who {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 18px 0 4px;
+/* The words that name what speaks or what happened, as the window's. */
+.label {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
   color: var(--faint);
+  text-transform: uppercase;
 }
-.who::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--faint);
-}
-.who.agent { color: var(--accent); }
-.who.agent::before { background: var(--accent); }
 
-.human {
-  margin: 4px 0 0 32px;
-  padding: 10px 12px;
-  border-radius: 14px;
+/* The goal, over the conversation. */
+.goal {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: 12px;
   background: var(--raised);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font-size: 13px;
 }
-.human.cox { color: var(--muted); background: var(--surface); }
+.goal .what { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.goal code { font-family: var(--mono); font-size: 12.5px; padding: 0; background: none; }
+.goal .turns { display: flex; gap: 3px; }
+.goal .turns span { width: 5px; height: 12px; border-radius: 2px; background: var(--border); }
+.goal .turns .failed { background: var(--failed-mark); }
+.goal .turns .now { background: var(--accent); }
+.goal .count { font-size: 12px; color: var(--faint); }
+
+/* The conversation, down a line on its left, as the window's: who
+   speaks is named where they start, with a dot of their color. */
+
+.conversation { padding-top: 16px; }
+.place {
+  position: relative;
+  padding: 0 0 10px 28px;
+}
+.place::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+.place:first-child::before { top: 10px; }
+.place.starts:not(:first-child) { padding-top: 8px; }
+.tdot {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 3px solid var(--surface);
+  background: var(--foreground);
+}
+.place.starts:not(:first-child) > .tdot { top: 12px; }
+.tdot.agent { background: var(--accent); }
+.tdot.cox { background: var(--faint); }
+.tdot.asking { background: var(--asking); }
+
+.human { font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cox-line, .note { font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .reply { overflow-wrap: anywhere; }
+.reply > :first-child { margin-top: 0; }
+.reply > :last-child { margin-bottom: 0; }
 .reply p, .reply ul, .reply ol, .reply pre, .reply blockquote, .reply h3 { margin: 8px 0; }
 .reply ul, .reply ol { padding-left: 22px; }
 .reply h3 { font-size: 15px; }
-.reply blockquote { margin-left: 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--soft); }
-.reply a { color: var(--accent); text-decoration: underline; }
+.reply blockquote { margin-left: 0; padding-left: 10px; border-left: 2px solid var(--border-strong); color: var(--dim); }
+.reply a { color: var(--link); text-decoration: underline; }
 code {
   font-family: var(--mono);
   font-size: 0.88em;
   padding: 1px 4px;
   border-radius: 5px;
-  background: var(--surface);
+  background: var(--raised);
+  color: var(--code);
 }
 pre {
   padding: 10px 12px;
-  border-radius: 12px;
-  background: var(--surface);
+  border-radius: 8px;
+  background: var(--raised);
   overflow-x: auto;
   font-size: 12px;
   line-height: 1.55;
 }
-pre code { padding: 0; background: none; font-size: inherit; }
+pre code { padding: 0; background: none; font-size: inherit; color: var(--foreground); }
 
-.note { font-size: 12.5px; color: var(--faint); white-space: pre-wrap; overflow-wrap: anywhere; }
-
-details.work {
-  border-radius: 12px;
-  background: var(--surface);
-}
-details.work > summary {
+/* A line that opens, as the window's: ▸, a mark, and what it is. */
+.line {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 10px 12px;
-  list-style: none;
-  cursor: pointer;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font-size: 14px;
+  color: var(--dim);
+  overflow-wrap: anywhere;
 }
-details.work > summary::-webkit-details-marker { display: none; }
+.line .fold { flex-shrink: 0; width: 10px; color: var(--faint); }
+.line .what { flex: 1; min-width: 0; }
+.line .answer { flex-shrink: 0; max-width: 45%; color: var(--dim); }
+
+/* The agent's work, folded under its line, as chips. */
+.work { display: flex; flex-direction: column; gap: 6px; }
+.work-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   max-width: 100%;
-  padding: 2px 8px;
-  border-radius: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 14px;
+  border: 1px solid transparent;
   background: var(--raised);
+  font-family: var(--mono);
   font-size: 12px;
-  color: var(--soft);
+  color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
-.chip.failed { background: var(--red-ground); color: var(--red); }
+.chip > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chip.open { border-color: var(--border-strong); }
+.chip.failed { background: var(--failed-ground); color: var(--failed); }
+.chip.stopped { color: var(--faint); }
 .mark {
   flex-shrink: 0;
   width: 7px;
   height: 7px;
-  border-radius: 4px;
-  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  border: 1px solid var(--link);
 }
-.mark.done { border: 0; background: var(--accent); }
-.mark.failed { border: 0; background: var(--red); }
-.mark.stopped { border: 0; background: var(--faint); }
-.thought.entry { font-size: 13.5px; }
-details[open] .last-thought { display: none; }
-.last-thought { width: 100%; font-size: 12.5px; font-style: italic; color: var(--muted); }
-.steps { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 8px; }
-.step { font-size: 13px; }
-.step .head { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
-.step pre { margin: 6px 0 0; max-height: 50vh; }
-.thought { font-style: italic; color: var(--muted); white-space: pre-wrap; }
+.mark.done { border-color: var(--accent); background: var(--accent); }
+.mark.failed { border-color: var(--failed-mark); background: var(--failed-mark); }
+.mark.stopped { border-color: var(--disabled); background: var(--disabled); }
+.mark.waiting { border-color: var(--disabled); }
+.mark.found { border-color: var(--asking); background: var(--asking); }
 
-.diff { margin: 6px 0 0; padding: 8px 0; border-radius: 10px; background: var(--ground); font-family: var(--mono); font-size: 11.5px; overflow-x: auto; }
-.diff .path { padding: 0 10px 4px; color: var(--muted); }
+.thought { font-size: 13px; font-style: italic; color: var(--faint); overflow-wrap: anywhere; }
+.thought .full { white-space: pre-wrap; margin-top: 4px; }
+.call { display: flex; flex-direction: column; gap: 4px; }
+.call pre, .call .diff { margin: 0; max-height: 50vh; }
+
+.diff { padding: 6px 0; border-radius: 8px; background: var(--raised); font-family: var(--mono); font-size: 11.5px; overflow-x: auto; }
+.diff .path { padding: 0 10px 4px; color: var(--dim); }
 .diff div { padding: 0 10px; white-space: pre; }
-.diff .added { background: var(--accent-ground); color: var(--accent); }
-.diff .removed { background: var(--red-ground); color: var(--red); }
-.diff .skipped { color: var(--faint); }
+.diff .added { background: var(--added-ground); }
+.diff .removed { background: var(--removed-ground); }
+.diff .skipped { color: var(--dim); }
 
-.plan { list-style: none; margin: 0; padding: 6px 0; border-radius: 12px; background: var(--surface); font-size: 13px; }
-.plan li { display: flex; gap: 10px; padding: 4px 12px; }
-.plan .state { width: 14px; flex-shrink: 0; text-align: center; }
-.plan .completed { color: var(--faint); }
-.plan .in_progress .state { color: var(--accent); }
-.plan-changed .label { color: var(--amber); }
-.plan-changed .added { color: var(--amber); }
-.plan-changed .removed { color: var(--faint); }
+/* The plan, as its steps. */
+.steps-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.steps-list li { display: flex; gap: 8px; }
+.steps-list .state { flex-shrink: 0; width: 10px; text-align: center; }
+.steps-list .completed { color: var(--faint); }
+.steps-list .completed .state { color: var(--accent); }
+.steps-list .in_progress .state { color: var(--accent); }
+.steps-list .added { color: var(--asking); }
+.steps-list .removed { color: var(--dim); }
+.plan-changed { display: flex; flex-direction: column; gap: 4px; }
 
-.card {
-  padding: 12px;
+/* What runs as a turn ends, or as something else happens, on a line. */
+.checks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.checks > .label { margin-right: 4px; }
+.checks .chip { height: 26px; }
+
+/* A card that waits for the human, as the window's: in amber for what
+   the agent asks, in the accent for what Cox or the agent offers. */
+.card-ask, .card-offer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
   border-radius: 14px;
-  background: var(--surface);
+  border: 1px solid;
+}
+.card-ask { --tone: var(--asking); --tone-button: var(--asking-button); --tone-edge: var(--asking-edge); background: var(--asking-ground); border-color: var(--asking-edge); }
+.card-offer { --tone: var(--accent); --tone-button: var(--offering-button); --tone-edge: var(--offering-edge); background: var(--offering-ground); border-color: var(--offering-edge); }
+.card-head { display: flex; align-items: flex-start; gap: 8px; }
+.card-head .sign { flex-shrink: 0; color: var(--tone); }
+.card-head .what { flex: 1; min-width: 0; color: var(--dim); overflow-wrap: anywhere; }
+.card-head .tag { flex-shrink: 0; font-size: 12px; color: var(--tone); }
+.card-ask .why, .card-offer .why { font-size: 12px; color: var(--dim); }
+.answers { display: flex; flex-wrap: wrap; gap: 6px; }
+.answers button {
+  flex: 1 1 96px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--tone-button);
+  color: var(--foreground);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.answers button.first { background: var(--tone); color: var(--ground); font-weight: 600; }
+.answers button:disabled { opacity: 0.6; }
+.answers button.armed { background: var(--asking); }
+.hint { margin: 0; font-size: 12px; color: var(--faint); }
+
+.gathered { display: flex; flex-direction: column; gap: 10px; }
+.gather .check { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+.gather .headline { margin-top: 4px; font-weight: 600; overflow-wrap: anywhere; }
+.gather .reply { margin: 4px 0 0; color: var(--dim); font-size: 14px; }
+
+/* A picture or a video, with its caption under it. */
+.media { margin: 0; }
+.media img, .media video { display: block; max-width: 100%; max-height: 70vh; border-radius: 8px; background: var(--raised); }
+.media img { height: auto; object-fit: contain; }
+.media figcaption { margin-top: 6px; font-size: 12px; color: var(--dim); overflow-wrap: anywhere; }
+
+.waits { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; font-size: 12px; color: var(--faint); }
+
+/* What the human closes the work on, with Merge. */
+.closing .part h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; color: var(--faint); text-transform: uppercase; }
+.closing .shown { display: flex; gap: 8px; overflow-x: auto; }
+.closing .shown a { flex-shrink: 0; display: grid; place-items: center; width: 80px; height: 80px; border-radius: 8px; overflow: hidden; background: var(--raised); color: var(--foreground); }
+.closing .shown img { width: 100%; height: 100%; object-fit: cover; }
+.closing .shown .video { font-size: 20px; }
+
+/* The pages of a sketch, to try, as chips, and the frame that shows one
+   over the chat. */
+.mocks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mocks .label { margin-right: 4px; }
+.mocks button {
+  height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--button);
+  color: var(--link);
+  font-size: 13px;
+}
+body.trying { overflow: hidden; }
+#mock { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--ground); }
+#mock .bar { padding: calc(env(safe-area-inset-top) + 6px) 8px 6px; background: var(--surface); border-bottom: 1px solid var(--border); }
+#mock .bar .icon-button { font-size: 20px; color: var(--dim); }
+#mock .page { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 14px; }
+#mock iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+
+/* The input, as the window's box: the line, with Stop and Send at its
+   end. */
+#goal-form, #compose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 12px 12px;
+  padding: 8px 8px 8px 16px;
+  border-radius: 16px;
+  background: var(--raised);
   border: 1px solid var(--border);
 }
-.card.asks { background: var(--amber-ground); border-color: var(--amber-border); }
-.card .label { color: var(--faint); }
-.card.asks .label { color: var(--amber); }
-.card .what { font-weight: 600; overflow-wrap: anywhere; }
-.card .why { font-size: 13px; color: var(--soft); }
-.options { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.options li {
-  padding: 8px 12px;
+#compose { flex-direction: row; align-items: flex-end; }
+#goal-form { border-color: var(--offering-edge); padding: 10px 16px; }
+#goal-form label { font-size: 11px; font-weight: 600; color: var(--faint); }
+#line, #goal-line {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 24px;
+  max-height: 160px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.4;
+  resize: none;
+}
+#line::placeholder, #goal-line::placeholder { color: var(--faint); }
+#line { align-self: center; }
+.compose-row { display: flex; align-items: center; gap: 6px; }
+#send, #stop {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border: 0;
   border-radius: 10px;
-  border: 1px solid var(--line);
-  font-size: 14px;
+  display: grid;
+  place-items: center;
 }
-.options li.first { background: var(--amber); border-color: var(--amber); color: #1a1408; font-weight: 600; }
-.options li.chosen { border-color: var(--accent); color: var(--accent); }
-.options li.other { color: var(--faint); border-style: dashed; }
-.hint { margin: 8px 0 0; font-size: 12px; color: var(--faint); }
-.media { margin: 10px 0; }
-.media img, .media video { display: block; max-width: 100%; max-height: 70vh; border-radius: 10px; background: var(--raised); }
-.media img { height: auto; object-fit: contain; }
-.media figcaption { margin-top: 6px; font-size: 12.5px; color: var(--soft); overflow-wrap: anywhere; }
-.gathered { display: flex; flex-direction: column; gap: 12px; margin: 10px 0; }
-.gather .headline { margin-top: 4px; font-weight: 600; overflow-wrap: anywhere; }
-.gather .reply { margin: 4px 0 0; color: var(--soft); font-size: 14px; }
+#send { background: var(--accent); color: var(--ground); }
+#stop { background: var(--button); color: var(--foreground); }
+#send:disabled, #stop:disabled { opacity: 0.5; }
+#failed, #held { margin: 0 14px 8px; font-size: 12px; }
+#failed { color: var(--failed); }
+#held { color: var(--dim); }
 
-.checks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.checks .label { margin: 0 4px 0 0; }
-.check { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--soft); }
-.check .mark.found { border: 0; background: var(--amber); }
+/* The page that pairs a phone. */
 
-.waits {
-  margin: 18px 0 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--muted);
-}
-.work pre, .card pre { background: var(--ground); }
-
-/* The page that pairs a phone */
-
-.pair { padding-top: calc(env(safe-area-inset-top) + 24px); }
+.pair { padding: calc(env(safe-area-inset-top) + 24px) 6px 24px; }
 .pair h1 { margin: 0 0 8px; font-size: 22px; }
-.pair p { color: var(--soft); }
+.pair p { color: var(--dim); }
 .pair input {
   width: 100%;
   height: 48px;
   margin: 4px 0 10px;
-  padding: 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-  color: var(--text);
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--raised);
+  color: var(--foreground);
   font: inherit;
+  font-size: 16px;
 }
 .pair button {
   width: 100%;
-  height: 48px;
+  height: 44px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--accent);
   color: var(--ground);
   font-weight: 600;
 }
-
-/* What the human does from the phone */
-
-#goal-button, #push-button {
-  width: 40px;
-  height: 40px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--soft);
-  font-size: 18px;
-}
-#push-button { display: flex; align-items: center; justify-content: center; color: var(--faint); }
-#push-button.on { color: var(--accent); background: var(--accent-ground); }
-
-#note {
-  margin: 0;
-  padding: 8px 14px;
-  background: var(--raised);
-  color: var(--soft);
-  font-size: 13px;
-}
-
-#bottom {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  background: var(--ground);
-  padding: 0 max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
-}
-#compose, #goal-form {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 10px 0 calc(env(safe-area-inset-bottom) + 10px);
-  border-top: 1px solid var(--raised);
-}
-#goal-form { flex-direction: column; align-items: stretch; gap: 6px; padding-bottom: 10px; }
-#goal-form label { font-size: 12px; color: var(--faint); }
-#line, #goal-line {
-  flex: 1;
-  min-width: 0;
-  min-height: 44px;
-  max-height: 160px;
-  padding: 11px 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 16px;
-  line-height: 1.35;
-  resize: none;
-}
-#send, #stop {
-  flex-shrink: 0;
-  width: 44px;
-  height: 44px;
-  border: 0;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-#send { background: var(--accent); color: var(--ground); }
-#stop { background: var(--raised); color: var(--text); }
-#send:disabled, #stop:disabled { opacity: 0.5; }
-#failed { margin: 8px 0 0; font-size: 12.5px; color: var(--red); }
-#held { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
-
-.options button {
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-}
-.options li:has(button) { padding: 0; }
-.options li button { padding: 12px; }
-.options button:disabled { opacity: 0.6; }
-.answers { display: flex; gap: 8px; margin: 10px 0 0; }
-.answers button {
-  flex: 1;
-  height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: transparent;
-  font: inherit;
-  font-size: 14px;
-}
-.answers button.first { background: var(--amber); border-color: var(--amber); color: #1a1408; font-weight: 600; }
-.answers button:disabled { opacity: 0.6; }
-
-/* The pages of a sketch, to try, and the frame that shows one over the chat. */
-.mocks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0; }
-.mocks .label { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--soft); margin-right: 2px; }
-.mocks .chip { font: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid var(--line); color: var(--accent); cursor: pointer; }
-body.trying { overflow: hidden; }
-#mock { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--ground); }
-#mock .bar { display: flex; align-items: center; gap: 8px; padding: calc(env(safe-area-inset-top) + 6px) 10px 6px; border-bottom: 1px solid var(--line); }
-#mock .bar button, #mock .bar a { min-width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--text); font-size: 20px; text-decoration: none; }
-#mock .page { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--soft); font-size: 14px; }
-#mock iframe { flex: 1; width: 100%; border: 0; background: #fff; }
-
-/* What the human closes the work on, with Merge. */
-.closing { margin: 14px 0; display: flex; flex-direction: column; gap: 10px; border-color: var(--accent); }
-.closing > .label { color: var(--accent); }
-.closing h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--soft); }
-.closing .shown { display: flex; gap: 8px; overflow-x: auto; }
-.closing .shown a { flex-shrink: 0; display: grid; place-items: center; width: 88px; height: 88px; border-radius: 10px; overflow: hidden; background: var(--raised); color: var(--text); text-decoration: none; }
-.closing .shown img { width: 100%; height: 100%; object-fit: cover; }
-.closing .shown .video { font-size: 22px; }
-.closing .plan { background: var(--ground); }
-.closing .plan .added { color: var(--amber); }
-.closing .plan .removed { color: var(--faint); }
-.closing .checks .label:empty { display: none; }
-.closing .merge { padding: 12px; border: 0; border-radius: 10px; background: var(--accent); color: #0d1f1c; font: inherit; font-weight: 600; }
-.closing .merge.armed { background: var(--amber); color: #1a1408; }
-.closing .merge:disabled { opacity: 0.6; }
-.closing .hint { margin: 0; }

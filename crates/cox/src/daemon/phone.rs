@@ -55,6 +55,7 @@ use super::Internal;
 use super::push::{self, Notice, Pushed, Pushes, Subscription};
 use super::wire::{FromDaemon, ToDaemon};
 use crate::storage::{self, Kept};
+use crate::ui::theme;
 
 /// The cookie that holds the secret, once the phone is paired.
 const COOKIE: &str = "cox_phone";
@@ -69,7 +70,8 @@ const BEAT: Duration = Duration::from_secs(20);
 /// apart from Safari's, so the page there pairs by the link pasted in.
 const NOT_PAIRED: &str = "<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" \
     content=\"width=device-width, initial-scale=1\"><title>Cox</title>\
-    <link rel=\"stylesheet\" href=\"/app.css\"><main class=\"pair\"><h1>Cox</h1>\
+    <link rel=\"stylesheet\" href=\"/theme.css\"><link rel=\"stylesheet\" href=\"/app.css\">\
+    <main class=\"pair\"><h1>Cox</h1>\
     <p>Cox does not know this phone. Open the page through Tailscale, logged in as the Mac \
     is, or, on the Mac, run <code>cox --phone-link</code> and open the pairing link it prints \
     here, or paste it:</p><form action=\"/pair\">\
@@ -79,7 +81,13 @@ const NOT_PAIRED: &str = "<!doctype html><meta charset=\"utf-8\"><meta name=\"vi
 /// The files a phone gets before it is paired: the page's look, for the
 /// page that pairs it, and what puts the page on its home screen, and the
 /// service worker, which the browser asks for without the cookie.
-const PUBLIC: &[&str] = &["/app.css", "/manifest.webmanifest", "/icon.svg", "/sw.js"];
+const PUBLIC: &[&str] = &[
+    "/app.css",
+    "/theme.css",
+    "/manifest.webmanifest",
+    "/icon.svg",
+    "/sw.js",
+];
 
 /// The page's files, built into Cox: its path, its type, and what it
 /// holds.
@@ -433,8 +441,14 @@ impl Page {
                 None => answer(StatusCode::NOT_FOUND, TEXT, "coxd pushes nothing"),
             };
         }
+        if path == "/theme.css" {
+            return answer(StatusCode::OK, "text/css; charset=utf-8", theme::css());
+        }
         if let Some(file) = path.strip_prefix("/media/") {
             return media(file, request.headers().get(header::RANGE));
+        }
+        if let Some(project) = path.strip_prefix("/project-icon/") {
+            return project_icon(project);
         }
         if path == "/mocks" {
             return self.mocks(request.uri().query().unwrap_or_default());
@@ -739,6 +753,15 @@ fn pasted(query: &str) -> &str {
 /// secret.
 fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0, |differ, (a, b)| differ | (a ^ b)) == 0
+}
+
+/// The icon the human gave the project kept by the number `project`, as
+/// the rail draws it, if it has one.
+fn project_icon(project: &str) -> Response<Body> {
+    match crate::project_icon::named(project).and_then(|path| std::fs::read(path).ok()) {
+        Some(bytes) => answer(StatusCode::OK, "image/png", bytes),
+        None => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
+    }
 }
 
 /// An answer of `status`, holding `text` of the type `kind`.
@@ -1058,6 +1081,41 @@ mod tests {
                     Some(Internal::Act { message: ToDaemon::Submit { key: 7, ref text, .. } }) if text == "go on"
                 ));
             });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn draws_in_the_window_colors_and_shows_the_icons_to_a_paired_phone() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, _heard) = unbounded_channel();
+            let owner = Rc::new(RefCell::new(None));
+            tokio::task::spawn_local(serve(
+                listener,
+                "secret".to_owned(),
+                owner,
+                (None, None),
+                internal,
+            ));
+            let get = |path: &str, cookie: &str| {
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
+            };
+            // The pairing page is drawn in them too.
+            let theme = ask(port, &get("/theme.css", ""), "").await;
+            assert!(theme.starts_with("HTTP/1.1 200"), "{theme}");
+            assert!(theme.contains("--asking-ground: #1e1b15;"), "{theme}");
+            let unpaired = ask(port, &get("/project-icon/1", ""), "").await;
+            assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
+            let cookie = "Cookie: cox_phone=secret\r\n";
+            let none = ask(port, &get("/project-icon/1", cookie), "").await;
+            assert!(none.starts_with("HTTP/1.1 404"), "{none}");
+            let elsewhere = ask(port, &get("/project-icon/..%2fphone-token", cookie), "").await;
+            assert!(elsewhere.starts_with("HTTP/1.1 404"), "{elsewhere}");
+        });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
             .expect("the page answers in time");
