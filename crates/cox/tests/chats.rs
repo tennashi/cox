@@ -21,6 +21,7 @@ use cox::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, Stat
 use cox::chat::sketch::Sketch;
 use cox::chat::view::ChatView;
 use cox::notices::{AppNotices, Notices};
+use cox::ui::input::LineInput;
 use cox::workflow;
 use cox::workspace::{Chat, Workspace};
 use cox_core::goal::Goal as KeptGoal;
@@ -1087,6 +1088,108 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
     assert_eq!(agent.cwd(), Some(store_folder));
     assert_eq!(agent.resumed(), Vec::<String>::new());
     let _ = std::fs::remove_dir_all(&projects);
+}
+
+#[gpui::test]
+fn directories_are_made_cloned_and_linked_on_the_projects_card(cx: &mut TestAppContext) {
+    let root = scratch("directories");
+    let origin = root.join("origin.git");
+    let git = |args: &[&str], at: &std::path::Path| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(at)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    std::fs::create_dir_all(&origin).unwrap();
+    git(&["init", "-q", "--initial-branch=main"], &origin);
+    git(
+        &[
+            "-c",
+            "user.name=Cox",
+            "-c",
+            "user.email=cox@example.com",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "first",
+        ],
+        &origin,
+    );
+    let app = root.join("projects").join("untitled-1");
+    let directories = app.join("directories");
+    let (store, _) = kept_chat(&app, None);
+    let (_, workspace, cx) = open_window_resuming(cx, root.join("home"), store, Resumes::Resume);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open_project_card(1, window, cx);
+    });
+    let card = workspace.read_with(cx, |workspace, _| {
+        workspace.project_card().expect("the card is open").clone()
+    });
+    let described = |cx: &mut VisualTestContext| cx.read(|cx| card.read(cx).described(cx));
+    let input = card.read_with(cx, |card, _| card.directory_input().clone());
+    let enter = |text: &str, input: &Entity<LineInput>, cx: &mut VisualTestContext| {
+        input.update(cx, |input, cx| input.set_text(text, cx));
+        cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+    };
+
+    // A URL clones the repository into a directory named after it.
+    let url = origin.display().to_string();
+    enter(&url, &input, cx);
+    assert!(directories.join("origin").join(".git").is_dir());
+    let said = described(cx);
+    assert!(
+        said.contains(&format!("Directory origin (Git, remote {url})"))
+            && said.contains(&"Under it: Cloned into origin.".to_owned()),
+        "{said:?}"
+    );
+    // The same again is not cloned over it.
+    enter(&url, &input, cx);
+    let said = described(cx);
+    assert!(
+        said.contains(&"Under it: The project has a directory origin already.".to_owned()),
+        "{said:?}"
+    );
+
+    // A name alone makes a directory, which is no repository yet.
+    enter("app", &input, cx);
+    assert!(directories.join("app").is_dir());
+    assert!(!directories.join("app").join(".git").exists());
+    let said = described(cx);
+    assert!(
+        said.contains(&"Directory app".to_owned())
+            && said.contains(&"Under it: Made app.".to_owned()),
+        "{said:?}"
+    );
+
+    // It becomes one, with no remote.
+    click(cx, "project-directory-action-0");
+    cx.run_until_parked();
+    assert!(directories.join("app").join(".git").is_dir());
+    let said = described(cx);
+    assert!(
+        said.contains(&"Directory app (Git, no remote)".to_owned()),
+        "{said:?}"
+    );
+
+    // And, linked to a remote while it has nothing yet, takes its branch.
+    click(cx, "project-directory-action-0");
+    let remote = card
+        .read_with(cx, |card, _| card.link_input().cloned())
+        .expect("the remote's input is open");
+    enter(&url, &remote, cx);
+    let said = described(cx);
+    assert!(
+        said.contains(&format!("Directory app (Git, remote {url})"))
+            && said.contains(&"Under it: Linked app to its remote, and took its main.".to_owned()),
+        "{said:?}"
+    );
+    assert!(card.read_with(cx, |card, _| card.link_input().is_none()));
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[gpui::test]

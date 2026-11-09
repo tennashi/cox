@@ -67,7 +67,21 @@ renaming the folder, where it is, with it, unless a folder there has
 the name already, or one of the project's chats is at work: each of
 its chats notes the move, its agent stops, and a line sent starts it
 again in the folder renamed, told the conversation so far, as when the
-folder moved (see below). The card also has the project's
+folder moved (see below). Under it are the project's directories: the
+folders in `directories` in its folder, as `~/cox/projects/shop/directories/app`,
+the rest of the project's folder being the human's to put anything in,
+as notes or what they try out, its agents working in all of it. Enter
+in the input under them makes a directory of the name typed, or, for a
+URL, clones the repository it names into one named after it, as `git
+clone` names it, as `cox` for `https://github.com/tennashi/cox.git`.
+A directory that is no Git repository has "Make repository", which
+makes it one, with no remote yet, for a project that starts from
+nothing; and a repository has its remote, `origin`, and "Link…",
+which opens an input of the remote's URL under it, where Enter links it
+to that remote, a repository with nothing in it yet taking the
+remote's branch, as a clone would have. Git asks nothing there, so a
+repository it needs a login for that it has not got fails, the card
+saying what Git said. The card also has the project's
 folders: its own, the primary, which its chats work in, and the others
 the human added, which their agents work in too, as roots of their
 session beside their own (ACP's `additionalDirectories`), for an agent

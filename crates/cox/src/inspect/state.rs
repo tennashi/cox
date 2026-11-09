@@ -143,6 +143,15 @@ fn focused(workspace: &Workspace, window: &Window, cx: &App) -> String {
         if focused == card.name_input().focus_handle(cx) {
             return "the project card's name".to_owned();
         }
+        if focused == card.directory_input().focus_handle(cx) {
+            return "the project card's directory".to_owned();
+        }
+        if card
+            .link_input()
+            .is_some_and(|input| focused == input.focus_handle(cx))
+        {
+            return "the project card's remote".to_owned();
+        }
     }
     if workspace.is_folded() && focused == workspace.focus_handle(cx) {
         return "the window, the chat folded away".to_owned();
