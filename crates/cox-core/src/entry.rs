@@ -54,6 +54,20 @@ pub enum Entry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size: Option<(u32, u32)>,
     },
+    /// A file the agent showed the human on the stage, as a Markdown
+    /// file to read or code at the lines it talks about, for the human
+    /// to read in the conversation too, on the Mac or on the phone, where
+    /// there is no stage: the copy Cox keeps of it as it was then, by the
+    /// name of its `file`, shown from `path`, as the agent named it, and
+    /// whether it is `markdown`, or else code at `lines`, if it named
+    /// them, the first and the last, from 1.
+    Shown {
+        file: String,
+        path: String,
+        markdown: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lines: Option<(usize, usize)>,
+    },
     /// A tool call, running until it has a result.
     ToolCall {
         id: String,

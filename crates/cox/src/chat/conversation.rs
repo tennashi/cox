@@ -1441,6 +1441,24 @@ impl Conversation {
         });
     }
 
+    /// Notes that the agent showed the human the file at `path`, as it
+    /// named it, kept as `file`, Markdown if it is `markdown`, or else
+    /// code at `lines`, if it named them.
+    pub fn show_file(
+        &mut self,
+        file: String,
+        path: String,
+        markdown: bool,
+        lines: Option<(usize, usize)>,
+    ) {
+        self.push(Entry::Shown {
+            file,
+            path,
+            markdown,
+            lines,
+        });
+    }
+
     /// Has the triggers named `names` gather what the human needs to
     /// answer the permission request the agent waits on, which shows that
     /// they do until each has said, or [`Self::stop_gathering`].

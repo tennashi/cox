@@ -968,6 +968,14 @@ agent's replies, for the human to read: the agent opens it with Cox's
 `show_markdown` tool. The tab follows the file as it changes, and the
 agent showing the same file again brings its tab to the front.
 
+What the agent shows with `show_markdown`, or with `show_file` (see
+below), the conversation notes too, on a row of its own, with the
+file's path, and the lines it named, which a click opens on the stage
+again, so that the human finds it later, and reads it on the phone,
+where there is no stage. Cox keeps a copy of each as it was shown, in
+`state/media` with the pictures (see [The stage](#the-stage)), named
+after what it holds; a file over 2 MB is shown on the stage alone.
+
 A tab can show a file as it is written too, such as code, with the
 numbers of its lines, for the human to read: the agent opens it with
 Cox's `show_file` tool, at the lines it talks about, which the tab marks
@@ -1375,7 +1383,7 @@ kind is kept apart
   `triggers.json`, how each last ran, `trigger-runs.json`, what a chat
   of each folder said last as its turn ended, `last-turns.json`, the
   pictures of the regions handed to the chats, `pictures`, the
-  pictures and videos shown in the conversations, `media`, the
+  pictures, videos and files shown in the conversations, `media`, the
   icons the human gave the projects, `icons`, the secret the
   human's phones are paired with, `phone-token`, the key what is
   pushed to them is signed with, `push-key`, and where to push to
@@ -1503,6 +1511,10 @@ agent asks, a tap on an option; sets or dismisses a goal the agent
 proposes, and says whether to keep what was learned in the wiki; stops
 a turn; and sets the chat's goal, with ◎ at the page's head, as "Set
 goal…" takes it, `$ ` and a command, or words, emptied to clear it.
+A file the agent showed opens over the chat, with a tap on its row, as
+it was shown: a Markdown file drawn as the agent's replies are, and
+code with the numbers of its lines, the lines the agent named marked
+and scrolled to, with ‹ back to the chat.
 What changed where the chat works, as "Changes" on the stage's bar
 shows it, the phone shows too, where there is no stage: ± at the
 page's head, counting the files that changed, opens it over the chat,
@@ -1548,7 +1560,8 @@ Once a chat waits for the human after the work their last line left
 it, the phone gathers, on a card under the conversation, what they
 close that work on: what changed where the chat works, as the files and
 the lines they gained and lost, which a tap opens, as ± does; what the
-agent showed of it, as pictures and videos, which a tap opens; what it decided on its own, the steps it
+agent showed of it, as pictures and videos, and the files it showed,
+which a tap opens; what it decided on its own, the steps it
 added to the plan it started with and those it took out, as `PLAN
 CHANGED` says them; and how the checks went as its last turn ended,
 with the goal's when it was met. "Merge" on the card, tapped twice, so

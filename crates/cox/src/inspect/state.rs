@@ -435,6 +435,16 @@ fn describe_entry(entry: &Entry) -> String {
             caption,
             ..
         } => describe_media(*kind, from, caption.as_deref()),
+        Entry::Shown {
+            path,
+            markdown,
+            lines,
+            ..
+        } => match (markdown, lines) {
+            (true, _) => format!("shown: {path}, as Markdown"),
+            (false, Some((first, last))) => format!("shown: {path}, lines {first}-{last}"),
+            (false, None) => format!("shown: {path}"),
+        },
         Entry::Plan(steps) => describe_plan(steps),
         Entry::ToolCall {
             title,
