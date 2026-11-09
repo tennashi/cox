@@ -22,7 +22,7 @@ tokio-stream = { version = "0.1.19", default-features = false, features = ["net"
 tracing.workspace = true
 # Whether the process an emulator's file names is there still, and
 # stopping an emulator Cox started.
-libc = "0.2.188"
+libc.workspace = true
 # The letters `cox-fake-emulator` draws its screen with.
 font8x8 = { version = "0.3.1", default-features = false }
 
