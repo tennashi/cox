@@ -5,7 +5,6 @@
 
 :root {
   --gap: 8px;
-  --card-radius: 18px;
   --row-radius: 11px;
   --mono: ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
 }
@@ -13,15 +12,15 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
-html { background: var(--ground); }
+html { background: var(--surface); }
 body {
   margin: 0;
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding: 0 max(var(--gap), env(safe-area-inset-right)) 0 max(var(--gap), env(safe-area-inset-left));
-  background: var(--ground);
+  padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  background: var(--surface);
   color: var(--foreground);
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, system-ui, "DejaVu Sans", sans-serif;
   -webkit-text-size-adjust: 100%;
@@ -32,58 +31,48 @@ a { color: inherit; text-decoration: none; }
 button { font: inherit; color: inherit; cursor: pointer; }
 svg { flex-shrink: 0; }
 
-/* The panel: a card on the window's ground, its head and its foot
-   staying in sight as the conversation scrolls between them. */
+/* The panel, as the window's, but filling the phone's screen edge to
+   edge, with no card around it, as an app of the phone's own is: the
+   screen's own corners are its card. Its head and its foot float over
+   the conversation, which scrolls under them, blurred under the head
+   and fading under the input, as iOS's bars do, rather than cut off by
+   a line. */
 
 #head {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding-top: calc(env(safe-area-inset-top) + var(--gap));
-  background: var(--ground);
+  padding-top: env(safe-area-inset-top);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
 }
-#head > .card {
-  display: flow-root;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-bottom: 0;
-  border-radius: var(--card-radius) var(--card-radius) 0 0;
-}
+#head > .card { display: flow-root; }
 main {
   flex: 1;
-  padding: 0 14px 12px;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  padding: 0 16px 12px;
 }
 #bottom {
   position: sticky;
   bottom: 0;
   z-index: 2;
-  padding-bottom: calc(env(safe-area-inset-bottom) + var(--gap));
-  background: var(--ground);
-}
-#bottom > .card {
-  min-height: var(--card-radius);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-top: 0;
-  border-radius: 0 0 var(--card-radius) var(--card-radius);
+  padding: 16px 0 env(safe-area-inset-bottom);
+  background: linear-gradient(to bottom, transparent, var(--surface) 24px);
 }
 
 .bar {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 6px;
+  padding: 4px 6px;
 }
 
 /* A button of the head, as the window's: square, round at its corners,
-   faint until it is used. */
+   faint until it is used, and as big as a finger. */
 .icon-button {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -162,7 +151,7 @@ main {
 /* The plan the agent works to, in sight under the head, as the window
    keeps it over the conversation, folded to its line until a tap. */
 #plan {
-  margin: 0 12px 8px;
+  margin: 0 16px 8px;
   border-radius: 12px;
   background: var(--raised);
   border: 1px solid var(--border-strong);
@@ -537,14 +526,14 @@ body.trying { overflow: hidden; }
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin: 0 12px 12px;
+  margin: 0 12px 8px;
   padding: 8px 8px 8px 16px;
-  border-radius: 16px;
+  border-radius: 25px;
   background: var(--raised);
   border: 1px solid var(--border);
 }
 #compose { flex-direction: row; align-items: flex-end; }
-#goal-form { border-color: var(--offering-edge); padding: 10px 16px; }
+#goal-form { border-color: var(--offering-edge); padding: 10px 16px; border-radius: 20px; }
 #goal-form label { font-size: 11px; font-weight: 600; color: var(--faint); }
 #line, #goal-line {
   flex: 1;
@@ -570,7 +559,7 @@ body.trying { overflow: hidden; }
   width: 34px;
   height: 34px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 50%;
   display: grid;
   place-items: center;
 }

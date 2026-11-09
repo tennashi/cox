@@ -1503,16 +1503,17 @@ seen. What else the window does, as handing the chat a selection,
 opening a project or a sketch, is the window's.
 
 The page is drawn as the window's panel is, for the human to find on
-the phone what they know from the Mac: on a card, in the window's own
-colors, which coxd serves from the window's theme, as `/theme.css`; at
-its head, the chat's dot and name, and how many of the project's other
-chats wait; the agent's pill, the goal's bar, and the plan in sight
-under the head, folded to its line; the conversation down a line on
-its left, who speaks named where they start, the agent's steps as
-chips, and what asks the human, or what Cox offers, on the window's
-cards; and the input in the window's box. Its list puts each project
-under its square, as the rail draws it, with the icon the human gave
-it, and each chat on a row, as the window's list has them.
+the phone what they know from the Mac: filling the phone's screen, with
+no card around it, in the window's own colors, which coxd serves from
+the window's theme, as `/theme.css`; at its head, the chat's dot and
+name, and how many of the project's other chats wait; the agent's pill,
+the goal's bar, and the plan in sight under the head, folded to its
+line; the conversation down a line on its left, who speaks named where
+they start, the agent's steps as chips, and what asks the human, or
+what Cox offers, on the window's cards; and the input in the window's
+box. Its list puts each project under its square, as the rail draws it,
+with the icon the human gave it, and each chat on a row, as the
+window's list has them.
 
 A chat of a sketch lists the sketch's HTML pages under its
 conversation, "Try it", for the human to try a mock the agent made as
