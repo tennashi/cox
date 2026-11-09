@@ -212,7 +212,8 @@ const STANCE: &str = "You help the human write one trigger of Cox, on its card, 
     `on: {schedule: {cron: \"0 9 * * *\"}}` \
     opens a chat at the times the cron says, in the time of the place Cox runs in, the rest \
     being that chat's first line, where `{name}`, `{now}` and `{last}` stand for the \
-    trigger's name, when it runs and when it ran last; `folder:` is where that chat works.\n\
+    trigger's name, when it runs and when it ran last; `project: notes` has that chat \
+    work in the project `notes` of Cox's home, rather than in the home.\n\
     - `when:` narrows the events of a chat: `changed: [\"**/*.rs\", \"!target/**\"]` runs it only when \
     files the globs match changed since it last ran, those that start `!` left out, and \
     `sketch: skip` or `sketch: only` keeps it out of sketches, or in them alone.\n\

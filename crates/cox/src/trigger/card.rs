@@ -25,10 +25,10 @@ pub struct Draft {
     /// The times a schedule runs, as cron writes them.
     #[serde(default)]
     pub cron: String,
-    /// Where a schedule's chat works, whole or from `~`, or else, empty,
-    /// the home.
+    /// The project a schedule's chat works in, by its name, or else,
+    /// empty, the home.
     #[serde(default)]
-    pub folder: String,
+    pub project: String,
     /// The globs whose files, changed, run it, or, empty, anything.
     #[serde(default)]
     pub changed: Vec<String>,
@@ -51,14 +51,14 @@ impl Draft {
     #[must_use]
     pub fn of(trigger: &Trigger) -> Self {
         let cron = trigger.cron().map(ToString::to_string).unwrap_or_default();
-        let (by, allow, reject, folder) = match &trigger.by {
+        let (by, allow, reject, project) = match &trigger.by {
             By::Shell => ("shell", Vec::new(), Vec::new(), None),
             By::This => ("this", Vec::new(), Vec::new(), None),
             By::New {
                 allow,
                 reject,
-                folder,
-            } => ("new", allow.clone(), reject.clone(), folder.as_deref()),
+                project,
+            } => ("new", allow.clone(), reject.clone(), project.clone()),
         };
         Self {
             name: trigger.name.clone(),
@@ -77,7 +77,7 @@ impl Draft {
                 })
                 .unwrap_or_default(),
             cron,
-            folder: folder.map(from_home).unwrap_or_default(),
+            project: project.unwrap_or_default(),
             changed: trigger.when.changed.clone().unwrap_or_default(),
             sketch: trigger.when.sketch,
             by: by.to_owned(),
@@ -126,8 +126,8 @@ impl Draft {
             }
         }
         lines.push(format!("by: {}", self.by.trim()));
-        if !self.folder.trim().is_empty() {
-            lines.push(format!("folder: {}", self.folder.trim()));
+        if !self.project.trim().is_empty() {
+            lines.push(format!("project: {}", self.project.trim()));
         }
         for (key, list) in [("allow", &self.allow), ("reject", &self.reject)] {
             let list: Vec<&String> = list.iter().filter(|item| !item.trim().is_empty()).collect();
@@ -165,19 +165,6 @@ impl Draft {
             self.scope.unwrap_or(Scope::Project),
             &self.written(),
         )
-    }
-}
-
-/// `path` from `~`, when it is in the home directory.
-fn from_home(path: &Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    match home
-        .as_deref()
-        .and_then(|home| path.strip_prefix(home).ok())
-    {
-        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Some(rest) => format!("~/{}", rest.display()),
-        None => path.display().to_string(),
     }
 }
 
@@ -310,14 +297,14 @@ mod tests {
             scope: Some(Scope::Global),
             on: "schedule".to_owned(),
             cron: "0 9 * * 1-5".to_owned(),
-            folder: "/notes".to_owned(),
+            project: "notes".to_owned(),
             by: "new".to_owned(),
             text: "News since {last}.".to_owned(),
             ..Draft::default()
         };
         assert_eq!(
             schedule.written(),
-            "---\non:\n  schedule:\n    cron: \"0 9 * * 1-5\"\nby: new\nfolder: /notes\n---\n\nNews since {last}.\n"
+            "---\non:\n  schedule:\n    cron: \"0 9 * * 1-5\"\nby: new\nproject: notes\n---\n\nNews since {last}.\n"
         );
         let trigger = schedule.trigger(Path::new("/w/triggers/news.md")).unwrap();
         assert_eq!(Draft::of(&trigger), schedule);

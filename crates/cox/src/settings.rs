@@ -199,6 +199,13 @@ impl Saved {
     }
 }
 
+/// The folder of Cox's home the projects are in, each in a folder of
+/// its own.
+pub const PROJECTS: &str = "projects";
+
+/// The folder of a project's directories, in its own.
+pub const DIRECTORIES: &str = "directories";
+
 /// Where Cox's own chats work: `home`, or `~/cox`, as an absolute
 /// path, which the agent needs.
 #[must_use]
