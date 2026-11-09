@@ -11,6 +11,18 @@
 //! last [`RUNS_KEPT`] runs. A panic goes there too, with its backtrace.
 //! Each line says where in Cox's code it was said, so that what Cox did
 //! can be followed back to the code, as [`flow`] does for a tool call.
+//!
+//! The targets worth asking for when debugging:
+//!
+//! - `cox_acp::wire`: every ACP message between Cox and an agent.
+//! - `cox_acp::stderr`: what an agent writes to standard error.
+//! - `cox::agent::mcp::wire`: every message between an agent and Cox's
+//!   tool server.
+//! - `cox::agent::mcp::asks`: what a tool asks of the stage, and
+//!   `cox::stage::asked`, the stage carrying it out.
+//! - `cox_browser::scheme`: how long each answer at a `cox:` address took;
+//!   a warning at 100 ms or more.
+//! - `cox::busy`: each time the window's thread was busy for 100 ms or more.
 
 use std::backtrace::Backtrace;
 use std::fs::{self, File};
