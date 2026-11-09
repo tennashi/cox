@@ -740,13 +740,14 @@ fn propose_project_tool() -> Value {
             propose a short name for it, as a folder is named, with no / in it nor a . \
             first. The human sees it on a card in the conversation, and makes the project \
             or lets it be: made, the project is a folder of that name in Cox's home, and \
-            this chat, and the chats opened under it, move into it, the chat stopping, to \
-            go on there, with the conversation so far, from the human's next line. When a \
-            sketch from nothing opened under this chat holds what the project starts \
-            from, give its name as `sketch`, as the human's list shows it, which \
-            start_sketch answered: its files move into the project, as its directory of \
-            the project's name, and the sketch ends. It answers at once, with where the \
-            project is to be.",
+            this chat moves into it with the chat it was opened under, if any, and the \
+            chats opened under those, each stopping, to go on there, with the conversation \
+            so far, from the human's next line. When a sketch from nothing of those holds \
+            what the project is to make, give its name as `sketch`, as the human's list \
+            shows it, which start_sketch answered: the sketch ends, and what it made is \
+            kept as a source of the project, for the project to make it again. A sketch \
+            from nothing that proposes it, giving no `sketch`, is that sketch. It answers \
+            at once, with where the project is to be.",
         "inputSchema": {
             "type": "object",
             "properties": {

@@ -1710,9 +1710,9 @@ impl Daemon {
 
     /// Shows the project named `name`, which the agent of the chat `key`,
     /// in no project, proposes to make of it, on a card in the chat's
-    /// conversation, the files of the sketch of the chat `sketch` going
-    /// into it, if given; and answers where the project is to be, or why
-    /// it cannot be proposed.
+    /// conversation, for what the sketch `sketch` names tried, if given, or
+    /// else the chat itself, when it is a sketch from nothing; and answers
+    /// where the project is to be, or why it cannot be proposed.
     fn propose_project(
         &mut self,
         key: u64,
@@ -1722,9 +1722,14 @@ impl Daemon {
     ) -> Result<PathBuf, String> {
         let name = name.trim();
         let folder = self.made_project(key, name)?;
-        let sketch = sketch
-            .map(|sketch| self.sketch_named(key, &sketch))
-            .transpose()?;
+        let sketch = match sketch {
+            Some(sketch) => Some(self.sketch_named(key, &sketch)?),
+            // A sketch proposes a project of what it made.
+            None => self
+                .sketch_of_project(key, key)
+                .zip(self.slot(key))
+                .map(|(folder, slot)| (slot.name.clone(), folder)),
+        };
         self.chat(key)
             .ok_or("the chat has closed")?
             .propose_project(name, why, sketch);
@@ -1777,10 +1782,25 @@ impl Daemon {
         keys
     }
 
+    /// The chats a project made of the chat `key` takes: the chat it was
+    /// opened under, and that one under, up to the first, and the chats
+    /// opened under that, by their keys.
+    fn family(&self, key: u64) -> Vec<u64> {
+        let mut first = key;
+        while let Some(parent) = self
+            .slot(first)
+            .and_then(|slot| slot.parent)
+            .filter(|&parent| parent != key && self.slot(parent).is_some())
+        {
+            first = parent;
+        }
+        self.under(first)
+    }
+
     /// The folder of the sketch `sketch`, when it is one from nothing,
-    /// opened under the chat `key`, that can end.
+    /// of the chats a project made of the chat `key` takes, that can end.
     fn sketch_of_project(&self, key: u64, sketch: u64) -> Option<PathBuf> {
-        if sketch == key || !self.under(key).contains(&sketch) || !self.ends_sketch(sketch) {
+        if !self.family(key).contains(&sketch) || !self.ends_sketch(sketch) {
             return None;
         }
         self.sketch_of(sketch)
@@ -1788,12 +1808,13 @@ impl Daemon {
             .map(|(_, folder)| folder)
     }
 
-    /// The sketch from nothing under the chat `key`, that can end, that
+    /// The sketch from nothing of the chats a project made of the chat
+    /// `key` takes (see [`Self::family`]), that can end, that
     /// `given` names, as the human's list shows it, or by its chat's
     /// number, as Cox says it: its name and folder, or why there is none.
     fn sketch_named(&self, key: u64, given: &str) -> Result<(String, PathBuf), String> {
         let sketches: Vec<(u64, &str, PathBuf)> = self
-            .under(key)
+            .family(key)
             .into_iter()
             .filter_map(|sketch| {
                 let folder = self.sketch_of_project(key, sketch)?;
@@ -1816,12 +1837,12 @@ impl Daemon {
                     .map(|(_, name, _)| format!("\"{name}\""))
                     .collect();
                 if names.is_empty() {
-                    "No sketch from nothing opened under this chat can go into the project: \
-                     give no sketch."
+                    "No sketch from nothing of this chat's can go into the project: give no \
+                     sketch."
                         .to_owned()
                 } else {
                     format!(
-                        "No sketch from nothing under this chat is named \"{given}\"; those \
+                        "No sketch from nothing of this chat's is named \"{given}\"; those \
                          that can go into the project: {}.",
                         names.join(", ")
                     )
@@ -1830,7 +1851,8 @@ impl Daemon {
     }
 
     /// The human answered the project proposed at `index` in the chat
-    /// `key`: makes it, the chat and those under it moving into it, or
+    /// `key`: makes it, the chats it takes moving into it (see
+    /// [`Self::family`]), or
     /// lets it be; or, when it cannot be made, notes why, the card staying
     /// for them to answer.
     fn answer_project_proposal(&mut self, key: u64, index: usize, answer: Answer) {
@@ -1864,12 +1886,12 @@ impl Daemon {
                 ),
             };
             let at_work = self
-                .under(key)
+                .family(key)
                 .into_iter()
                 .any(|key| self.slot(key).is_some_and(|slot| working(slot.state)));
             if at_work {
                 return Err(
-                    "This chat, or one under it, is at work: make it once the turn ends."
+                    "A chat that moves into the project is at work: make it once the turn ends."
                         .to_owned(),
                 );
             }
@@ -1897,7 +1919,8 @@ impl Daemon {
     /// Makes the project named `name` in `folder` of the chat `key`, in no
     /// project, for what the sketch `sketch`, its key and folder, tried, if
     /// given, what it made kept apart (see [`Self::keep_apart`]), and the
-    /// sketch ending; the chat and those under it move into the project, each
+    /// sketch ending; the chats it takes (see [`Self::family`]) move into
+    /// the project, each
     /// closed, its agent stopped, to go on there from the next line sent,
     /// with the conversation so far.
     fn make_project_of(
@@ -1947,7 +1970,7 @@ impl Daemon {
              there, with the conversation so far.",
             folder.display()
         );
-        let moving = self.under(key);
+        let moving = self.family(key);
         let store = Rc::clone(&self.store);
         for slot in self.chats.iter_mut().chain(&mut self.archived) {
             if !moving.contains(&slot.key) {
