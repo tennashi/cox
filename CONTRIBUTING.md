@@ -1587,10 +1587,11 @@ the goal's bar, and the plan in sight under the head, folded to its
 line; the conversation down a line on its left, who speaks named where
 they start, the agent's steps as chips, and what asks the human, or
 what Cox offers, on the window's cards; and the input in the window's
-box. Its list puts Cox's own chats first, under "Cox's own", as a place
-of their own, and then, past a line, under "Projects", each project
-under its square, as the rail draws it, with the icon the human gave
-it, and each chat on a row, as the window's list has them.
+box. Its list puts the chats of no project first, with no heading, as
+they work in the home the settings set, and then, past a line, under
+"Projects", each project under its square, as the rail draws it, with
+the icon the human gave it, and each chat on a row, as the window's
+list has them.
 
 A chat of a sketch lists the sketch's HTML pages under its
 conversation, "Try it", for the human to try a mock the agent made as
