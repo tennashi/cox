@@ -976,14 +976,14 @@ impl Daemon {
     }
 
     /// Makes a project with nothing set yet, in a folder of its own (see
-    /// [`Self::untitled`]), and opens a chat in it.
-    fn new_project(&mut self) {
+    /// [`Self::untitled`]), and answers its folder.
+    fn new_project(&mut self) -> Option<PathBuf> {
         let folder = self.untitled();
         if let Err(error) = std::fs::create_dir_all(&folder) {
             tracing::error!("cannot make {}: {error}", folder.display());
-            return;
+            return None;
         }
-        self.open(Some(folder));
+        Some(folder)
     }
 
     /// Opens a chat in the project at `index`, under the chat `from` names
@@ -1164,7 +1164,17 @@ impl Daemon {
             ToDaemon::Open { folder } => {
                 self.open(folder);
             }
-            ToDaemon::NewProject => self.new_project(),
+            ToDaemon::NewProject => {
+                if let Some(folder) = self.new_project() {
+                    self.open(Some(folder));
+                }
+            }
+            ToDaemon::NewProjectAside => {
+                if let Some(folder) = self.new_project() {
+                    let index = self.project(folder);
+                    self.open_in(index, None, None);
+                }
+            }
             ToDaemon::NewChat { folder } => {
                 // Only in a project the human has, whose folder is there.
                 let index = match folder {

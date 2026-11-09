@@ -217,6 +217,8 @@ button.pill:active { background: var(--hover); }
 /* The projects, apart from the home's chats, past a line, as the window's rail
    has them. */
 .projects-head { margin: 20px 0 0; padding: 12px 4px 0; border-top: 1px solid var(--border); }
+/* "New project", under the projects, as the + at the foot of the rail. */
+.chats.new-project { margin: 12px 0 0; }
 .square {
   flex-shrink: 0;
   width: 30px;

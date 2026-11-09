@@ -259,8 +259,9 @@ function chatRow(row, opts) {
 }
 
 // The chat the human opened from the phone, in the project at `project`,
-// to show once coxd lists it: the one of the project it did not list
-// before.
+// or, with `folders`, the folders of the projects coxd listed then, in a
+// project it makes, to show once coxd lists it: the one of the project
+// it did not list before.
 let opening = null;
 
 // Opens a chat in the project at `index`, as the window's list does,
@@ -283,11 +284,38 @@ async function newChat(button, index) {
   }, 10000);
 }
 
+// Makes a project, as the window's + on its rail does, with a chat in
+// it, and shows the chat once coxd lists it.
+async function newProject(button) {
+  button.disabled = true;
+  const made = {
+    project: null,
+    folders: new Set(listing.projects.map((project) => project.folder)),
+    known: new Set(listing.chats.map((row) => row.key)),
+  };
+  opening = made;
+  if (!(await act("NewProjectAside"))) {
+    opening = null;
+    button.disabled = false;
+    say(compose.failed.textContent);
+    return;
+  }
+  setTimeout(() => {
+    if (opening === made) {
+      opening = null;
+      button.disabled = false;
+    }
+  }, 10000);
+}
+
 function showOpened() {
   // A chat opened from the list shows from the list; a sketch, from the
   // chat it was opened beside.
   if (!opening || (chat && chat.key !== opening.from)) return;
-  const opened = listing.chats.find((row) => row.project === opening.project && !opening.known.has(row.key));
+  const inProject = (row) => opening.folders
+    ? !opening.folders.has(listing.projects[row.project].folder)
+    : row.project === opening.project;
+  const opened = listing.chats.find((row) => inProject(row) && !opening.known.has(row.key));
   if (!opened) return;
   opening = null;
   location.hash = `#chat/${opened.key}`;
@@ -429,10 +457,15 @@ function drawHome() {
     const own = listing.projects.findIndex((project) => project.id === null);
     if (own >= 0) shelves.push(shelf(own, null));
     const projects = listing.projects.map((_, index) => index).filter((index) => index !== own);
-    if (projects.length) shelves.push(el("div", { class: "projects-head" }, el("span", { class: "label" }, "Projects")));
+    shelves.push(el("div", { class: "projects-head" }, el("span", { class: "label" }, "Projects")));
     for (const index of projects) {
       shelves.push(shelf(index, el("div", { class: "shelf-head" }, square(index), el("span", {}, projectName(index)))));
     }
+    // A project of its own, as the + at the foot of the window's rail
+    // makes, for the human and the agent to work out what it is to be.
+    shelves.push(el("ul", { class: "chats new-project" }, el("li", { class: "new" },
+      el("button", { type: "button", onclick: (event) => newProject(event.currentTarget) },
+        el("span", { class: "plus" }, "+"), "New project"))));
   }
   main.replaceChildren(...shelves);
 }

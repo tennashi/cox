@@ -1548,7 +1548,9 @@ tells the page what changed, at `/changes?chat=<key>`, only for a
 chat's folder, and asks again each time a turn ends.
 "New chat", under a project's chats, opens a chat in the project, as
 the window's list does, and shows it on the phone, while the window
-goes on showing what it shows. A chat looked at on the phone counts as
+goes on showing what it shows; and "New project", under the projects,
+makes a project as the + at the foot of the rail does, with a chat in
+it, which the phone shows the same way. A chat looked at on the phone counts as
 seen. A sketch starts and ends from the phone too, where the human
 tries a way out as they plan it, with the branch at the page's head, as
 "Start sketch…" and the ways a sketch ends in the window's menu: for a
