@@ -543,6 +543,7 @@ fn describe_entry(entry: &Entry) -> String {
             name,
             why,
             sketch,
+            sketch_name,
             answer,
         } => {
             let answer = match answer {
@@ -552,7 +553,8 @@ fn describe_entry(entry: &Entry) -> String {
             };
             let mut line = format!("project proposal {name:?}, {answer}");
             if let Some(sketch) = sketch {
-                let _ = write!(line, ", with the sketch {}", sketch.display());
+                let named = sketch_name.as_deref().unwrap_or_default();
+                let _ = write!(line, ", with the sketch {named:?} in {}", sketch.display());
             }
             if let Some(why) = why {
                 let _ = write!(line, ": {}", text_of(why));

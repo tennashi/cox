@@ -858,13 +858,14 @@ impl ChatView {
             Entry::ProjectProposal {
                 name,
                 why,
-                sketch,
+                sketch_name,
                 answer,
+                ..
             } => render_project_proposal(
                 index,
                 name,
                 why.as_deref(),
-                sketch.is_some(),
+                sketch_name.as_deref(),
                 *answer,
                 &mut writer,
                 cx,
@@ -1390,14 +1391,14 @@ fn render_name_proposal(
 }
 
 /// A project the agent proposed to make of the chat: while the human has
-/// not answered it, a card with why the agent proposes it, and whether a
-/// sketch's files go into it, and buttons to make it, the chat moving
+/// not answered it, a card with why the agent proposes it, and the sketch
+/// whose files go into it, by its name, if any, and buttons to make it, the chat moving
 /// into it, or to let it be; then a line that says what they did.
 fn render_project_proposal(
     index: usize,
     name: &str,
     why: Option<&str>,
-    with_sketch: bool,
+    sketch: Option<&str>,
     answer: Option<Answer>,
     writer: &mut Writer,
     cx: &mut Context<ChatView>,
@@ -1448,11 +1449,14 @@ fn render_project_proposal(
                 .child(writer.markdown(why))
                 .into_any_element()
         }),
-        with_sketch.then(|| {
+        sketch.map(|sketch| {
             div()
                 .text_size(px(12.))
                 .text_color(rgb(DIM))
-                .child("The sketch's files go into it, as its directory.")
+                .child(SharedString::from(format!(
+                    "The files of the sketch \u{201c}{sketch}\u{201d} go into it, as its \
+                     directory."
+                )))
                 .into_any_element()
         }),
     ];

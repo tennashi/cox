@@ -1542,17 +1542,12 @@ impl Daemon {
         key: u64,
         name: &str,
         why: Option<String>,
-        sketch: Option<u64>,
+        sketch: Option<String>,
     ) -> Result<PathBuf, String> {
         let name = name.trim();
         let folder = self.made_project(key, name)?;
         let sketch = sketch
-            .map(|sketch| {
-                self.sketch_of_project(key, sketch).ok_or(format!(
-                    "Chat {sketch} is no sketch from nothing, opened under this chat, that can \
-                     end: give the number of one, or no sketch."
-                ))
-            })
+            .map(|sketch| self.sketch_named(key, &sketch))
             .transpose()?;
         self.chat(key)
             .ok_or("the chat has closed")?
@@ -1615,6 +1610,47 @@ impl Daemon {
         self.sketch_of(sketch)
             .filter(|(from, _)| *from == Sketch::Empty)
             .map(|(_, folder)| folder)
+    }
+
+    /// The sketch from nothing under the chat `key`, that can end, that
+    /// `given` names, as the human's list shows it, or by its chat's
+    /// number, as Cox says it: its name and folder, or why there is none.
+    fn sketch_named(&self, key: u64, given: &str) -> Result<(String, PathBuf), String> {
+        let sketches: Vec<(u64, &str, PathBuf)> = self
+            .under(key)
+            .into_iter()
+            .filter_map(|sketch| {
+                let folder = self.sketch_of_project(key, sketch)?;
+                Some((sketch, self.slot(sketch)?.name.as_str(), folder))
+            })
+            .collect();
+        let number = given.trim_start_matches("chat ").parse::<u64>().ok();
+        sketches
+            .iter()
+            .find(|(_, name, _)| name.trim() == given)
+            .or_else(|| {
+                sketches
+                    .iter()
+                    .find(|(sketch, _, _)| Some(*sketch) == number)
+            })
+            .map(|(_, name, folder)| ((*name).to_owned(), folder.clone()))
+            .ok_or_else(|| {
+                let names: Vec<String> = sketches
+                    .iter()
+                    .map(|(_, name, _)| format!("\"{name}\""))
+                    .collect();
+                if names.is_empty() {
+                    "No sketch from nothing opened under this chat can go into the project: \
+                     give no sketch."
+                        .to_owned()
+                } else {
+                    format!(
+                        "No sketch from nothing under this chat is named \"{given}\"; those \
+                         that can go into the project: {}.",
+                        names.join(", ")
+                    )
+                }
+            })
     }
 
     /// The human answered the project proposed at `index` in the chat

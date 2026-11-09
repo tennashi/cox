@@ -1409,7 +1409,7 @@ function projectProposal(proposed, index) {
     cardHead("✦", "Proposed project", "this chat moves into it"),
     el("div", {}, proposed.name),
     proposed.why ? el("div", { class: "why" }, proposed.why) : null,
-    proposed.sketch ? el("div", { class: "why" }, "The sketch's files go into it, as its directory.") : null,
+    proposed.sketch_name ? el("div", { class: "why" }, `The files of the sketch \u201c${proposed.sketch_name}\u201d go into it, as its directory.`) : null,
     buttons([
       ["Make project", { AnswerProjectProposal: { key: chat.key, index, answer: "set" } }, true],
       ["Dismiss", { AnswerProjectProposal: { key: chat.key, index, answer: "dismissed" } }],

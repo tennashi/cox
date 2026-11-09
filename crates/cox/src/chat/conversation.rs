@@ -836,13 +836,20 @@ impl Conversation {
 
     /// Shows the project named `name`, which the agent proposes to make of
     /// the chat, for the human to make or to let be, with `why` the agent
-    /// proposes it, if it said, and the folder of the sketch whose files
-    /// go into it, `sketch`, if it named one.
-    pub fn propose_project(&mut self, name: &str, why: Option<String>, sketch: Option<PathBuf>) {
+    /// proposes it, if it said, and the sketch whose files go into it,
+    /// `sketch`, its name and folder, if it named one.
+    pub fn propose_project(
+        &mut self,
+        name: &str,
+        why: Option<String>,
+        sketch: Option<(String, PathBuf)>,
+    ) {
+        let (sketch_name, sketch) = sketch.unzip();
         self.push(Entry::ProjectProposal {
             name: name.to_owned(),
             why: why.filter(|why| !why.trim().is_empty()),
             sketch,
+            sketch_name,
             answer: None,
         });
     }

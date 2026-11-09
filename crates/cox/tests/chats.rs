@@ -1255,20 +1255,20 @@ async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
 }
 
 /// Has the agent of the chat whose asks are at `from` propose the project
-/// `name`, starting from the sketch of the chat `sketch`, if given, and
+/// `name`, starting from the sketch named `sketch`, if given, and
 /// answers where the project is to be, or why not, once it is told.
 fn propose_project(
     asks: &Asks,
     from: usize,
     name: &str,
-    sketch: Option<u64>,
+    sketch: Option<&str>,
 ) -> tokio::sync::oneshot::Receiver<Result<PathBuf, String>> {
     let (answer, folder) = tokio::sync::oneshot::channel();
     asks.borrow()[from]
         .send(ChatRequest::ProposeProject {
             name: name.to_owned(),
             why: Some("We agreed on it.".to_owned()),
-            sketch,
+            sketch: sketch.map(str::to_owned),
             answer,
         })
         .unwrap();
@@ -1288,34 +1288,44 @@ async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
     let made = open_sketch(cx, &workspace, &asks, Sketch::Empty, 2).await;
     std::fs::write(made.join("index.html"), "<p>shop</p>\n").unwrap();
     let (first, sketch) = workspace.read_with(cx, |workspace, _| {
-        let mut chats = workspace.chats(0).map(Chat::key);
-        (chats.next().unwrap(), chats.next().unwrap())
+        let mut chats = workspace.chats(0);
+        let first = chats.next().unwrap().key();
+        (first, chats.next().unwrap().name().to_owned())
     });
 
-    // A chat that is no sketch of the chat's is no sketch to start from.
-    let refused = propose_project(&asks, 0, "shop", Some(first));
+    // A chat that is no sketch of the chat's is no sketch to start from,
+    // and the agent hears the names of those that are.
+    let refused = propose_project(&asks, 0, "shop", Some("hello"));
     settled(cx, &workspace);
     let refused = refused.await.unwrap();
-    assert!(refused.is_err_and(|why| why.contains("no sketch from nothing")));
+    assert!(refused.is_err_and(
+        |why| why.contains("is named \"hello\"") && why.contains(&format!("\"{sketch}\""))
+    ));
     // The agent hears where the project is to be, and it shows on a card.
     let projects = home.join("projects");
     let market = propose_project(&asks, 0, "market", None);
     settled(cx, &workspace);
     assert_eq!(market.await.unwrap(), Ok(projects.join("market")));
-    let shop = propose_project(&asks, 0, "shop", Some(sketch));
+    // The sketch goes by the name the human's list shows.
+    let shop = propose_project(&asks, 0, "shop", Some(&sketch));
     settled(cx, &workspace);
     assert_eq!(shop.await.unwrap(), Ok(projects.join("shop")));
     let shop = projects.join("shop");
-    let cards: Vec<(usize, Option<PathBuf>)> = shown_entries(cx, &workspace)
+    let cards: Vec<(usize, Option<PathBuf>, Option<String>)> = shown_entries(cx, &workspace)
         .into_iter()
         .enumerate()
         .filter_map(|(index, entry)| match entry {
-            Entry::ProjectProposal { sketch, .. } => Some((index, sketch)),
+            Entry::ProjectProposal {
+                sketch,
+                sketch_name,
+                ..
+            } => Some((index, sketch, sketch_name)),
             _ => None,
         })
         .collect();
     assert_eq!(cards.len(), 2, "{cards:?}");
     assert_eq!(cards[1].1.as_ref(), Some(&made));
+    assert_eq!(cards[1].2.as_ref(), Some(&sketch));
     let (market, at) = (cards[0].0, cards[1].0);
 
     // Dismiss lets one be; Make project makes the other, the sketch's
@@ -1332,7 +1342,9 @@ async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
         std::fs::read_to_string(shop.join("directories/shop/index.html")).unwrap(),
         "<p>shop</p>\n"
     );
-    assert!(!made.exists());
+    // Another test may make a sketch from nothing in a folder of the same
+    // name once this one is gone, so what is gone is what this sketch made.
+    assert!(!made.join("index.html").exists());
     let kept = store.projects().unwrap();
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].folder, shop);
