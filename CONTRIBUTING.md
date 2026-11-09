@@ -124,8 +124,9 @@ set, the folders of the human's workflow and wiki (see below), kept from
 `~` when they are in the home directory, or, emptied, Cox's own; and the
 translation (see below): the language, which, emptied, turns it off, and
 what translates, the agent a new chat talks to, one of the human's, or
-a command on one line, as an agent's. What else the files hold stays as
-it is. What the card says is selected and copied as the conversation's
+a command on one line, as an agent's; and, under "Phone", the code a
+phone pairs with (see [On the phone](#on-the-phone)). What else the
+files hold stays as it is. What the card says is selected and copied as the conversation's
 text is. Escape, the ×, or a click beside the card closes it.
 Each chat starts its own
 `<agent command>` working in its project's folder, and works on the
@@ -1636,7 +1637,12 @@ that comes some other way, pairs once with the secret coxd keeps in
 `state/phone-token` in Cox's data folder (see [The stage](#the-stage)),
 made the first time, by opening the link `--phone-link` prints, as
 `https://<the Mac's name in the tailnet>/pair/<secret>`, and keeps it in
-a cookie. A phone that opens the page from its home screen, as the
+a cookie. The settings show the link too, so that the human pairs a
+phone without a terminal: "Show pairing code", under "Phone", draws it
+as a QR code, which the phone's camera opens, beside the login a phone
+opens the page as it is with, a word when MagicDNS is off, and "Copy
+link", which copies it; the code goes as "Hide" is clicked, or the card
+closes, since it holds the secret. A phone that opens the page from its home screen, as the
 browser's "Add to Home Screen" puts it there, gets it as an app of its
 own; an iPhone keeps the cookies of such an app apart from Safari's, so
 the page there asks for the link, pasted. To pair the phones no more,
