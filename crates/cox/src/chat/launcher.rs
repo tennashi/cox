@@ -66,11 +66,19 @@ impl Spawns for Launcher {
     /// Starts the agent kept as `agent` working in `cwd`, as `start`
     /// says, with Cox's own tools, and the stage's through the relay on
     /// `relay`, when given. The chat's setup, if it has one, says which of
-    /// Cox's tools the agent gets.
-    fn chat(&self, cwd: PathBuf, start: Start, agent: &str, relay: Option<u16>) -> Spawned {
+    /// Cox's tools the agent gets, and a chat in no project, as
+    /// `in_project` says, gets none of a project's.
+    fn chat(
+        &self,
+        cwd: PathBuf,
+        start: Start,
+        agent: &str,
+        relay: Option<u16>,
+        in_project: bool,
+    ) -> Spawned {
         // 1. The server of Cox's own tools, with the `cox` that reaches it.
         let only = start.setup().and_then(|setup| setup.tools.clone());
-        let server = self.server(&cwd, only);
+        let server = self.server(&cwd, only, in_project);
         // What the agent gets: the MCP servers it starts to reach both.
         let tools = self.tools(&cwd, relay, server.as_ref());
         let (stage, asks, chat_requests) = match server {
@@ -105,16 +113,18 @@ impl Spawns for Launcher {
 
 impl Launcher {
     /// Starts the server of Cox's own tools for a chat working in `cwd`,
-    /// serving the tools named in `only`, or all of them, and answers it
-    /// with the `cox` the agent runs to reach it, or `None` when it did not
-    /// start.
+    /// serving the tools named in `only`, or all of them, but those of a
+    /// project when the chat is in none, as `in_project` says, and answers
+    /// it with the `cox` the agent runs to reach it, or `None` when it did
+    /// not start.
     fn server(
         &self,
         cwd: &std::path::Path,
         only: Option<Vec<String>>,
+        in_project: bool,
     ) -> Option<(PathBuf, ToolServer)> {
         let exe = self.exe.clone()?;
-        match crate::agent::mcp::start(cwd.to_owned(), only) {
+        match crate::agent::mcp::start(cwd.to_owned(), only, in_project) {
             Ok(server) => Some((exe, server)),
             Err(error) => {
                 tracing::error!("the agent gets no tools of Cox's own: {error:#}");

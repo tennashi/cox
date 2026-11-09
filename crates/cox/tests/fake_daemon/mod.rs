@@ -134,7 +134,7 @@ impl Spawns for FakeSpawns {
         self.0.choices.clone()
     }
 
-    fn chat(&self, cwd: PathBuf, start: Start, _: &str, _: Option<u16>) -> Spawned {
+    fn chat(&self, cwd: PathBuf, start: Start, _: &str, _: Option<u16>, _: bool) -> Spawned {
         let fakes = &self.0;
         let made = fakes.next.borrow_mut().pop_front();
         let agent = Arc::new(made.unwrap_or_else(|| match &start {
