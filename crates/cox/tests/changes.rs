@@ -7,9 +7,9 @@ use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::stage::changes::{Changes, Chosen};
+use cox::stage::changes::{Changes, Chosen, Repository};
 use cox::stage::tab::Shows as _;
-use cox_editor::changes::Since;
+use cox_editor::changes::{Diff, Since};
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
 /// A folder of its own for a test, made a Git repository with a commit of
@@ -75,16 +75,29 @@ fn click(selector: &'static str, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// The files the tab shows as changed, and how many lines each gained
-/// and lost.
+/// The files the tab shows as changed, of the repository it shows, each
+/// after the name of its directory if it has one, and how many lines
+/// each gained and lost.
 fn shown(changes: &Entity<Changes>, cx: &mut VisualTestContext) -> Vec<(String, usize, usize)> {
     changes.read_with(cx, |changes, _| {
-        changes.diff().map_or_else(Vec::new, |diff| {
-            diff.files
-                .iter()
-                .map(|file| (file.path.display().to_string(), file.added, file.removed))
-                .collect()
-        })
+        let Some(Repository {
+            name,
+            read: Ok(diff),
+        }) = changes.shown()
+        else {
+            return Vec::new();
+        };
+        diff.files
+            .iter()
+            .map(|file| {
+                let path = file.path.display().to_string();
+                let path = match name {
+                    Some(name) => format!("{name}/{path}"),
+                    None => path,
+                };
+                (path, file.added, file.removed)
+            })
+            .collect()
     })
 }
 
@@ -99,8 +112,14 @@ fn shows_the_lines_that_changed_and_opens_a_file_there(cx: &mut TestAppContext) 
         "Changes"
     );
     assert!(changes.read_with(cx, |changes, _| matches!(
-        changes.diff().map(|diff| &diff.since),
-        Some(Since::Head(_))
+        changes.repositories(),
+        [Repository {
+            name: None,
+            read: Ok(Diff {
+                since: Since::Head(_),
+                ..
+            }),
+        }]
     )));
     assert_eq!(
         shown(&changes, cx),
@@ -137,5 +156,78 @@ fn follows_what_changes_as_the_agent_works(cx: &mut TestAppContext) {
     cx.executor().advance_clock(Duration::from_secs(3));
     cx.run_until_parked();
     assert_eq!(shown(&changes, cx), [("a.txt".to_owned(), 1, 0)]);
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[gpui::test]
+fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut TestAppContext) {
+    let project = std::env::temp_dir().join(format!("cox-changes-project-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&project);
+    let directories = project.join("directories");
+    std::fs::create_dir_all(directories.join("notes")).unwrap();
+    let project = project.canonicalize().unwrap();
+    // The project's own folder is no repository, nor is its directory
+    // `notes`; `app` and `lib` are.
+    for name in ["app", "lib"] {
+        let folder = repository(&format!("project-{name}"), "one\n");
+        std::fs::rename(&folder, project.join("directories").join(name)).unwrap();
+    }
+    let app = project.join("directories/app");
+    std::fs::write(app.join("a.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(project.join("directories/notes/n.txt"), "note\n").unwrap();
+
+    let (changes, chosen, cx) = open(cx, &project, &project);
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes
+            .repositories()
+            .iter()
+            .map(|repository| repository.name.clone())
+            .collect::<Vec<_>>()),
+        [Some("app".to_owned()), Some("lib".to_owned())]
+    );
+    // The first that changed anything is shown, with each to choose.
+    assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
+    assert_eq!(cox::stage::changes::count(&project), Ok(1));
+    assert!(cx.debug_bounds("changed-repository-0").is_some());
+    assert!(cx.debug_bounds("changed-repository-1").is_some());
+
+    // The rows: a.txt, its stretch, "one", "two".
+    click("changed-line-3", cx);
+    assert_eq!(*chosen.borrow(), [(app.join("a.txt"), Some(2))]);
+
+    // What the agent changes in another repository is counted, and shows
+    // as the human chooses it.
+    std::fs::write(project.join("directories/lib/b.txt"), "new\n").unwrap();
+    cx.executor().advance_clock(Duration::from_secs(3));
+    cx.run_until_parked();
+    assert_eq!(shown(&changes, cx), [("app/a.txt".to_owned(), 1, 0)]);
+    assert_eq!(cox::stage::changes::count(&project), Ok(2));
+    click("changed-repository-1", cx);
+    assert_eq!(shown(&changes, cx), [("lib/b.txt".to_owned(), 1, 0)]);
+    click("changed-file-0", cx);
+    assert_eq!(
+        chosen.borrow().last(),
+        Some(&(project.join("directories/lib/b.txt"), None))
+    );
+
+    // It stays on the one chosen as nothing changes in it any more.
+    std::fs::remove_file(project.join("directories/lib/b.txt")).unwrap();
+    cx.executor().advance_clock(Duration::from_secs(3));
+    cx.run_until_parked();
+    assert_eq!(shown(&changes, cx), []);
+    assert!(changes.read_with(cx, |changes, _| {
+        changes
+            .shown()
+            .is_some_and(|shown| shown.name.as_deref() == Some("lib"))
+    }));
+    std::fs::remove_dir_all(project).unwrap();
+}
+
+#[test]
+fn a_folder_with_no_repository_counts_none() {
+    let folder = std::env::temp_dir().join(format!("cox-changes-none-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(folder.join("directories/notes")).unwrap();
+    assert!(cox::stage::changes::count(&folder).is_err());
     std::fs::remove_dir_all(folder).unwrap();
 }

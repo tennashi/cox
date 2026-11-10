@@ -180,8 +180,9 @@ impl Stage {
         self.push(TabContent::Tree(tree), changes, Some(opens), show, cx);
     }
 
-    /// Shows what changed in the files of the repository of `folder`, an
-    /// absolute path: on its tab, or a new one, with the keyboard in it.
+    /// Shows what changed in the files of the repositories of `folder`, an
+    /// absolute path (see [`super::changes::repositories`]): on its tab,
+    /// or a new one, with the keyboard in it.
     pub(super) fn show_changes(
         &mut self,
         folder: PathBuf,

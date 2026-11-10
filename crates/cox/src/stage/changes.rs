@@ -8,6 +8,12 @@
 //! (see [`cox_editor::words`]); a click on a file or a line opens the file
 //! there, as a link to it would (see [`crate::stage`]).
 //!
+//! A project's folder is not a repository itself: its repositories are
+//! its directories (see [`DIRECTORIES`]). The tab of such a folder shows
+//! what changed in one of them at a time, which the human chooses by its
+//! name under the heading, beside how many files changed in each (see
+//! [`repositories`]).
+//!
 //! The tab looks again now and then, so that it shows what the agent
 //! changes as it works. It draws only the rows in sight, so a long list
 //! of changes scrolls as a short one does, and stays where the human
@@ -24,10 +30,12 @@ use cox_editor::language::{Highlight, Language};
 use cox_editor::syntax::Syntax;
 use cox_editor::words;
 use gpui::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, HighlightStyle, ListAlignment,
-    ListOffset, ListState, SharedString, StyledText, Task, Window, div, list, prelude::*, px, rgb,
+    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
+    ListAlignment, ListOffset, ListState, SharedString, StyledText, Task, Window, div, list,
+    prelude::*, px, rgb,
 };
 
+use crate::settings::DIRECTORIES;
 use crate::stage::code::syntax_style;
 use crate::stage::heading::{CARD_RADIUS, INSET, heading};
 use crate::stage::tab::Shows;
@@ -72,26 +80,101 @@ pub struct Chosen {
     pub line: Option<usize>,
 }
 
+/// What changed in one of the repositories a folder's changes are of (see
+/// [`repositories`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Repository {
+    /// The name of the project's directory it is, or none for the
+    /// repository the folder is in.
+    pub name: Option<String>,
+    /// What changed in it, or why it could not be read.
+    pub read: Result<Diff, String>,
+}
+
+/// The repositories whose changes are those of `folder`: the directories
+/// of the project in `folder` that are repositories, by name, after
+/// `folder` itself if it is one too; or else, for a folder with no such
+/// directory, the repository `folder` is in, if it is in one.
+#[must_use]
+pub fn repositories(folder: &Path) -> Vec<(Option<String>, PathBuf)> {
+    let mut directories: Vec<(Option<String>, PathBuf)> =
+        std::fs::read_dir(folder.join(DIRECTORIES))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().join(".git").exists())
+            .filter_map(|entry| Some((Some(entry.file_name().into_string().ok()?), entry.path())))
+            .collect();
+    directories.sort();
+    if directories.is_empty() || folder.join(".git").exists() {
+        directories.insert(0, (None, folder.to_owned()));
+    }
+    directories
+}
+
+/// What changed in each of the repositories of `folder` (see
+/// [`repositories`]).
+#[must_use]
+pub fn read(folder: &Path) -> Vec<Repository> {
+    repositories(folder)
+        .into_iter()
+        .map(|(name, folder)| Repository {
+            name,
+            read: changes::read(&folder),
+        })
+        .collect()
+}
+
+/// How many files changed in the repositories of `folder` in all (see
+/// [`repositories`]), as [`changes::count`] counts them.
+///
+/// # Errors
+///
+/// When Git can tell what changed in none of them, as when `folder` is in
+/// no repository and has no directory that is one, with what Git said.
+pub fn count(folder: &Path) -> Result<usize, String> {
+    let mut counted = None;
+    let mut failed = None;
+    for (_, folder) in repositories(folder) {
+        match changes::count(&folder) {
+            Ok(count) => *counted.get_or_insert(0) += count,
+            Err(error) => {
+                failed.get_or_insert(error);
+            }
+        }
+    }
+    counted.ok_or_else(|| failed.unwrap_or_default())
+}
+
 pub struct Changes {
-    /// A folder of the repository whose changes the tab shows.
+    /// The folder whose changes the tab shows (see [`repositories`]).
     folder: PathBuf,
     /// The tab's name: "Changes", and the folder's name when it is not
     /// where the chat works.
     title: String,
-    /// What changed, as the tab last read it, or why it could not be read;
-    /// nothing until it is first read.
-    read: Option<Result<Diff, String>>,
-    /// How each line of each file is drawn, by file, then line.
-    looks: Vec<Vec<Look>>,
-    /// The rows of the tab: a file's, then its lines'.
+    /// What changed in each repository, as the tab last read it; nothing
+    /// until it is first read.
+    read: Option<Vec<Repository>>,
+    /// The repository the tab shows, of those, once the human chose one;
+    /// until then, the first that changed anything.
+    chosen: Option<Choice>,
+    /// How each line of each file is drawn, by repository, then file,
+    /// then line.
+    looks: Vec<Vec<Vec<Look>>>,
+    /// The rows of the tab, of the repository it shows: each file's,
+    /// followed by its lines'.
     rows: Vec<Row>,
     list: ListState,
     focus_handle: FocusHandle,
     _follow: Task<()>,
 }
 
-/// A row of the tab: the file at an index of what changed, or a line of
-/// it.
+/// A repository the human chose to show, by its name (see
+/// [`Repository::name`]).
+struct Choice(Option<String>);
+
+/// A row of the tab: the file at an index of the repository shown, or a
+/// line of it.
 #[derive(Clone, Copy)]
 enum Row {
     File(usize),
@@ -101,22 +184,19 @@ enum Row {
 impl EventEmitter<Chosen> for Changes {}
 
 impl Changes {
-    /// A tab showing what changed in the repository `folder` is in, for a
-    /// chat working in `cwd`.
+    /// A tab showing what changed in the repositories of `folder` (see
+    /// [`repositories`]), for a chat working in `cwd`.
     pub fn new(folder: PathBuf, cwd: &Path, cx: &mut Context<Self>) -> Self {
         let title = if folder == cwd {
             "Changes".to_owned()
         } else {
-            let name = folder.file_name().map_or_else(
-                || folder.display().to_string(),
-                |name| name.to_string_lossy().into_owned(),
-            );
-            format!("Changes in {name}")
+            format!("Changes in {}", name_of(&folder))
         };
         Self {
             folder,
             title,
             read: None,
+            chosen: None,
             looks: Vec::new(),
             rows: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(LINE_HEIGHT * 20.)),
@@ -125,16 +205,66 @@ impl Changes {
         }
     }
 
-    /// The folder of the repository whose changes the tab shows.
+    /// The folder whose changes the tab shows.
     #[must_use]
     pub fn folder(&self) -> &Path {
         &self.folder
     }
 
-    /// What changed, as the tab shows it, once read.
+    /// What changed in each repository, as the tab read it; none until
+    /// it is first read.
     #[must_use]
-    pub fn diff(&self) -> Option<&Diff> {
-        self.read.as_ref().and_then(|read| read.as_ref().ok())
+    pub fn repositories(&self) -> &[Repository] {
+        self.read.as_deref().unwrap_or_default()
+    }
+
+    /// The repository the tab shows, of [`Self::repositories`].
+    #[must_use]
+    pub fn shown(&self) -> Option<&Repository> {
+        self.shown_index()
+            .and_then(|index| self.repositories().get(index))
+    }
+
+    /// Shows the repository `name` (see [`Repository::name`]), from its
+    /// top, as the human chose it.
+    pub fn show(&mut self, name: Option<String>, cx: &mut Context<Self>) {
+        self.chosen = Some(Choice(name));
+        self.relist(false);
+        cx.notify();
+    }
+
+    /// The index of the repository the tab shows: the one the human
+    /// chose, while there is one of its name, or else the first that
+    /// changed anything, or else the first.
+    fn shown_index(&self) -> Option<usize> {
+        let repositories = self.repositories();
+        if let Some(Choice(chosen)) = &self.chosen
+            && let Some(index) = repositories.iter().position(|shown| &shown.name == chosen)
+        {
+            return Some(index);
+        }
+        let changed = repositories
+            .iter()
+            .position(|shown| shown.read.as_ref().is_ok_and(|diff| !diff.files.is_empty()));
+        changed.or((!repositories.is_empty()).then_some(0))
+    }
+
+    /// Lists the rows of the repository shown again: where the human had
+    /// scrolled to if `stay`, or else from its top.
+    fn relist(&mut self, stay: bool) {
+        self.rows = self
+            .shown()
+            .and_then(|shown| shown.read.as_ref().ok())
+            .map(rows)
+            .unwrap_or_default();
+        let top = self.list.logical_scroll_top();
+        self.list.splice(0..self.list.item_count(), self.rows.len());
+        if stay && !self.rows.is_empty() {
+            self.list.scroll_to(ListOffset {
+                item_ix: top.item_ix.min(self.rows.len() - 1),
+                offset_in_item: top.offset_in_item,
+            });
+        }
     }
 
     /// The tab read what changed again, which differs from what it shows,
@@ -142,30 +272,22 @@ impl Changes {
     /// had scrolled to.
     fn looked(
         &mut self,
-        read: Result<Diff, String>,
-        looks: Vec<Vec<Look>>,
+        read: Vec<Repository>,
+        looks: Vec<Vec<Vec<Look>>>,
         cx: &mut Context<Self>,
     ) {
-        self.rows = match &read {
-            Ok(diff) => rows(diff),
-            Err(_) => Vec::new(),
-        };
+        let was = self.shown().map(|shown| shown.name.clone());
         self.read = Some(read);
         self.looks = looks;
-        let top = self.list.logical_scroll_top();
-        self.list.splice(0..self.list.item_count(), self.rows.len());
-        if !self.rows.is_empty() {
-            self.list.scroll_to(ListOffset {
-                item_ix: top.item_ix.min(self.rows.len() - 1),
-                offset_in_item: top.offset_in_item,
-            });
-        }
+        let stay = was == self.shown().map(|shown| shown.name.clone());
+        self.relist(stay);
         cx.notify();
     }
 
-    /// The human chose the file at `index`, at `line` if they chose one.
+    /// The human chose the file at `index` of the repository shown, at
+    /// `line` if they chose one.
     fn choose(&self, index: usize, line: Option<usize>, cx: &mut Context<Self>) {
-        let Some(diff) = self.diff() else {
+        let Some(Ok(diff)) = self.shown().map(|shown| &shown.read) else {
             return;
         };
         let file = &diff.files[index];
@@ -178,32 +300,20 @@ impl Changes {
     }
 
     /// The tab's heading, as the plugins head their pages: its name, what
-    /// changed in all, and where.
+    /// changed in the repository shown, and where it is.
     fn render_heading(&self) -> impl IntoElement {
-        let failed = matches!(self.read, Some(Err(_)));
-        let said = match &self.read {
-            None => div().child("Reading what changed…"),
-            Some(Err(error)) => div().child(format!("Cannot tell what changed: {error}")),
-            Some(Ok(diff)) if diff.files.is_empty() => {
-                div().child(format!("Nothing changed {}.", diff.since.said()))
-            }
-            Some(Ok(diff)) => {
-                let (added, removed) = diff.counts();
-                let files = match diff.files.len() {
-                    1 => "1 file".to_owned(),
-                    count => format!("{count} files"),
-                };
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .child(format!("{files} ·"))
-                    .child(counts(added, removed))
-                    .child(diff.since.said())
-            }
+        let shown = self.shown();
+        let (said, failed) = match shown.map(|shown| &shown.read) {
+            None if self.read.is_none() => (div().child("Reading what changed…"), false),
+            None => (div(), false),
+            Some(Ok(diff)) => (said_of(diff), false),
+            Some(Err(error)) => (
+                div().child(format!("Cannot tell what changed: {error}")),
+                true,
+            ),
         };
-        let top = self
-            .diff()
+        let top = shown
+            .and_then(|shown| shown.read.as_ref().ok())
             .map_or_else(|| self.folder.clone(), |diff| diff.top.clone());
         heading(
             "changes-heading",
@@ -213,9 +323,83 @@ impl Changes {
         )
     }
 
+    /// The repositories the tab can show, side by side under its heading,
+    /// each by its name, with how many files changed in it, the one shown
+    /// marked, to show another; nothing for the one repository a folder
+    /// is in, which is all there is to show.
+    fn render_repositories(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let repositories = self.repositories();
+        if matches!(repositories, [] | [Repository { name: None, .. }]) {
+            return None;
+        }
+        let shown = self.shown_index();
+        let chips = repositories.iter().enumerate().map(|(index, repository)| {
+            let chosen = shown == Some(index);
+            let name = repository
+                .name
+                .clone()
+                .unwrap_or_else(|| name_of(&self.folder));
+            let mark = match &repository.read {
+                Ok(diff) if diff.files.is_empty() => None,
+                Ok(diff) => Some((diff.files.len().to_string(), ACCENT)),
+                Err(_) => Some(("!".to_owned(), FAILED)),
+            };
+            let picked = repository.name.clone();
+            div()
+                .id(("changed-repository", index))
+                .debug_selector(move || format!("changed-repository-{index}"))
+                .flex_shrink_0()
+                .h(px(26.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .px(px(10.))
+                .rounded(px(8.))
+                .font_family(CODE_FONT)
+                .text_size(px(12.5))
+                .cursor_pointer()
+                .map(|chip| {
+                    if chosen {
+                        chip.bg(rgb(SELECTED)).text_color(rgb(FOREGROUND))
+                    } else {
+                        chip.text_color(rgb(DIM))
+                            .hover(|style| style.bg(rgb(HOVER)))
+                    }
+                })
+                .child(name)
+                .children(mark.map(|(mark, color)| {
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(color))
+                        .child(mark)
+                }))
+                .on_click(cx.listener(move |changes, _, _, cx| {
+                    changes.show(picked.clone(), cx);
+                }))
+        });
+        Some(
+            div().flex().px(px(INSET)).pt(px(6.)).child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(2.))
+                    .p(px(3.))
+                    .rounded(px(11.))
+                    .bg(rgb(RAISED))
+                    .children(chips),
+            ),
+        )
+    }
+
     /// The row at `row` of the tab.
     fn render_row(&self, row: usize, cx: &mut Context<Self>) -> AnyElement {
-        let (Some(diff), Some(&listed)) = (self.diff(), self.rows.get(row)) else {
+        let Some(&listed) = self.rows.get(row) else {
+            return div().into_any_element();
+        };
+        let (Some(repository), Some(Ok(diff))) =
+            (self.shown_index(), self.shown().map(|shown| &shown.read))
+        else {
             return div().into_any_element();
         };
         let (index, line) = match listed {
@@ -230,7 +414,8 @@ impl Changes {
                 let none = Look::default();
                 let look = self
                     .looks
-                    .get(index)
+                    .get(repository)
+                    .and_then(|looks| looks.get(index))
                     .and_then(|looks| looks.get(line))
                     .unwrap_or(&none);
                 let first = line == 0;
@@ -257,6 +442,34 @@ impl Changes {
             .child(inner.border_x_1().border_color(rgb(BORDER)))
             .into_any_element()
     }
+}
+
+/// The name of `folder`, its last part's.
+fn name_of(folder: &Path) -> String {
+    folder.file_name().map_or_else(
+        || folder.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// What changed in `diff`, as the heading says it: how many files, the
+/// lines they gained and lost, and since what.
+fn said_of(diff: &Diff) -> gpui::Div {
+    if diff.files.is_empty() {
+        return div().child(format!("Nothing changed {}.", diff.since.said()));
+    }
+    let (added, removed) = diff.counts();
+    let files = match diff.files.len() {
+        1 => "1 file".to_owned(),
+        count => format!("{count} files"),
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .child(format!("{files} ·"))
+        .child(counts(added, removed))
+        .child(diff.since.said())
 }
 
 /// `+added −removed`, in the colors of what they mean, leaving out a
@@ -376,7 +589,7 @@ fn follow(cx: &mut Context<Changes>) -> Task<()> {
             };
             let read = cx
                 .background_executor()
-                .spawn(async move { changes::read(&folder) })
+                .spawn(async move { read(&folder) })
                 .await;
             let Ok(changed) = this.read_with(cx, |changes, _| changes.read.as_ref() != Some(&read))
             else {
@@ -386,7 +599,10 @@ fn follow(cx: &mut Context<Changes>) -> Task<()> {
                 let (read, looks) = cx
                     .background_executor()
                     .spawn(async move {
-                        let looks = read.as_ref().map(looks).unwrap_or_default();
+                        let looks = read
+                            .iter()
+                            .map(|shown| shown.read.as_ref().map(looks).unwrap_or_default())
+                            .collect();
                         (read, looks)
                     })
                     .await;
@@ -677,6 +893,7 @@ impl Render for Changes {
             .font_family(UI_FONT)
             .text_size(px(13.))
             .child(self.render_heading())
+            .children(self.render_repositories(cx))
             .child(list.pb_3())
     }
 }

@@ -479,6 +479,7 @@ fn show_changes_tool() -> Value {
     {
         "name": SHOW_CHANGES,
         "description": "Shows the human what changed in the files of a Git repository, \
+            or of each repository among a project's directories, \
             file by file and line by line, on a tab of the stage beside the conversation, \
             where a click on a line opens the file there: in a sketch, all it changed since \
             it started, and elsewhere what changed since the last commit, with the files \
@@ -490,9 +491,9 @@ fn show_changes_tool() -> Value {
             "properties": {
                 "folder": {
                     "type": "string",
-                    "description": "A folder of the repository, absolute or from the working \
-                        directory, such as a sketch's folder: the working directory unless \
-                        given.",
+                    "description": "A folder of the repository, or a project's folder, \
+                        absolute or from the working directory, such as a sketch's folder: the \
+                        working directory unless given.",
                 },
             },
         },
@@ -986,8 +987,9 @@ fn show_file(
     Ok(shown)
 }
 
-/// Asks the chat to show what changed in the repository of the folder
-/// `arguments` name, and answers what changed.
+/// Asks the chat to show what changed in the repositories of the folder
+/// `arguments` name (see [`crate::stage::changes::repositories`]), and
+/// answers what changed in each.
 fn show_changes(
     arguments: &Value,
     cwd: &Path,
@@ -1003,10 +1005,29 @@ fn show_changes(
     };
     let folder = fs::canonicalize(&folder)
         .map_err(|error| format!("cannot read {}: {error}", folder.display()))?;
-    let diff = changes::read(&folder)
-        .map_err(|error| format!("cannot tell what changed in {}: {error}", folder.display()))?;
+    let read = crate::stage::changes::read(&folder);
+    if !read.iter().any(|repository| repository.read.is_ok()) {
+        let error = read
+            .into_iter()
+            .find_map(|repository| repository.read.err())
+            .unwrap_or_default();
+        return Err(format!(
+            "cannot tell what changed in {}: {error}",
+            folder.display()
+        ));
+    }
     ask(requests, ToolRequest::ShowChanges { folder })?;
-    Ok(told_changes(&diff))
+    Ok(read
+        .iter()
+        .map(|repository| match &repository.read {
+            Ok(diff) => told_changes(diff),
+            Err(error) => format!(
+                "Cannot tell what changed in {}: {error}",
+                repository.name.as_deref().unwrap_or("the folder")
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n"))
 }
 
 /// Asks the chat to show the map of the project open where `arguments`
@@ -2528,6 +2549,33 @@ mod tests {
             let shown = call_now(SHOW_CHANGES, &json!({}), &outside, &sent);
             assert_eq!(shown["isError"], true);
             assert!(requests.try_recv().is_err());
+        }
+
+        // A project's folder shows what changed in its directories that
+        // are repositories.
+        let project = scratch("project-changes");
+        let app = project.join("directories").join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(project.join("directories").join("notes")).unwrap();
+        let ran = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&app)
+            .args(["init", "--quiet"])
+            .output()
+            .unwrap();
+        assert!(ran.status.success(), "{ran:?}");
+        fs::write(app.join("main.rs"), "fn main() {}\n").unwrap();
+        let shown = call_now(SHOW_CHANGES, &json!({}), &project, &sent);
+        assert_eq!(shown["isError"], false);
+        let told = shown["content"][0]["text"].as_str().unwrap();
+        assert!(
+            told.contains(&format!("What changed in {}", app.display()))
+                && told.ends_with("1 file, +1 -0.\nA main.rs +1 -0"),
+            "{told}"
+        );
+        match requests.try_recv() {
+            Ok(ToolRequest::ShowChanges { folder }) => assert_eq!(folder, project),
+            _ => panic!("the stage was not asked to show what changed"),
         }
     }
 

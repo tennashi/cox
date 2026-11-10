@@ -9,7 +9,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use cox_editor::changes;
 use gpui::{
     App, Context, Entity, Focusable, FontWeight, PathPromptOptions, SharedString, Subscription,
     Task, Window, actions, deferred, div, prelude::*, px, rgb,
@@ -86,7 +85,8 @@ const MAP: &str = "map";
 const ACTIVITY: &str = "activity";
 
 /// Which of the views a project may not have it has: a map, or a Git
-/// repository to show what changed in, or a tab of it open already.
+/// repository to show what changed in, its own or among its directories,
+/// or a tab of it open already.
 #[derive(Clone, Copy)]
 struct Present {
     map: bool,
@@ -189,8 +189,8 @@ impl Stage {
     /// ground, each by its icon, named where the mouse rests, but the one
     /// shown, which is marked and named: "Activity", counting the chats of
     /// the folder that wait for the human, "Map" when the project has one,
-    /// then "Files", "Changes" in a Git repository, then the other
-    /// plugins, "Triggers" last.
+    /// then "Files", "Changes" in a Git repository, or a project with one
+    /// among its directories, then the other plugins, "Triggers" last.
     fn render_views(
         shown: Option<&View>,
         plugins: Vec<Plugin>,
@@ -487,8 +487,10 @@ impl Stage {
 /// Counts the files that changed in the project of `cx`'s stage, looks
 /// whether it has a map, and counts the chats of the folder that wait for
 /// the human, now and then, while the stage is open, for the bar to show
-/// "Changes" in a Git repository only, with the count, "Map" only for a
-/// project with a map, and the count on "Activity".
+/// "Changes" only in a Git repository, or a project with one among its
+/// directories (see [`super::changes::repositories`]), with the count of
+/// the files of all of them, "Map" only for a project with a map, and the
+/// count on "Activity".
 pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
     cx.spawn(async move |this, cx| {
         loop {
@@ -503,7 +505,7 @@ pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
                     .spawn(async move {
                         let mapped = !cox_editor::map::list(&cwd).is_empty();
                         let waiting = super::activity::waiting(&cwd);
-                        (changes::count(&cwd).ok(), mapped, waiting)
+                        (super::changes::count(&cwd).ok(), mapped, waiting)
                     })
                     .await;
                 let counted = this.update(cx, |stage, cx| {
