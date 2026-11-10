@@ -41,6 +41,9 @@
 //!   [`crate::raw::told`]), the last kept first; and
 //!   `cox://api/raw/<name>`, a source, as a page of the wiki is told,
 //!   with where it was read.
+//! - `cox://api/project-raw`: the project's own sources, in `raw` in
+//!   its folder, as the human's are told, and whether the folder is the
+//!   home, which has none; and `cox://api/project-raw/<name>`, a source.
 //!
 //! - `cox://api/activity`: what goes on in the folder, what waits for
 //!   the human and what happened without them (see
@@ -315,10 +318,16 @@ impl Plugins {
                     wiki::page_in(&root, &percent_decoded(rest), translate::page)?
                 }
             }
-            "raw" => {
-                let root = crate::settings::raw();
+            "raw" | "project-raw" => {
+                let root = if what == "raw" {
+                    crate::settings::raw()
+                } else {
+                    self.root.join(crate::raw::PROJECT_RAW)
+                };
                 if rest.is_empty() {
-                    crate::raw::told(&root)
+                    let mut told = crate::raw::told(&root);
+                    told["home"] = (self.root == home()).into();
+                    told
                 } else {
                     crate::raw::told_source(&root, &percent_decoded(rest), translate::page)?
                 }
@@ -588,6 +597,33 @@ mod tests {
         assert_eq!(triage["name"], "triage");
         assert_eq!(triage["scope"], "project");
         assert_eq!(triage["schedule"]["every"], "Every 6 hours");
+    }
+
+    #[test]
+    fn the_projects_sources_are_told_as_json() {
+        let root = scratch("project-raw");
+        std::fs::create_dir_all(root.join("raw/sketches")).unwrap();
+        std::fs::write(
+            root.join("raw/sketches/2026-11-10-mock.md"),
+            "---\nsource: \"chat 3\"\nkept: 2026-11-10\n---\n\n# Mock\n\nWhat it tried.\n",
+        )
+        .unwrap();
+        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
+
+        let answer = plugins.resource("cox://api/project-raw").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["sources"][0]["name"], "sketches/2026-11-10-mock");
+        assert_eq!(json["sources"][0]["source"], "chat 3");
+        assert_eq!(json["home"], false);
+        let answer = plugins
+            .resource("cox://api/project-raw/sketches/2026-11-10-mock")
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["title"], "Mock");
+        assert_eq!(
+            plugins.resource("cox://api/project-raw/sketches/nothing"),
+            None
+        );
     }
 
     #[test]

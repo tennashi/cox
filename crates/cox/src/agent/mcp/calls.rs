@@ -248,104 +248,124 @@ fn all_tools() -> Value {
 /// The tools that keep what the agent reads, and find it again, as the
 /// agent learns of them.
 fn raw_tools() -> [Value; 3] {
-    [
-        json!({
-            "name": RAW_KEEP,
-            "description": "Keeps a source you read, as it was: a web page, a paper, a \
-                release note or a command's output, as the material of research the \
-                human has you do, apart from what is made of it, as a report or a page \
-                of the wiki, which then names the sources it was made from, so that it \
-                can be checked against them, or made again. For a web page, give its \
-                URL as `from` and no `text`: Cox reads the page itself, whole, its \
-                article as Markdown without the site's menus, keeps it, and answers \
-                what it says, so read pages for research with this rather than a fetch \
-                tool that answers a summary of them. Cox reads HTML and text on the web \
-                alone; a page its scripts draw, or one past a login, read with the \
-                browser's tools and keep as `text`. Otherwise give the text as you read \
-                it, as Markdown, not a summary of it, and leave out what is not the \
-                source's own, as a site's menus. Sources are kept by topic, as the \
-                research they are of; Cox notes where each was read, the day and this \
-                chat, and names it after the day and its title. A source is never \
-                written again: keep a newer one beside it. Answers the source's name, \
-                for raw_read, and its file.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "topic": {
-                        "type": "string",
-                        "description": "What the research is of, as words and `/`, as \
-                            `rust-news`: the folder the source is kept in.",
-                    },
-                    "from": {
-                        "type": "string",
-                        "description": "Where it was read: its URL, which Cox reads when \
-                            no `text` is given, or the command or the file it came from.",
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Its title, as the source names itself; for a \
-                            page Cox reads, the page's own unless given.",
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "What it says, as Markdown, without its title; \
-                            none for a web page Cox is to read.",
-                    },
+    [raw_keep_tool(), raw_search_tool(), raw_read_tool()]
+}
+
+/// The tool that keeps a source.
+fn raw_keep_tool() -> Value {
+    json!({
+        "name": RAW_KEEP,
+        "description": "Keeps a source you read, as it was: a web page, a paper, a \
+            release note or a command's output, as the material of research the \
+            human has you do, apart from what is made of it, as a report or a page \
+            of the wiki, which then names the sources it was made from, so that it \
+            can be checked against them, or made again. For a web page, give its \
+            URL as `from` and no `text`: Cox reads the page itself, whole, its \
+            article as Markdown without the site's menus, keeps it, and answers \
+            what it says, so read pages for research with this rather than a fetch \
+            tool that answers a summary of them. Cox reads HTML and text on the web \
+            alone; a page its scripts draw, or one past a login, read with the \
+            browser's tools and keep as `text`. Otherwise give the text as you read \
+            it, as Markdown, not a summary of it, and leave out what is not the \
+            source's own, as a site's menus. Sources are kept by topic, as the \
+            research they are of; Cox notes where each was read, the day and this \
+            chat, and names it after the day and its title. A chat of a project \
+            keeps its sources in the project's own, for its chats alone, unless \
+            told otherwise. A source is never written again: keep a newer one \
+            beside it. Answers the source's name, for raw_read, and its file.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "What the research is of, as words and `/`, as \
+                        `rust-news`: the folder the source is kept in.",
                 },
-                "required": ["topic", "from"],
-            },
-        }),
-        json!({
-            "name": RAW_SEARCH,
-            "description": "Searches the sources kept with raw_keep, of a topic or of all: \
-                answers those that have every word of the query, whatever the case, \
-                those that have them most first, each by its name and title with the \
-                first lines that have them. Read one with raw_read.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The words to look for, as `never type`.",
-                    },
-                    "topic": {
-                        "type": "string",
-                        "description": "The topic to search, as `rust-news`; all unless \
-                            given.",
-                    },
+                "from": {
+                    "type": "string",
+                    "description": "Where it was read: its URL, which Cox reads when \
+                        no `text` is given, or the command or the file it came from.",
                 },
-                "required": ["query"],
-            },
-        }),
-        json!({
-            "name": RAW_READ,
-            "description": "Reads a source kept with raw_keep, with where it was read, \
-                the day and the chat that kept it in its properties: whole, or as much \
-                as is told at once, saying where to read on. Without a source, lists \
-                those of the topic, or of all, the last kept first, as to see what \
-                research has found since a day.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "source": {
-                        "type": "string",
-                        "description": "The source's name, as raw_keep or raw_search \
-                            gives it, as `rust-news/2026-11-06-announcing-rust-1-92-0`.",
-                    },
-                    "topic": {
-                        "type": "string",
-                        "description": "Without a source, the topic to list, as \
-                            `rust-news`; all unless given.",
-                    },
-                    "from_line": {
-                        "type": "integer",
-                        "description": "The line of the source to read from, as an \
-                            earlier read says to read on; the first unless given.",
-                    },
+                "title": {
+                    "type": "string",
+                    "description": "Its title, as the source names itself; for a \
+                        page Cox reads, the page's own unless given.",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "What it says, as Markdown, without its title; \
+                        none for a web page Cox is to read.",
+                },
+                "keep_in_project": {
+                    "type": "boolean",
+                    "description": "false keeps the source in the human's sources, \
+                        for every project, as research of no one project; unless \
+                        given, a chat of a project keeps it in the project's own.",
                 },
             },
-        }),
-    ]
+            "required": ["topic", "from"],
+        },
+    })
+}
+
+/// The tool that searches the sources.
+fn raw_search_tool() -> Value {
+    json!({
+        "name": RAW_SEARCH,
+        "description": "Searches the sources kept with raw_keep, of a topic or of all, \
+            this project's and the human's: answers those that have every word of \
+            the query, whatever the case, those that have them most first, each by \
+            its name and title with the first lines that have them. Read one with \
+            raw_read.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The words to look for, as `never type`.",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "The topic to search, as `rust-news`; all unless \
+                        given.",
+                },
+            },
+            "required": ["query"],
+        },
+    })
+}
+
+/// The tool that reads a source, or lists them.
+fn raw_read_tool() -> Value {
+    json!({
+        "name": RAW_READ,
+        "description": "Reads a source kept with raw_keep, with where it was read, \
+            the day and the chat that kept it in its properties: whole, or as much \
+            as is told at once, saying where to read on; this project's before the \
+            human's of the same name. Without a source, lists those of the topic, \
+            or of all, the last kept first, this project's and the human's apart, \
+            as to see what research has found since a day.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "The source's name, as raw_keep or raw_search \
+                        gives it, as `rust-news/2026-11-06-announcing-rust-1-92-0`.",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "Without a source, the topic to list, as \
+                        `rust-news`; all unless given.",
+                },
+                "from_line": {
+                    "type": "integer",
+                    "description": "The line of the source to read from, as an \
+                        earlier read says to read on; the first unless given.",
+                },
+            },
+        },
+    })
 }
 
 /// The tools that read and write the human's wiki, as the agent learns
@@ -864,8 +884,8 @@ pub(super) async fn call(
         WIKI_READ => wiki_read(arguments, chats).await,
         WIKI_WRITE => wiki_write(arguments, cwd, chats).await,
         RAW_KEEP => raw_keep(arguments, chats).await,
-        RAW_SEARCH => raw_search(arguments),
-        RAW_READ => raw_read(arguments),
+        RAW_SEARCH => raw_search(arguments, chats).await,
+        RAW_READ => raw_read(arguments, chats).await,
         _ => return Err((INVALID_PARAMS, format!("no tool {name}"))),
     };
     Ok(match done {
@@ -1606,8 +1626,8 @@ async fn whereabouts(chats: &UnboundedSender<ChatRequest>) -> Result<Whereabouts
     heard.await.map_err(|_| "the chat has closed".to_owned())
 }
 
-/// A wiki a chat reads.
-struct Wiki {
+/// A wiki, or a folder of sources, that a chat reads.
+struct Shelf {
     /// What the agent hears it called.
     called: &'static str,
     root: PathBuf,
@@ -1617,21 +1637,40 @@ struct Wiki {
 
 /// The wikis a chat in the project of `folder`, if it is in one, reads,
 /// the first first: the project's own, then the human's.
-fn wikis(folder: Option<&Path>) -> Vec<Wiki> {
+fn wikis(folder: Option<&Path>) -> Vec<Shelf> {
     let mut wikis = Vec::new();
     if let Some(folder) = folder {
-        wikis.push(Wiki {
+        wikis.push(Shelf {
             called: "this project's wiki",
             root: folder.join(wiki::PROJECT_WIKI),
             own: true,
         });
     }
-    wikis.push(Wiki {
+    wikis.push(Shelf {
         called: "the human's wiki",
         root: crate::settings::wiki(),
         own: false,
     });
     wikis
+}
+
+/// The sources a chat in the project of `folder`, if it is in one,
+/// reads, the first first: the project's own, then the human's.
+fn raws(folder: Option<&Path>) -> Vec<Shelf> {
+    let mut raws = Vec::new();
+    if let Some(folder) = folder {
+        raws.push(Shelf {
+            called: "this project's sources",
+            root: folder.join(raw::PROJECT_RAW),
+            own: true,
+        });
+    }
+    raws.push(Shelf {
+        called: "the human's sources",
+        root: crate::settings::raw(),
+        own: false,
+    });
+    raws
 }
 
 /// Searches the wikis for what `arguments` ask, and tells what it found.
@@ -1688,7 +1727,7 @@ async fn wiki_read(
     if given == Some(true) && folder.is_none() {
         return Err("this chat is Cox's own, of no project, so it has no project wiki".to_owned());
     }
-    let wikis: Vec<Wiki> = wikis(folder.as_deref())
+    let wikis: Vec<Shelf> = wikis(folder.as_deref())
         .into_iter()
         .filter(|wiki| given.is_none_or(|own| wiki.own == own))
         .collect();
@@ -1841,13 +1880,27 @@ async fn raw_keep(
             text: given("text")?.unwrap_or(""),
         },
     };
+    let keep = match arguments.get("keep_in_project") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(keep)) => Some(*keep),
+        Some(_) => return Err("`keep_in_project` is not true or false".to_owned()),
+    };
     let Whereabouts {
         project,
         folder,
         chat,
         kept,
     } = whereabouts(chats).await?;
-    let root = crate::settings::raw();
+    if keep == Some(true) && folder.is_none() {
+        return Err(
+            "this chat is Cox's own, of no project, so it has no project sources: keep the \
+             source without keep_in_project"
+                .to_owned(),
+        );
+    }
+    let mut raws = raws(folder.as_deref());
+    let shelf = raws.remove(usize::from(keep == Some(false) && folder.is_some()));
+    let root = shelf.root;
     let day = wiki::today();
     let kept = raw::Kept {
         day: &day,
@@ -1858,7 +1911,8 @@ async fn raw_keep(
     let name = raw::keep(&root, topic, source, kept)?;
     let file = wiki::file(&root, &name)?;
     let kept = format!(
-        "The source is kept as {name}, in {}. Name it where you use it.",
+        "The source is kept as {name}, in {}, in {}. Name it where you use it.",
+        shelf.called,
         file.display()
     );
     if page.is_none() {
@@ -1929,44 +1983,70 @@ fn topic(arguments: &Value) -> Result<Option<&str>, String> {
 
 /// Searches the sources for what `arguments` ask, and tells what it
 /// found.
-fn raw_search(arguments: &Value) -> Result<String, String> {
+async fn raw_search(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
     let query = arguments
         .get("query")
         .and_then(Value::as_str)
         .filter(|query| !query.trim().is_empty())
         .ok_or("no query: give the words to look for as `query`")?;
     let topic = topic(arguments)?;
-    let found = raw::search(&crate::settings::raw(), query, topic);
-    if found.is_empty() {
-        return Ok(format!("No source kept has every word of `{query}`."));
-    }
+    let Whereabouts { folder, .. } = whereabouts(chats).await?;
     let mut told = format!("The sources kept that have every word of `{query}`:");
-    for source in found {
-        let _ = write!(told, "\n\n{}: {}", source.name, source.title);
-        for line in source.lines {
-            let _ = write!(told, "\n  {line}");
+    let mut any = false;
+    for shelf in raws(folder.as_deref()) {
+        let found = raw::search(&shelf.root, query, topic);
+        if found.is_empty() {
+            continue;
+        }
+        any = true;
+        let _ = write!(told, "\n\nIn {}:", shelf.called);
+        for source in found {
+            let _ = write!(told, "\n\n{}: {}", source.name, source.title);
+            for line in source.lines {
+                let _ = write!(told, "\n  {line}");
+            }
         }
     }
-    Ok(told)
+    if any {
+        Ok(told)
+    } else {
+        Ok(format!("No source kept has every word of `{query}`."))
+    }
 }
 
 /// Reads the source `arguments` name, or lists the sources.
-fn raw_read(arguments: &Value) -> Result<String, String> {
-    let root = crate::settings::raw();
+async fn raw_read(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let Whereabouts { folder, .. } = whereabouts(chats).await?;
+    let shelves = raws(folder.as_deref());
     match arguments.get("source") {
         None | Some(Value::Null) => {
             let topic = topic(arguments)?;
-            let sources = raw::list(&root, topic);
             let of = topic
                 .map(|topic| format!(" of {topic}"))
                 .unwrap_or_default();
-            if sources.is_empty() {
+            let lists: Vec<String> = shelves
+                .iter()
+                .filter_map(|shelf| {
+                    let sources = raw::list(&shelf.root, topic);
+                    (!sources.is_empty()).then(|| {
+                        format!(
+                            "In {}, the last kept first:\n{}",
+                            shelf.called,
+                            sources.join("\n")
+                        )
+                    })
+                })
+                .collect();
+            if lists.is_empty() {
                 Ok(format!("No source{of} is kept."))
             } else {
-                Ok(format!(
-                    "The sources{of}, the last kept first:\n{}",
-                    sources.join("\n")
-                ))
+                Ok(format!("The sources{of}:\n\n{}", lists.join("\n\n")))
             }
         }
         Some(Value::String(source)) => {
@@ -1977,9 +2057,17 @@ fn raw_read(arguments: &Value) -> Result<String, String> {
                     .and_then(|line| usize::try_from(line).ok())
                     .ok_or("`from_line` is not a line's number")?,
             };
-            let text = raw::read(&root, source)
-                .map_err(|error| format!("{error}: find its name with raw_read or raw_search"))?;
-            Ok(told_source(source, &text, from))
+            let mut missing = None;
+            for shelf in &shelves {
+                match raw::read(&shelf.root, source) {
+                    Ok(text) => return Ok(told_source(source, &text, from)),
+                    Err(error) => missing = Some(error),
+                }
+            }
+            Err(format!(
+                "{}: find its name with raw_read or raw_search",
+                missing.unwrap_or_default()
+            ))
         }
         Some(_) => Err("`source` is not a string".to_owned()),
     }
