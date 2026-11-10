@@ -1,6 +1,6 @@
 //! The language servers Cox knows, and which knows a language: those built
 //! into Cox, in `servers.json` beside this file, under those a project
-//! names in its own `.cox/servers.json`, written the same way.
+//! names in its own `servers.json`, written the same way.
 //!
 //! The file names each server, with the command that starts it, the
 //! languages it knows, as the protocol names them (see
@@ -108,6 +108,9 @@ pub struct Servers {
     servers: Vec<Server>,
 }
 
+/// The file of a project, in its folder, that names servers of its own.
+const PROJECT_SERVERS: &str = "servers.json";
+
 /// Cox's own servers.
 static BUILT_IN: LazyLock<Servers> = LazyLock::new(|| {
     Servers::over(&[], include_str!("servers.json"))
@@ -122,14 +125,14 @@ impl Servers {
     }
 
     /// The servers of the project in `root`: those its
-    /// `.cox/servers.json` names, over Cox's.
+    /// `servers.json` names, over Cox's.
     ///
     /// # Errors
     ///
     /// When the file cannot be read, or does not say servers as it is to,
     /// saying why.
     pub fn of_project(root: &Path) -> Result<Self, String> {
-        let path = root.join(".cox/servers.json");
+        let path = root.join(PROJECT_SERVERS);
         match std::fs::read_to_string(&path) {
             Ok(text) => Self::over(&BUILT_IN.servers, &text)
                 .map_err(|error| format!("{}: {error}", path.display())),
@@ -258,9 +261,9 @@ mod tests {
     fn a_project_with_no_file_has_coxs_servers() {
         let root = std::env::temp_dir().join(format!("cox-servers-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join(".cox")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         assert_eq!(Servers::of_project(&root), Ok(Servers::built_in()));
-        std::fs::write(root.join(".cox/servers.json"), "{").unwrap();
+        std::fs::write(root.join(PROJECT_SERVERS), "{").unwrap();
         assert!(
             Servers::of_project(&root)
                 .unwrap_err()

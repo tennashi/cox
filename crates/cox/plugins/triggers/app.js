@@ -142,7 +142,7 @@ function folder(f) {
 
 function empty() {
   return `<div class="empty">
-    <p>No trigger runs here. A trigger is a Markdown file in <code>.cox/triggers</code> here, or in <code>${esc(told.workflow)}</code> for every project:</p>
+    <p>No trigger runs here. A trigger is a Markdown file in <code>triggers</code> here, or in <code>${esc(told.workflow)}</code> for every project:</p>
     <pre>---
 on: turn.end
 when:

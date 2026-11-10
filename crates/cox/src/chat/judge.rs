@@ -28,7 +28,7 @@ pub type Starts = Rc<dyn Fn(PathBuf, Start) -> Agent>;
 
 /// The file in a project's folder that replaces [`STANCE`] for the
 /// project's judges, when there is one.
-pub const STANCE_FILE: &str = ".cox/goal.md";
+pub const STANCE_FILE: &str = "goal.md";
 
 /// What the judge is told it is, ahead of the goal, unless the project's
 /// [`STANCE_FILE`] says otherwise.
@@ -447,7 +447,7 @@ mod tests {
     fn the_projects_own_stance_replaces_the_default() {
         let folder = std::env::temp_dir().join(format!("cox-judge-stance-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(folder.join(".cox")).unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
         assert_eq!(stance(&folder), STANCE);
 
         std::fs::write(folder.join(STANCE_FILE), " \n").unwrap();

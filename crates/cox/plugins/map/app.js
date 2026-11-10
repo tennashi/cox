@@ -1,5 +1,5 @@
 // A map of the project, drawn by a page of the stage: a picture of the
-// project in tiers that an agent wrote in a file of its `.cox/maps`, one
+// project in tiers that an agent wrote in a file of its `maps`, one
 // of the project's maps, each from a top of its own, read as JSON from
 // `cox://api/map/<name>` with what Cox knows laid over it, and read
 // again every two seconds, as Cox's own tabs follow what they show. A
@@ -984,7 +984,7 @@ function renderEmpty() {
     app.innerHTML = `${headEl()}${mapsEl()}<div class="says empty">The map <code>${esc(data.name)}</code> has no tier yet. An agent writes them in <code>${esc(data.file)}</code>: ask it, in the chat.</div>`;
     return;
   }
-  app.innerHTML = `${headEl()}<div class="says empty">This project has no map yet. An agent writes one in <code>.cox/maps/</code>, a file for each map, as <code>.cox/maps/parts.json</code>: ask it, in the chat, to map the project.</div>`;
+  app.innerHTML = `${headEl()}<div class="says empty">This project has no map yet. An agent writes one in <code>maps/</code>, a file for each map, as <code>maps/parts.json</code>: ask it, in the chat, to map the project.</div>`;
 }
 
 function render() {

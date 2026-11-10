@@ -278,7 +278,7 @@ mod tests {
         let file = dir.join("triggers.json");
         fs::write(
             &file,
-            r#"{"/work/app": {"off": ["/work/app/.cox/triggers/ci.md"]}, "/work/b": {}}"#,
+            r#"{"/work/app": {"off": ["/work/app/triggers/ci.md"]}, "/work/b": {}}"#,
         )
         .unwrap();
         let moved = cox_core::moved::Moved {
@@ -290,7 +290,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(
             now,
-            serde_json::json!({"/src/app": {"off": ["/src/app/.cox/triggers/ci.md"]}, "/work/b": {}})
+            serde_json::json!({"/src/app": {"off": ["/src/app/triggers/ci.md"]}, "/work/b": {}})
         );
         // A file that is not there is left so.
         move_in(&dir.join("none.json"), moved).unwrap();

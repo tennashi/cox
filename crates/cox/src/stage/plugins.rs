@@ -3,14 +3,14 @@
 //! on the stage, the agent included. A plugin is a folder with an
 //! `index.html`, and a `plugin.json` naming its `title` if it has one: the
 //! ones built into Cox, in `crates/cox/plugins`, and the project's, in
-//! `.cox/plugins/<name>` under its folder. The stage shows a plugin as a
+//! `plugins/<name>` under its folder. The stage shows a plugin as a
 //! page at `cox://<name>/`, which it [serves](Plugins::serve) itself (see
 //! [`cox_browser::scheme`]), and a button on its tab bar for each.
 //!
 //! What Cox knows, a plugin reads as JSON from `cox://api/<what>`:
 //!
 //! - `cox://api/map/<name>`: the map of the project named `<name>`, as
-//!   its file in `.cox/maps` has it, with what changed and what is stale
+//!   its file in `maps` has it, with what changed and what is stale
 //!   laid over its boxes, and the names of the project's other maps (see
 //!   [`crate::stage::map`]); `cox://api/map`, its first map.
 //! - `cox://api/file/<path>`: what the project's language server says of
@@ -86,7 +86,7 @@ use crate::translate;
 use crate::wiki::told as wiki;
 
 /// Where a project keeps its plugins, under its folder.
-const PROJECT_PLUGINS: &str = ".cox/plugins";
+const PROJECT_PLUGINS: &str = "plugins";
 
 /// The files of a plugin, by their paths within it.
 type Files = &'static [(&'static str, &'static [u8])];
@@ -582,9 +582,10 @@ mod tests {
     #[test]
     fn the_schedules_of_the_folder_are_told_among_its_triggers() {
         let root = scratch("schedules");
-        std::fs::create_dir_all(root.join(".cox/triggers")).unwrap();
+        std::fs::create_dir_all(root.join(crate::trigger::PROJECT_TRIGGERS)).unwrap();
         std::fs::write(
-            root.join(".cox/triggers/triage.md"),
+            root.join(crate::trigger::PROJECT_TRIGGERS)
+                .join("triage.md"),
             "---\non: {schedule: {cron: \"0 */6 * * *\"}}\n---\n\nLook at what changed.\n",
         )
         .unwrap();

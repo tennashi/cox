@@ -131,10 +131,10 @@ mod tests {
     fn json_moves_the_paths_it_holds_and_its_keys_that_are_paths() {
         let mut value = json!({
             "/work/app": {
-                "off": ["/work/app/.cox/triggers/ci.md", "/home/me/workflow/triggers/x.md"],
+                "off": ["/work/app/triggers/ci.md", "/home/me/workflow/triggers/x.md"],
                 "order": [],
             },
-            "/work/other": {"off": ["/work/other/.cox/triggers/ci.md"]},
+            "/work/other": {"off": ["/work/other/triggers/ci.md"]},
             "tabs": [{"page": "file:///work/app/index.html", "zoom": 1.5}],
         });
         assert!(moved().json(&mut value));
@@ -142,10 +142,10 @@ mod tests {
             value,
             json!({
                 "/src/app-2": {
-                    "off": ["/src/app-2/.cox/triggers/ci.md", "/home/me/workflow/triggers/x.md"],
+                    "off": ["/src/app-2/triggers/ci.md", "/home/me/workflow/triggers/x.md"],
                     "order": [],
                 },
-                "/work/other": {"off": ["/work/other/.cox/triggers/ci.md"]},
+                "/work/other": {"off": ["/work/other/triggers/ci.md"]},
                 "tabs": [{"page": "file:///src/app-2/index.html", "zoom": 1.5}],
             })
         );

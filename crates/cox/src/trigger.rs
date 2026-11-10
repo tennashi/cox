@@ -19,8 +19,7 @@
 //!
 //! The human's triggers are in `triggers` in their workflow's folder (see
 //! [`crate::settings::workflow`]), and run in every project; a project's
-//! own are in `.cox/triggers` in its folder, which the project's
-//! repository can keep.
+//! own are in `triggers` in its folder, beside its directories.
 //!
 //! As a chat's turn ends, as its agent ends it, its goal is checked first,
 //! then the triggers of the folder it works in, `turn.end`, run in order:
@@ -50,7 +49,7 @@ pub mod discuss;
 pub const TRIGGERS: &str = "triggers";
 
 /// The folder of a project that holds its own triggers.
-pub const PROJECT_TRIGGERS: &str = ".cox/triggers";
+pub const PROJECT_TRIGGERS: &str = "triggers";
 
 /// Where a trigger is kept, and so where it runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -670,7 +669,7 @@ fn unquoted(value: &str) -> &str {
 }
 
 /// The triggers that run in `folder`, as its chats find them: the
-/// project's own, in `.cox/triggers` there, then the human's, in their
+/// project's own, in `triggers` there, then the human's, in their
 /// `workflow`, each by name; and why each of those Cox cannot read does
 /// not run.
 #[must_use]
