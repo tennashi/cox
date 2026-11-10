@@ -2,9 +2,12 @@
 //! means (see [`cox_editor::lsp`]): one for each project and server,
 //! started when a tab first needs it, and shared by the tabs of every chat
 //! in the project, until Cox quits. Which server knows a file is the
-//! project's to say, over what Cox knows (see
-//! [`cox_editor::lsp::servers`]). The app holds them as a global, which
-//! the stages find them in.
+//! project's to say, over the human's `servers.json`, where Cox keeps what
+//! lasts, which the settings screen changes (see [`listing`]), over what
+//! Cox knows (see [`cox_editor::lsp::servers`]). The app holds them as a
+//! global, which the stages find them in.
+
+pub mod listing;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -94,10 +97,11 @@ impl Servers {
     /// `Cargo.toml` is for Rust, or else in the file's own folder.
     pub fn of(&self, cwd: &Path, path: &Path, cx: &mut App) -> Option<Entity<LanguageServer>> {
         let language = languages::id_of(path)?;
-        let known = lsp::Servers::of_project(cwd).unwrap_or_else(|error| {
-            tracing::warn!("{error}");
-            lsp::Servers::built_in()
-        });
+        let user = crate::storage::path(Kept::Servers);
+        let (known, left_out) = lsp::Servers::of_project(user.as_deref(), cwd);
+        for why in left_out {
+            tracing::warn!("{why}");
+        }
         let server = known.of(language)?.clone();
         let root = if path.starts_with(cwd) {
             cwd.to_owned()
@@ -123,6 +127,38 @@ impl Servers {
         let running = cx.new(|cx| LanguageServer::new(server, started, cx));
         self.running.borrow_mut().insert(key, running.clone());
         Some(running)
+    }
+}
+
+/// Where the program of a server is, as the settings screen says it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Found {
+    /// Downloaded, at this version.
+    Downloaded(String),
+    /// Downloaded at this version the first time a tab needs it.
+    ToDownload(String),
+    /// Here: on `PATH`, or where the command says.
+    At(PathBuf),
+    /// Nowhere: the program the command names is not on `PATH`, or not
+    /// where it says.
+    Missing(String),
+}
+
+impl Found {
+    /// Where the program of `server` is, on `PATH` as Cox has it.
+    #[must_use]
+    pub fn of(server: &Server) -> Self {
+        if let Some((version, _)) = server.download_for(&download::platform()) {
+            return if download::is_installed(Kept::ServerDownloads, &server.name, version) {
+                Self::Downloaded(version.to_owned())
+            } else {
+                Self::ToDownload(version.to_owned())
+            };
+        }
+        let program = server.command.first().cloned().unwrap_or_default();
+        let here = std::env::current_dir().unwrap_or_default();
+        crate::agents::check::find(&program, std::env::var_os("PATH").as_deref(), &here)
+            .map_or(Self::Missing(program), Self::At)
     }
 }
 

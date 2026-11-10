@@ -151,7 +151,7 @@ pub fn check(command: Vec<String>, cwd: &Path) -> Checked {
 
 /// Where `program` is: on `path`, as a shell finds a program by its
 /// name, or, for a path, there, from `here` when it is relative.
-fn find(program: &str, path: Option<&std::ffi::OsStr>, here: &Path) -> Option<PathBuf> {
+pub(crate) fn find(program: &str, path: Option<&std::ffi::OsStr>, here: &Path) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt as _;
     let runs = |file: &Path| {
         std::fs::metadata(file)

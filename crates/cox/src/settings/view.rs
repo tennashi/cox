@@ -8,8 +8,9 @@
 //! kept (see [`super::keep_home`]), and the window opens the chats in no
 //! project there from then on. Under it are the folders of the human's
 //! workflow and wiki (see [`folder`]), the agents they run (see
-//! [`agents`]), the language they read in (see [`translation`]), and the
-//! code a phone pairs with (see [`phone`]).
+//! [`agents`]), the language servers of the code tabs (see [`servers`]),
+//! the language they read in (see [`translation`]), and the code a phone
+//! pairs with (see [`phone`]).
 //! What the screen says the human selects, copies and translates (see
 //! [`words`]).
 //! Escape, the ×, or a click beside the card closes it, keeping what
@@ -18,6 +19,7 @@
 mod agents;
 mod folder;
 mod phone;
+mod servers;
 mod translation;
 mod words;
 
@@ -31,6 +33,7 @@ use gpui::{
 use self::agents::AgentsSection;
 use self::folder::FolderField;
 use self::phone::PhoneSection;
+use self::servers::ServersSection;
 use self::translation::TranslationSection;
 use self::words::Words;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
@@ -93,6 +96,7 @@ pub struct SettingsView {
     workflow: Entity<FolderField>,
     wiki: Entity<FolderField>,
     agents: Entity<AgentsSection>,
+    servers: Entity<ServersSection>,
     translation: Entity<TranslationSection>,
     phone: Entity<PhoneSection>,
     /// What the screen says, as the human selects it.
@@ -150,6 +154,7 @@ impl SettingsView {
                 )
             }),
             agents: cx.new(|cx| AgentsSection::new(words.clone(), cx)),
+            servers: cx.new(|cx| ServersSection::new(words.clone(), cx)),
             translation: cx.new(|cx| TranslationSection::new(words.clone(), cx)),
             phone: cx.new(|_| PhoneSection::new(words.clone())),
             words,
@@ -169,6 +174,7 @@ impl SettingsView {
         self.workflow.update(cx, FolderField::reread);
         self.wiki.update(cx, FolderField::reread);
         self.agents.update(cx, AgentsSection::reread);
+        self.servers.update(cx, ServersSection::reread);
         self.translation.update(cx, TranslationSection::reread);
     }
 
@@ -176,15 +182,17 @@ impl SettingsView {
     /// `cox --inspect state`.
     #[must_use]
     pub fn described(&self, cx: &App) -> Vec<String> {
-        vec![
+        let mut lines = vec![
             format!(
                 "Workflow input holding {:?}",
                 self.workflow.read(cx).text(cx)
             ),
             format!("Wiki input holding {:?}", self.wiki.read(cx).text(cx)),
-            self.translation.read(cx).described(cx),
-            self.phone.read(cx).described(),
-        ]
+        ];
+        lines.extend(self.servers.read(cx).described(cx));
+        lines.push(self.translation.read(cx).described(cx));
+        lines.push(self.phone.read(cx).described());
+        lines
     }
 
     /// Keeps what the screen holds that is not kept yet, as it closes.
@@ -193,6 +201,7 @@ impl SettingsView {
         self.workflow.update(cx, FolderField::keep_typed);
         self.wiki.update(cx, FolderField::keep_typed);
         self.agents.update(cx, AgentsSection::save_all);
+        self.servers.update(cx, ServersSection::save_all);
         self.translation.update(cx, TranslationSection::keep_typed);
     }
 
@@ -441,6 +450,7 @@ impl Render for SettingsView {
                     .child(div().mt_4().child(self.workflow.clone()))
                     .child(div().mt_4().child(self.wiki.clone()))
                     .child(div().mt_4().child(self.agents.clone()))
+                    .child(div().mt_4().child(self.servers.clone()))
                     .child(div().mt_4().child(self.translation.clone()))
                     .child(div().mt_4().child(self.phone.clone())),
             )

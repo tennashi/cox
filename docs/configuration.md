@@ -38,8 +38,8 @@ Cox keeps what lasts across runs in a data folder:
 | Any other build, such as `target/debug/Cox.app` | `cox-data` beside it, such as `target/debug/cox-data` |
 | Started with `--data <dir>` | `<dir>` |
 
-You write `settings.json` and `agents.json` at its top. The rest is
-Cox's; [`storage.rs`](../crates/cox/src/storage.rs) lists all of it.
+You write `settings.json`, `agents.json` and `servers.json` at its top,
+or change them on the settings screen. The rest is Cox's; [`storage.rs`](../crates/cox/src/storage.rs) lists all of it.
 
 ## `settings.json`
 
@@ -278,8 +278,10 @@ more, so move them up out of it.
 Cox starts a language server for a code tab's language:
 `rust-analyzer`, which Cox downloads the first time it needs it, or
 `pyright-langserver`, `typescript-language-server`, `gopls` or `clangd`,
-if it is on `PATH`. A project names
-servers of its own in `servers.json`, in the same form as Cox's
+if it is on `PATH`. You name servers of your own, for every project, in
+`servers.json` in the [data folder](#the-data-folder), as the settings
+screen's "Language servers" does, and a project names its own in
+`servers.json` in its folder, both in the same form as Cox's
 [`servers.json`](../crates/cox-editor/src/lsp/servers.json):
 
 ```json
@@ -309,14 +311,14 @@ Each server, by name, has:
 | `settings` | Sent by section, as the server asks for them. |
 | `download` | Where the server's program is downloaded from, instead of found on `PATH`: its `version`, and for each platform (`darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`) the `archive`'s URL, its `sha256`, and the `program`'s path in it. |
 
-A project's server for a language goes before Cox's. For a server Cox
-already knows, each key the project gives replaces Cox's, as for
-`rust-analyzer` above; `null` turns the server off, as for `gopls`
-above.
+A project's server for a language goes before yours, and yours before
+Cox's. For a server Cox already knows, each key the file gives replaces
+Cox's, as for `rust-analyzer` above; `null` turns the server off, as for
+`gopls` above.
 
 Cox checks a download by its SHA-256 and keeps each version apart, in
 `cache/servers/<name>/<version>` in its data folder, so projects that
-download different versions of a server each run their own. A project
+download different versions of a server each run their own. A file
 that gives one of Cox's servers a `command` and no `download` runs that
 command instead, as `["rust-analyzer"]` to run the one on `PATH`. Cox's
 own `rust-analyzer` is from its

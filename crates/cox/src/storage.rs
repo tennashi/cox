@@ -39,6 +39,9 @@ pub enum Kept {
     Settings,
     /// The agents the human lists (see [`crate::agents`]).
     Agents,
+    /// The language servers the human names, over Cox's (see
+    /// [`crate::stage::servers`]).
+    Servers,
     /// The folders the sketches work in, and what is kept of those
     /// discarded (see [`crate::chat::sketch`]).
     Sketches,
@@ -97,9 +100,10 @@ pub enum Kept {
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Settings,
         Self::Agents,
+        Self::Servers,
         Self::Sketches,
         Self::Chats,
         Self::Stage,
@@ -128,6 +132,7 @@ impl Kept {
         match self {
             Self::Settings => "settings.json",
             Self::Agents => "agents.json",
+            Self::Servers => "servers.json",
             Self::Sketches => "sketches",
             Self::Chats => "state/chats.sqlite",
             Self::Stage => "state/stage",
