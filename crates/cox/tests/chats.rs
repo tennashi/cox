@@ -3414,12 +3414,16 @@ async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
     // its folder a directory of it named as it is, which the human goes
     // on with, so it is no longer discarded.
     let empty = open_sketch(cx, &workspace, &asks, Sketch::Empty, 4).await;
+    let made = empty.join("made.txt");
+    std::fs::write(&made, "made in the sketch\n").unwrap();
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.end_sketch_as(3, own_ending("Open as project"), window, cx);
         workspace.end_sketch_as(3, own_ending("Discard sketch"), window, cx);
     });
     settled(cx, &workspace);
-    assert!(!empty.exists());
+    // Another test may make a sketch from nothing in a folder of the same
+    // name once this one is gone, so what is gone is what this sketch made.
+    assert!(!made.exists());
     let project = opened_as_project(cx, &workspace, &home);
 
     let _ = std::fs::remove_dir_all(&project);
