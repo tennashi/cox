@@ -36,6 +36,10 @@
 
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
+
+/// How long an entry the human asked to see stays marked.
+const MARKED_FOR: Duration = Duration::from_millis(1600);
 
 use cox_core::entry::Attachment;
 use cox_core::goal;
@@ -166,6 +170,12 @@ pub struct ChatView {
     /// Whether the next frame scrolls the conversation to its end, to
     /// keep it in view as entries arrive.
     to_end: bool,
+    /// The entry the next frame scrolls the conversation to, as the human
+    /// asked to see it, once the conversation has it.
+    to_entry: Option<usize>,
+    /// The entry marked a moment, as one the human asked to see, while it
+    /// is.
+    pub(super) marked: Option<usize>,
     /// The line the human is typing.
     input: Entity<LineInput>,
     /// The list over the input of the agent's commands the line can go on
@@ -228,6 +238,8 @@ impl ChatView {
             list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
             places: Vec::new(),
             to_end: true,
+            to_entry: None,
+            marked: None,
             input,
             completion,
             stage: None,
@@ -1053,6 +1065,36 @@ impl ChatView {
                 offset_in_item: px(0.),
             });
         }
+        if let Some(entry) = self.to_entry
+            && entry < self.conversation.entries().len()
+            && let Some(place) = self.places.iter().rposition(|place| place.first() <= entry)
+        {
+            self.to_entry = None;
+            self.list.scroll_to(ListOffset {
+                item_ix: place,
+                offset_in_item: px(0.),
+            });
+        }
+    }
+
+    /// Scrolls the conversation to the entry at `index`, and marks it a
+    /// moment, as the human asked to see it: the line that started a turn
+    /// a commit was made in.
+    pub fn show_entry(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.to_entry = Some(index);
+        self.to_end = false;
+        self.marked = Some(index);
+        cx.spawn(async move |view, cx| {
+            cx.background_executor().timer(MARKED_FOR).await;
+            let _ = view.update(cx, |view, cx| {
+                if view.marked == Some(index) {
+                    view.marked = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     /// The box the human types the line in: the input, and under it the

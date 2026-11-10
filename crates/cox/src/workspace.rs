@@ -71,6 +71,7 @@ use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView};
 
 mod project_card;
 
+use crate::stage::changes::ShowTurn;
 use crate::stage::owners::ShowChat;
 use crate::stage::{NewPage, NewTerminal, OpenFile, Stage};
 use crate::ui::ellipsis::ellipsis;
@@ -926,6 +927,14 @@ impl Workspace {
             workspace.reveal(*key, window, cx);
         });
         self.shows_chats.push(shows);
+        let turns = cx.subscribe_in(
+            &stage,
+            window,
+            |workspace, _, &ShowTurn { chat, entry }, window, cx| {
+                workspace.show_turn(chat, entry, window, cx);
+            },
+        );
+        self.shows_chats.push(turns);
         self.at_work(cx);
     }
 
@@ -1650,6 +1659,30 @@ impl Workspace {
                 key,
                 archived: false,
             });
+        }
+    }
+
+    /// Shows the chat kept as `chat` at the entry `entry`, the line that
+    /// started a turn, as a commit made in the turn was clicked.
+    pub fn show_turn(
+        &mut self,
+        chat: i64,
+        entry: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .find(|shown| shown.kept.map(ChatId::number) == Some(chat))
+            .map(|shown| shown.key)
+        else {
+            return;
+        };
+        self.reveal(key, window, cx);
+        if let Some(view) = self.watch(key, cx) {
+            view.update(cx, |view, cx| view.show_entry(entry, cx));
         }
     }
 

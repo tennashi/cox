@@ -30,10 +30,10 @@ use crate::chat::view::ChatView;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::text::Writer;
 use crate::ui::theme::{
-    ACCENT, ADDED_GROUND, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER, BORDER_STRONG,
-    BUTTON, BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND, FAILED_MARK, FAINT,
-    FOREGROUND, GROUND, HOVER, LINK, OFFERING_BUTTON, OFFERING_EDGE, OFFERING_GROUND, RAISED,
-    REMOVED_GROUND, SURFACE,
+    ACCENT, ACCENT_GROUND, ADDED_GROUND, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER,
+    BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND,
+    FAILED_MARK, FAINT, FOREGROUND, GROUND, HOVER, LINK, OFFERING_BUTTON, OFFERING_EDGE,
+    OFFERING_GROUND, RAISED, REMOVED_GROUND, SURFACE,
 };
 
 /// How tall a picture shown in the conversation grows.
@@ -420,12 +420,22 @@ impl ChatView {
             Shown::Work(work) => self.render_work(work, name, cx),
             Shown::Closing(index) => self.render_closing(index, cx),
         };
+        let marked = self.marked.is_some_and(|marked| {
+            self.places
+                .get(place)
+                .is_some_and(|at| at.first() == marked)
+        });
         // The list lays each place out on its own, so each keeps the
         // conversation's margins itself.
         div()
             .px(px(14.))
             .when(place == 0, |first| first.pt(px(16.)))
-            .child(on_timeline(place == 0, mark, element))
+            .child(
+                div()
+                    .rounded(px(10.))
+                    .when(marked, |place| place.bg(rgb(ACCENT_GROUND)))
+                    .child(on_timeline(place == 0, mark, element)),
+            )
             .into_any_element()
     }
 
@@ -887,6 +897,7 @@ impl ChatView {
                 lines,
                 ..
             } => render_shown(index, path, *markdown, *lines, cx),
+            Entry::Commits(commits) => render_commits(index, commits, cx),
             Entry::Checks(checks) => self.render_checks(index, "TURN END", checks, &mut writer, cx),
             Entry::Event { on, checks } => {
                 self.render_checks(index, event_label(on), checks, &mut writer, cx)
@@ -1103,6 +1114,90 @@ fn drift_steps(added: &[String], removed: &[String], writer: &mut Writer) -> Vec
 /// A chip of one of what ran as a turn ended, `check`, which a test finds
 /// as `selector`: its name, after a ring while it waits or runs, and a
 /// dot once it went: passed, found something, or could not run.
+/// The commits the agent made in a turn, at `index`, as chips on a line,
+/// each of which a click shows on the stage's "Changes" of the folder the
+/// chat worked in, as what the commit changed.
+fn render_commits(
+    index: usize,
+    commits: &[cox_core::entry::Committed],
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    let chips = commits.iter().enumerate().map(|(at, commit)| {
+        let selector = format!("commit-{index}-{at}");
+        let (folder, name, id) = (
+            commit.folder.clone(),
+            commit.repository.clone(),
+            commit.id.clone(),
+        );
+        div()
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector)
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .h(px(24.))
+            .px(px(10.))
+            .max_w(px(320.))
+            .rounded_full()
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(RAISED))
+            .text_size(px(12.))
+            .cursor_pointer()
+            .hover(|style| style.border_color(rgb(BORDER_STRONG)))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .size(px(7.))
+                    .rounded_full()
+                    .bg(rgb(ACCENT)),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_family(CODE_FONT)
+                    .text_color(rgb(FAINT))
+                    .child(commit.short().to_owned()),
+            )
+            .children(commit.repository.clone().map(|name| {
+                div()
+                    .flex_shrink_0()
+                    .font_family(CODE_FONT)
+                    .text_color(rgb(FAINT))
+                    .child(name)
+            }))
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_color(rgb(DIM))
+                    .child(ellipsis(commit.subject.clone())),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .child(crate::stage::changes::counts(commit.added, commit.removed)),
+            )
+            .on_click(cx.listener(move |view, _, window, cx| {
+                if let Some(stage) = view.stage() {
+                    let (folder, name, id) = (folder.clone(), name.clone(), id.clone());
+                    stage.update(cx, |stage, cx| {
+                        stage.show_commit(&folder, name, id, window, cx);
+                    });
+                }
+            }))
+    });
+    div()
+        .debug_selector(move || format!("commits-{index}"))
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(6.))
+        .child(label().mr_1().child("COMMITTED"))
+        .children(chips)
+        .into_any_element()
+}
+
 fn check_chip(selector: String, check: &Check) -> Stateful<gpui::Div> {
     let (dot, filled, text) = match check.state {
         CheckState::Waiting => (DISABLED, false, FAINT),

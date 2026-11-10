@@ -7,9 +7,10 @@ use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::stage::changes::{Changes, Chosen, Repository};
+use cox::stage::changes::{Changes, Chosen, Pick, Repository, ShowTurn};
 use cox::stage::tab::Shows as _;
 use cox_editor::changes::{Diff, Since};
+use cox_editor::commits::{self, Turn};
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
 /// A folder of its own for a test, made a Git repository with a commit of
@@ -221,6 +222,117 @@ fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut T
             .is_some_and(|shown| shown.name.as_deref() == Some("lib"))
     }));
     std::fs::remove_dir_all(project).unwrap();
+}
+
+/// Commits all that changed in `folder`, as `message` says, and answers
+/// the commit's full name.
+fn commit(folder: &Path, message: &str) -> String {
+    for args in [
+        &["add", "--all"][..],
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--quiet",
+            "-m",
+            message,
+        ],
+    ] {
+        let ran = Command::new("git")
+            .arg("-C")
+            .arg(folder)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(ran.status.success(), "{ran:?}");
+    }
+    commits::head(folder).unwrap()
+}
+
+/// The paths of the files the tab shows as changed, of what it shows of
+/// the repository shown, and how many lines each gained and lost.
+fn shown_now(changes: &Entity<Changes>, cx: &mut VisualTestContext) -> Vec<(String, usize, usize)> {
+    changes.read_with(cx, |changes, _| {
+        let Some(Ok(diff)) = changes.shown_diff() else {
+            return Vec::new();
+        };
+        diff.files
+            .iter()
+            .map(|file| (file.path.display().to_string(), file.added, file.removed))
+            .collect()
+    })
+}
+
+#[gpui::test]
+fn lists_the_commits_and_shows_what_one_changed_and_the_turn_it_was_made_in(
+    cx: &mut TestAppContext,
+) {
+    let folder = repository("history", "one\n");
+    cox_editor::changes::start(&folder).unwrap();
+    std::fs::write(folder.join("a.txt"), "one\ntwo\n").unwrap();
+    let two = commit(&folder, "Two");
+    let turn = Turn {
+        chat: 7,
+        entry: 3,
+        line: "Add two".to_owned(),
+    };
+    commits::mark(&folder, &two, &turn).unwrap();
+    std::fs::write(folder.join("b.txt"), "b\n").unwrap();
+    commit(&folder, "B");
+    std::fs::write(folder.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+
+    let (changes, _, cx) = open(cx, &folder, &folder);
+    let turns = Rc::new(RefCell::new(Vec::new()));
+    let heard = Rc::clone(&turns);
+    cx.update(|_, cx| {
+        cx.subscribe(&changes, move |_, &ShowTurn { chat, entry }, _| {
+            heard.borrow_mut().push((chat, entry));
+        })
+        .detach();
+    });
+    let subjects = changes.read_with(cx, |changes, _| {
+        changes
+            .history()
+            .map(|history| {
+                history
+                    .commits
+                    .iter()
+                    .map(|commit| commit.subject.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    assert_eq!(subjects, ["B", "Two"]);
+    // A sketch shows everything it changed at first.
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.shown_pick()),
+        Pick::Everything
+    );
+    assert_eq!(
+        shown_now(&changes, cx),
+        [("a.txt".to_owned(), 2, 0), ("b.txt".to_owned(), 1, 0)]
+    );
+
+    // The rows: everything, what is not committed, B, then Two.
+    click("history-commit-1", cx);
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.shown_pick()),
+        Pick::Commit(two)
+    );
+    assert_eq!(shown_now(&changes, cx), [("a.txt".to_owned(), 1, 0)]);
+    click("commit-turn", cx);
+    assert_eq!(*turns.borrow(), [(7, 3)]);
+
+    click("history-uncommitted", cx);
+    assert_eq!(shown_now(&changes, cx), [("a.txt".to_owned(), 1, 0)]);
+    click("history-everything", cx);
+    assert_eq!(
+        shown_now(&changes, cx),
+        [("a.txt".to_owned(), 2, 0), ("b.txt".to_owned(), 1, 0)]
+    );
+    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[test]

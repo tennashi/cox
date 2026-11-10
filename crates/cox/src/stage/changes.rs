@@ -14,6 +14,15 @@
 //! name under the heading, beside how many files changed in each (see
 //! [`repositories`]).
 //!
+//! Beside the files, a column lists the commits of the repository shown,
+//! newest first, as [`cox_editor::commits`] reads them: under what is not
+//! committed yet, down to where they start, with everything since then
+//! as one above them. The human picks one to see what it changed, which
+//! the tab shows in place of what it shows at first: in a sketch,
+//! everything; elsewhere, what is not committed. A commit an agent made
+//! names the turn of the chat it was made in, which a click on the turn,
+//! over what the commit changed, shows (see [`ShowTurn`]).
+//!
 //! The tab looks again now and then, so that it shows what the agent
 //! changes as it works. It draws only the rows in sight, so a long list
 //! of changes scrolls as a short one does, and stays where the human
@@ -21,11 +30,12 @@
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use cox_core::tabs::KeptTab;
 use cox_editor::buffer::Buffer;
 use cox_editor::changes::{self, Diff, File, How, Kind, Line};
+use cox_editor::commits::{self, Base, Commit, History};
 use cox_editor::language::{Highlight, Language};
 use cox_editor::syntax::Syntax;
 use cox_editor::words;
@@ -42,8 +52,9 @@ use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
-    ACCENT, ADDED_GROUND, ADDED_WORD, BORDER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_MARK, FAINT,
-    FOREGROUND, HOVER, RAISED, REMOVED_GROUND, REMOVED_WORD, SELECTED, UI_FONT,
+    ACCENT, ADDED_GROUND, ADDED_WORD, ASKING, BORDER, CODE_FONT, DIM, DISABLED, FAILED,
+    FAILED_MARK, FAINT, FOREGROUND, HOVER, LINK, RAISED, REMOVED_GROUND, REMOVED_WORD, SELECTED,
+    UI_FONT,
 };
 
 /// How often the tab looks at what changed.
@@ -60,9 +71,16 @@ const LINE_HEIGHT: f32 = 18.;
 /// the stretches.
 const STRETCH_HEIGHT: f32 = 26.;
 
+/// How wide the column of commits is.
+const HISTORY_WIDTH: f32 = 236.;
+
 /// What the syntax says the stretches of a line are, as bytes of the line
 /// as it is drawn.
 type Spans = Vec<(Range<usize>, Highlight)>;
+
+/// What changed, as the tab shows it, and how its lines are drawn, by
+/// file, then line.
+type ShownRead<'a> = (&'a Result<Diff, String>, &'a [Vec<Look>]);
 
 /// How a line is drawn, as bytes of the line as it is drawn: what its
 /// syntax says of it, and, for a line a change replaced, or one it put in
@@ -78,6 +96,34 @@ pub struct Chosen {
     /// The file, as an absolute path.
     pub path: PathBuf,
     pub line: Option<usize>,
+}
+
+/// The human asks to see the turn of a chat a commit was made in: the
+/// chat, by the number Cox keeps it by, and the entry that started the
+/// turn, by its place in the conversation.
+pub struct ShowTurn {
+    pub chat: i64,
+    pub entry: usize,
+}
+
+/// What of a repository the tab shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pick {
+    /// Everything that changed since its commits start, as one.
+    Everything,
+    /// What changed since its last commit.
+    Uncommitted,
+    /// What the commit of this full name changed.
+    Commit(String),
+}
+
+/// What the human picked to see, as the tab read it: of the repository of
+/// a name, and how its lines are drawn.
+struct Picked {
+    pick: Pick,
+    repository: Option<String>,
+    read: Result<Diff, String>,
+    looks: Vec<Vec<Look>>,
 }
 
 /// What changed in one of the repositories a folder's changes are of (see
@@ -161,12 +207,23 @@ pub struct Changes {
     /// How each line of each file is drawn, by repository, then file,
     /// then line.
     looks: Vec<Vec<Vec<Look>>>,
+    /// The commits of each repository, as the tab last read them, if it
+    /// could.
+    histories: Vec<Option<History>>,
+    /// What of the repository shown the human picked to see, once they
+    /// picked; until then, what the tab shows at first (see
+    /// [`first_pick`]).
+    pick: Option<Pick>,
+    /// What the human picked, once the tab read it.
+    picked: Option<Picked>,
     /// The rows of the tab, of the repository it shows: each file's,
     /// followed by its lines'.
     rows: Vec<Row>,
     list: ListState,
     focus_handle: FocusHandle,
     _follow: Task<()>,
+    /// What reads what the human picked, while it does.
+    picking: Option<Task<()>>,
 }
 
 /// A repository the human chose to show, by its name (see
@@ -182,6 +239,7 @@ enum Row {
 }
 
 impl EventEmitter<Chosen> for Changes {}
+impl EventEmitter<ShowTurn> for Changes {}
 
 impl Changes {
     /// A tab showing what changed in the repositories of `folder` (see
@@ -198,10 +256,14 @@ impl Changes {
             read: None,
             chosen: None,
             looks: Vec::new(),
+            histories: Vec::new(),
+            pick: None,
+            picked: None,
             rows: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(LINE_HEIGHT * 20.)),
             focus_handle: cx.focus_handle(),
             _follow: follow(cx),
+            picking: None,
         }
     }
 
@@ -226,11 +288,135 @@ impl Changes {
     }
 
     /// Shows the repository `name` (see [`Repository::name`]), from its
-    /// top, as the human chose it.
+    /// top, as the human chose it, as it shows at first.
     pub fn show(&mut self, name: Option<String>, cx: &mut Context<Self>) {
         self.chosen = Some(Choice(name));
+        self.pick = None;
+        self.picked = None;
         self.relist(false);
         cx.notify();
+    }
+
+    /// The commits of the repository shown, as the tab read them, if it
+    /// could.
+    #[must_use]
+    pub fn history(&self) -> Option<&History> {
+        self.shown_index()
+            .and_then(|index| self.histories.get(index))
+            .and_then(Option::as_ref)
+    }
+
+    /// What of the repository shown the tab shows: what the human picked,
+    /// or else what it shows at first.
+    #[must_use]
+    pub fn shown_pick(&self) -> Pick {
+        self.pick
+            .clone()
+            .unwrap_or_else(|| first_pick(self.history()))
+    }
+
+    /// What changed, as the tab shows it, of the repository shown, and how
+    /// its lines are drawn: none while what the human picked is read.
+    #[must_use]
+    pub fn shown_diff(&self) -> Option<&Result<Diff, String>> {
+        self.shown_read().map(|(read, _)| read)
+    }
+
+    fn shown_read(&self) -> Option<ShownRead<'_>> {
+        let index = self.shown_index()?;
+        let shown = self.repositories().get(index)?;
+        let at_first = (
+            &shown.read,
+            self.looks.get(index).map_or(&[][..], Vec::as_slice),
+        );
+        let Some(pick) = &self.pick else {
+            return Some(at_first);
+        };
+        if *pick == first_pick(self.history()) {
+            return Some(at_first);
+        }
+        self.picked
+            .as_ref()
+            .filter(|picked| &picked.pick == pick && picked.repository == shown.name)
+            .map(|picked| (&picked.read, picked.looks.as_slice()))
+    }
+
+    /// Shows `pick` of the repository shown, as the human picked it,
+    /// reading it first.
+    pub fn pick(&mut self, pick: Pick, cx: &mut Context<Self>) {
+        self.pick = Some(pick);
+        self.relist(false);
+        self.read_picked(cx);
+        cx.notify();
+    }
+
+    /// Shows what the commit `id` changed, of the repository `name` (see
+    /// [`Repository::name`]), as a commit the chat shows was picked.
+    pub fn show_commit(&mut self, name: Option<String>, id: String, cx: &mut Context<Self>) {
+        self.chosen = Some(Choice(name));
+        self.pick(Pick::Commit(id), cx);
+    }
+
+    /// The folder of the repository shown, as [`repositories`] names it.
+    fn shown_folder(&self) -> Option<PathBuf> {
+        let name = match &self.chosen {
+            Some(Choice(name)) => name.clone(),
+            None => self.shown().and_then(|shown| shown.name.clone()),
+        };
+        repositories(&self.folder)
+            .into_iter()
+            .find(|(named, _)| *named == name)
+            .map(|(_, folder)| folder)
+    }
+
+    /// Reads what the human picked, of the repository shown, unless the
+    /// tab shows it at first, and shows it once read.
+    fn read_picked(&mut self, cx: &mut Context<Self>) {
+        let Some(pick) = self.pick.clone() else {
+            return;
+        };
+        let Some(folder) = self.shown_folder() else {
+            return;
+        };
+        let repository = match &self.chosen {
+            Some(Choice(name)) => name.clone(),
+            None => self.shown().and_then(|shown| shown.name.clone()),
+        };
+        self.picking = Some(cx.spawn(async move |this, cx| {
+            let reading = pick.clone();
+            let (read, looks) = cx
+                .background_executor()
+                .spawn(async move {
+                    let read = read_pick(&folder, &reading);
+                    let looks = read.as_ref().map(looks).unwrap_or_default();
+                    (read, looks)
+                })
+                .await;
+            let _ = this.update(cx, |changes, cx| {
+                if changes.pick.as_ref() != Some(&pick) {
+                    return;
+                }
+                let same = changes
+                    .picked
+                    .as_ref()
+                    .is_some_and(|picked| picked.pick == pick && picked.read == read);
+                if same {
+                    return;
+                }
+                let stay = changes
+                    .picked
+                    .as_ref()
+                    .is_some_and(|picked| picked.pick == pick);
+                changes.picked = Some(Picked {
+                    pick,
+                    repository,
+                    read,
+                    looks,
+                });
+                changes.relist(stay);
+                cx.notify();
+            });
+        }));
     }
 
     /// The index of the repository the tab shows: the one the human
@@ -253,8 +439,8 @@ impl Changes {
     /// scrolled to if `stay`, or else from its top.
     fn relist(&mut self, stay: bool) {
         self.rows = self
-            .shown()
-            .and_then(|shown| shown.read.as_ref().ok())
+            .shown_diff()
+            .and_then(|read| read.as_ref().ok())
             .map(rows)
             .unwrap_or_default();
         let top = self.list.logical_scroll_top();
@@ -284,10 +470,25 @@ impl Changes {
         cx.notify();
     }
 
+    /// The tab read the commits again, which differ from those it shows:
+    /// shows them.
+    fn read_histories(&mut self, histories: Vec<Option<History>>, cx: &mut Context<Self>) {
+        self.histories = histories;
+        cx.notify();
+    }
+
+    /// Reads again what the human picked, now and then, as what is not
+    /// committed changes; what a commit changed does not.
+    fn follow_picked(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.pick, Some(Pick::Everything | Pick::Uncommitted)) {
+            self.read_picked(cx);
+        }
+    }
+
     /// The human chose the file at `index` of the repository shown, at
     /// `line` if they chose one.
     fn choose(&self, index: usize, line: Option<usize>, cx: &mut Context<Self>) {
-        let Some(Ok(diff)) = self.shown().map(|shown| &shown.read) else {
+        let Some(Ok(diff)) = self.shown_diff() else {
             return;
         };
         let file = &diff.files[index];
@@ -303,8 +504,10 @@ impl Changes {
     /// changed in the repository shown, and where it is.
     fn render_heading(&self) -> impl IntoElement {
         let shown = self.shown();
-        let (said, failed) = match shown.map(|shown| &shown.read) {
-            None if self.read.is_none() => (div().child("Reading what changed…"), false),
+        let (said, failed) = match self.shown_diff() {
+            None if self.read.is_none() || shown.is_some() => {
+                (div().child("Reading what changed…"), false)
+            }
             None => (div(), false),
             Some(Ok(diff)) => (said_of(diff), false),
             Some(Err(error)) => (
@@ -392,14 +595,160 @@ impl Changes {
         )
     }
 
+    /// The column of the commits of the repository shown, as the tab read
+    /// them, if it could: everything since they start, as one, if
+    /// something tells where they start; then, newest first, what is not
+    /// committed yet, each commit, and where they start. The one the tab
+    /// shows is marked, and a click on another shows it.
+    fn render_history(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let history = self.history()?;
+        let shown = self.shown_pick();
+        let mut rows: Vec<AnyElement> = Vec::new();
+        if history.base != Base::Recent {
+            let row = history_row(
+                "history-everything".into(),
+                None,
+                shown == Pick::Everything,
+                "Everything".into(),
+                Some(
+                    div()
+                        .text_color(rgb(FAINT))
+                        .child(ellipsis(history.base.said()))
+                        .into_any_element(),
+                ),
+            )
+            .mb(px(6.))
+            .on_click(cx.listener(|changes, _, _, cx| changes.pick(Pick::Everything, cx)));
+            rows.push(row.into_any_element());
+        }
+        let row = history_row(
+            "history-uncommitted".into(),
+            Some((Dot::Uncommitted, false, true)),
+            shown == Pick::Uncommitted,
+            "Not committed yet".into(),
+            None,
+        )
+        .on_click(cx.listener(|changes, _, _, cx| changes.pick(Pick::Uncommitted, cx)));
+        rows.push(row.into_any_element());
+        for (index, commit) in history.commits.iter().enumerate() {
+            let picked = Pick::Commit(commit.id.clone());
+            let row = history_row(
+                format!("history-commit-{index}").into(),
+                Some((Dot::Commit, true, true)),
+                shown == picked,
+                commit.subject.clone().into(),
+                Some(commit_meta(commit).into_any_element()),
+            )
+            .on_click(cx.listener(move |changes, _, _, cx| changes.pick(picked.clone(), cx)));
+            rows.push(row.into_any_element());
+        }
+        let base = match &history.base {
+            Base::Start(commit) => format!("{commit} · the sketch started here"),
+            Base::Nothing => "The sketch started from nothing".to_owned(),
+            Base::Branched { from, at } => format!("{at} · branched from {from}"),
+            Base::Recent => "Earlier commits are left out".to_owned(),
+        };
+        let row = history_row(
+            "history-base".into(),
+            Some((Dot::Base, true, false)),
+            false,
+            base.into(),
+            None,
+        )
+        .text_color(rgb(FAINT));
+        rows.push(row.into_any_element());
+        Some(
+            div()
+                .id("history")
+                .debug_selector(|| "history".to_owned())
+                .flex_shrink_0()
+                .w(px(HISTORY_WIDTH))
+                .h_full()
+                .overflow_y_scroll()
+                .pl(px(INSET - 4.))
+                .pr_2()
+                .pb_3()
+                .border_r_1()
+                .border_color(rgb(BORDER))
+                .flex()
+                .flex_col()
+                .children(rows),
+        )
+    }
+
+    /// Over what a commit changed, as the human picked it to see: what it
+    /// says, and the turn of the chat it was made in, if it was marked,
+    /// which a click shows.
+    fn render_commit(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let Pick::Commit(id) = self.shown_pick() else {
+            return None;
+        };
+        let commit = self
+            .history()?
+            .commits
+            .iter()
+            .find(|commit| commit.id == id)?;
+        let turn = commit.turn.as_ref().map(|turn| {
+            let (chat, entry) = (turn.chat, turn.entry);
+            div()
+                .id("commit-turn")
+                .debug_selector(|| "commit-turn".to_owned())
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .cursor_pointer()
+                .text_color(rgb(LINK))
+                .hover(|link| link.text_color(rgb(FOREGROUND)))
+                .child(ellipsis(format!("From the turn: {} ›", turn.line)))
+                .on_click(cx.listener(move |_, _, _, cx| cx.emit(ShowTurn { chat, entry })))
+        });
+        Some(
+            div()
+                .debug_selector(|| "commit".to_owned())
+                .px(px(INSET + 4.))
+                .pb_1()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(ellipsis(commit.subject.clone())),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .whitespace_nowrap()
+                        .text_size(px(12.))
+                        .text_color(rgb(DIM))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .font_family(CODE_FONT)
+                                .child(commit.short()),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .child(counts(commit.added, commit.removed)),
+                        )
+                        .child(div().flex_shrink_0().child(ago(commit.when)))
+                        .children(turn),
+                ),
+        )
+    }
+
     /// The row at `row` of the tab.
     fn render_row(&self, row: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(&listed) = self.rows.get(row) else {
             return div().into_any_element();
         };
-        let (Some(repository), Some(Ok(diff))) =
-            (self.shown_index(), self.shown().map(|shown| &shown.read))
-        else {
+        let Some((Ok(diff), looks)) = self.shown_read() else {
             return div().into_any_element();
         };
         let (index, line) = match listed {
@@ -412,10 +761,8 @@ impl Changes {
             None => (file_row(row, file), None),
             Some(line) => {
                 let none = Look::default();
-                let look = self
-                    .looks
-                    .get(repository)
-                    .and_then(|looks| looks.get(index))
+                let look = looks
+                    .get(index)
                     .and_then(|looks| looks.get(line))
                     .unwrap_or(&none);
                 let first = line == 0;
@@ -442,6 +789,152 @@ impl Changes {
             .child(inner.border_x_1().border_color(rgb(BORDER)))
             .into_any_element()
     }
+}
+
+/// What the tab shows of a repository at first, of those it can show of
+/// its commits, `history`: in a sketch, everything since it started;
+/// elsewhere, what is not committed.
+fn first_pick(history: Option<&History>) -> Pick {
+    match history.map(|history| &history.base) {
+        Some(Base::Start(_) | Base::Nothing) => Pick::Everything,
+        _ => Pick::Uncommitted,
+    }
+}
+
+/// What changed in the repository at `folder`, as `pick` says.
+fn read_pick(folder: &Path, pick: &Pick) -> Result<Diff, String> {
+    match pick {
+        Pick::Everything => commits::everything(folder)?
+            .ok_or_else(|| "Nothing tells where the commits start.".to_owned()),
+        Pick::Uncommitted => commits::uncommitted(folder),
+        Pick::Commit(id) => commits::diff_of(folder, id),
+    }
+}
+
+/// How long ago `when`, in seconds since the epoch, was, short, as `3m`.
+fn ago(when: i64) -> String {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |now| i64::try_from(now.as_secs()).unwrap_or(i64::MAX));
+    let seconds = (now - when).max(0);
+    if seconds < 60 {
+        "now".to_owned()
+    } else if seconds < 3600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h", seconds / 3600)
+    } else {
+        format!("{}d", seconds / 86_400)
+    }
+}
+
+/// What marks a row of the column of commits, on the line down it.
+#[derive(Clone, Copy)]
+enum Dot {
+    Uncommitted,
+    Commit,
+    Base,
+}
+
+/// A row of the column of commits, found as `selector`: on the line down
+/// the column, if it has a dot there, with whether the line goes on above
+/// and below it, marked if it is `selected`, saying `title`, and under it
+/// `meta`, if given.
+fn history_row(
+    selector: SharedString,
+    dot: Option<(Dot, bool, bool)>,
+    selected: bool,
+    title: SharedString,
+    meta: Option<AnyElement>,
+) -> gpui::Stateful<gpui::Div> {
+    let line = |shown: bool| div().w(px(2.)).when(shown, |line| line.bg(rgb(BORDER)));
+    let column = dot.map(|(dot, above, below)| {
+        let mark = div().flex_shrink_0().size(px(10.)).rounded_full();
+        let mark = match dot {
+            Dot::Uncommitted => mark.border_2().border_color(rgb(ASKING)),
+            Dot::Commit => mark.bg(rgb(ACCENT)),
+            Dot::Base => mark.border_2().border_color(rgb(DISABLED)),
+        };
+        div()
+            .flex_shrink_0()
+            .w(px(18.))
+            .flex()
+            .flex_col()
+            .items_center()
+            .child(line(above).h(px(14.)))
+            .child(mark)
+            .child(line(below).flex_1())
+    });
+    let id = selector.clone();
+    div()
+        .id(id)
+        .debug_selector(move || selector.to_string())
+        .flex()
+        .children(column)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .my(px(2.))
+                .px_2()
+                .py(px(5.))
+                .rounded(px(8.))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .cursor_pointer()
+                .map(|row| {
+                    if selected {
+                        row.bg(rgb(SELECTED))
+                    } else {
+                        row.hover(|style| style.bg(rgb(HOVER)))
+                    }
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_size(px(12.5))
+                        .child(ellipsis(title)),
+                )
+                .children(meta.map(|meta| {
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_size(px(11.5))
+                        .child(meta)
+                })),
+        )
+}
+
+/// What a row of the column of commits says of `commit` under it: its
+/// short name, how many lines it gained and lost, how long ago it was
+/// made, and the line that started the turn it was made in, if it was
+/// marked.
+fn commit_meta(commit: &Commit) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(1.))
+        .text_color(rgb(FAINT))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .whitespace_nowrap()
+                .child(div().font_family(CODE_FONT).child(commit.short()))
+                .child(counts(commit.added, commit.removed))
+                .child(div().flex_1())
+                .child(ago(commit.when)),
+        )
+        .children(commit.turn.as_ref().map(|turn| {
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .text_color(rgb(DIM))
+                .child(ellipsis(format!("“{}”", turn.line)))
+        }))
 }
 
 /// The name of `folder`, its last part's.
@@ -587,10 +1080,24 @@ fn follow(cx: &mut Context<Changes>) -> Task<()> {
             let Ok(folder) = this.read_with(cx, |changes, _| changes.folder.clone()) else {
                 break;
             };
-            let read = cx
+            let (read, histories) = cx
                 .background_executor()
-                .spawn(async move { read(&folder) })
+                .spawn(async move {
+                    let histories = repositories(&folder)
+                        .iter()
+                        .map(|(_, folder)| commits::history(folder).ok())
+                        .collect::<Vec<_>>();
+                    (read(&folder), histories)
+                })
                 .await;
+            let Ok(()) = this.update(cx, |changes, cx| {
+                if changes.histories != histories {
+                    changes.read_histories(histories, cx);
+                }
+                changes.follow_picked(cx);
+            }) else {
+                break;
+            };
             let Ok(changed) = this.read_with(cx, |changes, _| changes.read.as_ref() != Some(&read))
             else {
                 break;
@@ -894,6 +1401,22 @@ impl Render for Changes {
             .text_size(px(13.))
             .child(self.render_heading())
             .children(self.render_repositories(cx))
-            .child(list.pb_3())
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .pt(px(6.))
+                    .children(self.render_history(cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .children(self.render_commit(cx))
+                            .child(list.pb_3()),
+                    ),
+            )
     }
 }
