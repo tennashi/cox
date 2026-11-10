@@ -1,9 +1,9 @@
 //! The translation on the settings screen: the language the human reads
 //! the wiki, and what they select, in, and what translates it, an agent
 //! Cox knows or a command, as `settings.json` keeps it under
-//! `translation` (see [`crate::settings::Translation`]). Enter keeps the
-//! language, or the command, and a click keeps the choice of what
-//! translates; emptied, the language takes the translation out, so that
+//! `translation` (see [`crate::settings::Translation`]). Enter, or the
+//! keyboard leaving it, keeps the language, or the command, and a click
+//! keeps the choice of what translates; emptied, the language takes the translation out, so that
 //! Cox translates nothing. What else the file holds of it stays.
 
 use gpui::{App, Context, Entity, Focusable, Subscription, Window, div, prelude::*, px, rgb};
@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 use super::words::Words;
 use crate::agents::{Agents, line};
 use crate::ui::button::INPUT_HEIGHT;
-use crate::ui::input::{LineInput, Submitted};
+use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, FAILED, FAINT, FOREGROUND,
 };
@@ -37,7 +37,7 @@ pub struct TranslationSection {
     /// What the line under the section says, and in which color.
     told: Option<(String, u32)>,
     words: Words,
-    _submitted: [Subscription; 2],
+    _subscriptions: [Subscription; 4],
 }
 
 impl TranslationSection {
@@ -54,8 +54,10 @@ impl TranslationSection {
             input.set_placeholder("plamo-translate --from {from} --to {to}", cx);
             input
         });
-        let submitted = [&language, &command]
+        let [language_submitted, command_submitted] = [&language, &command]
             .map(|input| cx.subscribe(input, |section, _, Submitted, cx| section.save(cx)));
+        let [language_left, command_left] = [&language, &command]
+            .map(|input| cx.subscribe(input, |section, _, Blurred, cx| section.keep_typed(cx)));
         let mut section = Self {
             language,
             command,
@@ -63,7 +65,12 @@ impl TranslationSection {
             kept: Some(Value::Null),
             told: None,
             words,
-            _submitted: submitted,
+            _subscriptions: [
+                language_submitted,
+                command_submitted,
+                language_left,
+                command_left,
+            ],
         };
         section.reread(cx);
         section
@@ -134,9 +141,49 @@ impl TranslationSection {
         } else if self.by != By::Command || !self.command.read(cx).text().trim().is_empty() {
             self.save(cx);
         } else {
-            self.tell("Write the command, then Enter keeps it.", FAINT, cx);
+            self.tell(
+                "Write the command, which is kept on Enter or as you leave it.",
+                FAINT,
+                cx,
+            );
         }
         cx.notify();
+    }
+
+    /// Keeps the language, or the command, the inputs hold, when it is not
+    /// what is kept, as when the keyboard leaves them, or the screen
+    /// closes: with no command yet, it waits for one.
+    pub fn keep_typed(&mut self, cx: &mut Context<Self>) {
+        let kept = |key: &str| self.kept.as_ref().and_then(|kept| kept.get(key));
+        let language = self.language.read(cx).text().trim().to_owned();
+        let kept_language = kept("language").and_then(Value::as_str).unwrap_or_default();
+        let command = self.command.read(cx).text().trim().to_owned();
+        let kept_command = kept("command")
+            .and_then(Value::as_array)
+            .map(|words| {
+                let words: Vec<String> = words
+                    .iter()
+                    .filter_map(|word| word.as_str().map(str::to_owned))
+                    .collect();
+                line::joined(&words)
+            })
+            .unwrap_or_default();
+        let by_command = self.by == By::Command;
+        if language == kept_language && (!by_command || command == kept_command) {
+            return;
+        }
+        // Translation is off, and stays so until there is a language.
+        if language.is_empty() && kept_language.is_empty() {
+            return;
+        }
+        if by_command && command.is_empty() && !language.is_empty() {
+            return self.tell(
+                "Write the command, which is kept on Enter or as you leave it.",
+                FAINT,
+                cx,
+            );
+        }
+        self.save(cx);
     }
 
     /// Keeps the translation as the section shows it, or, with no
@@ -281,8 +328,8 @@ impl Render for TranslationSection {
         );
         let (told, color) = self.told.clone().unwrap_or_else(|| {
             (
-                "Enter keeps the language, or the command; emptied, the language turns \
-                 translation off."
+                "The language, or the command, is kept on Enter or as you leave it; \
+                 emptied, the language turns translation off."
                     .to_owned(),
                 FAINT,
             )

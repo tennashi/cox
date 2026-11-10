@@ -1561,8 +1561,11 @@ impl Workspace {
     /// Closes the settings screen, giving the keyboard back to the chat
     /// shown.
     pub fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((view, _)) = self.settings.take() {
+        if let Some((view, subscriptions)) = self.settings.take() {
             view.update(cx, SettingsView::save_all);
+            // The screen, and what hears it, stay until what keeping told,
+            // as a home set, has reached the window.
+            cx.defer(move |_| drop((view, subscriptions)));
             window.focus(&self.focus_handle(cx));
             cx.notify();
         }

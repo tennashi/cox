@@ -2,8 +2,9 @@
 //! foot of the rail opens, as Command-, does (Control-, off macOS).
 //!
 //! It shows Cox's home, the folder Cox's own chats work in, in an
-//! input, where Enter sets what the human typed, a whole path or one from
-//! `~`, and "Choose…" asks for a folder and sets it. Set, the home is
+//! input, which sets what the human typed, a whole path or one from `~`,
+//! on Enter or as the keyboard leaves it, and "Choose…" asks for a folder
+//! and sets it. Set, the home is
 //! kept (see [`super::keep_home`]), and the window opens the chats in no
 //! project there from then on. Under it are the folders of the human's
 //! workflow and wiki (see [`folder`]), the agents they run (see
@@ -11,9 +12,8 @@
 //! code a phone pairs with (see [`phone`]).
 //! What the screen says the human selects, copies and translates (see
 //! [`words`]).
-//! Escape, the ×, or a click beside the card closes it,
-//! keeping the rows of agents changed, and leaving the home as it was
-//! last set.
+//! Escape, the ×, or a click beside the card closes it, keeping what
+//! the inputs hold that is not kept yet.
 
 mod agents;
 mod folder;
@@ -35,7 +35,7 @@ use self::translation::TranslationSection;
 use self::words::Words;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
-use crate::ui::input::{LineInput, Submitted};
+use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK};
 use crate::ui::{Copy, card};
@@ -99,7 +99,7 @@ pub struct SettingsView {
     words: Words,
     /// What has the keyboard while the human selects the words.
     focus: FocusHandle,
-    _submitted: Subscription,
+    _subscriptions: [Subscription; 2],
 }
 
 impl SettingsView {
@@ -112,9 +112,14 @@ impl SettingsView {
             input.set_placeholder("~/cox", cx);
             input
         });
-        let submitted = cx.subscribe_in(&input, window, |view, _, Submitted, _, cx| {
-            view.submit(cx);
-        });
+        let subscriptions = [
+            cx.subscribe_in(&input, window, |view, _, Submitted, _, cx| {
+                view.submit(cx);
+            }),
+            cx.subscribe_in(&input, window, |view, _, Blurred, _, cx| {
+                view.keep_typed(cx);
+            }),
+        ];
         let words = Words::default();
         Self {
             home,
@@ -149,7 +154,7 @@ impl SettingsView {
             phone: cx.new(|_| PhoneSection::new(words.clone())),
             words,
             focus: cx.focus_handle(),
-            _submitted: submitted,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -184,7 +189,11 @@ impl SettingsView {
 
     /// Keeps what the screen holds that is not kept yet, as it closes.
     pub fn save_all(&mut self, cx: &mut Context<Self>) {
+        self.keep_typed(cx);
+        self.workflow.update(cx, FolderField::keep_typed);
+        self.wiki.update(cx, FolderField::keep_typed);
         self.agents.update(cx, AgentsSection::save_all);
+        self.translation.update(cx, TranslationSection::keep_typed);
     }
 
     /// The input of the home's folder.
@@ -203,6 +212,14 @@ impl SettingsView {
     #[must_use]
     pub fn selected(&self) -> String {
         self.words.selected()
+    }
+
+    /// Sets the home to the folder the input names, when it is not the
+    /// home already, as when the keyboard leaves the input.
+    fn keep_typed(&mut self, cx: &mut Context<Self>) {
+        if self.input.read(cx).text().trim() != shortened(&self.home) {
+            self.submit(cx);
+        }
     }
 
     /// Sets the home to the folder the input names, if it names one.
@@ -283,7 +300,9 @@ impl SettingsView {
                 FAINT,
             ),
             Told::Hint => (
-                "Enter sets the path typed, from / or ~; Escape closes.".to_owned(),
+                "The path typed, from / or ~, is set on Enter or as you leave it; \
+                 Escape closes."
+                    .to_owned(),
                 FAINT,
             ),
         }

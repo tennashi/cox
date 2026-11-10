@@ -426,6 +426,7 @@ async fn the_rail_chooses_the_project_whose_chats_the_tabs_show(cx: &mut TestApp
 #[gpui::test]
 async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
     let home = scratch("settings-home");
+    let between = scratch("settings-between");
     let other = scratch("settings-other");
     let (agents, workspace, cx) = open_window(cx, home.clone());
     cx.simulate_keystrokes("secondary-n");
@@ -451,8 +452,19 @@ async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
     assert_eq!(kept, home);
 
     cx.simulate_keystrokes("secondary-a");
-    cx.simulate_input(&other.display().to_string());
+    cx.simulate_input(&between.display().to_string());
     cx.simulate_keystrokes("enter");
+    let kept = workspace.read_with(cx, |workspace, _| workspace.home().to_owned());
+    assert_eq!(kept, between);
+
+    // Escape closes them, keeping what was typed without Enter, and the
+    // next chat of Cox's own works there.
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input(&other.display().to_string());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    let open = workspace.read_with(cx, |workspace, _| workspace.settings().is_some());
+    assert!(!open);
     let kept = workspace.read_with(cx, |workspace, _| workspace.home().to_owned());
     assert_eq!(kept, other);
     assert_eq!(
@@ -460,16 +472,12 @@ async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
         Some(other.as_path()),
         "the home lasts across runs"
     );
-
-    // Escape closes them, and the next chat of Cox's own works there.
-    cx.simulate_keystrokes("escape");
-    let open = workspace.read_with(cx, |workspace, _| workspace.settings().is_some());
-    assert!(!open);
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "after").await;
     let cwds: Vec<_> = agents.borrow().iter().map(|agent| agent.cwd()).collect();
     assert_eq!(cwds, [Some(home.clone()), Some(other.clone())]);
     let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&between);
     let _ = std::fs::remove_dir_all(&other);
 }
 
