@@ -1890,9 +1890,9 @@ impl Daemon {
     }
 
     /// Makes the project named `name` in `folder` of the chat `key`, in no
-    /// project, the files of the sketch `sketch`, its key and folder, going
-    /// into it as its directory of its name, if given, and the sketch
-    /// ending; the chat and those under it move into the project, each
+    /// project, for what the sketch `sketch`, its key and folder, tried, if
+    /// given, what it made kept apart (see [`Self::keep_apart`]), and the
+    /// sketch ending; the chat and those under it move into the project, each
     /// closed, its agent stopped, to go on there from the next line sent,
     /// with the conversation so far.
     fn make_project_of(
@@ -1919,32 +1919,19 @@ impl Daemon {
                 })
                 .map(|slot| slot.key)
                 .collect();
-            let directory = folder.join(crate::settings::DIRECTORIES).join(name);
-            let moved = directory
-                .parent()
-                .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::rename(&from, &directory));
-            if let Err(error) = moved {
+            let kept = self.keep_apart(sketch, &from).map_err(|error| {
                 let _ = std::fs::remove_dir_all(folder);
-                return Err(format!(
-                    "Cox cannot move {} into {}: {error}",
-                    from.display(),
-                    directory.display()
-                ));
-            }
-            // A repository of the project now, what changed in it is what
-            // changed since its last commit.
-            if let Err(error) = cox_editor::changes::forget(&directory) {
-                tracing::warn!(
-                    "{} still counts changes from nothing: {error}",
-                    directory.display()
-                );
-            }
+                format!("Cox cannot keep what the sketch made: {error}")
+            })?;
             let (note, _) = self.with_sketch_kept(
                 sketch,
                 &folder.join(crate::raw::PROJECT_RAW),
                 Some(name),
-                &format!("The sketch moved into the project {name}, as its directory {name}."),
+                &format!(
+                    "The sketch moved into the project {name}, to make there what it tried; what \
+                     it made is not the project's.{}",
+                    kept.where_kept()
+                ),
             );
             self.end_sketch(sketch, &from, Ok(note));
         }
@@ -3371,9 +3358,10 @@ impl Daemon {
             || format!("sketch \"{}\"", slot.name),
             |number| format!("chat {number}"),
         );
+        let showed = showed_in_sketch(&entries, &root.join(sketch::SOURCES));
         let text = format!(
-            "## How it ended\n\n{ended}\n\n## What was said in it\n\nAs Cox kept it, where \
-             [you] stands for the sketch's agent.\n\n{said}\n"
+            "## How it ended\n\n{ended}\n\n{showed}## What was said in it\n\nAs Cox kept it, \
+             where [you] stands for the sketch's agent.\n\n{said}\n"
         );
         let day = crate::wiki::today();
         crate::raw::keep(
@@ -3393,43 +3381,28 @@ impl Daemon {
         )
     }
 
-    /// Moves `folder`, of the sketch `key`, into a project with nothing set
-    /// yet (see [`Self::untitled`]), as the directory of the project's
-    /// name, and opens a chat in the project; the sketch ends, its chats
-    /// going on where they were opened.
+    /// Makes a project with nothing set yet (see [`Self::untitled`]) for
+    /// what the sketch `key`, in `folder`, tried, what it made kept apart
+    /// (see [`Self::keep_apart`]), and opens a chat in the project; the
+    /// sketch ends, its chats going on where they were opened.
     fn open_as_project(&mut self, key: u64, folder: &Path) {
         let project = self.untitled();
         let name = project
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let directory = project.join(crate::settings::DIRECTORIES).join(&name);
-        let moved = directory
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::rename(folder, &directory))
-            .map_err(|error| {
-                let _ = std::fs::remove_dir_all(&project);
-                format!(
-                    "Cox cannot move {} into {}: {error}",
-                    folder.display(),
-                    directory.display()
-                )
+        let kept = std::fs::create_dir_all(&project)
+            .map_err(|error| format!("Cox cannot make {}: {error}", project.display()))
+            .and_then(|()| {
+                self.keep_apart(key, folder).inspect_err(|_| {
+                    let _ = std::fs::remove_dir_all(&project);
+                })
             });
-        if moved.is_ok() {
-            // A repository of the project now, what changed in it is what
-            // changed since its last commit.
-            if let Err(error) = cox_editor::changes::forget(&directory) {
-                tracing::warn!(
-                    "{} still counts changes from nothing: {error}",
-                    directory.display()
-                );
-            }
-        }
-        let ended = moved.map(|()| {
+        let ended = kept.map(|kept| {
             let note = format!(
-                "The sketch was opened as the project {name}, whose directory {name} holds what \
-                 it made."
+                "The sketch was opened as the project {name}, to make there what it tried; \
+                 what it made is not the project's.{}",
+                kept.where_kept()
             );
             self.with_sketch_kept(
                 key,
@@ -3442,6 +3415,21 @@ impl Daemon {
         if self.end_sketch(key, folder, ended) {
             self.open(Some(project));
         }
+    }
+
+    /// Keeps apart what the sketch `key` from nothing, in `folder`, made,
+    /// as a discarded sketch's is kept (see [`sketch::discard`]), taking
+    /// its folder away, for a project made for what it tried to start
+    /// with none of it.
+    fn keep_apart(&self, key: u64, folder: &Path) -> Result<sketch::Discarded, String> {
+        let title = self
+            .slot(key)
+            .map(|slot| slot.name.clone())
+            .unwrap_or_default();
+        let bundles = storage::path(storage::Kept::Sketches)
+            .map(|sketches| sketches.join(sketch::DISCARDED))
+            .ok_or("Cox cannot tell where to keep what the sketch made")?;
+        sketch::discard(Sketch::Empty, folder, &title, &bundles, true)
     }
 
     /// Keeps and tells what changed: each chat's conversation, how each
@@ -3698,4 +3686,82 @@ pub fn at_work(state: State) -> bool {
 struct Renamed {
     was: PathBuf,
     now: PathBuf,
+}
+
+/// What the sketch of `entries` showed the human, as pictures and
+/// recordings, copied from where Cox keeps them into [`sketch::MEDIA`] in
+/// `sources`, the sources of the sketches, as its source tells them: a
+/// section of links to them, by their paths from the source, or nothing
+/// when it showed none.
+fn showed_in_sketch(entries: &[Entry], sources: &Path) -> String {
+    let Some(kept) = storage::path(storage::Kept::Media) else {
+        return String::new();
+    };
+    let into = sources.join(sketch::MEDIA);
+    let mut showed = String::new();
+    for entry in entries {
+        let Entry::Media { file, caption, .. } = entry else {
+            continue;
+        };
+        let copied = std::fs::create_dir_all(&into)
+            .and_then(|()| std::fs::copy(kept.join(file), into.join(file)));
+        if let Err(error) = copied {
+            tracing::warn!("{file}, which the sketch showed, is not kept with it: {error}");
+            continue;
+        }
+        let caption = caption.as_deref().unwrap_or(file);
+        let _ = write!(showed, "![{caption}]({}/{file})\n\n", sketch::MEDIA);
+    }
+    if showed.is_empty() {
+        showed
+    } else {
+        format!(
+            "## What it showed\n\nThe pictures and recordings it showed the human, in `{}` \
+             beside this source, as they are to be made again; not its code.\n\n{showed}",
+            sketch::MEDIA
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sketch_keeps_the_pictures_it_showed_beside_its_source() {
+        let media = storage::path(storage::Kept::Media).unwrap();
+        std::fs::create_dir_all(&media).unwrap();
+        let file = format!("shown-{}.png", std::process::id());
+        std::fs::write(media.join(&file), b"png").unwrap();
+        let sources = std::env::temp_dir().join(format!("cox-showed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&sources);
+        let shown = |file: &str| Entry::Media {
+            file: file.to_owned(),
+            kind: cox_core::entry::MediaKind::Image,
+            from: "/tmp/list.png".to_owned(),
+            caption: Some("The list".to_owned()),
+            size: None,
+        };
+        let entries = [
+            Entry::Human("Make the list".to_owned()),
+            shown(&file),
+            shown("gone.png"),
+        ];
+
+        let told = showed_in_sketch(&entries, &sources);
+        assert!(told.starts_with("## What it showed\n\n"), "{told}");
+        assert!(
+            told.ends_with(&format!("![The list](media/{file})\n\n")),
+            "{told}"
+        );
+        assert!(!told.contains("gone.png"), "{told}");
+        assert_eq!(
+            std::fs::read(sources.join("media").join(&file)).unwrap(),
+            b"png"
+        );
+        assert_eq!(showed_in_sketch(&entries[..1], &sources), "");
+
+        std::fs::remove_file(media.join(&file)).unwrap();
+        std::fs::remove_dir_all(&sources).unwrap();
+    }
 }

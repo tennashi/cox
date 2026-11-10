@@ -24,9 +24,13 @@
 //!
 //! However it ends, Cox keeps what the sketch did as a source of its
 //! project's (see [`crate::raw`]), under [`SOURCES`]: how it ended, as
-//! where its files went, and all that was said in it. What is made of
-//! the sketch, as a page of the wiki or the work it goes on to, names
-//! that source, rather than the sketch itself becoming what is made.
+//! where its files went, all that was said in it, and the pictures and
+//! recordings it showed the human, in [`MEDIA`] beside it. What is made
+//! of the sketch, as a page of the wiki or the work it goes on to, names
+//! that source, rather than the sketch itself becoming what is made: a
+//! sketch from nothing that a project is made for keeps its files apart
+//! as a discarded one does, and the project starts with none of them, to
+//! make again what the sketch tried, rather than go on with its code.
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
@@ -161,6 +165,10 @@ pub const DISCARDED: &str = "discarded";
 /// The topic of the sources that keep what each sketch did once it
 /// ended.
 pub const SOURCES: &str = "sketches";
+
+/// The folder, beside the sources of the sketches, that holds the
+/// pictures and recordings they showed the human.
+pub const MEDIA: &str = "media";
 
 /// Where the sketches discarded from the project are kept in its
 /// repository, each under the name of its folder: refs, which Git keeps
@@ -306,7 +314,17 @@ impl Discarded {
     /// What the sketch's chat notes of it.
     #[must_use]
     pub fn note(&self) -> String {
-        let mut note = "The sketch is discarded, and its folder is gone.".to_owned();
+        format!(
+            "The sketch is discarded, and its folder is gone.{}",
+            self.where_kept()
+        )
+    }
+
+    /// Where what the sketch changed is kept, and what was left out, as
+    /// its note says it after how it ended, each a sentence after a space.
+    #[must_use]
+    pub fn where_kept(&self) -> String {
+        let mut note = String::new();
         match &self.kept {
             Some(Kept::Ref(name)) => {
                 let _ = write!(

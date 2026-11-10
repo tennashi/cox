@@ -142,8 +142,8 @@ pub struct Ending {
     /// Whether what the sketch changed is kept apart (see
     /// [`crate::chat::sketch::discard`]) before its folder goes.
     pub keep: bool,
-    /// Whether the sketch's folder is opened as a project, in place of
-    /// going, for a sketch from nothing.
+    /// Whether a project is made for what the sketch tried, for a sketch
+    /// from nothing, what it made kept apart, as a discarded sketch's is.
     pub open: bool,
     /// The text the agent of the chat the sketch was opened beside is told
     /// once the sketch ends, with `{kept}`, where what the sketch changed is
