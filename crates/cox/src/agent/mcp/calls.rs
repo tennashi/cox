@@ -424,9 +424,13 @@ fn wiki_tools() -> [Value; 3] {
                 holds. A page is of one topic, starting with its `# ` title and a line on \
                 what it is about, and links to others as [[name]]. Write it in English, \
                 whatever language the chat speaks, so that every chat finds it by the same \
-                words; the human reads it in their own language, as Cox translates it. Cox adds, under \
-                \"Used in\", where this chat used it: the day, the project, the chat, the \
-                commit its folder is at, and the paths you give. What holds only of this \
+                words; the human reads it in their own language, as Cox translates it. A page is \
+                what was made of what the agents read and the chats said, which stay as they \
+                were: give the sources it was made from, those kept with raw_keep, as a \
+                sketch's once it ended, and the chats, this one too, for what the human said \
+                there. Cox adds, under \"Used in\", where this chat used it: the day, the \
+                project, the chat, the commit its folder is at, the sources and the paths you \
+                give. What holds only of this \
                 project, as of its own people, customers or plans, keep in its own wiki \
                 with keep_in_project, so that only its chats find the page. Answers the \
                 page's file.",
@@ -448,6 +452,13 @@ fn wiki_tools() -> [Value; 3] {
                         "description": "The paths of the code the page is of, from the \
                             working directory, as `src/view.rs`.",
                     },
+                    "sources": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "What the page was made from, one at least: the \
+                            sources kept, by their names as raw_keep and raw_read give them, \
+                            as `sketches/2026-11-10-mock`, and the chats, as `chat 3`.",
+                    },
                     "keep_in_project": {
                         "type": "boolean",
                         "description": "true writes the page in this project's own wiki, \
@@ -456,7 +467,7 @@ fn wiki_tools() -> [Value; 3] {
                             human's.",
                     },
                 },
-                "required": ["page", "text"],
+                "required": ["page", "text", "sources"],
             },
         }),
     ]
@@ -1779,29 +1790,20 @@ async fn wiki_write(
         .get("text")
         .and_then(Value::as_str)
         .ok_or("no text: give the whole page as `text`")?;
-    let paths = match arguments.get("paths") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(paths)) => paths
-            .iter()
-            .map(|path| {
-                path.as_str()
-                    .map(str::to_owned)
-                    .ok_or("`paths` holds something that is not a string")
-            })
-            .collect::<Result<_, _>>()?,
-        Some(_) => return Err("`paths` is not an array of strings".to_owned()),
-    };
+    let paths = strings(arguments, "paths")?;
     let keep = match arguments.get("keep_in_project") {
         None | Some(Value::Null) => None,
         Some(Value::Bool(keep)) => Some(*keep),
         Some(_) => return Err("`keep_in_project` is not true or false".to_owned()),
     };
+    let sources = strings(arguments, "sources")?;
     let Whereabouts {
         project,
         folder,
         chat,
         kept,
     } = whereabouts(chats).await?;
+    sources_there(&sources, folder.as_deref())?;
     let mut wikis = wikis(folder.as_deref());
     let own = match keep {
         Some(true) if folder.is_none() => {
@@ -1824,6 +1826,7 @@ async fn wiki_write(
         kept,
         commit: wiki::commit_of(cwd),
         paths,
+        sources,
     };
     let file = wiki::write(&wiki.root, page, text, &used)?;
     chats
@@ -1837,6 +1840,56 @@ async fn wiki_write(
         wiki.called,
         used.line().trim_start_matches("- ")
     ))
+}
+
+/// The strings `arguments` give as `key`, none unless given.
+fn strings(arguments: &Value, key: &str) -> Result<Vec<String>, String> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("`{key}` holds something that is not a string"))
+            })
+            .collect(),
+        Some(_) => Err(format!("`{key}` is not an array of strings")),
+    }
+}
+
+/// Whether `sources`, what a page of the wiki is made from, are there
+/// for a chat in the project of `folder`, if it is in one: one at least,
+/// each a source kept, of the project or the human, or a chat, as
+/// `chat 3`; or why not.
+fn sources_there(sources: &[String], folder: Option<&Path>) -> Result<(), String> {
+    if sources.is_empty() {
+        return Err(
+            "no sources: give what the page was made from as `sources`, the sources kept \
+             with raw_keep by their names, as a sketch's once it ended, and the chats, as \
+             `chat 3`, this one too for what the human said here"
+                .to_owned(),
+        );
+    }
+    let shelves = raws(folder);
+    for source in sources {
+        let chat = source
+            .strip_prefix("chat ")
+            .is_some_and(|number| number.parse::<u64>().is_ok());
+        let kept = || {
+            shelves
+                .iter()
+                .any(|shelf| raw::read(&shelf.root, source).is_ok())
+        };
+        if !chat && !kept() {
+            return Err(format!(
+                "{source} is no source kept, nor a chat as `chat 3`: find the sources' names \
+                 with raw_read or raw_search"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Keeps the source `arguments` give, noting the chat that kept it: the

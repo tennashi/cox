@@ -9,8 +9,11 @@
 //! [`crate::agent::mcp`]), and every page they write goes through Cox,
 //! which adds where it was used: a line under the page's "Used in", of
 //! the day, the project, the chat, the commit the chat's folder was at,
-//! and the paths of the code the page is of, so that a page says where it
-//! came from without the agent writing it. Cox keeps `index.md`, the
+//! what it was made from, and the paths of the code the page is of, so
+//! that a page says where it came from without the agent writing it. A
+//! page is what is made of what the agents read and the chats said, so
+//! Cox writes none that names nothing it was made from: a source kept
+//! (see [`crate::raw`]), as a sketch's once it ended, or a chat. Cox keeps `index.md`, the
 //! page that lists the others, unless the human wrote their own. The
 //! stage's Knowledge plugin shows the pages to the human (see [`told`]).
 //!
@@ -79,6 +82,9 @@ pub struct Used {
     pub commit: Option<String>,
     /// The paths of the code the page is of, from the chat's folder.
     pub paths: Vec<String>,
+    /// What the page was made from: the sources it was made of, by their
+    /// names (see [`crate::raw`]), and the chats, as `chat 3`.
+    pub sources: Vec<String>,
 }
 
 impl Used {
@@ -91,6 +97,9 @@ impl Used {
         }
         if let Some(commit) = &self.commit {
             let _ = write!(what, ", at {commit}");
+        }
+        if !self.sources.is_empty() {
+            let _ = write!(what, ", from {}", self.sources.join(", "));
         }
         if !self.paths.is_empty() {
             let _ = write!(what, ": {}", self.paths.join(", "));
@@ -448,6 +457,7 @@ mod tests {
             kept: Some("3".to_owned()),
             commit: Some("9955f39".to_owned()),
             paths: vec!["src/view.rs".to_owned()],
+            sources: vec!["chat 3".to_owned()],
         }
     }
 
@@ -484,8 +494,8 @@ mod tests {
             read(&root, "gpui-layout").unwrap(),
             "# GPUI layout\n\nA flex child needs `min_h_0` to scroll, in a column.\n\n\
              ## Used in\n\n\
-             - 2026-11-05 in notes, chat \"Layout\" (#3), at 9955f39: src/view.rs\n\
-             - 2026-11-05 in cox, chat \"Fix scroll\" (#3), at 9955f39: src/view.rs\n"
+             - 2026-11-05 in notes, chat \"Layout\" (#3), at 9955f39, from chat 3: src/view.rs\n\
+             - 2026-11-05 in cox, chat \"Fix scroll\" (#3), at 9955f39, from chat 3: src/view.rs\n"
         );
         let _ = fs::remove_dir_all(&root);
     }
