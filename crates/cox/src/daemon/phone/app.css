@@ -361,6 +361,15 @@ pre {
   line-height: 1.55;
 }
 pre code { padding: 0; background: none; font-size: inherit; color: var(--foreground); }
+.reply .table, .reply .diagram { margin: 8px 0; overflow-x: auto; }
+.reply table { border-collapse: collapse; font-size: 14px; overflow-wrap: normal; }
+.reply th, .reply td { padding: 4px 8px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+.reply th { font-weight: 600; }
+.reply .align-left { text-align: left; }
+.reply .align-center { text-align: center; }
+.reply .align-right { text-align: right; }
+.reply div.diagram { padding: 8px; border-radius: 8px; background: var(--raised); }
+.reply img.diagram { display: block; max-width: 100%; height: auto; }
 
 /* A line that opens, as the window's: ▸, a mark, and what it is. */
 .line {

@@ -439,6 +439,8 @@ pub async fn serve(
                         page.changes(&request).await
                     } else if request.uri().path() == "/sketch" {
                         page.sketch(&request).await
+                    } else if request.uri().path() == "/diagram" {
+                        page.diagram(&request).await
                     } else {
                         page.answer(&request)
                     };
@@ -626,6 +628,35 @@ impl Page {
         });
         match told.await {
             Ok(told) => answer(StatusCode::OK, "application/json", told.to_string()),
+            Err(error) => answer(StatusCode::INTERNAL_SERVER_ERROR, TEXT, error.to_string()),
+        }
+    }
+
+    /// The Mermaid diagram `request` holds, `?source=<source>`, as an SVG
+    /// in the window's colors, as the window draws it (see
+    /// [`crate::ui::diagram`]).
+    async fn diagram(&self, request: &Request<Incoming>) -> Response<Body> {
+        if !self.paired(request) {
+            return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
+        }
+        let query = request.uri().query().unwrap_or_default();
+        let Some(source) = url::form_urlencoded::parse(query.as_bytes())
+            .find_map(|(name, value)| (name == "source").then(|| value.into_owned()))
+        else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "No diagram");
+        };
+        // Drawing it reads the system's fonts the first time.
+        match tokio::task::spawn_blocking(move || crate::ui::diagram::svg(&source)).await {
+            Ok(Ok(svg)) => {
+                let mut response = answer(StatusCode::OK, "image/svg+xml", svg);
+                // The same source draws the same diagram.
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("private, max-age=86400"),
+                );
+                response
+            }
+            Ok(Err(error)) => answer(StatusCode::UNPROCESSABLE_ENTITY, TEXT, format!("{error:#}")),
             Err(error) => answer(StatusCode::INTERNAL_SERVER_ERROR, TEXT, error.to_string()),
         }
     }
