@@ -251,6 +251,34 @@ fn commit(folder: &Path, message: &str) -> String {
     commits::head(folder).unwrap()
 }
 
+/// Amends the last commit of the repository at `folder` with all its
+/// files, saying `message`, and gives the commit it is now.
+fn amend(folder: &Path, message: &str) -> String {
+    for args in [
+        &["add", "--all"][..],
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--quiet",
+            "--amend",
+            "-m",
+            message,
+        ],
+    ] {
+        let ran = Command::new("git")
+            .arg("-C")
+            .arg(folder)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(ran.status.success(), "{ran:?}");
+    }
+    commits::head(folder).unwrap()
+}
+
 /// The paths of the files the tab shows as changed, of what it shows of
 /// the repository shown, and how many lines each gained and lost.
 fn shown_now(changes: &Entity<Changes>, cx: &mut VisualTestContext) -> Vec<(String, usize, usize)> {
@@ -341,5 +369,84 @@ fn a_folder_with_no_repository_counts_none() {
     let _ = std::fs::remove_dir_all(&folder);
     std::fs::create_dir_all(folder.join("directories/notes")).unwrap();
     assert!(cox::stage::changes::count(&folder).is_err());
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[gpui::test]
+fn an_amended_commit_shows_what_it_was_and_what_amending_it_changed(cx: &mut TestAppContext) {
+    let folder = repository("amended", "one\n");
+    cox_editor::changes::start(&folder).unwrap();
+    std::fs::write(folder.join("a.txt"), "one\ntwo\n").unwrap();
+    let first = commit(&folder, "Two");
+    let made = Turn {
+        chat: 2,
+        entry: 1,
+        line: "Add two".to_owned(),
+    };
+    commits::mark(&folder, &first, &made).unwrap();
+    std::fs::write(folder.join("a.txt"), "one\n2\n").unwrap();
+    std::fs::write(folder.join("b.txt"), "b\n").unwrap();
+    let now = amend(&folder, "Two, as a number");
+    let amending = Turn {
+        chat: 2,
+        entry: 5,
+        line: "Use a number".to_owned(),
+    };
+    commits::mark(&folder, &now, &amending).unwrap();
+
+    let (changes, _, cx) = open(cx, &folder, &folder);
+    let turns = Rc::new(RefCell::new(Vec::new()));
+    let heard = Rc::clone(&turns);
+    cx.update(|_, cx| {
+        cx.subscribe(&changes, move |_, &ShowTurn { chat, entry }, _| {
+            heard.borrow_mut().push((chat, entry));
+        })
+        .detach();
+    });
+    // It is one commit, as it is now, which was another before.
+    let earlier = changes.read_with(cx, |changes, _| {
+        let commits = &changes.history().unwrap().commits;
+        assert_eq!(commits.len(), 1);
+        commits[0]
+            .earlier
+            .iter()
+            .map(|commit| commit.id.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(earlier, [first.as_str()]);
+
+    click("history-commit-0", cx);
+    assert_eq!(
+        shown_now(&changes, cx),
+        [("a.txt".to_owned(), 1, 0), ("b.txt".to_owned(), 1, 0)]
+    );
+    // As it was made first: the line it added then, and its turn.
+    click("commit-version-0", cx);
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.shown_pick()),
+        Pick::Commit(first.clone())
+    );
+    assert_eq!(shown_now(&changes, cx), [("a.txt".to_owned(), 1, 0)]);
+    click("commit-turn", cx);
+    // Amended: what amending it changed, and the turn that did.
+    click("commit-version-1", cx);
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.shown_pick()),
+        Pick::Amendment {
+            from: first,
+            to: now.clone()
+        }
+    );
+    assert_eq!(
+        shown_now(&changes, cx),
+        [("a.txt".to_owned(), 1, 1), ("b.txt".to_owned(), 1, 0)]
+    );
+    click("commit-turn", cx);
+    assert_eq!(*turns.borrow(), [(2, 1), (2, 5)]);
+    click("commit-version-now", cx);
+    assert_eq!(
+        changes.read_with(cx, |changes, _| changes.shown_pick()),
+        Pick::Commit(now)
+    );
     std::fs::remove_dir_all(folder).unwrap();
 }

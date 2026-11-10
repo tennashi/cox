@@ -233,6 +233,10 @@ pub struct Committed {
     /// How many lines its files gained, and lost, in all.
     pub added: usize,
     pub removed: usize,
+    /// The commit it amended, by its full name, if it was made by amending
+    /// one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amended: Option<String>,
 }
 
 impl Committed {
@@ -240,6 +244,14 @@ impl Committed {
     #[must_use]
     pub fn short(&self) -> &str {
         self.id.get(..7).unwrap_or(&self.id)
+    }
+
+    /// The short name of the commit it amended, if it amended one.
+    #[must_use]
+    pub fn amended_short(&self) -> Option<&str> {
+        self.amended
+            .as_deref()
+            .map(|amended| amended.get(..7).unwrap_or(amended))
     }
 }
 

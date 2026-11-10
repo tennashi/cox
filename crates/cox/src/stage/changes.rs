@@ -115,6 +115,20 @@ pub enum Pick {
     Uncommitted,
     /// What the commit of this full name changed.
     Commit(String),
+    /// What amending the commit `from` into the commit `to`, by their full
+    /// names, changed.
+    Amendment { from: String, to: String },
+}
+
+impl Pick {
+    /// The commit it shows, or the one amended into, by its full name, if
+    /// it shows one.
+    fn commit(&self) -> Option<&str> {
+        match self {
+            Self::Commit(id) | Self::Amendment { to: id, .. } => Some(id),
+            Self::Everything | Self::Uncommitted => None,
+        }
+    }
 }
 
 /// What the human picked to see, as the tab read it: of the repository of
@@ -635,7 +649,7 @@ impl Changes {
             let row = history_row(
                 format!("history-commit-{index}").into(),
                 Some((Dot::Commit, true, true)),
-                shown == picked,
+                shown.commit().is_some_and(|id| commit.was(id)),
                 commit.subject.clone().into(),
                 Some(commit_meta(commit).into_any_element()),
             )
@@ -678,17 +692,23 @@ impl Changes {
 
     /// Over what a commit changed, as the human picked it to see: what it
     /// says, and the turn of the chat it was made in, if it was marked,
-    /// which a click shows.
+    /// which a click shows; and, if it was amended, what it was each time,
+    /// a click on which shows what it changed then.
     fn render_commit(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let Pick::Commit(id) = self.shown_pick() else {
-            return None;
-        };
+        let pick = self.shown_pick();
+        let id = pick.commit()?;
         let commit = self
             .history()?
             .commits
             .iter()
-            .find(|commit| commit.id == id)?;
-        let turn = commit.turn.as_ref().map(|turn| {
+            .find(|commit| commit.was(id))?;
+        // The commit as it was, if the human picked what it was before.
+        let shown = commit
+            .earlier
+            .iter()
+            .find(|earlier| earlier.id == id)
+            .unwrap_or(commit);
+        let turn = shown.turn.as_ref().map(|turn| {
             let (chat, entry) = (turn.chat, turn.entry);
             div()
                 .id("commit-turn")
@@ -716,7 +736,7 @@ impl Changes {
                         .overflow_hidden()
                         .text_size(px(14.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(ellipsis(commit.subject.clone())),
+                        .child(ellipsis(shown.subject.clone())),
                 )
                 .child(
                     div()
@@ -730,16 +750,79 @@ impl Changes {
                             div()
                                 .flex_shrink_0()
                                 .font_family(CODE_FONT)
-                                .child(commit.short()),
+                                .child(shown.short()),
                         )
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .child(counts(commit.added, commit.removed)),
+                                .child(counts(shown.added, shown.removed)),
                         )
-                        .child(div().flex_shrink_0().child(ago(commit.when)))
+                        .child(div().flex_shrink_0().child(ago(shown.when)))
                         .children(turn),
+                )
+                .children(Self::render_versions(commit, &pick, cx)),
+        )
+    }
+
+    /// What `commit` was each time it was amended, if it was: first what
+    /// it changes now, then the commit it was first, and each it was made
+    /// into, oldest first, with how long ago and the line of the turn it
+    /// was made in. The one `pick` shows is marked, and a click on another
+    /// shows what it changed: the first all it changed, each after what
+    /// amending into it changed.
+    fn render_versions(
+        commit: &Commit,
+        pick: &Pick,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        if commit.earlier.is_empty() {
+            return None;
+        }
+        let row = |selector: String, picked: Pick, label: &'static str, version: &Commit| {
+            version_row(selector, *pick == picked, label, version)
+                .on_click(cx.listener(move |changes, _, _, cx| changes.pick(picked.clone(), cx)))
+        };
+        let versions: Vec<&Commit> = commit.earlier.iter().chain([commit]).collect();
+        let mut rows = vec![row(
+            "commit-version-now".to_owned(),
+            Pick::Commit(commit.id.clone()),
+            "All of it",
+            commit,
+        )];
+        for (index, version) in versions.iter().enumerate() {
+            let (picked, label) = match index.checked_sub(1).map(|before| versions[before]) {
+                None => (Pick::Commit(version.id.clone()), "Made"),
+                Some(before) => (
+                    Pick::Amendment {
+                        from: before.id.clone(),
+                        to: version.id.clone(),
+                    },
+                    "Amended",
                 ),
+            };
+            rows.push(row(
+                format!("commit-version-{index}"),
+                picked,
+                label,
+                version,
+            ));
+        }
+        Some(
+            div()
+                .debug_selector(|| "commit-versions".to_owned())
+                .mt_1()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px_2()
+                        .pb(px(2.))
+                        .text_size(px(10.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(FAINT))
+                        .child("VERSIONS"),
+                )
+                .children(rows),
         )
     }
 
@@ -808,6 +891,7 @@ fn read_pick(folder: &Path, pick: &Pick) -> Result<Diff, String> {
             .ok_or_else(|| "Nothing tells where the commits start.".to_owned()),
         Pick::Uncommitted => commits::uncommitted(folder),
         Pick::Commit(id) => commits::diff_of(folder, id),
+        Pick::Amendment { from, to } => commits::amendment(folder, from, to),
     }
 }
 
@@ -907,11 +991,83 @@ fn history_row(
         )
 }
 
+/// A row of what an amended commit was, found as `selector`, marked if
+/// it is `selected`, saying `label`, then the short name of `version`, how
+/// long ago it was made, and the line of the turn it was made in, if it
+/// was marked.
+fn version_row(
+    selector: String,
+    selected: bool,
+    label: &'static str,
+    version: &Commit,
+) -> gpui::Stateful<gpui::Div> {
+    let said = version
+        .turn
+        .as_ref()
+        .map(|turn| format!("“{}”", turn.line))
+        .unwrap_or_default();
+    div()
+        .id(SharedString::from(selector.clone()))
+        .debug_selector(move || selector)
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .px_2()
+        .py(px(3.))
+        .rounded(px(6.))
+        .whitespace_nowrap()
+        .text_size(px(12.))
+        .cursor_pointer()
+        .map(|row| {
+            if selected {
+                row.bg(rgb(SELECTED))
+            } else {
+                row.hover(|style| style.bg(rgb(HOVER)))
+            }
+        })
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(64.))
+                .text_color(rgb(if selected { FOREGROUND } else { DIM }))
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .font_family(CODE_FONT)
+                .text_color(rgb(FAINT))
+                .child(version.short()),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(FAINT))
+                .child(ago(version.when)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .text_color(rgb(DIM))
+                .child(ellipsis(said)),
+        )
+}
+
 /// What a row of the column of commits says of `commit` under it: its
 /// short name, how many lines it gained and lost, how long ago it was
-/// made, and the line that started the turn it was made in, if it was
-/// marked.
+/// made, and under them whether it was amended, and the line that started
+/// the turn it was made in, if it was marked.
 fn commit_meta(commit: &Commit) -> impl IntoElement {
+    let amended = !commit.earlier.is_empty();
+    let said = commit.turn.as_ref().map(|turn| {
+        div()
+            .min_w_0()
+            .overflow_hidden()
+            .text_color(rgb(DIM))
+            .child(ellipsis(format!("“{}”", turn.line)))
+    });
     div()
         .flex()
         .flex_col()
@@ -928,13 +1084,24 @@ fn commit_meta(commit: &Commit) -> impl IntoElement {
                 .child(div().flex_1())
                 .child(ago(commit.when)),
         )
-        .children(commit.turn.as_ref().map(|turn| {
-            div()
-                .min_w_0()
-                .overflow_hidden()
-                .text_color(rgb(DIM))
-                .child(ellipsis(format!("“{}”", turn.line)))
-        }))
+        .when(amended || said.is_some(), |meta| {
+            meta.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .whitespace_nowrap()
+                    .when(amended, |line| {
+                        line.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(rgb(ASKING))
+                                .child("amended"),
+                        )
+                    })
+                    .children(said),
+            )
+        })
 }
 
 /// The name of `folder`, its last part's.

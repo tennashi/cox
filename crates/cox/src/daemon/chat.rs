@@ -642,6 +642,7 @@ impl Chat {
                 committed.push(Committed {
                     folder: cwd.clone(),
                     repository: head.name.clone(),
+                    amended: commit.earlier.last().map(|earlier| earlier.id.clone()),
                     id: commit.id,
                     subject: commit.subject,
                     added: commit.added,

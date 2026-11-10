@@ -44,6 +44,10 @@ pub enum Since {
     /// Where the branch left another, `from`, by its name, at the commit
     /// `at`, by its short name (see [`crate::commits::Base`]).
     Branched { from: String, at: String },
+    /// The commit `from`, by its short name, which was amended into the
+    /// commit `to`: what amending it changed (see
+    /// [`crate::commits::amendment`]).
+    Amended { from: String, to: String },
 }
 
 /// A file that changed.
@@ -132,6 +136,7 @@ impl Since {
             Self::Head(commit) => format!("since the last commit, {commit}"),
             Self::Commit(commit) => format!("in commit {commit}"),
             Self::Branched { from, at } => format!("since it branched from {from}, at {at}"),
+            Self::Amended { from, to } => format!("as {from} was amended into {to}"),
         }
     }
 }

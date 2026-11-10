@@ -586,8 +586,12 @@ fn describe_entry(entry: &Entry) -> String {
                         .as_deref()
                         .map(|name| format!(" in {name}"))
                         .unwrap_or_default();
+                    let amending = commit
+                        .amended_short()
+                        .map(|amended| format!(", amending {amended}"))
+                        .unwrap_or_default();
                     format!(
-                        "{} {:?}{within} (+{} -{})",
+                        "{} {:?}{within} (+{} -{}){amending}",
                         commit.short(),
                         commit.subject,
                         commit.added,
