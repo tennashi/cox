@@ -193,7 +193,8 @@ impl Fits<'_> {
 /// first, while it is `/` and the start of a name: those whose name starts
 /// with what follows the `/`, then those whose name has it, then those
 /// whose description has it, whatever its case. `None` for a line that is
-/// not, or that no command fits.
+/// not, or that no command fits. The phone's page finds them as this does,
+/// in its own `matching`.
 pub(super) fn matching<'c>(
     commands: &'c [SlashCommand],
     line: &str,

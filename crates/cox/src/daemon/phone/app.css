@@ -610,6 +610,41 @@ body.trying { overflow: hidden; }
 #stop { background: var(--button); color: var(--foreground); }
 #send:disabled, #stop:disabled { opacity: 0.5; }
 #failed, #held { margin: 0 14px 8px; font-size: 12px; }
+
+/* The agent's commands the line can go on to run, over the input, as the
+   window's list: a card of rows, each the command's name, what to write
+   after it, and, under them, what it does, as big as a finger. */
+#commands {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(5 * 56px + 12px);
+  margin: 0 12px 8px;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 18px;
+  background: var(--raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+#commands .command {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-height: 56px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  text-align: left;
+}
+#commands .command:active { background: var(--selected); }
+#commands .name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+#commands .slash { flex-shrink: 0; font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--foreground); }
+#commands .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--faint); }
+#commands .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--dim); }
 #failed { color: var(--failed); }
 #held { color: var(--dim); }
 

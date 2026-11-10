@@ -24,6 +24,7 @@ const compose = {
   changesCount: document.getElementById("changes-count"),
   failed: document.getElementById("failed"),
   held: document.getElementById("held"),
+  commands: document.getElementById("commands"),
 };
 // The line the human sent while the agent was at work, which goes once
 // the turn ends, as the window's does.
@@ -54,7 +55,7 @@ let sketching = null;
 // What a sketch the human starts beside the chat starts from, "project"
 // or "empty", as the input's chip has it.
 let sketchFrom = "project";
-let chat = null; // { key, entries, state, steers, title, goal, settings }
+let chat = null; // { key, entries, state, steers, title, goal, settings, commands }
 let events = null;
 let drawing = false;
 // What the human opened of the conversation, folded otherwise, as the
@@ -133,7 +134,7 @@ function shownKey() {
 function connect() {
   if (events) events.close();
   const key = shownKey();
-  chat = key === null ? null : { key, entries: [], state: null, steers: false, title: null, goal: null, settings: [], came: false };
+  chat = key === null ? null : { key, entries: [], state: null, steers: false, title: null, goal: null, settings: [], commands: [], came: false };
   events = new EventSource(key === null ? "/events" : `/events?chat=${key}`);
   events.onopen = () => { head.lost.hidden = true; };
   events.onerror = () => {
@@ -168,6 +169,7 @@ function hear(told) {
     chat.title = patch.title;
     chat.goal = patch.goal;
     chat.settings = patch.settings || [];
+    chat.commands = patch.commands || [];
     chat.came = true;
     if (held !== null && takesLines(chat)) sendHeld();
   } else {
@@ -187,6 +189,7 @@ function draw() {
   drawPush();
   if (chat) drawChat();
   else drawHome();
+  drawCommands();
 }
 
 // How a chat stands, as its dot and in words.
@@ -1634,7 +1637,60 @@ function grow() {
   compose.line.style.height = "auto";
   compose.line.style.height = `${Math.min(compose.line.scrollHeight, 160)}px`;
 }
-compose.line.addEventListener("input", grow);
+compose.line.addEventListener("input", () => {
+  grow();
+  drawCommands();
+});
+
+// The commands of `commands` that `line` can go on to run, the best
+// first, while it is `/` and the start of a name, as the window's list
+// over its input finds them: those whose name starts with what follows
+// the `/`, then those whose name has it, then those whose description
+// has it, whatever its case. None for a line that is not.
+function matching(commands, line) {
+  if (!line.startsWith("/")) return [];
+  const typed = line.slice(1);
+  if (/\s/.test(typed)) return [];
+  const lower = typed.toLowerCase();
+  const rank = (command) => {
+    const name = command.name.toLowerCase();
+    if (name.startsWith(lower)) return 0;
+    if (name.includes(lower)) return 1;
+    if ((command.description || "").toLowerCase().includes(lower)) return 2;
+    return null;
+  };
+  // The sort is stable: the agent's order stays within a rank.
+  return commands
+    .map((command) => [rank(command), command])
+    .filter(([fit]) => fit !== null)
+    .sort((one, other) => one[0] - other[0])
+    .map(([, command]) => command);
+}
+
+// The list over the input of the agent's commands the line can go on to
+// run, as the window's: each by its name, with what to write after it
+// and what it does. A tap puts the command in the line, ready for its
+// input, which closes the list.
+function drawCommands() {
+  const fits = chat && !compose.form.hidden ? matching(chat.commands, compose.line.value) : [];
+  compose.commands.hidden = !fits.length;
+  compose.commands.replaceChildren(...fits.map((command) => el("button", {
+    type: "button",
+    class: "command",
+    role: "option",
+    // The line keeps the keyboard, as the tap goes to the list.
+    onmousedown: (event) => event.preventDefault(),
+    onclick: () => {
+      compose.line.value = `/${command.name} `;
+      grow();
+      compose.line.focus();
+      drawCommands();
+    },
+  },
+  el("span", { class: "name" }, el("span", { class: "slash" }, `/${command.name}`),
+    command.hint ? el("span", { class: "hint" }, command.hint) : null),
+  command.description ? el("span", { class: "what" }, command.description) : null)));
+}
 
 head.back.addEventListener("click", (event) => {
   event.preventDefault();
