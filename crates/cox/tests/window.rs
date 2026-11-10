@@ -15,7 +15,7 @@ use agent_client_protocol::schema::v1::{
 use cox::agent::setup::{Policy, Setup};
 use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
 use cox::chat::view::ChatView;
-use cox::ui::input::LineInput;
+use cox::ui::input::{Blurred, LineInput};
 use cox::workspace::Workspace;
 use cox_acp::McpServer;
 use cox_core::diff::Line;
@@ -299,6 +299,28 @@ fn an_input_of_one_line_pastes_line_breaks_as_spaces(cx: &mut TestAppContext) {
         input.read_with(cx, |input, _| input.text().to_owned()),
         "one two three"
     );
+}
+
+/// The input tells when the keyboard leaves it, as the settings keep what
+/// was typed then.
+#[gpui::test]
+fn tells_when_the_keyboard_leaves_the_input(cx: &mut TestAppContext) {
+    let (input, cx) = one_line_input(cx);
+    // Only the active window tells where its keyboard goes.
+    cx.update(|window, _| window.activate_window());
+    let left = Rc::new(std::cell::Cell::new(0));
+    let _subscription = cx.update({
+        let left = left.clone();
+        |_, cx| cx.subscribe(&input, move |_, Blurred, _| left.set(left.get() + 1))
+    });
+    cx.simulate_input("typed");
+    cx.run_until_parked();
+    assert_eq!(left.get(), 0);
+
+    let elsewhere = cx.update(|_, cx| cx.focus_handle());
+    cx.update(|window, _| window.focus(&elsewhere));
+    cx.run_until_parked();
+    assert_eq!(left.get(), 1);
 }
 
 /// An input of one line, focused, on its own in a window.

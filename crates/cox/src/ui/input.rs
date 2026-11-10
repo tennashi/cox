@@ -11,7 +11,8 @@
 //! The human selects with the mouse or with Shift and the arrows, and cuts,
 //! copies and pastes with the usual keys. Enter submits. In an input that
 //! wraps, Shift+Enter starts a new line; in one that holds one line, a
-//! pasted line break becomes a space. On macOS, a key with Control that no
+//! pasted line break becomes a space. The input tells when the keyboard
+//! leaves it, for what keeps what was typed without Enter. On macOS, a key with Control that no
 //! binding takes goes to the input method, as macSKK's Control-J.
 //!
 //! [`draft`] is the text as it is typed, with its selection and
@@ -27,9 +28,9 @@ use gpui::{
     App, AvailableSpace, Bounds, ClipboardItem, ContentMask, Context, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     GlobalElementId, InspectorElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, TextAlign,
-    TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill, point,
-    prelude::*, px, relative, rgb, size,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, Subscription,
+    TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill,
+    point, prelude::*, px, relative, rgb, size,
 };
 
 use self::draft::{Draft, one_line, unix_line_breaks};
@@ -142,6 +143,10 @@ pub fn bind_keys(cx: &mut App) {
 /// The human pressed Enter with no composition in progress.
 pub struct Submitted;
 
+/// The keyboard left the input, as when the human clicked elsewhere or
+/// pressed Tab.
+pub struct Blurred;
+
 pub struct LineInput {
     focus_handle: FocusHandle,
     /// The text, with its selection and what the input method is
@@ -162,6 +167,9 @@ pub struct LineInput {
     scroll: Point<Pixels>,
     /// What the input shows, fainter, while it is empty.
     placeholder: SharedString,
+    /// What tells the input the keyboard left it, once it is drawn in a
+    /// window, which it has to be to get the keyboard at all.
+    left: Option<Subscription>,
 }
 
 /// What a drag selects by: characters, after a click; words, after a
@@ -189,6 +197,7 @@ impl LineInput {
             last_bounds: None,
             scroll: Point::default(),
             placeholder: SharedString::default(),
+            left: None,
         }
     }
 
@@ -658,6 +667,8 @@ impl LineInput {
 
 impl EventEmitter<Submitted> for LineInput {}
 
+impl EventEmitter<Blurred> for LineInput {}
+
 impl Focusable for LineInput {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -774,7 +785,10 @@ impl EntityInputHandler for LineInput {
 }
 
 impl Render for LineInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.left.is_none() {
+            self.left = Some(cx.on_blur(&self.focus_handle, window, |_, _, cx| cx.emit(Blurred)));
+        }
         div()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)

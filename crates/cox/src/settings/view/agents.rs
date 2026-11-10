@@ -1,6 +1,7 @@
 //! The agents on the settings screen: those the human lists in
 //! `agents.json`, a row each, with its name and its command on one line,
-//! as a shell takes it (see [`crate::agents::line`]), which Enter keeps.
+//! as a shell takes it (see [`crate::agents::line`]), which Enter keeps,
+//! as the keyboard leaving the row does once it has both.
 //! A dot marks the agent a new chat talks to when the command line names
 //! none, as `settings.json` names it, and a click on another's dot names
 //! that one. "Test" starts the agent and asks it to open a session (see
@@ -24,7 +25,7 @@ use crate::agents::listing::Listing;
 use crate::agents::{Agents, Known};
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
-use crate::ui::input::{LineInput, Submitted};
+use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::theme::{
     ACCENT, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER, LINK,
     RAISED,
@@ -61,7 +62,7 @@ struct Row {
     told: Option<(String, u32)>,
     /// Whether "Test" is trying it out.
     testing: bool,
-    _submitted: [Subscription; 2],
+    _subscriptions: [Subscription; 4],
 }
 
 impl Row {
@@ -161,9 +162,14 @@ impl AgentsSection {
             input.set_placeholder("NAME=value program arguments…", cx);
             input
         });
-        let submitted = [&name_input, &command_input].map(|input| {
+        let [name_submitted, command_submitted] = [&name_input, &command_input].map(|input| {
             cx.subscribe(input, move |section, _, Submitted, cx| {
                 section.save(key, cx);
+            })
+        });
+        let [name_left, command_left] = [&name_input, &command_input].map(|input| {
+            cx.subscribe(input, move |section, _, Blurred, cx| {
+                section.keep_typed(key, cx);
             })
         });
         Row {
@@ -174,7 +180,7 @@ impl AgentsSection {
             command: command_input,
             told: None,
             testing: false,
-            _submitted: submitted,
+            _subscriptions: [name_submitted, command_submitted, name_left, command_left],
         }
     }
 
@@ -188,6 +194,20 @@ impl AgentsSection {
             row.told = Some((told.into(), color));
         }
         cx.notify();
+    }
+
+    /// Keeps the row of `key` when its inputs hold what is not kept, and
+    /// both a name and a command, as when the keyboard leaves one of them:
+    /// a row half written, as when the human goes from its name to its
+    /// command, waits for the rest.
+    fn keep_typed(&mut self, key: u64, cx: &mut Context<Self>) {
+        let Some(row) = self.rows.iter().find(|row| row.key == key) else {
+            return;
+        };
+        let (name, command) = row.texts(cx);
+        if row.changed(cx) && !name.is_empty() && !command.is_empty() {
+            self.save(key, cx);
+        }
     }
 
     /// Keeps the row of `key` in `agents.json`, as its inputs say.
@@ -588,7 +608,10 @@ impl Render for AgentsSection {
             .iter()
             .map(|row| self.render_row(row, &mut words, cx))
             .collect();
-        let hint = words.note("Enter keeps a row; Test tries it out.", FAINT);
+        let hint = words.note(
+            "A row is kept on Enter or as you leave it; Test tries it out.",
+            FAINT,
+        );
         let adding = self.adding;
         div()
             .flex()

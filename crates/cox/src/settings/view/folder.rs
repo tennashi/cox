@@ -1,6 +1,6 @@
 //! A folder `settings.json` names, on the settings screen: the human's
-//! workflow or their wiki, in an input where Enter keeps the path typed,
-//! whole or from `~`, kept from `~` when it is in the home directory, as
+//! workflow or their wiki, in an input that keeps the path typed, whole
+//! or from `~`, on Enter or as the keyboard leaves it, kept from `~` when it is in the home directory, as
 //! the human would write it, or, emptied, Cox's own folder in its place;
 //! and "Choose…" asks for a folder and keeps it.
 
@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::words::Words;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
-use crate::ui::input::{LineInput, Submitted};
+use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND};
 
@@ -34,7 +34,7 @@ pub struct FolderField {
     /// What the line under the input says, and in which color.
     told: Option<(String, u32)>,
     words: Words,
-    _submitted: Subscription,
+    _subscriptions: [Subscription; 2],
 }
 
 impl FolderField {
@@ -56,7 +56,10 @@ impl FolderField {
             }
             input
         });
-        let submitted = cx.subscribe(&input, |field, _, Submitted, cx| field.submit(cx));
+        let subscriptions = [
+            cx.subscribe(&input, |field, _, Submitted, cx| field.submit(cx)),
+            cx.subscribe(&input, |field, _, Blurred, cx| field.keep_typed(cx)),
+        ];
         let mut field = Self {
             key,
             title,
@@ -66,7 +69,7 @@ impl FolderField {
             kept: None,
             told: None,
             words,
-            _submitted: submitted,
+            _subscriptions: subscriptions,
         };
         field.reread(cx);
         field
@@ -101,6 +104,19 @@ impl FolderField {
             self.input.update(cx, |input, cx| input.set_text(&text, cx));
             self.kept = kept;
             cx.notify();
+        }
+    }
+
+    /// Keeps what the input holds, when it is not what is kept, as when
+    /// the keyboard leaves it, or the screen closes.
+    pub fn keep_typed(&mut self, cx: &mut Context<Self>) {
+        let kept = self
+            .kept
+            .as_ref()
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if self.text(cx).trim() != kept {
+            self.submit(cx);
         }
     }
 
@@ -174,7 +190,9 @@ impl Render for FolderField {
         let key = self.key;
         let (told, color) = self.told.clone().unwrap_or_else(|| {
             (
-                "Enter keeps the path typed, from / or ~; emptied, Cox's own is used.".to_owned(),
+                "The path typed, from / or ~, is kept on Enter or as you leave it; emptied, \
+                 Cox's own is used."
+                    .to_owned(),
                 FAINT,
             )
         });
