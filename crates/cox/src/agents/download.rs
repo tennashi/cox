@@ -1,18 +1,22 @@
 //! The programs of the ACP Registry's agents that Cox downloads, as the
-//! registry lists them for each platform: Cox downloads the archive the
-//! first time a chat starts the agent, checks it by the SHA-256 the
-//! registry gives, and unpacks it in `agents/<id>/<version>`, where Cox
-//! keeps what lasts (see [`crate::storage`]), for every chat and run
-//! after to start the program from there.
+//! registry lists them for each platform, and of the language servers, as
+//! their `servers.json` does (see [`crate::stage::servers`]): Cox
+//! downloads the archive the first time it starts the program, checks it
+//! by the SHA-256 it is given, and unpacks it in `<id>/<version>`, in
+//! `cache/agents` or `cache/servers` where Cox keeps what lasts (see
+//! [`crate::storage`]), for every chat and run after to start the program
+//! from there.
 //!
 //! An archive is a `.tar.gz` (or `.tgz`), a `.tar.bz2` (or `.tbz2`), a
-//! `.zip`, or else the program itself.
+//! `.zip`, the program gzipped (`.gz`), or else the program itself.
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
+
+use crate::storage::Kept;
 
 /// Where the program of an agent of the registry is downloaded from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,18 +44,24 @@ pub fn platform() -> String {
     format!("{os}-{}", std::env::consts::ARCH)
 }
 
-/// The folder that holds the program of the agent kept as `id`, at
-/// `download`'s version, downloading and unpacking it first if it is not
-/// there yet, after `told` is told so.
+/// The folder that holds the program kept as `id` in `kept`, as an agent
+/// of the registry in [`Kept::Downloads`], at `download`'s version,
+/// downloading and unpacking it first if it is not there yet, after
+/// `told` is told so.
 ///
 /// # Errors
 ///
 /// When the archive cannot be downloaded, its SHA-256 is not the one
-/// the registry gives, or it cannot be unpacked.
-pub fn installed(id: &str, download: &Download, told: &dyn Fn(String)) -> anyhow::Result<PathBuf> {
-    let agents = crate::storage::path(crate::storage::Kept::Downloads)
-        .ok_or_else(|| anyhow::anyhow!("Cox has nowhere to keep the agents it downloads"))?;
-    let folder = agents.join(name(id)).join(name(&download.version));
+/// `download` gives, or it cannot be unpacked.
+pub fn installed(
+    kept: Kept,
+    id: &str,
+    download: &Download,
+    told: &dyn Fn(String),
+) -> anyhow::Result<PathBuf> {
+    let downloads = crate::storage::path(kept)
+        .ok_or_else(|| anyhow::anyhow!("Cox has nowhere to keep what it downloads"))?;
+    let folder = downloads.join(name(id)).join(name(&download.version));
     if folder.join(UNPACKED).exists() {
         return Ok(folder);
     }
@@ -125,7 +135,7 @@ fn check(path: &Path, sha256: &str) -> anyhow::Result<()> {
     let found = hex(&hasher.finalize());
     anyhow::ensure!(
         found.eq_ignore_ascii_case(sha256.trim()),
-        "the archive's SHA-256 is {found}, not {sha256} as the registry says"
+        "the archive's SHA-256 is {found}, not {sha256} as it should be"
     );
     Ok(())
 }
@@ -145,6 +155,8 @@ enum Packing {
     TarGz,
     TarBz2,
     Zip,
+    /// The program, gzipped.
+    Gz,
     /// Not at all: it is the program itself.
     Program,
 }
@@ -162,6 +174,7 @@ fn packing(name: &str) -> Packing {
         (Some("tgz"), _) | (Some("gz"), Some("tar")) => Packing::TarGz,
         (Some("tbz2"), _) | (Some("bz2"), Some("tar")) => Packing::TarBz2,
         (Some("zip"), _) => Packing::Zip,
+        (Some("gz"), _) => Packing::Gz,
         _ => Packing::Program,
     }
 }
@@ -192,6 +205,15 @@ fn unpack_in(path: &Path, name: &str, folder: &Path) -> anyhow::Result<()> {
         Packing::TarGz => tar::Archive::new(flate2::read::GzDecoder::new(file)).unpack(folder)?,
         Packing::TarBz2 => tar::Archive::new(bzip2::read::BzDecoder::new(file)).unpack(folder)?,
         Packing::Zip => zip::ZipArchive::new(file)?.extract(folder)?,
+        Packing::Gz => {
+            let stem = Path::new(name).file_stem().unwrap_or_default();
+            let program = folder.join(self::name(&stem.to_string_lossy()));
+            io::copy(
+                &mut flate2::read::GzDecoder::new(file),
+                &mut File::create(&program)?,
+            )?;
+            executable(&program)?;
+        }
         Packing::Program => {
             let program = folder.join(self::name(name));
             fs::copy(path, &program)?;
@@ -292,6 +314,34 @@ mod tests {
     }
 
     #[test]
+    fn a_gzipped_program_is_unzipped_and_made_to_run() {
+        let scratch = scratch("gz");
+        let downloaded = scratch.join("downloaded");
+        let mut encoder = flate2::write::GzEncoder::new(
+            File::create(&downloaded).unwrap(),
+            flate2::Compression::fast(),
+        );
+        encoder.write_all(b"#!/bin/sh\n").unwrap();
+        encoder.finish().unwrap();
+        let folder = scratch.join("rust-analyzer");
+        unpack(
+            &downloaded,
+            "rust-analyzer-x86_64-unknown-linux-gnu.gz",
+            &folder,
+        )
+        .unwrap();
+        let program = folder.join("rust-analyzer-x86_64-unknown-linux-gnu");
+        assert_eq!(fs::read_to_string(&program).unwrap(), "#!/bin/sh\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(&program).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111);
+        }
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
     fn names_a_folder_with_nothing_that_leads_out_of_it() {
         assert_eq!(name("registry:amp-acp"), "registry_amp-acp");
         assert_eq!(name("../x"), ".._x");
@@ -313,6 +363,9 @@ mod tests {
             Packing::Zip
         );
         assert_eq!(packing("sigit-linux-amd64"), Packing::Program);
-        assert_eq!(packing("agent.gz"), Packing::Program);
+        assert_eq!(
+            packing("rust-analyzer-aarch64-apple-darwin.gz"),
+            Packing::Gz
+        );
     }
 }

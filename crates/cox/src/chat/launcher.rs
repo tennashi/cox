@@ -41,6 +41,7 @@ use crate::chat::judge::Starts;
 use crate::chat::view::{OpenLink, StageView};
 use crate::daemon::{Spawned, Spawns};
 use crate::stage::Stage;
+use crate::storage::Kept;
 use crate::ui::Panel;
 use cox_browser::relay::Relay;
 
@@ -184,7 +185,7 @@ pub(crate) fn spawn(known: Known, cwd: PathBuf, tools: Vec<McpServer>, start: St
         // is downloaded the first time it starts.
         let command = match download {
             Some(download) => {
-                let installed = download::installed(&id, &download, &|note| {
+                let installed = download::installed(Kept::Downloads, &id, &download, &|note| {
                     told(format!("{name}: {note}"));
                 })?;
                 crate::agents::located(&command, &installed)

@@ -28,7 +28,34 @@
 //! Cox's, as `rust-analyzer` above, which checks the code as it is saved;
 //! named as `null`, as `gopls` above, it is not started at all.
 //!
-//! Cox's `rust-analyzer` builds what it needs of the project, such as its
+//! A server may also say where its program is downloaded from, at which
+//! version, for each platform, as Cox names them (`darwin-aarch64`,
+//! `linux-x86_64`, ...): the archive, its SHA-256, and where the program
+//! is in it:
+//!
+//! ```json
+//! "rust-analyzer": {
+//!   "download": {
+//!     "version": "2026-11-09",
+//!     "platforms": {
+//!       "darwin-aarch64": {
+//!         "archive": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-aarch64-apple-darwin.gz",
+//!         "sha256": "e43a6500...",
+//!         "program": "rust-analyzer-aarch64-apple-darwin"
+//!       }
+//!     }
+//!   }
+//! }
+//! ```
+//!
+//! The program then runs from where it was downloaded, in place of the
+//! command's own, found on `PATH`, which still runs on a platform the
+//! download does not name. A project that gives a server of Cox's a
+//! `command` and no `download` runs its command, not what Cox downloads.
+//!
+//! Cox downloads its `rust-analyzer` from its releases on GitHub, which
+//! run on their own, unlike that of `rustup`, which needs the rest of the
+//! toolchain. It builds what it needs of the project, such as its
 //! procedural macros, in a directory of its own, `target/rust-analyzer`,
 //! so that it does not hold up the builds of the project while it does,
 //! and does not check the project as it is saved, which only finds
@@ -58,6 +85,32 @@ pub struct Server {
     /// Its settings, by section, as it asks for them
     /// (`workspace/configuration`).
     pub settings: Value,
+    /// Where its program is downloaded from, if it is.
+    pub download: Option<Download>,
+}
+
+/// Where a server's program is downloaded from, at one version.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Download {
+    /// The version, which the folder it is kept in is named after, so that
+    /// each version is kept apart from the others.
+    pub version: String,
+    /// The archive of each platform, as Cox names them, such as
+    /// `darwin-aarch64`.
+    pub platforms: BTreeMap<String, Archive>,
+}
+
+/// The archive of a server's program, for one platform.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Archive {
+    /// Its URL.
+    pub archive: String,
+    /// Its SHA-256, in hexadecimal.
+    pub sha256: String,
+    /// The program, by its path in the archive.
+    pub program: String,
 }
 
 impl Server {
@@ -65,6 +118,16 @@ impl Server {
     #[must_use]
     pub fn knows(&self, language: &str) -> bool {
         self.languages.iter().any(|known| known == language)
+    }
+
+    /// Where its program is downloaded from on `platform`, as Cox names
+    /// them, such as `darwin-aarch64`, if it is: the version, and the
+    /// archive.
+    #[must_use]
+    pub fn download_for(&self, platform: &str) -> Option<(&str, &Archive)> {
+        let download = self.download.as_ref()?;
+        let archive = download.platforms.get(platform)?;
+        Some((&download.version, archive))
     }
 
     /// The settings of `section`, as `rust-analyzer` or `python.analysis`,
@@ -93,6 +156,7 @@ struct Entry {
     markers: Option<Vec<String>>,
     initialization_options: Option<Value>,
     settings: Option<Value>,
+    download: Option<Download>,
 }
 
 /// A file of servers: each by its name, or `null` for none.
@@ -159,6 +223,18 @@ impl Servers {
                         .filter(|given| !given.is_empty())
                         .ok_or_else(|| format!("the server {name} has no {what}"))
                 };
+            if let Some(download) = &entry.download {
+                if download.version.is_empty() {
+                    return Err(format!("the server {name} is downloaded at no version"));
+                }
+                if download
+                    .platforms
+                    .values()
+                    .any(|archive| archive.program.is_empty())
+                {
+                    return Err(format!("the server {name} is downloaded with no program"));
+                }
+            }
             servers.push(Server {
                 name: name.clone(),
                 command: given("command", &entry.command, |base| &base.command)?,
@@ -178,6 +254,12 @@ impl Servers {
                     .clone()
                     .or_else(|| base.map(|base| base.settings.clone()))
                     .unwrap_or(Value::Null),
+                // A command of the project's own is run as it is.
+                download: match (&entry.download, &entry.command) {
+                    (Some(download), _) => Some(download.clone()),
+                    (None, Some(_)) => None,
+                    (None, None) => base.and_then(|base| base.download.clone()),
+                },
             });
         }
         servers.extend(
@@ -241,6 +323,71 @@ mod tests {
         );
         assert_eq!(servers.of("go"), None);
         assert!(servers.of("typescript").is_some());
+    }
+
+    #[test]
+    fn downloads_coxs_rust_analyzer_on_each_platform_it_names() {
+        let servers = Servers::built_in();
+        let rust = servers.of("rust").unwrap();
+        let (version, archive) = rust.download_for("darwin-aarch64").unwrap();
+        assert!(archive.archive.contains(version));
+        assert_eq!(archive.program, "rust-analyzer-aarch64-apple-darwin");
+        assert_eq!(archive.sha256.len(), 64);
+        assert!(rust.download_for("windows-x86_64").is_none());
+        assert!(servers.of("go").unwrap().download.is_none());
+    }
+
+    #[test]
+    fn a_project_downloads_a_version_of_its_own_or_runs_its_command() {
+        let over = |text: &str| Servers::over(&Servers::built_in().servers, text).unwrap();
+        let downloads = over(
+            r#"{ "servers": { "rust-analyzer": { "download": {
+                "version": "1.90.0",
+                "platforms": { "linux-x86_64": {
+                    "archive": "https://example.com/ra-1.90.0.tar.gz",
+                    "sha256": "00",
+                    "program": "ra/bin/rust-analyzer"
+                } }
+            } } } }"#,
+        );
+        let rust = downloads.of("rust").unwrap();
+        let (version, archive) = rust.download_for("linux-x86_64").unwrap();
+        assert_eq!(version, "1.90.0");
+        assert_eq!(archive.program, "ra/bin/rust-analyzer");
+        // In place of all of Cox's.
+        assert!(rust.download_for("darwin-aarch64").is_none());
+        assert_eq!(rust.command, ["rust-analyzer"]);
+        // A command of its own runs as it is.
+        let runs = over(r#"{ "servers": { "rust-analyzer": { "command": ["/opt/ra"] } } }"#);
+        assert_eq!(runs.of("rust").unwrap().download, None);
+        // What leaves the command be leaves Cox's download be.
+        let keeps = over(r#"{ "servers": { "rust-analyzer": { "settings": {} } } }"#);
+        assert!(keeps.of("rust").unwrap().download.is_some());
+    }
+
+    #[test]
+    fn a_download_needs_a_version_and_a_program() {
+        let fails = |download: &str| {
+            Servers::over(
+                &[],
+                &format!(
+                    r#"{{ "servers": {{ "zls": {{ "command": ["zls"], "languages": ["zig"],
+                        "download": {download} }} }} }}"#
+                ),
+            )
+            .unwrap_err()
+        };
+        assert_eq!(
+            fails(r#"{ "version": "", "platforms": {} }"#),
+            "the server zls is downloaded at no version"
+        );
+        assert_eq!(
+            fails(
+                r#"{ "version": "0.15", "platforms": { "linux-x86_64":
+                    { "archive": "https://example.com/zls.tar.gz", "sha256": "00", "program": "" } } }"#
+            ),
+            "the server zls is downloaded with no program"
+        );
     }
 
     #[test]

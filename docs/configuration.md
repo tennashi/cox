@@ -275,9 +275,10 @@ more, so move them up out of it.
 
 ### Language servers
 
-Cox starts a language server for a code tab's language, if one is on
-`PATH`: `rust-analyzer`, `pyright-langserver`,
-`typescript-language-server`, `gopls` or `clangd`. A project names
+Cox starts a language server for a code tab's language:
+`rust-analyzer`, which Cox downloads the first time it needs it, or
+`pyright-langserver`, `typescript-language-server`, `gopls` or `clangd`,
+if it is on `PATH`. A project names
 servers of its own in `servers.json`, in the same form as Cox's
 [`servers.json`](../crates/cox-editor/src/lsp/servers.json):
 
@@ -306,11 +307,22 @@ Each server, by name, has:
 | `markers` | Files a folder of such a project has. |
 | `initializationOptions` | Sent to the server as it starts. |
 | `settings` | Sent by section, as the server asks for them. |
+| `download` | Where the server's program is downloaded from, instead of found on `PATH`: its `version`, and for each platform (`darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`) the `archive`'s URL, its `sha256`, and the `program`'s path in it. |
 
 A project's server for a language goes before Cox's. For a server Cox
 already knows, each key the project gives replaces Cox's, as for
 `rust-analyzer` above; `null` turns the server off, as for `gopls`
 above.
+
+Cox checks a download by its SHA-256 and keeps each version apart, in
+`cache/servers/<name>/<version>` in its data folder, so projects that
+download different versions of a server each run their own. A project
+that gives one of Cox's servers a `command` and no `download` runs that
+command instead, as `["rust-analyzer"]` to run the one on `PATH`. Cox's
+own `rust-analyzer` is from its
+[releases](https://github.com/rust-lang/rust-analyzer/releases); a
+project can download a release of its own, written as in Cox's
+[`servers.json`](../crates/cox-editor/src/lsp/servers.json).
 
 ### Plugins
 
