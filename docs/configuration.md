@@ -254,7 +254,7 @@ menu offers them.
 | `COX.md` | What the project's chats' agents are told first, after the workflow's `COX.md`. |
 | `.cox/goal.md` | What a goal's judge is told it is, instead of Cox's default. Cox still adds how to end the reply, and the goal. |
 | `.cox/triggers/*.md` | The project's [triggers](#triggers). |
-| `.cox/wiki/` | The project's own wiki, for what holds only of it. Only its chats see it. |
+| `wiki/` | The project's own wiki, for what holds only of it. Only its chats see it. |
 | `raw/` | The project's own sources, what its chats read (`raw_keep`), as they read it. Only its chats see them. |
 | `.cox/maps/<name>.json` | The project's maps. Agents write them; `show_map` tells an agent the format. |
 | `.cox/plugins/<name>/` | A [plugin](#plugins): a view of the project's own on the stage. |

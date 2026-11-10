@@ -337,7 +337,7 @@ mod tests {
     fn the_index_of_the_projects_wiki_goes_after_the_instructions() {
         let folder = scratch("wiki");
         let instructions = Instructions::read_with(&folder, None);
-        let root = folder.join(".cox/wiki");
+        let root = folder.join("wiki");
         let index = "# Index\n\n- [[shipping|Shipping]]: Only in Japan.\n";
         let with = instructions
             .clone()

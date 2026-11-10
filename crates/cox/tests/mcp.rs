@@ -350,7 +350,7 @@ fn a_project_keeps_its_own_wiki(writer: &mut Agent, reader: &mut Agent, one: &Pa
     );
     let written = writer.hear();
     let written = written["result"]["content"][0]["text"].as_str().unwrap();
-    let customers = one.join(".cox/wiki/customers.md");
+    let customers = one.join("wiki/customers.md");
     assert!(
         written.starts_with(&format!(
             "{} is written, in this project's wiki, used ",

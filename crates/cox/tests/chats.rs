@@ -1265,7 +1265,7 @@ async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn a_chat_is_told_the_index_of_the_projects_own_wiki(cx: &mut TestAppContext) {
     let app = scratch("project-wiki");
-    let wiki = app.join(".cox/wiki");
+    let wiki = app.join("wiki");
     std::fs::create_dir_all(&wiki).unwrap();
     std::fs::write(wiki.join("shipping.md"), "# Shipping\n\nOnly in Japan.\n").unwrap();
     std::fs::write(
