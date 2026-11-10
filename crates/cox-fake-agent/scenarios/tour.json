@@ -54,6 +54,13 @@
       ]
     },
     {
+      "when": "What did the other chats settle",
+      "steps": [
+        { "call": { "tool": "read_chat", "arguments": { "chat": 1 } } },
+        { "say": "I read chat 1 of the project: it settled what the project is." }
+      ]
+    },
+    {
       "when": "/compact",
       "steps": [{ "say": "Summed up the conversation so far." }]
     },
