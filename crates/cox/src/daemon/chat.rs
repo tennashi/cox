@@ -1442,10 +1442,14 @@ impl Chat {
     pub fn flush(&mut self) -> Option<Patch> {
         let changed = self.conversation.take_changed();
         let settings_changed = self.conversation.take_settings_changed();
+        let commands_changed = self.conversation.take_commands_changed();
         let baseline_changed = self.conversation.take_baseline_changed();
         if let Some(record) = &self.record {
             if settings_changed && let Err(error) = record.settings(self.conversation.settings()) {
                 tracing::error!("the chat's settings are not kept: {error:#}");
+            }
+            if commands_changed && let Err(error) = record.commands(self.conversation.commands()) {
+                tracing::error!("the chat's commands are not kept: {error:#}");
             }
             if baseline_changed && let Err(error) = record.baseline(self.conversation.baseline()) {
                 tracing::error!("the chat's plan is not kept: {error:#}");
