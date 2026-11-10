@@ -291,6 +291,7 @@ impl Language {
                 "ts" | "mts" | "cts" => &TYPESCRIPT,
                 "tsx" => &TSX,
                 "py" | "pyi" => &PYTHON,
+                "go" => &GO,
                 _ => return None,
             },
         };
@@ -313,6 +314,7 @@ impl Language {
             "typescript" | "ts" => &TYPESCRIPT,
             "tsx" => &TSX,
             "python" | "py" => &PYTHON,
+            "go" | "golang" => &GO,
             _ => return None,
         };
         Some(language)
@@ -492,6 +494,16 @@ static PYTHON: LazyLock<Language> = LazyLock::new(|| {
     )
 });
 
+static GO: LazyLock<Language> = LazyLock::new(|| {
+    Language::new(
+        "go",
+        tree_sitter_go::LANGUAGE,
+        &[tree_sitter_go::HIGHLIGHTS_QUERY],
+        None,
+        &[tree_sitter_go::TAGS_QUERY],
+    )
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,6 +522,7 @@ mod tests {
             "typescript",
             "tsx",
             "python",
+            "go",
         ] {
             let language = Language::named(name).unwrap();
             assert_eq!(language.name(), name);
@@ -523,6 +536,7 @@ mod tests {
         assert_eq!(of("Cargo.lock"), Some("toml"));
         assert_eq!(of("README.md"), Some("markdown"));
         assert_eq!(of("ci.yml"), Some("yaml"));
+        assert_eq!(of("cmd/cox/main.go"), Some("go"));
         assert_eq!(of("LICENSE"), None);
         assert_eq!(of("notes.txt"), None);
     }
