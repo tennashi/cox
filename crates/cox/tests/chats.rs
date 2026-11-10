@@ -923,7 +923,13 @@ fn kept_chat(
     folder: &std::path::Path,
     session: Option<&str>,
 ) -> (KeptStore, cox_core::store::ChatId) {
-    let name = folder.file_name().unwrap().to_string_lossy();
+    // Named by the whole folder, under the scratch folder of its test, as
+    // tests running at once keep projects of the same name.
+    let name = folder
+        .strip_prefix(std::env::temp_dir())
+        .unwrap_or(folder)
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "-");
     let store = kept_store(&format!("kept-{name}"));
     // Its chats start again in it while it is there.
     std::fs::create_dir_all(folder).unwrap();
