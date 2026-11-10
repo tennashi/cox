@@ -285,6 +285,7 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     let (mut writer, _one) = chat_in(&one, "one", "Fix scroll");
     let (mut reader, _other) = chat_in(&other, "other", "Layout");
 
+    // A page says what it was made from.
     writer.call(
         2,
         "wiki_write",
@@ -292,6 +293,36 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
             "page": "gpui/scroll",
             "text": "# Scrolling in GPUI\n\nA flex child needs `min_h_0` to scroll.\n",
             "paths": ["src/view.rs"],
+        }),
+    );
+    let refused = writer.hear();
+    let refused = refused["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(refused.starts_with("no sources: "), "{refused}");
+    writer.call(
+        2,
+        "wiki_write",
+        &json!({
+            "page": "gpui/scroll",
+            "text": "# Scrolling in GPUI\n\nA flex child needs `min_h_0` to scroll.\n",
+            "paths": ["src/view.rs"],
+            "sources": ["gpui-news/nothing"],
+        }),
+    );
+    let refused = writer.hear();
+    let refused = refused["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        refused.starts_with("gpui-news/nothing is no source kept"),
+        "{refused}"
+    );
+    assert!(!home.join("wiki/gpui/scroll.md").exists());
+    writer.call(
+        2,
+        "wiki_write",
+        &json!({
+            "page": "gpui/scroll",
+            "text": "# Scrolling in GPUI\n\nA flex child needs `min_h_0` to scroll.\n",
+            "paths": ["src/view.rs"],
+            "sources": ["chat 7"],
         }),
     );
     let written = writer.hear();
@@ -316,7 +347,7 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     let read = read["result"]["content"][0]["text"].as_str().unwrap();
     assert!(read.starts_with("# Scrolling in GPUI\n"), "{read}");
     assert!(
-        read.ends_with(" in one, chat \"Fix scroll\" (#7): src/view.rs\n"),
+        read.ends_with(" in one, chat \"Fix scroll\" (#7), from chat 7: src/view.rs\n"),
         "{read}"
     );
     reader.call(5, "wiki_read", &json!({}));
@@ -346,6 +377,7 @@ fn a_project_keeps_its_own_wiki(writer: &mut Agent, reader: &mut Agent, one: &Pa
             "page": "customers",
             "text": "# Customers\n\nAcme scrolls a lot.\n",
             "keep_in_project": true,
+            "sources": ["chat 7"],
         }),
     );
     let written = writer.hear();
@@ -527,4 +559,19 @@ fn a_project_keeps_its_own_sources(
     let read = writer.hear();
     let read = read["result"]["content"][0]["text"].as_str().unwrap();
     assert!(read.contains("Acme wants a plain list"), "{read}");
+    // A page made from it names it; the reader, of another project, has
+    // no such source to make one from.
+    let page = json!({
+        "page": "acme",
+        "text": "# Acme\n\nWants a plain list.\n",
+        "keep_in_project": true,
+        "sources": [name],
+    });
+    reader.call(25, "wiki_write", &page);
+    assert_eq!(reader.hear()["result"]["isError"], true);
+    writer.call(26, "wiki_write", &page);
+    let written = writer.hear();
+    assert_eq!(written["result"]["isError"], false, "{written}");
+    let page = std::fs::read_to_string(one.join("wiki/acme.md")).unwrap();
+    assert!(page.contains(&format!(", from {name}\n")), "{page}");
 }
