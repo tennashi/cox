@@ -21,6 +21,12 @@
 //! is discarded, its folder with it, its agent first
 //! summing it up in the conversation, and what it changed kept apart,
 //! but for the files too big to keep. The chat goes on, in the project.
+//!
+//! However it ends, Cox keeps what the sketch did as a source of its
+//! project's (see [`crate::raw`]), under [`SOURCES`]: how it ended, as
+//! where its files went, and all that was said in it. What is made of
+//! the sketch, as a page of the wiki or the work it goes on to, names
+//! that source, rather than the sketch itself becoming what is made.
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
@@ -151,6 +157,10 @@ fn worktree(project: &Path, sketches: &Path) -> Result<PathBuf, String> {
 /// What Cox calls the folder, in the folder of sketches, that keeps what
 /// the discarded sketches from nothing changed.
 pub const DISCARDED: &str = "discarded";
+
+/// The topic of the sources that keep what each sketch did once it
+/// ended.
+pub const SOURCES: &str = "sketches";
 
 /// Where the sketches discarded from the project are kept in its
 /// repository, each under the name of its folder: refs, which Git keeps

@@ -1537,6 +1537,12 @@ async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
             if note.starts_with("The chat moved into the project shop"))),
         "{entries:?}"
     );
+    // What the sketch did is a source of the project's.
+    let source = sketch_source(&shop.join("raw"));
+    assert!(
+        source.contains("## How it ended\n\nThe sketch moved into the project shop"),
+        "{source}"
+    );
 
     // The next line starts its agent again in the project's folder, where
     // it has a project already.
@@ -3388,6 +3394,18 @@ async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
         panic!("{last:?}");
     };
     assert_made_again(note, "made.txt", "made in the sketch\n");
+    // What it did is a source, of the human's for a sketch of Cox's own:
+    // how it ended, and all that was said in it, as its summing up.
+    let source = sketch_source(&home.join("raw"));
+    assert!(source.contains("## How it ended\n\n"), "{source}");
+    assert!(
+        source.contains("[cox]\nThe human discards this sketch"),
+        "{source}"
+    );
+    assert!(
+        note.contains("What it did is kept as the source sketches/"),
+        "{note}"
+    );
 
     // Where the human goes on, the chat it was opened beside, they are
     // asked whether to keep what the sketch found in the wiki, which its
@@ -3425,11 +3443,27 @@ async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
     // name once this one is gone, so what is gone is what this sketch made.
     assert!(!made.exists());
     let project = opened_as_project(cx, &workspace, &home);
+    // What it did is a source of the project it was opened as.
+    let source = sketch_source(&project.join("raw"));
+    assert!(
+        source.contains("The sketch was opened as the project untitled-1"),
+        "{source}"
+    );
 
     let _ = std::fs::remove_dir_all(&project);
     let _ = std::fs::remove_dir_all(&folder);
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
+}
+
+/// The one source kept of a sketch in the sources at `raw`.
+fn sketch_source(raw: &Path) -> String {
+    let sources: Vec<PathBuf> = std::fs::read_dir(raw.join("sketches"))
+        .unwrap_or_else(|error| panic!("{}: {error}", raw.display()))
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    std::fs::read_to_string(&sources[0]).unwrap()
 }
 
 /// The project the sketch at 3 was opened as, the first with nothing

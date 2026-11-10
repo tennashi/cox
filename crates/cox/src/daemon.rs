@@ -1940,13 +1940,13 @@ impl Daemon {
                     directory.display()
                 );
             }
-            self.end_sketch(
+            let (note, _) = self.with_sketch_kept(
                 sketch,
-                &from,
-                Ok(format!(
-                    "The sketch moved into the project {name}, as its directory {name}."
-                )),
+                &folder.join(crate::raw::PROJECT_RAW),
+                Some(name),
+                format!("The sketch moved into the project {name}, as its directory {name}."),
             );
+            self.end_sketch(sketch, &from, Ok(note));
         }
         let index = self.project(folder.to_owned());
         let project = self.projects[index].id;
@@ -3119,6 +3119,7 @@ impl Daemon {
             return;
         };
         let title = slot.name.clone();
+        let project = slot.project;
         let sketch_kept = slot.kept;
         let sketch_keeps = keeps_in_wiki(slot.setup.as_ref());
         let parent = slot.parent;
@@ -3137,8 +3138,16 @@ impl Daemon {
             .and_then(|discarded| discarded.kept.as_ref())
             .map(ToString::to_string)
             .unwrap_or_default();
-        let note = discarded.as_ref().map(sketch::Discarded::note).ok();
-        let ended = self.end_sketch(key, &folder, discarded.map(|discarded| discarded.note()));
+        let (sources, of) = self.sources_of(project);
+        let (ended, source) = match discarded.as_ref().map(sketch::Discarded::note) {
+            Ok(note) => {
+                let (note, source) = self.with_sketch_kept(key, &sources, of.as_deref(), note);
+                (Ok(note), source)
+            }
+            Err(error) => (Err(error.clone()), None),
+        };
+        let note = ended.as_ref().ok().cloned();
+        let ended = self.end_sketch(key, &folder, ended);
         if !ended {
             return;
         }
@@ -3181,7 +3190,13 @@ impl Daemon {
             chat.set_goal(Goal::parse(goal));
         }
         if let Some(text) = &ending.then {
-            match workflow::say(text, &[("kept", &kept), ("summary", &summary)]) {
+            let source = source.unwrap_or_default();
+            let values = [
+                ("kept", kept.as_str()),
+                ("summary", summary.as_str()),
+                ("source", source.as_str()),
+            ];
+            match workflow::say(text, &values) {
                 Some(line) => self.go_on(goes_on, &line),
                 None => {
                     if let Some(chat) = self.chat(goes_on) {
@@ -3279,6 +3294,105 @@ impl Daemon {
         true
     }
 
+    /// The sources of the project at `index`, in its folder, and its name;
+    /// or, for Cox's own, of no project, the human's: where the settings
+    /// say, or else in the home this Cox works in.
+    fn sources_of(&self, index: usize) -> (PathBuf, Option<String>) {
+        let project = &self.projects[index];
+        if project.id.is_none() {
+            let saved = crate::settings::Saved::read().raw;
+            (
+                saved.unwrap_or_else(|| project.folder.join(crate::raw::RAW)),
+                None,
+            )
+        } else {
+            (
+                project.folder.join(crate::raw::PROJECT_RAW),
+                Some(project.name.clone()),
+            )
+        }
+    }
+
+    /// `ended`, how the sketch `key` ends, with where what it did is kept
+    /// (see [`Self::keep_sketch`]), in the sources at `root` of the
+    /// project `project`, if it is one, or why it is not; and the source's
+    /// name, once it is kept.
+    fn with_sketch_kept(
+        &self,
+        key: u64,
+        root: &Path,
+        project: Option<&str>,
+        ended: String,
+    ) -> (String, Option<String>) {
+        match self.keep_sketch(key, root, project, &ended) {
+            Ok(name) => (
+                format!(
+                    "{ended} What it did is kept as the source {name}, for what is made of it \
+                     to name."
+                ),
+                Some(name),
+            ),
+            Err(error) => {
+                tracing::error!("what the sketch did is not kept: {error}");
+                (
+                    format!("{ended} What it did is not kept as a source: {error}"),
+                    None,
+                )
+            }
+        }
+    }
+
+    /// Keeps what the sketch `key` did as a source, in the sources at
+    /// `root`, of the project `project`, if it is one, under
+    /// [`sketch::SOURCES`]: how it ended, `ended`, and all that was said in
+    /// it, as Cox kept it, whatever the human's workflow says of how it
+    /// ends; answers the source's name.
+    fn keep_sketch(
+        &self,
+        key: u64,
+        root: &Path,
+        project: Option<&str>,
+        ended: &str,
+    ) -> Result<String, String> {
+        let slot = self.slot(key).ok_or("the sketch has closed")?;
+        let entries = match &slot.chat {
+            Some(chat) => chat.conversation().entries().to_vec(),
+            None => slot
+                .kept
+                .map(|kept| self.store.entries(kept))
+                .transpose()
+                .map_err(|error| format!("its conversation cannot be read: {error:#}"))?
+                .unwrap_or_default(),
+        };
+        let said =
+            agent::said_in_sketch(&entries).unwrap_or_else(|| "Nothing was said in it.".to_owned());
+        let number = slot.kept.map(|kept| kept.number().to_string());
+        let from = number.as_ref().map_or_else(
+            || format!("sketch \"{}\"", slot.name),
+            |number| format!("chat {number}"),
+        );
+        let text = format!(
+            "## How it ended\n\n{ended}\n\n## What was said in it\n\nAs Cox kept it, where \
+             [you] stands for the sketch's agent.\n\n{said}\n"
+        );
+        let day = crate::wiki::today();
+        crate::raw::keep(
+            root,
+            sketch::SOURCES,
+            crate::raw::Source {
+                from: &from,
+                title: &slot.name,
+                text: &text,
+            },
+            crate::raw::Kept {
+                day: &day,
+                chat: &slot.name,
+                chat_id: number.as_deref(),
+                project,
+            },
+        )
+    }
+
     /// Moves `folder`, of the sketch `key`, into a project with nothing set
     /// yet (see [`Self::untitled`]), as the directory of the project's
     /// name, and opens a chat in the project; the sketch ends, its chats
@@ -3313,10 +3427,17 @@ impl Daemon {
             }
         }
         let ended = moved.map(|()| {
-            format!(
+            let note = format!(
                 "The sketch was opened as the project {name}, whose directory {name} holds what \
                  it made."
+            );
+            self.with_sketch_kept(
+                key,
+                &project.join(crate::raw::PROJECT_RAW),
+                Some(&name),
+                note,
             )
+            .0
         });
         if self.end_sketch(key, folder, ended) {
             self.open(Some(project));
