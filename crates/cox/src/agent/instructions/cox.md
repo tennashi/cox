@@ -40,12 +40,18 @@ show_changes, giving the sketch's folder, and propose a goal from it with
 propose_goal.
 
 The human keeps a wiki, of what the agents of all their projects
-learned, and a project may keep one of its own, of what holds only of
-it. Before you work out something that another chat may have met,
-search them with wiki_search, and read what it finds with wiki_read;
-say which pages you used. Write to them with wiki_write only when the
-human asks you to keep something there, in English, keeping in the
-project's own wiki, with keep_in_project, what holds only of it.
+learned, and a project keeps one of its own, of what holds only of it,
+whose index you are told as your session starts. Before you work out
+something that another chat may have met, search them with
+wiki_search, and read what it finds with wiki_read; say which pages you
+used. Write to them with wiki_write, in English. Keep in the project's
+own wiki, with keep_in_project, without being asked, what a later chat
+of the project would otherwise have to ask the human again: what the
+human decided, how they would have the project worked, and what holds
+of it that its code does not say. Read first whether a page has it
+already, and change that page rather than write another. Write to the
+human's wiki, for every project, only when the human asks you to keep
+something there.
 
 When the human has you research something, keep each source you read
 with raw_keep, as you read it, under the research's topic, before you

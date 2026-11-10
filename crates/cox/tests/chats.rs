@@ -1255,6 +1255,34 @@ async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn a_chat_is_told_the_index_of_the_projects_own_wiki(cx: &mut TestAppContext) {
+    let app = scratch("project-wiki");
+    let wiki = app.join(".cox/wiki");
+    std::fs::create_dir_all(&wiki).unwrap();
+    std::fs::write(wiki.join("shipping.md"), "# Shipping\n\nOnly in Japan.\n").unwrap();
+    std::fs::write(
+        wiki.join("index.md"),
+        "# Index\n\n- [[shipping|Shipping]]: Only in Japan.\n",
+    )
+    .unwrap();
+    let (agents, workspace, cx) = open_window(cx, scratch("project-wiki-home"));
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(app.clone()), window, cx);
+    });
+    say(cx, &workspace, "hello").await;
+    let told = agents.borrow()[0].prompt_blocks();
+    let index = told[0]
+        .iter()
+        .find(|block| block.starts_with("The index of this project's own wiki"))
+        .unwrap_or_else(|| panic!("no index is told: {told:?}"));
+    assert!(
+        index.ends_with("- [[shipping|Shipping]]: Only in Japan."),
+        "{index}"
+    );
+    let _ = std::fs::remove_dir_all(&app);
+}
+
+#[gpui::test]
 async fn a_chat_is_told_the_projects_other_chats_and_reads_them(cx: &mut TestAppContext) {
     let app = scratch("other-chats");
     let (store, kept) = kept_chat(&app, None);

@@ -1584,15 +1584,19 @@ impl Daemon {
 
     /// What the agent of a chat of the project at `index` that works in
     /// `cwd` is told first: what the project is, if it says, the
-    /// instructions, then the project's chats but the chat `except`.
+    /// instructions, the index of the project's own wiki, if it has pages,
+    /// then the project's chats but the chat `except`.
     fn instructions(&self, index: usize, cwd: &Path, except: Option<u64>) -> Instructions {
         let project = &self.projects[index];
         let instructions = Instructions::read(cwd);
         if index == 0 {
             return instructions;
         }
+        let wiki = project.folder.join(crate::wiki::PROJECT_WIKI);
+        let pages = crate::wiki::read(&wiki, crate::wiki::INDEX).ok();
         instructions
             .about(&project.name, project.about.as_deref())
+            .wiki(&wiki, pages.as_deref())
             .chats(&self.chats_told(index, except))
     }
 
