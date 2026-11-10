@@ -243,14 +243,17 @@ menu offers them.
 | `from` | `project` or `empty`, to offer the ending only for sketches that start from the project or from nothing. |
 | `sum_up` | A file of the workflow the sketch's agent is asked first, to sum the sketch up, with `{left_out}`. |
 | `keep` | `"ref"` keeps what the sketch changed, as one commit: under `refs/cox/discarded/` in the project's repository, or as a Git bundle in `sketches/discarded` in the data folder for a sketch from nothing. |
-| `folder` | `"open"` opens a sketch from nothing as a new project, instead of removing its folder. |
+| `folder` | `"open"` makes a new project for what a sketch from nothing tried. What the sketch made is kept apart, as a discarded sketch's is, and the project starts without it. |
 | `then` | A file of the workflow that the chat the sketch was opened beside is told next. `{kept}` stands for the ref or bundle, `{summary}` for the sketch's summing up, and `{source}` for the source Cox keeps of the sketch. |
 | `goal` | The goal that chat gets: `$ ` and a command, or words. |
 
 However a sketch ends, and whatever `sketch.json` says, Cox keeps what it
 did as a source of the project's, under the topic `sketches` in its
-`raw/`: how it ended and all that was said in it. A sketch of Cox's own
-chats keeps it in the human's `raw`.
+`raw/`: how it ended, all that was said in it, and the pictures and
+recordings it showed, copied into `sketches/media/`. A sketch of Cox's
+own chats keeps it in the human's `raw`. A sketch's code never becomes
+the project's: a project made for a sketch starts without it, to make
+what the sketch tried again.
 
 ## A project's own files
 

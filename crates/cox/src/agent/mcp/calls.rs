@@ -2113,7 +2113,17 @@ async fn raw_read(
             let mut missing = None;
             for shelf in &shelves {
                 match raw::read(&shelf.root, source) {
-                    Ok(text) => return Ok(told_source(source, &text, from)),
+                    Ok(text) => {
+                        let told = told_source(source, &text, from);
+                        let Ok(file) = wiki::file(&shelf.root, source) else {
+                            return Ok(told);
+                        };
+                        return Ok(format!(
+                            "{told}\n\nIts file is {}: what it links to, as the pictures a \
+                             sketch showed, is beside it.",
+                            file.display()
+                        ));
+                    }
                     Err(error) => missing = Some(error),
                 }
             }

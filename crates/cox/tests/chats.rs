@@ -1505,13 +1505,9 @@ async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
     assert!(!projects.join("market").exists());
     click(cx, Box::leak(format!("make-project-{at}").into_boxed_str()));
     settled(cx, &workspace);
-    assert_eq!(
-        std::fs::read_to_string(shop.join("directories/shop/index.html")).unwrap(),
-        "<p>shop</p>\n"
-    );
-    // What the sketch made is gone from its folder, and what it did is a
-    // source of the project's.
-    assert_moved(&made.join("index.html"), &shop);
+    // What the sketch made is kept apart, not the project's, and what it
+    // did is a source of the project's.
+    assert_moved(&made.join("index.html"), "<p>shop</p>\n", &shop);
     let kept = store.projects().unwrap();
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].folder, shop);
@@ -3445,12 +3441,14 @@ async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
     // name once this one is gone, so what is gone is what this sketch made.
     assert!(!made.exists());
     let project = opened_as_project(cx, &workspace, &home);
-    // What it did is a source of the project it was opened as.
+    // What it did is a source of the project it was opened as, which
+    // says where what it made is kept apart.
     let source = sketch_source(&project.join("raw"));
     assert!(
         source.contains("The sketch was opened as the project untitled-1"),
         "{source}"
     );
+    assert_made_again(&source, "made.txt", "made in the sketch\n");
 
     let _ = std::fs::remove_dir_all(&project);
     let _ = std::fs::remove_dir_all(&folder);
@@ -3458,18 +3456,22 @@ async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
-/// Checks that `made`, a file a sketch made, is gone from its folder,
-/// and that the one source the `project` keeps of a sketch says it moved
-/// into the project. Another test may make a sketch from nothing in a
-/// folder of the same name once the sketch's is gone, so what is gone is
-/// what it made.
-fn assert_moved(made: &Path, project: &Path) {
+/// Checks that `made`, a file a sketch made that said `text`, is gone
+/// from its folder, and not the `project`'s, which has no directories,
+/// and that the one source the project keeps of a sketch says it moved
+/// into the project, and where what it made is kept, which makes it
+/// again. Another test may make a sketch from nothing in a folder of the
+/// same name once the sketch's is gone, so what is gone is what it made.
+fn assert_moved(made: &Path, text: &str, project: &Path) {
     assert!(!made.exists(), "{}", made.display());
+    assert!(!project.join("directories").exists());
     let source = sketch_source(&project.join("raw"));
     assert!(
         source.contains("The sketch moved into the project"),
         "{source}"
     );
+    let file = made.file_name().unwrap().to_str().unwrap();
+    assert_made_again(&source, file, text);
 }
 
 /// The one source kept of a sketch in the sources at `raw`.
@@ -3477,6 +3479,7 @@ fn sketch_source(raw: &Path) -> String {
     let sources: Vec<PathBuf> = std::fs::read_dir(raw.join("sketches"))
         .unwrap_or_else(|error| panic!("{}: {error}", raw.display()))
         .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
         .collect();
     assert_eq!(sources.len(), 1, "{sources:?}");
     std::fs::read_to_string(&sources[0]).unwrap()
@@ -3484,8 +3487,8 @@ fn sketch_source(raw: &Path) -> String {
 
 /// The project the sketch at 3 was opened as, the first with nothing
 /// set yet in the projects of `home`, after checking that the window
-/// lists it, that the sketch's folder is its directory named as it is,
-/// and that the sketch says so.
+/// lists it, that it starts with none of what the sketch made, and that
+/// the sketch says so.
 fn opened_as_project(
     cx: &mut VisualTestContext,
     workspace: &Entity<Workspace>,
@@ -3507,13 +3510,7 @@ fn opened_as_project(
         "{} is not among {listed:?}: {said:?}",
         project.display()
     );
-    assert!(
-        project
-            .join("directories")
-            .join("untitled-1")
-            .join(".git")
-            .exists()
-    );
+    assert!(!project.join("directories").exists());
     assert!(
         said.iter().any(|entry| matches!(entry,
             Entry::Note(note) if note.starts_with("The sketch was opened as the project untitled-1"))),
