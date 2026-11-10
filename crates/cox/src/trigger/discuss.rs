@@ -526,7 +526,7 @@ fn tried_on(tried: &Try, last: Option<&Path>) -> Tried {
                 Ok(reply) => Tried {
                     state: match Verdict::of(&reply) {
                         Verdict::Met(_) => CheckState::Passed,
-                        Verdict::NotMet(_) => CheckState::Failed,
+                        Verdict::NotMet(_) | Verdict::Blocked(_) => CheckState::Failed,
                     },
                     said: Some(reply.trim().to_owned()),
                 },
