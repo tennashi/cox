@@ -10,6 +10,8 @@
 //! - [`fuzzy`] finds a path by a few of its letters.
 //! - [`changes`] is what changed in them, as Git tells it, and
 //!   [`words`] what changed within the lines a change replaced.
+//! - [`commits`] is the commits that made the changes, each with the turn
+//!   of a chat it was made in.
 //! - [`map`] is the project's map, in tiers, as an agent wrote it, with
 //!   what changed laid over it.
 //! - [`language`] is the languages the editor knows, and what in their
@@ -20,6 +22,7 @@
 
 pub mod buffer;
 pub mod changes;
+pub mod commits;
 pub mod files;
 pub mod fuzzy;
 pub mod history;

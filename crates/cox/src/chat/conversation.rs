@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use cox_acp::{PermissionAnswer, SlashCommand, StopReason};
 use cox_core::diff::Line;
 pub use cox_core::entry::{
-    Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, Step, StepState,
+    Answer, Attachment, Check, CheckState, Committed, Content, Entry, LoginOption, Step, StepState,
     TerminalLogin, ToolCallResult,
 };
 use cox_core::goal;
@@ -649,6 +649,28 @@ impl Conversation {
     /// Adds `note`, a note from Cox.
     pub fn note(&mut self, note: String) {
         self.push(Entry::Note(note));
+    }
+
+    /// Shows `commits`, which the agent made in the turn that ends, if it
+    /// made any.
+    pub fn committed(&mut self, commits: Vec<Committed>) {
+        if !commits.is_empty() {
+            self.push(Entry::Commits(commits));
+        }
+    }
+
+    /// The entry that started the last turn, by its place, with the line
+    /// it sent: the human's, or Cox's in their place.
+    #[must_use]
+    pub fn turn_start(&self) -> Option<(usize, &str)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, entry)| match entry {
+                Entry::Human(text) | Entry::Cox(text) => Some((index, text.as_str())),
+                _ => None,
+            })
     }
 
     /// Closes the conversation, as `note` says why: its agent is gone.
@@ -2626,6 +2648,32 @@ mod tests {
             ]
         );
         assert_eq!(conversation.state(), State::Idle);
+    }
+
+    #[test]
+    fn shows_the_commits_of_a_turn_and_names_the_line_it_started_on() {
+        let mut conversation = Conversation::new();
+        conversation.submit("commit it");
+        conversation.apply(AgentEvent::ReplyText("done".to_owned()));
+        assert_eq!(conversation.turn_start(), Some((0, "commit it")));
+        conversation.committed(Vec::new());
+        let commit = Committed {
+            folder: "/work".into(),
+            repository: None,
+            id: "0123456789abcdef".to_owned(),
+            subject: "Commit it".to_owned(),
+            added: 1,
+            removed: 0,
+        };
+        conversation.committed(vec![commit.clone()]);
+        assert_eq!(commit.short(), "0123456");
+        assert_eq!(
+            conversation.entries()[1..],
+            [
+                Entry::Reply("done".to_owned()),
+                Entry::Commits(vec![commit])
+            ]
+        );
     }
 
     #[test]

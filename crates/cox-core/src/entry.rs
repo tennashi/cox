@@ -166,6 +166,10 @@ pub enum Entry {
         #[serde(default)]
         kept: Option<bool>,
     },
+    /// The commits the agent made in a turn, as it ended, in the
+    /// repositories of the folder the chat works in, newest first, each of
+    /// which Cox marked in Git with the turn.
+    Commits(Vec<Committed>),
     /// What runs as a turn ends, as the agent ends it: the chat's goal,
     /// then the triggers of the folder it works in, in order, each with
     /// how it went.
@@ -211,6 +215,32 @@ pub struct Attachment {
     /// the window the human chose, which `text` then says what is in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<std::path::PathBuf>,
+}
+
+/// A commit the agent made in a turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Committed {
+    /// The folder the chat worked in, whose changes show the commit.
+    pub folder: std::path::PathBuf,
+    /// The directory of the folder's project the commit is in, by name, or
+    /// none for the repository the folder is in itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    /// Its full name.
+    pub id: String,
+    /// The first line of its message.
+    pub subject: String,
+    /// How many lines its files gained, and lost, in all.
+    pub added: usize,
+    pub removed: usize,
+}
+
+impl Committed {
+    /// Its short name, as people read it.
+    #[must_use]
+    pub fn short(&self) -> &str {
+        self.id.get(..7).unwrap_or(&self.id)
+    }
 }
 
 /// A way the agent offers the human to log in.

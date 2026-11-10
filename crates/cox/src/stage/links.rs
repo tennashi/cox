@@ -8,10 +8,10 @@
 use std::path::{Path, PathBuf};
 
 use cox_core::tabs::Lines;
-use gpui::{Context, Window, prelude::*};
+use gpui::{Context, EventEmitter, Subscription, Window, prelude::*};
 
 use crate::stage::Stage;
-use crate::stage::changes::{self, Changes};
+use crate::stage::changes::{self, Changes, ShowTurn};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::flow::{self, Flow};
@@ -19,6 +19,8 @@ use crate::stage::tab::{ShowsFile, TabContent};
 use crate::stage::tree::{Chosen, Tree};
 use crate::ui::LinkClicked;
 use crate::ui::markdown::FileLink;
+
+impl EventEmitter<ShowTurn> for Stage {}
 
 impl Stage {
     /// Shows the file at `path`, which says `text`, as a `T` shows it, at
@@ -201,6 +203,29 @@ impl Stage {
         }
     }
 
+    /// Shows what the commit `id` changed, of the repository `name` of
+    /// `folder` (see [`super::changes::repositories`]), on the tab of what
+    /// changed in `folder`, or a new one.
+    pub fn show_commit(
+        &mut self,
+        folder: &Path,
+        name: Option<String>,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_changes(folder.to_owned(), window, cx);
+        let shown = self.tabs.iter().find_map(|tab| match &tab.content {
+            TabContent::Changes(changes) if changes.read(cx).folder() == folder => {
+                Some(changes.clone())
+            }
+            _ => None,
+        });
+        if let Some(changes) = shown {
+            changes.update(cx, |changes, cx| changes.show_commit(name, id, cx));
+        }
+    }
+
     /// Puts a tab showing what changed in the files of the repository of
     /// `folder` after the others, shown if `show` is.
     pub(super) fn push_changes(
@@ -227,6 +252,12 @@ impl Stage {
                 }
             },
         );
+        // The turn a commit was made in shows in its chat, which the window
+        // shows.
+        let turns = cx.subscribe(&shown, |_, _, &ShowTurn { chat, entry }, cx| {
+            cx.emit(ShowTurn { chat, entry });
+        });
+        let opens = Subscription::join(opens, turns);
         self.push(TabContent::Changes(shown), changes, Some(opens), show, cx);
     }
 

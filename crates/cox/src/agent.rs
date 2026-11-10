@@ -1029,6 +1029,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
                 | Entry::Switched { .. }
                 | Entry::Login { .. }
                 | Entry::Keep { .. }
+                | Entry::Commits(_)
                 | Entry::Checks(_)
                 | Entry::Event { .. }
         )
@@ -1059,6 +1060,14 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
                 None => format!("[shown to the human: {from}]"),
             }),
             Entry::Shown { path, .. } => Some(format!("[you showed the human {path}]")),
+            Entry::Commits(commits) => Some(format!(
+                "[you committed: {}]",
+                commits
+                    .iter()
+                    .map(|commit| format!("{} {}", commit.short(), commit.subject))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )),
             Entry::Reply(text) => Some(format!("[you]\n{text}")),
             Entry::ToolCall { title, result, .. } => {
                 let result = result.map_or_else(|| "not ended".to_owned(), |r| format!("{r:?}"));

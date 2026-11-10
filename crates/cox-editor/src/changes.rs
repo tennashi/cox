@@ -38,6 +38,12 @@ pub enum Since {
     Nothing,
     /// The last commit, by its short name.
     Head(String),
+    /// The commit before the commit by this short name: what that commit
+    /// changed (see [`crate::commits::diff_of`]).
+    Commit(String),
+    /// Where the branch left another, `from`, by its name, at the commit
+    /// `at`, by its short name (see [`crate::commits::Base`]).
+    Branched { from: String, at: String },
 }
 
 /// A file that changed.
@@ -124,6 +130,8 @@ impl Since {
             Self::Start(commit) => format!("since the sketch started, at {commit}"),
             Self::Nothing => "since nothing, every file new".to_owned(),
             Self::Head(commit) => format!("since the last commit, {commit}"),
+            Self::Commit(commit) => format!("in commit {commit}"),
+            Self::Branched { from, at } => format!("since it branched from {from}, at {at}"),
         }
     }
 }
@@ -146,6 +154,12 @@ impl Diff {
 /// changed, with what Git said.
 pub fn read(folder: &Path) -> Result<Diff, String> {
     let (top, since, from) = since(folder)?;
+    read_from(top, since, &from)
+}
+
+/// What changed in the worktree at `top` since `from`, a commit or a tree,
+/// which is `since`, with the files Git does not track, which are new.
+pub(crate) fn read_from(top: PathBuf, since: Since, from: &str) -> Result<Diff, String> {
     let patch = git(
         &top,
         &[
@@ -158,7 +172,7 @@ pub fn read(folder: &Path) -> Result<Diff, String> {
             "--find-renames",
             "--src-prefix=a/",
             "--dst-prefix=b/",
-            &from,
+            from,
             "--",
         ],
     )?;
@@ -255,7 +269,7 @@ pub fn forget(folder: &Path) -> Result<(), String> {
 
 /// The full name of what `name` names in the repository at `folder`, if
 /// it names anything.
-fn commit(folder: &Path, name: &str) -> Option<String> {
+pub(crate) fn commit(folder: &Path, name: &str) -> Option<String> {
     git(folder, &["rev-parse", "--verify", "--quiet", name])
         .ok()
         .map(|name| name.trim().to_owned())
@@ -263,7 +277,7 @@ fn commit(folder: &Path, name: &str) -> Option<String> {
 }
 
 /// The short name of a commit, as people read it.
-fn short(name: &str) -> String {
+pub(crate) fn short(name: &str) -> String {
     name.chars().take(7).collect()
 }
 
@@ -310,7 +324,7 @@ fn new_file(top: &Path, path: &Path) -> File {
 }
 
 /// The files that changed, as the patch Git printed says.
-fn parse(patch: &str) -> Vec<File> {
+pub(crate) fn parse(patch: &str) -> Vec<File> {
     let mut files: Vec<File> = Vec::new();
     // Where the next lines are, in the file as it was and as it is, once
     // in a stretch of the current file.
@@ -437,7 +451,7 @@ fn starts(stretch: &str) -> Option<(usize, usize)> {
 
 /// Runs Git in `folder` with `args`, and answers what it printed, or what
 /// it said went wrong.
-fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(folder)

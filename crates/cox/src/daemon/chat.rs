@@ -12,9 +12,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use cox_core::entry::Attachment;
+use cox_core::entry::{Attachment, Committed};
 use cox_core::goal;
 use cox_core::store::{ChatId, Record};
+use cox_editor::commits::{self, Turn};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -57,6 +58,19 @@ impl Drop for Task {
             task.abort();
         }
     }
+}
+
+/// The repositories of `cwd`, where a chat works, each with its last
+/// commit now.
+fn heads(cwd: &Path) -> Vec<Head> {
+    crate::stage::changes::repositories(cwd)
+        .into_iter()
+        .map(|(name, folder)| Head {
+            commit: commits::head(&folder),
+            name,
+            folder,
+        })
+        .collect()
 }
 
 /// Spawns `future` on the daemon's `LocalSet`, as a [`Task`].
@@ -153,6 +167,20 @@ pub struct Chat {
     /// What the window was last told, but the entries, to tell it only
     /// what changed.
     told: Option<Patch>,
+    /// Where the turn that runs started, while one runs: the folder the
+    /// chat works in, and the last commit of each of its repositories then,
+    /// to tell the commits the agent makes in the turn.
+    turn_heads: Option<(PathBuf, Vec<Head>)>,
+}
+
+/// A repository of the folder a chat works in, as a turn started.
+struct Head {
+    /// The project's directory it is, by name, or none for the repository
+    /// the folder is in (see [`crate::stage::changes::repositories`]).
+    name: Option<String>,
+    folder: PathBuf,
+    /// Its last commit then, by its full name, if it had one.
+    commit: Option<String>,
 }
 
 impl Chat {
@@ -197,6 +225,7 @@ impl Chat {
             watched: false,
             unsent: Vec::new(),
             told: None,
+            turn_heads: None,
         }
     }
 
@@ -556,6 +585,11 @@ impl Chat {
             }
         }
         let closed = matches!(event, AgentEvent::Closed(_));
+        // The commits of the turn show as it ends, ahead of what runs then;
+        // a turn a steered line goes on with ends later.
+        if (closed || matches!(event, AgentEvent::TurnEnded(_))) && !self.conversation.steering() {
+            self.show_commits();
+        }
         let asks = matches!(event, AgentEvent::PermissionRequest { .. });
         let was_checking = self.conversation.state() == State::Checking;
         self.conversation.apply(event);
@@ -579,6 +613,43 @@ impl Chat {
         } else {
             self.after();
         }
+    }
+
+    /// Shows the commits the agent made in the turn that ends, in the
+    /// repositories of the folder it worked in, marking each in Git with
+    /// the turn, when the chat is kept, for the human to find the turn from
+    /// the commit (see [`cox_editor::commits`]).
+    fn show_commits(&mut self) {
+        let Some((cwd, heads)) = self.turn_heads.take() else {
+            return;
+        };
+        let turn = match (&self.record, self.conversation.turn_start()) {
+            (Some(record), Some((entry, line))) => Some(Turn {
+                chat: record.chat().number(),
+                entry,
+                line: line.to_owned(),
+            }),
+            _ => None,
+        };
+        let mut committed = Vec::new();
+        for head in heads {
+            for commit in commits::made(&head.folder, head.commit.as_deref()) {
+                if let Some(turn) = &turn
+                    && let Err(error) = commits::mark(&head.folder, &commit.id, turn)
+                {
+                    tracing::error!("a commit is not marked with its turn: {error}");
+                }
+                committed.push(Committed {
+                    folder: cwd.clone(),
+                    repository: head.name.clone(),
+                    id: commit.id,
+                    subject: commit.subject,
+                    added: commit.added,
+                    removed: commit.removed,
+                });
+            }
+        }
+        self.conversation.committed(committed);
     }
 
     /// Has the triggers of the chat's folder that run as the agent asks
@@ -1429,6 +1500,13 @@ impl Chat {
             // The agent side is gone once the connection closes, which the
             // conversation shows when the `Closed` event arrives.
             Some(running) => {
+                if matches!(command, Command::Prompt(_)) {
+                    let cwd = running.cwd.clone();
+                    self.turn_heads = Some((cwd.clone(), heads(&cwd)));
+                }
+                let Some(running) = &self.running else {
+                    return;
+                };
                 let _ = running.commands.send(command);
             }
             None if self.starting => self.queued.push(command),

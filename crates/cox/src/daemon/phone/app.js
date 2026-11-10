@@ -1034,6 +1034,9 @@ function entryNode(at, kind, value, asks) {
       return projectProposal(value, at);
     case "keep":
       return keep(value, at);
+    case "commits":
+      return el("div", { class: "chips" }, value.map((one) =>
+        el("span", { class: "chip" }, el("code", {}, one.id.slice(0, 7)), el("span", {}, one.subject))));
     case "checks":
       return checks("Turn end", value);
     case "event":

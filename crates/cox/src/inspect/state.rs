@@ -576,6 +576,27 @@ fn describe_entry(entry: &Entry) -> String {
             line
         }
         Entry::Keep { why, chat, kept } => describe_keep(why, *chat, *kept),
+        Entry::Commits(commits) => format!(
+            "commits: {}",
+            commits
+                .iter()
+                .map(|commit| {
+                    let within = commit
+                        .repository
+                        .as_deref()
+                        .map(|name| format!(" in {name}"))
+                        .unwrap_or_default();
+                    format!(
+                        "{} {:?}{within} (+{} -{})",
+                        commit.short(),
+                        commit.subject,
+                        commit.added,
+                        commit.removed
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Entry::Checks(checks) => describe_checks("turn end", checks),
         Entry::Event { on, checks } => describe_checks(on, checks),
     }
