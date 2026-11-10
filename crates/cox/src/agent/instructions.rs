@@ -1,6 +1,7 @@
 //! What each chat's agent is told first, ahead of the first line the
-//! human sends: how the human works with Cox, whatever the project, then
-//! what the project's `COX.md` says.
+//! human sends: what the chat's project is, as the human set it, how the
+//! human works with Cox, whatever the project, then what the project's
+//! `COX.md` says.
 //!
 //! How the human works is the `COX.md` of their workflow's folder (see
 //! [`crate::settings::workflow`]), or, when they keep none, Cox's own
@@ -38,6 +39,8 @@ struct Part {
 /// Whose instructions a part is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Whose {
+    /// What the project of this name is, as the human set it.
+    About(String),
     /// Cox's own, for a human who keeps none.
     Cox,
     /// The human's, for every project, from the file at the path.
@@ -94,6 +97,22 @@ impl Instructions {
         }
     }
 
+    /// The instructions with what the project named `name` is, `about`,
+    /// ahead of the rest, when it says.
+    #[must_use]
+    pub fn about(mut self, name: &str, about: Option<&str>) -> Self {
+        if let Some(about) = about.map(str::trim).filter(|about| !about.is_empty()) {
+            self.parts.insert(
+                0,
+                Part {
+                    whose: Whose::About(name.to_owned()),
+                    text: about.to_owned(),
+                },
+            );
+        }
+        self
+    }
+
     /// The files the instructions come from, for the human to see which
     /// the agent gets: Cox's own come from none.
     #[must_use]
@@ -101,7 +120,7 @@ impl Instructions {
         self.parts
             .iter()
             .filter_map(|part| match &part.whose {
-                Whose::Cox => None,
+                Whose::Cox | Whose::About(_) => None,
                 Whose::Human(path) | Whose::Project(path) => Some(path.clone()),
             })
             .collect()
@@ -118,6 +137,10 @@ impl Instructions {
 impl Part {
     fn prompt(&self) -> String {
         let from = match &self.whose {
+            Whose::About(name) => format!(
+                "This chat is in the project {name}. This is what the project is, as the \
+                 human set it, for you to keep in mind for the whole session."
+            ),
             Whose::Cox => format!(
                 "{COX_START}, for every project. Follow it for the whole session, unless the \
                  project's instructions say otherwise."
@@ -207,6 +230,29 @@ mod tests {
             instructions
         );
         assert_eq!(Instructions::read_with(&folder, None), instructions);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn what_the_project_is_goes_ahead_of_the_instructions() {
+        let folder = scratch("about");
+        std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
+        let instructions = Instructions::read_with(&folder, None);
+
+        let about = instructions
+            .clone()
+            .about("tea", Some(" A shop that sells tea. \n"));
+        // Said of no file.
+        assert_eq!(about.paths(), instructions.paths());
+        let prompts = about.prompts();
+        assert_eq!(prompts.len(), 3);
+        assert!(prompts[0].starts_with("This chat is in the project tea. "));
+        assert!(prompts[0].ends_with("\n\nA shop that sells tea."));
+        assert_eq!(prompts[1..], instructions.prompts());
+
+        // A project that says nothing of what it is adds nothing.
+        assert_eq!(instructions.clone().about("tea", Some(" ")), instructions);
+        assert_eq!(instructions.clone().about("tea", None), instructions);
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

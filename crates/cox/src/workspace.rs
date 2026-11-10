@@ -84,7 +84,7 @@ use crate::ui::theme::{
 use crate::ui::{card, tip};
 use crate::workflow;
 pub use project_card::Gives;
-use project_card::{Drawing, ProjectCard, Rename, Standing, ToIcon};
+use project_card::{Drawing, ProjectCard, Rename, SetAbout, Standing, ToIcon};
 
 actions!(
     cox,
@@ -178,6 +178,8 @@ pub struct Project {
     archived: bool,
     /// Whether the human deleted it, while Cox runs.
     deleted: bool,
+    /// What it is, as each chat's agent is told, if the human set it.
+    about: Option<String>,
 }
 
 impl Project {
@@ -435,7 +437,7 @@ pub struct Workspace {
     /// The settings screen, while it is open.
     settings: Option<(Entity<SettingsView>, [Subscription; 2])>,
     /// The card where the human edits a project, while it is open.
-    project_card: Option<(Entity<ProjectCard>, [Subscription; 3])>,
+    project_card: Option<(Entity<ProjectCard>, [Subscription; 4])>,
     /// The sheet over the window the human drags a region on, for the
     /// chat shown, while it is laid.
     region: Option<Sheet>,
@@ -516,6 +518,7 @@ impl Workspace {
                 missing: false,
                 archived: false,
                 deleted: false,
+                about: None,
             }],
             chats: List::new(),
             archived: Vec::new(),
@@ -725,6 +728,7 @@ impl Workspace {
                 missing: row.missing,
                 archived: row.archived,
                 deleted: row.deleted,
+                about: row.about,
             })
             .collect();
     }
@@ -1443,6 +1447,7 @@ impl Workspace {
             folder: project.folder.clone(),
             missing: project.missing,
             icon: project.icon.clone(),
+            about: project.about.clone(),
             drawing: match project.id {
                 _ if self.agents.is_none() => Drawing::Unable,
                 Some(id) if self.drawing.contains(&id) => Drawing::Now,
@@ -1480,6 +1485,12 @@ impl Workspace {
                 name: name.clone(),
             });
         });
+        let told = cx.subscribe(&card, move |workspace, _, SetAbout(about), _| {
+            workspace.tell(ToDaemon::SetAbout {
+                project: id,
+                about: about.clone(),
+            });
+        });
         let dismissed = cx.subscribe_in(
             &card,
             window,
@@ -1506,7 +1517,7 @@ impl Workspace {
             },
         );
         window.focus(&card.focus_handle(cx));
-        self.project_card = Some((card, [renamed, dismissed, iconed]));
+        self.project_card = Some((card, [renamed, told, dismissed, iconed]));
         cx.notify();
     }
 
@@ -1515,8 +1526,11 @@ impl Workspace {
     pub fn close_project_card(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((card, _)) = self.project_card.take() {
             let card = card.read(cx);
+            let project = card.project();
+            if let Some(SetAbout(about)) = card.told(cx) {
+                self.tell(ToDaemon::SetAbout { project, about });
+            }
             if let Some(Rename(name)) = card.renamed(cx) {
-                let project = card.project();
                 self.tell(ToDaemon::RenameProject { project, name });
             }
             window.focus(&self.focus_handle(cx));

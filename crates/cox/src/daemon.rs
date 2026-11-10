@@ -236,6 +236,9 @@ struct Project {
     opened: usize,
     /// Whether the human put it away, off the rail.
     archived: bool,
+    /// What it is, in a sentence or two, as each chat's agent is told, if
+    /// the human set it.
+    about: Option<String>,
     /// Whether the human deleted it: it stays in the projects, so that
     /// the chats of those after it keep the places they are listed by,
     /// with none of its own.
@@ -507,6 +510,7 @@ impl Daemon {
                 folder: home,
                 opened: 0,
                 archived: false,
+                about: None,
                 deleted: false,
             }],
             chats: Vec::new(),
@@ -558,6 +562,7 @@ impl Daemon {
                 folder: project.folder,
                 opened: 0,
                 archived: project.archived,
+                about: project.about,
                 deleted: false,
             }));
         for chat in chats {
@@ -968,6 +973,7 @@ impl Daemon {
             folder,
             opened: 0,
             archived: false,
+            about: None,
             deleted: false,
         });
         self.projects.len() - 1
@@ -1034,10 +1040,10 @@ impl Daemon {
             }
         }
         let cwd = folder.clone().unwrap_or_else(|| project.folder.clone());
-        let instructions = Instructions::read(&cwd);
         project.opened += 1;
         let name = format!("Chat {}", project.opened);
         let project_id = project.id;
+        let instructions = self.instructions(index, &cwd);
         let kept = match from {
             Some((_, Some(parent))) => self.store.add_chat_under(
                 parent,
@@ -1254,6 +1260,9 @@ impl Daemon {
             ToDaemon::AnswerNameProposal { key, index, answer } => {
                 self.answer_name_proposal(key, index, answer);
             }
+            ToDaemon::AnswerAboutProposal { key, index, answer } => {
+                self.answer_about_proposal(key, index, answer);
+            }
             ToDaemon::AnswerProjectProposal { key, index, answer } => {
                 self.answer_project_proposal(key, index, answer);
             }
@@ -1342,6 +1351,11 @@ impl Daemon {
                 }
             }
             ToDaemon::RenameProject { project, name } => self.rename_project(project, &name),
+            ToDaemon::SetAbout { project, about } => {
+                if let Some(index) = self.index_of(project) {
+                    self.set_about(index, &about);
+                }
+            }
             ToDaemon::ArchiveProject { project, archived } => {
                 if let Some(index) = self.index_of(project) {
                     self.put_away(index, archived);
@@ -1498,6 +1512,88 @@ impl Daemon {
             .ok_or("the chat has closed")?
             .propose_name(name, why);
         Ok(now)
+    }
+
+    /// Keeps `about` as what the project at `index` is, or, blank, that it
+    /// says nothing of what it is, for the agents of its chats that start
+    /// from now on to be told.
+    fn set_about(&mut self, index: usize, about: &str) {
+        let about = Some(about.trim())
+            .filter(|about| !about.is_empty())
+            .map(str::to_owned);
+        let project = &mut self.projects[index];
+        let Some(id) = project.id else {
+            return;
+        };
+        if project.about == about {
+            return;
+        }
+        if let Err(error) = self.store.keep_about(id, about.as_deref()) {
+            tracing::error!("what the project is is not kept: {error:#}");
+            return;
+        }
+        project.about = about;
+        self.tell_listing();
+    }
+
+    /// Shows `about`, what the agent of the chat `key` proposes its
+    /// project is, on a card in the chat's conversation, and answers what
+    /// the project is now, if it says, or why it cannot be proposed.
+    fn propose_about(
+        &mut self,
+        key: u64,
+        about: &str,
+        why: Option<String>,
+    ) -> Result<Option<String>, String> {
+        let project = self.slot(key).ok_or("the chat has closed")?.project;
+        if project == 0 {
+            return Err("This chat is in no project: Cox's own chats have none to say.".to_owned());
+        }
+        let now = self.projects[project].about.clone();
+        self.chat(key)
+            .ok_or("the chat has closed")?
+            .propose_about(about.trim(), why);
+        Ok(now)
+    }
+
+    /// The human answered what the project of the chat `key` is, as
+    /// proposed at `index`: sets it, or lets it be.
+    fn answer_about_proposal(&mut self, key: u64, index: usize, answer: Answer) {
+        let Some(project) = self.slot(key).map(|slot| slot.project) else {
+            return;
+        };
+        let Some(about) = self.chat(key).and_then(|chat| chat.proposed_about(index)) else {
+            return;
+        };
+        let answer = match answer {
+            Answer::Dismissed => Answer::Dismissed,
+            Answer::Set | Answer::Changed => Answer::Set,
+        };
+        if let Some(chat) = self.chat(key) {
+            chat.answer_about_proposal(index, answer);
+        }
+        if answer == Answer::Set && project != 0 {
+            self.set_about(project, &about);
+        }
+    }
+
+    /// What the agent of a chat of the project at `index` that works in
+    /// `cwd` is told first: what the project is, if it says, then the
+    /// instructions.
+    fn instructions(&self, index: usize, cwd: &Path) -> Instructions {
+        let project = &self.projects[index];
+        let instructions = Instructions::read(cwd);
+        if index == 0 {
+            return instructions;
+        }
+        instructions.about(&project.name, project.about.as_deref())
+    }
+
+    /// What the agent of the chat `key`, which works in `cwd`, is told
+    /// first (see [`Self::instructions`]).
+    fn instructions_of(&self, key: u64, cwd: &Path) -> Instructions {
+        let index = self.slot(key).map_or(0, |slot| slot.project);
+        self.instructions(index, cwd)
     }
 
     /// The human answered the name proposed at `index` in the chat `key`
@@ -2024,7 +2120,7 @@ impl Daemon {
                 session,
                 setup,
             } = again;
-            let start = Start::again(&cwd, session, &earlier, setup);
+            let start = Start::again(self.instructions_of(key, &cwd), session, &earlier, setup);
             self.start_agent(key, start);
         }
         if let Some(chat) = self.chat(key) {
@@ -2054,7 +2150,10 @@ impl Daemon {
                 session,
                 setup,
             } = again;
-            self.start_agent(key, Start::again(&cwd, session, &earlier, setup));
+            self.start_agent(
+                key,
+                Start::again(self.instructions_of(key, &cwd), session, &earlier, setup),
+            );
         }
     }
 
@@ -2456,6 +2555,9 @@ impl Daemon {
             ChatRequest::ProposeName { name, why, answer } => {
                 answer.send(self.propose_name(key, &name, why)).ok();
             }
+            ChatRequest::ProposeAbout { about, why, answer } => {
+                answer.send(self.propose_about(key, &about, why)).ok();
+            }
             ChatRequest::ProposeProject {
                 name,
                 why,
@@ -2771,7 +2873,10 @@ impl Daemon {
                 session,
                 setup,
             } = again;
-            self.start_agent(key, Start::again(&cwd, session, &earlier, setup));
+            self.start_agent(
+                key,
+                Start::again(self.instructions_of(key, &cwd), session, &earlier, setup),
+            );
         }
     }
 
@@ -3196,6 +3301,7 @@ impl Daemon {
                     missing: project.id.is_some() && !project.deleted && !project.folder.is_dir(),
                     archived: project.archived,
                     deleted: project.deleted,
+                    about: project.about.clone(),
                 })
                 .collect(),
             chats: self

@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 14;
+const VERSION: i64 = 15;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -30,7 +30,9 @@ CREATE TABLE projects (
     folder TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     -- Whether the human put it away, off the rail.
-    archived INTEGER NOT NULL DEFAULT 0
+    archived INTEGER NOT NULL DEFAULT 0,
+    -- What it is, in a sentence or two, as each chat's agent is told.
+    about TEXT
 );
 CREATE TABLE chats (
     id INTEGER PRIMARY KEY,
@@ -135,6 +137,7 @@ const UPGRADES: &[&str] = &[
     // own.
     "DROP TABLE folders;",
     "ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
+    "ALTER TABLE projects ADD COLUMN about TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -173,6 +176,8 @@ pub struct KeptProject {
     pub name: String,
     /// Whether the human put it away, off the rail.
     pub archived: bool,
+    /// What it is, in a sentence or two, if the human said.
+    pub about: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -302,13 +307,14 @@ impl Store {
     pub fn projects(&self) -> anyhow::Result<Vec<KeptProject>> {
         let mut statement = self
             .connection
-            .prepare("SELECT id, folder, name, archived FROM projects ORDER BY id")?;
+            .prepare("SELECT id, folder, name, archived, about FROM projects ORDER BY id")?;
         let projects = statement.query_map([], |row| {
             Ok(KeptProject {
                 id: ProjectId(row.get(0)?),
                 folder: PathBuf::from(row.get::<_, String>(1)?),
                 name: row.get(2)?,
                 archived: row.get(3)?,
+                about: row.get(4)?,
             })
         })?;
         Ok(projects.collect::<Result<_, _>>()?)
@@ -578,6 +584,20 @@ impl Store {
         self.connection.execute(
             "UPDATE projects SET archived = ?2 WHERE id = ?1",
             params![project.0, archived],
+        )?;
+        Ok(())
+    }
+
+    /// Keeps `about` as what `project` is, or that it says nothing of what
+    /// it is.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn keep_about(&self, project: ProjectId, about: Option<&str>) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE projects SET about = ?2 WHERE id = ?1",
+            params![project.0, about],
         )?;
         Ok(())
     }
@@ -1042,12 +1062,14 @@ mod tests {
                     folder: "/src/cox".into(),
                     name: "cox".to_owned(),
                     archived: false,
+                    about: None,
                 },
                 KeptProject {
                     id: notes,
                     folder: "/notes".into(),
                     name: "notes".to_owned(),
                     archived: false,
+                    about: None,
                 },
             ]
         );
@@ -1237,6 +1259,25 @@ mod tests {
         assert_eq!(store.stage(Path::new("/work/app")).unwrap(), None);
         // Its folder can be a project again.
         assert_ne!(store.project(Path::new("/work/app"), "app").unwrap(), app);
+    }
+
+    #[test]
+    fn keeps_what_a_project_is() {
+        let store = Store::in_memory().unwrap();
+        let app = store.project(Path::new("/work/app"), "app").unwrap();
+        let about = |store: &Store| store.projects().unwrap()[0].about.clone();
+        assert_eq!(about(&store), None);
+        store
+            .keep_about(app, Some("A shop that sells tea."))
+            .unwrap();
+        assert_eq!(about(&store).as_deref(), Some("A shop that sells tea."));
+        // It moves with the project's folder.
+        store
+            .move_project(app, Path::new("/work/tea"), "tea")
+            .unwrap();
+        assert_eq!(about(&store).as_deref(), Some("A shop that sells tea."));
+        store.keep_about(app, None).unwrap();
+        assert_eq!(about(&store), None);
     }
 
     #[test]

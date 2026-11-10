@@ -120,6 +120,18 @@ pub enum Entry {
         /// be.
         answer: Option<Answer>,
     },
+    /// What the chat's project is, in a sentence or two, as the agent
+    /// proposed it, for the human to set as what each chat's agent is told
+    /// of the project, or to let be.
+    AboutProposal {
+        /// What the project is.
+        about: String,
+        /// Why the agent proposes it, if it said.
+        why: Option<String>,
+        /// What the human did with it, once they did: set it, or let it
+        /// be.
+        answer: Option<Answer>,
+    },
     /// A project the agent of a chat in no project proposed to make of
     /// it, named `name`, for the human to make, the chat moving into it,
     /// or to let be.

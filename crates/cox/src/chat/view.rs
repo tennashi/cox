@@ -549,6 +549,16 @@ impl ChatView {
         });
     }
 
+    /// The human answered what the project is as proposed at `index`:
+    /// set it, or let it be.
+    fn answer_about_proposal(&mut self, index: usize, answer: Answer, _: &mut Context<Self>) {
+        self.tell(ToDaemon::AnswerAboutProposal {
+            key: self.key,
+            index,
+            answer,
+        });
+    }
+
     /// The human chose, on the card at `index`, whether to keep what a
     /// chat learned in the wiki.
     fn answer_keep(&mut self, index: usize, keep: bool, _: &mut Context<Self>) {

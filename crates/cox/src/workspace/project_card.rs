@@ -1,7 +1,8 @@
 //! The card where the human edits a project, over the window, which
 //! "Edit project…" in the menu of the right button on the project, on
 //! the rail, opens: the project's name, its folder's, which Enter
-//! changes, as the card does as it closes, renaming the folder; its
+//! changes, as the card does as it closes, renaming the folder; what the
+//! project is, which each chat's agent is told first, set the same way; its
 //! icon, which the human chooses, has an agent draw, or takes away; and
 //! the project's directories, in `directories` in its folder, which Enter
 //! makes, named as the project unless named otherwise, or clones a
@@ -65,6 +66,10 @@ pub fn bind_keys(cx: &mut App) {
 /// The human renamed the project, and so its folder.
 pub struct Rename(pub String);
 
+/// The human set what the project is, or, blank, that it says nothing of
+/// what it is.
+pub struct SetAbout(pub String);
+
 /// The human closed the card.
 pub struct Dismissed;
 
@@ -95,6 +100,8 @@ pub struct Standing {
     pub icon: Option<Arc<Image>>,
     /// Whether an agent draws it one.
     pub drawing: Drawing,
+    /// What it is, as each chat's agent is told, if the human set it.
+    pub about: Option<String>,
 }
 
 /// Whether an agent draws a project an icon.
@@ -162,6 +169,8 @@ pub struct ProjectCard {
     standing: Standing,
     /// The input of the project's name.
     name: Entity<LineInput>,
+    /// The input of what the project is.
+    about: Entity<LineInput>,
     /// The project's directories, as they stand.
     directories: Vec<Directory>,
     /// The input of a directory's name, or a Git repository's URL.
@@ -171,7 +180,7 @@ pub struct ProjectCard {
     /// The directory of which the human gives its remote or its name, if
     /// they do.
     editing: Option<Editing>,
-    _submitted: [Subscription; 3],
+    _submitted: [Subscription; 4],
 }
 
 impl ProjectCard {
@@ -189,6 +198,12 @@ impl ProjectCard {
             input.set_text(&named(&standing.folder), cx);
             input
         });
+        let about = cx.new(|cx| {
+            let mut input = LineInput::wrapping(cx);
+            input.set_placeholder("What the project is, in a sentence or two", cx);
+            input.set_text(standing.about.as_deref().unwrap_or_default(), cx);
+            input
+        });
         let directory = cx.new(|cx| {
             let mut input = LineInput::new(cx);
             input.set_placeholder(
@@ -200,6 +215,9 @@ impl ProjectCard {
         let named = cx.subscribe_in(&name, window, |card, _, Submitted, _, cx| {
             card.submit_name(cx);
         });
+        let told = cx.subscribe_in(&about, window, |card, _, Submitted, _, cx| {
+            card.submit_about(cx);
+        });
         let made = cx.subscribe_in(&directory, window, |card, _, Submitted, _, cx| {
             card.make_directory(cx);
         });
@@ -210,10 +228,11 @@ impl ProjectCard {
             directories: directory::listed(&standing.folder),
             standing,
             name,
+            about,
             directory,
             making: Making::Hint,
             editing: None,
-            _submitted: [named, made, typed],
+            _submitted: [named, told, made, typed],
         }
     }
 
@@ -227,6 +246,12 @@ impl ProjectCard {
     #[must_use]
     pub fn name_input(&self) -> &Entity<LineInput> {
         &self.name
+    }
+
+    /// The input of what the project is.
+    #[must_use]
+    pub fn about_input(&self) -> &Entity<LineInput> {
+        &self.about
     }
 
     /// The input of a directory's name, or a Git repository's URL.
@@ -522,9 +547,29 @@ impl ProjectCard {
         }
     }
 
+    /// What the human typed of what the project is, while it is not what
+    /// the project is now.
+    #[must_use]
+    pub fn told(&self, cx: &App) -> Option<SetAbout> {
+        let typed = self.about.read(cx).text().trim();
+        (typed != self.standing.about.as_deref().unwrap_or_default())
+            .then(|| SetAbout(typed.to_owned()))
+    }
+
+    /// Keeps what the project is as typed.
+    fn submit_about(&mut self, cx: &mut Context<Self>) {
+        if let Some(set) = self.told(cx) {
+            cx.emit(set);
+        }
+    }
+
     /// Follows the project as the window lists it now, as once it is
-    /// renamed.
+    /// renamed, or what it is was set elsewhere, as from a chat.
     pub fn follow(&mut self, standing: Standing, cx: &mut Context<Self>) {
+        let about = standing.about.as_deref().unwrap_or_default();
+        if self.standing.about != standing.about && self.about.read(cx).text().trim() != about {
+            self.about.update(cx, |input, cx| input.set_text(about, cx));
+        }
         if self.standing.folder != standing.folder {
             let text = named(&standing.folder);
             self.name.update(cx, |input, cx| input.set_text(&text, cx));
@@ -545,6 +590,10 @@ impl ProjectCard {
                 why_not_renamed(&self.standing, self.typed_name(cx))
                     .map(|why| format!(": {why}"))
                     .unwrap_or_default()
+            )))
+            .chain(std::iter::once(format!(
+                "About input holding {:?}",
+                self.about.read(cx).text()
             )))
             .chain(std::iter::once(self.described_icon()))
             .chain(self.directories.iter().map(|directory| {
@@ -652,6 +701,35 @@ impl ProjectCard {
                     .child(self.name.clone()),
             )
             .child(div().text_size(px(12.)).text_color(rgb(color)).child(said))
+    }
+
+    /// The input of what the project is, under its name, with what it
+    /// does.
+    fn render_about(&self) -> impl IntoElement + use<> {
+        div()
+            .mb_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(label("ABOUT"))
+            .child(
+                div()
+                    .debug_selector(|| "project-about-input".to_owned())
+                    .min_h(px(INPUT_HEIGHT))
+                    .px_2()
+                    .py(px(7.))
+                    .border_1()
+                    .border_color(rgb(LINK))
+                    .rounded(px(10.))
+                    .text_size(px(13.))
+                    .text_color(rgb(FOREGROUND))
+                    .child(self.about.clone()),
+            )
+            .child(div().text_size(px(12.)).text_color(rgb(FAINT)).child(
+                "Each chat's agent in the project is told it first, as its session \
+                     starts. Enter sets it, as closing the card does; Shift+Enter starts a \
+                     new line.",
+            ))
     }
 
     /// What the line under the project's icon says, and in which color.
@@ -942,6 +1020,7 @@ fn named(folder: &Path) -> String {
 }
 
 impl EventEmitter<Rename> for ProjectCard {}
+impl EventEmitter<SetAbout> for ProjectCard {}
 impl EventEmitter<Dismissed> for ProjectCard {}
 impl EventEmitter<ToIcon> for ProjectCard {}
 
@@ -996,6 +1075,7 @@ impl Render for ProjectCard {
                     .gap_2()
                     .children(missing)
                     .child(self.render_name(cx))
+                    .child(self.render_about())
                     .child(self.render_icon(cx))
                     .child(self.render_directories(cx)),
             )
@@ -1026,6 +1106,7 @@ mod tests {
             at_work: false,
             icon: None,
             drawing: Drawing::Unable,
+            about: None,
         };
         assert_eq!(why_not_renamed(&standing, "shop"), None);
         assert_eq!(why_not_renamed(&standing, "app"), None);

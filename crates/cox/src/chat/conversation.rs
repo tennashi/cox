@@ -834,6 +834,44 @@ impl Conversation {
         }
     }
 
+    /// Shows `about`, what the agent proposes the chat's project is, for
+    /// the human to set or to let be, with `why` the agent proposes it, if
+    /// it said.
+    pub fn propose_about(&mut self, about: &str, why: Option<String>) {
+        self.push(Entry::AboutProposal {
+            about: about.to_owned(),
+            why: why.filter(|why| !why.trim().is_empty()),
+            answer: None,
+        });
+    }
+
+    /// What the project is as proposed at `index`, while the human has
+    /// not answered it.
+    #[must_use]
+    pub fn proposed_about(&self, index: usize) -> Option<&str> {
+        match self.entries.get(index)? {
+            Entry::AboutProposal {
+                about,
+                answer: None,
+                ..
+            } => Some(about),
+            _ => None,
+        }
+    }
+
+    /// Takes the human's `answer` to what the project is as proposed at
+    /// `index`, unless they answered it already. Setting it is the
+    /// caller's.
+    pub fn answer_about_proposal(&mut self, index: usize, answer: Answer) {
+        if self.proposed_about(index).is_none() {
+            return;
+        }
+        if let Some(Entry::AboutProposal { answer: taken, .. }) = self.entries.get_mut(index) {
+            *taken = Some(answer);
+            self.changed.insert(index);
+        }
+    }
+
     /// Shows the project named `name`, which the agent proposes to make of
     /// the chat, for the human to make or to let be, with `why` the agent
     /// proposes it, if it said, and the sketch whose files go into it,

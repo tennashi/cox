@@ -1254,6 +1254,84 @@ async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui::test]
+async fn an_agent_proposes_what_the_project_is_which_the_next_chats_are_told(
+    cx: &mut TestAppContext,
+) {
+    let app = scratch("propose-about");
+    let (store, _) = kept_chat(&app, Some("session-1"));
+    let (agents, asks, workspace, cx) = open_window_asking(
+        cx,
+        scratch("propose-about-home"),
+        store.clone(),
+        Resumes::Resume,
+    );
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.show(FIRST_KEPT, window, cx);
+    });
+    say(cx, &workspace, "hello").await;
+    let tea = "A shop that sells tea.";
+    let propose = |about: &str| {
+        let (answer, now) = tokio::sync::oneshot::channel();
+        asks.borrow()[0]
+            .send(ChatRequest::ProposeAbout {
+                about: about.to_owned(),
+                why: None,
+                answer,
+            })
+            .unwrap();
+        now
+    };
+    let proposed = |cx: &mut VisualTestContext| {
+        shown_entries(cx, &workspace)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match entry {
+                Entry::AboutProposal { about, answer, .. } => Some((index, about, answer)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // The agent hears that the project says nothing of what it is yet,
+    // and what it proposes shows on a card, for the human to set.
+    let now = propose(tea);
+    settled(cx, &workspace);
+    assert_eq!(now.await.unwrap(), Ok(None));
+    let card = proposed(cx)[0].0;
+    click(cx, Box::leak(format!("set-about-{card}").into_boxed_str()));
+    settled(cx, &workspace);
+    assert_eq!(proposed(cx)[0].2, Some(Answer::Set));
+    assert_eq!(store.projects().unwrap()[0].about.as_deref(), Some(tea));
+    // The next proposal hears what the project is now; one dismissed
+    // leaves it be.
+    let now = propose("A shop that sells coffee.");
+    settled(cx, &workspace);
+    assert_eq!(now.await.unwrap(), Ok(Some(tea.to_owned())));
+    let card = proposed(cx)[1].0;
+    click(
+        cx,
+        Box::leak(format!("dismiss-about-{card}").into_boxed_str()),
+    );
+    settled(cx, &workspace);
+    assert_eq!(store.projects().unwrap()[0].about.as_deref(), Some(tea));
+
+    // A chat opened in the project from now on is told it first.
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(app.clone()), window, cx);
+    });
+    say(cx, &workspace, "again").await;
+    let told = agents.borrow()[1].prompt_blocks();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(
+        told[0][0].starts_with("This chat is in the project project. "),
+        "{told:?}"
+    );
+    assert!(told[0][0].ends_with(tea), "{told:?}");
+    assert_eq!(told[0].last().map(String::as_str), Some("again"));
+    let _ = std::fs::remove_dir_all(&app);
+}
+
 /// Has the agent of the chat whose asks are at `from` propose the project
 /// `name`, starting from the sketch named `sketch`, if given, and
 /// answers where the project is to be, or why not, once it is told.
