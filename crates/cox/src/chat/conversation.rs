@@ -1313,6 +1313,14 @@ impl Conversation {
                 return self.passed();
             }
             Verdict::NotMet(why) => why,
+            Verdict::Blocked(why) => {
+                self.push(Entry::Note(format!(
+                    "The goal cannot be judged as written: {why} Change it to what this chat's \
+                     work can meet and the judge can check, then send a line to go on."
+                )));
+                self.stop_checks(CheckState::Broken);
+                return None;
+            }
         };
         let not_met = format!("Goal not met, as judged: {why}");
         let told = format!(
@@ -1344,10 +1352,10 @@ impl Conversation {
         let why = match Verdict::of(&said) {
             Verdict::Met(_) => return self.passed(),
             // What happened besides a turn's end, the agent is not told.
-            Verdict::NotMet(_) if self.event.is_some() => {
+            Verdict::NotMet(_) | Verdict::Blocked(_) if self.event.is_some() => {
                 return self.next(CheckState::Failed);
             }
-            Verdict::NotMet(why) => why,
+            Verdict::NotMet(why) | Verdict::Blocked(why) => why,
         };
         let found = format!("The trigger `{name}` found something: {why}");
         let told = format!(
@@ -3725,6 +3733,29 @@ mod tests {
         conversation.submit("fix");
         take_turn(&mut conversation, calling);
         conversation
+    }
+
+    #[test]
+    fn a_goal_the_judge_cannot_judge_as_written_waits_for_the_human() {
+        let mut conversation = toward_words(true);
+        conversation.take_changed();
+
+        let said = "It asks for Slack.\nBLOCKED: I cannot see whether Slack got a message.";
+        assert_eq!(conversation.judged(Ok(said.to_owned())), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert!(conversation.entries().iter().any(|entry| matches!(entry,
+        Entry::Note(note) if note.starts_with(
+            "The goal cannot be judged as written: I cannot see whether Slack got a message."
+        ))));
+        // The agent is not told to go on, and the goal stays for the human
+        // to change.
+        assert!(
+            !conversation
+                .entries()
+                .iter()
+                .any(|entry| matches!(entry, Entry::Cox(_)))
+        );
+        assert!(conversation.goal().is_some());
     }
 
     #[test]

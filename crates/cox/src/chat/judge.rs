@@ -41,7 +41,12 @@ const STANCE: &str = "You judge whether another chat's work meets a goal. The ch
 /// How the judge ends its reply, so that Cox reads the verdict, and the
 /// command that decides the goal, when the judge finds one.
 const PROTOCOL: &str = "End every reply with one line of its own: `PASS` when the goal is \
-    met, or `FAIL: ` and why it is not, in one sentence, which the working chat is told. \
+    met, or `FAIL: ` and why it is not, in one sentence, which the working chat is told; or \
+    `BLOCKED: ` and why, in one sentence, which the human is told, when the goal cannot be \
+    judged as written, however the work goes on: when it asks what you may not run or \
+    reach, as a deployment or a message sent out; when it is of how the work is done, not \
+    of what it makes; or when it is more than one chat's work can meet, as a whole product \
+    in place of its next step. \
     When one shell command, run in this folder, would decide the goal as written by \
     itself, passing exactly when the goal is met, now and as the work goes on, put a line \
     `COMMAND: ` and that command just before the verdict, which Cox offers the human to \
@@ -88,10 +93,14 @@ pub enum Verdict {
     Met(String),
     /// Not met, with why, as the judge said.
     NotMet(String),
+    /// Not to be judged as written, however the work goes on, with why,
+    /// as the judge said: for the human to change the goal.
+    Blocked(String),
 }
 
 impl Verdict {
-    /// The verdict `reply` ends with: `PASS` or `FAIL`, on its last line.
+    /// The verdict `reply` ends with: `PASS`, `FAIL` or `BLOCKED`, on its
+    /// last line.
     /// A reply that ends with neither judges the goal not met, since the
     /// judge did not say it was.
     #[must_use]
@@ -112,6 +121,13 @@ impl Verdict {
         let line = last.trim_matches(['`', '*', '_', ' ']);
         if let Some(rest) = strip_word(line, "PASS") {
             Self::Met(said(rest))
+        } else if let Some(rest) = strip_word(line, "BLOCKED") {
+            let why = said(rest);
+            Self::Blocked(if why.is_empty() {
+                "it said so, giving no reason".to_owned()
+            } else {
+                why
+            })
         } else if let Some(rest) = strip_word(line, "FAIL") {
             let why = said(rest);
             Self::NotMet(if why.is_empty() {
@@ -368,6 +384,14 @@ mod tests {
         assert_eq!(
             Verdict::of("  \n"),
             Verdict::NotMet("it said nothing".to_owned())
+        );
+        assert_eq!(
+            Verdict::of("It asks for a deployment.\nBLOCKED: I cannot reach GCP."),
+            Verdict::Blocked("I cannot reach GCP.".to_owned())
+        );
+        assert_eq!(
+            Verdict::of("**BLOCKED**"),
+            Verdict::Blocked("it said so, giving no reason".to_owned())
         );
     }
 

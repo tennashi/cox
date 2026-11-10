@@ -609,7 +609,12 @@ fn propose_goal_tool() -> Value {
             which an agent judges by reading the project and running what tests it. Use it \
             once you and the human have talked through what they want, or when they ask \
             for a goal. Make it one that can be checked: name the commands, files or \
-            behaviour that show it is met, not the steps to get there. When one command \
+            behaviour that show it is met, not the steps to get there; what must not break \
+            meanwhile; and where to stop and ask the human, as when it is blocked. Make it as \
+            much as this chat's work can meet before the human looks at it, as the next step \
+            of a larger plan, not the whole of it. Leave out what the judge cannot check, \
+            reading the project and running its tests, as a deployment or a message sent out, \
+            and how the work is to be done, which belongs in the project's wiki. When one command \
             decides it, passing exactly when it is met, such as a test that checks what the \
             human asked for, propose the command: it checks the goal the same way every \
             time, with no judge. The human sees it on a card in the conversation, and sets \
