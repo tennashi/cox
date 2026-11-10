@@ -12,6 +12,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{ChatRequest, Waited};
@@ -2900,6 +2901,10 @@ fn repository(name: &str) -> PathBuf {
     home
 }
 
+/// How many sketches were made again, which names the folder of each, as
+/// tests make sketches again at once.
+static MADE_AGAIN: AtomicUsize = AtomicUsize::new(0);
+
 /// Checks that the bundle the note `note` of a discarded sketch names makes
 /// the sketch again, with `file` holding `text`, and takes it away.
 fn assert_made_again(note: &str, file: &str, text: &str) {
@@ -2907,7 +2912,10 @@ fn assert_made_again(note: &str, file: &str, text: &str) {
         .split_once("kept in ")
         .and_then(|(_, rest)| rest.split_once(", which"))
         .map_or_else(|| panic!("{note}"), |(bundle, _)| PathBuf::from(bundle));
-    let again = scratch("sketch-made-again");
+    let again = scratch(&format!(
+        "sketch-made-again-{}",
+        MADE_AGAIN.fetch_add(1, Ordering::Relaxed)
+    ));
     let cloned = std::process::Command::new("git")
         .arg("clone")
         .arg("-q")
