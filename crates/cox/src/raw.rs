@@ -16,7 +16,7 @@
 //! it.
 //!
 //! A project keeps sources of its own too, in `raw` in its folder,
-//! as it keeps a wiki of its own (see [`crate::wiki`]): what its chats
+//! beside its own wiki (see [`crate::wiki`]): what its chats
 //! read, and what they tried, are of its work, so its chats keep them
 //! there, and only they find them, the project's before the human's.
 //!

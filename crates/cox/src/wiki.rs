@@ -15,9 +15,10 @@
 //! stage's Knowledge plugin shows the pages to the human (see [`told`]).
 //!
 //! A project has a wiki of its own too, for what holds only of its work
-//! or its people, in `.cox/wiki` in its folder, where its repository can
-//! keep it: only the chats of that project find its pages, read them, or
-//! write them, the project's before the human's.
+//! or its people, in `wiki` in its folder, beside its directories and
+//! its sources (see [`crate::raw`]), where the human finds it: only the
+//! chats of that project find its pages, read them, or write them, the
+//! project's before the human's.
 //!
 //! The agents write the pages in English, whatever language their chat
 //! speaks, so that a page is found by the same words from every chat;
@@ -36,7 +37,7 @@ use std::sync::Mutex;
 pub const INDEX: &str = "index";
 
 /// The folder of a project that holds its own wiki.
-pub const PROJECT_WIKI: &str = ".cox/wiki";
+pub const PROJECT_WIKI: &str = "wiki";
 
 /// The heading under which a page says where it was used, which Cox
 /// writes.

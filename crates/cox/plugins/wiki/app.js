@@ -1,7 +1,7 @@
 // What the agents learned and read, drawn by a page of the stage, on
 // four shelves the chips at its top choose between: the human's wiki,
 // the pages the agents of every project keep of what they learned, read
-// as JSON from `cox://api/wiki`; the project's own wiki, in `.cox/wiki`
+// as JSON from `cox://api/wiki`; the project's own wiki, in `wiki`
 // in its folder, from `cox://api/project-wiki`; the human's sources, what
 // the agents kept of what they read, from `cox://api/raw`; and the
 // project's own sources, in `raw` in its folder, from
@@ -194,7 +194,7 @@ function drawList(shelf) {
 const NOTHING = {
   wiki: "The wiki has no pages yet. An agent writes one with <code>wiki_write</code>, as when the human asks a chat to <b>Save to wiki</b> from the menu of its tab.",
   project:
-    "This project's wiki has no pages yet. An agent writes one with <code>wiki_write</code> and <code>keep_in_project</code>, for what holds only of this project, into <code>.cox/wiki</code> in its folder.",
+    "This project's wiki has no pages yet. An agent writes one with <code>wiki_write</code> and <code>keep_in_project</code>, for what holds only of this project, into <code>wiki</code> in its folder.",
   raw: "No source is kept yet. An agent keeps what it reads with <code>raw_keep</code>, as research on a schedule asks it to.",
   projectRaw:
     "This project has no sources yet. Its chats keep what they read with <code>raw_keep</code>, into <code>raw</code> in its folder.",

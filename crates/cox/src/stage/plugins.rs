@@ -34,7 +34,7 @@
 //!   and, when the human reads the wiki in a language of their own, as
 //!   HTML in that language too, as far as it is translated (see
 //!   [`crate::wiki::told`] and [`crate::translate`]).
-//! - `cox://api/project-wiki`: the project's own wiki, in `.cox/wiki` in
+//! - `cox://api/project-wiki`: the project's own wiki, in `wiki` in
 //!   its folder, as the human's is told, and whether the folder is the
 //!   home, which has none; and `cox://api/project-wiki/<page>`, a page.
 //! - `cox://api/raw`: the sources the agents kept of what they read (see
@@ -629,12 +629,8 @@ mod tests {
     #[test]
     fn the_projects_wiki_is_told_as_json() {
         let root = scratch("project-wiki");
-        std::fs::create_dir_all(root.join(".cox/wiki")).unwrap();
-        std::fs::write(
-            root.join(".cox/wiki/people.md"),
-            "# People\n\nWho to ask.\n",
-        )
-        .unwrap();
+        std::fs::create_dir_all(root.join("wiki")).unwrap();
+        std::fs::write(root.join("wiki/people.md"), "# People\n\nWho to ask.\n").unwrap();
         let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
 
         let answer = plugins.resource("cox://api/project-wiki").unwrap();

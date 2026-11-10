@@ -338,7 +338,8 @@ mod tests {
     #[test]
     fn what_happened_there_comes_the_last_first() {
         let root = scratch("happened");
-        let wiki = root.join("wiki");
+        // The human's wiki, apart from the project's own, in `root`.
+        let wiki = root.join("human/wiki");
         std::fs::create_dir_all(&wiki).unwrap();
         std::fs::write(
             wiki.join("errors.md"),
@@ -347,9 +348,9 @@ mod tests {
              - 2026-11-06 in other, chat \"two\"\n",
         )
         .unwrap();
-        std::fs::create_dir_all(root.join(".cox/wiki")).unwrap();
+        std::fs::create_dir_all(root.join("wiki")).unwrap();
         std::fs::write(
-            root.join(".cox/wiki/people.md"),
+            root.join("wiki/people.md"),
             "# People\n\nAsk Ann.\n\n## Used in\n\n- 2026-11-04 in app, chat \"three\"\n",
         )
         .unwrap();
