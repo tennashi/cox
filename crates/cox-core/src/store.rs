@@ -22,7 +22,7 @@ use crate::settings::Setting;
 use crate::tabs::KeptTabs;
 
 /// The version of the tables below, as `SQLite`'s `user_version` holds it.
-const VERSION: i64 = 15;
+const VERSION: i64 = 16;
 
 const TABLES: &str = "
 CREATE TABLE projects (
@@ -70,7 +70,11 @@ CREATE TABLE chats (
     folder TEXT,
     -- The steps of the plan its agent first sent after the human's last
     -- line, as JSON, which the plan is told against as it changes.
-    baseline TEXT
+    baseline TEXT,
+    -- The commands its agent runs when a line starts with `/` and one of
+    -- their names, as JSON, as it last told them, for the human to be
+    -- offered them while it does not run.
+    commands TEXT
 );
 CREATE TABLE entries (
     chat INTEGER NOT NULL REFERENCES chats (id),
@@ -138,6 +142,7 @@ const UPGRADES: &[&str] = &[
     "DROP TABLE folders;",
     "ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
     "ALTER TABLE projects ADD COLUMN about TEXT;",
+    "ALTER TABLE chats ADD COLUMN commands TEXT;",
 ];
 
 /// How long a write waits for another Cox writing the same database.
@@ -793,7 +798,7 @@ impl Store {
     /// When the database cannot be written.
     pub fn keep_agent(&self, chat: ChatId, agent: &str) -> anyhow::Result<()> {
         self.connection.execute(
-            "UPDATE chats SET agent = ?2, session = NULL, settings = NULL WHERE id = ?1",
+            "UPDATE chats SET agent = ?2, session = NULL, settings = NULL, commands = NULL WHERE id = ?1",
             params![chat.0, agent],
         )?;
         Ok(())
@@ -815,6 +820,45 @@ impl Store {
             .map(|settings| serde_json::from_str(&settings))
             .transpose()?
             .unwrap_or_default())
+    }
+
+    /// The commands `chat`'s agent runs when a line starts with `/` and
+    /// one of their names, as it last told them: none until it told any.
+    /// They are kept as `T` is written as JSON, whatever it is.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be read, or holds commands that are not
+    /// `T`s.
+    pub fn commands<T: serde::de::DeserializeOwned>(&self, chat: ChatId) -> anyhow::Result<Vec<T>> {
+        let commands: Option<String> = self.connection.query_row(
+            "SELECT commands FROM chats WHERE id = ?1",
+            [chat.0],
+            |row| row.get(0),
+        )?;
+        Ok(commands
+            .map(|commands| serde_json::from_str(&commands))
+            .transpose()?
+            .unwrap_or_default())
+    }
+
+    /// Keeps `commands` as those `chat`'s agent runs when a line starts
+    /// with `/` and one of their names.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written, or `commands` cannot be
+    /// written as JSON.
+    pub fn keep_commands<T: serde::Serialize>(
+        &self,
+        chat: ChatId,
+        commands: &[T],
+    ) -> anyhow::Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET commands = ?2 WHERE id = ?1",
+            params![chat.0, serde_json::to_string(commands)?],
+        )?;
+        Ok(())
     }
 
     /// The steps of the plan `chat`'s agent first sent after the human's
@@ -958,6 +1002,17 @@ impl Record {
     /// When the database cannot be written.
     pub fn baseline(&self, baseline: Option<&[String]>) -> anyhow::Result<()> {
         self.store.keep_baseline(self.chat, baseline)
+    }
+
+    /// Keeps `commands` as those the chat's agent runs when a line starts
+    /// with `/` and one of their names, as [`Store::keep_commands`] does.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written, or `commands` cannot be
+    /// written as JSON.
+    pub fn commands<T: serde::Serialize>(&self, commands: &[T]) -> anyhow::Result<()> {
+        self.store.keep_commands(self.chat, commands)
     }
 
     /// What the human set each setting of `agent`'s sessions to last, of
@@ -1389,6 +1444,25 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_commands_of_a_chats_agent() {
+        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        struct Command {
+            name: String,
+        }
+        let store = Store::in_memory().unwrap();
+        let chat = store.add_chat(None, "Chat 1").unwrap();
+        assert_eq!(store.commands::<Command>(chat).unwrap(), []);
+
+        let commands = [Command {
+            name: "review".to_owned(),
+        }];
+        store.keep_commands(chat, &commands).unwrap();
+        assert_eq!(store.commands::<Command>(chat).unwrap(), commands);
+        store.keep_commands::<Command>(chat, &[]).unwrap();
+        assert_eq!(store.commands::<Command>(chat).unwrap(), []);
+    }
+
+    #[test]
     fn keeps_the_settings_of_a_chats_session_and_the_last_choices() {
         use crate::settings::{Choice, Setting};
         let store = Store::in_memory().unwrap();
@@ -1445,11 +1519,16 @@ mod tests {
             choices: Vec::new(),
         };
         store.keep_settings(chat, &[setting]).unwrap();
+        store.keep_commands(chat, &["review"]).unwrap();
 
         store.keep_agent(chat, "codex").unwrap();
         assert_eq!(store.agent(chat).unwrap().as_deref(), Some("codex"));
         assert_eq!(store.session(chat).unwrap(), None);
         assert_eq!(store.settings(chat).unwrap(), []);
+        assert_eq!(
+            store.commands::<String>(chat).unwrap(),
+            Vec::<String>::new()
+        );
         // A chat its agent opens talks to the same agent.
         let child = store.add_chat_under(chat, None, "Chat 2", None).unwrap();
         assert_eq!(store.agent(child).unwrap().as_deref(), Some("codex"));

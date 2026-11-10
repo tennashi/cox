@@ -766,6 +766,10 @@ impl Daemon {
             tracing::error!("the chat's settings cannot be read: {error:#}");
             Vec::new()
         });
+        let commands = self.store.commands(kept).unwrap_or_else(|error| {
+            tracing::error!("the chat's commands cannot be read: {error:#}");
+            Vec::new()
+        });
         // A chat of a sketch whose folder is gone from under it does not
         // start again.
         let gone = setup.as_ref().is_some_and(|setup| setup.folder.is_some()) && !cwd.exists();
@@ -783,6 +787,7 @@ impl Daemon {
             .with_baseline(baseline)
             .with_goal(goal)
             .with_settings(settings)
+            .with_commands(commands)
             .with_keeping(keeps);
         let record = Record::new(Rc::clone(&self.store), kept);
         let agents = self.spawns.agents();

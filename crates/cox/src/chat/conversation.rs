@@ -256,6 +256,14 @@ struct Drift {
     changes: usize,
 }
 
+/// Which of what the agent told of its session changed since it was last
+/// taken, to keep.
+#[derive(Debug, Default)]
+struct Unkept {
+    settings: bool,
+    commands: bool,
+}
+
 /// The conversation the window shows.
 #[derive(Debug)]
 pub struct Conversation {
@@ -272,11 +280,13 @@ pub struct Conversation {
     /// model, each as it is set, once the agent has said, or as it was
     /// kept.
     settings: Vec<Setting>,
-    /// Whether the settings changed since that was last taken, to keep.
-    settings_changed: bool,
     /// The commands the agent runs when a line starts with `/` and one of
-    /// their names, as it last told them while it runs.
+    /// their names, as it last told them, while it runs or since, as they
+    /// were kept: a line sent to a closed chat starts it again.
     commands: Vec<SlashCommand>,
+    /// Which of the settings and the commands changed since that was last
+    /// taken, to keep.
+    unkept: Unkept,
     /// Whose move it was when the agent asked the human to log in, which it
     /// is again once they have chosen how.
     before_login: State,
@@ -351,8 +361,8 @@ impl Conversation {
             title: None,
             goal: None,
             settings: Vec::new(),
-            settings_changed: false,
             commands: Vec::new(),
+            unkept: Unkept::default(),
             before_login: State::Idle,
             keeps: true,
             steers: false,
@@ -399,8 +409,8 @@ impl Conversation {
             title: None,
             goal: None,
             settings: Vec::new(),
-            settings_changed: false,
             commands: Vec::new(),
+            unkept: Unkept::default(),
             before_login: State::Idle,
             keeps: true,
             steers: false,
@@ -442,6 +452,14 @@ impl Conversation {
     #[must_use]
     pub fn with_settings(mut self, settings: Vec<Setting>) -> Self {
         self.settings = settings;
+        self
+    }
+
+    /// The conversation, of a chat whose agent told `commands` as those it
+    /// runs, as they were kept.
+    #[must_use]
+    pub fn with_commands(mut self, commands: Vec<SlashCommand>) -> Self {
+        self.commands = commands;
         self
     }
 
@@ -505,7 +523,7 @@ impl Conversation {
     }
 
     /// The commands the agent runs when a line starts with `/` and one of
-    /// their names, as it told them, while it runs.
+    /// their names, as it last told them, while it runs or since.
     #[must_use]
     pub fn commands(&self) -> &[SlashCommand] {
         &self.commands
@@ -513,7 +531,12 @@ impl Conversation {
 
     /// Whether the settings changed since this was last called, to keep.
     pub fn take_settings_changed(&mut self) -> bool {
-        std::mem::take(&mut self.settings_changed)
+        std::mem::take(&mut self.unkept.settings)
+    }
+
+    /// Whether the commands changed since this was last called, to keep.
+    pub fn take_commands_changed(&mut self) -> bool {
+        std::mem::take(&mut self.unkept.commands)
     }
 
     /// Sets the setting `id` to `value` here, as for a closed chat, whose
@@ -526,7 +549,7 @@ impl Conversation {
             return false;
         }
         value.clone_into(&mut setting.value);
-        self.settings_changed = true;
+        self.unkept.settings = true;
         true
     }
 
@@ -636,7 +659,7 @@ impl Conversation {
 
     /// Closes the conversation as the human switches it from the agent
     /// named `from` to the one named `to`, which goes on from it. The
-    /// settings were of the session of the agent before.
+    /// settings and the commands were of the agent before.
     pub fn switch(&mut self, from: &str, to: &str) {
         self.push(Entry::Switched {
             from: from.to_owned(),
@@ -644,6 +667,7 @@ impl Conversation {
         });
         self.state = State::Closed;
         self.settings.clear();
+        self.commands.clear();
     }
 
     /// Takes what the human entered, and returns the prompt to send the
@@ -2061,11 +2085,19 @@ impl Conversation {
         });
     }
 
+    /// Takes `commands` as those the agent runs now.
+    fn commands_told(&mut self, commands: Vec<SlashCommand>) {
+        if commands != self.commands {
+            self.commands = commands;
+            self.unkept.commands = true;
+        }
+    }
+
     /// Takes `settings` as how the session is set now.
     fn settings_set(&mut self, settings: Vec<Setting>) {
         if settings != self.settings {
             self.settings = settings;
-            self.settings_changed = true;
+            self.unkept.settings = true;
         }
     }
 
@@ -2105,7 +2137,7 @@ impl Conversation {
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Titled(title) => self.title = Some(title),
-            AgentEvent::Commands(commands) => self.commands = commands,
+            AgentEvent::Commands(commands) => self.commands_told(commands),
             AgentEvent::Settings(settings) => self.settings_set(settings),
             AgentEvent::SettingFailed { name, error } => {
                 self.push(Entry::Note(format!(
@@ -2188,8 +2220,7 @@ impl Conversation {
         self.push(Entry::Note(note));
         self.state = State::Closed;
         self.steering = 0;
-        // A closed agent runs no command.
-        self.commands.clear();
+        // The commands stay, for the line that starts the agent again.
     }
 }
 
@@ -2368,6 +2399,26 @@ mod tests {
                 chosen: Some(1),
             })
         );
+    }
+
+    #[test]
+    fn the_agents_commands_are_kept_and_stay_once_it_closes() {
+        let review = SlashCommand {
+            name: "review".to_owned(),
+            description: "Review the changes".to_owned(),
+            hint: None,
+        };
+        let mut conversation = Conversation::new();
+        conversation.apply(AgentEvent::Commands(vec![review.clone()]));
+        assert!(conversation.take_commands_changed());
+        conversation.apply(AgentEvent::Commands(vec![review.clone()]));
+        assert!(!conversation.take_commands_changed());
+
+        conversation.apply(AgentEvent::Closed(None));
+        assert_eq!(conversation.commands(), std::slice::from_ref(&review));
+
+        conversation.switch("claude", "codex");
+        assert_eq!(conversation.commands(), []);
     }
 
     #[test]
