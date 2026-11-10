@@ -1555,6 +1555,53 @@ async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
     let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
+#[gpui::test]
+async fn a_sketch_proposes_a_project_of_what_it_made_with_the_chat_it_was_opened_under(
+    cx: &mut TestAppContext,
+) {
+    let home = repository("sketch-proposes-home");
+    let store = kept_store("sketch-proposes-kept");
+    let (_, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let made = open_sketch(cx, &workspace, &asks, Sketch::Empty, 2).await;
+    std::fs::write(made.join("index.html"), "<p>shop</p>\n").unwrap();
+    let sketch = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().name().to_owned()
+    });
+
+    // The sketch's agent names no sketch: it is the sketch.
+    let shop = propose_project(&asks, 1, "shop", None);
+    settled(cx, &workspace);
+    let shop = shop.await.unwrap().unwrap();
+    workspace.update_in(cx, |workspace, window, cx| workspace.show(1, window, cx));
+    let at = shown_entries(cx, &workspace)
+        .iter()
+        .position(|entry| {
+            matches!(entry, Entry::ProjectProposal { sketch_name: Some(name), .. }
+                if *name == sketch)
+        })
+        .expect("the card names the sketch");
+    click(cx, Box::leak(format!("make-project-{at}").into_boxed_str()));
+    settled(cx, &workspace);
+
+    // What it made is kept apart, a source of the project's, and the
+    // chat it was opened under goes into the project with it.
+    assert_moved(&made.join("index.html"), "<p>shop</p>\n", &shop);
+    let kept = store.projects().unwrap();
+    assert_eq!(kept.len(), 1);
+    let chats = store.chats().unwrap();
+    assert_eq!(chats.len(), 2);
+    assert!(chats.iter().all(|chat| chat.project == Some(kept[0].id)));
+    workspace.read_with(cx, |workspace, _| {
+        assert_eq!(workspace.chats(0).count(), 0);
+        assert_eq!(workspace.chats(1).count(), 2);
+    });
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
+}
+
 /// Makes a Git repository at `folder` with one commit, on `main`.
 fn repository_with_a_commit(folder: &Path) {
     let git = |args: &[&str]| {
