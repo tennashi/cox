@@ -1002,7 +1002,20 @@ fn told_of_proposal(entry: &Entry) -> Option<String> {
 /// tool calls it made, by their titles, and where the human switched the
 /// chat from one agent to another, which the answer says it holds. Cox's
 /// notes are left out. A chat where nothing was said has nothing to tell.
+/// Past [`RETOLD_LENGTH`], the start is left out.
 fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
+    let (mut told, switched) = said(entries)?;
+    let length = told.chars().count();
+    if length > RETOLD_LENGTH {
+        let kept: String = told.chars().skip(length - RETOLD_LENGTH).collect();
+        told = format!("[… the start is left out]\n{kept}");
+    }
+    Some((told, switched))
+}
+
+/// What was said in `entries`, whole, as [`told_so_far`] tells it, and
+/// whether the human switched the chat from one agent to another.
+fn said(entries: &[Entry]) -> Option<(String, bool)> {
     let switched = entries
         .iter()
         .any(|entry| matches!(entry, Entry::Switched { .. }));
@@ -1091,13 +1104,15 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
             | Entry::Event { .. } => None,
         })
         .collect();
-    let mut told = told.join("\n\n");
-    let length = told.chars().count();
-    if length > RETOLD_LENGTH {
-        let kept: String = told.chars().skip(length - RETOLD_LENGTH).collect();
-        told = format!("[… the start is left out]\n{kept}");
-    }
-    Some((told, switched))
+    Some((told.join("\n\n"), switched))
+}
+
+/// What was said in a sketch, `entries`, whole, as it is kept once the
+/// sketch ends (see [`crate::raw`]), where `[you]` stands for the
+/// sketch's agent; or nothing, when nothing was said in it.
+#[must_use]
+pub fn said_in_sketch(entries: &[Entry]) -> Option<String> {
+    said(entries).map(|(said, _)| said)
 }
 
 /// The most of another chat's conversation an agent reads with

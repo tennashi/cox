@@ -34,13 +34,16 @@
 //!   and, when the human reads the wiki in a language of their own, as
 //!   HTML in that language too, as far as it is translated (see
 //!   [`crate::wiki::told`] and [`crate::translate`]).
-//! - `cox://api/project-wiki`: the project's own wiki, in `.cox/wiki` in
+//! - `cox://api/project-wiki`: the project's own wiki, in `wiki` in
 //!   its folder, as the human's is told, and whether the folder is the
 //!   home, which has none; and `cox://api/project-wiki/<page>`, a page.
 //! - `cox://api/raw`: the sources the agents kept of what they read (see
 //!   [`crate::raw::told`]), the last kept first; and
 //!   `cox://api/raw/<name>`, a source, as a page of the wiki is told,
 //!   with where it was read.
+//! - `cox://api/project-raw`: the project's own sources, in `raw` in
+//!   its folder, as the human's are told, and whether the folder is the
+//!   home, which has none; and `cox://api/project-raw/<name>`, a source.
 //!
 //! - `cox://api/activity`: what goes on in the folder, what waits for
 //!   the human and what happened without them (see
@@ -315,10 +318,16 @@ impl Plugins {
                     wiki::page_in(&root, &percent_decoded(rest), translate::page)?
                 }
             }
-            "raw" => {
-                let root = crate::settings::raw();
+            "raw" | "project-raw" => {
+                let root = if what == "raw" {
+                    crate::settings::raw()
+                } else {
+                    self.root.join(crate::raw::PROJECT_RAW)
+                };
                 if rest.is_empty() {
-                    crate::raw::told(&root)
+                    let mut told = crate::raw::told(&root);
+                    told["home"] = (self.root == home()).into();
+                    told
                 } else {
                     crate::raw::told_source(&root, &percent_decoded(rest), translate::page)?
                 }
@@ -591,14 +600,37 @@ mod tests {
     }
 
     #[test]
-    fn the_projects_wiki_is_told_as_json() {
-        let root = scratch("project-wiki");
-        std::fs::create_dir_all(root.join(".cox/wiki")).unwrap();
+    fn the_projects_sources_are_told_as_json() {
+        let root = scratch("project-raw");
+        std::fs::create_dir_all(root.join("raw/sketches")).unwrap();
         std::fs::write(
-            root.join(".cox/wiki/people.md"),
-            "# People\n\nWho to ask.\n",
+            root.join("raw/sketches/2026-11-10-mock.md"),
+            "---\nsource: \"chat 3\"\nkept: 2026-11-10\n---\n\n# Mock\n\nWhat it tried.\n",
         )
         .unwrap();
+        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
+
+        let answer = plugins.resource("cox://api/project-raw").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["sources"][0]["name"], "sketches/2026-11-10-mock");
+        assert_eq!(json["sources"][0]["source"], "chat 3");
+        assert_eq!(json["home"], false);
+        let answer = plugins
+            .resource("cox://api/project-raw/sketches/2026-11-10-mock")
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert_eq!(json["title"], "Mock");
+        assert_eq!(
+            plugins.resource("cox://api/project-raw/sketches/nothing"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_projects_wiki_is_told_as_json() {
+        let root = scratch("project-wiki");
+        std::fs::create_dir_all(root.join("wiki")).unwrap();
+        std::fs::write(root.join("wiki/people.md"), "# People\n\nWho to ask.\n").unwrap();
         let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
 
         let answer = plugins.resource("cox://api/project-wiki").unwrap();

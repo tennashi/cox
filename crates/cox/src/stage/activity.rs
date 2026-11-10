@@ -199,10 +199,49 @@ fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, triggers: &Value) 
             &mut happened,
         );
     }
-    let sources = crate::raw::told(raw);
-    for source in sources["sources"].as_array().into_iter().flatten() {
+    kept_sources(root, raw, home, name.as_deref(), &mut happened);
+    happened.sort_by(|a, b| {
+        let when = |event: &Value| event["when"].as_str().unwrap_or_default().to_owned();
+        when(b).cmp(&when(a))
+    });
+    happened.truncate(HAPPENED);
+    json!({
+        "folder": root,
+        "home": home,
+        "waiting": waiting,
+        "happened": happened,
+    })
+}
+
+/// Pushes onto `happened` the sources kept of the folder `root`, the
+/// project of `name`, if it is one: those of the human's sources at
+/// `raw` the project kept, or all of them in the home, and those of the
+/// project's own.
+fn kept_sources(
+    root: &Path,
+    raw: &Path,
+    home: bool,
+    name: Option<&str>,
+    happened: &mut Vec<Value>,
+) {
+    let mut sources: Vec<(Value, &str)> = crate::raw::told(raw)["sources"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|source| (source.clone(), "raw:"))
+        .collect();
+    if !home {
+        sources.extend(
+            crate::raw::told(&root.join(crate::raw::PROJECT_RAW))["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|source| (source.clone(), "project-raw:")),
+        );
+    }
+    for (source, shelf) in &sources {
         let project = source["project"].as_str();
-        let kept_here = home || (project.is_some() && name.as_deref() == project);
+        let kept_here = home || *shelf == "project-raw:" || (project.is_some() && name == project);
         if kept_here {
             happened.push(json!({
                 "when": source["kept"],
@@ -217,21 +256,10 @@ fn told_of(told: &Told, root: &Path, wiki: &Path, raw: &Path, triggers: &Value) 
                         .map(|project| format!(" in {project}"))
                         .unwrap_or_default()
                 ),
-                "href": format!("cox://wiki/#raw:{}", source["name"].as_str().unwrap_or_default()),
+                "href": format!("cox://wiki/#{shelf}{}", source["name"].as_str().unwrap_or_default()),
             }));
         }
     }
-    happened.sort_by(|a, b| {
-        let when = |event: &Value| event["when"].as_str().unwrap_or_default().to_owned();
-        when(b).cmp(&when(a))
-    });
-    happened.truncate(HAPPENED);
-    json!({
-        "folder": root,
-        "home": home,
-        "waiting": waiting,
-        "happened": happened,
-    })
 }
 
 #[cfg(test)]
@@ -310,7 +338,8 @@ mod tests {
     #[test]
     fn what_happened_there_comes_the_last_first() {
         let root = scratch("happened");
-        let wiki = root.join("wiki");
+        // The human's wiki, apart from the project's own, in `root`.
+        let wiki = root.join("human/wiki");
         std::fs::create_dir_all(&wiki).unwrap();
         std::fs::write(
             wiki.join("errors.md"),
@@ -319,13 +348,14 @@ mod tests {
              - 2026-11-06 in other, chat \"two\"\n",
         )
         .unwrap();
-        std::fs::create_dir_all(root.join(".cox/wiki")).unwrap();
+        std::fs::create_dir_all(root.join("wiki")).unwrap();
         std::fs::write(
-            root.join(".cox/wiki/people.md"),
+            root.join("wiki/people.md"),
             "# People\n\nAsk Ann.\n\n## Used in\n\n- 2026-11-04 in app, chat \"three\"\n",
         )
         .unwrap();
-        let raw = root.join("raw");
+        // The human's sources, apart from the project's own, in `root`.
+        let raw = root.join("human/raw");
         let source = crate::raw::Source {
             from: "https://example.com/",
             title: "News",

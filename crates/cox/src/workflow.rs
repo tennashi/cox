@@ -147,7 +147,9 @@ pub struct Ending {
     pub open: bool,
     /// The text the agent of the chat the sketch was opened beside is told
     /// once the sketch ends, with `{kept}`, where what the sketch changed is
-    /// kept, and `{summary}`, what the sketch's agent said last.
+    /// kept, `{summary}`, what the sketch's agent said last, and `{source}`,
+    /// the source that keeps what the sketch did (see
+    /// [`crate::chat::sketch::SOURCES`]).
     pub then: Option<String>,
     /// The goal the chat works toward once it goes on in the project, as
     /// "Set goal…" takes it.

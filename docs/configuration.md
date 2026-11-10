@@ -66,7 +66,7 @@ Every key is optional. Paths may be absolute or start with `~`.
 | `home` | Cox's home: where Cox's own chats work, and where `projects`, `workflow`, `wiki` and `raw` are by default. | `~/cox` |
 | `workflow` | Your [workflow folder](#the-workflow-folder). | `workflow` in the home |
 | `wiki` | Your wiki: Markdown pages the agents write, such as an Obsidian vault or a Git repository. | `wiki` in the home |
-| `raw` | Where agents keep the sources they read (`raw_keep`). | `raw` in the home |
+| `raw` | Where agents keep the sources they read (`raw_keep`) in Cox's own chats, or when told to keep them for every project. A project's chats keep theirs in the project's `raw/`. | `raw` in the home |
 | `translation.language` | Your language. Text in English is translated into it, and other text into English. Without it, translation is off. | none |
 | `translation.command` | A command that reads text on standard input and writes its translation on standard output. `{from}` and `{to}` in its arguments stand for the languages. | none |
 | `translation.agent` | The name of an agent to translate with, used when there is no `command`. | the agent a new chat starts |
@@ -244,8 +244,13 @@ menu offers them.
 | `sum_up` | A file of the workflow the sketch's agent is asked first, to sum the sketch up, with `{left_out}`. |
 | `keep` | `"ref"` keeps what the sketch changed, as one commit: under `refs/cox/discarded/` in the project's repository, or as a Git bundle in `sketches/discarded` in the data folder for a sketch from nothing. |
 | `folder` | `"open"` opens a sketch from nothing as a new project, instead of removing its folder. |
-| `then` | A file of the workflow that the chat the sketch was opened beside is told next. `{kept}` stands for the ref or bundle, and `{summary}` for the sketch's summing up. |
+| `then` | A file of the workflow that the chat the sketch was opened beside is told next. `{kept}` stands for the ref or bundle, `{summary}` for the sketch's summing up, and `{source}` for the source Cox keeps of the sketch. |
 | `goal` | The goal that chat gets: `$ ` and a command, or words. |
+
+However a sketch ends, and whatever `sketch.json` says, Cox keeps what it
+did as a source of the project's, under the topic `sketches` in its
+`raw/`: how it ended and all that was said in it. A sketch of Cox's own
+chats keeps it in the human's `raw`.
 
 ## A project's own files
 
@@ -254,7 +259,8 @@ menu offers them.
 | `COX.md` | What the project's chats' agents are told first, after the workflow's `COX.md`. |
 | `.cox/goal.md` | What a goal's judge is told it is, instead of Cox's default. Cox still adds how to end the reply, and the goal. |
 | `.cox/triggers/*.md` | The project's [triggers](#triggers). |
-| `.cox/wiki/` | The project's own wiki, for what holds only of it. Only its chats see it. |
+| `wiki/` | The project's own wiki, for what holds only of it. Only its chats see it. |
+| `raw/` | The project's own sources, what its chats read (`raw_keep`), as they read it. Only its chats see them. |
 | `.cox/maps/<name>.json` | The project's maps. Agents write them; `show_map` tells an agent the format. |
 | `.cox/plugins/<name>/` | A [plugin](#plugins): a view of the project's own on the stage. |
 | `.cox/servers.json` | Language servers for the project. See [Language servers](#language-servers). |

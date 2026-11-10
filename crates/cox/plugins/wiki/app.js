@@ -1,11 +1,12 @@
 // What the agents learned and read, drawn by a page of the stage, on
-// three shelves the chips at its top choose between: the human's wiki,
+// four shelves the chips at its top choose between: the human's wiki,
 // the pages the agents of every project keep of what they learned, read
-// as JSON from `cox://api/wiki`; the project's own wiki, in `.cox/wiki`
-// in its folder, from `cox://api/project-wiki`, which the home has none
-// of; and the sources the agents kept of what they read, from
-// `cox://api/raw`. Each is read again every two seconds, as Cox's own
-// tabs follow what they show.
+// as JSON from `cox://api/wiki`; the project's own wiki, in `wiki`
+// in its folder, from `cox://api/project-wiki`; the human's sources, what
+// the agents kept of what they read, from `cox://api/raw`; and the
+// project's own sources, in `raw` in its folder, from
+// `cox://api/project-raw`. The home has no project's shelves. Each is
+// read again every two seconds, as Cox's own tabs follow what they show.
 //
 // With no page in the hash, the page lists the shelf's pages, which the
 // line at its top narrows to those whose names, titles or first lines
@@ -17,8 +18,9 @@
 //
 // The hash names the shelf and the page: `#rust/errors` a page of the
 // human's wiki, `#project:` the project's wiki and `#project:people` a
-// page of it, `#raw:` the sources and `#raw:rust-news/2026-11-06-...` a
-// source. A page shows its text, its links opening the pages they name
+// page of it, `#raw:` the human's sources and
+// `#raw:rust-news/2026-11-06-...` a source, and `#project-raw:` the
+// project's sources. A page shows its text, its links opening the pages they name
 // on its shelf, and, on a wiki, the pages that link to it and where it
 // was used; a source shows where it was read, and when and by which
 // chat. When the human reads in a language of their own, a page is
@@ -30,8 +32,9 @@ const EVERY = 2000;
 /// The shelves, by the prefix of the hash that names them.
 const SHELVES = {
   wiki: { prefix: "", api: "cox://api/wiki", label: "Your wiki" },
-  project: { prefix: "project:", api: "cox://api/project-wiki", label: "This project's wiki" },
-  raw: { prefix: "raw:", api: "cox://api/raw", label: "Sources" },
+  project: { prefix: "project:", api: "cox://api/project-wiki", label: "This project's wiki", project: true },
+  raw: { prefix: "raw:", api: "cox://api/raw", label: "Your sources", sources: true },
+  projectRaw: { prefix: "project-raw:", api: "cox://api/project-raw", label: "This project's sources", sources: true, project: true },
 };
 
 /// What each mark of Cox's says, as a chip and on a page.
@@ -75,7 +78,7 @@ function shown() {
 const encoded = (name) => name.split("/").map(encodeURIComponent).join("/");
 const href = (shelf, name) => `#${SHELVES[shelf].prefix}${encoded(name)}`;
 const marks = (p) => (p.marks ?? []).map((m) => `<span class="mark ${m}" title="${esc(MARKS[m]?.[1] ?? m)}">${esc(MARKS[m]?.[0] ?? m)}</span>`).join("");
-const entriesOf = (shelf) => (shelf === "raw" ? lists.raw?.sources : lists[shelf]?.pages) ?? [];
+const entriesOf = (shelf) => (SHELVES[shelf].sources ? lists[shelf]?.sources : lists[shelf]?.pages) ?? [];
 
 async function read(url) {
   try {
@@ -123,12 +126,12 @@ function draw() {
 }
 
 /// The chips that choose the shelf, each with how many it holds; the
-/// project's wiki is not one in the home.
+/// project's shelves are none in the home.
 function shelves(chosen) {
   return (
     `<div class="shelves">` +
     Object.entries(SHELVES)
-      .filter(([shelf]) => shelf !== "project" || (lists.project && !lists.project.home) || chosen === "project")
+      .filter(([shelf, { project }]) => !project || (lists[shelf] && !lists[shelf].home) || chosen === shelf)
       .map(([shelf, { label }]) => {
         const count = entriesOf(shelf).length;
         return `<a class="shelf ${shelf === chosen ? "on" : ""}" href="${href(shelf, "")}" data-shelf="${shelf}">${esc(label)}<b>${count}</b></a>`;
@@ -152,12 +155,12 @@ function head(said, where, opens) {
 function drawList(shelf) {
   const list = lists[shelf];
   if (!list) {
-    app.innerHTML = `${head("")}<div class="find">${shelves(shelf)}</div><div class="empty">Cox cannot tell where the ${shelf === "raw" ? "sources are" : "wiki is"}.</div>`;
+    app.innerHTML = `${head("")}<div class="find">${shelves(shelf)}</div><div class="empty">Cox cannot tell where the ${SHELVES[shelf].sources ? "sources are" : "wiki is"}.</div>`;
     return;
   }
   const entries = entriesOf(shelf);
   const counts =
-    shelf === "raw"
+    SHELVES[shelf].sources
       ? []
       : Object.keys(MARKS)
           .map((m) => [m, entries.filter((p) => p.marks.includes(m)).length])
@@ -165,7 +168,7 @@ function drawList(shelf) {
   if (marked && !counts.some(([m]) => m === marked)) marked = null;
   const focused = document.activeElement?.id === "find";
   app.innerHTML =
-    head(`${entries.length} ${shelf === "raw" ? "source" : "page"}${entries.length === 1 ? "" : "s"}`, list.root) +
+    head(`${entries.length} ${SHELVES[shelf].sources ? "source" : "page"}${entries.length === 1 ? "" : "s"}`, list.root) +
     `<div class="find">${shelves(shelf)}<input id="find" placeholder="Narrow by words" value="${esc(typed)}" spellcheck="false">` +
     counts.map(([m, n]) => `<span class="chip ${marked === m ? "on" : ""}" data-mark="${m}" title="${esc(MARKS[m][1])}"><b>${n}</b> ${esc(MARKS[m][0])}</span>`).join("") +
     `</div><div class="pages" id="pages"></div>`;
@@ -191,8 +194,10 @@ function drawList(shelf) {
 const NOTHING = {
   wiki: "The wiki has no pages yet. An agent writes one with <code>wiki_write</code>, as when the human asks a chat to <b>Save to wiki</b> from the menu of its tab.",
   project:
-    "This project's wiki has no pages yet. An agent writes one with <code>wiki_write</code> and <code>keep_in_project</code>, for what holds only of this project, into <code>.cox/wiki</code> in its folder.",
+    "This project's wiki has no pages yet. An agent writes one with <code>wiki_write</code> and <code>keep_in_project</code>, for what holds only of this project, into <code>wiki</code> in its folder.",
   raw: "No source is kept yet. An agent keeps what it reads with <code>raw_keep</code>, as research on a schedule asks it to.",
+  projectRaw:
+    "This project has no sources yet. Its chats keep what they read with <code>raw_keep</code>, into <code>raw</code> in its folder.",
 };
 
 function drawEntries(shelf) {
@@ -213,7 +218,7 @@ function drawEntries(shelf) {
     return;
   }
   list.classList.add("card");
-  list.innerHTML = fits.map((p) => (shelf === "raw" ? sourceEntry(p) : pageEntry(shelf, p))).join("");
+  list.innerHTML = fits.map((p) => (SHELVES[shelf].sources ? sourceEntry(shelf, p) : pageEntry(shelf, p))).join("");
 }
 
 function pageEntry(shelf, p) {
@@ -236,10 +241,10 @@ function from(source) {
   }
 }
 
-function sourceEntry(s) {
+function sourceEntry(shelf, s) {
   const kept = [s.kept, s.topic && `in ${s.topic}`, s.chat && `by ${s.chat}`].filter(Boolean).join(" ");
   return (
-    `<a class="entry" href="${href("raw", s.name)}"><div><span class="title">${esc(s.title)}</span><span class="name">${esc(from(s.source))}</span></div>` +
+    `<a class="entry" href="${href(shelf, s.name)}"><div><span class="title">${esc(s.title)}</span><span class="name">${esc(from(s.source))}</span></div>` +
     (kept ? `<div class="last">kept ${esc(kept)}</div>` : "") +
     `</a>`
   );
@@ -256,7 +261,7 @@ function drawPage(shelf, name) {
   const link = (n) => `<a href="${href(shelf, n)}">${esc(titled(n))}</a>`;
   const translation = page.translation;
   const translated = translation && !written;
-  const raw = shelf === "raw";
+  const raw = SHELVES[shelf].sources;
   const warned = raw ? "" : page.marks.map((m) => `<li>${esc(MARKS[m]?.[1] ?? m)}${m === "broken" ? `: ${page.broken.map((b) => `<code>${esc(b)}</code>`).join(", ")}` : ""}</li>`).join("");
   const aside = raw
     ? `<div class="aside"><h2>Read at</h2>${source(page.source)}</div>` +

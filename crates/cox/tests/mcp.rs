@@ -329,6 +329,7 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
 
     a_project_keeps_its_own_wiki(&mut writer, &mut reader, &one, &home);
     sources_are_kept_apart_from_the_wiki(&mut writer, &mut reader, &home);
+    a_project_keeps_its_own_sources(&mut writer, &mut reader, &one, &home);
     drop((writer, reader));
     for folder in [data, one, other] {
         std::fs::remove_dir_all(folder).unwrap();
@@ -349,7 +350,7 @@ fn a_project_keeps_its_own_wiki(writer: &mut Agent, reader: &mut Agent, one: &Pa
     );
     let written = writer.hear();
     let written = written["result"]["content"][0]["text"].as_str().unwrap();
-    let customers = one.join(".cox/wiki/customers.md");
+    let customers = one.join("wiki/customers.md");
     assert!(
         written.starts_with(&format!(
             "{} is written, in this project's wiki, used ",
@@ -389,8 +390,9 @@ fn a_project_keeps_its_own_wiki(writer: &mut Agent, reader: &mut Agent, one: &Pa
     assert_eq!(writer.hear()["result"]["isError"], true);
 }
 
-/// What a chat reads is kept apart from the wiki, in the home's `raw`,
-/// for any chat to find again.
+/// What a chat reads is kept apart from the wiki, in the home's `raw`
+/// when the chat says it is for every project, for any chat to find
+/// again.
 fn sources_are_kept_apart_from_the_wiki(writer: &mut Agent, reader: &mut Agent, home: &Path) {
     writer.call(
         11,
@@ -400,6 +402,7 @@ fn sources_are_kept_apart_from_the_wiki(writer: &mut Agent, reader: &mut Agent, 
             "from": "https://docs.rs/gpui/latest/gpui/",
             "title": "gpui docs",
             "text": "Overflow scrolls only inside a bounded height.\n",
+            "keep_in_project": false,
         }),
     );
     let kept = writer.hear();
@@ -464,4 +467,64 @@ fn sources_are_kept_apart_from_the_wiki(writer: &mut Agent, reader: &mut Agent, 
     let refused = writer.hear();
     let refused = refused["result"]["content"][0]["text"].as_str().unwrap();
     assert!(refused.contains("not on the web"), "{refused}");
+}
+
+/// What a chat of a project reads is kept in the project's own `raw`,
+/// in `one`, unless it says otherwise: its chats find it, the project's
+/// before the human's, and the reader, of another project, does not.
+fn a_project_keeps_its_own_sources(
+    writer: &mut Agent,
+    reader: &mut Agent,
+    one: &Path,
+    home: &Path,
+) {
+    writer.call(
+        19,
+        "raw_keep",
+        &json!({
+            "topic": "sketches",
+            "from": "chat 7",
+            "title": "Acme mock",
+            "text": "Acme wants a plain list, not cards.\n",
+        }),
+    );
+    let kept = writer.hear();
+    let kept = kept["result"]["content"][0]["text"].as_str().unwrap();
+    let name = kept
+        .strip_prefix("The source is kept as ")
+        .and_then(|rest| rest.split(", in ").next())
+        .unwrap_or_else(|| panic!("{kept}"));
+    assert!(kept.contains(", in this project's sources, in "), "{kept}");
+    assert!(one.join(format!("raw/{name}.md")).is_file(), "{kept}");
+    assert!(!home.join(format!("raw/{name}.md")).exists(), "{kept}");
+    reader.call(20, "raw_search", &json!({ "query": "plain list" }));
+    let found = reader.hear();
+    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(found.starts_with("No source kept"), "{found}");
+    reader.call(21, "raw_read", &json!({ "source": name }));
+    assert_eq!(reader.hear()["result"]["isError"], true);
+    writer.call(22, "raw_search", &json!({ "query": "plain list" }));
+    let found = writer.hear();
+    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        found.contains(&format!("In this project's sources:\n\n{name}: Acme mock")),
+        "{found}"
+    );
+    writer.call(23, "raw_read", &json!({}));
+    let listed = writer.hear();
+    let listed = listed["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        listed.contains(&format!(
+            "In this project's sources, the last kept first:\n{name}"
+        )),
+        "{listed}"
+    );
+    assert!(
+        listed.contains("In the human's sources, the last kept first:\ngpui-news/"),
+        "{listed}"
+    );
+    writer.call(24, "raw_read", &json!({ "source": name }));
+    let read = writer.hear();
+    let read = read["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(read.contains("Acme wants a plain list"), "{read}");
 }

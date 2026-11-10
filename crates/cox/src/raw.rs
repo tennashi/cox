@@ -15,6 +15,11 @@
 //! is never written again: what changed is another source, kept beside
 //! it.
 //!
+//! A project keeps sources of its own too, in `raw` in its folder,
+//! beside its own wiki (see [`crate::wiki`]): what its chats
+//! read, and what they tried, are of its work, so its chats keep them
+//! there, and only they find them, the project's before the human's.
+//!
 //! What a source says is anyone's, as a page of the web, kept in a
 //! folder the human may open as an Obsidian vault, where some of the
 //! plugins run what a note holds: so it is kept [`inert`], with what
@@ -33,6 +38,9 @@ pub mod page;
 /// The folder in the home that keeps the sources, unless the settings
 /// name another.
 pub const RAW: &str = "raw";
+
+/// The folder of a project that holds its own sources.
+pub const PROJECT_RAW: &str = "raw";
 
 /// The most characters of a source's name, past its day.
 const NAME_LENGTH: usize = 60;
