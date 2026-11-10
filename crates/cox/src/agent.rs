@@ -1100,6 +1100,27 @@ fn told_so_far(entries: &[Entry]) -> Option<(String, bool)> {
     Some((told, switched))
 }
 
+/// The most of another chat's conversation an agent reads with
+/// `read_chat`, in characters: past it, the start is left out.
+const READ_LENGTH: usize = 40_000;
+
+/// What an agent reading another chat of its project is told of what the
+/// chat `name`, kept as `number`, showed, `entries`, from its end; or
+/// nothing, when nothing was said in it.
+#[must_use]
+pub fn read_out(number: i64, name: &str, entries: &[Entry]) -> Option<String> {
+    let (mut told, _) = told_so_far(entries)?;
+    let length = told.chars().count();
+    if length > READ_LENGTH {
+        let kept: String = told.chars().skip(length - READ_LENGTH).collect();
+        told = format!("[… the start is left out]\n{kept}");
+    }
+    Some(format!(
+        "Chat {number}, \"{name}\", as Cox kept it, where [you] stands for that chat's agent, \
+         not you:\n\n{told}"
+    ))
+}
+
 /// What the agent of a sketch opened beside a chat is told of what the
 /// chat talked through so far, `entries`, ahead of what it tries; or
 /// nothing, when nothing was said in the chat.
@@ -1242,6 +1263,40 @@ mod tests {
             "{told}"
         );
         assert!(!told.contains("EndTurn"), "{told}");
+    }
+
+    #[test]
+    fn another_chat_is_read_out_from_its_end() {
+        assert_eq!(
+            read_out(3, "Chat 3", &[Entry::Note("Opened".to_owned())]),
+            None
+        );
+        let read = read_out(
+            3,
+            "Cart",
+            &[
+                Entry::Human("Add a cart.".to_owned()),
+                Entry::Reply("Added it.".to_owned()),
+            ],
+        )
+        .unwrap();
+        assert!(
+            read.starts_with("Chat 3, \"Cart\", as Cox kept it"),
+            "{read}"
+        );
+        assert!(
+            read.ends_with("[human]\nAdd a cart.\n\n[you]\nAdded it."),
+            "{read}"
+        );
+        let long = "あ".repeat(READ_LENGTH);
+        let read = read_out(
+            3,
+            "Cart",
+            &[Entry::Human("first".to_owned()), Entry::Reply(long.clone())],
+        )
+        .unwrap();
+        assert!(read.ends_with(&format!("[… the start is left out]\n{long}")));
+        assert!(!read.contains("first"));
     }
 
     #[test]

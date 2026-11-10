@@ -1,7 +1,7 @@
 //! What each chat's agent is told first, ahead of the first line the
 //! human sends: what the chat's project is, as the human set it, how the
-//! human works with Cox, whatever the project, then what the project's
-//! `COX.md` says.
+//! human works with Cox, whatever the project, what the project's
+//! `COX.md` says, then the project's other chats.
 //!
 //! How the human works is the `COX.md` of their workflow's folder (see
 //! [`crate::settings::workflow`]), or, when they keep none, Cox's own
@@ -41,6 +41,8 @@ struct Part {
 enum Whose {
     /// What the project of this name is, as the human set it.
     About(String),
+    /// The project's other chats, a line each.
+    Chats,
     /// Cox's own, for a human who keeps none.
     Cox,
     /// The human's, for every project, from the file at the path.
@@ -113,6 +115,19 @@ impl Instructions {
         self
     }
 
+    /// The instructions with the project's other chats, `chats`, a line
+    /// each, after the rest, when it has any.
+    #[must_use]
+    pub fn chats(mut self, chats: &[String]) -> Self {
+        if !chats.is_empty() {
+            self.parts.push(Part {
+                whose: Whose::Chats,
+                text: chats.join("\n"),
+            });
+        }
+        self
+    }
+
     /// The files the instructions come from, for the human to see which
     /// the agent gets: Cox's own come from none.
     #[must_use]
@@ -120,7 +135,7 @@ impl Instructions {
         self.parts
             .iter()
             .filter_map(|part| match &part.whose {
-                Whose::Cox | Whose::About(_) => None,
+                Whose::Cox | Whose::About(_) | Whose::Chats => None,
                 Whose::Human(path) | Whose::Project(path) => Some(path.clone()),
             })
             .collect()
@@ -141,6 +156,12 @@ impl Part {
                 "This chat is in the project {name}. This is what the project is, as the \
                  human set it, for you to keep in mind for the whole session."
             ),
+            Whose::Chats => "The other chats of this project, as the human's list shows them, \
+                 each with an agent of its own, at work on a part of the project or done with \
+                 it. Before you ask the human what one of them may have settled already, or \
+                 take up work one of them did, read what it talked through with read_chat, \
+                 giving its number."
+                .to_owned(),
             Whose::Cox => format!(
                 "{COX_START}, for every project. Follow it for the whole session, unless the \
                  project's instructions say otherwise."
@@ -253,6 +274,29 @@ mod tests {
         // A project that says nothing of what it is adds nothing.
         assert_eq!(instructions.clone().about("tea", Some(" ")), instructions);
         assert_eq!(instructions.clone().about("tea", None), instructions);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_projects_other_chats_go_last() {
+        let folder = scratch("chats");
+        std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
+        let instructions = Instructions::read_with(&folder, None);
+        let chats = vec![
+            "- chat 3: \"Cart\", idle".to_owned(),
+            "- chat 4: \"Checkout\", at work".to_owned(),
+        ];
+        let with = instructions.clone().chats(&chats);
+        assert_eq!(with.paths(), instructions.paths());
+        let prompts = with.prompts();
+        assert_eq!(prompts[..prompts.len() - 1], instructions.prompts());
+        let last = prompts.last().unwrap();
+        assert!(
+            last.starts_with("The other chats of this project"),
+            "{last}"
+        );
+        assert!(last.ends_with("\n\n- chat 3: \"Cart\", idle\n- chat 4: \"Checkout\", at work"));
+        assert_eq!(instructions.clone().chats(&[]), instructions);
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

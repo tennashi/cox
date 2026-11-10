@@ -1255,6 +1255,59 @@ async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn a_chat_is_told_the_projects_other_chats_and_reads_them(cx: &mut TestAppContext) {
+    let app = scratch("other-chats");
+    let (store, kept) = kept_chat(&app, None);
+    let (agents, asks, workspace, cx) = open_window_asking(
+        cx,
+        scratch("other-chats-home"),
+        store.clone(),
+        Resumes::Resume,
+    );
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(app.clone()), window, cx);
+    });
+    say(cx, &workspace, "hello").await;
+
+    // The new chat's agent is told the chat kept, by its number, first.
+    let told = agents.borrow()[0].prompt_blocks();
+    let chats = told[0]
+        .iter()
+        .find(|block| block.starts_with("The other chats of this project"))
+        .unwrap_or_else(|| panic!("no chats are told: {told:?}"));
+    assert!(
+        chats.contains(&format!("- chat {kept}: \"Chat 1\"")),
+        "{chats}"
+    );
+    assert_eq!(told[0].last().map(String::as_str), Some("hello"));
+
+    // It reads what that chat talked through, and no chat of another
+    // project.
+    let read = |chat: i64| {
+        let (answer, read) = tokio::sync::oneshot::channel();
+        asks.borrow()[0]
+            .send(ChatRequest::ReadChat { chat, answer })
+            .unwrap();
+        read
+    };
+    let first = read(kept.number());
+    settled(cx, &workspace);
+    let first = first.await.unwrap().unwrap();
+    assert!(
+        first.starts_with(&format!("Chat {kept}, \"Chat 1\"")),
+        "{first}"
+    );
+    assert!(
+        first.ends_with("[human]\nhello\n\n[you]\necho: hello"),
+        "{first}"
+    );
+    let none = read(kept.number() + 100);
+    settled(cx, &workspace);
+    assert!(none.await.unwrap().is_err());
+    let _ = std::fs::remove_dir_all(&app);
+}
+
+#[gpui::test]
 async fn an_agent_proposes_what_the_project_is_which_the_next_chats_are_told(
     cx: &mut TestAppContext,
 ) {

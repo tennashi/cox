@@ -32,6 +32,7 @@ pub mod push;
 pub mod wire;
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -225,6 +226,10 @@ pub enum Internal {
     /// and run them (see [`crate::schedule`]).
     Schedules,
 }
+
+/// How many of the project's other chats a chat's agent is told of, at
+/// most, the last the list shows.
+const CHATS_TOLD: usize = 20;
 
 /// A project: a folder the human opened, whose chats work there.
 struct Project {
@@ -1043,7 +1048,7 @@ impl Daemon {
         project.opened += 1;
         let name = format!("Chat {}", project.opened);
         let project_id = project.id;
-        let instructions = self.instructions(index, &cwd);
+        let instructions = self.instructions(index, &cwd, None);
         let kept = match from {
             Some((_, Some(parent))) => self.store.add_chat_under(
                 parent,
@@ -1578,22 +1583,88 @@ impl Daemon {
     }
 
     /// What the agent of a chat of the project at `index` that works in
-    /// `cwd` is told first: what the project is, if it says, then the
-    /// instructions.
-    fn instructions(&self, index: usize, cwd: &Path) -> Instructions {
+    /// `cwd` is told first: what the project is, if it says, the
+    /// instructions, then the project's chats but the chat `except`.
+    fn instructions(&self, index: usize, cwd: &Path, except: Option<u64>) -> Instructions {
         let project = &self.projects[index];
         let instructions = Instructions::read(cwd);
         if index == 0 {
             return instructions;
         }
-        instructions.about(&project.name, project.about.as_deref())
+        instructions
+            .about(&project.name, project.about.as_deref())
+            .chats(&self.chats_told(index, except))
     }
 
     /// What the agent of the chat `key`, which works in `cwd`, is told
     /// first (see [`Self::instructions`]).
     fn instructions_of(&self, key: u64, cwd: &Path) -> Instructions {
         let index = self.slot(key).map_or(0, |slot| slot.project);
-        self.instructions(index, cwd)
+        self.instructions(index, cwd, Some(key))
+    }
+
+    /// The chats of the project at `index` but the chat `except`, as its
+    /// chats' agents are told them, a line each: the last
+    /// [`CHATS_TOLD`] the list shows, by the numbers they are kept by,
+    /// which `read_chat` takes.
+    fn chats_told(&self, index: usize, except: Option<u64>) -> Vec<String> {
+        let kept = |key: u64| self.slot(key).and_then(|slot| slot.kept);
+        let lines: Vec<String> = self
+            .chats
+            .iter()
+            .filter(|slot| slot.project == index && Some(slot.key) != except)
+            .filter_map(|slot| {
+                let number = slot.kept?;
+                let state = match slot.state {
+                    State::Asking => "waits for the human to answer it",
+                    state if working(state) => "at work",
+                    State::Closed => "closed",
+                    _ => "idle",
+                };
+                let mut line = format!("- chat {number}: \"{}\", {state}", slot.name);
+                if let Some(goal) = &slot.goal {
+                    line.push_str("; works until: ");
+                    line.push_str(&goal.input());
+                }
+                if let Some(parent) = slot.parent.and_then(kept) {
+                    let _ = write!(line, "; opened from chat {parent}");
+                }
+                if slot
+                    .setup
+                    .as_ref()
+                    .is_some_and(|setup| setup.folder.is_some())
+                {
+                    line.push_str("; a sketch, apart from the project");
+                }
+                Some(line)
+            })
+            .collect();
+        let from = lines.len().saturating_sub(CHATS_TOLD);
+        lines[from..].to_vec()
+    }
+
+    /// What the chat kept as `number`, of the project of the chat `key`,
+    /// talked through, as its agent reads it, or why it cannot.
+    fn read_chat(&self, key: u64, number: i64) -> Result<String, String> {
+        let project = self.slot(key).ok_or("the chat has closed")?.project;
+        let slot = self
+            .chats
+            .iter()
+            .chain(&self.archived)
+            .find(|slot| slot.kept.is_some_and(|kept| kept.number() == number))
+            .filter(|slot| slot.project == project)
+            .ok_or_else(|| format!("This project has no chat {number}."))?;
+        let entries = match &slot.chat {
+            Some(chat) => chat.conversation().entries().to_vec(),
+            None => slot
+                .kept
+                .map(|kept| self.store.entries(kept))
+                .transpose()
+                .map_err(|error| format!("Chat {number} cannot be read: {error:#}"))?
+                .unwrap_or_default(),
+        };
+        Ok(crate::agent::read_out(number, &slot.name, &entries)
+            .unwrap_or_else(|| format!("Nothing was said in chat {number} yet.")))
     }
 
     /// The human answered the name proposed at `index` in the chat `key`
@@ -2554,6 +2625,9 @@ impl Daemon {
             }
             ChatRequest::ProposeName { name, why, answer } => {
                 answer.send(self.propose_name(key, &name, why)).ok();
+            }
+            ChatRequest::ReadChat { chat, answer } => {
+                answer.send(self.read_chat(key, chat)).ok();
             }
             ChatRequest::ProposeAbout { about, why, answer } => {
                 answer.send(self.propose_about(key, &about, why)).ok();

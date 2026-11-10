@@ -33,6 +33,7 @@ const SHOW_MEDIA: &str = "show_media";
 const RUN_COMMAND: &str = "run_command";
 const OPEN_CHAT: &str = "open_chat";
 const WAIT_CHAT: &str = "wait_chat";
+const READ_CHAT: &str = "read_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const PROPOSE_NAME: &str = "propose_name";
 const PROPOSE_ABOUT: &str = "propose_about";
@@ -115,14 +116,14 @@ pub(super) fn tools(only: Option<&[String]>) -> Value {
 
 /// The names of the tools a chat gets, in a project or in none, as
 /// `in_project` says: those named in `only`, or all of them, but the one
-/// that propose a name for the chat's project and what it is, for a chat
-/// in none, and the one that proposes a project to make of the chat, for a
-/// chat in one.
+/// that propose a name for the chat's project and what it is, and the one
+/// that reads the project's other chats, for a chat in none, and the one
+/// that proposes a project to make of the chat, for a chat in one.
 pub(super) fn for_chat(only: Option<&[String]>, in_project: bool) -> Vec<String> {
     let left_out: &[&str] = if in_project {
         &[PROPOSE_PROJECT]
     } else {
-        &[PROPOSE_NAME, PROPOSE_ABOUT]
+        &[PROPOSE_NAME, PROPOSE_ABOUT, READ_CHAT]
     };
     tools(only)
         .as_array()
@@ -229,6 +230,7 @@ fn all_tools() -> Value {
             "required": ["chat"],
         },
     },
+    read_chat_tool(),
     show_media_tool(),
     propose_goal_tool(),
     propose_name_tool(),
@@ -634,6 +636,30 @@ fn propose_name_tool() -> Value {
     })
 }
 
+/// The tool that reads another chat of the project, as the agent learns
+/// of it.
+fn read_chat_tool() -> Value {
+    json!(
+    {
+        "name": READ_CHAT,
+        "description": "Reads what another chat of this project talked through: what the \
+            human said in it, what its agent replied, and the tool calls it made, by their \
+            titles, from its end. Use it to learn what a chat of the project settled or \
+            did before you ask the human again or take up its work. The chats of the \
+            project, with their numbers, are told you as your session starts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "integer",
+                    "description": "The chat's number, as the project's chats were told you.",
+                },
+            },
+            "required": ["chat"],
+        },
+    })
+}
+
 /// The tool that proposes what the chat's project is, as the agent learns
 /// of it.
 fn propose_about_tool() -> Value {
@@ -827,6 +853,7 @@ pub(super) async fn call(
         RUN_COMMAND => run_command(arguments, cwd, requests).await,
         OPEN_CHAT => open_chat(arguments, chats).await,
         WAIT_CHAT => wait_chat(arguments, chats).await,
+        READ_CHAT => read_chat(arguments, chats).await,
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
         PROPOSE_ABOUT => propose_about(arguments, chats).await,
@@ -1422,6 +1449,24 @@ async fn propose_name(
     ))
 }
 
+/// Asks the window what the chat of the project `arguments` name talked
+/// through, and tells the agent.
+async fn read_chat(
+    arguments: &Value,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let chat = arguments
+        .get("chat")
+        .and_then(Value::as_i64)
+        .ok_or("no chat: give the chat's number as `chat`")?;
+    let (answer, read) = oneshot::channel();
+    chats
+        .send(ChatRequest::ReadChat { chat, answer })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    read.await
+        .map_err(|_| "the chat closed before it read the other".to_owned())?
+}
+
 /// Asks the window to show the human what `arguments` propose the chat's
 /// project is, and tells the agent what it is now.
 async fn propose_about(
@@ -2002,11 +2047,12 @@ mod tests {
         assert_eq!(listed[3]["name"], SHOW_MAP);
         assert_eq!(listed[4]["name"], RUN_COMMAND);
         assert_eq!(listed[5]["name"], OPEN_CHAT);
-        assert_eq!(listed[7]["name"], SHOW_MEDIA);
-        assert_eq!(listed[9]["name"], PROPOSE_NAME);
-        assert_eq!(listed[10]["name"], PROPOSE_ABOUT);
-        assert_eq!(listed[11]["name"], PROPOSE_PROJECT);
-        assert_eq!(listed[12]["name"], START_SKETCH);
+        assert_eq!(listed[7]["name"], READ_CHAT);
+        assert_eq!(listed[8]["name"], SHOW_MEDIA);
+        assert_eq!(listed[10]["name"], PROPOSE_NAME);
+        assert_eq!(listed[11]["name"], PROPOSE_ABOUT);
+        assert_eq!(listed[12]["name"], PROPOSE_PROJECT);
+        assert_eq!(listed[13]["name"], START_SKETCH);
     }
 
     #[test]
@@ -2575,6 +2621,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reads_another_chat_of_the_project() {
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let Some(ChatRequest::ReadChat { chat, answer }) = asked.recv().await else {
+                panic!("the window was not asked");
+            };
+            let _ = answer.send(Ok("Chat 3, \"Cart\"".to_owned()));
+            chat
+        });
+        let read = |arguments: Value| {
+            let params = json!({ "name": READ_CHAT, "arguments": arguments });
+            let (sent, chats) = (sent.clone(), chats.clone());
+            async move {
+                call(&params, Path::new("/work"), None, &sent, &chats)
+                    .await
+                    .unwrap()
+            }
+        };
+        let answered = read(json!({ "chat": 3 })).await;
+        assert_eq!(answered["isError"], false);
+        assert_eq!(answered["content"][0]["text"], "Chat 3, \"Cart\"");
+        assert_eq!(window.await.unwrap(), 3);
+        // No number asks nothing.
+        let none = read(json!({ "chat": "Cart" })).await;
+        assert_eq!(none["isError"], true);
+    }
+
+    #[tokio::test]
     async fn proposes_what_the_project_is_and_tells_what_it_is_now() {
         let (sent, _requests) = unbounded_channel();
         let (chats, mut asked) = unbounded_channel();
@@ -2625,11 +2700,12 @@ mod tests {
         assert!(
             !none
                 .iter()
-                .any(|name| name == PROPOSE_ABOUT || name == PROPOSE_NAME)
+                .any(|name| [PROPOSE_ABOUT, PROPOSE_NAME, READ_CHAT].contains(&name.as_str()))
         );
         assert!(none.iter().any(|name| name == PROPOSE_PROJECT));
         let some = for_chat(None, true);
         assert!(some.iter().any(|name| name == PROPOSE_ABOUT));
+        assert!(some.iter().any(|name| name == READ_CHAT));
         assert!(!some.iter().any(|name| name == PROPOSE_PROJECT));
     }
 

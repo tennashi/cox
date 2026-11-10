@@ -161,6 +161,14 @@ impl std::fmt::Display for ProjectId {
 #[serde(transparent)]
 pub struct ChatId(i64);
 
+impl ChatId {
+    /// The number the chat is kept by, as an agent names it to read it.
+    #[must_use]
+    pub const fn number(self) -> i64 {
+        self.0
+    }
+}
+
 /// The number the chat is kept by, as the logs say which chat a line is of.
 impl std::fmt::Display for ChatId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
