@@ -1,6 +1,6 @@
 //! A map of the chat's project, as a page of the stage draws it: a
 //! picture of the project in tiers that an agent wrote in a file of
-//! `.cox/maps` (see [`cox_editor::map`]), with what Cox knows laid
+//! `maps` (see [`cox_editor::map`]), with what Cox knows laid
 //! over its boxes: what changed, as the Changes tab shows it, and which
 //! boxes hold paths the project no longer has. The Map page reads it as
 //! JSON from `cox://api/map/<name>` (see [`crate::stage::plugins`]), and the
@@ -121,12 +121,7 @@ mod tests {
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
         std::fs::write(root.join(MAPS_FOLDER).join("map.json"), A_MAP).unwrap();
         let json = told(&root, None);
-        assert!(
-            json["file"]
-                .as_str()
-                .unwrap()
-                .ends_with(".cox/maps/map.json")
-        );
+        assert!(json["file"].as_str().unwrap().ends_with("maps/map.json"));
         assert_eq!(json["name"], "map");
         assert_eq!(json["map"]["tiers"][0]["id"], "whole");
         assert_eq!(json["map"]["parts"]["app"]["tier"], "app");
@@ -164,7 +159,7 @@ mod tests {
             json["file"]
                 .as_str()
                 .unwrap()
-                .ends_with(".cox/maps/runtime.json")
+                .ends_with("maps/runtime.json")
         );
         assert_eq!(json["map"]["says"], "Where it runs.");
         assert_eq!(json["map"]["tiers"][0]["id"], "hosts");
@@ -172,7 +167,7 @@ mod tests {
         assert_eq!(json["maps"][0]["name"], "map");
         assert_eq!(json["maps"][1]["name"], "runtime");
         assert_eq!(json["maps"][1]["says"], "Where it runs.");
-        assert_eq!(json["maps"][1]["file"], ".cox/maps/runtime.json");
+        assert_eq!(json["maps"][1]["file"], "maps/runtime.json");
         assert_eq!(told(&root, None)["name"], "map");
 
         let json = told(&root, Some("gone"));

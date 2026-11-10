@@ -117,7 +117,7 @@ a good starting point to copy.
 
 A trigger is a Markdown file that runs on an event in a chat: in
 `triggers` in your workflow folder, for every project, or in
-`.cox/triggers` in a project's folder, for that project. Its name is the
+`triggers` in a project's folder, for that project. Its name is the
 file's name. The front matter says when it runs and who runs it; the
 rest is what is done.
 
@@ -257,23 +257,28 @@ what the sketch tried again.
 
 ## A project's own files
 
+A project keeps these in its folder, `projects/<name>` in Cox's home,
+beside its `directories/`. An earlier Cox read all but `COX.md`,
+`wiki/` and `raw/` from `.cox/` in the folder; it reads them there no
+more, so move them up out of it.
+
 | File | What it is |
 | --- | --- |
 | `COX.md` | What the project's chats' agents are told first, after the workflow's `COX.md`. |
-| `.cox/goal.md` | What a goal's judge is told it is, instead of Cox's default. Cox still adds how to end the reply, and the goal. |
-| `.cox/triggers/*.md` | The project's [triggers](#triggers). |
+| `goal.md` | What a goal's judge is told it is, instead of Cox's default. Cox still adds how to end the reply, and the goal. |
+| `triggers/*.md` | The project's [triggers](#triggers). |
 | `wiki/` | The project's own wiki, for what holds only of it. Only its chats see it. |
 | `raw/` | The project's own sources, what its chats read (`raw_keep`), as they read it. Only its chats see them. |
-| `.cox/maps/<name>.json` | The project's maps. Agents write them; `show_map` tells an agent the format. |
-| `.cox/plugins/<name>/` | A [plugin](#plugins): a view of the project's own on the stage. |
-| `.cox/servers.json` | Language servers for the project. See [Language servers](#language-servers). |
+| `maps/<name>.json` | The project's maps. Agents write them; `show_map` tells an agent the format. |
+| `plugins/<name>/` | A [plugin](#plugins): a view of the project's own on the stage. |
+| `servers.json` | Language servers for the project. See [Language servers](#language-servers). |
 
 ### Language servers
 
 Cox starts a language server for a code tab's language, if one is on
 `PATH`: `rust-analyzer`, `pyright-langserver`,
 `typescript-language-server`, `gopls` or `clangd`. A project names
-servers of its own in `.cox/servers.json`, in the same form as Cox's
+servers of its own in `servers.json`, in the same form as Cox's
 [`servers.json`](../crates/cox-editor/src/lsp/servers.json):
 
 ```json

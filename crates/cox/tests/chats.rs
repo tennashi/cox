@@ -2282,7 +2282,7 @@ async fn the_triggers_of_a_permission_request_gather_before_the_human_is_told(
     cx: &mut TestAppContext,
 ) {
     let home = scratch("gather");
-    let triggers = home.join(".cox/triggers");
+    let triggers = home.join("triggers");
     std::fs::create_dir_all(&triggers).unwrap();
     std::fs::write(
         triggers.join("touches.md"),
@@ -2456,7 +2456,7 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
 #[gpui::test]
 async fn a_trigger_of_the_folder_runs_as_a_turn_ends_until_it_passes(cx: &mut TestAppContext) {
     let home = scratch("trigger");
-    let triggers = home.join(".cox/triggers");
+    let triggers = home.join("triggers");
     std::fs::create_dir_all(&triggers).unwrap();
     let command = passing_the_second_time(&home);
     std::fs::write(

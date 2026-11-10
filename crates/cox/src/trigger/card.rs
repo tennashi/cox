@@ -194,7 +194,7 @@ pub struct Save {
 }
 
 impl Save {
-    /// Writes the trigger to its file, in `.cox/triggers` in the folder
+    /// Writes the trigger to its file, in `triggers` in the folder
     /// for the project's, or in `triggers` in the human's `workflow`: the
     /// file it has, while it stays where it is and is named so, or else
     /// another, the one it had taken away. Answers the file.
@@ -243,7 +243,7 @@ impl Save {
 
     /// Where `file`, a trigger shown in `folder`, is kept.
     fn scope_of(file: &Path, folder: &Path, workflow: &Path) -> Option<Scope> {
-        if file.starts_with(folder.join(".cox")) {
+        if file.starts_with(folder.join(super::PROJECT_TRIGGERS)) {
             Some(Scope::Project)
         } else if file.starts_with(workflow) {
             Some(Scope::Global)
@@ -367,7 +367,7 @@ mod tests {
             .make(&workflow)
         };
         let ci = save(None, draft.clone()).unwrap();
-        assert_eq!(ci, project.join(".cox/triggers/ci.md"));
+        assert_eq!(ci, project.join("triggers/ci.md"));
         assert!(save(None, draft.clone()).unwrap_err().contains("already"));
         // Changed where it stays.
         let changed = Draft {
@@ -395,7 +395,7 @@ mod tests {
             ..draft
         };
         assert!(save(None, empty).is_err());
-        assert!(!project.join(".cox/triggers/empty.md").exists());
+        assert!(!project.join("triggers/empty.md").exists());
 
         let kept = root.join("last-turns.json");
         assert_eq!(last_turn(Some(&kept), &project), None);

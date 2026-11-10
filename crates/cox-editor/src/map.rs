@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Where a project keeps its maps, under its folder: a file each, as
-/// `.cox/maps/parts.json` for the map named `parts`.
-pub const MAPS_FOLDER: &str = ".cox/maps";
+/// `maps/parts.json` for the map named `parts`.
+pub const MAPS_FOLDER: &str = "maps";
 
 /// A project's map, as its file has it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -507,7 +507,7 @@ mod tests {
 
         let (named, map) = read(&root, None).unwrap().unwrap();
         assert_eq!(named.name, "map");
-        assert_eq!(named.file, ".cox/maps/map.json");
+        assert_eq!(named.file, "maps/map.json");
         assert_eq!(map.tiers.len(), 2);
         assert_eq!(map.tier("app").unwrap().name, "The app");
         assert_eq!(map.tier_of("app").unwrap().id, "app");
@@ -528,7 +528,7 @@ mod tests {
         assert!(
             read(&root, None)
                 .unwrap_err()
-                .starts_with(".cox/maps/map.json is not a map")
+                .starts_with("maps/map.json is not a map")
         );
     }
 
@@ -543,8 +543,11 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join(MAPS_FOLDER).join("wrong.json"), "{").unwrap();
-        // The one file an earlier Cox read is no map now.
-        std::fs::write(root.join(".cox/map.json"), A_MAP).unwrap();
+        // The one file an earlier Cox read is no map now, nor one in
+        // `.cox/maps`, where Cox kept them before.
+        std::fs::write(root.join("map.json"), A_MAP).unwrap();
+        std::fs::create_dir_all(root.join(".cox/maps")).unwrap();
+        std::fs::write(root.join(".cox/maps/old.json"), A_MAP).unwrap();
         std::fs::write(root.join(MAPS_FOLDER).join("a:b.json"), "{}").unwrap();
         std::fs::write(root.join(MAPS_FOLDER).join("notes.md"), "").unwrap();
 
@@ -553,7 +556,7 @@ mod tests {
         };
         assert_eq!(listed(&root), ["deploy", "parts", "wrong"]);
         assert_eq!(list(&root)[0].says, "Where it runs.");
-        assert_eq!(list(&root)[0].file, ".cox/maps/deploy.json");
+        assert_eq!(list(&root)[0].file, "maps/deploy.json");
         assert_eq!(list(&root)[2].says, "");
 
         let (named, map) = read(&root, Some("parts")).unwrap().unwrap();
@@ -566,7 +569,7 @@ mod tests {
         assert!(
             read(&root, Some("wrong"))
                 .unwrap_err()
-                .starts_with(".cox/maps/wrong.json is not a map")
+                .starts_with("maps/wrong.json is not a map")
         );
         assert_eq!(
             read(&root, Some("map")).unwrap_err(),

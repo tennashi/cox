@@ -55,8 +55,8 @@ const RAW_READ: &str = "raw_read";
 /// the project's to decide.
 const MAP_FORMAT: &str = "\
 A project has a map for each picture of it from a top of its own, as one of what it is made \
-of and one of how it is deployed, each a file in `.cox/maps` in the project's folder, named \
-after the map, as `.cox/maps/parts.json` for the map `parts`. A map is a JSON object with `says`, one line on what it shows \
+of and one of how it is deployed, each a file in `maps` in the project's folder, named \
+after the map, as `maps/parts.json` for the map `parts`. A map is a JSON object with `says`, one line on what it shows \
 as against the project's other maps, `tiers`, `parts`, `edges` and `flows`. `tiers` is a list, the top tier first, each `{\"id\", \"name\", \"says\", \"rows\", \
 \"frame\"}`: `says` is one line on what the tier shows; `rows` are the lines of boxes, from the \
 top, each `{\"name\", \"parts\": [ids], \"under\": id}`, where `under` hangs the row under a \
@@ -513,7 +513,7 @@ fn show_map_tool() -> Value {
             of is in the project, before you talk it through or show the diff: open it at \
             the tier or box you talk of, and the human sees the boxes around it. Answers \
             what the map shows there, box by box, and names the project's other maps. A \
-            map is a file of the project, in `.cox/maps`, which you write when the project \
+            map is a file of the project, in `maps`, which you write when the project \
             has none, or when the human wants another picture of it from another top, \
             deciding with the human what it is to show, and keep as you change the code it \
             holds; shown with none, the tool says how the file is written.",
@@ -523,7 +523,7 @@ fn show_map_tool() -> Value {
                 "map": {
                     "type": "string",
                     "description": "Which map to open, by its name, its file's in \
-                        `.cox/maps` without `.json`; the project's first when not given.",
+                        `maps` without `.json`; the project's first when not given.",
                 },
                 "at": {
                     "type": "array",
@@ -2321,7 +2321,7 @@ mod tests {
         assert_eq!(shown["isError"], false, "{shown}");
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert!(told.starts_with("The project has no map yet"), "{told}");
-        assert!(told.contains("`.cox/maps/parts.json`"), "{told}");
+        assert!(told.contains("`maps/parts.json`"), "{told}");
         match requests.try_recv() {
             Ok(ToolRequest::ShowMap { map, at }) => {
                 assert_eq!(map, None);

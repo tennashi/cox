@@ -3138,7 +3138,7 @@ mod tests {
         vec![
             Due {
                 name: "ci".to_owned(),
-                file: "/work/.cox/triggers/ci.md".into(),
+                file: "/work/triggers/ci.md".into(),
                 does: Does::Run("cargo test".to_owned()),
             },
             Due {
@@ -3172,7 +3172,7 @@ mod tests {
     fn a_trigger_by_this_tells_the_agent_once_for_a_line() {
         let commit = || Due {
             name: "commit".to_owned(),
-            file: "/p/.cox/triggers/commit.md".into(),
+            file: "/p/triggers/commit.md".into(),
             does: Does::Tell("Write the commit message.".to_owned()),
         };
         let mut conversation = Conversation::new();
@@ -3209,7 +3209,7 @@ mod tests {
     fn the_goal_met_again_on_a_line_runs_its_triggers_once() {
         let commit = Due {
             name: "commit".to_owned(),
-            file: "/p/.cox/triggers/commit.md".into(),
+            file: "/p/triggers/commit.md".into(),
             does: Does::Tell("Write the commit message.".to_owned()),
         };
         let happened = Happened {

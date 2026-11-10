@@ -333,9 +333,8 @@ fn a_project_says_which_server_knows_a_language(cx: &mut TestAppContext) {
         assert_eq!(name("main.go", cx).as_deref(), Some("gopls"));
         assert_eq!(name("app.py", cx).as_deref(), Some("pyright"));
     });
-    std::fs::create_dir_all(directory.join(".cox")).unwrap();
     std::fs::write(
-        directory.join(".cox/servers.json"),
+        directory.join("servers.json"),
         r#"{ "servers": {
             "pylsp": { "command": ["pylsp"], "languages": ["python"] },
             "gopls": null
