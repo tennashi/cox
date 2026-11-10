@@ -1477,7 +1477,8 @@ function shorten(text, most) {
 }
 
 // Markdown, as far as a phone needs it: paragraphs, headings, lists,
-// quotes, code, and inline code, bold, italics and links.
+// quotes, code, tables, Mermaid diagrams, and inline code, bold, italics
+// and links.
 function markdown(text) {
   const root = el("div", { class: "entry reply" });
   const lines = text.split("\n");
@@ -1490,10 +1491,19 @@ function markdown(text) {
       at++;
       while (at < lines.length && !lines[at].trim().startsWith(fence[1])) code.push(lines[at++]);
       at++;
-      root.append(el("pre", {}, el("code", {}, code.join("\n"))));
+      const language = line.trim().slice(fence[1].length).trim().split(/\s+/)[0];
+      root.append(language === "mermaid" ? diagram(code.join("\n")) : codeBlock(code.join("\n")));
       continue;
     }
     if (!line.trim()) { at++; continue; }
+    if (startsTable(lines, at)) {
+      const rows = [line];
+      const aligns = cells(lines[at + 1]).map(alignOf);
+      at += 2;
+      while (at < lines.length && lines[at].trim() && lines[at].includes("|")) rows.push(lines[at++]);
+      root.append(table(rows.map(cells), aligns));
+      continue;
+    }
     const heading = /^#{1,6}\s+(.*)$/.exec(line);
     if (heading) { root.append(el("h3", {}, inline(heading[1]))); at++; continue; }
     if (/^\s*>/.test(line)) {
@@ -1515,13 +1525,77 @@ function markdown(text) {
       continue;
     }
     const paragraph = [];
-    while (at < lines.length && lines[at].trim() && !/^\s*(```|~~~|#{1,6}\s|>|[-*+]\s|\d+[.)]\s)/.test(lines[at])) {
+    while (at < lines.length && lines[at].trim() && !/^\s*(```|~~~|#{1,6}\s|>|[-*+]\s|\d+[.)]\s)/.test(lines[at])
+      && !startsTable(lines, at)) {
       paragraph.push(lines[at++]);
     }
     if (!paragraph.length) paragraph.push(lines[at++]);
     root.append(el("p", {}, inline(paragraph.join(" "))));
   }
   return root;
+}
+
+function codeBlock(code) {
+  return el("pre", {}, el("code", {}, code));
+}
+
+// A Mermaid diagram, as coxd draws it, in the window's colors, or its
+// source as code if coxd cannot draw it.
+function diagram(source) {
+  const picture = el("img", {
+    class: "diagram",
+    src: `/diagram?${new URLSearchParams({ source })}`,
+    alt: source,
+    onerror: () => picture.replaceWith(codeBlock(source)),
+  });
+  return el("div", { class: "diagram" }, picture);
+}
+
+// Whether a table starts at line `at` of `lines`: a row of cells, then
+// the line under its head, of dashes between pipes.
+function startsTable(lines, at) {
+  const under = lines[at + 1];
+  return lines[at].includes("|") && under !== undefined
+    && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(under) && under.includes("-")
+    && (under.includes("|") || lines[at].trim().replace(/^\||\|$/g, "").includes("|"));
+}
+
+// The cells of a table's row, split at its pipes but those escaped or in
+// code.
+function cells(row) {
+  const found = [];
+  let cell = "";
+  let code = false;
+  const text = row.trim().replace(/^\|/, "");
+  for (let at = 0; at < text.length; at++) {
+    const char = text[at];
+    if (char === "\\" && text[at + 1] === "|") { cell += "|"; at++; continue; }
+    if (char === "`") code = !code;
+    if (char === "|" && !code) { found.push(cell.trim()); cell = ""; continue; }
+    cell += char;
+  }
+  if (cell.trim()) found.push(cell.trim());
+  return found;
+}
+
+// How a column's cells line up, as the dashes under its head say.
+function alignOf(under) {
+  const left = under.startsWith(":");
+  const right = under.endsWith(":");
+  if (left && right) return "center";
+  return right ? "right" : left ? "left" : null;
+}
+
+// A table, its head first, with as many columns as its head, which
+// scrolls sideways when wider than the phone.
+function table(rows, aligns) {
+  const width = rows[0].length;
+  const row = (cellsOf, tag) => el("tr", {}, Array.from({ length: width }, (_, column) =>
+    el(tag, { class: aligns[column] ? `align-${aligns[column]}` : null }, inline(cellsOf[column] || ""))));
+  return el("div", { class: "table" },
+    el("table", {},
+      el("thead", {}, row(rows[0], "th")),
+      el("tbody", {}, rows.slice(1).map((one) => row(one, "td")))));
 }
 
 function inline(text) {

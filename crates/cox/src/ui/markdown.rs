@@ -6,13 +6,14 @@
 //! lines of Japanese do not gain spaces between them. Web addresses and
 //! paths of files in the text are links even where the agent did not mark
 //! them as such, as in what a command printed, or a place in the code the
-//! agent names, such as `src/main.rs:12`.
+//! agent names, such as `src/main.rs:12`. A code block of Mermaid is a
+//! diagram, which the window draws (see [`super::diagram`]).
 
 use std::ops::Range;
 
 use cox_core::tabs::Lines;
 
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 /// One block of a reply, such as a paragraph or a code block.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +42,9 @@ pub enum Kind {
     Rule,
     /// A table's rows of cells, its head first.
     Table(Vec<Vec<Text>>),
+    /// A Mermaid diagram, by its source: a code block whose language is
+    /// `mermaid`.
+    Diagram(String),
 }
 
 /// Text, in runs that each have one style and together cover it.
@@ -376,8 +380,8 @@ struct Blocks {
     /// `None` when its items have bullets.
     lists: Vec<Option<u64>>,
     quotes: usize,
-    /// The code block being read.
-    code: Option<String>,
+    /// The code block being read, and whether it is a Mermaid diagram.
+    code: Option<(String, bool)>,
     /// The table being read: its rows, and the cell being read.
     table: Option<(Vec<Vec<Text>>, Option<Text>)>,
     /// The styles in effect, innermost last.
@@ -447,7 +451,7 @@ impl Blocks {
     /// Adds text where the reading is: to a code block, a table's cell, or
     /// a block of text, which starts if none has.
     fn text(&mut self, text: &str, style: &Style) {
-        if let Some(code) = &mut self.code {
+        if let Some((code, _)) = &mut self.code {
             code.push_str(text);
             return;
         }
@@ -506,9 +510,14 @@ impl Blocks {
                 self.start_other_block();
                 self.quotes += 1;
             }
-            Tag::CodeBlock(_) => {
+            Tag::CodeBlock(kind) => {
                 self.start_other_block();
-                self.code = Some(String::new());
+                let diagram = matches!(
+                    &kind,
+                    CodeBlockKind::Fenced(info)
+                        if info.split_whitespace().next() == Some("mermaid")
+                );
+                self.code = Some((String::new(), diagram));
             }
             Tag::List(first) => {
                 self.start_other_block();
@@ -570,11 +579,15 @@ impl Blocks {
                 self.quotes = self.quotes.saturating_sub(1);
             }
             TagEnd::CodeBlock => {
-                if let Some(mut code) = self.code.take() {
+                if let Some((mut code, diagram)) = self.code.take() {
                     if code.ends_with('\n') {
                         code.pop();
                     }
-                    self.block(Kind::Code(Text::plain(&code)));
+                    self.block(if diagram {
+                        Kind::Diagram(code)
+                    } else {
+                        Kind::Code(Text::plain(&code))
+                    });
                 }
             }
             TagEnd::List(_) => {
@@ -697,6 +710,17 @@ mod tests {
         assert_eq!(
             parse("```console\n$ cargo xtask ci\n  ok\n```"),
             [block(Kind::Code(plain("$ cargo xtask ci\n  ok")))]
+        );
+    }
+
+    #[test]
+    fn reads_a_mermaid_block_as_a_diagram() {
+        assert_eq!(
+            parse("```mermaid\nflowchart LR\n  A --> B\n```\n\n```\nmermaid\n```"),
+            [
+                block(Kind::Diagram("flowchart LR\n  A --> B".to_owned())),
+                block(Kind::Code(plain("mermaid"))),
+            ]
         );
     }
 

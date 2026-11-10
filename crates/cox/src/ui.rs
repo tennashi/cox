@@ -3,8 +3,9 @@
 //! - [`input`] is the text the human types into, which an input method
 //!   can compose into.
 //! - [`text`] draws text so that the human can select it and click its
-//!   links, replies as the Markdown that [`markdown`] reads;
-//!   [`selection`] is what the human selected.
+//!   links, replies as the Markdown that [`markdown`] reads, with the
+//!   Mermaid diagrams in it that [`diagram`] draws; [`selection`] is what
+//!   the human selected.
 //! - [`theme`] is how things look, [`icons`] the icons drawn, and
 //!   [`paths`] how paths are written.
 //! - The [`Copy`] action and the [`LinkClicked`] event are what the parts
@@ -15,6 +16,7 @@
 //! - [`screen`] captures what the screen shows of the window.
 
 pub mod button;
+pub mod diagram;
 pub mod ellipsis;
 pub mod icons;
 pub mod input;

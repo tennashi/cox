@@ -44,6 +44,8 @@ jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-sy
 # the wiki's pages as HTML, for the stage's Wiki plugin: see
 # `src/wiki/told.rs`.
 pulldown-cmark = { version = "0.13.5", default-features = false, features = ["html"] }
+# Drawing the Mermaid diagrams in Markdown: see `src/ui/diagram.rs`.
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
 # What Cox says of itself, and what gpui and others say through `log`, on

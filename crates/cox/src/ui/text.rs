@@ -18,12 +18,14 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Element, ElementId, FontStyle,
-    FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
-    IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, Pixels, Point, SharedString,
-    StrikethroughStyle, StyledText, TextLayout, UnderlineStyle, Window, div, prelude::*, px, rgb,
+    FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, Hsla, ImageSource,
+    InspectorElementId, IntoElement, LayoutId, MouseDownEvent, MouseMoveEvent, ObjectFit, Pixels,
+    Point, SharedString, StrikethroughStyle, StyledText, TextLayout, UnderlineStyle, Window, div,
+    img, prelude::*, px, rgb,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::ui::diagram;
 use crate::ui::markdown::{self, Block, Kind};
 use crate::ui::selection::{Piece, Selection, Spot, TextId};
 use crate::ui::theme::{
@@ -583,6 +585,7 @@ impl Writer {
             Kind::Code(text) => self.code(text).ml(indent(block.depth)),
             Kind::Rule => div().ml(indent(block.depth)).h(px(1.)).bg(rgb(BORDER)),
             Kind::Table(rows) => self.table(rows).ml(indent(block.depth)),
+            Kind::Diagram(source) => self.diagram(source).ml(indent(block.depth)),
         };
         if block.quoted {
             shown
@@ -627,6 +630,23 @@ impl Writer {
                         cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
                     }),
             )
+    }
+
+    /// A Mermaid diagram, drawn at its size, or less where there is less
+    /// room, or its source as a code block when it cannot be drawn.
+    fn diagram(&mut self, source: &str) -> gpui::Div {
+        let Some(picture) = diagram::picture(source) else {
+            return self.code(&markdown::Text::plain(source));
+        };
+        let size = picture.size(0);
+        #[expect(clippy::cast_precision_loss, reason = "a picture's pixels")]
+        let width = size.width.0 as f32 / diagram::SCALE;
+        div().max_w_full().p_2().rounded_sm().bg(rgb(RAISED)).child(
+            img(ImageSource::Render(picture))
+                .w(px(width))
+                .max_w_full()
+                .object_fit(ObjectFit::Contain),
+        )
     }
 
     /// A table, its head in bold, copied as lines of cells between tabs.
