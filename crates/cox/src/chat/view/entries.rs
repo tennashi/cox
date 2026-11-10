@@ -1166,6 +1166,12 @@ fn render_commits(
                     .text_color(rgb(FAINT))
                     .child(name)
             }))
+            .children(commit.amended.is_some().then(|| {
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(ASKING))
+                    .child("amended")
+            }))
             .child(
                 div()
                     .min_w_0()

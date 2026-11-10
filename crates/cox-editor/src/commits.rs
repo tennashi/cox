@@ -7,7 +7,12 @@
 //! the turn, in a note of Git's of its own, [`NOTES`], which Git keeps
 //! apart from the notes `git log` shows, and does not push; a commit read
 //! here has the turn it was made in, if it was marked.
+//!
+//! A commit amended is made anew, and the one it was is no longer among
+//! them; a commit read here has what it was before, as this worktree's
+//! reflog of `HEAD` tells it, until Git lets that go.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::changes::{self, Diff, Since, commit, git, parse, short};
@@ -61,6 +66,10 @@ pub struct Commit {
     pub removed: usize,
     /// The turn it was made in, when Cox marked it.
     pub turn: Option<Turn>,
+    /// What it was before it was amended, as the reflog tells it, oldest
+    /// first, each with nothing here: the commit it was first, and each it
+    /// was after, up to the one this amended.
+    pub earlier: Vec<Commit>,
 }
 
 /// The turn of a chat a commit was made in.
@@ -81,6 +90,12 @@ impl Commit {
     #[must_use]
     pub fn short(&self) -> String {
         short(&self.id)
+    }
+
+    /// Whether it is, or was before it was amended, the commit `id`.
+    #[must_use]
+    pub fn was(&self, id: &str) -> bool {
+        self.id == id || self.earlier.iter().any(|earlier| earlier.id == id)
     }
 }
 
@@ -125,10 +140,11 @@ pub fn history(folder: &Path) -> Result<History, String> {
     let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
     let (base, after) = base(&top);
     let commits = match (&base, after) {
-        (_, Some(after)) => log(&top, &format!("{after}..HEAD"), MOST),
-        (Base::Recent, None) => log(&top, "HEAD", RECENT),
-        (_, None) => log(&top, "HEAD", MOST),
+        (_, Some(after)) => log(&top, &[&format!("{after}..HEAD")], MOST),
+        (Base::Recent, None) => log(&top, &["HEAD"], RECENT),
+        (_, None) => log(&top, &["HEAD"], MOST),
     };
+    let commits = with_earlier(&top, commits);
     Ok(History { top, base, commits })
 }
 
@@ -241,6 +257,28 @@ pub fn diff_of(folder: &Path, id: &str) -> Result<Diff, String> {
             .trim()
             .to_owned(),
     };
+    between(top, &before, id, Since::Commit(short(id)))
+}
+
+/// What amending the commit `from` into the commit `to` changed, in the
+/// repository `folder` is in: what differs between the files of the two.
+///
+/// # Errors
+///
+/// When `folder` is not in a Git repository, or has no such commits, with
+/// what Git said.
+pub fn amendment(folder: &Path, from: &str, to: &str) -> Result<Diff, String> {
+    let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
+    let since = Since::Amended {
+        from: short(from),
+        to: short(to),
+    };
+    between(top, from, to, since)
+}
+
+/// What differs between the files of `before` and those of `after`, in the
+/// worktree at `top`, as a [`Diff`] since `since`.
+fn between(top: PathBuf, before: &str, after: &str, since: Since) -> Result<Diff, String> {
     let patch = git(
         &top,
         &[
@@ -253,18 +291,14 @@ pub fn diff_of(folder: &Path, id: &str) -> Result<Diff, String> {
             "--find-renames",
             "--src-prefix=a/",
             "--dst-prefix=b/",
-            &before,
-            id,
+            before,
+            after,
             "--",
         ],
     )?;
     let mut files = parse(&patch);
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(Diff {
-        top,
-        since: Since::Commit(short(id)),
-        files,
-    })
+    Ok(Diff { top, since, files })
 }
 
 /// The last commit of the repository `folder` is in, by its full name, if
@@ -283,10 +317,11 @@ pub fn made(folder: &Path, from: Option<&str>) -> Vec<Commit> {
     if commit(folder, "HEAD").is_none() {
         return Vec::new();
     }
-    match from {
-        Some(from) => log(folder, &format!("{from}..HEAD"), MOST),
-        None => log(folder, "HEAD", MOST),
-    }
+    let commits = match from {
+        Some(from) => log(folder, &[&format!("{from}..HEAD")], MOST),
+        None => log(folder, &["HEAD"], MOST),
+    };
+    with_earlier(folder, commits)
 }
 
 /// Marks the commit `id`, in the repository `folder` is in, as made in
@@ -318,27 +353,102 @@ pub fn mark(folder: &Path, id: &str, turn: &Turn) -> Result<(), String> {
     .map(drop)
 }
 
-/// The commits of `range`, as `git log` takes it, at most `most`, newest
-/// first, with the turns Cox marked them with. None where Git cannot tell.
-fn log(folder: &Path, range: &str, most: usize) -> Vec<Commit> {
-    let most = most.to_string();
-    let notes = format!("--notes={NOTES}");
+/// The commits `commits` were before they were amended, each the commit
+/// they were made anew from, by their full names, as the reflog of `HEAD`
+/// of the worktree `folder` is in tells: Git logs each amend there, with
+/// what `HEAD` was before it.
+fn amended(folder: &Path) -> HashMap<String, String> {
     let Ok(printed) = git(
         folder,
-        &[
-            "-c",
-            "core.quotePath=false",
-            "log",
-            "--no-color",
-            "--numstat",
-            "--format=%x1e%H%x1f%ct%x1f%s%x1f%N%x1f",
-            &notes,
-            "-n",
-            &most,
-            range,
-            "--",
-        ],
+        &["log", "--walk-reflogs", "--format=%H%x1f%gs", "HEAD", "--"],
     ) else {
+        return HashMap::new();
+    };
+    // Newest first: each `HEAD` became what the one above it is.
+    let logged: Vec<(&str, &str)> = printed
+        .lines()
+        .filter_map(|line| line.split_once('\x1f'))
+        .collect();
+    logged
+        .iter()
+        .zip(logged.iter().skip(1))
+        .filter(|((_, said), _)| said.starts_with("commit (amend):"))
+        .map(|((after, _), (before, _))| ((*after).to_owned(), (*before).to_owned()))
+        .filter(|(after, before)| after != before)
+        .collect()
+}
+
+/// `commits`, each with what it was before it was amended (see
+/// [`Commit::earlier`]).
+fn with_earlier(folder: &Path, mut commits: Vec<Commit>) -> Vec<Commit> {
+    let amended = amended(folder);
+    if amended.is_empty() {
+        return commits;
+    }
+    // What each was, newest first, followed as far as the reflog goes,
+    // once round, should it go round.
+    let chains: Vec<Vec<String>> = commits
+        .iter()
+        .map(|commit| {
+            let mut seen = HashSet::from([commit.id.clone()]);
+            let mut chain = Vec::new();
+            let mut at = &commit.id;
+            while let Some(before) = amended.get(at) {
+                if !seen.insert(before.clone()) {
+                    break;
+                }
+                chain.push(before.clone());
+                at = before;
+            }
+            chain
+        })
+        .collect();
+    // Git lets go of what no ref holds, in time: those are left out.
+    let mut seen = HashSet::new();
+    let ids: Vec<&str> = chains
+        .iter()
+        .flatten()
+        .map(String::as_str)
+        .filter(|id| seen.insert(*id) && commit(folder, &format!("{id}^{{commit}}")).is_some())
+        .collect();
+    if ids.is_empty() {
+        return commits;
+    }
+    let mut args = vec!["--no-walk=unsorted"];
+    args.extend(&ids);
+    let read: HashMap<String, Commit> = log(folder, &args, ids.len())
+        .into_iter()
+        .map(|commit| (commit.id.clone(), commit))
+        .collect();
+    for (commit, chain) in commits.iter_mut().zip(chains) {
+        commit.earlier = chain
+            .iter()
+            .rev()
+            .filter_map(|id| read.get(id).cloned())
+            .collect();
+    }
+    commits
+}
+
+/// The commits `args` tell `git log`, at most `most`, newest first, with
+/// the turns Cox marked them with. None where Git cannot tell.
+fn log(folder: &Path, args: &[&str], most: usize) -> Vec<Commit> {
+    let most = most.to_string();
+    let notes = format!("--notes={NOTES}");
+    let mut all = vec![
+        "-c",
+        "core.quotePath=false",
+        "log",
+        "--no-color",
+        "--numstat",
+        "--format=%x1e%H%x1f%ct%x1f%s%x1f%N%x1f",
+        &notes,
+        "-n",
+        &most,
+    ];
+    all.extend(args);
+    all.push("--");
+    let Ok(printed) = git(folder, &all) else {
         return Vec::new();
     };
     printed
@@ -371,6 +481,7 @@ fn log(folder: &Path, range: &str, most: usize) -> Vec<Commit> {
                 added,
                 removed,
                 turn,
+                earlier: Vec::new(),
             })
         })
         .collect()
@@ -525,5 +636,65 @@ mod tests {
         assert_eq!(made_after.len(), 1);
         assert_eq!(made_after[0].subject, "One, again");
         assert_eq!(made(&folder, from.as_deref()).len(), 1);
+    }
+
+    fn amend(folder: &Path, path: &str, text: &str, message: &str) -> String {
+        std::fs::write(folder.join(path), text).unwrap();
+        run(folder, &["add", "--all"]);
+        run(
+            folder,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--quiet",
+                "--amend",
+                "-m",
+                message,
+            ],
+        );
+        head(folder).unwrap()
+    }
+
+    #[test]
+    fn an_amended_commit_has_what_it_was_and_what_amending_it_changed() {
+        let folder = repository("versions");
+        changes::start(&folder).unwrap();
+        let first = write_and_commit(&folder, "a.txt", "a\nb\n", "Greet");
+        let turn = Turn {
+            chat: 1,
+            entry: 2,
+            line: "Greet".to_owned(),
+        };
+        mark(&folder, &first, &turn).unwrap();
+        let second = amend(&folder, "a.txt", "a\nc\n", "Greet by name");
+        let third = amend(&folder, "a.txt", "a\nc\nd\n", "Greet by name!");
+        let made = made(&folder, Some(&second));
+        assert_eq!(made.len(), 1);
+        let earlier: Vec<_> = made[0].earlier.iter().map(|c| c.id.clone()).collect();
+        assert_eq!(earlier, [first.clone(), second.clone()]);
+        assert_eq!(made[0].earlier[0].turn, Some(turn));
+        assert!(made[0].was(&first) && made[0].was(&third));
+        let read = history(&folder).unwrap();
+        assert_eq!(read.commits.len(), 1);
+        assert_eq!(read.commits[0].earlier.len(), 2);
+        // Amending it the first time took b out for c.
+        let diff = amendment(&folder, &first, &second).unwrap();
+        assert_eq!(
+            diff.since,
+            Since::Amended {
+                from: short(&first),
+                to: short(&second)
+            }
+        );
+        assert_eq!(diff.counts(), (1, 1));
+        // A commit only made has nothing earlier.
+        let other = write_and_commit(&folder, "b.txt", "b\n", "Other");
+        let read = history(&folder).unwrap();
+        assert_eq!(read.commits[0].id, other);
+        assert_eq!(read.commits[0].earlier, Vec::<Commit>::new());
+        assert_eq!(read.commits[1].earlier.len(), 2);
     }
 }

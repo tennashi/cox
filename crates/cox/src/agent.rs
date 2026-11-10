@@ -1064,7 +1064,11 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
                 "[you committed: {}]",
                 commits
                     .iter()
-                    .map(|commit| format!("{} {}", commit.short(), commit.subject))
+                    .map(|commit| match commit.amended_short() {
+                        Some(amended) =>
+                            format!("{} {}, amending {amended}", commit.short(), commit.subject),
+                        None => format!("{} {}", commit.short(), commit.subject),
+                    })
                     .collect::<Vec<_>>()
                     .join("; ")
             )),

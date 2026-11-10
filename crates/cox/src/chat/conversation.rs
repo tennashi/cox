@@ -2664,6 +2664,7 @@ mod tests {
             subject: "Commit it".to_owned(),
             added: 1,
             removed: 0,
+            amended: None,
         };
         conversation.committed(vec![commit.clone()]);
         assert_eq!(commit.short(), "0123456");
