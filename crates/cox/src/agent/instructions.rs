@@ -1,7 +1,8 @@
 //! What each chat's agent is told first, ahead of the first line the
 //! human sends: what the chat's project is, as the human set it, how the
 //! human works with Cox, whatever the project, what the project's
-//! `COX.md` says, then the project's other chats.
+//! `COX.md` says, the index of the project's own wiki, then the project's
+//! other chats.
 //!
 //! How the human works is the `COX.md` of their workflow's folder (see
 //! [`crate::settings::workflow`]), or, when they keep none, Cox's own
@@ -18,6 +19,10 @@ pub const INSTRUCTIONS_FILE: &str = "COX.md";
 /// How Cox would have the agent use its tools, for a human who says
 /// nothing of their own.
 const COX: &str = include_str!("instructions/cox.md");
+
+/// The most of the index of the project's wiki the agent is told, in
+/// characters: past it, the end is left out.
+const WIKI_INDEX_LENGTH: usize = 8000;
 
 /// How what the agent is told of Cox's own starts, which tells it apart
 /// from the rest of a prompt.
@@ -41,6 +46,8 @@ struct Part {
 enum Whose {
     /// What the project of this name is, as the human set it.
     About(String),
+    /// The index of the project's own wiki, in the folder at the path.
+    Wiki(PathBuf),
     /// The project's other chats, a line each.
     Chats,
     /// Cox's own, for a human who keeps none.
@@ -115,6 +122,26 @@ impl Instructions {
         self
     }
 
+    /// The instructions with `index`, the index of the project's own wiki
+    /// in the folder `root`, after the rest, when it lists any page.
+    #[must_use]
+    pub fn wiki(mut self, root: &Path, index: Option<&str>) -> Self {
+        let Some(index) = index.map(str::trim).filter(|index| index.contains("[[")) else {
+            return self;
+        };
+        let text = if index.chars().count() > WIKI_INDEX_LENGTH {
+            let kept: String = index.chars().take(WIKI_INDEX_LENGTH).collect();
+            format!("{kept}\n[… the rest is left out: find it with wiki_search]")
+        } else {
+            index.to_owned()
+        };
+        self.parts.push(Part {
+            whose: Whose::Wiki(root.to_owned()),
+            text,
+        });
+        self
+    }
+
     /// The instructions with the project's other chats, `chats`, a line
     /// each, after the rest, when it has any.
     #[must_use]
@@ -135,7 +162,7 @@ impl Instructions {
         self.parts
             .iter()
             .filter_map(|part| match &part.whose {
-                Whose::Cox | Whose::About(_) | Whose::Chats => None,
+                Whose::Cox | Whose::About(_) | Whose::Wiki(_) | Whose::Chats => None,
                 Whose::Human(path) | Whose::Project(path) => Some(path.clone()),
             })
             .collect()
@@ -155,6 +182,12 @@ impl Part {
             Whose::About(name) => format!(
                 "This chat is in the project {name}. This is what the project is, as the \
                  human set it, for you to keep in mind for the whole session."
+            ),
+            Whose::Wiki(root) => format!(
+                "The index of this project's own wiki, in {}: what the project's chats kept \
+                 of what holds only of it, as what the human decided. Before you work on \
+                 what a page is of, or ask the human about it, read the page with wiki_read.",
+                root.display()
             ),
             Whose::Chats => "The other chats of this project, as the human's list shows them, \
                  each with an agent of its own, at work on a part of the project or done with \
@@ -297,6 +330,42 @@ mod tests {
         );
         assert!(last.ends_with("\n\n- chat 3: \"Cart\", idle\n- chat 4: \"Checkout\", at work"));
         assert_eq!(instructions.clone().chats(&[]), instructions);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_index_of_the_projects_wiki_goes_after_the_instructions() {
+        let folder = scratch("wiki");
+        let instructions = Instructions::read_with(&folder, None);
+        let root = folder.join(".cox/wiki");
+        let index = "# Index\n\n- [[shipping|Shipping]]: Only in Japan.\n";
+        let with = instructions
+            .clone()
+            .wiki(&root, Some(index))
+            .chats(&["- chat 3: \"Cart\", idle".to_owned()]);
+        assert_eq!(with.paths(), instructions.paths());
+        let prompts = with.prompts();
+        assert_eq!(prompts.len(), instructions.prompts().len() + 2);
+        let wiki = &prompts[prompts.len() - 2];
+        assert!(
+            wiki.starts_with("The index of this project's own wiki, in "),
+            "{wiki}"
+        );
+        assert!(wiki.contains(&root.display().to_string()), "{wiki}");
+        assert!(
+            wiki.ends_with("- [[shipping|Shipping]]: Only in Japan."),
+            "{wiki}"
+        );
+        // An index that lists no page, or none, adds nothing.
+        assert_eq!(
+            instructions.clone().wiki(&root, Some("# Index\n")),
+            instructions
+        );
+        assert_eq!(instructions.clone().wiki(&root, None), instructions);
+        // A long one is cut.
+        let long = format!("- [[a|A]]: {}", "a".repeat(WIKI_INDEX_LENGTH));
+        let cut = instructions.clone().wiki(&root, Some(&long)).prompts();
+        assert!(cut.last().unwrap().ends_with("find it with wiki_search]"));
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

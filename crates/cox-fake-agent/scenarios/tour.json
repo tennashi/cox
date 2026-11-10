@@ -61,6 +61,13 @@
       ]
     },
     {
+      "when": "We ship only in Japan",
+      "steps": [
+        { "call": { "tool": "wiki_write", "arguments": { "page": "shipping", "text": "# Shipping\n\nThe shop ships only in Japan, as the human decided.\n", "keep_in_project": true } } },
+        { "say": "Kept it in the project's wiki, for the next chats to read." }
+      ]
+    },
+    {
       "when": "/compact",
       "steps": [{ "say": "Summed up the conversation so far." }]
     },
