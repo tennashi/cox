@@ -50,6 +50,9 @@ pub enum Kept {
     Registry,
     /// The agents of the registry that Cox downloaded.
     Downloads,
+    /// The language servers that Cox downloaded (see
+    /// [`crate::stage::servers`]).
+    ServerDownloads,
     /// The translations (see [`crate::translate`]).
     Translations,
     /// What Cox said of each run.
@@ -94,7 +97,7 @@ pub enum Kept {
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Settings,
         Self::Agents,
         Self::Sketches,
@@ -102,6 +105,7 @@ impl Kept {
         Self::Stage,
         Self::Registry,
         Self::Downloads,
+        Self::ServerDownloads,
         Self::Translations,
         Self::Logs,
         Self::Inspect,
@@ -129,6 +133,7 @@ impl Kept {
             Self::Stage => "state/stage",
             Self::Registry => "cache/registry.json",
             Self::Downloads => "cache/agents",
+            Self::ServerDownloads => "cache/servers",
             Self::Translations => "cache/translations",
             Self::Logs => "logs",
             Self::Inspect => "run/inspect.sock",

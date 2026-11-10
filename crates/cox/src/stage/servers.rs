@@ -15,6 +15,9 @@ use std::rc::Rc;
 use cox_editor::lsp::{self, Client, Error, Server, Status, languages};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
+use crate::agents::download::{self, Download};
+use crate::storage::Kept;
+
 /// What starts a server in a project's folder, and answers it once it is
 /// ready.
 pub type Starter =
@@ -33,12 +36,40 @@ type Running = HashMap<(PathBuf, String), Entity<LanguageServer>>;
 impl Global for Servers {}
 
 impl Default for Servers {
-    /// Servers started as programs, found on `PATH`.
+    /// Servers started as programs: downloaded, for a server that says
+    /// where from on this platform, or else found on `PATH`.
     fn default() -> Self {
         Self::new(Rc::new(|server, root| {
-            Box::pin(async move { Client::start(&server, &root).await })
+            Box::pin(async move {
+                let server = downloaded(server)?;
+                Client::start(&server, &root).await
+            })
         }))
     }
+}
+
+/// `server`, to start from where its program is downloaded, in
+/// `cache/servers/<name>/<version>` where Cox keeps what lasts, when it
+/// says where it is downloaded from on this platform: downloaded first if
+/// it is not there yet.
+fn downloaded(mut server: Server) -> Result<Server, Error> {
+    let Some((version, archive)) = server.download_for(&download::platform()) else {
+        return Ok(server);
+    };
+    let download = Download {
+        version: version.to_owned(),
+        archive: archive.archive.clone(),
+        sha256: archive.sha256.clone(),
+    };
+    let folder = download::installed(Kept::ServerDownloads, &server.name, &download, &|note| {
+        tracing::info!(server = %server.name, "{note}");
+    })
+    .map_err(|error| Error::Io(std::io::Error::other(format!("{error:#}"))))?;
+    let program = folder.join(&archive.program);
+    if let Some(command) = server.command.first_mut() {
+        *command = program.to_string_lossy().into_owned();
+    }
+    Ok(server)
 }
 
 impl Servers {
