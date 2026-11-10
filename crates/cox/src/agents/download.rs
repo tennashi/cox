@@ -75,6 +75,19 @@ pub fn installed(
     Ok(folder)
 }
 
+/// Whether the program kept as `id` in `kept` is there at `version`,
+/// downloaded and unpacked (see [`installed`]).
+#[must_use]
+pub fn is_installed(kept: Kept, id: &str, version: &str) -> bool {
+    crate::storage::path(kept).is_some_and(|downloads| {
+        downloads
+            .join(name(id))
+            .join(name(version))
+            .join(UNPACKED)
+            .exists()
+    })
+}
+
 /// The path beside `folder` named after it, with `.` and `suffix`.
 fn beside(folder: &Path, suffix: &str) -> PathBuf {
     let mut name = folder.file_name().unwrap_or_default().to_owned();

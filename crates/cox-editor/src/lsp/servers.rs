@@ -1,6 +1,7 @@
 //! The language servers Cox knows, and which knows a language: those built
-//! into Cox, in `servers.json` beside this file, under those a project
-//! names in its own `servers.json`, written the same way.
+//! into Cox, in `servers.json` beside this file, under those the human
+//! names in a `servers.json` of their own, under those a project names in
+//! its own `servers.json`, all written the same way.
 //!
 //! The file names each server, with the command that starts it, the
 //! languages it knows, as the protocol names them (see
@@ -23,10 +24,11 @@
 //! }
 //! ```
 //!
-//! A project's server of a language goes before Cox's. A server of Cox's
-//! the project names is the project's, with what it gives in place of
-//! Cox's, as `rust-analyzer` above, which checks the code as it is saved;
-//! named as `null`, as `gopls` above, it is not started at all.
+//! A project's server of a language goes before the human's, and theirs
+//! before Cox's. A server of Cox's the project names is the project's,
+//! with what it gives in place of Cox's, as `rust-analyzer` above, which
+//! checks the code as it is saved; named as `null`, as `gopls` above, it
+//! is not started at all. A server of the human's goes the same way.
 //!
 //! A server may also say where its program is downloaded from, at which
 //! version, for each platform, as Cox names them (`darwin-aarch64`,
@@ -188,21 +190,42 @@ impl Servers {
         BUILT_IN.clone()
     }
 
-    /// The servers of the project in `root`: those its
-    /// `servers.json` names, over Cox's.
-    ///
-    /// # Errors
-    ///
-    /// When the file cannot be read, or does not say servers as it is to,
-    /// saying why.
-    pub fn of_project(root: &Path) -> Result<Self, String> {
-        let path = root.join(PROJECT_SERVERS);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Self::over(&BUILT_IN.servers, &text)
-                .map_err(|error| format!("{}: {error}", path.display())),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::built_in()),
-            Err(error) => Err(format!("{}: {error}", path.display())),
+    /// The servers of the project in `root`: those its `servers.json`
+    /// names, over those the human's own, `user`, names, if given, over
+    /// Cox's; and why each file that cannot be read, or does not say
+    /// servers as it is to, is left out.
+    #[must_use]
+    pub fn of_project(user: Option<&Path>, root: &Path) -> (Self, Vec<String>) {
+        let project = root.join(PROJECT_SERVERS);
+        Self::of_files(user.into_iter().chain([project.as_path()]))
+    }
+
+    /// The servers each of `files`, of servers, names, over those of the
+    /// files before it, over Cox's; and why each file that cannot be read,
+    /// or does not say servers as it is to, is left out. A file that is not
+    /// there names none.
+    #[must_use]
+    pub fn of_files<'a>(files: impl IntoIterator<Item = &'a Path>) -> (Self, Vec<String>) {
+        let mut servers = Self::built_in();
+        let mut left_out = Vec::new();
+        for path in files {
+            let read = match std::fs::read_to_string(path) {
+                Ok(text) => Self::over(&servers.servers, &text),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => Err(error.to_string()),
+            };
+            match read {
+                Ok(read) => servers = read,
+                Err(error) => left_out.push(format!("{}: {error}", path.display())),
+            }
         }
+        (servers, left_out)
+    }
+
+    /// All of them, the first of a language going before the rest.
+    #[must_use]
+    pub fn all(&self) -> &[Server] {
+        &self.servers
     }
 
     /// The servers `text`, a file of servers, names, ahead of those of
@@ -409,13 +432,43 @@ mod tests {
         let root = std::env::temp_dir().join(format!("cox-servers-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        assert_eq!(Servers::of_project(&root), Ok(Servers::built_in()));
-        std::fs::write(root.join(PROJECT_SERVERS), "{").unwrap();
-        assert!(
-            Servers::of_project(&root)
-                .unwrap_err()
-                .contains("servers.json")
+        assert_eq!(
+            Servers::of_project(None, &root),
+            (Servers::built_in(), Vec::new())
         );
+        std::fs::write(root.join(PROJECT_SERVERS), "{").unwrap();
+        let (servers, left_out) = Servers::of_project(None, &root);
+        assert_eq!(servers, Servers::built_in());
+        assert!(left_out[0].contains("servers.json"), "{left_out:?}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_project_names_servers_over_the_humans_over_coxs() {
+        let root = std::env::temp_dir().join(format!("cox-servers-user-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let user = root.join("user.json");
+        std::fs::write(
+            &user,
+            r#"{ "servers": {
+                "gopls": { "command": ["go", "run", "golang.org/x/tools/gopls@v0.20.0"] },
+                "zls": { "command": ["zls"], "languages": ["zig"] },
+                "pyright": null
+            } }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(PROJECT_SERVERS),
+            r#"{ "servers": { "zls": { "command": ["/opt/zls"] } } }"#,
+        )
+        .unwrap();
+        let (servers, left_out) = Servers::of_project(Some(&user), &root);
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert_eq!(servers.of("go").unwrap().command[0], "go");
+        assert_eq!(servers.of("zig").unwrap().command, ["/opt/zls"]);
+        assert_eq!(servers.of("python"), None);
+        assert!(servers.of("rust").is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 

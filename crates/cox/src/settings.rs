@@ -224,7 +224,7 @@ pub fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
 /// names, and Cox's own chats open from then on work in the home
 /// it names, unless `--home` gave another.
 pub fn follow(window: WindowHandle<Workspace>, agents: Agents, cx: &mut App) {
-    let files: Vec<PathBuf> = [Kept::Settings, Kept::Agents]
+    let files: Vec<PathBuf> = [Kept::Settings, Kept::Agents, Kept::Servers]
         .into_iter()
         .filter_map(crate::storage::path)
         .collect();
