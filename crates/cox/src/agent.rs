@@ -122,6 +122,13 @@ pub enum AgentEvent {
     /// or in one that starts for it, which ends with a
     /// [`AgentEvent::TurnEnded`] of its own.
     Steered,
+    /// The agent went on by itself while no turn ran, as when work it left
+    /// running in the background ended after its turn did: what it sends
+    /// from here, until the next turn, is of no turn. Told once between
+    /// two turns. A permission request it sends then waits for an answer
+    /// as one in a turn does, and a [`Command::Cancel`] then ends as a
+    /// turn stopped does, with an [`AgentEvent::TurnEnded`].
+    WentOn,
     /// The turn ended.
     TurnEnded(StopReason),
     /// The agent answered the prompt with an error.
@@ -402,25 +409,11 @@ async fn run<T: Transport + 'static>(
     let commands_known = Arc::new(Mutex::new(Vec::new()));
     // Where the files a line points to are, from.
     let folder = cwd.clone();
-    let told = events.clone();
-    let known = Arc::clone(&settings);
-    let names = Arc::clone(&commands_known);
-    let heard = move |news| match news {
-        News::Titled(title) => {
-            let _ = told.send(AgentEvent::Titled(title));
-        }
-        News::Commands(commands) => {
-            *names.lock().expect("no one panics holding it") = commands
-                .iter()
-                .map(|command| command.name.clone())
-                .collect();
-            let _ = told.send(AgentEvent::Commands(commands));
-        }
-        News::Settings(changed) => {
-            let _ = told.send(AgentEvent::Settings(shown_settings(&changed)));
-            *known.lock().expect("no one panics holding it") = changed;
-        }
-    };
+    let heard = hears(
+        events.clone(),
+        Arc::clone(&settings),
+        Arc::clone(&commands_known),
+    );
     cox_acp::connect(
         transport,
         cwd,
@@ -443,7 +436,18 @@ async fn run<T: Transport + 'static>(
             session
                 .settings()
                 .clone_into(&mut settings.lock().expect("no one panics holding it"));
-            while let Some(command) = commands.recv().await {
+            // Whether the agent went on by itself since its last turn.
+            let mut went_on = false;
+            while let Some(command) = between_turns(
+                &mut session,
+                policy,
+                &settings,
+                &mut commands,
+                events,
+                &mut went_on,
+            )
+            .await?
+            {
                 // An answer with no permission request waiting has nothing to
                 // answer, and a cancel with no turn running nothing to stop.
                 match command {
@@ -475,6 +479,7 @@ async fn run<T: Transport + 'static>(
                             &folder,
                         )
                         .await?;
+                        went_on = false;
                     }
                     // The turn the line was steered into ended before the
                     // agent side heard it: it starts a turn of its own.
@@ -493,6 +498,32 @@ async fn run<T: Transport + 'static>(
         },
     )
     .await
+}
+
+/// What hears the news of the session, between turns too: it tells the
+/// window, on `told`, and keeps the settings as they stand in `known`,
+/// and the names of the agent's commands in `names`.
+fn hears(
+    told: UnboundedSender<AgentEvent>,
+    known: Arc<Mutex<Vec<cox_acp::Setting>>>,
+    names: Arc<Mutex<Vec<String>>>,
+) -> impl Fn(News) + Send + Sync {
+    move |news| match news {
+        News::Titled(title) => {
+            let _ = told.send(AgentEvent::Titled(title));
+        }
+        News::Commands(commands) => {
+            *names.lock().expect("no one panics holding it") = commands
+                .iter()
+                .map(|command| command.name.clone())
+                .collect();
+            let _ = told.send(AgentEvent::Commands(commands));
+        }
+        News::Settings(changed) => {
+            let _ = told.send(AgentEvent::Settings(shown_settings(&changed)));
+            *known.lock().expect("no one panics holding it") = changed;
+        }
+    }
 }
 
 /// Asks the human to log in, one of the ways of `methods`, telling why
@@ -821,75 +852,170 @@ async fn take_one_turn(
         let Some(update) = update else {
             break;
         };
-        match update {
-            Update::ReplyText(text) => send(AgentEvent::ReplyText(text)),
-            Update::ThoughtText(text) => send(AgentEvent::ThoughtText(text)),
-            Update::Plan(entries) => {
-                send(AgentEvent::Plan(entries.into_iter().map(step).collect()));
+        let request = match update_event(update) {
+            Ok(event) => {
+                send(event);
+                continue;
             }
-            Update::ToolCall(call) => send(AgentEvent::ToolCall {
-                id: call.id,
-                title: call.title,
-                content: call.content.map(shown),
-                result: call.result.map(ended),
-            }),
-            // Once the human has asked to stop, the agent is told no
-            // without asking them.
-            Update::PermissionRequest(request) if cancelled => {
-                request.answer(PermissionAnswer::Cancel)?;
-            }
-            // The setup's policy answers in the human's place, when it has
-            // an answer and the agent offers it.
-            Update::PermissionRequest(request) if decided(policy, &request).is_some() => {
-                let chosen = decided(policy, &request).unwrap_or_default();
-                send(AgentEvent::PermissionDecided {
-                    id: request.tool_call_id(),
-                    title: request.title().map(str::to_owned),
-                    content: request.content().map(shown),
-                    options: request.options().iter().map(|o| o.name.clone()).collect(),
-                    chosen,
-                });
-                request.answer(PermissionAnswer::Select(chosen))?;
-            }
-            Update::PermissionRequest(request) => {
-                send(AgentEvent::PermissionRequest {
-                    id: request.tool_call_id(),
-                    title: request.title().map(str::to_owned),
-                    content: request.content().map(shown),
-                    options: request.options().iter().map(|o| o.name.clone()).collect(),
-                });
-                let answer = loop {
-                    match commands.recv().await {
-                        Some(Command::Answer(answer)) => break answer,
-                        Some(Command::Cancel) => {
-                            cancelled = true;
-                            turn.cancel()?;
-                            break PermissionAnswer::Cancel;
-                        }
-                        Some(Command::Set { id, value }) => {
-                            let set = async |id: &str, value: &str| turn.set(id, value).await;
-                            set_setting(set, settings, &id, &value, events).await;
-                        }
-                        // A line steered into the turn goes to the agent
-                        // as one would while it runs: the agent takes it
-                        // once the human has answered.
-                        Some(Command::Steer(prompt)) => {
-                            steer(&turn, prompt, steers, folder, &mut later, events).await;
-                        }
-                        // The window sends no prompt while a turn runs, and
-                        // no login while the agent does not ask for one.
-                        Some(Command::Prompt(_) | Command::LogIn(_)) => {}
-                        None => break PermissionAnswer::Cancel,
-                    }
-                };
-                request.answer(answer)?;
-            }
+            Err(request) => request,
+        };
+        // Once the human has asked to stop, the agent is told no without
+        // asking them.
+        if cancelled {
+            request.answer(PermissionAnswer::Cancel)?;
+            continue;
         }
+        // The setup's policy answers in the human's place, when it has an
+        // answer and the agent offers it.
+        if let Some(chosen) = decided(policy, &request) {
+            send(decided_event(&request, chosen));
+            request.answer(PermissionAnswer::Select(chosen))?;
+            continue;
+        }
+        send(asked_event(&request));
+        let answer = loop {
+            match commands.recv().await {
+                Some(Command::Answer(answer)) => break answer,
+                Some(Command::Cancel) => {
+                    cancelled = true;
+                    turn.cancel()?;
+                    break PermissionAnswer::Cancel;
+                }
+                Some(Command::Set { id, value }) => {
+                    let set = async |id: &str, value: &str| turn.set(id, value).await;
+                    set_setting(set, settings, &id, &value, events).await;
+                }
+                // A line steered into the turn goes to the agent
+                // as one would while it runs: the agent takes it
+                // once the human has answered.
+                Some(Command::Steer(prompt)) => {
+                    steer(&turn, prompt, steers, folder, &mut later, events).await;
+                }
+                // The window sends no prompt while a turn runs, and
+                // no login while the agent does not ask for one.
+                Some(Command::Prompt(_) | Command::LogIn(_)) => {}
+                None => break PermissionAnswer::Cancel,
+            }
+        };
+        request.answer(answer)?;
     }
     Ok(Some(Ended {
         how: turn.end().await,
         later,
     }))
+}
+
+/// What the window is told of `update`, or, for a permission request,
+/// the request, which waits for an answer.
+fn update_event(update: Update) -> Result<AgentEvent, cox_acp::PermissionRequest> {
+    Ok(match update {
+        Update::ReplyText(text) => AgentEvent::ReplyText(text),
+        Update::ThoughtText(text) => AgentEvent::ThoughtText(text),
+        Update::Plan(entries) => AgentEvent::Plan(entries.into_iter().map(step).collect()),
+        Update::ToolCall(call) => AgentEvent::ToolCall {
+            id: call.id,
+            title: call.title,
+            content: call.content.map(shown),
+            result: call.result.map(ended),
+        },
+        Update::PermissionRequest(request) => return Err(request),
+    })
+}
+
+/// What the window is told of `request`, which waits for the human.
+fn asked_event(request: &cox_acp::PermissionRequest) -> AgentEvent {
+    AgentEvent::PermissionRequest {
+        id: request.tool_call_id(),
+        title: request.title().map(str::to_owned),
+        content: request.content().map(shown),
+        options: request.options().iter().map(|o| o.name.clone()).collect(),
+    }
+}
+
+/// What the window is told of `request`, which Cox answered with the
+/// option at `chosen` in the human's place.
+fn decided_event(request: &cox_acp::PermissionRequest, chosen: usize) -> AgentEvent {
+    AgentEvent::PermissionDecided {
+        id: request.tool_call_id(),
+        title: request.title().map(str::to_owned),
+        content: request.content().map(shown),
+        options: request.options().iter().map(|o| o.name.clone()).collect(),
+        chosen,
+    }
+}
+
+/// The next command the window sends while no turn runs, or `None` once
+/// the window is gone. What the agent sends meanwhile, as it goes on by
+/// itself, shows as it comes, not once the next turn starts: the first
+/// of it since the last turn, as `went_on` tells, says so.
+async fn between_turns(
+    session: &mut Session,
+    policy: &Policy,
+    settings: &Mutex<Vec<cox_acp::Setting>>,
+    commands: &mut Commands,
+    events: &UnboundedSender<AgentEvent>,
+    went_on: &mut bool,
+) -> anyhow::Result<Option<Command>> {
+    loop {
+        tokio::select! {
+            command = commands.recv() => return Ok(command),
+            Some(update) = session.next_unprompted() => {
+                if !std::mem::replace(went_on, true) {
+                    let _ = events.send(AgentEvent::WentOn);
+                }
+                unprompted(session, update, policy, settings, commands, events).await?;
+            }
+        }
+    }
+}
+
+/// Passes on `update`, which the agent sent while no turn ran, as it went
+/// on by itself. A permission request is answered as `policy` says, or
+/// as the human does, as in a turn: a line they send meanwhile goes once
+/// they have, and asking to stop stops what the agent does, which ends
+/// as a turn stopped does.
+async fn unprompted(
+    session: &mut Session,
+    update: Update,
+    policy: &Policy,
+    settings: &Mutex<Vec<cox_acp::Setting>>,
+    commands: &mut Commands,
+    events: &UnboundedSender<AgentEvent>,
+) -> anyhow::Result<()> {
+    let request = match update_event(update) {
+        Ok(event) => {
+            let _ = events.send(event);
+            return Ok(());
+        }
+        Err(request) => request,
+    };
+    if let Some(chosen) = decided(policy, &request) {
+        let _ = events.send(decided_event(&request, chosen));
+        return request.answer(PermissionAnswer::Select(chosen));
+    }
+    let _ = events.send(asked_event(&request));
+    let answer = loop {
+        match commands.recv().await {
+            Some(Command::Answer(answer)) => break answer,
+            Some(Command::Cancel) => {
+                session.cancel()?;
+                let _ = events.send(AgentEvent::TurnEnded(StopReason::Cancelled));
+                break PermissionAnswer::Cancel;
+            }
+            Some(Command::Set { id, value }) => {
+                let set = async |id: &str, value: &str| session.set(id, value).await;
+                set_setting(set, settings, &id, &value, events).await;
+            }
+            // No turn runs to take a line into: it goes once the human
+            // has answered.
+            Some(command @ (Command::Prompt(_) | Command::Steer(_))) => {
+                commands.held.push_back(command);
+            }
+            Some(Command::LogIn(_)) => {}
+            None => break PermissionAnswer::Cancel,
+        }
+    };
+    request.answer(answer)
 }
 
 /// Takes `prompt`, a line the human steered into `turn`, and steers it

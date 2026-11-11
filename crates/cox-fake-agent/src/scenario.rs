@@ -12,8 +12,9 @@
 //! Each line sent to the agent takes the first turn not taken yet whose
 //! `when`, if it has one, is in what the line says, and the agent takes its
 //! steps one after another, then ends the turn with its `stop`, `end_turn`
-//! unless it says otherwise. A step is an object with one key, which says
-//! what it is (see [`Step`]). `configOptions`, beside `turns`, are the
+//! unless it says otherwise, after which it takes the steps of its
+//! `after`, if it has any, by itself, with no turn running. A step is an
+//! object with one key, which says what it is (see [`Step`]). `configOptions`, beside `turns`, are the
 //! settings of each session, as ACP says them, such as its model.
 //! `commands` are the commands the agent runs when a line starts with `/`
 //! and one of their names, as ACP's `availableCommands` says them, which
@@ -74,6 +75,11 @@ pub struct Turn {
     /// The turn's `stopReason`.
     #[serde(default = "end_turn")]
     pub stop: String,
+    /// The steps the agent takes once it has ended the turn, by itself,
+    /// with no turn running, as `claude-agent-acp` does once a task
+    /// Claude Code left running in the background ends.
+    #[serde(default)]
+    pub after: Vec<Step>,
 }
 
 fn end_turn() -> String {

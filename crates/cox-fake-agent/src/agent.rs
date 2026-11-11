@@ -288,10 +288,15 @@ impl<W: Write> Agent<W> {
         self.turning = true;
         let mut said = Some(said(&params["prompt"]));
         let mut went = (Went::On, Value::from("end_turn"));
+        // The turns of the scenario taken, whose steps after go once the
+        // prompt is answered.
+        let mut taken = Vec::new();
         while let (Went::On, Some(text)) =
             (&went.0, said.take().or_else(|| self.steered.pop_front()))
         {
-            went = self.answer_line(&session, &text);
+            let (turn, how) = self.answer_line(&session, &text);
+            taken.extend(turn);
+            went = how;
         }
         self.turning = false;
         self.steered.clear();
@@ -301,25 +306,40 @@ impl<W: Write> Agent<W> {
             (Went::Failed(error), _) => self.fail(id, INTERNAL_ERROR, &error),
             (Went::Gone, _) => return false,
         }
+        for turn in taken {
+            let after = std::mem::take(&mut self.scenario.turns[turn].after);
+            let went = self.steps(&session, &after);
+            self.scenario.turns[turn].after = after;
+            if matches!(went, Went::Gone) {
+                return false;
+            }
+        }
         true
     }
 
     /// Takes the turn of the scenario that answers `text`, and answers
-    /// how it went, with the reason it stops for.
-    fn answer_line(&mut self, session: &Value, text: &str) -> (Went, Value) {
+    /// which it was, if the scenario has one, and how it went, with the
+    /// reason it stops for.
+    fn answer_line(&mut self, session: &Value, text: &str) -> (Option<usize>, (Went, Value)) {
         let turn = (0..self.scenario.turns.len())
             .find(|&turn| !self.taken[turn] && self.scenario.turns[turn].answers(text));
         let Some(turn) = turn else {
             return (
-                self.say(session, "The scenario has no turn for this."),
-                Value::from("end_turn"),
+                None,
+                (
+                    self.say(session, "The scenario has no turn for this."),
+                    Value::from("end_turn"),
+                ),
             );
         };
         self.taken[turn] = true;
         let steps = std::mem::take(&mut self.scenario.turns[turn].steps);
         let went = self.steps(session, &steps);
         self.scenario.turns[turn].steps = steps;
-        (went, Value::from(self.scenario.turns[turn].stop.clone()))
+        (
+            Some(turn),
+            (went, Value::from(self.scenario.turns[turn].stop.clone())),
+        )
     }
 
     /// Takes the line `params` steers into the turn that runs, and answers

@@ -65,6 +65,10 @@ pub enum State {
     Closed,
 }
 
+/// The note that says the agent went on by itself after its turn ended,
+/// as when work it left running ended, ahead of what it said then.
+pub const WENT_ON: &str = "The agent went on by itself.";
+
 /// How many turns a chat takes toward its goal on one line of the human's,
 /// at most.
 pub const GOAL_TURNS: usize = 10;
@@ -224,7 +228,10 @@ pub struct Patch {
     pub goal: Option<Goal>,
     pub settings: Vec<Setting>,
     pub commands: Vec<SlashCommand>,
-    pub before_login: State,
+    /// From a daemon of before the agent asked between turns, it was said
+    /// of logging in only.
+    #[serde(alias = "before_login")]
+    pub before_asking: State,
     pub keeps: bool,
     /// Whether the agent takes a line into the turn it takes: from a
     /// daemon of before it was said, it does not.
@@ -287,9 +294,11 @@ pub struct Conversation {
     /// Which of the settings and the commands changed since that was last
     /// taken, to keep.
     unkept: Unkept,
-    /// Whose move it was when the agent asked the human to log in, which it
-    /// is again once they have chosen how.
-    before_login: State,
+    /// Whose move it was when the agent asked the human to log in, or for
+    /// their permission, which it is again once they have answered: the
+    /// agent's, when it asked in a turn, or the human's, when it asked as
+    /// it went on by itself after its turn ended.
+    before_asking: State,
     /// Whether the chat's agent can keep what it learned in the wiki, so
     /// that the chat asks the human whether to at its milestones.
     keeps: bool,
@@ -363,7 +372,7 @@ impl Conversation {
             settings: Vec::new(),
             commands: Vec::new(),
             unkept: Unkept::default(),
-            before_login: State::Idle,
+            before_asking: State::Idle,
             keeps: true,
             steers: false,
             steering: 0,
@@ -411,7 +420,7 @@ impl Conversation {
             settings: Vec::new(),
             commands: Vec::new(),
             unkept: Unkept::default(),
-            before_login: State::Idle,
+            before_asking: State::Idle,
             keeps: true,
             steers: false,
             steering: 0,
@@ -594,7 +603,7 @@ impl Conversation {
             goal: self.goal.clone(),
             settings: self.settings.clone(),
             commands: self.commands.clone(),
-            before_login: self.before_login,
+            before_asking: self.before_asking,
             keeps: self.keeps,
             steers: self.steers,
         }
@@ -619,7 +628,7 @@ impl Conversation {
             goal,
             settings,
             commands,
-            before_login,
+            before_asking,
             keeps,
             steers,
         } = patch;
@@ -636,7 +645,7 @@ impl Conversation {
         self.goal = goal;
         self.settings = settings;
         self.commands = commands;
-        self.before_login = before_login;
+        self.before_asking = before_asking;
         self.keeps = keeps;
         self.steers = steers;
     }
@@ -726,7 +735,12 @@ impl Conversation {
     /// takes lines so, and a turn runs that the human has not stopped.
     #[must_use]
     pub fn steers(&self) -> bool {
-        self.steers && matches!(self.state, State::Busy | State::Asking)
+        let turning = match self.state {
+            State::Busy => true,
+            State::Asking => self.before_asking == State::Busy,
+            _ => false,
+        };
+        self.steers && turning
     }
 
     /// Whether the agent side has yet to take a line the human steered
@@ -1562,7 +1576,7 @@ impl Conversation {
         // Asked as the human stopped the turn: the agent side gives up
         // without the human.
         if self.state != State::Stopping {
-            self.before_login = match self.state {
+            self.before_asking = match self.state {
                 State::Busy | State::Asking => State::Busy,
                 _ => State::Idle,
             };
@@ -1585,7 +1599,7 @@ impl Conversation {
         let option = options.get(index)?.clone();
         *chosen = Some(index);
         self.changed.insert(self.entries.len() - 1);
-        self.state = self.before_login;
+        self.state = self.before_asking;
         Some(option)
     }
 
@@ -1785,7 +1799,7 @@ impl Conversation {
         }
         *chosen = Some(index);
         self.changed.insert(self.entries.len() - 1);
-        self.state = State::Busy;
+        self.state = self.before_asking;
         // The human answered as the plan stands: it is the one the plan
         // is told against from here.
         let planned = self.entries.iter().rev().find_map(|entry| match entry {
@@ -2203,6 +2217,7 @@ impl Conversation {
                 )));
             }
             AgentEvent::Steered => self.steering = self.steering.saturating_sub(1),
+            AgentEvent::WentOn => self.push(Entry::Note(WENT_ON.to_owned())),
             AgentEvent::Opened { how, steers, .. } => {
                 self.steers = steers;
                 self.opened(how);
@@ -2240,6 +2255,10 @@ impl Conversation {
                 // Asked before the agent heard it is to stop: the agent
                 // side answers it as cancelled, without the human.
                 if self.state != State::Stopping {
+                    self.before_asking = match self.state {
+                        State::Busy | State::Asking => State::Busy,
+                        _ => State::Idle,
+                    };
                     self.state = State::Asking;
                 }
             }

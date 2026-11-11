@@ -5,6 +5,8 @@
 //! opened before, when it can. Each [`Session::send`] starts a
 //! [`Turn`], which hands over what the agent sends as [`Update`]s until the
 //! turn ends, and which [`Turn::cancel`] asks the agent to end early.
+//! What the agent sends while no turn runs, [`Session::next_unprompted`]
+//! hands over.
 //! The [`Setting`]s the agent lets the human choose of the session, such
 //! as its model, come with the session, and [`Session::set`] or
 //! [`Turn::set`] chooses one. An agent that asks the human to log in, as
@@ -482,8 +484,8 @@ fn settings(options: Vec<SessionConfigOption>) -> Vec<Setting> {
         .collect()
 }
 
-/// What the connection hands to the turn that is running: an update ready to
-/// show, or news of a tool call, which the turn gathers until the call ends.
+/// What the connection hands to the session: an update ready to show, or
+/// news of a tool call, which the session gathers until the call ends.
 enum Received {
     Update(Update),
     ToolCall {
@@ -505,7 +507,8 @@ struct Known {
     locations: Vec<PathBuf>,
 }
 
-/// Hands `received` to the turn that is running. The receiver lives as long
+/// Hands `received` to the session: to the turn that is running, or to
+/// [`Session::next_unprompted`] while none runs. The receiver lives as long
 /// as the session, so sending only fails after `talk` has returned, when
 /// there is no one left to show it to.
 fn deliver(updates: &UnboundedSender<Received>, received: Received) {
@@ -679,7 +682,7 @@ pub struct Session {
     login_methods: Vec<LoginMethod>,
     takes: Takes,
     received: UnboundedReceiver<Received>,
-    /// What is known of each tool call of the turn that has not ended yet.
+    /// What is known of each tool call that has not ended yet.
     tool_calls: HashMap<ToolCallId, Known>,
 }
 
@@ -744,7 +747,36 @@ impl Session {
         Ok(settings)
     }
 
-    /// Sends `blocks` to the agent as a prompt, starting a turn.
+    /// The next thing the agent sends while no turn runs, as when it goes
+    /// on on its own once work it left running ends: `claude-agent-acp`
+    /// does, when a task Claude Code ran in the background ends after the
+    /// turn that started it. Waits until the agent sends something, and
+    /// answers `None` once the connection has closed. Cancelled, it loses
+    /// nothing.
+    pub async fn next_unprompted(&mut self) -> Option<Update> {
+        loop {
+            let received = self.received.recv().await?;
+            if let Some(update) = follow(&mut self.tool_calls, received) {
+                return Some(update);
+            }
+        }
+    }
+
+    /// Asks the agent to stop what it does on its own while no turn runs
+    /// (see [`Session::next_unprompted`]), as [`Turn::cancel`] does a turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection fails.
+    pub fn cancel(&self) -> anyhow::Result<()> {
+        self.cx
+            .send_notification(CancelNotification::new(self.id.clone()))?;
+        Ok(())
+    }
+
+    /// Sends `blocks` to the agent as a prompt, starting a turn. What the
+    /// agent sent before, and was not taken with
+    /// [`Session::next_unprompted`], comes first in the turn.
     pub fn send(&mut self, blocks: impl IntoIterator<Item = Block>) -> Turn<'_> {
         let prompt = PromptRequest::new(self.id.clone(), content(blocks, self.takes));
         self.tool_calls.clear();
@@ -923,33 +955,8 @@ impl Turn<'_> {
                     continue;
                 }
             };
-            match received {
-                Received::Update(Update::PermissionRequest(mut request)) => {
-                    if let Some(known) =
-                        self.tool_calls.get(&request.request.tool_call.tool_call_id)
-                    {
-                        request.fill(known);
-                    }
-                    return Some(Update::PermissionRequest(request));
-                }
-                Received::Update(update) => return Some(update),
-                Received::ToolCall {
-                    id,
-                    title,
-                    kind,
-                    locations,
-                    content,
-                    status,
-                } => {
-                    let told = Known {
-                        title,
-                        kind,
-                        locations: locations.unwrap_or_default(),
-                    };
-                    if let Some(call) = self.follow_tool_call(id, told, content, status) {
-                        return Some(Update::ToolCall(call));
-                    }
-                }
+            if let Some(update) = follow(self.tool_calls, received) {
+                return Some(update);
             }
         }
     }
@@ -964,53 +971,6 @@ impl Turn<'_> {
             title,
             content: None,
             result: Some(ToolCallResult::Cancelled),
-        })
-    }
-
-    /// Records news of a tool call, what it is `told` to be, and returns the
-    /// call when there is something new to show: it started, its title or
-    /// content changed, or it ended. A kind or locations not told stay as
-    /// they were.
-    fn follow_tool_call(
-        &mut self,
-        id: ToolCallId,
-        told: Known,
-        content: Option<Vec<ToolCallContent>>,
-        status: Option<ToolCallStatus>,
-    ) -> Option<ToolCall> {
-        let title = told.title;
-        let result = match status {
-            Some(ToolCallStatus::Completed) => Some(ToolCallResult::Completed),
-            Some(ToolCallStatus::Failed) => Some(ToolCallResult::Failed),
-            _ => None,
-        };
-        let shown_id = id.to_string();
-        if result.is_some() {
-            let known = self.tool_calls.remove(&id).and_then(|known| known.title);
-            return Some(ToolCall {
-                id: shown_id,
-                title: title.or(known),
-                content,
-                result,
-            });
-        }
-        let started = !self.tool_calls.contains_key(&id);
-        let known = self.tool_calls.entry(id).or_default();
-        if told.kind.is_some() {
-            known.kind = told.kind;
-        }
-        if !told.locations.is_empty() {
-            known.locations = told.locations;
-        }
-        let retitled = title.is_some() && title != known.title;
-        if retitled {
-            known.title = title;
-        }
-        (started || retitled || content.is_some()).then(|| ToolCall {
-            id: shown_id,
-            title: known.title.clone(),
-            content,
-            result: None,
         })
     }
 
@@ -1077,6 +1037,83 @@ impl Turn<'_> {
             self.next().await;
         }
     }
+}
+
+/// Takes `received`, what the agent sent, given what is known of the
+/// tool calls that have not ended, and returns what there is to show of
+/// it, if anything.
+fn follow(tool_calls: &mut HashMap<ToolCallId, Known>, received: Received) -> Option<Update> {
+    match received {
+        Received::Update(Update::PermissionRequest(mut request)) => {
+            if let Some(known) = tool_calls.get(&request.request.tool_call.tool_call_id) {
+                request.fill(known);
+            }
+            Some(Update::PermissionRequest(request))
+        }
+        Received::Update(update) => Some(update),
+        Received::ToolCall {
+            id,
+            title,
+            kind,
+            locations,
+            content,
+            status,
+        } => {
+            let told = Known {
+                title,
+                kind,
+                locations: locations.unwrap_or_default(),
+            };
+            follow_tool_call(tool_calls, id, told, content, status).map(Update::ToolCall)
+        }
+    }
+}
+
+/// Records news of a tool call, what it is `told` to be, and returns the
+/// call when there is something new to show: it started, its title or
+/// content changed, or it ended. A kind or locations not told stay as
+/// they were.
+fn follow_tool_call(
+    tool_calls: &mut HashMap<ToolCallId, Known>,
+    id: ToolCallId,
+    told: Known,
+    content: Option<Vec<ToolCallContent>>,
+    status: Option<ToolCallStatus>,
+) -> Option<ToolCall> {
+    let title = told.title;
+    let result = match status {
+        Some(ToolCallStatus::Completed) => Some(ToolCallResult::Completed),
+        Some(ToolCallStatus::Failed) => Some(ToolCallResult::Failed),
+        _ => None,
+    };
+    let shown_id = id.to_string();
+    if result.is_some() {
+        let known = tool_calls.remove(&id).and_then(|known| known.title);
+        return Some(ToolCall {
+            id: shown_id,
+            title: title.or(known),
+            content,
+            result,
+        });
+    }
+    let started = !tool_calls.contains_key(&id);
+    let known = tool_calls.entry(id).or_default();
+    if told.kind.is_some() {
+        known.kind = told.kind;
+    }
+    if !told.locations.is_empty() {
+        known.locations = told.locations;
+    }
+    let retitled = title.is_some() && title != known.title;
+    if retitled {
+        known.title = title;
+    }
+    (started || retitled || content.is_some()).then(|| ToolCall {
+        id: shown_id,
+        title: known.title.clone(),
+        content,
+        result: None,
+    })
 }
 
 /// How the agent `answer`ed a line steered into a turn.

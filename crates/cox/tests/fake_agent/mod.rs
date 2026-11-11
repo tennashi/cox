@@ -9,7 +9,12 @@
 //! prompt mentions "think", it first thinks [`THOUGHT`], and when it mentions
 //! "plan", it first sends a plan of two steps, the first under way. When it
 //! mentions "title", it first titles its session [`TITLE`], and when it
-//! mentions "slow", it waits a moment before anything. When the
+//! mentions "slow", it waits a moment before anything. When the prompt
+//! mentions "background", it replies [`BACKGROUND_STARTED`] and ends the
+//! turn, and a moment later goes on by itself, with no prompt, as
+//! `claude-agent-acp` does once a task left running in the background
+//! ends: it asks permission to edit `x.txt` as above when the prompt
+//! mentions "ask" too, and replies [`BACKGROUND_FINISHED`]. When the
 //! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
 //! turn, or steers a line into it, which it echoes, ending the turn. A turn cancelled, or whose permission request Cox answers as cancelled,
 //! ends as cancelled. Its sessions have two settings, [`MODEL`] and
@@ -581,6 +586,11 @@ async fn take_turn(
         tokio::time::sleep(SLOW).await;
     }
     work(&turn, &request.session_id, &text)?;
+    if text.contains("background") {
+        say(&turn, &request.session_id, BACKGROUND_STARTED)?;
+        responder.respond(PromptResponse::new(StopReason::EndTurn))?;
+        return go_on(&turn, &request.session_id, &text, &answers).await;
+    }
     if text.contains("wait") {
         say(&turn, &request.session_id, "waiting")?;
         cancels.waiting.store(true, Ordering::SeqCst);
@@ -652,6 +662,33 @@ const SLOW: Duration = Duration::from_millis(300);
 /// What Cox asks the judge of a goal to end its reply with, which tells
 /// the agent it is asked to judge.
 const JUDGE_ASKS: &str = "PASS or FAIL";
+
+/// What the agent says as it ends the turn that leaves work running in
+/// the background, and once it went on by itself after it.
+pub const BACKGROUND_STARTED: &str = "started in the background";
+pub const BACKGROUND_FINISHED: &str = "finished in the background";
+
+/// Goes on by itself after the turn that answered `text` ended, with no
+/// prompt, as `claude-agent-acp` does once a task Claude Code left
+/// running in the background ends: asks permission first when `text`
+/// mentions "ask", and says it finished.
+async fn go_on(
+    cx: &ConnectionTo<Client>,
+    session: &SessionId,
+    text: &str,
+    answers: &Mutex<Vec<RequestPermissionOutcome>>,
+) -> Result<()> {
+    tokio::time::sleep(SLOW).await;
+    if text.contains("ask") {
+        let answer = ask_permission(cx, session).await?;
+        answers.lock().unwrap().push(answer.clone());
+        if answer == RequestPermissionOutcome::Cancelled {
+            return Ok(());
+        }
+        finish(cx, session, "call-1")?;
+    }
+    say(cx, session, BACKGROUND_FINISHED)
+}
 
 /// What the agent says when the last of `prompts` asks it to judge a
 /// goal: it finds the goal not met the first time it is asked, and met
