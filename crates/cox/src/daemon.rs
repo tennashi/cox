@@ -1727,16 +1727,25 @@ impl Daemon {
         lines[from..].to_vec()
     }
 
+    /// The chats the agent of the chat `key` may ask about, open or not:
+    /// those of its project; none while it is gone.
+    fn seen_by(&self, key: u64) -> Option<impl Iterator<Item = &Slot>> {
+        let project = self.slot(key)?.project;
+        Some(
+            self.chats
+                .iter()
+                .chain(&self.archived)
+                .filter(move |slot| slot.project == project),
+        )
+    }
+
     /// What the chat kept as `number`, of the project of the chat `key`,
     /// talked through, as its agent reads it, or why it cannot.
     fn read_chat(&self, key: u64, number: i64) -> Result<String, String> {
-        let project = self.slot(key).ok_or("the chat has closed")?.project;
         let slot = self
-            .chats
-            .iter()
-            .chain(&self.archived)
+            .seen_by(key)
+            .ok_or("the chat has closed")?
             .find(|slot| slot.kept.is_some_and(|kept| kept.number() == number))
-            .filter(|slot| slot.project == project)
             .ok_or_else(|| format!("This project has no chat {number}."))?;
         let entries = match &slot.chat {
             Some(chat) => chat.conversation().entries().to_vec(),
@@ -2782,7 +2791,7 @@ impl Daemon {
                 let opened = self.open_chat(key, &text, setup, goal);
                 answer.send(opened).ok();
             }
-            ChatRequest::WaitChat { chat, answer } => self.wait_chat(chat, answer),
+            ChatRequest::WaitChat { chat, answer } => self.wait_chat(key, chat, answer),
             ChatRequest::SaveToWiki { chat } => self.save_to_wiki_of(key, chat),
             ChatRequest::WikiWritten { page } => {
                 let in_sketch = self.sketch_of(key).is_some();
@@ -2885,10 +2894,19 @@ impl Daemon {
             .is_some_and(|slot| !working(slot.state) && keeps_in_wiki(slot.setup.as_ref()))
     }
 
-    /// Answers `answer` with how the chat that goes by `key` stands once it
-    /// is not at work, or at once when it is not.
-    fn wait_chat(&mut self, key: u64, answer: oneshot::Sender<Result<Waited, String>>) {
-        if self.slot(key).is_none() {
+    /// Answers `answer` with how the chat that goes by `key`, of the
+    /// project of the chat `asking`, stands once it is not at work, or at
+    /// once when it is not.
+    fn wait_chat(
+        &mut self,
+        asking: u64,
+        key: u64,
+        answer: oneshot::Sender<Result<Waited, String>>,
+    ) {
+        let seen = self
+            .seen_by(asking)
+            .is_some_and(|mut chats| chats.any(|slot| slot.key == key));
+        if !seen {
             answer.send(Err(format!("no chat {key}"))).ok();
             return;
         }
