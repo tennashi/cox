@@ -212,7 +212,7 @@ mod tests {
         assert!(left_out.is_empty(), "{left_out:?}");
         assert_eq!(servers.of("zig").unwrap().command, ["zls"]);
         // Cox's command again, it is downloaded as Cox has it.
-        assert!(servers.of("rust").unwrap().download.is_some());
+        assert!(servers.of("rust").unwrap().source.is_some());
 
         fs::write(&file, r#"{"servers": []}"#).unwrap();
         assert!(Listing::read_from(&file).is_err());

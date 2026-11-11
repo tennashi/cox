@@ -9,6 +9,11 @@
 //!
 //! An archive is a `.tar.gz` (or `.tgz`), a `.tar.bz2` (or `.tbz2`), a
 //! `.zip`, the program gzipped (`.gz`), or else the program itself.
+//!
+//! A language server's program may also be the asset of a release on
+//! GitHub, which Cox checks by the SHA-256 GitHub gives of it (see
+//! [`from_github`]), or a Go package, which `go install` installs, checking
+//! it by the Go checksum database (see [`go_installed`]).
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -79,13 +84,122 @@ pub fn installed(
 /// downloaded and unpacked (see [`installed`]).
 #[must_use]
 pub fn is_installed(kept: Kept, id: &str, version: &str) -> bool {
-    crate::storage::path(kept).is_some_and(|downloads| {
-        downloads
-            .join(name(id))
-            .join(name(version))
-            .join(UNPACKED)
-            .exists()
+    installed_at(kept, id, version).is_some()
+}
+
+/// The folder that holds the program kept as `id` in `kept` at
+/// `version`, if it is there, downloaded and unpacked (see
+/// [`installed`]).
+#[must_use]
+pub fn installed_at(kept: Kept, id: &str, version: &str) -> Option<PathBuf> {
+    let folder = crate::storage::path(kept)?
+        .join(name(id))
+        .join(name(version));
+    folder.join(UNPACKED).exists().then_some(folder)
+}
+
+/// Where the asset named `asset` of the release tagged `tag` of the
+/// GitHub repository `repository`, as `rust-lang/rust-analyzer`, is
+/// downloaded from, with the SHA-256 GitHub gives of it, at `tag` as its
+/// version.
+///
+/// # Errors
+///
+/// When GitHub cannot be asked, has no such release or asset, or gives no
+/// SHA-256 of it, as for assets uploaded before GitHub began keeping them.
+pub fn from_github(repository: &str, tag: &str, asset: &str) -> anyhow::Result<Download> {
+    let url = format!("https://api.github.com/repos/{repository}/releases/tags/{tag}");
+    let release = ureq::get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "cox")
+        .call()
+        .map_err(|error| anyhow::anyhow!("asking GitHub for {repository} {tag}: {error}"))?
+        .body_mut()
+        .read_to_string()?;
+    asset_of(&release, repository, tag, asset)
+}
+
+/// The asset named `asset` of `release`, a release of `repository` tagged
+/// `tag` as GitHub's API answers it.
+fn asset_of(release: &str, repository: &str, tag: &str, asset: &str) -> anyhow::Result<Download> {
+    #[derive(serde::Deserialize)]
+    struct Release {
+        assets: Vec<Asset>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Asset {
+        name: String,
+        browser_download_url: String,
+        digest: Option<String>,
+    }
+    let release: Release = serde_json::from_str(release)?;
+    let found = release
+        .assets
+        .into_iter()
+        .find(|found| found.name == asset)
+        .ok_or_else(|| anyhow::anyhow!("{repository} {tag} has no asset {asset}"))?;
+    let sha256 = found
+        .digest
+        .as_deref()
+        .and_then(|digest| digest.strip_prefix("sha256:"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "GitHub gives no SHA-256 of {asset} of {repository} {tag}, so Cox does not \
+                 download it"
+            )
+        })?;
+    Ok(Download {
+        version: tag.to_owned(),
+        archive: found.browser_download_url,
+        sha256: sha256.to_owned(),
     })
+}
+
+/// The folder that holds the program `go install` makes of the Go package
+/// `package` at `version`, kept as `id` in `kept`, installing it first if
+/// it is not there yet, after `told` is told so. `go` has to be on `PATH`.
+///
+/// # Errors
+///
+/// When `go` cannot be run, or does not install the package.
+pub fn go_installed(
+    kept: Kept,
+    id: &str,
+    package: &str,
+    version: &str,
+    told: &dyn Fn(String),
+) -> anyhow::Result<PathBuf> {
+    let downloads = crate::storage::path(kept)
+        .ok_or_else(|| anyhow::anyhow!("Cox has nowhere to keep what it downloads"))?;
+    let folder = downloads.join(name(id)).join(name(version));
+    if folder.join(UNPACKED).exists() {
+        return Ok(folder);
+    }
+    told(format!("Installing {package}@{version} with go install …"));
+    let partial = beside(&folder, "partial");
+    let _ = fs::remove_dir_all(&partial);
+    fs::create_dir_all(&partial)?;
+    let installed = std::process::Command::new("go")
+        .args(["install", &format!("{package}@{version}")])
+        .env("GOBIN", &partial)
+        .output()
+        .map_err(|error| anyhow::anyhow!("go could not be run: {error}"))
+        .and_then(|output| {
+            anyhow::ensure!(
+                output.status.success(),
+                "go install {package}@{version} failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            File::create(partial.join(UNPACKED))?;
+            let _ = fs::remove_dir_all(&folder);
+            fs::rename(&partial, &folder)?;
+            Ok(())
+        });
+    if installed.is_err() {
+        let _ = fs::remove_dir_all(&partial);
+    }
+    installed?;
+    Ok(folder)
 }
 
 /// The path beside `folder` named after it, with `.` and `suffix`.
@@ -352,6 +466,29 @@ mod tests {
             assert_eq!(mode & 0o111, 0o111);
         }
         let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn takes_an_asset_of_a_release_with_the_sha256_github_gives() {
+        let release = r#"{ "tag_name": "2026-11-09", "assets": [
+            { "name": "rust-analyzer-x86_64-unknown-linux-gnu.gz",
+              "browser_download_url": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-x86_64-unknown-linux-gnu.gz",
+              "digest": "sha256:8c039b25cb338b3970c731646677a4c9d4e9dd7a92c9ab9ae459c71467fbf4a9" },
+            { "name": "rust-analyzer-old.gz", "browser_download_url": "https://example.com/old.gz", "digest": null }
+        ] }"#;
+        let of = |asset| asset_of(release, "rust-lang/rust-analyzer", "2026-11-09", asset);
+        assert_eq!(
+            of("rust-analyzer-x86_64-unknown-linux-gnu.gz").unwrap(),
+            Download {
+                version: "2026-11-09".to_owned(),
+                archive: "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-x86_64-unknown-linux-gnu.gz".to_owned(),
+                sha256: "8c039b25cb338b3970c731646677a4c9d4e9dd7a92c9ab9ae459c71467fbf4a9".to_owned(),
+            }
+        );
+        let unchecked = of("rust-analyzer-old.gz").unwrap_err().to_string();
+        assert!(unchecked.contains("no SHA-256"), "{unchecked}");
+        let missing = of("rust-analyzer-windows.zip").unwrap_err().to_string();
+        assert!(missing.contains("has no asset"), "{missing}");
     }
 
     #[test]

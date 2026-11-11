@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
 
+use cox_editor::lsp::servers::Got;
 use cox_editor::lsp::{self, Client, Error, Server, Status, languages};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
-use crate::agents::download::{self, Download};
+use crate::agents::download;
 use crate::storage::Kept;
 
 /// What starts a server in a project's folder, and answers it once it is
@@ -39,8 +40,8 @@ type Running = HashMap<(PathBuf, String), Entity<LanguageServer>>;
 impl Global for Servers {}
 
 impl Default for Servers {
-    /// Servers started as programs: downloaded, for a server that says
-    /// where from on this platform, or else found on `PATH`.
+    /// Servers started as programs: got as each says, for a server that
+    /// says where from on this platform, or else found on `PATH`.
     fn default() -> Self {
         Self::new(Rc::new(|server, root| {
             Box::pin(async move {
@@ -51,24 +52,36 @@ impl Default for Servers {
     }
 }
 
-/// `server`, to start from where its program is downloaded, in
+/// `server`, to start from where Cox gets its program, in
 /// `cache/servers/<name>/<version>` where Cox keeps what lasts, when it
-/// says where it is downloaded from on this platform: downloaded first if
-/// it is not there yet.
+/// says where Cox gets it from on this platform: got first if it is not
+/// there yet, downloaded from GitHub, or installed with `go install`.
 fn downloaded(mut server: Server) -> Result<Server, Error> {
-    let Some((version, archive)) = server.download_for(&download::platform()) else {
-        return Ok(server);
+    let told = |note: String| tracing::info!(server = %server.name, "{note}");
+    let got = match server.got_on(&download::platform()) {
+        None => return Ok(server),
+        Some(Got::GitHub {
+            repository,
+            version,
+            asset,
+            program,
+        }) => download::installed_at(Kept::ServerDownloads, &server.name, version)
+            .map_or_else(
+                || {
+                    let from = download::from_github(repository, version, &asset)?;
+                    download::installed(Kept::ServerDownloads, &server.name, &from, &told)
+                },
+                Ok,
+            )
+            .map(|folder| folder.join(program)),
+        Some(Got::Go {
+            package,
+            version,
+            program,
+        }) => download::go_installed(Kept::ServerDownloads, &server.name, package, version, &told)
+            .map(|folder| folder.join(program)),
     };
-    let download = Download {
-        version: version.to_owned(),
-        archive: archive.archive.clone(),
-        sha256: archive.sha256.clone(),
-    };
-    let folder = download::installed(Kept::ServerDownloads, &server.name, &download, &|note| {
-        tracing::info!(server = %server.name, "{note}");
-    })
-    .map_err(|error| Error::Io(std::io::Error::other(format!("{error:#}"))))?;
-    let program = folder.join(&archive.program);
+    let program = got.map_err(|error| Error::Io(std::io::Error::other(format!("{error:#}"))))?;
     if let Some(command) = server.command.first_mut() {
         *command = program.to_string_lossy().into_owned();
     }
@@ -148,7 +161,8 @@ impl Found {
     /// Where the program of `server` is, on `PATH` as Cox has it.
     #[must_use]
     pub fn of(server: &Server) -> Self {
-        if let Some((version, _)) = server.download_for(&download::platform()) {
+        if let Some(got) = server.got_on(&download::platform()) {
+            let version = got.version();
             return if download::is_installed(Kept::ServerDownloads, &server.name, version) {
                 Self::Downloaded(version.to_owned())
             } else {
