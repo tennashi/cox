@@ -61,7 +61,10 @@
 //!   `triggers/discussion/<card>` tells how that stands, and
 //!   `triggers/try/<try>` tries the card on the last turn of a chat in
 //!   the folder, and `triggers/tried/<card>` tells how it went (see
-//!   [`crate::trigger::discuss`]).
+//!   [`crate::trigger::discuss`]). Only a plugin's own `fetch` has the
+//!   triggers set, or a card saved, talked through, tried or ended
+//!   (`triggers/end/<card>`): a tab sent to one of those, by a link or a
+//!   page elsewhere, gets nothing (see [`Asker`]).
 //!
 //! A plugin draws in the window's colors by linking the stylesheet at
 //! `cox://api/theme.css`, whose custom properties on `:root` are the
@@ -76,7 +79,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use cox_browser::scheme::{Resource, Serve, percent_decoded};
+use cox_browser::scheme::{Asker, Resource, Serve, percent_decoded};
 
 use crate::stage::calls::Calls;
 use crate::stage::lines;
@@ -222,11 +225,18 @@ impl Plugins {
         plugins
     }
 
-    /// What the stage's pages get at `cox:` addresses.
+    /// What the stage's pages get at `cox:` addresses: anyone is told what
+    /// is there, and only a plugin has the stage do what it asks (see
+    /// [`Asker`]).
     #[must_use]
     pub fn serve(&self) -> Serve {
         let plugins = self.clone();
-        Arc::new(move |url| plugins.resource(url))
+        Arc::new(move |url, asker| {
+            if asker == Asker::Anyone && acts(url) {
+                return None;
+            }
+            plugins.resource(url)
+        })
     }
 
     /// What is at `url`, if anything.
@@ -494,6 +504,17 @@ fn split(url: &str) -> Option<(&str, &str)> {
     Some((host, path))
 }
 
+/// Whether asking for `url` has the stage do something, not only tell:
+/// a new ask of the Triggers tab's does, until it is named here as one
+/// that only tells.
+fn acts(url: &str) -> bool {
+    let Some(("api", path)) = split(url) else {
+        return false;
+    };
+    path.strip_prefix("triggers/")
+        .is_some_and(|ask| !ask.starts_with("discussion/") && !ask.starts_with("tried/"))
+}
+
 /// The media type of a file, by its name.
 fn mime(path: &str) -> &'static str {
     let extension = Path::new(path)
@@ -550,6 +571,22 @@ mod tests {
         assert_eq!(plugins.resource("cox://map/missing.js"), None);
         assert_eq!(plugins.resource("cox://nothing/"), None);
         assert_eq!(plugins.resource("cox://api/weather"), None);
+    }
+
+    #[test]
+    fn only_a_plugin_has_the_triggers_tab_do_what_it_asks() {
+        let plugins = Plugins::new(scratch("asker"), Outlines::new().0, Calls::new().0);
+        let serve = plugins.serve();
+        let body = |url: &str, asker| serve(url, asker).map(|resource| resource.body);
+
+        assert_eq!(
+            body("cox://api/triggers/end/card", Asker::Plugin),
+            Some(b"{}".to_vec())
+        );
+        assert_eq!(body("cox://api/triggers/end/card", Asker::Anyone), None);
+        assert!(body("cox://api/triggers/tried/card", Asker::Anyone).is_some());
+        assert!(body("cox://api/triggers/discussion/card", Asker::Anyone).is_some());
+        assert!(body("cox://map/", Asker::Anyone).is_some());
     }
 
     #[test]

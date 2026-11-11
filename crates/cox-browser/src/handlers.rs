@@ -306,8 +306,9 @@ wrap_request_handler! {
         }
 
         /// A request of the page's at a `cox:` address is answered by what
-        /// the stage serves (see [`crate::scheme`]); the rest go to the
-        /// network, or the file, as usual.
+        /// the stage serves, as far as who made it may have it (see
+        /// [`crate::scheme`]); the rest go to the network, or the file, as
+        /// usual.
         fn resource_request_handler(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -315,12 +316,22 @@ wrap_request_handler! {
             request: Option<&mut cef::Request>,
             _is_navigation: c_int,
             _is_download: c_int,
-            _request_initiator: Option<&CefString>,
+            request_initiator: Option<&CefString>,
             _disable_default_handling: Option<&mut c_int>,
         ) -> Option<ResourceRequestHandler> {
             let serve = self.serve.as_ref()?;
-            let url = CefString::from(&request?.url()).to_string();
-            crate::scheme::is_served(&url).then(|| crate::scheme::handler(Arc::clone(serve)))
+            let request = request?;
+            let url = CefString::from(&request.url()).to_string();
+            if !crate::scheme::is_served(&url) {
+                return None;
+            }
+            let initiator = request_initiator.map(ToString::to_string).unwrap_or_default();
+            let handler =
+                crate::scheme::handler(Arc::clone(serve), &initiator, request.resource_type());
+            if handler.is_none() {
+                tracing::warn!(url, initiator, "a page at {initiator} may not have {url}");
+            }
+            handler
         }
     }
 }
