@@ -33,7 +33,7 @@ use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, ADDED_GROUND, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER,
     BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND,
     FAILED_MARK, FAINT, FOREGROUND, GROUND, HOVER, LINK, OFFERING_BUTTON, OFFERING_EDGE,
-    OFFERING_GROUND, RAISED, REMOVED_GROUND, SURFACE,
+    OFFERING_GROUND, RAISED, REMOVED_GROUND, SURFACE, chat_color,
 };
 
 /// How tall a picture shown in the conversation grows.
@@ -359,7 +359,9 @@ impl ChatView {
                 speaker.map(|speaker| match speaker {
                     Speaker::Human => Mark::Named("YOU".into(), FOREGROUND),
                     Speaker::Cox => Mark::Named("COX".into(), FAINT),
-                    Speaker::Agent => Mark::Named(agents.now().to_uppercase().into(), ACCENT),
+                    Speaker::Agent => {
+                        Mark::Named(agents.now().to_uppercase().into(), chat_color(self.key))
+                    }
                 })
             } else {
                 None

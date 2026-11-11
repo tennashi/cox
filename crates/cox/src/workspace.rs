@@ -80,7 +80,7 @@ use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAINT, FOREGROUND, GAP,
-    GROUND, HOVER, LINK, RAISED, SELECTED, SURFACE, UI_FONT,
+    GROUND, HOVER, LINK, RAISED, SELECTED, SURFACE, UI_FONT, chat_color,
 };
 use crate::ui::{card, tip};
 use crate::workflow;
@@ -2741,12 +2741,15 @@ impl Workspace {
 
 /// The dot of how `chat` stands, its color, whether it is filled, and
 /// what it is called: filled, it asks the human to look; a ring, it says
-/// only whether the agent is at work. A closed chat has none.
+/// only whether the agent is at work. A closed chat has none. Its agent's
+/// dots are in the chat's color, as the tabs it works on are, so that the
+/// human tells which tabs are whose.
 fn dot(chat: &Chat) -> Option<(u32, bool, &'static str)> {
+    let color = chat_color(chat.key);
     match chat.open.then_some(chat.state) {
         Some(State::Asking) => Some((ASKING, true, "asking")),
-        _ if chat.unread => Some((ACCENT, true, "unread")),
-        Some(State::Busy | State::Stopping | State::Checking) => Some((ACCENT, false, "working")),
+        _ if chat.unread => Some((color, true, "unread")),
+        Some(State::Busy | State::Stopping | State::Checking) => Some((color, false, "working")),
         Some(State::Idle) => Some((DISABLED, false, "idle")),
         Some(State::Closed) | None => None,
     }

@@ -13,7 +13,7 @@
 
 use gpui::{
     AnchoredPositionMode, AnyElement, Context, ElementId, Focusable as _, FontWeight, MouseButton,
-    MouseDownEvent, anchored, deferred, div, point, prelude::*, px, rgb,
+    MouseDownEvent, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
 };
 
 use cox_core::settings::{Choice, Setting};
@@ -23,9 +23,7 @@ use crate::agents::REGISTRY_GROUP;
 use crate::chat::conversation::State;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::menu::{ROW_HEIGHT, ROW_RADIUS};
-use crate::ui::theme::{
-    ACCENT, ACCENT_GROUND, BORDER, BUTTON, DIM, FAINT, FOREGROUND, SELECTED, SURFACE,
-};
+use crate::ui::theme::{BORDER, BUTTON, DIM, FAINT, FOREGROUND, SELECTED, SURFACE, chat_color};
 
 /// How wide the list of a setting's choices is.
 const CHOICES_WIDTH: f32 = 260.;
@@ -62,6 +60,7 @@ impl ChatView {
         }
         let idle = matches!(self.conversation.state(), State::Idle | State::Closed);
         let open = self.setting_open;
+        let color = chat_color(self.key);
         let pill = div()
             .id("settings")
             .debug_selector(|| "settings".to_owned())
@@ -83,7 +82,8 @@ impl ChatView {
             .hover(|style| style.bg(rgb(BUTTON)))
             .when(open.is_some(), |pill| pill.bg(rgb(BUTTON)))
             .child(
-                // A dot in the accent, in a ring of its ground.
+                // A dot in the chat's color, as its agent's tabs on the
+                // stage are, in a faint ring of it.
                 div()
                     .flex_shrink_0()
                     .size(px(11.))
@@ -91,8 +91,8 @@ impl ChatView {
                     .items_center()
                     .justify_center()
                     .rounded_full()
-                    .bg(rgb(ACCENT_GROUND))
-                    .child(div().size(px(7.)).rounded_full().bg(rgb(ACCENT))),
+                    .bg(rgba(color << 8 | 0x1e))
+                    .child(div().size(px(7.)).rounded_full().bg(rgb(color))),
             )
             .children(agent.is_some().then(|| {
                 div()
