@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use std::time::Duration;
 
-use anyhow::Context as _;
+use anyhow::{Context as _, bail};
 use gpui::{App, AsyncApp, WindowHandle};
 use serde_json::{Map, Value};
 
@@ -367,7 +367,7 @@ pub fn translation() -> Option<Translation> {
 /// # Errors
 ///
 /// When Cox has no place to keep it, the path is not UTF-8, or the file
-/// cannot be written.
+/// cannot be read as settings or written.
 pub fn keep_home(home: &Path) -> anyhow::Result<()> {
     let file =
         crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
@@ -388,7 +388,8 @@ fn keep_home_in(file: &Path, home: &Path) -> anyhow::Result<()> {
 ///
 /// # Errors
 ///
-/// When Cox has no place to keep it, or the file cannot be written.
+/// When Cox has no place to keep it, or the file cannot be read as
+/// settings or written.
 pub fn keep_agent(agent: Option<&str>) -> anyhow::Result<()> {
     let file =
         crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
@@ -413,7 +414,8 @@ pub fn kept(key: &str) -> Option<Value> {
 ///
 /// # Errors
 ///
-/// When Cox has no place to keep it, or the file cannot be written.
+/// When Cox has no place to keep it, or the file cannot be read as
+/// settings or written.
 pub fn keep(key: &str, value: Option<Value>) -> anyhow::Result<()> {
     let file =
         crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
@@ -422,13 +424,24 @@ pub fn keep(key: &str, value: Option<Value>) -> anyhow::Result<()> {
 
 /// Keeps `value` as `key` of `file`, or takes `key` out with none,
 /// leaving the rest of what it holds as it was.
+///
+/// # Errors
+///
+/// When `file` cannot be read as an object of settings, as when the human
+/// left a mistake in it, which leaves it as it is, or it cannot be written.
 fn keep_in(file: &Path, key: &str, value: Option<Value>) -> anyhow::Result<()> {
     let mut settings = match fs::read(file) {
-        Ok(bytes) => match serde_json::from_slice(&bytes) {
-            Ok(Value::Object(settings)) => settings,
-            // What cannot be read goes, in place of losing what is set too.
-            _ => Map::new(),
-        },
+        Ok(bytes) => {
+            let read = serde_json::from_slice(&bytes)
+                .with_context(|| format!("{} is not JSON, so it is left as it is", file.display()));
+            let Value::Object(settings) = read? else {
+                bail!(
+                    "{} is not an object of settings, so it is left as it is",
+                    file.display()
+                );
+            };
+            settings
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Map::new(),
         Err(error) => return Err(error).with_context(|| format!("reading {}", file.display())),
     };
@@ -445,7 +458,9 @@ fn keep_in(file: &Path, key: &str, value: Option<Value>) -> anyhow::Result<()> {
     }
     let mut text = serde_json::to_string_pretty(&Value::Object(settings))?;
     text.push('\n');
-    fs::write(file, text).with_context(|| format!("writing {}", file.display()))
+    let part = file.with_extension("part");
+    fs::write(&part, text).with_context(|| format!("writing {}", part.display()))?;
+    fs::rename(&part, file).with_context(|| format!("writing {}", file.display()))
 }
 
 /// The folder `text` names, as the human types it on the settings screen:
