@@ -69,10 +69,12 @@ pub const LINK: u32 = 0xa6_ebe1;
 /// Code among words, as `a path` in the conversation, and the stretch of
 /// a line a search found.
 pub const CODE: u32 = 0xe0_b080;
-/// The colors that tell the chats apart, as on the tabs of the stage: of
-/// the accent's lightness and saturation, around the wheel but for the
-/// amber and the red of what asks and what went wrong, in an order that
-/// sets each far from the one before, the accent first.
+/// The colors that tell the chats apart: on the tabs of the stage its
+/// agent works on, on its dot in the list of chats, and on its agent's
+/// lines in the conversation. They are of the accent's lightness and
+/// saturation, around the wheel but for the amber and the red of what
+/// asks and what went wrong, in an order that sets each far from the one
+/// before, the accent first.
 pub const CHAT_COLORS: [u32; 8] = [
     0x6f_d3c6, 0xba_6fd3, 0xa1_d36f, 0x6f_88d3, 0xd3_6fba, 0x6f_d388, 0x88_6fd3, 0x6f_b2d3,
 ];
