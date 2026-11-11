@@ -11,7 +11,7 @@ use cox::agent::Start;
 use cox::agents::Agents;
 use cox::chat::judge::Starts;
 use cox::daemon::client::{self, Connected};
-use cox::daemon::wire::{FromDaemon, Hello, ToDaemon};
+use cox::daemon::wire::{Build, FromDaemon, Hello, ToDaemon};
 use cox::daemon::{Spawned, Spawns};
 use cox_core::entry::Attachment;
 use cox_core::store::Store;
@@ -79,11 +79,13 @@ fn reach(socket: &Path, home: &Path, gone: &Arc<AtomicBool>) -> anyhow::Result<C
     let hello = Hello {
         home: Some(home.to_owned()),
         command: Vec::new(),
+        build: Build::now(),
     };
     client::connect(
         socket,
         &hello,
         &|| Err(std::io::Error::other("coxd runs already")),
+        &|| panic!("coxd is of the window's build"),
         move || gone.store(true, Ordering::SeqCst),
     )
 }
@@ -277,14 +279,17 @@ fn what_the_window_and_coxd_say_reads_back_as_it_was() {
     let hello = Hello {
         home: Some(PathBuf::from("/tmp/home")),
         command: vec!["node".to_owned(), "agent.mjs".to_owned()],
+        build: Build::now(),
     };
     let line = serde_json::to_string(&hello).unwrap();
     assert!(!line.contains('\n'));
     assert_eq!(serde_json::from_str::<Hello>(&line).unwrap(), hello);
     for message in [
+        FromDaemon::Joined,
         FromDaemon::Welcome,
         FromDaemon::Taken,
         FromDaemon::Outdated,
+        FromDaemon::Busy,
         FromDaemon::Settled { id: 3 },
     ] {
         let line = serde_json::to_string(&message).unwrap();

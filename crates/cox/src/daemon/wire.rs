@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use cox_core::entry::Attachment;
 use cox_core::goal::Goal;
@@ -138,6 +139,28 @@ pub enum StageAsk {
     },
 }
 
+/// Which build of Cox a window or coxd runs, as the file of its program
+/// was when it started: a window and a coxd of one build say the same
+/// [`ToDaemon`] and [`FromDaemon`], and of two builds they may not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Build {
+    size: u64,
+    modified: SystemTime,
+}
+
+impl Build {
+    /// The build this process runs, unless the file of its program
+    /// cannot be read.
+    #[must_use]
+    pub fn now() -> Option<Self> {
+        let metadata = std::fs::metadata(std::env::current_exe().ok()?).ok()?;
+        Some(Self {
+            size: metadata.len(),
+            modified: metadata.modified().ok()?,
+        })
+    }
+}
+
 /// What a window says first, as it comes to coxd, of the command line
 /// it was started with.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,19 +171,49 @@ pub struct Hello {
     /// The agent a new chat talks to, and its arguments, as the command
     /// line gave it, or none for the one the settings name.
     pub command: Vec<String>,
+    /// The window's build, or none from a window of a build that did not
+    /// tell it.
+    #[serde(default)]
+    pub build: Option<Build>,
+}
+
+impl Hello {
+    /// How coxd of `build` answers this hello from a window it could
+    /// take, as a chat of its is `at_work` or not: it takes a window of
+    /// its own build only, and stops for one of another once no chat is
+    /// at work.
+    #[must_use]
+    pub fn answer(&self, build: Option<Build>, at_work: bool) -> FromDaemon {
+        if self.build == build {
+            FromDaemon::Joined
+        } else if at_work {
+            FromDaemon::Busy
+        } else {
+            FromDaemon::Outdated
+        }
+    }
 }
 
 /// What the daemon tells a window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FromDaemon {
-    /// The window's [`Hello`] was heard: what follows is the daemon's.
+    /// The window's [`Hello`] was heard, from a window of the daemon's
+    /// build: what follows is the daemon's.
+    Joined,
+    /// What a coxd of a build that did not tell builds apart answers a
+    /// window it takes, of any build: a window takes it as
+    /// [`FromDaemon::Busy`], since what follows may not read.
     Welcome,
     /// Another window is there already, which the daemon goes on with.
     Taken,
-    /// The daemon's own program was replaced, as by `cargo xtask
-    /// install`, and no chat is at work: it stops, for the window to
-    /// start the new one.
+    /// The window is of another build than the daemon's, as when `cargo
+    /// xtask install` replaced its program, and no chat is at work: the
+    /// daemon stops, for the window to start one of its own build.
     Outdated,
+    /// The window is of another build than the daemon's, which goes on as
+    /// it is, since a chat is at work: it does not take the window, which
+    /// comes again later.
+    Busy,
     /// The projects and chats, as they are now.
     Listing(Listing),
     /// How the conversation of the chat `key` changed, for a window that
@@ -346,4 +399,54 @@ pub enum ToDaemon {
     /// Answer [`FromDaemon::Settled`] with `id` once all asked before is
     /// done.
     Sync { id: u64 },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn built(size: u64) -> Build {
+        Build {
+            size,
+            modified: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn coxd_takes_a_window_of_its_own_build_only() {
+        let ours = Hello {
+            build: Some(built(1)),
+            ..Hello::default()
+        };
+        let theirs = Hello {
+            build: Some(built(2)),
+            ..Hello::default()
+        };
+        let untold = Hello::default();
+
+        for at_work in [false, true] {
+            assert_eq!(ours.answer(Some(built(1)), at_work), FromDaemon::Joined);
+        }
+        assert_eq!(theirs.answer(Some(built(1)), false), FromDaemon::Outdated);
+        assert_eq!(theirs.answer(Some(built(1)), true), FromDaemon::Busy);
+        assert_eq!(untold.answer(Some(built(1)), false), FromDaemon::Outdated);
+        assert_eq!(untold.answer(Some(built(1)), true), FromDaemon::Busy);
+    }
+
+    #[test]
+    fn a_window_and_a_coxd_of_a_build_that_told_none_read_each_other_greeting() {
+        let hello: Hello = serde_json::from_str(r#"{"home":null,"command":[]}"#).unwrap();
+        assert_eq!(hello.build, None);
+        assert_eq!(
+            serde_json::from_str::<FromDaemon>(r#""Welcome""#).unwrap(),
+            FromDaemon::Welcome
+        );
+        let told = Hello {
+            build: Build::now(),
+            ..Hello::default()
+        };
+        let line = serde_json::to_string(&told).unwrap();
+        assert_eq!(serde_json::from_str::<Hello>(&line).unwrap(), told);
+        assert!(told.build.is_some(), "{line}");
+    }
 }

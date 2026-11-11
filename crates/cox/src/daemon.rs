@@ -56,7 +56,7 @@ use crate::storage;
 use crate::trigger::By;
 use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
-use wire::{ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
+use wire::{Build, ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
 /// What the project of chats with no folder is called.
 const COX: &str = "Cox";
@@ -180,14 +180,13 @@ pub enum Internal {
     /// The command `id`, which the window runs, is not waited for any more.
     Cancel { id: u64 },
     /// A window came, as the connection `id`, saying `hello`, to hear
-    /// what the daemon says on `window`, when the daemon's own program
-    /// was `replaced` since it started, or not. `answer` hears how the
-    /// daemon took it.
+    /// what the daemon says on `window`, the daemon being of `build`.
+    /// `answer` hears how the daemon took it.
     Attach {
         id: u64,
         hello: Hello,
         window: UnboundedSender<FromDaemon>,
-        replaced: bool,
+        build: Option<Build>,
         answer: oneshot::Sender<FromDaemon>,
     },
     /// The window of the connection `id` went.
@@ -2407,10 +2406,10 @@ impl Daemon {
                 id,
                 hello,
                 window,
-                replaced,
+                build,
                 answer,
             } => {
-                let taken = self.attach(id, hello, window, replaced);
+                let taken = self.attach(id, hello, window, build);
                 answer.send(taken).ok();
             }
             Internal::Detach { id } => {
@@ -2553,15 +2552,14 @@ impl Daemon {
 
     /// Takes the window of the connection `id`, which says `hello`, to
     /// tell what it does on `window` from now on, unless another window
-    /// is there, or the daemon's own program was `replaced` and no chat
-    /// is at work, when the daemon is to stop for the new one. Answers
-    /// which of those it is.
+    /// is there, or the window is of another build than the daemon's,
+    /// `build` (see [`Hello::answer`]). Answers which of those it is.
     fn attach(
         &mut self,
         id: u64,
         hello: Hello,
         window: UnboundedSender<FromDaemon>,
-        replaced: bool,
+        build: Option<Build>,
     ) -> FromDaemon {
         if self.window.is_some() {
             return FromDaemon::Taken;
@@ -2571,13 +2569,14 @@ impl Daemon {
             .iter()
             .chain(&self.archived)
             .any(|slot| working(slot.state));
-        if replaced && !at_work {
-            return FromDaemon::Outdated;
+        let answer = hello.answer(build, at_work);
+        if answer == FromDaemon::Busy {
+            tracing::warn!("a window of another build waits, since a chat is at work");
         }
-        if replaced {
-            tracing::warn!("the daemon goes on as it was, since a chat is at work");
+        if answer != FromDaemon::Joined {
+            return answer;
         }
-        let Hello { home, command } = hello;
+        let Hello { home, command, .. } = hello;
         // A window not given a home leaves Cox's own chats where
         // the settings say now, which may have changed while none was
         // there.
@@ -2593,7 +2592,7 @@ impl Daemon {
         self.window_watches.clear();
         self.listed = None;
         self.shown = None;
-        FromDaemon::Welcome
+        FromDaemon::Joined
     }
 
     /// Lets the window go: what it was asked to run it does not, and the
