@@ -157,3 +157,58 @@ fn carry(
         from_daemon,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::net::UnixListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    /// A coxd on `socket` that answers each window that comes, in turn,
+    /// the line of `answers`, counting in `heard` the hellos it heard.
+    fn coxd(socket: &Path, answers: &'static [&'static str], heard: &Arc<AtomicUsize>) {
+        let _ = std::fs::remove_file(socket);
+        let listener = UnixListener::bind(socket).unwrap();
+        let heard = Arc::clone(heard);
+        std::thread::spawn(move || {
+            let mut windows = Vec::new();
+            for answer in answers {
+                let (stream, _) = listener.accept().unwrap();
+                let mut hello = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut hello)
+                    .unwrap();
+                heard.fetch_add(1, Ordering::SeqCst);
+                (&stream)
+                    .write_all(format!("{answer}\n").as_bytes())
+                    .unwrap();
+                windows.push(stream);
+            }
+            std::thread::park();
+        });
+    }
+
+    #[test]
+    fn a_window_waits_out_a_coxd_that_does_not_say_it_is_of_its_build() {
+        let socket = std::env::temp_dir().join(format!("cox-greet-{}.sock", std::process::id()));
+        let heard = Arc::new(AtomicUsize::new(0));
+        coxd(&socket, &[r#""Welcome""#, r#""Joined""#], &heard);
+
+        let connected = connect(
+            &socket,
+            &Hello::default(),
+            &|| Err(std::io::Error::other("coxd runs already")),
+            || {},
+        );
+
+        assert!(connected.is_ok(), "{:?}", connected.err());
+        assert_eq!(
+            heard.load(Ordering::SeqCst),
+            2,
+            "the window comes again, past the coxd that welcomed it as any window"
+        );
+        let _ = std::fs::remove_file(&socket);
+    }
+}
