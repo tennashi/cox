@@ -3064,6 +3064,50 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
+#[gpui::test]
+async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppContext) {
+    let home = scratch("bounded-home");
+    let store = kept_store("bounded-kept");
+    let (_, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+
+    // The human answers every request of the first chat's, yet its agent
+    // asks for a chat that Cox answers everything of.
+    let (answer, _opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::OpenChat {
+            text: "permission".to_owned(),
+            setup: Setup {
+                policy: Policy {
+                    allow: vec!["*".to_owned()],
+                    ..Policy::default()
+                },
+                ..Setup::default()
+            },
+            goal: None,
+            sketch: None,
+            answer,
+        })
+        .unwrap();
+    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 2)
+        .await;
+
+    // The chat it opened asks the human too.
+    let view = view_at(cx, &workspace, 1);
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    let setup = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().setup().cloned().unwrap()
+    });
+    assert_eq!(setup.policy, Policy::default());
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
+}
+
 /// A Git repository at a scratch folder named after `name`, with
 /// `main.rs` committed, and someone to commit as.
 fn repository(name: &str) -> PathBuf {
