@@ -78,12 +78,32 @@ fn installed_in(folder: &Path, download: &Download, told: &dyn Fn(String)) -> an
         return Ok(());
     }
     told(format!("Downloading {} …", download.archive));
-    let fetched = beside(folder, "download");
-    fetch(&download.archive, &fetched)?;
-    let unpacked = check(&fetched, &download.sha256)
-        .and_then(|()| unpack(&fetched, file_name(&download.archive), folder));
-    let _ = fs::remove_file(&fetched);
-    unpacked
+    one_at_a_time(folder, || {
+        let fetched = beside(folder, "download");
+        fetch(&download.archive, &fetched)?;
+        let unpacked = check(&fetched, &download.sha256)
+            .and_then(|()| unpack(&fetched, file_name(&download.archive), folder));
+        let _ = fs::remove_file(&fetched);
+        unpacked
+    })
+}
+
+/// Makes `folder` with `install`, unless it is there already, one at a
+/// time: while one install of `folder` runs, in any thread or process of
+/// Cox, another waits for it and then takes what it made.
+fn one_at_a_time(
+    folder: &Path,
+    install: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    if let Some(parent) = folder.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock = File::create(beside(folder, "lock"))?;
+    lock.lock()?;
+    if folder.join(UNPACKED).exists() {
+        return Ok(());
+    }
+    install()
 }
 
 /// Whether the program kept as `id` in `kept` is there at `version`,
@@ -182,29 +202,31 @@ pub fn go_installed(
         return Ok(folder);
     }
     told(format!("Installing {package}@{version} with go install …"));
-    let partial = beside(&folder, "partial");
-    let _ = fs::remove_dir_all(&partial);
-    fs::create_dir_all(&partial)?;
-    let installed = std::process::Command::new("go")
-        .args(["install", &format!("{package}@{version}")])
-        .env("GOBIN", &partial)
-        .output()
-        .map_err(|error| anyhow::anyhow!("go could not be run: {error}"))
-        .and_then(|output| {
-            anyhow::ensure!(
-                output.status.success(),
-                "go install {package}@{version} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-            File::create(partial.join(UNPACKED))?;
-            let _ = fs::remove_dir_all(&folder);
-            fs::rename(&partial, &folder)?;
-            Ok(())
-        });
-    if installed.is_err() {
+    one_at_a_time(&folder, || {
+        let partial = beside(&folder, "partial");
         let _ = fs::remove_dir_all(&partial);
-    }
-    installed?;
+        fs::create_dir_all(&partial)?;
+        let installed = std::process::Command::new("go")
+            .args(["install", &format!("{package}@{version}")])
+            .env("GOBIN", &partial)
+            .output()
+            .map_err(|error| anyhow::anyhow!("go could not be run: {error}"))
+            .and_then(|output| {
+                anyhow::ensure!(
+                    output.status.success(),
+                    "go install {package}@{version} failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                File::create(partial.join(UNPACKED))?;
+                let _ = fs::remove_dir_all(&folder);
+                fs::rename(&partial, &folder)?;
+                Ok(())
+            });
+        if installed.is_err() {
+            let _ = fs::remove_dir_all(&partial);
+        }
+        installed
+    })?;
     Ok(folder)
 }
 
