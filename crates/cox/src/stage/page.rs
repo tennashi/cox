@@ -627,9 +627,29 @@ mod tests {
             Some("https://example.com/path".to_owned())
         );
         assert_eq!(
-            address_to_url("localhost:3000"),
-            Some("https://localhost:3000".to_owned())
+            address_to_url("localhost.example.com"),
+            Some("https://localhost.example.com".to_owned())
         );
+    }
+
+    #[test]
+    fn a_host_of_the_mac_is_plain_http() {
+        for typed in [
+            "localhost",
+            "localhost:3000",
+            "localhost:5173/shop?item=2",
+            "app.localhost:4000/",
+            "127.0.0.1:8080",
+            "127.1.2.3",
+            "[::1]:3000/",
+            "0.0.0.0:8000",
+        ] {
+            assert_eq!(
+                address_to_url(typed),
+                Some(format!("http://{typed}")),
+                "{typed}"
+            );
+        }
     }
 
     #[test]
