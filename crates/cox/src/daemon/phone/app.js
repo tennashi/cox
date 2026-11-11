@@ -984,7 +984,7 @@ function conversation(entries, current) {
   // Each place, to draw: what it holds is made only for those drawn.
   const found = [];
   let speaking = null;
-  const asking = chat.state === "Asking";
+  const asked = askedAt(chat);
   for (let at = 0; at < entries.length; at++) {
     const entry = entries[at];
     if (!entry) continue;
@@ -1006,8 +1006,7 @@ function conversation(entries, current) {
       at = end - 1;
       continue;
     }
-    const asks = kind === "permission" && (value.chosen === null || value.chosen === undefined)
-      && asking && at === entries.length - 1;
+    const asks = kind === "permission" && at === asked;
     const first = at;
     found.push(() => {
       const node = entryNode(first, kind, value, asks);
@@ -1097,6 +1096,16 @@ function entryNode(at, kind, value, asks) {
     default:
       return null;
   }
+}
+
+// The place of the permission request the agent waits on the human to
+// answer, while it does, or -1: the agent asks one thing at a time, so it
+// is the last asked, wherever notes Cox added since put it.
+function askedAt(chat) {
+  if (chat.state !== "Asking") return -1;
+  const at = lastIndexOf(chat.entries, "permission");
+  const value = at < 0 ? null : kindOf(chat.entries[at])[1];
+  return value && (value.chosen === null || value.chosen === undefined) ? at : -1;
 }
 
 function lastIndexOf(entries, kind) {
