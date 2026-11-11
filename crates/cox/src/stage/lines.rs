@@ -29,7 +29,15 @@ const AROUND: usize = 4;
 #[must_use]
 pub fn told(root: &Path, path: &Path, line: usize) -> Option<serde_json::Value> {
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    // A file that is not there yet is named by its folder's real name, as
+    // the root is, so that a path through a link, as macOS's `/var` to
+    // `/private/var`, is still found within the project.
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| {
+        path.parent()
+            .zip(path.file_name())
+            .and_then(|(folder, name)| Some(std::fs::canonicalize(folder).ok()?.join(name)))
+            .unwrap_or_else(|| path.to_owned())
+    });
     if !path.starts_with(&root) {
         return None;
     }
