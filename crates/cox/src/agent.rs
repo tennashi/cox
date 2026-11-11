@@ -1574,6 +1574,39 @@ mod tests {
     }
 
     #[test]
+    fn dropping_an_agent_still_starting_does_not_wait_for_it() {
+        let file = std::env::temp_dir().join(format!("cox-agent-started-{}", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        let script = format!("echo started > {}", file.display());
+        let (connecting, connects) = std::sync::mpsc::channel();
+        let (finish, finished) = std::sync::mpsc::channel::<()>();
+        let agent = spawn(
+            move |_| {
+                let _ = connecting.send(());
+                let _ = finished.recv_timeout(Duration::from_secs(5));
+                let _ = connecting.send(());
+                cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script])
+            },
+            std::env::temp_dir(),
+            Vec::new(),
+            Start::New {
+                instructions: None,
+                setup: None,
+            },
+        );
+        connects.recv().unwrap();
+
+        let stopping = Instant::now();
+        drop(agent);
+        let took = stopping.elapsed();
+        drop(finish);
+        assert!(took < Duration::from_secs(1), "dropping it took {took:?}");
+        connects.recv().unwrap();
+        thread::sleep(Duration::from_millis(500));
+        assert!(!file.exists(), "the agent started after it was dropped");
+    }
+
+    #[test]
     fn the_agent_gets_none_of_coxs_files() {
         let file = std::env::temp_dir().join(format!("cox-agent-files-{}", std::process::id()));
         // A descriptor that stays open across `exec`, like CEF's port.
