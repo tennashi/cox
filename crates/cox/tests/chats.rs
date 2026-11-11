@@ -33,7 +33,7 @@ use cox_core::store::Store;
 use fake_agent::{BACKGROUND_FINISHED, BACKGROUND_STARTED, FakeAgent, LogsIn, Resumes, TITLE};
 use fake_daemon::{
     Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, kept_at,
-    open_again, settle, settle_on, settled,
+    open_again, settle, settle_on, settle_until, settled,
 };
 use gpui::{
     Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
@@ -1001,6 +1001,151 @@ async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestA
         entries(cx, &view).last(),
         Some(&Entry::Note("Stopped.".to_owned()))
     );
+}
+
+/// A command that waits until `mark` is made, for less long than a test
+/// waits, and passes once it is.
+fn waiting_for(mark: &Path) -> String {
+    let mark = mark.display();
+    format!(
+        "i=0; while [ ! -e '{mark}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done; \
+         test -e '{mark}'"
+    )
+}
+
+/// Sets the goal of the chat `view` to pass once `command` does, and has
+/// the human send a line its agent goes on with after its turn ended,
+/// asking them, as `command` runs as the turn ended.
+async fn ask_as_the_goal_is_checked(
+    cx: &mut VisualTestContext,
+    view: &Entity<ChatView>,
+    command: &str,
+) {
+    view.read_with(cx, |view, _| {
+        view.set_goal(Some(KeptGoal::Command(command.to_owned())));
+    });
+    cx.simulate_input("background ask");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+}
+
+/// The chips of what ran as the last turn ended, by name.
+fn chips(entries: &[Entry]) -> Vec<(String, CheckState)> {
+    entries
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            Entry::Checks(checks) => Some(
+                checks
+                    .iter()
+                    .map(|check| (check.name.clone(), check.state))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+#[gpui::test]
+async fn the_goal_checked_as_the_agent_asks_goes_on_once_the_human_answers(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch("checks-ask");
+    let triggers = home.join("triggers");
+    std::fs::create_dir_all(&triggers).unwrap();
+    std::fs::write(
+        triggers.join("check.md"),
+        "---\non: turn.end\nby: shell\n---\ntrue\n",
+    )
+    .unwrap();
+    turn_on(&home, &triggers.join("check.md"));
+    let (_, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    let mark = home.join("made");
+    let command = waiting_for(&mark);
+
+    ask_as_the_goal_is_checked(cx, &view, &command).await;
+    click(cx, "option-1");
+    wait_until(cx, &view, |conversation| {
+        conversation.entries().last() == Some(&Entry::Reply(BACKGROUND_FINISHED.to_owned()))
+    })
+    .await;
+    let state = view.read_with(cx, |view, _| view.conversation().state());
+    assert_eq!(state, State::Checking);
+
+    // The command ends once the human answered: the goal is met, and the
+    // trigger runs after it.
+    std::fs::write(&mark, "").unwrap();
+    wait_for_turn(cx, &view).await;
+    let entries = entries(cx, &view);
+    assert!(
+        entries.contains(&Entry::Note(format!("Goal met: `{command}` passed."))),
+        "{entries:?}"
+    );
+    assert_eq!(
+        chips(&entries),
+        [
+            ("goal".to_owned(), CheckState::Passed),
+            ("check".to_owned(), CheckState::Passed),
+        ]
+    );
+}
+
+#[gpui::test]
+async fn what_the_goals_command_answers_as_the_agent_asks_is_taken_once_answered(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch("checks-held");
+    std::fs::create_dir_all(&home).unwrap();
+    let (_, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    let (mark, ended) = (home.join("made"), home.join("ended"));
+    let command = format!("{} && touch '{}'", waiting_for(&mark), ended.display());
+
+    ask_as_the_goal_is_checked(cx, &view, &command).await;
+    // The command ends while the human is asked.
+    std::fs::write(&mark, "").unwrap();
+    settle_until(cx, |_| ended.exists()).await;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    settle(cx).await;
+    let state = view.read_with(cx, |view, _| view.conversation().state());
+    assert_eq!(state, State::Asking);
+    click(cx, "option-1");
+    wait_for_turn(cx, &view).await;
+
+    let entries = entries(cx, &view);
+    assert!(
+        entries.contains(&Entry::Note(format!("Goal met: `{command}` passed."))),
+        "{entries:?}"
+    );
+    assert_eq!(chips(&entries), [("goal".to_owned(), CheckState::Passed)]);
+}
+
+#[gpui::test]
+async fn stopping_the_agent_that_asks_as_the_goal_is_checked_gives_the_check_up(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch("checks-stop");
+    std::fs::create_dir_all(&home).unwrap();
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    let mark = home.join("made");
+
+    ask_as_the_goal_is_checked(cx, &view, &waiting_for(&mark)).await;
+    click(cx, "stop");
+    wait_for_turn(cx, &view).await;
+    std::fs::write(&mark, "").unwrap();
+
+    assert_eq!(agents.borrow()[0].cancels(), 1);
+    let entries = entries(cx, &view);
+    assert_eq!(entries.last(), Some(&Entry::Note("Stopped.".to_owned())));
+    assert_eq!(chips(&entries), [("goal".to_owned(), CheckState::Waiting)]);
 }
 
 /// What the closed chat of [`kept_chat`] showed.

@@ -3847,6 +3847,111 @@ mod tests {
         assert_eq!(conversation.state(), State::Idle);
     }
 
+    /// The agent goes on by itself after its turn ended, and asks the
+    /// human's permission.
+    fn ask_after_the_turn(conversation: &mut Conversation) {
+        conversation.apply(AgentEvent::WentOn);
+        conversation.apply(AgentEvent::PermissionRequest {
+            id: "call-9".to_owned(),
+            title: Some("touch y.txt".to_owned()),
+            content: None,
+            options: vec!["Allow".to_owned(), "Reject".to_owned()],
+        });
+    }
+
+    #[test]
+    fn what_runs_as_the_turn_ended_goes_on_once_the_human_answers_the_agent() {
+        let mut conversation = Conversation::new();
+        conversation.set_goal(Some(goal::Goal::Command("make".to_owned())));
+        conversation.submit("fix");
+        conversation.set_due(ci_and_simplify());
+        take_turn(&mut conversation, true);
+
+        ask_after_the_turn(&mut conversation);
+        assert_eq!(conversation.state(), State::Asking);
+        assert_eq!(
+            conversation.choose(0),
+            Some(Command::Answer(PermissionAnswer::Select(0)))
+        );
+        assert_eq!(conversation.state(), State::Checking);
+        assert_eq!(conversation.checking(), Some("make"));
+
+        // `make` ends once the human answered: the goal is met, and the
+        // triggers run after it.
+        assert_eq!(conversation.checked(ran(0, "ok")), None);
+        assert_eq!(conversation.checking(), Some("cargo test"));
+        assert_eq!(conversation.checked(ran(0, "ok")), None);
+        assert_eq!(conversation.found(Ok("PASS".to_owned())), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            marks(&conversation),
+            [
+                ("goal".to_owned(), CheckState::Passed),
+                ("ci".to_owned(), CheckState::Passed),
+                ("simplify".to_owned(), CheckState::Passed),
+            ]
+        );
+        assert!(matches!(
+            conversation.entries().last(),
+            Some(Entry::Keep { .. })
+        ));
+    }
+
+    #[test]
+    fn a_goal_judged_as_the_agent_asked_goes_on_once_the_human_answers() {
+        let mut conversation = toward_words(true);
+        ask_after_the_turn(&mut conversation);
+        conversation.choose(1);
+
+        assert_eq!(conversation.judging(), Some("The greeting names the user."));
+        let Some(Command::Prompt(Prompt { text: prompt, .. })) =
+            conversation.judged(Ok("FAIL: it says hello".to_owned()))
+        else {
+            panic!("the agent goes on toward the goal");
+        };
+        assert!(
+            prompt.starts_with("Goal not met, as judged: it says hello"),
+            "{prompt}"
+        );
+        assert_eq!(conversation.state(), State::Busy);
+    }
+
+    #[test]
+    fn stopping_the_agent_that_asks_as_the_goal_is_checked_gives_the_check_up() {
+        let mut conversation = toward_make(true);
+        ask_after_the_turn(&mut conversation);
+
+        assert_eq!(conversation.cancel(), Some(Command::Cancel));
+        assert_eq!(conversation.state(), State::Stopping);
+        conversation.apply(AgentEvent::TurnEnded(StopReason::Cancelled));
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            marks(&conversation),
+            [("goal".to_owned(), CheckState::Waiting)]
+        );
+        assert_eq!(conversation.checked(ran(1, "")), None);
+        assert_eq!(
+            conversation.submit("again"),
+            Some(Command::Prompt("again".to_owned().into()))
+        );
+    }
+
+    #[test]
+    fn changing_the_goal_as_the_agent_asks_gives_the_check_up() {
+        let mut conversation = toward_make(true);
+        ask_after_the_turn(&mut conversation);
+
+        conversation.set_goal(None);
+        assert_eq!(conversation.state(), State::Asking);
+        assert_eq!(conversation.checking(), None);
+        assert_eq!(
+            marks(&conversation),
+            [("goal".to_owned(), CheckState::Waiting)]
+        );
+        // Once answered, the chat waits for the human.
+        assert_eq!(conversation.whole().before_asking, State::Idle);
+    }
+
     #[test]
     fn a_goal_that_cannot_be_checked_waits_for_the_human() {
         let mut conversation = toward_make(true);
