@@ -155,6 +155,23 @@ fn a_turn_takes_its_steps_in_order() {
 }
 
 #[test]
+fn a_turn_goes_on_by_itself_after_it_ended() {
+    let scenario = json!({ "turns": [{
+        "steps": [{ "say": "Started." }],
+        "after": [{ "sleep": 10 }, { "say": "Finished." }],
+    }] });
+    let mut agent = Agent::session("after", &scenario, &json!([]));
+
+    let (sent, answer) = agent.turn("run it in the background");
+    let (went_on, _) =
+        agent.until(|message| message["params"]["update"]["content"]["text"] == "Finished.");
+
+    assert_eq!(answer["result"]["stopReason"], "end_turn");
+    assert_eq!(replied(&sent), "Started.");
+    assert_eq!(updates(&went_on), Vec::<&Value>::new());
+}
+
+#[test]
 fn each_line_takes_the_first_turn_left_that_answers_it() {
     let scenario = json!({ "turns": [
         { "when": "judge", "steps": [{ "say": "PASS" }] },

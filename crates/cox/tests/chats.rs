@@ -18,7 +18,7 @@ use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{ChatRequest, Waited};
 use cox::agent::setup::{Policy, Setup};
 use cox::agents::Agents as Choices;
-use cox::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, State};
+use cox::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, State, WENT_ON};
 use cox::chat::sketch::Sketch;
 use cox::chat::view::ChatView;
 use cox::notices::{AppNotices, Notices};
@@ -30,7 +30,7 @@ use cox_core::goal::Goal as KeptGoal;
 use cox_core::settings::{Choice, Setting};
 use cox_core::store::Named;
 use cox_core::store::Store;
-use fake_agent::{FakeAgent, LogsIn, Resumes, TITLE};
+use fake_agent::{BACKGROUND_FINISHED, BACKGROUND_STARTED, FakeAgent, LogsIn, Resumes, TITLE};
 use fake_daemon::{
     Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, kept_at,
     open_again, settle, settle_on, settled,
@@ -905,6 +905,101 @@ async fn a_line_sent_while_the_agent_works_goes_into_its_turn(cx: &mut TestAppCo
             Entry::Human("and then this".to_owned()),
             Entry::Reply("echo: and then this".to_owned()),
         ]
+    );
+}
+
+#[gpui::test]
+async fn what_the_agent_says_after_its_turn_ended_shows_as_it_comes(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch("went-on"));
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+
+    say(cx, &workspace, "background").await;
+    // The human sends nothing more.
+    wait_until(cx, &view, |conversation| {
+        conversation.entries().last() == Some(&Entry::Reply(BACKGROUND_FINISHED.to_owned()))
+    })
+    .await;
+
+    assert_eq!(
+        entries(cx, &view),
+        [
+            Entry::Human("background".to_owned()),
+            Entry::Reply(BACKGROUND_STARTED.to_owned()),
+            Entry::Note(WENT_ON.to_owned()),
+            Entry::Reply(BACKGROUND_FINISHED.to_owned()),
+        ]
+    );
+    let state = view.read_with(cx, |view, _| view.conversation().state());
+    assert_eq!(state, State::Idle);
+}
+
+#[gpui::test]
+async fn the_agent_asks_after_its_turn_ended_and_goes_on_once_answered(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch("went-on-asks"));
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+
+    say(cx, &workspace, "background ask").await;
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    // No turn runs to take a line into.
+    let steers = view.read_with(cx, |view, _| view.conversation().steers());
+    assert!(!steers);
+    click(cx, "option-1");
+    wait_until(cx, &view, |conversation| {
+        conversation.entries().last() == Some(&Entry::Reply(BACKGROUND_FINISHED.to_owned()))
+    })
+    .await;
+
+    let entries = entries(cx, &view);
+    assert!(
+        matches!(
+            entries.as_slice(),
+            [
+                Entry::Human(_),
+                Entry::Reply(_),
+                Entry::Note(_),
+                Entry::ToolCall { .. },
+                Entry::Permission {
+                    chosen: Some(0),
+                    ..
+                },
+                Entry::Reply(_),
+            ]
+        ),
+        "{entries:?}"
+    );
+    let state = view.read_with(cx, |view, _| view.conversation().state());
+    assert_eq!(state, State::Idle);
+    // The human goes on as after any turn.
+    say(cx, &workspace, "hello").await;
+    assert_eq!(
+        shown_entries(cx, &workspace).last(),
+        Some(&Entry::Reply("echo: hello".to_owned()))
+    );
+}
+
+#[gpui::test]
+async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestAppContext) {
+    let (agents, workspace, cx) = open_window(cx, scratch("went-on-stops"));
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+
+    say(cx, &workspace, "background ask").await;
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    click(cx, "stop");
+    wait_for_turn(cx, &view).await;
+
+    assert_eq!(agents.borrow()[0].cancels(), 1);
+    assert_eq!(
+        entries(cx, &view).last(),
+        Some(&Entry::Note("Stopped.".to_owned()))
     );
 }
 
