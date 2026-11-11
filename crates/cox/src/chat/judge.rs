@@ -64,7 +64,9 @@ const COMMAND: &str = "COMMAND:";
 /// command is named whole, with or without more words after it, so that
 /// `git diff` is not `git difftool`. A command here with flags that have
 /// it run another program or write a file has them in
-/// [`crate::agent::setup::RUNS_OR_WRITES`].
+/// [`crate::agent::setup::RUNS_OR_WRITES`], and one that runs the
+/// project's tests is given only what picks them, as
+/// [`crate::agent::setup::PICKS`] says, or nothing.
 pub(crate) const ALLOWED: &[&str] = &[
     "read:*",
     "search:*",
@@ -91,13 +93,10 @@ pub(crate) const ALLOWED: &[&str] = &[
     "execute:cargo clippy",
     "execute:cargo clippy *",
     "execute:cargo xtask ci",
-    "execute:cargo xtask ci *",
     "execute:npm test",
-    "execute:npm test *",
     "execute:pytest",
     "execute:pytest *",
     "execute:make test",
-    "execute:make test *",
     "execute:go test",
     "execute:go test *",
 ];
