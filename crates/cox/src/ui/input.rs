@@ -255,6 +255,21 @@ impl LineInput {
         });
     }
 
+    /// Where in the window the input was last drawn. `None` before it was.
+    #[must_use]
+    pub fn drawn_at(&self) -> Option<Bounds<Pixels>> {
+        self.last_bounds
+    }
+
+    /// Where in the window the row of offset `offset` of the text starts
+    /// above it, as the input last drew it: the top left corner of what
+    /// is at the offset. `None` before it was drawn.
+    #[must_use]
+    pub fn position_of(&self, offset: usize) -> Option<Point<Pixels>> {
+        let (bounds, layout) = (self.last_bounds?, self.last_layout.as_ref()?);
+        Some(self.text_origin(bounds) + layout.position(offset))
+    }
+
     /// What the input shows, fainter, while it is empty.
     #[must_use]
     pub fn placeholder(&self) -> &str {

@@ -1,10 +1,11 @@
-//! The list over the chat's input of what the line can go on to be: the
-//! agent's commands, while the word at the cursor is `/` and the start of
-//! one of their names, as `/rev`, and the project's files, while it is
-//! `@` and the start of a path, as `@src/ma` or `@chv` (see [`mention`]).
-//! Up and Down choose one, Tab puts it in the line, as Enter does unless
-//! the line has it whole already, when Enter sends the line, and Escape
-//! closes the list until the line changes.
+//! What the line can go on to be, over the chat's input: the agent's
+//! commands, while the word at the cursor is `/` and the start of one of
+//! their names, as `/rev`, one at a time, in a tip over the name, and the
+//! project's files, while it is `@` and the start of a path, as `@src/ma`
+//! or `@chv` (see [`mention`]), in a list over the input. Up and Down
+//! choose one, Tab puts it in the line, as Enter does unless the line has
+//! it whole already, when Enter sends the line, and Escape closes the tip
+//! or the list until the line changes.
 //!
 //! A command chosen goes to the start of the line, wherever its name was
 //! being written, as the agent runs the command a line starts with and
@@ -17,8 +18,8 @@ use std::path::Path;
 use cox_acp::SlashCommand;
 use cox_editor::{changes, files, fuzzy};
 use gpui::{
-    AnyElement, App, Context, Entity, Focusable, FontWeight, ScrollHandle, Subscription, Task,
-    Window, deferred, div, prelude::*, px, rgb,
+    AnyElement, App, Context, Corner, Entity, Focusable, FontWeight, ScrollHandle, Subscription,
+    Task, Window, anchored, deferred, div, point, prelude::*, px, rgb,
 };
 
 use super::ChatView;
@@ -26,6 +27,22 @@ use crate::chat::mention;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::LineInput;
 use crate::ui::theme::{BORDER_STRONG, CODE_FONT, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
+
+/// How wide the tip of a command grows, before what the command does is
+/// cut short.
+const TIP_WIDTH: f32 = 420.;
+
+/// How wide the tip of a command is at least, moved left of the name it
+/// is for, if it must be, to keep over the input.
+const TIP_LEAST_WIDTH: f32 = 260.;
+
+/// How far the name in the tip of a command is from the tip's left edge,
+/// its border and the room inside it, for the name to be over the one
+/// being written.
+const TIP_INSET: f32 = 11.;
+
+/// How far the tip of a command is above the name it is for.
+const TIP_GAP: f32 = 6.;
 
 /// How many rows the list shows before it scrolls.
 const ROWS: f32 = 8.;
@@ -432,7 +449,7 @@ impl ChatView {
     }
 
     /// The "/ commands" chip under the input: starts a command's name at
-    /// the cursor with `/`, which opens the list of the agent's commands,
+    /// the cursor with `/`, which opens the tip of the agent's commands,
     /// while the agent has commands.
     pub(super) fn start_command(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.start_word('/', window, cx);
@@ -463,105 +480,146 @@ impl ChatView {
         cx.notify();
     }
 
-    /// The list over the input, while it is open, the row chosen marked.
+    /// The tip of the command chosen, or the list of files, while one is
+    /// open.
     pub(super) fn render_completions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let fits = self.completions(cx)?;
         let chosen = self.chosen(fits.len(), cx);
-        let rows = match fits {
+        Some(match fits {
             Fits::Commands { range, commands } => {
-                Self::render_commands(&range, commands, chosen, cx)
+                self.render_command_tip(range, &commands, chosen, cx)
             }
-            Fits::Files { range, paths } => render_files(&range, paths, chosen, cx),
-        };
-        Some(
-            deferred(
-                div()
-                    .id("completions")
-                    .debug_selector(|| "completions".to_owned())
-                    .occlude()
-                    .absolute()
-                    .bottom_full()
-                    .left(px(12.))
-                    .right(px(12.))
-                    .p(px(6.))
-                    .bg(rgb(RAISED))
-                    .border_1()
-                    .border_color(rgb(BORDER_STRONG))
-                    .rounded(px(14.))
-                    .shadow_lg()
-                    .child(
-                        div()
-                            .id("completions-rows")
-                            .max_h(px(ROW_HEIGHT * ROWS))
-                            .overflow_y_scroll()
-                            .track_scroll(&self.completion.scroll)
-                            .flex()
-                            .flex_col()
-                            .children(rows),
-                    ),
-            )
-            .with_priority(2)
-            .into_any_element(),
-        )
+            Fits::Files { range, paths } => {
+                self.render_files_list(render_files(&range, paths, chosen, cx))
+            }
+        })
     }
 
-    /// Each command by its name, with what it does, and what to write
-    /// after it.
-    fn render_commands(
-        range: &Range<usize>,
-        commands: Vec<&SlashCommand>,
+    /// The command chosen of `commands`, the one of them Tab takes, by its
+    /// name, with what to write after it, what it does, and which of them
+    /// it is, over where its name is being written, in `range` of the
+    /// line. A click takes it too.
+    fn render_command_tip(
+        &self,
+        range: Range<usize>,
+        commands: &[&SlashCommand],
         chosen: usize,
         cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        commands
-            .into_iter()
-            .enumerate()
-            .map(|(place, command)| {
-                let name = command.name.clone();
-                let range = range.clone();
+    ) -> AnyElement {
+        let command = commands[chosen];
+        let count = commands.len();
+        let name = command.name.clone();
+        let start = range.start;
+        let tip = div()
+            .id("completions")
+            .debug_selector(|| "completions".to_owned())
+            .occlude()
+            .h(px(ROW_HEIGHT))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(BORDER_STRONG))
+            .rounded(px(10.))
+            .shadow_lg()
+            .text_size(px(13.))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(SELECTED)))
+            .child(
                 div()
-                    .id(("command", place))
-                    .debug_selector(move || format!("command-{place}"))
                     .flex_shrink_0()
-                    .h(px(ROW_HEIGHT))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .rounded(px(9.))
-                    .text_size(px(13.))
-                    .cursor_pointer()
-                    .when(place == chosen, |row| row.bg(rgb(SELECTED)))
-                    .hover(|style| style.bg(rgb(SELECTED)))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .font_family(CODE_FONT)
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(FOREGROUND))
-                            .child(format!("/{}", command.name)),
-                    )
-                    .children(
-                        command
-                            .hint
-                            .clone()
-                            .map(|hint| div().flex_shrink_0().text_color(rgb(FAINT)).child(hint)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_color(rgb(DIM))
-                            .child(ellipsis(command.description.clone())),
-                    )
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.take_command(range.clone(), &name, cx);
-                        window.focus(&view.input.focus_handle(cx));
-                    }))
-                    .into_any_element()
+                    .font_family(CODE_FONT)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(FOREGROUND))
+                    .child(format!("/{}", command.name)),
+            )
+            .children(
+                command
+                    .hint
+                    .clone()
+                    .map(|hint| div().flex_shrink_0().text_color(rgb(FAINT)).child(hint)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_color(rgb(DIM))
+                    .child(ellipsis(command.description.clone())),
+            )
+            // Which of those that fit it is, while Up and Down have others
+            // to choose.
+            .when(count > 1, |tip| {
+                tip.child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(CODE_FONT)
+                        .text_color(rgb(FAINT))
+                        .child(format!("{}/{count}", chosen + 1)),
+                )
             })
-            .collect()
+            .on_click(cx.listener(move |view, _, window, cx| {
+                view.take_command(range.clone(), &name, cx);
+                window.focus(&view.input.focus_handle(cx));
+            }));
+        let input = self.input.read(cx);
+        let tip = match (input.position_of(start), input.drawn_at()) {
+            // The name in the tip over the `/` of the one being written,
+            // as far as the tip keeps over the input; else the tip as far
+            // left as it takes to.
+            (Some(at), Some(drawn)) => {
+                let right = drawn.right() + px(TIP_INSET);
+                let left = (at.x - px(TIP_INSET)).min(right - px(TIP_LEAST_WIDTH));
+                anchored()
+                    .position(point(left, at.y - px(TIP_GAP)))
+                    .anchor(Corner::BottomLeft)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(tip.max_w((right - left).min(px(TIP_WIDTH))))
+                    .into_any_element()
+            }
+            // Before the input is drawn, where the list would be.
+            _ => div()
+                .absolute()
+                .bottom_full()
+                .left(px(12.))
+                .child(tip.max_w(px(TIP_WIDTH)))
+                .into_any_element(),
+        };
+        deferred(tip).with_priority(2).into_any_element()
+    }
+
+    /// The list over the input of `rows`, the files that fit, the row
+    /// chosen marked.
+    fn render_files_list(&self, rows: Vec<AnyElement>) -> AnyElement {
+        deferred(
+            div()
+                .id("completions")
+                .debug_selector(|| "completions".to_owned())
+                .occlude()
+                .absolute()
+                .bottom_full()
+                .left(px(12.))
+                .right(px(12.))
+                .p(px(6.))
+                .bg(rgb(RAISED))
+                .border_1()
+                .border_color(rgb(BORDER_STRONG))
+                .rounded(px(14.))
+                .shadow_lg()
+                .child(
+                    div()
+                        .id("completions-rows")
+                        .max_h(px(ROW_HEIGHT * ROWS))
+                        .overflow_y_scroll()
+                        .track_scroll(&self.completion.scroll)
+                        .flex()
+                        .flex_col()
+                        .children(rows),
+                ),
+        )
+        .with_priority(2)
+        .into_any_element()
     }
 }
 
