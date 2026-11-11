@@ -1099,6 +1099,7 @@ fn done_on_the_page(message: &ToDaemon) -> bool {
         | ToDaemon::ChangeProposal { .. }
         | ToDaemon::AnswerNameProposal { .. }
         | ToDaemon::AnswerAboutProposal { .. }
+        | ToDaemon::AnswerIconProposal { .. }
         | ToDaemon::AnswerProjectProposal { .. }
         | ToDaemon::AnswerKeep { .. }
         | ToDaemon::Merge { .. }

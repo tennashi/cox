@@ -478,6 +478,11 @@ pre code { padding: 0; background: none; font-size: inherit; color: var(--foregr
 .card-head .what { flex: 1; min-width: 0; color: var(--dim); overflow-wrap: anywhere; }
 .card-head .tag { flex-shrink: 0; font-size: 12px; color: var(--tone); }
 .card-ask .why, .card-offer .why { font-size: 12px; color: var(--dim); }
+/* The icon an agent proposed for the project, as large as the rail's
+   square twice over, beside the picture it was made from. */
+.proposed-icon { display: flex; align-items: center; gap: 12px; }
+.proposed-icon .square { width: 60px; height: 60px; border-radius: 16px; }
+.proposed-icon .why { min-width: 0; overflow-wrap: anywhere; }
 .answers { display: flex; flex-wrap: wrap; gap: 6px; }
 .answers button {
   flex: 1 1 96px;

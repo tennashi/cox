@@ -1428,6 +1428,91 @@ async fn an_agent_proposes_what_the_project_is_which_the_next_chats_are_told(
     let _ = std::fs::remove_dir_all(&app);
 }
 
+#[gpui::test]
+async fn an_agent_proposes_an_icon_which_the_project_has_once_the_human_sets_it(
+    cx: &mut TestAppContext,
+) {
+    let app = scratch("propose-icon");
+    let (store, _) = kept_chat(&app, Some("session-1"));
+    let (_agents, asks, workspace, cx) = open_window_asking(
+        cx,
+        scratch("propose-icon-home"),
+        store.clone(),
+        Resumes::Resume,
+    );
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.show(FIRST_KEPT, window, cx);
+    });
+    say(cx, &workspace, "hello").await;
+    let id = store.projects().unwrap()[0].id;
+    let icon = cox::project_icon::path(id).unwrap();
+    let _ = std::fs::remove_file(&icon);
+    // Two icons, of two colors, as an agent's tool keeps them.
+    let picture = |color: &str| {
+        let svg = app.join(format!("{color}.svg"));
+        std::fs::write(
+            &svg,
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="{color}"/></svg>"#
+            ),
+        )
+        .unwrap();
+        cox::project_icon::propose(&svg).unwrap()
+    };
+    let propose = |file: String| {
+        let (answer, now) = tokio::sync::oneshot::channel();
+        asks.borrow()[0]
+            .send(ChatRequest::ProposeIcon {
+                file,
+                from: "logo.svg".to_owned(),
+                why: None,
+                answer,
+            })
+            .unwrap();
+        now
+    };
+    let proposed = |cx: &mut VisualTestContext| {
+        shown_entries(cx, &workspace)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match entry {
+                Entry::IconProposal { answer, .. } => Some((index, answer)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // The agent hears that the project has no icon yet, and the one it
+    // proposes shows on a card, for the human to set.
+    let teal = picture("teal");
+    let now = propose(teal.clone());
+    settled(cx, &workspace);
+    assert_eq!(now.await.unwrap(), Ok(false));
+    assert!(!icon.exists());
+    let card = proposed(cx)[0].0;
+    click(cx, Box::leak(format!("set-icon-{card}").into_boxed_str()));
+    settled(cx, &workspace);
+    assert_eq!(proposed(cx)[0].1, Some(Answer::Set));
+    let (kept, _) = cox::media::kept(&teal).unwrap();
+    assert_eq!(std::fs::read(&icon).unwrap(), std::fs::read(kept).unwrap());
+    // The next proposal hears the project has one; one dismissed leaves
+    // it be.
+    let now = propose(picture("red"));
+    settled(cx, &workspace);
+    assert_eq!(now.await.unwrap(), Ok(true));
+    let card = proposed(cx)[1].0;
+    click(
+        cx,
+        Box::leak(format!("dismiss-icon-{card}").into_boxed_str()),
+    );
+    settled(cx, &workspace);
+    assert_eq!(proposed(cx)[1].1, Some(Answer::Dismissed));
+    let (kept, _) = cox::media::kept(&teal).unwrap();
+    assert_eq!(std::fs::read(&icon).unwrap(), std::fs::read(kept).unwrap());
+    let _ = std::fs::remove_file(&icon);
+    let _ = std::fs::remove_dir_all(&app);
+}
+
 /// Has the agent of the chat whose asks are at `from` propose the project
 /// `name`, starting from the sketch named `sketch`, if given, and
 /// answers where the project is to be, or why not, once it is told.

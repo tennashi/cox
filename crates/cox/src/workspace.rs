@@ -586,6 +586,7 @@ impl Workspace {
                 cx.notify();
             }
             FromDaemon::Reveal { key } => self.reveal(key, window, cx),
+            FromDaemon::Icon { project } => self.read_icon(project, cx),
             FromDaemon::News { key, name, body } => {
                 let shown = self.shown().map(Chat::key) == Some(key);
                 let seen = shown && window.is_window_active();
