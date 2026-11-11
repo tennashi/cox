@@ -516,6 +516,51 @@ mod tests {
     }
 
     #[test]
+    fn a_setting_kept_leaves_the_others_as_they_were() {
+        let dir = std::env::temp_dir().join(format!("cox-settings-kept-{}", std::process::id()));
+        let file = dir.join("settings.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &file,
+            r#"{"agent": "Claude", "wiki": "~/notes", "raw": "~/raw",
+                "phone": {"tailscale": false}, "translation": {"language": "Japanese"}}"#,
+        )
+        .unwrap();
+
+        keep_in(&file, "home", Some("/work".into())).unwrap();
+        let kept: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            kept,
+            serde_json::json!({"agent": "Claude", "wiki": "~/notes", "raw": "~/raw",
+                "phone": {"tailscale": false}, "translation": {"language": "Japanese"},
+                "home": "/work"})
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_settings_file_that_cannot_be_read_is_left_as_the_human_wrote_it() {
+        let dir =
+            std::env::temp_dir().join(format!("cox-settings-unreadable-{}", std::process::id()));
+        let file = dir.join("settings.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for written in [
+            "{\"agent\": \"Claude\", \"wiki\": \"~/notes\",}\n",
+            "[\"agent\", \"Claude\"]\n",
+        ] {
+            std::fs::write(&file, written).unwrap();
+            let kept = keep_in(&file, "home", Some("/work".into()));
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), written);
+            let error = format!("{:#}", kept.unwrap_err());
+            assert!(error.contains("settings.json"), "{error}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_home_that_is_not_a_path_is_not_read() {
         assert!(Saved::parse(br#"{"home": 3}"#).is_err());
         assert_eq!(Saved::parse(b"{}").unwrap(), Saved::default());
