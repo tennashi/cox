@@ -116,7 +116,90 @@ pub enum Decision {
     Reject,
 }
 
+/// What a chat that a chat opened was not given of the setup asked for
+/// it, as more than the chat that opened it may do (see
+/// [`Setup::opened_by`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Withheld {
+    /// The patterns asked for in `allow` that no pattern of the opener's
+    /// surely matches every request of.
+    pub allow: Vec<String>,
+    /// The tools the chat gets, when it gets fewer than were asked for.
+    pub tools: Option<Vec<String>>,
+    /// Whether it was asked to drive its stage, and does not.
+    pub stage: bool,
+}
+
+impl Withheld {
+    /// Whether nothing was withheld.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.allow.is_empty() && self.tools.is_none() && !self.stage
+    }
+}
+
 impl Setup {
+    /// The setup asked for a chat that a chat set up as `opener` opens, or
+    /// a chat with no setup when `None`, whose requests the human answers,
+    /// kept to what the opener may do, and what of it was withheld. The
+    /// chat gets no tool the opener does not get, drives its stage only
+    /// when the opener does, rejects what the opener rejects as well as
+    /// what it was asked to, keeps the calls that change files to the
+    /// opener's folder, and allows only a pattern the opener allows as
+    /// written, or one the opener's `*`, or a kind's name and `:*`, takes
+    /// in whole.
+    #[must_use]
+    pub fn opened_by(self, opener: Option<&Self>) -> (Self, Withheld) {
+        let none = Self::default();
+        let opener = opener.unwrap_or(&none);
+        let (allow, kept_back): (Vec<_>, Vec<_>) =
+            self.policy.allow.into_iter().partition(|asked| {
+                opener
+                    .policy
+                    .allow
+                    .iter()
+                    .any(|allowed| covers(allowed, asked))
+            });
+        let mut reject = opener.policy.reject.clone();
+        reject.extend(
+            self.policy
+                .reject
+                .into_iter()
+                .filter(|pattern| !opener.policy.reject.contains(pattern)),
+        );
+        let tools = match (&self.tools, &opener.tools) {
+            (asked, None) => asked.clone(),
+            (None, Some(given)) => Some(given.clone()),
+            (Some(asked), Some(given)) => Some(
+                asked
+                    .iter()
+                    .filter(|tool| given.contains(tool))
+                    .cloned()
+                    .collect(),
+            ),
+        };
+        let stage = match opener.stage {
+            StageUse::Look => StageUse::Look,
+            StageUse::Drive => self.stage,
+        };
+        let withheld = Withheld {
+            allow: kept_back,
+            tools: tools.clone().filter(|_| tools != self.tools),
+            stage: stage != self.stage,
+        };
+        let setup = Self {
+            tools,
+            stage,
+            policy: Policy {
+                allow,
+                reject,
+                within: opener.policy.within.clone(),
+            },
+            ..self
+        };
+        (setup, withheld)
+    }
+
     /// The setup `json` keeps, as [`Setup::to_json`] wrote it.
     ///
     /// # Errors
@@ -185,13 +268,31 @@ impl Policy {
 /// Whether `pattern` matches `asked`: its title, and its kind when the
 /// pattern names one.
 fn answers(pattern: &str, asked: Asked<'_>) -> bool {
-    let kinded = pattern
-        .split_once(':')
-        .and_then(|(name, rest)| Some((ToolKind::named(name)?, rest)));
-    match kinded {
+    match kinded(pattern) {
         Some((kind, rest)) => asked.kind == Some(kind) && matches(rest, asked.title),
         None => matches(pattern, asked.title),
     }
+}
+
+/// Whether the pattern `allowed` matches every request the pattern `asked`
+/// does: when they are the same, or `allowed` is only `*`s, or a kind's
+/// name, a `:` and only `*`s and `asked` names the same kind. Any other
+/// pair is taken as not covered, though it may be.
+fn covers(allowed: &str, asked: &str) -> bool {
+    let any = |rest: &str| !rest.is_empty() && rest.chars().all(|c| c == '*');
+    allowed == asked
+        || match kinded(allowed) {
+            None => any(allowed),
+            Some((of, rest)) => any(rest) && kinded(asked).is_some_and(|(kind, _)| kind == of),
+        }
+}
+
+/// The kind of tool `pattern` names before a `:`, and the rest, if it
+/// names one.
+fn kinded(pattern: &str) -> Option<(ToolKind, &str)> {
+    pattern
+        .split_once(':')
+        .and_then(|(name, rest)| Some((ToolKind::named(name)?, rest)))
 }
 
 /// Whether `path` is in `folder`, as written: an absolute path under it
@@ -410,6 +511,139 @@ mod tests {
             decide(ToolKind::Read, &["/home/me/notes.md"]),
             Some(Decision::Allow)
         );
+    }
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|&item| item.to_owned()).collect()
+    }
+
+    #[test]
+    fn a_chat_the_human_opened_opens_chats_the_human_answers() {
+        let asked = Setup {
+            context: Some("Change nothing.".to_owned()),
+            tools: Some(strings(&["show_file"])),
+            stage: StageUse::Drive,
+            policy: Policy {
+                allow: strings(&["*", "read:*"]),
+                reject: strings(&["edit:*"]),
+                within: None,
+            },
+            ..Setup::default()
+        };
+        let (setup, withheld) = asked.clone().opened_by(None);
+        assert_eq!(
+            setup,
+            Setup {
+                policy: Policy {
+                    allow: Vec::new(),
+                    ..asked.policy.clone()
+                },
+                ..asked
+            }
+        );
+        assert_eq!(
+            withheld,
+            Withheld {
+                allow: strings(&["*", "read:*"]),
+                ..Withheld::default()
+            }
+        );
+        assert_eq!(setup.policy.decide(Asked::titled("rm -rf /")), None);
+        let (_, withheld) = Setup::default().opened_by(None);
+        assert!(withheld.is_empty());
+    }
+
+    #[test]
+    fn a_chat_a_chat_opens_may_do_no_more_than_it() {
+        let opener = Setup {
+            tools: Some(strings(&["show_file", "run_command", "open_chat"])),
+            stage: StageUse::Look,
+            policy: Policy {
+                allow: strings(&["cargo test*", "read:*", "edit:**"]),
+                reject: strings(&["execute:git push*"]),
+                within: Some("/sketches/greet-1".into()),
+            },
+            ..Setup::default()
+        };
+        let asked = Setup {
+            tools: Some(strings(&["show_file", "wiki_write"])),
+            policy: Policy {
+                allow: strings(&[
+                    "cargo test*",
+                    "cargo test --all",
+                    "read:*",
+                    "read:src/*",
+                    "edit:x.md",
+                    "Note: *",
+                    "*",
+                ]),
+                reject: strings(&["execute:git push*", "delete:*"]),
+                within: None,
+            },
+            ..Setup::default()
+        };
+        let (setup, withheld) = asked.opened_by(Some(&opener));
+        assert_eq!(
+            setup,
+            Setup {
+                tools: Some(strings(&["show_file"])),
+                stage: StageUse::Look,
+                policy: Policy {
+                    allow: strings(&["cargo test*", "read:*", "read:src/*", "edit:x.md"]),
+                    reject: strings(&["execute:git push*", "delete:*"]),
+                    within: Some("/sketches/greet-1".into()),
+                },
+                ..Setup::default()
+            }
+        );
+        assert_eq!(
+            withheld,
+            Withheld {
+                allow: strings(&["cargo test --all", "Note: *", "*"]),
+                tools: Some(strings(&["show_file"])),
+                stage: true,
+            }
+        );
+
+        // Asked for every tool, it gets the opener's; asked for less than
+        // the opener may do, it gets what it asked for.
+        let (setup, withheld) = Setup::default().opened_by(Some(&opener));
+        assert_eq!(setup.tools, opener.tools);
+        assert_eq!(withheld.tools, opener.tools);
+        let everything = Setup {
+            policy: Policy {
+                allow: strings(&["*"]),
+                ..Policy::default()
+            },
+            ..Setup::default()
+        };
+        let narrower = Setup {
+            tools: Some(strings(&["show_file"])),
+            stage: StageUse::Look,
+            policy: Policy {
+                allow: strings(&["edit:*", "cargo *"]),
+                reject: strings(&["Edit *"]),
+                within: None,
+            },
+            ..Setup::default()
+        };
+        let (setup, withheld) = narrower.clone().opened_by(Some(&everything));
+        assert_eq!(setup, narrower);
+        assert!(withheld.is_empty());
+    }
+
+    #[test]
+    fn a_pattern_covers_only_what_it_surely_matches() {
+        assert!(covers("cargo *", "cargo *"));
+        assert!(covers("*", "anything"));
+        assert!(covers("**", "edit:*"));
+        assert!(covers("edit:*", "edit:main.rs"));
+        assert!(!covers("edit:*", "Edit main.rs"));
+        assert!(!covers("edit:*", "read:*"));
+        assert!(!covers("Note:*", "Note: hi"));
+        assert!(!covers("cargo *", "cargo test"));
+        assert!(!covers("", "x"));
+        assert!(!covers("edit:", "edit:x"));
     }
 
     #[test]

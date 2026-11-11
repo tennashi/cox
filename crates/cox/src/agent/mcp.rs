@@ -301,6 +301,9 @@ pub struct OpenedChat {
     pub name: String,
     /// The folder it works in, when it is a sketch.
     pub folder: Option<PathBuf>,
+    /// What it was not given of the setup asked for it, as more than the
+    /// chat that opened it may do.
+    pub withheld: crate::agent::setup::Withheld,
 }
 
 /// How a command the agent ran went.
