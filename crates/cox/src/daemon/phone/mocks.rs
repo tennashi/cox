@@ -168,7 +168,9 @@ fn file(sketches: &Path, path: &str) -> Option<Found> {
     }
     let sketches = sketches.canonicalize().ok()?;
     let sketch = sketches.join(name).canonicalize().ok()?;
-    if sketch.parent()? != sketches {
+    // A sketch is a folder: a file beside the sketches is none of theirs,
+    // though macOS finds `<file>/` as the file itself.
+    if sketch.parent()? != sketches || !sketch.is_dir() {
         return None;
     }
     let mut at = sketch.join(rest.join("/")).canonicalize().ok()?;
