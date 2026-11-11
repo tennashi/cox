@@ -23,7 +23,6 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use cox_acp::{
     Block, Login, LoginMethod, McpServer, News, PermissionAnswer, PermissionKind, PlanEntry,
@@ -277,11 +276,10 @@ impl Start {
     }
 }
 
-/// How long the agent side's tasks get to end once the agent is stopped.
-const STOP_TIMEOUT: Duration = Duration::from_secs(1);
-
 /// The thread the agent side runs on. Dropping it stops the agent, along
 /// with every process the agent started, and waits for the thread to end.
+/// An agent still starting, as while its program downloads, is not waited
+/// for: it never starts.
 ///
 /// The process ending does not do that by itself: the agent runs in a
 /// process group of its own, and its processes outlive Cox unless the
@@ -303,14 +301,13 @@ impl Drop for AgentThread {
     }
 }
 
-/// Starts the agent side on a thread of its own. `connect` runs on its
-/// runtime, telling the human what it does on the way, as when it
-/// downloads the agent's program, with the function it is given, and
-/// returns the transport to the agent, which works in `cwd`, an
-/// absolute path, gets the tools of `mcp_servers`, and starts as `start`
-/// says. What the agent side says is said in the span `spawn` is called
-/// in, such as its chat's.
-pub fn spawn<T: Transport + 'static>(
+/// Starts the agent side on a thread of its own. `connect` runs where it
+/// may block, as while it downloads the agent's program, telling the human
+/// what it does on the way with the function it is given, and returns the
+/// transport to the agent, which works in `cwd`, an absolute path, gets the
+/// tools of `mcp_servers`, and starts as `start` says. What the agent side
+/// says is said in the span `spawn` is called in, such as its chat's.
+pub fn spawn<T: Transport + Send + 'static>(
     connect: impl FnOnce(&dyn Fn(String)) -> anyhow::Result<T> + Send + 'static,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
@@ -350,8 +347,7 @@ pub fn spawn<T: Transport + 'static>(
                     }
                     .instrument(span),
                 );
-                // The connection's tasks go with the runtime.
-                runtime.shutdown_timeout(STOP_TIMEOUT);
+                runtime.shutdown_background();
                 outcome
             });
         let _ = sent.send(AgentEvent::Closed(outcome.err().map(|e| format!("{e:#}"))));
@@ -383,8 +379,8 @@ fn handed_blocks(attachment: Attachment) -> impl Iterator<Item = Block> {
     .chain(picture)
 }
 
-async fn run<T: Transport + 'static>(
-    connect: impl FnOnce(&dyn Fn(String)) -> anyhow::Result<T>,
+async fn run<T: Transport + Send + 'static>(
+    connect: impl FnOnce(&dyn Fn(String)) -> anyhow::Result<T> + Send + 'static,
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     start: Start,
@@ -392,9 +388,7 @@ async fn run<T: Transport + 'static>(
     commands: UnboundedReceiver<Command>,
     events: &UnboundedSender<AgentEvent>,
 ) -> anyhow::Result<()> {
-    let transport = connect(&|note| {
-        let _ = events.send(AgentEvent::Note(note));
-    })?;
+    let transport = connected(connect, events).await?;
     // Heard by the human's logging in before the session opens, then by
     // the session.
     let commands = tokio::sync::Mutex::new(Commands::new(commands));
@@ -498,6 +492,27 @@ async fn run<T: Transport + 'static>(
         },
     )
     .await
+}
+
+/// The transport `connect` returns, run where it may block. What it says
+/// it does on the way goes to the window on `events` while the agent side
+/// lasts.
+async fn connected<T: Transport + Send + 'static>(
+    connect: impl FnOnce(&dyn Fn(String)) -> anyhow::Result<T> + Send + 'static,
+    events: &UnboundedSender<AgentEvent>,
+) -> anyhow::Result<T> {
+    let span = tracing::Span::current();
+    let weak_events = events.downgrade();
+    tokio::task::spawn_blocking(move || {
+        span.in_scope(|| {
+            connect(&|note| {
+                if let Some(events) = weak_events.upgrade() {
+                    let _ = events.send(AgentEvent::Note(note));
+                }
+            })
+        })
+    })
+    .await?
 }
 
 /// What hears the news of the session, between turns too: it tells the
@@ -1360,7 +1375,7 @@ fn ended(result: cox_acp::ToolCallResult) -> ToolCallResult {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use super::*;
 
