@@ -2264,14 +2264,21 @@ impl Workspace {
                         .bg(rgb(ACCENT)),
                 )
             })
+            // The badges are the square's siblings, not its children: gpui
+            // paints a div's border over its children, and the square's
+            // would cross them.
             .child(
                 div()
                     .relative()
                     .size(px(PROJECT_SIZE))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .map(|square| project_square(square, project, home, chosen, drawing))
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .map(|square| project_square(square, project, home, chosen, drawing)),
+                    )
                     .when(waiting > 0, |square| {
                         square.child(waiting_badge(index, waiting, asking > 0))
                     })
@@ -2787,48 +2794,55 @@ fn project_square(square: Div, project: &Project, home: bool, chosen: bool, draw
 /// The mark over the bottom right of the square of the project at
 /// `index`, on the rail, whose folder is not there.
 fn missing_badge(index: usize) -> Div {
-    div()
+    badge(ASKING, px(11.), "?")
         .debug_selector(move || format!("project-{}-missing", index + 1))
-        .absolute()
         .bottom(px(-5.))
         .right(px(-5.))
-        .size(px(17.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(9.))
-        .border_2()
-        .border_color(rgb(GROUND))
-        .bg(rgb(ASKING))
-        .text_color(rgb(GROUND))
-        .text_size(px(11.))
-        .font_weight(FontWeight::BOLD)
-        .child("?")
 }
 
 /// The count over the top right of the project's square, on the rail, at
 /// `index`: how many of its chats wait for the human or that they have
 /// not seen, in amber when one of them `asks`.
 fn waiting_badge(index: usize, waiting: usize, asks: bool) -> Div {
+    badge(
+        if asks { ASKING } else { ACCENT },
+        px(10.),
+        waiting.to_string(),
+    )
+    .debug_selector(move || format!("project-{}-waiting", index + 1))
+    .top(px(-5.))
+    .right(px(-5.))
+}
+
+/// A badge over a corner of a project's square, placed by the caller: a
+/// disc in `color`, or a pill when `label` is wider than a digit, ringed
+/// in the ground so that it stands off the square.
+///
+/// The ring is a disc of the ground under the colored one, not a border:
+/// gpui smooths the edges of a border and of the background under it
+/// apart, and the background's color would show as a thin halo outside
+/// the ring.
+fn badge(color: u32, size: Pixels, label: impl Into<SharedString>) -> Div {
     div()
-        .debug_selector(move || format!("project-{}-waiting", index + 1))
         .absolute()
-        .top(px(-5.))
-        .right(px(-5.))
-        .min_w(px(17.))
-        .h(px(17.))
-        .px(px(4.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(9.))
-        .border_2()
-        .border_color(rgb(GROUND))
-        .bg(rgb(if asks { ASKING } else { ACCENT }))
-        .text_color(rgb(GROUND))
-        .text_size(px(10.))
-        .font_weight(FontWeight::BOLD)
-        .child(waiting.to_string())
+        .p(px(2.))
+        .rounded_full()
+        .bg(rgb(GROUND))
+        .child(
+            div()
+                .min_w(px(13.))
+                .h(px(13.))
+                .px(px(3.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(rgb(color))
+                .text_color(rgb(GROUND))
+                .text_size(size)
+                .font_weight(FontWeight::BOLD)
+                .child(label.into()),
+        )
 }
 
 impl Workspace {
