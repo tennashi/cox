@@ -3118,6 +3118,53 @@ mod tests {
     }
 
     #[test]
+    fn answers_a_permission_request_noted_past() {
+        let mut conversation = Conversation::new();
+        conversation.submit("permission");
+        conversation.apply(AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
+            title: Some("Run make".to_owned()),
+            content: None,
+            options: vec!["Allow".to_owned(), "Reject".to_owned()],
+        });
+        conversation.set_goal(Some(goal::Goal::Command("make".to_owned())));
+        conversation.note("A trigger ran.".to_owned());
+
+        assert_eq!(conversation.asking_for(), Some("Run make"));
+        assert_eq!(
+            conversation.asked(),
+            Some(&["Allow".to_owned(), "Reject".to_owned()][..])
+        );
+        assert_eq!(conversation.options_asked(), 2);
+        assert_eq!(
+            conversation.choose(1),
+            Some(Command::Answer(PermissionAnswer::Select(1)))
+        );
+        assert_eq!(conversation.state(), State::Busy);
+        assert!(conversation.entries().iter().any(|entry| matches!(
+            entry,
+            Entry::Permission {
+                chosen: Some(1),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn logs_in_noted_past() {
+        let mut conversation = Conversation::new();
+        conversation.submit("hello");
+        conversation.apply(asks_to_log_in());
+        conversation.note("A trigger ran.".to_owned());
+
+        assert!(conversation.logging_in());
+        assert_eq!(conversation.options_asked(), 2);
+        let chosen = conversation.choose_login(1).expect("there is a second way");
+        assert_eq!(chosen.id, "terminal");
+        assert_eq!(conversation.state(), State::Busy);
+    }
+
+    #[test]
     fn asks_without_what_has_not_come_once_gathering_stops() {
         let mut conversation = Conversation::new();
         conversation.submit("permission");
