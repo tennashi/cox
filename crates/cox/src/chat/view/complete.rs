@@ -1,10 +1,16 @@
-//! The list over the chat's input of what the line can go on to be: the
-//! agent's commands, while the line is `/` and the start of one of their
-//! names, as `/rev`, and the project's files, while the word at the
-//! cursor is `@` and the start of a path, as `@src/ma` or `@chv` (see
-//! [`mention`]). Up and Down choose one, Tab puts it in the line, as
-//! Enter does unless the line has it whole already, when Enter sends
-//! the line, and Escape closes the list until the line changes.
+//! What the line can go on to be, over the chat's input: the agent's
+//! commands, while the word at the cursor is `/` and the start of one of
+//! their names, as `/rev`, one at a time, in a tip over the name, and the
+//! project's files, while it is `@` and the start of a path, as `@src/ma`
+//! or `@chv` (see [`mention`]), in a list over the input. Up and Down
+//! choose one, Tab puts it in the line, as Enter does unless the line has
+//! it whole already, when Enter sends the line, and Escape closes the tip
+//! or the list until the line changes.
+//!
+//! A command chosen goes to the start of the line, wherever its name was
+//! being written, as the agent runs the command a line starts with and
+//! takes the rest of the line for its input: `look at the last commit
+//! /rev` becomes `/review look at the last commit`.
 
 use std::ops::Range;
 use std::path::Path;
@@ -12,8 +18,8 @@ use std::path::Path;
 use cox_acp::SlashCommand;
 use cox_editor::{changes, files, fuzzy};
 use gpui::{
-    AnyElement, App, Context, Entity, Focusable, FontWeight, ScrollHandle, Subscription, Task,
-    Window, deferred, div, prelude::*, px, rgb,
+    AnyElement, App, Context, Corner, Entity, Focusable, FontWeight, ScrollHandle, Subscription,
+    Task, Window, anchored, deferred, div, point, prelude::*, px, rgb,
 };
 
 use super::ChatView;
@@ -21,6 +27,22 @@ use crate::chat::mention;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::LineInput;
 use crate::ui::theme::{BORDER_STRONG, CODE_FONT, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
+
+/// How wide the tip of a command grows, before what the command does is
+/// cut short.
+const TIP_WIDTH: f32 = 420.;
+
+/// How wide the tip of a command is at least, moved left of the name it
+/// is for, if it must be, to keep over the input.
+const TIP_LEAST_WIDTH: f32 = 260.;
+
+/// How far the name in the tip of a command is from the tip's left edge,
+/// its border and the room inside it, for the name to be over the one
+/// being written.
+const TIP_INSET: f32 = 11.;
+
+/// How far the tip of a command is above the name it is for.
+const TIP_GAP: f32 = 6.;
 
 /// How many rows the list shows before it scrolls.
 const ROWS: f32 = 8.;
@@ -170,8 +192,12 @@ fn changed_first(folder: &Path) -> Vec<String> {
 
 /// What the list shows.
 enum Fits<'v> {
-    /// The agent's commands the line can go on to run.
-    Commands(Vec<&'v SlashCommand>),
+    /// The agent's commands the line can go on to run, the name being
+    /// written in `range` of the line.
+    Commands {
+        range: Range<usize>,
+        commands: Vec<&'v SlashCommand>,
+    },
     /// The files whose path the line can go on to have, in place of
     /// `range` of the line.
     Files {
@@ -183,27 +209,59 @@ enum Fits<'v> {
 impl Fits<'_> {
     fn len(&self) -> usize {
         match self {
-            Fits::Commands(commands) => commands.len(),
+            Fits::Commands { commands, .. } => commands.len(),
             Fits::Files { paths, .. } => paths.len(),
         }
     }
 }
 
-/// The commands of `commands` that `line` can go on to run, the best
-/// first, while it is `/` and the start of a name: those whose name starts
-/// with what follows the `/`, then those whose name has it, then those
-/// whose description has it, whatever its case. `None` for a line that is
-/// not, or that no command fits. The phone's page finds them as this does,
-/// in its own `matching`.
-pub(super) fn matching<'c>(
-    commands: &'c [SlashCommand],
-    line: &str,
-) -> Option<Vec<&'c SlashCommand>> {
-    let typed = line.strip_prefix('/')?;
-    if typed.contains(char::is_whitespace) {
+/// The name of a command being written where the cursor is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Naming<'l> {
+    /// Where the `/` and the name are in the line, which leave it for the
+    /// command chosen to go to its start.
+    pub range: Range<usize>,
+    /// What of the name is written before the cursor.
+    pub query: &'l str,
+}
+
+/// The name of a command being written in the word that ends at `cursor`,
+/// a byte offset of `line`, if the word is `/` and the start of a name:
+/// anywhere in the line, after what the human wrote for the command, as
+/// `look at this /rev`, or before it.
+pub(super) fn naming(line: &str, cursor: usize) -> Option<Naming<'_>> {
+    let before = line.get(..cursor)?;
+    let start = before
+        .char_indices()
+        .rev()
+        .find(|(_, letter)| letter.is_whitespace())
+        .map_or(0, |(gap, letter)| gap + letter.len_utf8());
+    let query = before[start..].strip_prefix('/')?;
+    // A path, as `/usr/bin`, is no command's name.
+    if query.contains('/') {
         return None;
     }
-    let typed = typed.to_lowercase();
+    // The rest of the word goes too, when the cursor is inside it.
+    let end = line[cursor..]
+        .find(char::is_whitespace)
+        .map_or(line.len(), |gap| cursor + gap);
+    Some(Naming {
+        range: start..end,
+        query,
+    })
+}
+
+/// The commands of `commands` whose name can start with `query`, what of
+/// a name is written after its `/`, the best first: those whose name
+/// starts with it, then those whose name has it, then those whose
+/// description has it, whatever its case. `None` for a query that no
+/// command fits. The phone's page finds them as this does, in its own
+/// `matching`.
+pub(super) fn matching<'c>(
+    commands: &'c [SlashCommand],
+    query: &str,
+) -> Option<Vec<&'c SlashCommand>> {
+    let typed = query.to_lowercase();
     let mut fits: Vec<(usize, &SlashCommand)> = commands
         .iter()
         .filter_map(|command| {
@@ -226,6 +284,33 @@ pub(super) fn matching<'c>(
     (!fits.is_empty()).then_some(fits)
 }
 
+/// `line` with the command `name` at its start, ready for its input, and
+/// where its cursor goes. The name being written in `range` leaves the
+/// line, with the gap before it, and the command of `commands` the line
+/// started with, if it did, gives way, as the agent runs the command a
+/// line starts with and no other. The cursor goes where the name was
+/// being written, for the human to go on writing there. The phone's page
+/// does this as this does, in its own `taken`.
+pub(super) fn taken(
+    line: &str,
+    range: Range<usize>,
+    name: &str,
+    commands: &[SlashCommand],
+) -> (String, usize) {
+    let before = &line[..range.start];
+    let before = before.strip_suffix(char::is_whitespace).unwrap_or(before);
+    let rest = format!("{before}{}", &line[range.end..]);
+    let first = rest.split(char::is_whitespace).next().unwrap_or_default();
+    let started = first
+        .strip_prefix('/')
+        .is_some_and(|old| commands.iter().any(|command| command.name == old));
+    let lead = if started { first.len() } else { 0 };
+    let gone = rest.len() - rest[lead..].trim_start().len();
+    let command = format!("/{name} ");
+    let cursor = command.len() + before.len().saturating_sub(gone);
+    (format!("{command}{}", &rest[gone..]), cursor)
+}
+
 impl ChatView {
     /// What the list over the input shows, while it is open.
     fn completions(&self, cx: &App) -> Option<Fits<'_>> {
@@ -234,8 +319,13 @@ impl ChatView {
         if self.completion.dismissed.as_deref() == Some(line) {
             return None;
         }
-        if let Some(commands) = matching(self.conversation.commands(), line) {
-            return Some(Fits::Commands(commands));
+        if let Some(naming) = naming(line, input.cursor())
+            && let Some(commands) = matching(self.conversation.commands(), naming.query)
+        {
+            return Some(Fits::Commands {
+                range: naming.range,
+                commands,
+            });
         }
         let typing = mention::typing(line, input.cursor())?;
         let (_, paths) = self.completion.found.as_ref()?;
@@ -306,12 +396,14 @@ impl ChatView {
         let chosen = self.chosen(fits.len(), cx);
         let line = self.input.read(cx).text();
         match fits {
-            Fits::Commands(commands) => {
+            Fits::Commands { range, commands } => {
                 let name = commands[chosen].name.clone();
-                if sending && line == format!("/{name}") {
+                // Enter sends a line that starts with the command whole,
+                // and takes one written after something else to the start.
+                if sending && range.start == 0 && line[range.clone()] == format!("/{name}") {
                     return false;
                 }
-                self.take_command(&name, cx);
+                self.take_command(range, &name, cx);
             }
             Fits::Files { range, paths } => {
                 let written = mention::written(&paths[chosen]);
@@ -332,10 +424,17 @@ impl ChatView {
             .update(cx, |input, cx| input.replace(range, &written, cx));
     }
 
-    /// Puts the command `name` in the line, ready for its input.
-    fn take_command(&mut self, name: &str, cx: &mut Context<Self>) {
-        let line = format!("/{name} ");
-        self.input.update(cx, |input, cx| input.set_text(&line, cx));
+    /// Puts the command `name` at the start of the line, ready for its
+    /// input, in place of what of it was being written in `range`.
+    fn take_command(&mut self, range: Range<usize>, name: &str, cx: &mut Context<Self>) {
+        let (line, cursor) = taken(
+            self.input.read(cx).text(),
+            range,
+            name,
+            self.conversation.commands(),
+        );
+        self.input
+            .update(cx, |input, cx| input.set_text_at(&line, cursor, cx));
     }
 
     /// Escape: closes the list until the line changes. Answers whether the
@@ -349,132 +448,178 @@ impl ChatView {
         true
     }
 
-    /// The "/ commands" chip under the input: starts an empty line with
-    /// `/`, which opens the list, while the agent has commands.
+    /// The "/ commands" chip under the input: starts a command's name at
+    /// the cursor with `/`, which opens the tip of the agent's commands,
+    /// while the agent has commands.
     pub(super) fn start_command(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.input.read(cx).text().is_empty() {
-            self.input.update(cx, |input, cx| input.set_text("/", cx));
-        }
-        self.completion.dismissed = None;
-        window.focus(&self.input.focus_handle(cx));
-        cx.notify();
+        self.start_word('/', window, cx);
     }
 
     /// The "@ files" chip under the input: starts a path at the cursor
     /// with `@`, which opens the list of the project's files, while the
     /// chat has a folder.
     pub(super) fn start_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_word('@', window, cx);
+    }
+
+    /// Starts a word with `mark` at the cursor, which opens the list.
+    fn start_word(&mut self, mark: char, window: &mut Window, cx: &mut Context<Self>) {
         let input = self.input.read(cx);
         let cursor = input.cursor();
         let before = &input.text()[..cursor];
-        // A path is pointed to at the start of a word.
-        let at = if before.is_empty() || before.ends_with(char::is_whitespace) {
-            "@"
+        // A name or a path is written at the start of a word.
+        let start = if before.is_empty() || before.ends_with(char::is_whitespace) {
+            mark.to_string()
         } else {
-            " @"
+            format!(" {mark}")
         };
         self.input
-            .update(cx, |input, cx| input.replace(cursor..cursor, at, cx));
+            .update(cx, |input, cx| input.replace(cursor..cursor, &start, cx));
         self.completion.dismissed = None;
         window.focus(&self.input.focus_handle(cx));
         cx.notify();
     }
 
-    /// The list over the input, while it is open, the row chosen marked.
+    /// The tip of the command chosen, or the list of files, while one is
+    /// open.
     pub(super) fn render_completions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let fits = self.completions(cx)?;
         let chosen = self.chosen(fits.len(), cx);
-        let rows = match fits {
-            Fits::Commands(commands) => Self::render_commands(commands, chosen, cx),
-            Fits::Files { range, paths } => render_files(&range, paths, chosen, cx),
-        };
-        Some(
-            deferred(
-                div()
-                    .id("completions")
-                    .debug_selector(|| "completions".to_owned())
-                    .occlude()
-                    .absolute()
-                    .bottom_full()
-                    .left(px(12.))
-                    .right(px(12.))
-                    .p(px(6.))
-                    .bg(rgb(RAISED))
-                    .border_1()
-                    .border_color(rgb(BORDER_STRONG))
-                    .rounded(px(14.))
-                    .shadow_lg()
-                    .child(
-                        div()
-                            .id("completions-rows")
-                            .max_h(px(ROW_HEIGHT * ROWS))
-                            .overflow_y_scroll()
-                            .track_scroll(&self.completion.scroll)
-                            .flex()
-                            .flex_col()
-                            .children(rows),
-                    ),
-            )
-            .with_priority(2)
-            .into_any_element(),
-        )
+        Some(match fits {
+            Fits::Commands { range, commands } => {
+                self.render_command_tip(range, &commands, chosen, cx)
+            }
+            Fits::Files { range, paths } => {
+                self.render_files_list(render_files(&range, paths, chosen, cx))
+            }
+        })
     }
 
-    /// Each command by its name, with what it does, and what to write
-    /// after it.
-    fn render_commands(
-        commands: Vec<&SlashCommand>,
+    /// The command chosen of `commands`, the one of them Tab takes, by its
+    /// name, with what to write after it, what it does, and which of them
+    /// it is, over where its name is being written, in `range` of the
+    /// line. A click takes it too.
+    fn render_command_tip(
+        &self,
+        range: Range<usize>,
+        commands: &[&SlashCommand],
         chosen: usize,
         cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        commands
-            .into_iter()
-            .enumerate()
-            .map(|(place, command)| {
-                let name = command.name.clone();
+    ) -> AnyElement {
+        let command = commands[chosen];
+        let count = commands.len();
+        let name = command.name.clone();
+        let start = range.start;
+        let tip = div()
+            .id("completions")
+            .debug_selector(|| "completions".to_owned())
+            .occlude()
+            .h(px(ROW_HEIGHT))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(BORDER_STRONG))
+            .rounded(px(10.))
+            .shadow_lg()
+            .text_size(px(13.))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(SELECTED)))
+            .child(
                 div()
-                    .id(("command", place))
-                    .debug_selector(move || format!("command-{place}"))
                     .flex_shrink_0()
-                    .h(px(ROW_HEIGHT))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .rounded(px(9.))
-                    .text_size(px(13.))
-                    .cursor_pointer()
-                    .when(place == chosen, |row| row.bg(rgb(SELECTED)))
-                    .hover(|style| style.bg(rgb(SELECTED)))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .font_family(CODE_FONT)
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(FOREGROUND))
-                            .child(format!("/{}", command.name)),
-                    )
-                    .children(
-                        command
-                            .hint
-                            .clone()
-                            .map(|hint| div().flex_shrink_0().text_color(rgb(FAINT)).child(hint)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_color(rgb(DIM))
-                            .child(ellipsis(command.description.clone())),
-                    )
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.take_command(&name, cx);
-                        window.focus(&view.input.focus_handle(cx));
-                    }))
-                    .into_any_element()
+                    .font_family(CODE_FONT)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(FOREGROUND))
+                    .child(format!("/{}", command.name)),
+            )
+            .children(
+                command
+                    .hint
+                    .clone()
+                    .map(|hint| div().flex_shrink_0().text_color(rgb(FAINT)).child(hint)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_color(rgb(DIM))
+                    .child(ellipsis(command.description.clone())),
+            )
+            // Which of those that fit it is, while Up and Down have others
+            // to choose.
+            .when(count > 1, |tip| {
+                tip.child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(CODE_FONT)
+                        .text_color(rgb(FAINT))
+                        .child(format!("{}/{count}", chosen + 1)),
+                )
             })
-            .collect()
+            .on_click(cx.listener(move |view, _, window, cx| {
+                view.take_command(range.clone(), &name, cx);
+                window.focus(&view.input.focus_handle(cx));
+            }));
+        let input = self.input.read(cx);
+        let tip = match (input.position_of(start), input.drawn_at()) {
+            // The name in the tip over the `/` of the one being written,
+            // as far as the tip keeps over the input; else the tip as far
+            // left as it takes to.
+            (Some(at), Some(drawn)) => {
+                let right = drawn.right() + px(TIP_INSET);
+                let left = (at.x - px(TIP_INSET)).min(right - px(TIP_LEAST_WIDTH));
+                anchored()
+                    .position(point(left, at.y - px(TIP_GAP)))
+                    .anchor(Corner::BottomLeft)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(tip.max_w((right - left).min(px(TIP_WIDTH))))
+                    .into_any_element()
+            }
+            // Before the input is drawn, where the list would be.
+            _ => div()
+                .absolute()
+                .bottom_full()
+                .left(px(12.))
+                .child(tip.max_w(px(TIP_WIDTH)))
+                .into_any_element(),
+        };
+        deferred(tip).with_priority(2).into_any_element()
+    }
+
+    /// The list over the input of `rows`, the files that fit, the row
+    /// chosen marked.
+    fn render_files_list(&self, rows: Vec<AnyElement>) -> AnyElement {
+        deferred(
+            div()
+                .id("completions")
+                .debug_selector(|| "completions".to_owned())
+                .occlude()
+                .absolute()
+                .bottom_full()
+                .left(px(12.))
+                .right(px(12.))
+                .p(px(6.))
+                .bg(rgb(RAISED))
+                .border_1()
+                .border_color(rgb(BORDER_STRONG))
+                .rounded(px(14.))
+                .shadow_lg()
+                .child(
+                    div()
+                        .id("completions-rows")
+                        .max_h(px(ROW_HEIGHT * ROWS))
+                        .overflow_y_scroll()
+                        .track_scroll(&self.completion.scroll)
+                        .flex()
+                        .flex_col()
+                        .children(rows),
+                ),
+        )
+        .with_priority(2)
+        .into_any_element()
     }
 }
 
@@ -548,6 +693,12 @@ mod tests {
         fits.map(|fits| fits.iter().map(|command| command.name.as_str()).collect())
     }
 
+    /// The commands the list shows for `line`, with the cursor at its end.
+    fn listed<'c>(commands: &'c [SlashCommand], line: &str) -> Option<Vec<&'c str>> {
+        let naming = naming(line, line.len())?;
+        names(matching(commands, naming.query))
+    }
+
     #[test]
     fn the_names_that_start_so_come_first() {
         let commands = [
@@ -556,23 +707,90 @@ mod tests {
             command("compact", "Sum up the conversation"),
         ];
         assert_eq!(
-            names(matching(&commands, "/")),
+            listed(&commands, "/"),
             Some(vec!["pr-comments", "review", "compact"])
         );
         assert_eq!(
-            names(matching(&commands, "/re")),
+            listed(&commands, "/re"),
             Some(vec!["review", "pr-comments"])
         );
-        assert_eq!(names(matching(&commands, "/SUM")), Some(vec!["compact"]));
+        assert_eq!(listed(&commands, "/SUM"), Some(vec!["compact"]));
     }
 
     #[test]
     fn the_list_is_for_a_name_being_typed() {
         let commands = [command("review", "Review the changes")];
-        assert_eq!(names(matching(&commands, "review")), None);
-        assert_eq!(names(matching(&commands, "/review ")), None);
-        assert_eq!(names(matching(&commands, "/review the last commit")), None);
-        assert_eq!(names(matching(&commands, "/zzz")), None);
-        assert_eq!(names(matching(&[], "/")), None);
+        assert_eq!(listed(&commands, "review"), None);
+        assert_eq!(listed(&commands, "/review "), None);
+        assert_eq!(listed(&commands, "/review the last commit"), None);
+        assert_eq!(listed(&commands, "/zzz"), None);
+        assert_eq!(listed(&[], "/"), None);
+    }
+
+    #[test]
+    fn a_name_is_written_anywhere_in_the_line() {
+        let commands = [command("review", "Review the changes")];
+        assert_eq!(
+            listed(&commands, "look at the last commit /rev"),
+            Some(vec!["review"])
+        );
+        assert_eq!(
+            listed(&commands, "最後のコミットを見て /"),
+            Some(vec!["review"])
+        );
+        assert_eq!(listed(&commands, "and/or"), None);
+        assert_eq!(listed(&commands, "see /usr/re"), None);
+
+        let line = "/rev the last commit";
+        assert_eq!(
+            naming(line, 4),
+            Some(Naming {
+                range: 0..4,
+                query: "rev"
+            })
+        );
+        assert_eq!(naming(line, 2).map(|naming| naming.range), Some(0..4));
+        assert_eq!(naming(line, 5), None);
+    }
+
+    #[test]
+    fn a_command_chosen_goes_to_the_start() {
+        let commands = [
+            command("review", "Review the changes"),
+            command("compact", "Sum up the conversation"),
+        ];
+        // `|` marks the cursor.
+        let take = |marked: &str, name: &str| {
+            let cursor = marked.find('|').unwrap();
+            let line = marked.replacen('|', "", 1);
+            let range = naming(&line, cursor).unwrap().range;
+            let (line, cursor) = taken(&line, range, name, &commands);
+            format!("{}|{}", &line[..cursor], &line[cursor..])
+        };
+        assert_eq!(take("/rev|", "review"), "/review |");
+        assert_eq!(
+            take("/rev| the last commit", "review"),
+            "/review |the last commit"
+        );
+        assert_eq!(
+            take("look at the last commit /rev|", "review"),
+            "/review look at the last commit|"
+        );
+        assert_eq!(
+            take("look at /r|ev the last commit", "review"),
+            "/review look at| the last commit"
+        );
+        assert_eq!(
+            take("最後のコミットを\n/rev|", "review"),
+            "/review 最後のコミットを|"
+        );
+        assert_eq!(
+            take("/review the last commit /com|", "compact"),
+            "/compact the last commit|"
+        );
+        assert_eq!(
+            take("/usr/bin is gone /rev|", "review"),
+            "/review /usr/bin is gone|"
+        );
     }
 }

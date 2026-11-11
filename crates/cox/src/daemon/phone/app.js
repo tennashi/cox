@@ -1873,16 +1873,30 @@ compose.line.addEventListener("input", () => {
   drawCommands();
 });
 
-// The commands of `commands` that `line` can go on to run, the best
-// first, while it is `/` and the start of a name, as the window's list
-// over its input finds them: those whose name starts with what follows
-// the `/`, then those whose name has it, then those whose description
-// has it, whatever its case. None for a line that is not.
-function matching(commands, line) {
-  if (!line.startsWith("/")) return [];
-  const typed = line.slice(1);
-  if (/\s/.test(typed)) return [];
-  const lower = typed.toLowerCase();
+// The name of a command being written in the word that ends at `cursor`,
+// if the word is `/` and the start of a name, anywhere in the line, as
+// the window's `naming` finds it: where the word is, and what of the name
+// is written before the cursor. Null for a word that is not.
+function naming(line, cursor) {
+  const before = line.slice(0, cursor);
+  const start = before.search(/\S*$/);
+  const word = before.slice(start);
+  if (!word.startsWith("/")) return null;
+  const query = word.slice(1);
+  // A path, as `/usr/bin`, is no command's name.
+  if (query.includes("/")) return null;
+  // The rest of the word goes too, when the cursor is inside it.
+  const gap = line.slice(cursor).search(/\s/);
+  return { start, end: gap < 0 ? line.length : cursor + gap, query };
+}
+
+// The commands of `commands` whose name can start with `query`, what of
+// a name is written after its `/`, the best first, as the window's list
+// over its input finds them: those whose name starts with it, then those
+// whose name has it, then those whose description has it, whatever its
+// case.
+function matching(commands, query) {
+  const lower = query.toLowerCase();
   const rank = (command) => {
     const name = command.name.toLowerCase();
     if (name.startsWith(lower)) return 0;
@@ -1898,12 +1912,33 @@ function matching(commands, line) {
     .map(([, command]) => command);
 }
 
-// The list over the input of the agent's commands the line can go on to
-// run, as the window's: each by its name, with what to write after it
-// and what it does. A tap puts the command in the line, ready for its
-// input, which closes the list.
+// `line` with the command `name` at its start, ready for its input, and
+// where its cursor goes, as the window's `taken` puts it: the name being
+// written in `named` leaves the line, with the gap before it, and the
+// command of `commands` the line started with, if it did, gives way, as
+// the agent runs the command a line starts with and no other.
+function taken(line, named, name, commands) {
+  const before = line.slice(0, named.start).replace(/\s$/, "");
+  const rest = before + line.slice(named.end);
+  const first = rest.split(/\s/, 1)[0];
+  const started = commands.some((command) => `/${command.name}` === first);
+  const lead = started ? first.length : 0;
+  const gone = rest.length - rest.slice(lead).trimStart().length;
+  const command = `/${name} `;
+  return {
+    line: command + rest.slice(gone),
+    cursor: command.length + Math.max(before.length - gone, 0),
+  };
+}
+
+// The list over the input of the agent's commands the word at the cursor
+// can go on to name, as the window's: each by its name, with what to
+// write after it and what it does. A tap puts the command at the start of
+// the line, ready for its input, which closes the list.
 function drawCommands() {
-  const fits = chat && !compose.form.hidden ? matching(chat.commands, compose.line.value) : [];
+  const line = compose.line.value;
+  const named = chat && !compose.form.hidden ? naming(line, compose.line.selectionStart) : null;
+  const fits = named ? matching(chat.commands, named.query) : [];
   compose.commands.hidden = !fits.length;
   compose.commands.replaceChildren(...fits.map((command) => el("button", {
     type: "button",
@@ -1912,7 +1947,9 @@ function drawCommands() {
     // The line keeps the keyboard, as the tap goes to the list.
     onmousedown: (event) => event.preventDefault(),
     onclick: () => {
-      compose.line.value = `/${command.name} `;
+      const took = taken(line, named, command.name, chat.commands);
+      compose.line.value = took.line;
+      compose.line.setSelectionRange(took.cursor, took.cursor);
       grow();
       compose.line.focus();
       drawCommands();
@@ -1922,6 +1959,10 @@ function drawCommands() {
     command.hint ? el("span", { class: "hint" }, command.hint) : null),
   command.description ? el("span", { class: "what" }, command.description) : null)));
 }
+// The list follows the cursor, as it moves without the line changing.
+document.addEventListener("selectionchange", () => {
+  if (document.activeElement === compose.line) drawCommands();
+});
 
 head.back.addEventListener("click", (event) => {
   event.preventDefault();

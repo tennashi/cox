@@ -230,6 +230,15 @@ impl LineInput {
         self.edit(cx, |draft| draft.set_text(text));
     }
 
+    /// Puts `text` in the input, with the cursor at `cursor`, a byte
+    /// offset of it.
+    pub fn set_text_at(&mut self, text: &str, cursor: usize, cx: &mut Context<Self>) {
+        self.edit(cx, |draft| {
+            draft.set_text(text);
+            draft.move_to(cursor);
+        });
+    }
+
     /// Where the cursor is, as a byte offset of the text.
     #[must_use]
     pub fn cursor(&self) -> usize {
@@ -244,6 +253,21 @@ impl LineInput {
             draft.select_to(range.end);
             draft.commit(None, text);
         });
+    }
+
+    /// Where in the window the input was last drawn. `None` before it was.
+    #[must_use]
+    pub fn drawn_at(&self) -> Option<Bounds<Pixels>> {
+        self.last_bounds
+    }
+
+    /// Where in the window the row of offset `offset` of the text starts
+    /// above it, as the input last drew it: the top left corner of what
+    /// is at the offset. `None` before it was drawn.
+    #[must_use]
+    pub fn position_of(&self, offset: usize) -> Option<Point<Pixels>> {
+        let (bounds, layout) = (self.last_bounds?, self.last_layout.as_ref()?);
+        Some(self.text_origin(bounds) + layout.position(offset))
     }
 
     /// What the input shows, fainter, while it is empty.
