@@ -1598,6 +1598,69 @@ mod tests {
             .expect("the page answers in time");
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn takes_no_process_on_the_mac_for_the_human_by_what_tailscale_would_say() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, mut heard) = unbounded_channel();
+            let owner = Rc::new(RefCell::new(Some(tailnet::Owner {
+                host: "mac.tail1234.ts.net".to_owned(),
+                login: "me@github".to_owned(),
+            })));
+            tokio::task::spawn_local(serve(
+                listener,
+                "secret".to_owned(),
+                owner,
+                (None, None),
+                internal,
+            ));
+            let as_tailscale_says =
+                "Host: mac.tail1234.ts.net\r\nTailscale-User-Login: me@github\r\n";
+
+            let line = r#"{"Submit":{"key":7,"text":"go on"}}"#;
+            let posted = |cookie: &str| {
+                format!(
+                    "POST /act HTTP/1.1\r\n{as_tailscale_says}{cookie}X-Cox: phone\r\n\
+                     Origin: https://mac.tail1234.ts.net\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{line}",
+                    line.len()
+                )
+            };
+            let page = ask(
+                port,
+                &format!("GET / HTTP/1.1\r\n{as_tailscale_says}Connection: close\r\n\r\n"),
+                "",
+            )
+            .await;
+            let act = ask(port, &posted(""), "").await;
+            let sent = heard.try_recv().is_ok();
+            let first = |answer: &str| answer.lines().next().unwrap_or_default().to_owned();
+            assert_eq!(
+                (first(&page), first(&act), sent),
+                (
+                    "HTTP/1.1 401 Unauthorized".to_owned(),
+                    "HTTP/1.1 401 Unauthorized".to_owned(),
+                    false
+                ),
+                "the page, what it posts, and whether a line was sent as the human's"
+            );
+
+            let paired = ask(port, &posted("Cookie: cox_phone=secret\r\n"), "").await;
+            assert!(paired.starts_with("HTTP/1.1 204"), "{paired}");
+            assert!(matches!(
+                heard.recv().await,
+                Some(Internal::Act {
+                    message: ToDaemon::Submit { key: 7, .. }
+                })
+            ));
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
     #[test]
     fn tells_the_phone_how_many_things_a_call_shows_but_not_them() {
         use crate::chat::conversation::{Patch, State};

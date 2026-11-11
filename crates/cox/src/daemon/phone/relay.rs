@@ -650,6 +650,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn passes_nothing_on_for_what_tailscale_would_say_alone() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (at, relay, mut seen) = relayed_app().await;
+                let told = asked(
+                    relay,
+                    format!(
+                        "GET / HTTP/1.1\r\nhost: mac.ts.net:{at}\r\n\
+                         tailscale-user-login: me@github\r\nconnection: close\r\n\r\n"
+                    ),
+                )
+                .await;
+                assert!(told.starts_with("HTTP/1.1 401"), "{told}");
+                assert!(seen.try_recv().is_err(), "the app was sent the request");
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn passes_a_websocket_on() {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let local = tokio::task::LocalSet::new();
