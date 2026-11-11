@@ -26,11 +26,15 @@
 //! The tab looks again now and then, so that it shows what the agent
 //! changes as it works. It draws only the rows in sight, so a long list
 //! of changes scrolls as a short one does, and stays where the human
-//! scrolled to as the changes do.
+//! scrolled to as the changes do. The wheel scrolls a file's lines across
+//! too, each file's apart, their numbers staying in place, so that a line
+//! too long for the tab can be read to its end.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
 use cox_core::tabs::KeptTab;
@@ -42,8 +46,8 @@ use cox_editor::syntax::Syntax;
 use cox_editor::words;
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
-    ListAlignment, ListOffset, ListState, SharedString, StyledText, Task, Window, div, list,
-    prelude::*, px, rgb,
+    Hsla, ListAlignment, ListOffset, ListState, Pixels, ScrollWheelEvent, SharedString, StyledText,
+    Task, TextRun, Window, div, font, list, prelude::*, px, rgb,
 };
 
 use crate::settings::DIRECTORIES;
@@ -71,6 +75,8 @@ const LINE_HEIGHT: f32 = 18.;
 /// How long a stretch's row is: a little longer than a line's, to part
 /// the stretches.
 const STRETCH_HEIGHT: f32 = 26.;
+/// The room right of a line's text, scrolled across to its end.
+const TEXT_END: f32 = 12.;
 
 /// How wide the column of commits is.
 const HISTORY_WIDTH: f32 = 236.;
@@ -247,6 +253,14 @@ pub struct Changes {
     /// followed by its lines'.
     rows: Vec<Row>,
     list: ListState,
+    /// How far the lines of each file shown are scrolled across, by its
+    /// path.
+    across: HashMap<PathBuf, Pixels>,
+    /// How wide the longest line of each file shown is, by its path, once
+    /// the tab measured it to scroll the file across.
+    widest: HashMap<PathBuf, Pixels>,
+    /// How wide the text of a line is in sight, as a line was last drawn.
+    in_sight: Rc<Cell<Pixels>>,
     focus_handle: FocusHandle,
     _follow: Task<()>,
     /// What reads what the human picked, while it does.
@@ -288,6 +302,9 @@ impl Changes {
             picked: None,
             rows: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(LINE_HEIGHT * 20.)),
+            across: HashMap::new(),
+            widest: HashMap::new(),
+            in_sight: Rc::new(Cell::new(px(0.))),
             focus_handle: cx.focus_handle(),
             _follow: follow(cx),
             picking: None,
@@ -463,8 +480,13 @@ impl Changes {
     }
 
     /// Lists the rows of the repository shown again: where the human had
-    /// scrolled to if `stay`, or else from its top.
+    /// scrolled to if `stay`, or else from its top, and its files from
+    /// their left.
     fn relist(&mut self, stay: bool) {
+        self.widest.clear();
+        if !stay {
+            self.across.clear();
+        }
         self.rows = self
             .shown_diff()
             .and_then(|read| read.as_ref().ok())
@@ -524,6 +546,42 @@ impl Changes {
                 path: diff.top.join(&file.path),
                 line,
             });
+        }
+    }
+
+    /// The wheel turned over the file at `index` of the repository shown:
+    /// scrolls its lines across, as far as its longest line ends in sight.
+    fn scroll_across(
+        &mut self,
+        index: usize,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let delta = event.delta.pixel_delta(px(LINE_HEIGHT)).x;
+        if delta == px(0.) {
+            return;
+        }
+        let Some(Ok(diff)) = self.shown_diff() else {
+            return;
+        };
+        let Some(file) = diff.files.get(index) else {
+            return;
+        };
+        let path = file.path.clone();
+        let widest = if let Some(&widest) = self.widest.get(&path) {
+            widest
+        } else {
+            let widest = widest(file, window);
+            self.widest.insert(path.clone(), widest);
+            widest
+        };
+        let most = (widest + px(TEXT_END) - self.in_sight.get()).max(px(0.));
+        let at = self.across.entry(path).or_default();
+        let across = (*at - delta).clamp(px(0.), most);
+        if across != *at {
+            *at = across;
+            cx.notify();
         }
     }
 
@@ -852,6 +910,7 @@ impl Changes {
             Row::Line(index, line) => (index, Some(line)),
         };
         let file = &diff.files[index];
+        let across = self.across.get(&file.path).copied().unwrap_or_default();
         let last = line.map_or(file.lines.is_empty(), |line| line + 1 == file.lines.len());
         let (inner, at) = match line {
             None => (file_row(row, file), None),
@@ -863,7 +922,9 @@ impl Changes {
                     .unwrap_or(&none);
                 let first = line == 0;
                 let shown = &file.lines[line];
-                (line_row(row, shown, first, last, look), Some(shown.at))
+                let in_sight = self.in_sight.clone();
+                let drawn = line_row(row, shown, first, last, look, across, in_sight);
+                (drawn, Some(shown.at))
             }
         };
         let inner = if last {
@@ -882,6 +943,9 @@ impl Changes {
             .px(px(INSET))
             .when(line.is_none(), |row| row.pt(px(10.)))
             .when(last, |row| row.pb(px(4.)))
+            .on_scroll_wheel(cx.listener(move |changes, event, window, cx| {
+                changes.scroll_across(index, event, window, cx);
+            }))
             .child(inner.border_x_1().border_color(rgb(BORDER)))
             .into_any_element()
     }
@@ -1384,13 +1448,17 @@ fn file_row(row: usize, file: &File) -> gpui::Stateful<gpui::Div> {
 
 /// The row of `line`, at `row` of the tab, the first of its file's if
 /// `first` and the last if `last`: its numbers, as it was and as it is,
-/// and its text, drawn as `look` says, on the ground its kind has.
+/// and its text, drawn as `look` says, scrolled `across`, on the ground
+/// its kind has. Drawing it tells `in_sight` how wide its text is in
+/// sight.
 fn line_row(
     row: usize,
     line: &Line,
     first: bool,
     last: bool,
     look: &Look,
+    across: Pixels,
+    in_sight: Rc<Cell<Pixels>>,
 ) -> gpui::Stateful<gpui::Div> {
     let element = div()
         .id(("changed-line", row))
@@ -1453,11 +1521,48 @@ fn line_row(
         )
         .child(
             div()
+                .flex_1()
                 .min_w_0()
-                .pr_3()
-                .text_color(rgb(FOREGROUND))
-                .child(StyledText::new(text).with_highlights(highlights)),
+                .overflow_hidden()
+                // Its one child is as wide as it is, however long the text
+                // it holds.
+                .on_children_prepainted(move |bounds, _, _| {
+                    if let Some(text) = bounds.first() {
+                        in_sight.set(text.size.width);
+                    }
+                })
+                .child(
+                    div()
+                        .relative()
+                        .left(-across)
+                        .text_color(rgb(FOREGROUND))
+                        .child(StyledText::new(text).with_highlights(highlights)),
+                ),
         )
+}
+
+/// How wide the longest line of `file` is, drawn as the tab draws it.
+fn widest(file: &File, window: &Window) -> Pixels {
+    let font = font(CODE_FONT);
+    file.lines
+        .iter()
+        .filter(|line| line.kind != Kind::Stretch)
+        .map(|line| {
+            let text = drawn(&line.text);
+            let run = TextRun {
+                len: text.len(),
+                font: font.clone(),
+                color: Hsla::default(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            window
+                .text_system()
+                .shape_line(text.into(), px(CODE_SIZE), &[run], None)
+                .width
+        })
+        .fold(px(0.), Pixels::max)
 }
 
 /// How the stretches of a line `len` bytes long are drawn, as `look`
