@@ -3,12 +3,14 @@
 use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
 
 use super::Code;
+use crate::stage::tree;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FOREGROUND};
 
 impl Code {
-    /// The bar above the code: back and forward, the file's path, the
+    /// The bar above the code: the button that shows the project's files
+    /// while they are folded, back and forward, the file's path, the
     /// lines it is shown at, and what the tab says of what the human asked,
     /// the server, and the file when it cannot be read.
     pub(super) fn render_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -51,6 +53,9 @@ impl Code {
             .border_b_1()
             .border_color(rgb(BORDER))
             .text_color(rgb(DIM))
+            .when(tree::is_folded(cx), |bar| {
+                bar.child(tree::unfold_button("unfold-files"))
+            })
             .when(
                 self.history.has_back() || self.history.has_forward(),
                 |bar| {

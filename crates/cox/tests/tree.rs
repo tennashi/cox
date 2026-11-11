@@ -1,12 +1,11 @@
 //! A human finding a file of the project on the tree of its files, to
-//! open it.
+//! read it, and the tree marking the file of the tab shown.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::stage::tab::Shows as _;
 use cox::stage::tree::{Chosen, Tree};
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
@@ -22,24 +21,25 @@ fn scratch(name: &str, paths: &[&str]) -> PathBuf {
     directory
 }
 
-/// Opens a tab showing the files under `root`, with the folders `open`
-/// open, and hears the files chosen on it.
+/// The files chosen on a tree, each with whether it was chosen for a tab
+/// of its own.
+type Heard = Rc<RefCell<Vec<(PathBuf, bool)>>>;
+
+/// Opens the tree of the files under `root`, with the folders `open`
+/// open, and hears the files chosen on it, and whether each was chosen
+/// for a tab of its own.
 fn open<'a>(
     cx: &'a mut TestAppContext,
     root: &Path,
     open: Vec<PathBuf>,
-) -> (
-    Entity<Tree>,
-    Rc<RefCell<Vec<PathBuf>>>,
-    &'a mut VisualTestContext,
-) {
+) -> (Entity<Tree>, Heard, &'a mut VisualTestContext) {
     let root = root.to_owned();
     let (tree, cx) = cx.add_window_view(|_, cx| Tree::new(root, open, cx));
     let chosen = Rc::new(RefCell::new(Vec::new()));
     let heard = Rc::clone(&chosen);
     cx.update(|_, cx| {
-        cx.subscribe(&tree, move |_, Chosen(path), _| {
-            heard.borrow_mut().push(path.clone());
+        cx.subscribe(&tree, move |_, chosen: &Chosen, _| {
+            heard.borrow_mut().push((chosen.path.clone(), chosen.apart));
         })
         .detach();
     });
@@ -62,8 +62,12 @@ fn shown(tree: &Entity<Tree>, root: &Path, cx: &mut VisualTestContext) -> Vec<St
 }
 
 fn click(row: usize, cx: &mut VisualTestContext) {
+    click_with(row, Modifiers::none(), cx);
+}
+
+fn click_with(row: usize, modifiers: Modifiers, cx: &mut VisualTestContext) {
     let bounds = cx.debug_bounds(entry(row)).expect("the row is drawn");
-    cx.simulate_click(bounds.center(), Modifiers::none());
+    cx.simulate_click(bounds.center(), modifiers);
     cx.run_until_parked();
 }
 
@@ -86,10 +90,6 @@ fn opens_folders_and_chooses_files(cx: &mut TestAppContext) {
     );
     std::fs::write(root.join(".gitignore"), "/target\n").unwrap();
     let (tree, chosen, cx) = open(cx, &root, Vec::new());
-    assert_eq!(
-        tree.read_with(cx, |tree, _| tree.title()),
-        format!("{}/", root.file_name().unwrap().to_string_lossy())
-    );
     // Not `target`, which Git ignores.
     assert_eq!(shown(&tree, &root, cx), ["src", ".gitignore", "Cargo.toml"]);
 
@@ -103,9 +103,16 @@ fn opens_folders_and_chooses_files(cx: &mut TestAppContext) {
         [root.join("src")]
     );
 
-    // `main.rs`, in `src`.
+    // `main.rs`, in `src`: on the tab shown, and then on one of its own.
     click(2, cx);
-    assert_eq!(*chosen.borrow(), [root.join("src/main.rs")]);
+    click_with(2, Modifiers::secondary_key(), cx);
+    assert_eq!(
+        *chosen.borrow(),
+        [
+            (root.join("src/main.rs"), false),
+            (root.join("src/main.rs"), true)
+        ]
+    );
 
     click(1, cx);
     assert_eq!(
@@ -143,5 +150,45 @@ fn follows_the_files_as_they_come_and_go(cx: &mut TestAppContext) {
     std::fs::remove_file(root.join("src/main.rs")).unwrap();
     look(cx);
     assert_eq!(shown(&tree, &root, cx), ["src", "src/lib.rs"]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn marks_the_file_shown_with_the_folders_it_is_in_open(cx: &mut TestAppContext) {
+    let root = scratch("reveals", &["src/code/tree.rs", "src/main.rs", "README.md"]);
+    let root = std::fs::canonicalize(root).unwrap();
+    let (tree, _, cx) = open(cx, &root, Vec::new());
+    assert_eq!(shown(&tree, &root, cx), ["src", "README.md"]);
+
+    let file = root.join("src/code/tree.rs");
+    tree.update(cx, |tree, cx| tree.reveal(Some(file.clone()), cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shown(&tree, &root, cx),
+        [
+            "src",
+            "src/code",
+            "src/code/tree.rs",
+            "src/main.rs",
+            "README.md"
+        ]
+    );
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.current().map(Path::to_owned)),
+        Some(file)
+    );
+
+    // No file, as of a tab of a file not chosen yet: the folders stay
+    // open.
+    tree.update(cx, |tree, cx| tree.reveal(None, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.current().map(Path::to_owned)),
+        None
+    );
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.open()),
+        [root.join("src"), root.join("src/code")]
+    );
     std::fs::remove_dir_all(root).unwrap();
 }

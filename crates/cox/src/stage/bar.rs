@@ -1,17 +1,17 @@
 //! The bar along the top of the stage: the views of the project it keeps
-//! in sight, the project's files, what changed in them, and the pages of
-//! the plugins, such as the map, each by its icon but the one shown, as
-//! the column beside the stage lists the rest of the tabs (see
-//! [`super::column`]); and, at its end, the menu that opens another tab,
-//! among them an Android emulator of each virtual device the SDK has. The button of what changed counts the
+//! in sight, what changed in its files, and the pages of the plugins, such
+//! as the map, each by its icon but the one shown, as the column beside
+//! the stage lists the rest of the tabs (see [`super::column`]); and, at
+//! its end, the menu that opens another tab: a page, a terminal, a file,
+//! chosen on the tree of the project's files, or an Android emulator of
+//! each virtual device the SDK has. The button of what changed counts the
 //! files that did, while the stage is open.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    App, Context, Entity, Focusable, FontWeight, PathPromptOptions, SharedString, Subscription,
-    Task, Window, actions, deferred, div, prelude::*, px, rgb,
+    App, Context, Entity, Focusable, FontWeight, SharedString, Subscription, Task, Window, actions,
+    deferred, div, prelude::*, px, rgb,
 };
 
 use super::Stage;
@@ -73,7 +73,6 @@ pub(super) struct Menu {
 /// A view of the project that the bar keeps in sight, apart from the tabs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum View {
-    Files,
     Changes,
     Plugin(String),
 }
@@ -94,11 +93,10 @@ struct Present {
 }
 
 impl Stage {
-    /// The view of the project `tab` shows, if it shows one: the tree of
-    /// the project's files, what changed in them, or a plugin's page.
+    /// The view of the project `tab` shows, if it shows one: what changed
+    /// in the project's files, or a plugin's page.
     fn view_of(&self, tab: &Tab, plugins: &[Plugin], cx: &App) -> Option<View> {
         match &tab.content {
-            TabContent::Tree(_) => Some(View::Files),
             TabContent::Changes(changes) if changes.read(cx).folder() == self.cwd => {
                 Some(View::Changes)
             }
@@ -189,7 +187,7 @@ impl Stage {
     /// ground, each by its icon, named where the mouse rests, but the one
     /// shown, which is marked and named: "Activity", counting the chats of
     /// the folder that wait for the human, "Map" when the project has one,
-    /// then "Files", "Changes" in a Git repository, or a project with one
+    /// then "Changes" in a Git repository, or a project with one
     /// among its directories, then the other plugins, "Triggers" last.
     fn render_views(
         shown: Option<&View>,
@@ -247,10 +245,6 @@ impl Stage {
             .rounded(px(12.))
             .bg(rgb(RAISED))
             .children(ahead)
-            .child(
-                button("show-tree".into(), View::Files, "Files".into(), Icon::Files)
-                    .on_click(cx.listener(|stage, _, window, cx| stage.show_tree(window, cx))),
-            )
             .when(present.changes, |views| {
                 views.child(
                     button(
@@ -423,10 +417,10 @@ impl Stage {
                     ),
                 )
                 .child(
-                    item("open-file", "File…", Icon::Code, OPEN_FILE_KEY).on_click(cx.listener(
+                    item("open-files", "Files", Icon::Files, OPEN_FILE_KEY).on_click(cx.listener(
                         move |stage, _, window, cx| {
                             close(stage, cx);
-                            Self::choose_file(window, cx);
+                            stage.new_files(window, cx);
                         },
                     )),
                 )
@@ -451,36 +445,6 @@ impl Stage {
                 }),
         )
         .with_priority(2)
-    }
-
-    /// Asks for a file, and opens it on a tab, as a link to it does.
-    pub fn choose_file(window: &mut Window, cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Open".into()),
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let path: PathBuf = match chosen.await {
-                Ok(Ok(Some(mut paths))) if !paths.is_empty() => paths.swap_remove(0),
-                Ok(Err(error)) => {
-                    tracing::error!("no file chosen: {error:#}");
-                    return;
-                }
-                _ => return,
-            };
-            this.update_in(cx, |stage, window, cx| {
-                // A file that cannot be read gets a tab all the same,
-                // which says why.
-                if stage.open_path(&path, None, window, cx).is_err() {
-                    stage.show_file::<Code>(path, "", None, window, cx);
-                    stage.focus_shown(window, cx);
-                }
-            })
-            .ok();
-        })
-        .detach();
     }
 }
 

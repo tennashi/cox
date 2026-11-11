@@ -1,6 +1,6 @@
 //! A tab of the stage, and what it shows: a page of the browser, a
-//! Markdown file, a file as it is written, the project's files, what
-//! changed in them, the map of the project, the flow of a tool call, a
+//! Markdown file, a file as it is written, a file not chosen yet, what
+//! changed in the project's files, the map of the project, the flow of a tool call, a
 //! terminal, or an Android emulator. What the stage asks of every kind alike, the name the tab
 //! goes by, how it is kept for a closed chat's stage to open again, the
 //! keyboard's place in it and the view drawn, each kind answers as
@@ -26,7 +26,7 @@ use super::flow::Flow;
 use super::mac_window::MacWindow;
 use super::page::Page;
 use super::terminal::{Program, Terminal};
-use super::tree::Tree;
+use super::tree::Unchosen;
 use super::windows::Windows;
 use crate::ui::LinkClicked;
 use cox_browser::TargetId;
@@ -88,7 +88,8 @@ pub(super) enum TabContent {
     },
     Document(Entity<Document>),
     Code(Entity<Code>),
-    Tree(Entity<Tree>),
+    /// A file not chosen yet, beside the tree of the project's files.
+    Files(Entity<Unchosen>),
     Changes(Entity<Changes>),
     Flow(Entity<Flow>),
     Terminal(Entity<Terminal>),
@@ -131,7 +132,7 @@ impl TabContent {
             Self::Page { page, .. } => page,
             Self::Document(document) => document,
             Self::Code(code) => code,
-            Self::Tree(tree) => tree,
+            Self::Files(files) => files,
             Self::Changes(changes) => changes,
             Self::Flow(flow) => flow,
             Self::Terminal(terminal) => terminal,
@@ -162,13 +163,37 @@ impl TabContent {
         self.shows().view()
     }
 
+    /// Whether it is the tab of a file, which the tree of the project's
+    /// files is drawn beside: a file shown as Markdown or as it is
+    /// written, or one not chosen yet.
+    pub(super) fn is_file(&self) -> bool {
+        matches!(self, Self::Document(_) | Self::Code(_) | Self::Files(_))
+    }
+
+    /// The file the tab shows, if it shows one.
+    pub(super) fn file(&self, cx: &App) -> Option<PathBuf> {
+        match self {
+            Self::Document(document) => Some(document.read(cx).path().to_owned()),
+            Self::Code(code) => Some(code.read(cx).path().to_owned()),
+            Self::Files(_)
+            | Self::Page { .. }
+            | Self::Changes(_)
+            | Self::Flow(_)
+            | Self::Terminal(_)
+            | Self::Android(_)
+            | Self::Devices(_)
+            | Self::MacWindow(_)
+            | Self::Windows(_) => None,
+        }
+    }
+
     /// The page the tab shows, if it shows one.
     pub(super) fn page(&self) -> Option<&Entity<Page>> {
         match self {
             Self::Page { page, .. } => Some(page),
             Self::Document(_)
             | Self::Code(_)
-            | Self::Tree(_)
+            | Self::Files(_)
             | Self::Changes(_)
             | Self::Flow(_)
             | Self::Terminal(_)
@@ -195,7 +220,7 @@ impl TabContent {
             Self::Page { .. }
             | Self::Document(_)
             | Self::Code(_)
-            | Self::Tree(_)
+            | Self::Files(_)
             | Self::Changes(_)
             | Self::Flow(_)
             | Self::Android(_)

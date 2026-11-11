@@ -1,11 +1,18 @@
-//! A tab of the stage that shows the files of the chat's project as a
-//! tree, for the human to find one and open it: a click on a folder opens
-//! or closes it, and a click on a file opens it on a tab of its own, as a
-//! link to it would (see [`crate::stage`]). What Git ignores is left out
-//! (see [`cox_editor::files`]).
+//! The files of the chat's project as a tree, beside the tab of a file,
+//! for the human to find another and read it there: a click on a folder
+//! opens or closes it, and a click on a file shows it on the tab shown,
+//! or on a tab of its own with Command held, or Control off macOS (see
+//! [`crate::stage`]). What Git ignores is left out (see
+//! [`cox_editor::files`]).
 //!
-//! The tab looks now and then at the folders open in it, so that it shows
-//! the files the agent writes, and no longer those it removes.
+//! The tree marks the file of the tab shown, with the folders it is in
+//! open, and scrolls to it. It looks now and then at the folders open in
+//! it, so that it shows the files the agent writes, and no longer those it
+//! removes. The human folds it out of the way, beside every tab of a file
+//! at once, for as long as Cox runs.
+//!
+//! [`Unchosen`] is the tab of a file not chosen yet, which the human opens
+//! to choose one from the tree.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -14,16 +21,17 @@ use std::time::Duration;
 use cox_core::tabs::KeptTab;
 use cox_editor::files::{self, Listed};
 use gpui::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, ScrollHandle, Task, Window,
-    div, prelude::*, px, rgb,
+    AnyElement, App, ClickEvent, Context, Div, EventEmitter, FocusHandle, Focusable, FontWeight,
+    Global, ScrollHandle, Stateful, Task, Window, div, prelude::*, px, rgb,
 };
 
-use crate::stage::heading::{INSET, body, heading};
 use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT_GROUND, DIM, FAILED, FAINT, FOREGROUND, HOVER};
+use crate::ui::theme::{
+    ACCENT_GROUND, BORDER, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, HOVER,
+};
+use crate::ui::tip;
 
 /// How often the tab looks at the folders open in it.
 const LOOK_EVERY: Duration = Duration::from_secs(1);
@@ -32,9 +40,63 @@ const LOOK_EVERY: Duration = Duration::from_secs(1);
 const INDENT: f32 = 16.;
 /// How tall a row is.
 const ROW_HEIGHT: f32 = 26.;
+/// How wide the tree is beside a tab.
+pub const WIDTH: f32 = 260.;
 
-/// The human chose the file at this path, to open it.
-pub struct Chosen(pub PathBuf);
+/// The human chose the file at `path`, to read it: on the tab shown, or
+/// on a tab of its own when `apart`.
+pub struct Chosen {
+    pub path: PathBuf,
+    pub apart: bool,
+}
+
+/// Whether the tree is folded, beside every tab of a file of every stage,
+/// for as long as Cox runs.
+#[derive(Default)]
+struct Folded(bool);
+
+impl Global for Folded {}
+
+/// Whether the tree is folded out of the way.
+#[must_use]
+pub fn is_folded(cx: &App) -> bool {
+    cx.try_global::<Folded>().is_some_and(|folded| folded.0)
+}
+
+/// Folds the tree out of the way, or unfolds it, beside every tab.
+pub fn fold(folded: bool, cx: &mut App) {
+    cx.set_global(Folded(folded));
+    cx.refresh_windows();
+}
+
+/// The button that unfolds the tree, for the bar of a tab of a file to
+/// show while it is folded, which a test finds as `selector`.
+#[must_use]
+pub fn unfold_button(selector: &'static str) -> Stateful<Div> {
+    fold_button(selector, false)
+}
+
+/// The button that folds the tree, or unfolds it when `folded` is false.
+fn fold_button(selector: &'static str, folded: bool) -> Stateful<Div> {
+    div()
+        .id(selector)
+        .debug_selector(move || selector.to_owned())
+        .flex_shrink_0()
+        .size(px(22.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .hover(|style| style.bg(rgb(BUTTON_HOVER)))
+        .tooltip(tip(if folded {
+            "Fold the files"
+        } else {
+            "Show the files"
+        }))
+        .child(icon(Icon::Sidebar, 14., DIM))
+        .on_click(move |_, _, cx| fold(folded, cx))
+}
 
 pub struct Tree {
     /// The project's folder, which is always open.
@@ -44,8 +106,8 @@ pub struct Tree {
     /// What is in each folder open, as the tab last listed it, or why it
     /// could not be listed.
     listed: HashMap<PathBuf, Result<Vec<Listed>, String>>,
-    /// The file the human chose last, which the tab marks.
-    chosen: Option<PathBuf>,
+    /// The file of the tab shown, which the tree marks.
+    current: Option<PathBuf>,
     scroll: ScrollHandle,
     focus_handle: FocusHandle,
     _follow: Task<()>,
@@ -57,6 +119,8 @@ impl Tree {
     /// A tab showing the files under `root`, an absolute path, with the
     /// folders `open` open.
     pub fn new(root: PathBuf, open: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
+        // As the tabs name their files, so that the tree finds them in it.
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
         let open: BTreeSet<PathBuf> = open.into_iter().filter(|path| *path != root).collect();
         let listed = std::iter::once(&root)
             .chain(&open)
@@ -66,7 +130,7 @@ impl Tree {
             root,
             open,
             listed,
-            chosen: None,
+            current: None,
             scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             _follow: follow(cx),
@@ -88,18 +152,61 @@ impl Tree {
             .collect()
     }
 
-    /// Opens the folder at `path`, or closes it if it is open.
-    fn toggle(&mut self, path: &Path, cx: &mut Context<Self>) {
-        if !self.open.remove(path) {
-            self.listed.insert(path.to_owned(), list(path));
-            self.open.insert(path.to_owned());
+    /// Opens the folders at `open` besides those open already.
+    pub fn open_too(&mut self, open: Vec<PathBuf>, cx: &mut Context<Self>) {
+        for folder in open {
+            self.open_folder(folder);
         }
         cx.notify();
     }
 
-    fn choose(&mut self, path: &Path, cx: &mut Context<Self>) {
-        self.chosen = Some(path.to_owned());
-        cx.emit(Chosen(path.to_owned()));
+    /// The file the tree marks, as the file of the tab shown.
+    #[must_use]
+    pub fn current(&self) -> Option<&Path> {
+        self.current.as_deref()
+    }
+
+    /// Marks the file at `path`, as the file of the tab shown, with the
+    /// folders it is in open, and scrolls to it; or no file.
+    pub fn reveal(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        if self.current == path {
+            return;
+        }
+        self.current = path;
+        if let Some(path) = self.current.clone()
+            && let Ok(under) = path.strip_prefix(&self.root)
+        {
+            let mut folder = self.root.clone();
+            for part in under.parent().into_iter().flat_map(Path::components) {
+                folder.push(part);
+                self.open_folder(folder.clone());
+            }
+            let mut rows = Vec::new();
+            self.rows(&self.root, 0, &mut rows);
+            let place = rows
+                .iter()
+                .position(|row| matches!(row, Row::Listed { entry, .. } if entry.path == path));
+            if let Some(place) = place {
+                self.scroll.scroll_to_item(place);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Opens the folder at `folder`, listing what is in it, unless it is
+    /// the project's or open already.
+    fn open_folder(&mut self, folder: PathBuf) {
+        if folder != self.root && !self.open.contains(&folder) {
+            self.listed.insert(folder.clone(), list(&folder));
+            self.open.insert(folder);
+        }
+    }
+
+    /// Opens the folder at `path`, or closes it if it is open.
+    fn toggle(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if !self.open.remove(path) {
+            self.open_folder(path.to_owned());
+        }
         cx.notify();
     }
 
@@ -206,14 +313,17 @@ impl Tree {
                     .overflow_hidden()
                     .child(ellipsis(entry.name.clone())),
             )
-            .on_click(cx.listener(move |tree, _, _, cx| {
+            .on_click(cx.listener(move |tree, click: &ClickEvent, _, cx| {
                 if is_folder {
                     tree.toggle(&path, cx);
                 } else {
-                    tree.choose(&path, cx);
+                    cx.emit(Chosen {
+                        path: path.clone(),
+                        apart: click.modifiers().secondary(),
+                    });
                 }
             }));
-        if self.chosen.as_ref() == Some(&entry.path) {
+        if self.current.as_ref() == Some(&entry.path) {
             row.bg(rgb(ACCENT_GROUND)).into_any_element()
         } else {
             row.hover(|style| style.bg(rgb(HOVER))).into_any_element()
@@ -280,18 +390,13 @@ fn follow(cx: &mut Context<Tree>) -> Task<()> {
     })
 }
 
-impl Shows for Tree {
+impl Tree {
     /// The project's folder's name.
-    fn title(&self) -> String {
-        let name = self.root.file_name().map_or_else(
+    fn name(&self) -> String {
+        self.root.file_name().map_or_else(
             || self.root.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
-        );
-        format!("{name}/")
-    }
-
-    fn kept(&self) -> KeptTab {
-        KeptTab::Files { open: self.open() }
+        )
     }
 }
 
@@ -310,27 +415,123 @@ impl Render for Tree {
             .enumerate()
             .map(|(index, row)| self.render_row(index + 1, row, cx))
             .collect();
-        body()
+        div()
             .track_focus(&self.focus_handle)
+            .size_full()
+            .flex()
+            .flex_col()
             .text_color(rgb(FOREGROUND))
-            .child(heading(
-                "tree-path",
-                "Files",
-                "without what Git ignores",
-                Some(shortened(&self.root)),
-            ))
+            .child(
+                div()
+                    .debug_selector(|| "tree-heading".to_owned())
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .pl(px(14.))
+                    .pr(px(8.))
+                    .pt(px(8.))
+                    .pb_1()
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Files"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_color(rgb(DIM))
+                            .child(ellipsis(self.name())),
+                    )
+                    .child(fold_button("fold-files", true)),
+            )
             .child(
                 div()
                     .id("tree")
                     .debug_selector(|| "tree".to_owned())
                     .flex_1()
                     .min_h_0()
-                    .px(px(INSET))
+                    .px(px(8.))
                     .pt_1()
                     .pb_3()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .children(rows),
+            )
+    }
+}
+
+/// The tab of a file not chosen yet, beside the tree, for the human to
+/// choose one there.
+pub struct Unchosen {
+    focus_handle: FocusHandle,
+}
+
+impl Unchosen {
+    #[must_use]
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            focus_handle: cx.focus_handle(),
+        }
+    }
+}
+
+impl Shows for Unchosen {
+    fn title(&self) -> String {
+        "Files".to_owned()
+    }
+
+    /// The folders open in the tree are not kept: the tree opens to the
+    /// file of the tab shown.
+    fn kept(&self) -> KeptTab {
+        KeptTab::Files { open: Vec::new() }
+    }
+}
+
+impl Focusable for Unchosen {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for Unchosen {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let folded = is_folded(cx);
+        div()
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_h(px(30.))
+                    .px_3()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .text_color(rgb(DIM))
+                    .when(folded, |bar| bar.child(unfold_button("unfold-files")))
+                    .child("No file chosen"),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "unchosen".to_owned())
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(rgb(FAINT))
+                    .child(if folded {
+                        "Show the files to choose one"
+                    } else {
+                        "Choose a file from the files"
+                    }),
             )
     }
 }

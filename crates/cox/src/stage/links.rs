@@ -1,9 +1,10 @@
 //! What opens on a tab, and which: a link the human clicked, on the tab
 //! showing its page already or a new one; a file, as Markdown or as it is
 //! written, on the tab showing it already or a new one, from the link's
-//! own folder; and the tree of the project's files, from which a click
-//! opens a file the same way, as one does from what changed in them, and
-//! from the map of the project.
+//! own folder, as one does from what changed in the project's files, and
+//! from the map of the project; and a file chosen on the tree of the
+//! project's files, on the tab of a file shown, in place of what it
+//! showed, or on a tab of its own.
 
 use std::path::{Path, PathBuf};
 
@@ -15,8 +16,8 @@ use crate::stage::changes::{self, Changes, ShowTurn};
 use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::flow::{self, Flow};
-use crate::stage::tab::{ShowsFile, TabContent};
-use crate::stage::tree::{Chosen, Tree};
+use crate::stage::tab::{ShowsFile, Tab, TabContent};
+use crate::stage::tree::{self, Chosen, Unchosen};
 use crate::ui::LinkClicked;
 use crate::ui::markdown::FileLink;
 
@@ -61,6 +62,21 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let (content, changes, opens) = self.file_tab::<T>(path, text, lines, window, cx);
+        self.push(content, changes, Some(opens), show, cx);
+    }
+
+    /// What a tab shows of the file at `path`, which says `text`, as a `T`
+    /// shows it, at `lines` if any, with what redraws the tab as it
+    /// changes and opens the links clicked in it.
+    fn file_tab<T: ShowsFile>(
+        &self,
+        path: PathBuf,
+        text: &str,
+        lines: Option<Lines>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (TabContent, Subscription, Subscription) {
         let shown = cx.new(|cx| T::open(&self.cwd, path, text, lines, cx));
         let changes = cx.observe(&shown, |stage, _, cx| stage.changed(cx));
         let opens = cx.subscribe_in(
@@ -73,7 +89,7 @@ impl Stage {
                 stage.open_from(url, &from, window, cx);
             },
         );
-        self.push(T::content(shown), changes, Some(opens), show, cx);
+        (T::content(shown), changes, opens)
     }
 
     /// Opens `url`, a link the human clicked: on the tab that shows it
@@ -145,41 +161,88 @@ impl Stage {
         Ok(())
     }
 
-    /// Shows the tree of the project's files: on its tab, or a new one,
-    /// with the keyboard in it.
-    pub(super) fn show_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let showing = self
-            .tabs
-            .iter()
-            .position(|tab| matches!(tab.content, TabContent::Tree(_)));
-        if let Some(index) = showing {
-            self.show(index, window, cx);
-        } else {
-            self.push_tree(Vec::new(), true, window, cx);
-            self.focus_shown(window, cx);
-        }
+    /// Opens the tab of a file not chosen yet, with the tree of the
+    /// project's files beside it, unfolded, to choose one there.
+    pub fn new_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        tree::fold(false, cx);
+        self.push_files(true, cx);
+        self.focus_shown(window, cx);
     }
 
-    /// Puts a tab showing the tree of the project's files, with the
-    /// folders `open` open, after the others, shown if `show` is.
-    pub(super) fn push_tree(
+    /// Puts the tab of a file not chosen yet after the others, shown if
+    /// `show` is.
+    pub(super) fn push_files(&mut self, show: bool, cx: &mut Context<Self>) {
+        let unchosen = cx.new(Unchosen::new);
+        let changes = cx.observe(&unchosen, |stage, _, cx| stage.changed(cx));
+        self.push(TabContent::Files(unchosen), changes, None, show, cx);
+    }
+
+    /// Shows the file the human chose on the tree: on the tab of a file
+    /// shown, unless they asked for a tab of its own, or there is none.
+    pub(super) fn open_chosen(
         &mut self,
-        open: Vec<PathBuf>,
-        show: bool,
+        chosen: &Chosen,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let tree = cx.new(|cx| Tree::new(self.cwd.clone(), open, cx));
-        let changes = cx.observe(&tree, |stage, _, cx| stage.changed(cx));
-        let opens = cx.subscribe_in(&tree, window, |stage, _, Chosen(path), window, cx| {
+        let shown = self
+            .tabs
+            .shown_index()
+            .filter(|&index| self.tabs[index].content.is_file());
+        match shown {
+            Some(index) if !chosen.apart => self.show_in(index, &chosen.path, window, cx),
             // A file that cannot be read gets a tab all the same, which
             // says why.
-            if stage.open_path(path, None, window, cx).is_err() {
-                stage.show_file::<Code>(path.clone(), "", None, window, cx);
-                stage.focus_shown(window, cx);
+            _ => {
+                if self.open_path(&chosen.path, None, window, cx).is_err() {
+                    self.show_file::<Code>(chosen.path.clone(), "", None, window, cx);
+                    self.focus_shown(window, cx);
+                }
             }
-        });
-        self.push(TabContent::Tree(tree), changes, Some(opens), show, cx);
+        }
+    }
+
+    /// Shows the file at `path` on the tab of a file at `index`, in place
+    /// of what it showed: as it is written on a tab of code, which back
+    /// goes from to what it showed before, and on a tab of its own kind
+    /// otherwise, as Markdown for a Markdown file.
+    fn show_in(&mut self, index: usize, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        match (FileTab::of(&path, None), &self.tabs[index].content) {
+            (FileTab::Code(_), TabContent::Code(code)) => {
+                code.update(cx, |code, cx| code.go_to_file(&path, cx));
+            }
+            (kind, _) => {
+                // A file that cannot be read is shown all the same, which
+                // its tab says.
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                match kind {
+                    FileTab::Document => self.put_file::<Document>(index, path, &text, window, cx),
+                    FileTab::Code(_) => self.put_file::<Code>(index, path, &text, window, cx),
+                }
+            }
+        }
+        self.changed(cx);
+        self.focus_shown(window, cx);
+    }
+
+    /// Puts a tab showing the file at `path`, which says `text`, as a `T`
+    /// shows it, in place of the tab at `index`, of the same chat.
+    fn put_file<T: ShowsFile>(
+        &mut self,
+        index: usize,
+        path: PathBuf,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (content, changes, opens) = self.file_tab::<T>(path, text, None, window, cx);
+        self.tabs[index] = Tab {
+            content,
+            owner: self.tabs[index].owner,
+            _changes: changes,
+            _opens: Some(opens),
+        };
     }
 
     /// Shows what changed in the files of the repositories of `folder`, an
