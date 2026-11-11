@@ -441,6 +441,9 @@ fn log(folder: &Path, args: &[&str], most: usize) -> Vec<Commit> {
         "log",
         "--no-color",
         "--numstat",
+        // A merge counts what it changed since its first parent, as its
+        // diff shows: with no say, `git log` counts nothing for it.
+        "--diff-merges=first-parent",
         "--format=%x1e%H%x1f%ct%x1f%s%x1f%N%x1f",
         &notes,
         "-n",
@@ -585,6 +588,35 @@ mod tests {
         // The first commit changed everything from nothing.
         let first = history(&folder).unwrap().commits.last().unwrap().id.clone();
         assert_eq!(diff_of(&folder, &first).unwrap().counts(), (1, 0));
+    }
+
+    #[test]
+    fn a_merge_counts_what_it_changed_since_its_first_parent() {
+        let folder = repository("merge");
+        run(&folder, &["checkout", "--quiet", "-b", "side"]);
+        write_and_commit(&folder, "b.txt", "b\nc\n", "Side");
+        run(&folder, &["checkout", "--quiet", "main"]);
+        write_and_commit(&folder, "a.txt", "a\nd\n", "Main");
+        run(
+            &folder,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "merge",
+                "--quiet",
+                "--no-ff",
+                "-m",
+                "Merge side",
+                "side",
+            ],
+        );
+        let merge = head(&folder).unwrap();
+        let commits = made(&folder, None);
+        let read = commits.iter().find(|c| c.id == merge).unwrap();
+        assert_eq!((read.added, read.removed), (2, 0));
+        assert_eq!(diff_of(&folder, &merge).unwrap().counts(), (2, 0));
     }
 
     #[test]
