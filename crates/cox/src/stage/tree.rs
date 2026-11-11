@@ -6,7 +6,11 @@
 //! [`cox_editor::files`]).
 //!
 //! The tree marks the file of the tab shown, with the folders it is in
-//! open, and scrolls to it. It looks now and then at the folders open in
+//! open, and scrolls to it. A folder whose only file is a folder is one
+//! row with it, as `docs / design`, and opens with it. Lines down the
+//! tree show which folder a row is in, the line of the folder of the file
+//! marked brighter, and the folders the rows at the top are in stay at
+//! the top as the tree scrolls. It looks now and then at the folders open in
 //! it, so that it shows the files the agent writes, and no longer those it
 //! removes. The human folds it out of the way, beside every tab of a file
 //! at once, for as long as Cox runs.
@@ -29,7 +33,7 @@ use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::theme::{
-    ACCENT_GROUND, BORDER, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, HOVER,
+    ACCENT_GROUND, BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER, SURFACE,
 };
 use crate::ui::tip;
 
@@ -40,6 +44,8 @@ const LOOK_EVERY: Duration = Duration::from_secs(1);
 const INDENT: f32 = 16.;
 /// How tall a row is.
 const ROW_HEIGHT: f32 = 26.;
+/// How far the first row is from the top of the tree.
+const TOP: f32 = 4.;
 /// How wide the tree is beside a tab.
 pub const WIDTH: f32 = 260.;
 
@@ -181,9 +187,8 @@ impl Tree {
                 folder.push(part);
                 self.open_folder(folder.clone());
             }
-            let mut rows = Vec::new();
-            self.rows(&self.root, 0, &mut rows);
-            let place = rows
+            let place = self
+                .all_rows()
                 .iter()
                 .position(|row| matches!(row, Row::Listed { entry, .. } if entry.path == path));
             if let Some(place) = place {
@@ -202,10 +207,21 @@ impl Tree {
         }
     }
 
-    /// Opens the folder at `path`, or closes it if it is open.
+    /// Opens the folder at `path`, or closes it if it is open. It opens
+    /// with the folder in it, and the folder in that, as long as each is
+    /// the only file of the one it is in.
     fn toggle(&mut self, path: &Path, cx: &mut Context<Self>) {
         if !self.open.remove(path) {
-            self.open_folder(path.to_owned());
+            let mut next = Some(path.to_owned());
+            while let Some(folder) = next.take() {
+                self.open_folder(folder.clone());
+                if let Some(Ok(inner)) = self.listed.get(&folder)
+                    && let [only] = inner.as_slice()
+                    && only.is_folder
+                {
+                    next = Some(only.path.clone());
+                }
+            }
         }
         cx.notify();
     }
@@ -233,9 +249,8 @@ impl Tree {
     /// is in the project's folder, and in the folders open in it.
     #[must_use]
     pub fn shown(&self) -> Vec<PathBuf> {
-        let mut rows = Vec::new();
-        self.rows(&self.root, 0, &mut rows);
-        rows.into_iter()
+        self.all_rows()
+            .into_iter()
             .filter_map(|row| match row {
                 Row::Listed { entry, .. } => Some(entry.path.clone()),
                 Row::Unread { .. } => None,
@@ -243,32 +258,102 @@ impl Tree {
             .collect()
     }
 
+    /// The rows of the tree, in order. Of a folder whose only file is a
+    /// folder, one row stands for both; [`Self::shown`] gives its path as
+    /// the inner one's.
+    fn all_rows(&self) -> Vec<Row<'_>> {
+        let mut rows = Vec::new();
+        self.rows(&self.root, 0, None, &mut rows);
+        rows
+    }
+
     /// Adds the rows of what is in `folder`, `depth` folders under the
-    /// project's, and of the folders open in it, to `rows`.
-    fn rows<'a>(&'a self, folder: &Path, depth: u16, rows: &mut Vec<Row<'a>>) {
+    /// project's, and of the folders open in it, to `rows`, with the
+    /// line of the folder `depth` folders under the project's brighter,
+    /// as the folder the file marked is in.
+    fn rows<'a>(&'a self, folder: &Path, depth: u16, bright: Option<u16>, rows: &mut Vec<Row<'a>>) {
         match self.listed.get(folder) {
             Some(Ok(entries)) => {
                 for entry in entries {
+                    let (entry, name) = self.chain(entry);
                     let open = entry.is_folder && self.open.contains(&entry.path);
-                    rows.push(Row::Listed { entry, depth, open });
+                    rows.push(Row::Listed {
+                        entry,
+                        name,
+                        depth,
+                        open,
+                        bright,
+                    });
                     if open {
-                        self.rows(&entry.path, depth + 1, rows);
+                        let marked = self.current.as_deref().and_then(Path::parent)
+                            == Some(entry.path.as_path());
+                        let bright = if marked { Some(depth) } else { bright };
+                        self.rows(&entry.path, depth + 1, bright, rows);
                     }
                 }
             }
-            Some(Err(error)) => rows.push(Row::Unread { error, depth }),
+            Some(Err(error)) => rows.push(Row::Unread {
+                error,
+                depth,
+                bright,
+            }),
             None => {}
         }
     }
 
-    fn render_row(&self, number: usize, row: &Row<'_>, cx: &mut Context<Self>) -> AnyElement {
-        let (entry, depth, open) = match *row {
-            Row::Listed { entry, depth, open } => (entry, depth, open),
-            Row::Unread { error, depth } => {
+    /// The folder `entry` is a row for, as the last of the folders open
+    /// one in another from it, each the only file of the one before, with
+    /// the name of the row, the names of them all; or `entry`, and its
+    /// name.
+    fn chain<'a>(&'a self, mut entry: &'a Listed) -> (&'a Listed, String) {
+        let mut name = entry.name.clone();
+        while entry.is_folder
+            && self.open.contains(&entry.path)
+            && let Some(Ok(inner)) = self.listed.get(&entry.path)
+            && let [only] = inner.as_slice()
+            && only.is_folder
+        {
+            name.push_str(" / ");
+            name.push_str(&only.name);
+            entry = only;
+        }
+        (entry, name)
+    }
+
+    /// Scrolls so that the row at `place` is at the top, below the
+    /// folders it is in, which stay there.
+    fn scroll_to_folder(&self, place: usize, above: usize, cx: &mut Context<Self>) {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "far fewer rows than f32 counts exactly"
+        )]
+        let rows = (place - above) as f32;
+        self.scroll
+            .set_offset(gpui::point(px(0.), -px(rows * ROW_HEIGHT)));
+        cx.notify();
+    }
+
+    /// The row `row` of the tree, which a test finds as `entry-{number}`;
+    /// or, as one of the folders the rows at the top are in, as
+    /// `pinned-{number}`.
+    fn render_row(&self, row: &Row<'_>, at: At, cx: &mut Context<Self>) -> AnyElement {
+        let (entry, name, depth, open) = match row {
+            Row::Listed {
+                entry,
+                name,
+                depth,
+                open,
+                ..
+            } => (*entry, name, *depth, *open),
+            Row::Unread { error, depth, .. } => {
                 return div()
-                    .pl(indent(depth) + px(16.))
-                    .py_1()
+                    .relative()
+                    .h(px(ROW_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .pl(indent(*depth) + px(16.))
                     .text_color(rgb(FAILED))
+                    .children(guides(*depth, row.bright()))
                     .child(format!("cannot read: {error}"))
                     .into_any_element();
             }
@@ -287,9 +372,13 @@ impl Tree {
         };
         let path = entry.path.clone();
         let is_folder = entry.is_folder;
+        let (id, number) = match at {
+            At::Listed(number) | At::Pinned { number, .. } => (at.name(), number),
+        };
         let row = div()
-            .id(("entry", number))
-            .debug_selector(move || format!("entry-{number}"))
+            .id((id, number))
+            .debug_selector(move || format!("{id}-{number}"))
+            .relative()
             .flex()
             .items_center()
             .gap(px(6.))
@@ -298,6 +387,7 @@ impl Tree {
             .pr_2()
             .rounded(px(6.))
             .cursor_pointer()
+            .children(guides(depth, row.bright()))
             .child(
                 div()
                     .w(px(10.))
@@ -311,10 +401,12 @@ impl Tree {
                 div()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(ellipsis(entry.name.clone())),
+                    .child(ellipsis(name.clone())),
             )
             .on_click(cx.listener(move |tree, click: &ClickEvent, _, cx| {
-                if is_folder {
+                if let At::Pinned { place, above, .. } = at {
+                    tree.scroll_to_folder(place, above, cx);
+                } else if is_folder {
                     tree.toggle(&path, cx);
                 } else {
                     cx.emit(Chosen {
@@ -332,18 +424,113 @@ impl Tree {
 }
 
 /// A row of the tab: a file or folder, `depth` folders under the
-/// project's, open if it is a folder that is, or why a folder open could
-/// not be listed.
+/// project's, drawn as `name`, open if it is a folder that is, or why a
+/// folder open could not be listed. Of the lines down the tree beside it,
+/// the one `bright` folders in is brighter.
 enum Row<'a> {
     Listed {
         entry: &'a Listed,
+        name: String,
         depth: u16,
         open: bool,
+        bright: Option<u16>,
     },
     Unread {
         error: &'a str,
         depth: u16,
+        bright: Option<u16>,
     },
+}
+
+impl Row<'_> {
+    fn depth(&self) -> u16 {
+        match *self {
+            Self::Listed { depth, .. } | Self::Unread { depth, .. } => depth,
+        }
+    }
+
+    fn bright(&self) -> Option<u16> {
+        match *self {
+            Self::Listed { bright, .. } | Self::Unread { bright, .. } => bright,
+        }
+    }
+}
+
+/// Where a row is drawn: among the rest, as the `number`th, or at the top
+/// as the `number`th of the folders the rows there are in, `place` among
+/// the rest, under `above` folders.
+#[derive(Clone, Copy)]
+enum At {
+    Listed(usize),
+    Pinned {
+        number: usize,
+        place: usize,
+        above: usize,
+    },
+}
+
+impl At {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Listed(_) => "entry",
+            Self::Pinned { .. } => "pinned",
+        }
+    }
+}
+
+/// The lines down the tree beside a row `depth` folders under the
+/// project's, one for each folder it is in, the one `bright` folders in
+/// brighter.
+fn guides(depth: u16, bright: Option<u16>) -> impl Iterator<Item = AnyElement> {
+    (0..depth).map(move |column| {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(indent(column) + px(4.5))
+            .w(px(1.))
+            .bg(rgb(if bright == Some(column) {
+                DISABLED
+            } else {
+                BORDER
+            }))
+            .into_any_element()
+    })
+}
+
+/// The places of the rows of the folders the row at `place` is in, from
+/// the project's down.
+fn folders_of(rows: &[Row<'_>], place: usize) -> Vec<usize> {
+    let mut depth = rows[place].depth();
+    let mut folders = Vec::new();
+    for at in (0..place).rev() {
+        if depth == 0 {
+            break;
+        }
+        if rows[at].depth() == depth - 1 {
+            folders.push(at);
+            depth -= 1;
+        }
+    }
+    folders.reverse();
+    folders
+}
+
+/// The places of the rows of the folders to keep at the top of the tree
+/// when the row at `top` is the first there: the folders of the first row
+/// they leave to be seen.
+fn pinned(rows: &[Row<'_>], top: usize) -> Vec<usize> {
+    let mut count = 0;
+    loop {
+        if top + count >= rows.len() {
+            return Vec::new();
+        }
+        let folders = folders_of(rows, top + count);
+        if folders.len() <= count {
+            return folders;
+        }
+        count = folders.len();
+    }
 }
 
 /// How far in a row `depth` folders under the project's is drawn.
@@ -408,12 +595,30 @@ impl Focusable for Tree {
 
 impl Render for Tree {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut rows = Vec::new();
-        self.rows(&self.root, 0, &mut rows);
+        let rows = self.all_rows();
+        let scrolled = -f32::from(self.scroll.offset().y);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a count of rows, not below 0"
+        )]
+        let top = (scrolled.max(0.) / ROW_HEIGHT).floor() as usize;
+        let pinned: Vec<_> = pinned(&rows, top)
+            .into_iter()
+            .enumerate()
+            .map(|(index, place)| {
+                let at = At::Pinned {
+                    number: index + 1,
+                    place,
+                    above: index,
+                };
+                self.render_row(&rows[place], at, cx)
+            })
+            .collect();
         let rows: Vec<_> = rows
             .iter()
             .enumerate()
-            .map(|(index, row)| self.render_row(index + 1, row, cx))
+            .map(|(index, row)| self.render_row(row, At::Listed(index + 1), cx))
             .collect();
         div()
             .track_focus(&self.focus_handle)
@@ -451,16 +656,39 @@ impl Render for Tree {
             )
             .child(
                 div()
-                    .id("tree")
-                    .debug_selector(|| "tree".to_owned())
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .px(px(8.))
-                    .pt_1()
-                    .pb_3()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .children(rows),
+                    .child(
+                        div()
+                            .id("tree")
+                            .debug_selector(|| "tree".to_owned())
+                            .size_full()
+                            .px(px(8.))
+                            .pt(px(TOP))
+                            .pb_3()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .children(rows),
+                    )
+                    .when(!pinned.is_empty(), |tree| {
+                        tree.child(
+                            div()
+                                .debug_selector(|| "pinned".to_owned())
+                                // Not the rows below, under it.
+                                .occlude()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .right_0()
+                                .px(px(8.))
+                                .pt(px(TOP))
+                                .bg(rgb(SURFACE))
+                                .border_b_1()
+                                .border_color(rgb(BORDER))
+                                .children(pinned),
+                        )
+                    }),
             )
     }
 }
