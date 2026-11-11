@@ -1506,8 +1506,20 @@ function shorten(text, most) {
 // quotes, code, tables, Mermaid diagrams, and inline code, bold, italics
 // and links.
 function markdown(text) {
-  const root = el("div", { class: "entry reply" });
-  const lines = text.split("\n");
+  const lines = text.split("\n").map((line) => line.replace(/^\t+/, (tabs) => "    ".repeat(tabs.length)));
+  return el("div", { class: "entry reply" }, blocks(lines));
+}
+
+// A line that starts an item of a list: its indent, its marker, a bullet
+// or a number, and its text.
+const ITEM = /^( *)([-*+]|\d+[.)])\s+(.*)$/;
+
+// A line that starts a block other than a paragraph, and so ends one.
+const STARTS_BLOCK = /^\s*(```|~~~|#{1,6}\s|>|[-*+]\s|\d+[.)]\s)/;
+
+// The blocks `lines` hold, as nodes.
+function blocks(lines) {
+  const found = [];
   let at = 0;
   while (at < lines.length) {
     const line = lines[at];
@@ -1518,7 +1530,7 @@ function markdown(text) {
       while (at < lines.length && !lines[at].trim().startsWith(fence[1])) code.push(lines[at++]);
       at++;
       const language = line.trim().slice(fence[1].length).trim().split(/\s+/)[0];
-      root.append(language === "mermaid" ? diagram(code.join("\n")) : codeBlock(code.join("\n")));
+      found.push(language === "mermaid" ? diagram(code.join("\n")) : codeBlock(code.join("\n")));
       continue;
     }
     if (!line.trim()) { at++; continue; }
@@ -1527,38 +1539,91 @@ function markdown(text) {
       const aligns = cells(lines[at + 1]).map(alignOf);
       at += 2;
       while (at < lines.length && lines[at].trim() && lines[at].includes("|")) rows.push(lines[at++]);
-      root.append(table(rows.map(cells), aligns));
+      found.push(table(rows.map(cells), aligns));
       continue;
     }
     const heading = /^#{1,6}\s+(.*)$/.exec(line);
-    if (heading) { root.append(el("h3", {}, inline(heading[1]))); at++; continue; }
+    if (heading) { found.push(el("h3", {}, inline(heading[1]))); at++; continue; }
     if (/^\s*>/.test(line)) {
       const quote = [];
       while (at < lines.length && /^\s*>/.test(lines[at])) quote.push(lines[at++].replace(/^\s*>\s?/, ""));
-      root.append(el("blockquote", {}, inline(quote.join(" "))));
+      found.push(el("blockquote", {}, inline(quote.join(" "))));
       continue;
     }
-    const item = /^\s*([-*+]|\d+[.)])\s+/;
-    if (item.test(line)) {
-      const ordered = /^\s*\d/.test(line);
-      const list = el(ordered ? "ol" : "ul");
-      while (at < lines.length && (item.test(lines[at]) || (/^\s{2,}\S/.test(lines[at]) && list.lastChild))) {
-        if (item.test(lines[at])) list.append(el("li", {}, inline(lines[at].replace(item, ""))));
-        else list.lastChild.append(" ", ...inline(lines[at].trim()));
-        at++;
-      }
-      root.append(list);
+    if (ITEM.test(line)) {
+      const [node, after] = list(lines, at);
+      found.push(node);
+      at = after;
       continue;
     }
     const paragraph = [];
-    while (at < lines.length && lines[at].trim() && !/^\s*(```|~~~|#{1,6}\s|>|[-*+]\s|\d+[.)]\s)/.test(lines[at])
-      && !startsTable(lines, at)) {
+    while (at < lines.length && lines[at].trim() && !STARTS_BLOCK.test(lines[at]) && !startsTable(lines, at)) {
       paragraph.push(lines[at++]);
     }
     if (!paragraph.length) paragraph.push(lines[at++]);
-    root.append(el("p", {}, inline(paragraph.join(" "))));
+    found.push(el("p", {}, inline(paragraph.join(" "))));
   }
-  return root;
+  return found;
+}
+
+// The list whose first item is at line `at` of `lines`, and the line
+// after it. Its items are those of its kind, numbered or not, up to one
+// indented less than an item of it. Each holds its line and those under
+// it indented more than its marker, as blocks of their own, so a list
+// in an item nests in it; a line not indented, right under its text,
+// goes on with the text. A blank line between items makes the list
+// loose, its items' paragraphs apart, as the window shows them; a tight
+// list's items hold their text alone. An item that starts with a box,
+// `[ ]` or `[x]`, shows the box for its marker.
+function list(lines, at) {
+  const first = ITEM.exec(lines[at]);
+  const ordered = /\d/.test(first[2]);
+  const items = [];
+  let loose = false;
+  while (at < lines.length) {
+    const item = ITEM.exec(lines[at]);
+    if (!item || /\d/.test(item[2]) !== ordered) break;
+    const indent = item[1].length;
+    const column = item[0].length - item[3].length;
+    const body = [item[3]];
+    at++;
+    while (at < lines.length) {
+      const line = lines[at];
+      if (!line.trim()) {
+        let next = at;
+        while (next < lines.length && !lines[next].trim()) next++;
+        if (next === lines.length || indentOf(lines[next]) <= indent) break;
+        while (at < next) { body.push(""); at++; }
+        loose = true;
+        continue;
+      }
+      if (indentOf(line) > indent) body.push(line.slice(Math.min(indentOf(line), column)));
+      else if (body[body.length - 1].trim() && !STARTS_BLOCK.test(line) && !startsTable(lines, at)) body.push(line);
+      else break;
+      at++;
+    }
+    items.push(body);
+    let next = at;
+    while (next < lines.length && !lines[next].trim()) next++;
+    const following = next > at && next < lines.length && ITEM.exec(lines[next]);
+    if (following && /\d/.test(following[2]) === ordered) { loose = true; at = next; }
+  }
+  const start = parseInt(first[2], 10);
+  const node = el(ordered ? "ol" : "ul", { start: ordered && start !== 1 ? String(start) : null });
+  for (const body of items) {
+    const box = /^\[([ xX])\]\s+/.exec(body[0]);
+    if (box) body[0] = body[0].slice(box[0].length);
+    const held = blocks(body);
+    node.append(el("li", { class: box ? "task" : null },
+      box ? el("span", { class: "box" }, box[1] === " " ? "☐" : "☑") : null,
+      loose ? held : held.flatMap((one) => (one.tagName === "P" ? [...one.childNodes] : [one]))));
+  }
+  return [node, at];
+}
+
+// How many spaces `line` starts with.
+function indentOf(line) {
+  return line.length - line.trimStart().length;
 }
 
 function codeBlock(code) {
