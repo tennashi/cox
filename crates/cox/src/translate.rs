@@ -37,6 +37,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use cox_acp::{PermissionAnswer, StopReason};
 use pulldown_cmark::{Event, Parser, Tag};
@@ -51,6 +52,10 @@ use crate::wiki::told::options;
 
 /// The language the agents write in, and that text not in it goes into.
 pub const ENGLISH: &str = "English";
+
+/// How long a translation may take before it is given up, its command
+/// stopped or its agent closed, for the next to go on.
+const GIVES_UP_AFTER: Duration = Duration::from_mins(5);
 
 /// The translator, once Cox has started it.
 static TRANSLATOR: OnceLock<Translator> = OnceLock::new();
@@ -135,7 +140,7 @@ pub fn start(agents: Agents) {
         tracing::error!("nothing is translated: there is no place to keep translations");
         return;
     };
-    let _ = TRANSLATOR.set(Translator::start(folder, Some(agents)));
+    let _ = TRANSLATOR.set(Translator::start(folder, Some(agents), GIVES_UP_AFTER));
 }
 
 /// The page whose text is `body`, as the human reads it in the language
@@ -206,8 +211,9 @@ struct State {
 
 impl Translator {
     /// Starts the translator, keeping translations in `folder`, its agent,
-    /// when it needs one, being one of `agents`.
-    fn start(folder: PathBuf, agents: Option<Agents>) -> Self {
+    /// when it needs one, being one of `agents`, giving up a translation
+    /// that takes longer than `gives_up_after`.
+    fn start(folder: PathBuf, agents: Option<Agents>, gives_up_after: Duration) -> Self {
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
             added: Condvar::new(),
@@ -216,6 +222,7 @@ impl Translator {
             agents,
             agent: None,
             cwd: folder.clone(),
+            gives_up_after,
             shared: shared.clone(),
         };
         thread::Builder::new()
@@ -301,6 +308,8 @@ struct Worker {
     agent: Option<(Option<String>, Agent)>,
     /// Where the agent works.
     cwd: PathBuf,
+    /// How long a translation may take before it is given up.
+    gives_up_after: Duration,
     shared: Arc<Shared>,
 }
 
@@ -331,7 +340,7 @@ impl Worker {
                 }
             };
             let translated = match &job.translation.command {
-                Some(command) => run(command, &job.way, &job.text, so_far),
+                Some(command) => run(command, &job.way, &job.text, self.gives_up_after, so_far),
                 None => self.ask(
                     job.translation.agent.as_deref(),
                     &job.way,
@@ -424,6 +433,11 @@ impl Worker {
             let agent = crate::chat::launcher::spawn(known, self.cwd.clone(), Vec::new(), start);
             self.agent = Some((named.map(str::to_owned), agent));
         }
+        let until = Instant::now() + self.gives_up_after;
+        let waits = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .map_err(|error| format!("cannot wait for the agent: {error}"))?;
         let (_, agent) = self.agent.as_mut().expect("started above");
         agent
             .commands
@@ -431,7 +445,13 @@ impl Worker {
             .map_err(|_| "the agent closed".to_owned())?;
         let mut reply = String::new();
         loop {
-            let Some(event) = agent.events.blocking_recv() else {
+            let event = waits.block_on(async {
+                tokio::time::timeout_at(until.into(), agent.events.recv()).await
+            });
+            let Ok(event) = event else {
+                return Err(gave_up(self.gives_up_after, "the agent did not answer"));
+            };
+            let Some(event) = event else {
                 return Err("the agent closed".to_owned());
             };
             match event {
@@ -515,15 +535,24 @@ fn unfenced(reply: &str, text: &str) -> String {
     }
 }
 
+/// Why a translation that took longer than `gives_up_after` has none.
+fn gave_up(gives_up_after: Duration, what: &str) -> String {
+    format!("gave up after {gives_up_after:?}: {what}")
+}
+
 /// What `command` writes for `text`, given on its standard input, with
 /// `{from}` and `{to}` in its arguments standing for the languages of
-/// `way`, telling `so_far` what it has written as it writes it.
+/// `way`, telling `so_far` what it has written as it writes it; stopped,
+/// with every process it started, when it takes longer than
+/// `gives_up_after`.
 fn run(
     command: &[String],
     way: &Way,
     text: &str,
+    gives_up_after: Duration,
     mut so_far: impl FnMut(&str),
 ) -> Result<String, String> {
+    use std::os::unix::process::CommandExt as _;
     let words: Vec<String> = command
         .iter()
         .map(|word| word.replace("{from}", &way.from).replace("{to}", &way.to))
@@ -534,8 +563,23 @@ fn run(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|error| format!("{program} does not start: {error}"))?;
+    let group = libc::pid_t::try_from(child.id()).map_err(|error| error.to_string())?;
+    let (finished, finishing) = std::sync::mpsc::channel::<()>();
+    // Its whole group, as what it started holds its output open too.
+    let watches = thread::spawn(move || {
+        let late = finishing.recv_timeout(gives_up_after)
+            == Err(std::sync::mpsc::RecvTimeoutError::Timeout);
+        if late {
+            // SAFETY: this only signals the command's group, whose id can
+            // be another's only once the command is waited for, a moment
+            // before this is told it finished.
+            unsafe { libc::killpg(group, libc::SIGKILL) };
+        }
+        late
+    });
     let mut stdin = child.stdin.take().ok_or("the command takes no input")?;
     let input = format!("{}\n", text.trim_end());
     // Written apart from the reading, so that a command that writes as it
@@ -555,8 +599,16 @@ fn run(
     let status = child
         .wait()
         .map_err(|error| format!("{program} cannot be waited for: {error}"))?;
+    drop(finished);
+    let late = watches.join().unwrap_or_default();
     let _ = writes.join();
     let said = complains.join().unwrap_or_default();
+    if late {
+        return Err(gave_up(
+            gives_up_after,
+            &format!("{program} did not finish"),
+        ));
+    }
     if !status.success() {
         let said = String::from_utf8_lossy(&said);
         let said = said.trim().lines().last().unwrap_or_default();
@@ -724,8 +776,6 @@ fn rebuilt(body: &str, mut translated: impl FnMut(&str) -> Option<String>) -> St
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
     use super::*;
 
     const PAGE: &str = "# GPUI layout\n\nHow [[taffy]] lays out `div`s.\n\n\
@@ -873,7 +923,7 @@ mod tests {
     #[test]
     fn a_command_translates_the_page_a_block_at_a_time() {
         let folder = scratch("command");
-        let translator = Translator::start(folder.clone(), None);
+        let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
         let shouting = Translation {
             language: "Shouting".to_owned(),
             command: Some(vec![
@@ -906,7 +956,7 @@ mod tests {
     #[test]
     fn a_command_that_fails_says_why_until_another_is_named() {
         let folder = scratch("fails");
-        let translator = Translator::start(folder.clone(), None);
+        let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
         let failing = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
@@ -938,7 +988,7 @@ mod tests {
     #[test]
     fn a_selection_is_translated_whole_and_kept() {
         let folder = scratch("selection");
-        let translator = Translator::start(folder.clone(), None);
+        let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
         let marked = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
@@ -979,9 +1029,8 @@ mod tests {
     #[test]
     fn a_command_that_does_not_finish_is_given_up_and_the_next_translates() {
         let folder = scratch("gives-up");
-        let translator = Translator::start(folder.clone(), None);
-        // The command's own child holds its output open as well.
-        let stuck = Translation {
+        let translator = Translator::start(folder.clone(), None, Duration::from_secs(1));
+        let stuck_with_a_child = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
                 "sh".to_owned(),
@@ -991,14 +1040,13 @@ mod tests {
             agent: None,
         };
         let way = Way::into("Japanese");
-        let answer = translator.text("Shrink.", way.clone(), stuck.clone());
+        let answer = translator.text("Shrink.", way.clone(), stuck_with_a_child.clone());
         let error = done_within(answer, Duration::from_secs(10))
             .expect("the translation is given up")
             .unwrap_err();
         assert!(error.starts_with("gave up"), "{error}");
-        // Not kept: asked again, it is translated again.
-        let mut again = translator.text("Shrink.", way.clone(), stuck);
-        assert!(again.try_recv().is_err());
+        let mut not_kept = translator.text("Shrink.", way.clone(), stuck_with_a_child);
+        assert!(not_kept.try_recv().is_err());
         let quick = Translation {
             command: Some(vec!["tr".to_owned(), "a-z".to_owned(), "A-Z".to_owned()]),
             language: "Japanese".to_owned(),
@@ -1024,7 +1072,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let translator = Translator::start(folder.clone(), Some(silent));
+        let translator = Translator::start(folder.clone(), Some(silent), Duration::from_secs(1));
         let asked = Translation {
             language: "Japanese".to_owned(),
             command: None,
@@ -1052,7 +1100,7 @@ mod tests {
     #[test]
     fn a_selection_is_told_as_far_as_it_has_arrived() {
         let folder = scratch("arriving");
-        let translator = Translator::start(folder.clone(), None);
+        let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
         let slow = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
