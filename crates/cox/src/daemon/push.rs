@@ -190,7 +190,7 @@ impl Pushes {
 
     fn keep(&self) {
         let json = serde_json::to_vec_pretty(&self.subscriptions).unwrap_or_default();
-        if let Err(error) = std::fs::write(&self.file, json) {
+        if let Err(error) = storage::keep_secret(&self.file, &json) {
             tracing::error!("{} cannot be kept: {error}", self.file.display());
         }
     }

@@ -217,10 +217,7 @@ fn token_at(file: &Path) -> anyhow::Result<String> {
         let _ = std::fmt::Write::write_fmt(&mut token, format_args!("{byte:02x}"));
         token
     });
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    std::io::Write::write_all(&mut options.open(file)?, token.as_bytes())
+    storage::keep_secret(file, token.as_bytes())
         .with_context(|| format!("cannot keep {}", file.display()))?;
     Ok(token)
 }

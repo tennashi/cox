@@ -225,6 +225,34 @@ pub fn moved(moved: cox_core::moved::Moved<'_>) -> Result<(), String> {
     }
 }
 
+/// Keeps `bytes` in `file` for the human alone, whole or not at all:
+/// through a file beside it, which none but the human may read, put in
+/// its place once written.
+///
+/// # Errors
+///
+/// When it cannot be written.
+pub fn keep_secret(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut partial = file.as_os_str().to_owned();
+    partial.push(format!(".{}.partial", std::process::id()));
+    let partial = PathBuf::from(partial);
+    let _ = fs::remove_file(&partial);
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&partial)
+        .and_then(|mut kept| kept.write_all(bytes))
+        .and_then(|()| fs::rename(&partial, file));
+    if written.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    written
+}
+
 /// Makes the JSON file at `path`, if there is one, name where a folder
 /// moved, as `moved` says.
 fn move_in(path: &Path, moved: cox_core::moved::Moved<'_>) -> Result<(), String> {
