@@ -1468,6 +1468,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(kept.parent().unwrap());
     }
 
+    fn human_s(name: &str) -> Trigger {
+        let file = PathBuf::from(format!("/w/{name}.md"));
+        Trigger::parse(
+            name,
+            &file,
+            Scope::Global,
+            "---\non: turn.end\nby: shell\n---\ntrue",
+        )
+        .unwrap()
+    }
+
+    fn running(arranged: &Arranged, triggers: Vec<Trigger>) -> Vec<(String, bool)> {
+        arranged
+            .apply(triggers)
+            .into_iter()
+            .map(|(trigger, on)| (trigger.name, on))
+            .collect()
+    }
+
+    #[test]
+    fn a_project_s_own_trigger_does_not_run_until_the_human_turns_it_on() {
+        assert_eq!(
+            running(&Arranged::default(), vec![named("ci"), human_s("simplify")]),
+            [("ci".to_owned(), false), ("simplify".to_owned(), true)]
+        );
+    }
+
+    #[test]
+    fn a_kept_file_cox_cannot_read_runs_none_of_a_project_s_own() {
+        let kept = std::env::temp_dir()
+            .join(format!("cox-arranged-torn-{}", std::process::id()))
+            .join("triggers.json");
+        std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+        std::fs::write(&kept, "{\"/work\": {\"off\": [\"/w/simpl").unwrap();
+        let arranged = Arranged::read(Some(&kept), Path::new("/work"));
+        assert_eq!(
+            running(&arranged, vec![named("ci"), human_s("simplify")]),
+            [("ci".to_owned(), false), ("simplify".to_owned(), true)]
+        );
+        let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+    }
+
+    #[test]
+    fn a_reader_of_the_kept_file_reads_it_whole_while_it_is_written() {
+        use std::io::Read as _;
+        let kept = std::env::temp_dir()
+            .join(format!("cox-arranged-whole-{}", std::process::id()))
+            .join("triggers.json");
+        let work = Path::new("/work");
+        let off = |file: &str| Arranged {
+            off: BTreeSet::from([PathBuf::from(file)]),
+            ..Arranged::default()
+        };
+        off("/w/a.md").keep(Some(&kept), work).unwrap();
+        let mut reading = std::fs::File::open(&kept).unwrap();
+        off("/w/b.md").keep(Some(&kept), work).unwrap();
+        let mut text = String::new();
+        reading.read_to_string(&mut text).unwrap();
+        let read: BTreeMap<PathBuf, Arranged> = serde_json::from_str(&text).unwrap();
+        assert_eq!(read[work], off("/w/a.md"));
+        assert_eq!(Arranged::read(Some(&kept), work), off("/w/b.md"));
+        let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+    }
+
     #[test]
     fn reads_a_trigger_an_agent_runs() {
         let trigger = parse(

@@ -2736,6 +2736,36 @@ async fn a_trigger_of_the_folder_runs_as_a_turn_ends_until_it_passes(cx: &mut Te
 }
 
 #[gpui::test]
+async fn a_trigger_of_the_project_runs_only_once_the_human_turns_it_on(cx: &mut TestAppContext) {
+    let home = scratch("trigger-turned-on");
+    let triggers = home.join("triggers");
+    std::fs::create_dir_all(&triggers).unwrap();
+    let ran = home.join("ran");
+    std::fs::write(
+        triggers.join("mark.md"),
+        format!(
+            "---\non: turn.end\nby: shell\n---\ntouch {}\n",
+            ran.display()
+        ),
+    )
+    .unwrap();
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+
+    say(cx, &workspace, "hello").await;
+
+    assert!(!ran.exists(), "the trigger ran before it was turned on");
+    let entries = shown_entries(cx, &workspace);
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Checks(_))),
+        "{entries:?}"
+    );
+    assert_eq!(agents.borrow()[0].prompts().len(), 1);
+}
+
+#[gpui::test]
 async fn a_command_the_window_runs_answers_once_it_ends(cx: &mut TestAppContext) {
     let home = scratch("window-runs");
     std::fs::create_dir_all(&home).unwrap();
