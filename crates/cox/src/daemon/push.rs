@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Context as _;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use cox_core::store::ChatId;
 use ring::aead::{AES_128_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use ring::agreement::{self, ECDH_P256, EphemeralPrivateKey, UnparsedPublicKey};
 use ring::hmac::{self, HMAC_SHA256};
@@ -57,8 +58,9 @@ const SERVICES: &[&str] = &[
 /// What a phone is told of a chat.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Notice {
-    /// The number the chat goes by this run, for the page to show it.
-    pub key: u64,
+    /// The number the chat is kept by, for the page to show it, or none,
+    /// of a chat not kept.
+    pub kept: Option<ChatId>,
     /// The chat's name.
     pub title: String,
     pub body: String,
@@ -537,8 +539,12 @@ mod tests {
         assert_eq!(again.public_key(), pushes.public_key());
         assert_eq!(again.subscriptions, vec![subscription]);
 
+        let kept = cox_core::store::Store::in_memory()
+            .unwrap()
+            .add_chat(None, "Fix the button")
+            .unwrap();
         let notice = Notice {
-            key: 7,
+            kept: Some(kept),
             title: "Fix the button".to_owned(),
             body: "x".repeat(1000),
         };
@@ -548,7 +554,8 @@ mod tests {
         assert_eq!(push.endpoint, "https://fcm.googleapis.com/fcm/send/abc");
         let told: serde_json::Value =
             serde_json::from_slice(&decrypt(private, &point, &secret, &push.body)).unwrap();
-        assert_eq!(told["key"], 7);
+        assert_eq!(told["kept"], kept.number(), "{told}");
+        assert!(told.get("key").is_none(), "{told}");
         assert_eq!(told["title"], "Fix the button");
         assert_eq!(told["body"].as_str().unwrap().chars().count(), TOLD);
 

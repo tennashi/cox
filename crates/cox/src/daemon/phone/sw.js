@@ -6,8 +6,9 @@
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
-// What coxd pushes: { key, title, body }, a chat and what it came to. A
-// chat's notice takes the place of the one it pushed before.
+// What coxd pushes: { kept, title, body }, a chat, by the number it is
+// kept by, and what it came to. A chat's notice takes the place of the
+// one it pushed before.
 self.addEventListener("push", (event) => {
   let told = {};
   try {
@@ -15,11 +16,11 @@ self.addEventListener("push", (event) => {
   } catch (_) {
     told = {};
   }
-  const key = typeof told.key === "number" ? told.key : null;
+  const kept = typeof told.kept === "number" ? told.kept : null;
   event.waitUntil(self.registration.showNotification(told.title || "Cox", {
     body: told.body || "",
-    tag: key === null ? "cox" : `chat-${key}`,
-    data: { key },
+    tag: kept === null ? "cox" : `chat-${kept}`,
+    data: { kept },
   }));
 });
 
@@ -30,8 +31,8 @@ const TAPPED = "/tapped";
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const key = event.notification.data && event.notification.data.key;
-  const hash = typeof key === "number" ? `#chat/${key}` : "";
+  const kept = event.notification.data && event.notification.data.kept;
+  const hash = typeof kept === "number" ? `#kept/${kept}` : "";
   event.waitUntil((async () => {
     if (hash) {
       const kept = await caches.open("cox");
