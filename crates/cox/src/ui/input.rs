@@ -230,6 +230,15 @@ impl LineInput {
         self.edit(cx, |draft| draft.set_text(text));
     }
 
+    /// Puts `text` in the input, with the cursor at `cursor`, a byte
+    /// offset of it.
+    pub fn set_text_at(&mut self, text: &str, cursor: usize, cx: &mut Context<Self>) {
+        self.edit(cx, |draft| {
+            draft.set_text(text);
+            draft.move_to(cursor);
+        });
+    }
+
     /// Where the cursor is, as a byte offset of the text.
     #[must_use]
     pub fn cursor(&self) -> usize {
