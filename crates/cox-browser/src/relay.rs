@@ -46,6 +46,10 @@ use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::{oneshot, watch};
+use tokio_tungstenite::accept_hdr_async_with_config;
+use tokio_tungstenite::tungstenite::handshake::server;
+use tokio_tungstenite::tungstenite::http::StatusCode;
+use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 use tokio_tungstenite::tungstenite::{self, Message};
 
 use self::devtools::{browser_endpoint, config, find_tab};
@@ -235,6 +239,23 @@ pub struct Relay {
     pub port: u16,
     pub pages: Pages,
     pub from_agent: UnboundedReceiver<FromAgent>,
+    pub serving: Serving,
+}
+
+/// What keeps the relay serving. Dropped, the relay closes its port and
+/// the agent's connections, and its thread ends before the drop returns.
+pub struct Serving {
+    stop: Option<oneshot::Sender<()>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 /// How often, at most, the relay asks where the agent types: once for a
@@ -269,13 +290,21 @@ pub fn start(devtools_port: u16) -> anyhow::Result<Relay> {
         names,
     };
     let known = Arc::clone(&pages.known);
-    thread::spawn(move || {
+    let (stop, stopped) = oneshot::channel();
+    let thread = thread::spawn(move || {
         let served = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(anyhow::Error::from)
             .and_then(|runtime| {
-                runtime.block_on(serve(listener, devtools_port, known, to_find, seen))
+                runtime.block_on(serve(
+                    listener,
+                    devtools_port,
+                    known,
+                    to_find,
+                    seen,
+                    stopped,
+                ))
             });
         if let Err(error) = served {
             tracing::error!("a relay to the stage stopped: {error:#}");
@@ -285,6 +314,10 @@ pub fn start(devtools_port: u16) -> anyhow::Result<Relay> {
         port,
         pages,
         from_agent,
+        serving: Serving {
+            stop: Some(stop),
+            thread: Some(thread),
+        },
     })
 }
 
@@ -296,10 +329,12 @@ async fn serve(
     known: Arc<watch::Sender<Known>>,
     mut to_find: UnboundedReceiver<Find>,
     seen: UnboundedSender<FromAgent>,
+    mut stopped: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::from_std(listener)?;
     loop {
         tokio::select! {
+            _ = &mut stopped => return Ok(()),
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
                 let known = known.subscribe();
@@ -439,7 +474,7 @@ async fn relay(
     mut known: watch::Receiver<Known>,
     stage: UnboundedSender<FromAgent>,
 ) -> anyhow::Result<()> {
-    let client = tokio_tungstenite::accept_async_with_config(client, Some(config())).await?;
+    let client = accept_hdr_async_with_config(client, from_no_page, Some(config())).await?;
     let endpoint = browser_endpoint(devtools_port).await?;
     // The agent sees the pages the stage has opened so far.
     if tokio::time::timeout(OPENING_TIMEOUT, known.wait_for(|known| known.opening == 0))
@@ -692,6 +727,23 @@ async fn close_tab(
         .map_err(|_| "The stage is closed")?;
     answered.await.map_err(|_| "The stage is closed")??;
     Ok(json!({ "success": true }))
+}
+
+/// Refuses a connection that names an origin, as a browser does for a web
+/// page: one that finds the relay's port would drive the folder's pages,
+/// as the agent's tools, which name none, do.
+#[expect(clippy::result_large_err, reason = "the answer tungstenite takes")]
+fn from_no_page(
+    request: &server::Request,
+    response: server::Response,
+) -> Result<server::Response, server::ErrorResponse> {
+    if !request.headers().contains_key(ORIGIN) {
+        return Ok(response);
+    }
+    let mut refused =
+        server::ErrorResponse::new(Some("A web page cannot reach the stage".to_owned()));
+    *refused.status_mut() = StatusCode::FORBIDDEN;
+    Err(refused)
 }
 
 /// Whether a message goes on to the other end. Pings and pongs are each
