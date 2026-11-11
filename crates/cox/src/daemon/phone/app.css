@@ -355,6 +355,9 @@ button.pill:active { background: var(--hover); }
 .reply > :last-child { margin-bottom: 0; }
 .reply p, .reply ul, .reply ol, .reply pre, .reply blockquote, .reply h3 { margin: 8px 0; }
 .reply ul, .reply ol { padding-left: 22px; }
+.reply li > ul, .reply li > ol { margin: 0; }
+.reply li.task { list-style: none; }
+.reply li.task > .box { display: inline-block; width: 22px; margin-left: -22px; color: var(--dim); }
 .reply h3 { font-size: 15px; }
 .reply blockquote { margin-left: 0; padding-left: 10px; border-left: 2px solid var(--border-strong); color: var(--dim); }
 .reply a { color: var(--link); text-decoration: underline; }
