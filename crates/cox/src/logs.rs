@@ -17,7 +17,8 @@
 //! - `cox_acp::wire`: every ACP message between Cox and an agent.
 //! - `cox_acp::stderr`: what an agent writes to standard error.
 //! - `cox::agent::mcp::wire`: every message between an agent and Cox's
-//!   tool server.
+//!   tool server, in brief; at `trace`, whole, with what it carries:
+//!   pages, commands' output, screenshots.
 //! - `cox::agent::mcp::asks`: what a tool asks of the stage, and
 //!   `cox::stage::asked`, the stage carrying it out.
 //! - `cox_browser::scheme`: how long each answer at a `cox:` address took;
@@ -27,6 +28,7 @@
 use std::backtrace::Backtrace;
 use std::fs::{self, File};
 use std::io;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -44,6 +46,9 @@ pub const RUNS_KEPT: usize = 20;
 
 /// What the file of a run keeps when `COX_LOG` does not say.
 const KEPT: &str = "info,cox=debug";
+
+/// The mode of a run's file: what the agents say is the human's user's only.
+const OWNER_ONLY: u32 = 0o600;
 
 /// The target a panic is said under, which only the file of the run takes:
 /// on standard error, Rust says it already.
@@ -139,7 +144,11 @@ fn open(directory: &Path) -> io::Result<(PathBuf, File)> {
     prune(directory, RUNS_KEPT - 1)?;
     let time = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ");
     let path = directory.join(format!("{time}-{}.jsonl", std::process::id()));
-    let file = File::options().create(true).append(true).open(&path)?;
+    let file = File::options()
+        .create(true)
+        .append(true)
+        .mode(OWNER_ONLY)
+        .open(&path)?;
     Ok((path, file))
 }
 
@@ -259,7 +268,9 @@ mod tests {
 
     /// A tool server whose every call answers a screenshot of `bytes`
     /// bytes of base64.
-    struct Screenshot(usize);
+    struct Screenshot {
+        bytes: usize,
+    }
 
     impl Serves for Screenshot {
         fn tools(&self) -> Value {
@@ -270,7 +281,7 @@ mod tests {
             &'a self,
             _params: &'a Value,
         ) -> Pin<Box<dyn Future<Output = Answered> + Send + 'a>> {
-            let data = "iVBORw0K".repeat(self.0 / 8);
+            let data = "iVBORw0K".repeat(self.bytes / 8);
             Box::pin(async move {
                 Ok(json!({
                     "content": [{ "type": "image", "data": data, "mimeType": "image/png" }],
@@ -292,7 +303,7 @@ mod tests {
             let subscriber =
                 tracing_subscriber::registry().with(kept(file).with_filter(EnvFilter::new(KEPT)));
             tracing::subscriber::with_default(subscriber, || {
-                mcp::serve(listener, Arc::new(Screenshot(1 << 20)), async {
+                mcp::serve(listener, Arc::new(Screenshot { bytes: 1 << 20 }), async {
                     let _ = stopped.await;
                 })
             })

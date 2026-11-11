@@ -56,9 +56,14 @@ mod calls;
 pub const OPTION: &str = "--mcp";
 
 /// The target under which each line the agent and the server send each
-/// other over the socket is said, at `debug`, with `from` saying whose it
-/// is: `cox` or `agent`.
+/// other over the socket is said, with `from` saying whose it is: `cox` or
+/// `agent`. At `debug` it is said in [`brief`], with `bytes`, how long it
+/// is; at `trace`, whole.
 pub const WIRE: &str = "cox::agent::mcp::wire";
+
+const STRING_KEPT_WHOLE: usize = 256;
+
+const STRING_CUT_TO: usize = 200;
 
 /// The target under which a tool asking something of the chat's stage is
 /// said, at `debug`, as "asks the stage to " and [`ToolRequest::said`].
@@ -705,7 +710,8 @@ async fn talk(stream: UnixStream, served: Arc<dyn Serves>) -> anyhow::Result<()>
     let sending = tokio::spawn(async move {
         while let Some(answer) = ready.recv().await {
             let mut line = answer.to_string();
-            tracing::debug!(target: WIRE, from = "cox", "{line}");
+            tracing::debug!(target: WIRE, from = "cox", bytes = line.len(), "{}", in_brief(&answer));
+            tracing::trace!(target: WIRE, from = "cox", "{line}");
             line.push('\n');
             said.write_all(line.as_bytes()).await?;
         }
@@ -718,7 +724,8 @@ async fn talk(stream: UnixStream, served: Arc<dyn Serves>) -> anyhow::Result<()>
         if line.trim().is_empty() {
             continue;
         }
-        tracing::debug!(target: WIRE, from = "agent", "{line}");
+        tracing::debug!(target: WIRE, from = "agent", bytes = line.len(), "{}", brief(&line));
+        tracing::trace!(target: WIRE, from = "agent", "{line}");
         let message = match serde_json::from_str::<Value>(&line) {
             Ok(message) => message,
             Err(error) => {
@@ -751,6 +758,42 @@ async fn talk(stream: UnixStream, served: Arc<dyn Serves>) -> anyhow::Result<()>
     }
     drop(answers);
     sending.await?
+}
+
+/// `line`, a message over the socket, in brief: each string value in it
+/// longer than [`STRING_KEPT_WHOLE`] characters cut to its first
+/// [`STRING_CUT_TO`] and how many bytes it had, so that a page written, a command's output or a
+/// screenshot is not said whole. A line that is not JSON is cut as one
+/// string.
+#[must_use]
+pub fn brief(line: &str) -> String {
+    match serde_json::from_str::<Value>(line) {
+        Ok(message) => in_brief(&message).to_string(),
+        Err(_) => cut(line),
+    }
+}
+
+/// `message` with its strings cut as [`brief`] cuts them. Cutting it
+/// again changes nothing.
+#[must_use]
+pub fn in_brief(message: &Value) -> Value {
+    match message {
+        Value::String(text) => Value::String(cut(text)),
+        Value::Array(items) => items.iter().map(in_brief).collect(),
+        Value::Object(fields) => fields
+            .iter()
+            .map(|(name, value)| (name.clone(), in_brief(value)))
+            .collect(),
+        other => other.clone(),
+    }
+}
+
+fn cut(text: &str) -> String {
+    if text.chars().count() <= STRING_KEPT_WHOLE {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(STRING_CUT_TO).collect();
+    format!("{kept}… ({} bytes)", text.len())
 }
 
 /// The id of the request `message` cancels, if it is the notice that does.
@@ -913,6 +956,23 @@ mod tests {
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();
         assert_eq!(called["error"]["code"], INVALID_PARAMS);
+    }
+
+    #[test]
+    fn a_message_in_brief_keeps_its_short_strings_and_cuts_its_long_ones() {
+        let page = "a line of the page\n".repeat(1000);
+        let message = json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": { "name": "wiki_write", "arguments": { "path": "notes.md", "text": page } } });
+
+        let said: Value = serde_json::from_str(&brief(&message.to_string())).unwrap();
+
+        assert_eq!(said["method"], "tools/call");
+        assert_eq!(said["params"]["arguments"]["path"], "notes.md");
+        let text = said["params"]["arguments"]["text"].as_str().unwrap();
+        assert!(text.starts_with("a line of the page\n"), "{text}");
+        assert!(text.ends_with("… (19000 bytes)"), "{text}");
+        assert_eq!(in_brief(&said), said);
+        assert_eq!(brief(&"x".repeat(1000)).chars().count(), STRING_CUT_TO + 14);
     }
 
     #[test]
