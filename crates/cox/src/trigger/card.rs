@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{By, InSketch, Scope, Trigger};
+use super::{Arranged, By, Change, InSketch, Scope, Trigger};
 
 /// What the card of a trigger says, field by field, as the page edits it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -197,13 +197,15 @@ impl Save {
     /// Writes the trigger to its file, in `triggers` in the folder
     /// for the project's, or in `triggers` in the human's `workflow`: the
     /// file it has, while it stays where it is and is named so, or else
-    /// another, the one it had taken away. Answers the file.
+    /// another, the one it had taken away. Answers the file. A project's
+    /// own runs in the folder as written, as `arranged` keeps it (see
+    /// [`Arranged`]), when the card made it or the human had turned it on.
     ///
     /// # Errors
     ///
     /// When the draft makes no trigger, another has its name, or the file
     /// cannot be written.
-    pub fn make(self, workflow: &Path) -> Result<PathBuf, String> {
+    pub fn make(self, workflow: &Path, arranged: Option<&Path>) -> Result<PathBuf, String> {
         let scope = self.draft.scope.unwrap_or(Scope::Project);
         let name = self.draft.name.trim().to_owned();
         let kept = match &self.file {
@@ -228,15 +230,28 @@ impl Save {
         let mut draft = self.draft;
         draft.name = name;
         draft.scope = Some(scope);
-        draft.trigger(&kept)?;
+        let trigger = draft.trigger(&kept)?;
         if let Some(parent) = kept.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("cannot make {}: {error}", parent.display()))?;
         }
         std::fs::write(&kept, draft.written())
             .map_err(|error| format!("cannot write {}: {error}", kept.display()))?;
+        let runs = self
+            .file
+            .as_ref()
+            .is_none_or(|file| Arranged::read(arranged, &self.folder).on.contains_key(file));
         if let Some(file) = self.file.filter(|file| *file != kept) {
             let _ = std::fs::remove_file(file);
+        }
+        if scope == Scope::Project && runs {
+            Change::Switch {
+                folder: self.folder,
+                file: kept.clone(),
+                on: true,
+                sum: Some(trigger.sum),
+            }
+            .make(arranged)?;
         }
         Ok(kept)
     }
@@ -358,16 +373,22 @@ mod tests {
             text: "cargo test".to_owned(),
             ..Draft::default()
         };
+        let arranged = root.join("triggers.json");
         let save = |file: Option<PathBuf>, draft: Draft| {
             Save {
                 folder: project.clone(),
                 file,
                 draft,
             }
-            .make(&workflow)
+            .make(&workflow, Some(&arranged))
+        };
+        let runs = |file: &Path| {
+            let trigger = Trigger::read(file, Scope::Project).unwrap().unwrap();
+            Arranged::read(Some(&arranged), &project).runs(&trigger)
         };
         let ci = save(None, draft.clone()).unwrap();
         assert_eq!(ci, project.join("triggers/ci.md"));
+        assert!(runs(&ci));
         assert!(save(None, draft.clone()).unwrap_err().contains("already"));
         // Changed where it stays.
         let changed = Draft {
@@ -380,6 +401,23 @@ mod tests {
                 .unwrap()
                 .contains("cargo xtask ci")
         );
+        assert!(runs(&ci));
+        let never_turned_on = project.join("triggers/cloned.md");
+        std::fs::write(
+            &never_turned_on,
+            "---\non: turn.end\nby: shell\n---\nmake\n",
+        )
+        .unwrap();
+        let cloned = Draft {
+            name: "cloned".to_owned(),
+            text: "make all".to_owned(),
+            ..draft.clone()
+        };
+        assert_eq!(
+            save(Some(never_turned_on.clone()), cloned).unwrap(),
+            never_turned_on
+        );
+        assert!(!runs(&never_turned_on));
         // Made the human's, it moves to their workflow.
         let global = Draft {
             scope: Some(Scope::Global),

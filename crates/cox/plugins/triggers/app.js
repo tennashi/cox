@@ -2,7 +2,8 @@
 // read as JSON from `cox://api/triggers`, and again every two seconds, as
 // Cox's own tabs follow what they show. They are listed under the event
 // they run on, in the order they run in, each with how it last ran, where
-// it is kept, and whether it runs in this folder, which its switch turns;
+// it is kept, and whether it runs in this folder, which its switch turns:
+// a project's own only once the human turns it on, as its file is then;
 // a drag of a row orders them, and a click on one opens its card. Those
 // on a schedule say when they run next, and where their chat works when
 // that is elsewhere. In the home, each project's follow, under its name.
@@ -109,6 +110,14 @@ function does(t, folder) {
 const dot = (t) => `<span class="dot ${esc(t.ran?.state ?? "")}" title="${esc(status(t))}"></span>`;
 const scope = (t) => (t.scope === "project" ? "Project" : "Global");
 
+/// Whether the trigger runs, as its switch says it, and why a project's
+/// own does not.
+function switched(t) {
+  if (t.enabled) return "On";
+  if (t.edited) return "Off: its file changed since you turned it on";
+  return t.scope === "project" ? "Off until you turn it on" : "Off";
+}
+
 function row(folder, t) {
   const handle = t.schedule ? `<span class="handle"></span>` : `<span class="handle" title="Drag to reorder">⠿</span>`;
   const coming = t.schedule ? `<span class="next" title="Next run">${esc(next(t))}</span>` : "";
@@ -120,7 +129,7 @@ function row(folder, t) {
     <span class="last">${esc(t.ran ? ago(t.ran.at) : "")}</span>
     ${coming}
     <span class="scope" title="${esc(t.file)}">${scope(t)}</span>
-    <span class="switch${t.enabled ? " on" : ""}" title="${t.enabled ? "On" : "Off"}"></span>
+    <span class="switch${t.enabled ? " on" : ""}" title="${esc(switched(t))}"></span>
     <span class="more">›</span>
   </div>`;
 }
@@ -661,7 +670,7 @@ app.addEventListener("click", (event) => {
   const t = find(folder, file);
   if (!t) return;
   if (event.target.closest(".switch")) {
-    change({ folder: at, file, on: !t.enabled });
+    change({ folder: at, file, on: !t.enabled, sum: t.sum });
     return;
   }
   openCard(folder, t);

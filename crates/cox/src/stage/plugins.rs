@@ -373,7 +373,10 @@ impl Plugins {
                 if !shown(&save.folder) {
                     return None;
                 }
-                let made = save.make(&crate::settings::workflow());
+                let made = save.make(
+                    &crate::settings::workflow(),
+                    crate::storage::path(crate::storage::Kept::Triggers).as_deref(),
+                );
                 let mut told = self.triggers();
                 match made {
                     Ok(file) => told["saved"] = serde_json::json!(file),

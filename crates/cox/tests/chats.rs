@@ -2523,6 +2523,7 @@ async fn the_triggers_of_a_permission_request_gather_before_the_human_is_told(
         "---\non: permission.asked\nby: shell\n---\nprintf 'Only x.txt changes\\nNothing else.\\n'\n",
     )
     .unwrap();
+    turn_on(&home, &triggers.join("touches.md"));
     let (_, workspace, cx) = open_window(cx, home.clone());
     let recorded = Rc::new(Recorded::default());
     let notices = Rc::clone(&recorded);
@@ -2698,6 +2699,7 @@ async fn a_trigger_of_the_folder_runs_as_a_turn_ends_until_it_passes(cx: &mut Te
         format!("---\non: turn.end\nby: shell\n---\n{command}\n"),
     )
     .unwrap();
+    turn_on(&home, &triggers.join("check.md"));
     let (agents, workspace, cx) = open_window(cx, home.clone());
     cx.simulate_keystrokes("secondary-n");
 
@@ -2741,28 +2743,59 @@ async fn a_trigger_of_the_project_runs_only_once_the_human_turns_it_on(cx: &mut 
     let triggers = home.join("triggers");
     std::fs::create_dir_all(&triggers).unwrap();
     let ran = home.join("ran");
-    std::fs::write(
-        triggers.join("mark.md"),
+    let mark = triggers.join("mark.md");
+    let touching = |then: &str| {
         format!(
-            "---\non: turn.end\nby: shell\n---\ntouch {}\n",
+            "---\non: turn.end\nby: shell\n---\ntouch {}{then}\n",
             ran.display()
-        ),
-    )
-    .unwrap();
+        )
+    };
+    std::fs::write(&mark, touching("")).unwrap();
     let (agents, workspace, cx) = open_window(cx, home.clone());
     cx.simulate_keystrokes("secondary-n");
+    let checks = |cx: &mut VisualTestContext| {
+        shown_entries(cx, &workspace)
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Checks(_)))
+            .count()
+    };
 
     say(cx, &workspace, "hello").await;
 
     assert!(!ran.exists(), "the trigger ran before it was turned on");
-    let entries = shown_entries(cx, &workspace);
-    assert!(
-        !entries
-            .iter()
-            .any(|entry| matches!(entry, Entry::Checks(_))),
-        "{entries:?}"
-    );
+    assert_eq!(checks(cx), 0);
     assert_eq!(agents.borrow()[0].prompts().len(), 1);
+
+    turn_on(&home, &mark);
+    say(cx, &workspace, "again").await;
+    assert!(ran.exists(), "the trigger did not run once turned on");
+    assert_eq!(checks(cx), 1);
+
+    std::fs::remove_file(&ran).unwrap();
+    std::fs::write(&mark, touching(" && true")).unwrap();
+    say(cx, &workspace, "once more").await;
+    assert!(!ran.exists(), "the trigger ran as changed since turned on");
+    assert_eq!(checks(cx), 1);
+}
+
+/// Turns on the project's own trigger of `file` in `folder`, as its file
+/// is now, as the human does on the Triggers tab.
+fn turn_on(folder: &Path, file: &Path) {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turning = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let trigger = cox::trigger::Trigger::read(file, cox::trigger::Scope::Project)
+        .unwrap()
+        .unwrap();
+    cox::trigger::Change::Switch {
+        folder: folder.to_owned(),
+        file: file.to_owned(),
+        on: true,
+        sum: Some(trigger.sum),
+    }
+    .make(cox::storage::path(cox::storage::Kept::Triggers).as_deref())
+    .unwrap();
 }
 
 #[gpui::test]
