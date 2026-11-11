@@ -203,17 +203,16 @@ struct Sorted {
     left_out: Vec<LeftOut>,
 }
 
-/// Sorts what the sketch that works in `folder` changed since it started
-/// into what is kept once it is discarded, the files of up to
+/// Sorts what the sketch whose worktree is at `top` changed since it
+/// started into what is kept once it is discarded, the files of up to
 /// [`FILE_KEPT`] bytes, as many as fit in [`ALL_KEPT`] together, the
 /// smaller first, and what is left out, the rest.
-fn sort(folder: &Path) -> Result<Sorted, String> {
-    let top = top(folder)?;
+fn sort(top: &Path) -> Result<Sorted, String> {
     let changed = git(
-        &top,
+        top,
         &["diff", "--name-only", "-z", "--no-renames", changes::START],
     )?;
-    let made = git(&top, &["ls-files", "-z", "--others", "--exclude-standard"])?;
+    let made = git(top, &["ls-files", "-z", "--others", "--exclude-standard"])?;
     let mut paths: Vec<&str> = changed
         .split('\0')
         .chain(made.split('\0'))
@@ -237,7 +236,7 @@ fn sort(folder: &Path) -> Result<Sorted, String> {
             all += size;
             sorted.kept.push(path.to_owned());
         } else {
-            let hash = git(&top, &["hash-object", "--", path])?.trim().to_owned();
+            let hash = git(top, &["hash-object", "--", path])?.trim().to_owned();
             sorted.left_out.push(LeftOut {
                 path: path.to_owned(),
                 size,
@@ -252,14 +251,15 @@ fn sort(folder: &Path) -> Result<Sorted, String> {
     Ok(sorted)
 }
 
-/// The files the sketch that works in `folder` made that are too big to
-/// keep once it is discarded.
+/// The files the sketch that works in `folder`, in `sketches`, made that
+/// are too big to keep once it is discarded.
 ///
 /// # Errors
 ///
-/// When Git cannot tell what the sketch changed, with what Git said.
-pub fn left_out(folder: &Path) -> Result<Vec<LeftOut>, String> {
-    sort(folder).map(|sorted| sorted.left_out)
+/// When the sketch's folder is not a Git repository of its own (see
+/// [`discard`]), or Git cannot tell what the sketch changed, with why.
+pub fn left_out(folder: &Path, sketches: &Path) -> Result<Vec<LeftOut>, String> {
+    sort(&own_top(folder, sketches)?).map(|sorted| sorted.left_out)
 }
 
 /// The files `left_out` of a sketch, too big to keep, as its agent is
@@ -355,29 +355,26 @@ impl Discarded {
 }
 
 /// Discards the sketch that starts from `sketch`, named `title`, that works
-/// in `folder`, taking its folder away. When `keep` says to, what it
-/// changed since it started is kept first, as one commit from where it
-/// started, but for the files too big to keep: as a ref of the project's
-/// repository for a sketch of the project's, and as a bundle in `bundles`
-/// for a sketch from nothing.
+/// in `folder`, in `sketches`, taking its folder away. When `keep` says to,
+/// what it changed since it started is kept first, as one commit from where
+/// it started, but for the files too big to keep: as a ref of the project's
+/// repository for a sketch of the project's, and as a bundle in
+/// [`DISCARDED`] for a sketch from nothing.
 ///
 /// # Errors
 ///
-/// When Git cannot keep what it changed, or the folder cannot be taken
-/// away, with why.
+/// When the folder Cox made the sketch in, in `sketches`, is not a Git
+/// repository of its own; or when Git cannot keep what it changed, or the
+/// folder cannot be taken away; with why.
 pub fn discard(
     sketch: Sketch,
     folder: &Path,
     title: &str,
-    bundles: &Path,
+    sketches: &Path,
     keep: bool,
 ) -> Result<Discarded, String> {
-    let top = top(folder)?;
-    let sorted = if keep {
-        sort(folder)?
-    } else {
-        Sorted::default()
-    };
+    let top = own_top(folder, sketches)?;
+    let sorted = if keep { sort(&top)? } else { Sorted::default() };
     let commit = commit_kept(&top, &sorted.kept, title)?;
     let kept = match (commit, sketch) {
         (None, _) => None,
@@ -392,7 +389,7 @@ pub fn discard(
             // a clone of it to check it out too.
             git(&top, &["update-ref", "refs/heads/sketch", &commit])?;
             git(&top, &["symbolic-ref", "HEAD", "refs/heads/sketch"])?;
-            let bundle = free_bundle(bundles, &folder_name(&top))?;
+            let bundle = free_bundle(&sketches.join(DISCARDED), &folder_name(&top))?;
             let path = bundle.to_string_lossy();
             git(
                 &top,
@@ -562,6 +559,42 @@ fn top(folder: &Path) -> Result<PathBuf, String> {
     ))
 }
 
+/// The top of the worktree of the sketch that works in `folder`, in
+/// `sketches`: the folder Cox made it in there, as long as Git finds that
+/// folder the top of a worktree, and not a repository around it.
+fn own_top(folder: &Path, sketches: &Path) -> Result<PathBuf, String> {
+    let canonical = |path: &Path| {
+        path.canonicalize()
+            .map_err(|error| format!("cannot find {}: {error}", path.display()))
+    };
+    let sketches = canonical(sketches)?;
+    let folder = canonical(folder)?;
+    let own = folder
+        .strip_prefix(&sketches)
+        .ok()
+        .and_then(|within| within.components().next())
+        .map(|name| sketches.join(name))
+        .ok_or_else(|| {
+            format!(
+                "{} is not a sketch's, in {}",
+                folder.display(),
+                sketches.display()
+            )
+        })?;
+    let mine = |why: String| {
+        format!(
+            "the sketch's folder {} is not a Git repository of its own: {why}",
+            own.display()
+        )
+    };
+    let top = top(&folder).map_err(mine)?;
+    if canonical(&top)? == own {
+        Ok(own)
+    } else {
+        Err(mine(format!("Git finds {}", top.display())))
+    }
+}
+
 /// Takes away the worktree at `top`, with what is in it, from the
 /// repository it is a worktree of.
 fn remove_worktree(top: &Path) -> Result<(), String> {
@@ -721,6 +754,10 @@ mod tests {
             &root.join("elsewhere"),
         );
         assert!(error.is_err_and(|error| error.starts_with("a sketch of the project needs")));
+
+        // One in a folder of the repository goes with its whole worktree.
+        discard(Sketch::Project, &sketch, "App", &sketches, true).unwrap();
+        assert!(!sketches.join("greet-1").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -825,7 +862,7 @@ mod tests {
         std::fs::create_dir_all(sketch.join("target")).unwrap();
         std::fs::write(sketch.join("target/out"), "built\n").unwrap();
 
-        let left_out = left_out(&sketch).unwrap();
+        let left_out = left_out(&sketch, &sketches).unwrap();
         let paths: Vec<_> = left_out.iter().map(|file| file.path.as_str()).collect();
         assert_eq!(paths, ["big.bin", "e.txt"]);
         assert_eq!(left_out[0].size, 300 * 1024);
@@ -835,7 +872,7 @@ mod tests {
         assert_eq!(left_out_lines(&[]), "");
 
         let discarded =
-            discard(Sketch::Project, &sketch, "Try a greeting", &bundles, true).unwrap();
+            discard(Sketch::Project, &sketch, "Try a greeting", &sketches, true).unwrap();
         assert!(!sketch.exists());
         let name = "refs/cox/discarded/greet-1";
         assert_eq!(discarded.kept, Some(Kept::Ref(name.to_owned())));
@@ -881,14 +918,14 @@ mod tests {
         // its own when the first is taken.
         let again = make(Sketch::Project, &project, &sketches).unwrap();
         std::fs::remove_file(again.join("main.rs")).unwrap();
-        let discarded = discard(Sketch::Project, &again, "Again", &bundles, true).unwrap();
+        let discarded = discard(Sketch::Project, &again, "Again", &sketches, true).unwrap();
         let name = "refs/cox/discarded/greet-1-2";
         assert_eq!(discarded.kept, Some(Kept::Ref(name.to_owned())));
         assert!(shown(&format!("{name}:main.rs")).is_err());
 
         // A sketch that changed nothing keeps nothing.
         let unchanged = make(Sketch::Project, &project, &sketches).unwrap();
-        let discarded = discard(Sketch::Project, &unchanged, "Nothing", &bundles, true).unwrap();
+        let discarded = discard(Sketch::Project, &unchanged, "Nothing", &sketches, true).unwrap();
         assert_eq!(discarded.kept, None);
         assert_eq!(
             discarded.note(),
@@ -898,14 +935,14 @@ mod tests {
         // One whose ending keeps nothing goes as it is.
         let unkept = make(Sketch::Project, &project, &sketches).unwrap();
         std::fs::write(unkept.join("main.rs"), "fn main() { unkept() }\n").unwrap();
-        let discarded = discard(Sketch::Project, &unkept, "Unkept", &bundles, false).unwrap();
+        let discarded = discard(Sketch::Project, &unkept, "Unkept", &sketches, false).unwrap();
         assert!(!unkept.exists());
         assert_eq!(discarded.kept, None);
 
         // A sketch from nothing is kept as a bundle, which makes it again.
         let empty = make(Sketch::Empty, &project, &sketches).unwrap();
         std::fs::write(empty.join("main.rs"), "fn main() {}\n").unwrap();
-        let discarded = discard(Sketch::Empty, &empty, "From nothing", &bundles, true).unwrap();
+        let discarded = discard(Sketch::Empty, &empty, "From nothing", &sketches, true).unwrap();
         assert!(!empty.exists());
         let bundle = bundles.join("scratch-1.bundle");
         assert_eq!(discarded.kept, Some(Kept::Bundle(bundle.clone())));
@@ -932,9 +969,9 @@ mod tests {
         let head = git(&outer, &["rev-parse", "HEAD"]).unwrap();
 
         for keep in [false, true] {
-            let error = discard(Sketch::Empty, &empty, "Gone", &bundles, keep).unwrap_err();
+            let error = discard(Sketch::Empty, &empty, "Gone", &sketches, keep).unwrap_err();
             assert!(error.contains("not a Git repository of its own"), "{error}");
-            assert!(left_out(&empty).is_err());
+            assert!(left_out(&empty, &sketches).is_err());
         }
         assert_eq!(
             std::fs::read_to_string(outer.join("main.rs")).unwrap(),
