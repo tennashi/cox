@@ -32,7 +32,7 @@ use cox_core::store::Named;
 use cox_core::store::Store;
 use fake_agent::{BACKGROUND_FINISHED, BACKGROUND_STARTED, FakeAgent, LogsIn, Resumes, TITLE};
 use fake_daemon::{
-    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, kept_at,
+    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, Kept, Made, SECOND_AGENT, given_up, kept_at,
     open_again, settle, settle_on, settled,
 };
 use gpui::{
@@ -280,11 +280,7 @@ async fn say(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, text: &s
 /// Waits until a turn of the chat `view` has ended.
 async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
     settle(cx).await;
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(GIVEN_UP);
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     tokio::select! {
         () = cx.condition(view, |view, _| {
             view.conversation().state() == State::Idle && !view.conversation().entries().is_empty()
@@ -2425,11 +2421,7 @@ async fn wait_until(
     view: &Entity<ChatView>,
     until: impl Fn(&Conversation) -> bool,
 ) {
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(GIVEN_UP);
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     tokio::select! {
         () = cx.condition(view, |view, _| until(view.conversation())) => {}
         _ = timeout => panic!("the agent never got there"),
@@ -3122,11 +3114,7 @@ async fn wait_for_discarded(
     workspace: &Entity<Workspace>,
     made: &std::path::Path,
 ) {
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(GIVEN_UP);
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     let made = made.to_owned();
     tokio::select! {
         () = cx.condition(workspace, move |_, _| !made.exists()) => {}

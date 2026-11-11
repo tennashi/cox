@@ -9,16 +9,19 @@ use std::time::Duration;
 use cox::stage::tree::{Chosen, Tree};
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
-/// A folder of its own for a test, with the files `paths`, empty.
+/// A folder of its own for a test, with the files `paths`, empty, by
+/// its real path, as the tree names its files: macOS's temporary folder
+/// is under a link.
 fn scratch(name: &str, paths: &[&str]) -> PathBuf {
     let directory = std::env::temp_dir().join(format!("cox-tree-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
     for path in paths {
         let path = directory.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "").unwrap();
     }
-    directory
+    directory.canonicalize().unwrap()
 }
 
 /// The files chosen on a tree, each with whether it was chosen for a tab
