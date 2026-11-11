@@ -24,6 +24,12 @@
 //! says it, which coxd does as the window's (see [`done_on_the_page`]
 //! for which).
 //!
+//! The page lists, too, the pages a chat has for the human to try, on
+//! `/pages`: the mocks of the sketch it works in, and the pages of its
+//! stage served on the Mac's own address, as the web app the agent makes
+//! is, and shows one in a frame over the chat, as the relay passes it on
+//! at the same port of the Mac's name (see [`relay`]).
+//!
 //! The page asks, too, to be told of the chats that need the human while
 //! they are away from the Mac, with Web Push (see [`super::push`]): it
 //! reads coxd's key on `/push`, and posts where to push to it there, or
@@ -31,6 +37,7 @@
 //! showing what is pushed.
 
 use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::io::Read as _;
 use std::path::Path;
@@ -49,6 +56,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 pub mod mocks;
+pub mod relay;
 pub(crate) mod tailnet;
 
 use super::push::{self, Notice, Pushed, Pushes, Subscription};
@@ -316,18 +324,21 @@ pub fn link() -> anyhow::Result<String> {
 }
 
 /// Has the tailnet hand the page on `port` to the phone, at the Mac's
-/// name there, and the sketches' mocks on `mocks`, at that port of it,
-/// and keeps `owner`, the Mac's login there, as Tailscale says it, every
-/// few minutes, so that a phone of that login comes in.
+/// name there, and each port the relay passes on to, as `ports` wants
+/// them, at that port of it, to the relay, and keeps `owner`, the Mac's
+/// login there, as Tailscale says it, every few minutes, so that a phone
+/// of that login comes in.
 pub async fn follow_tailnet(
     port: u16,
-    mocks: Option<u16>,
+    ports: Option<Rc<relay::Ports>>,
     owner: Rc<RefCell<Option<tailnet::Owner>>>,
 ) {
-    let mut serving: Vec<(u16, u16, bool, Option<String>)> = std::iter::once((port, 443))
-        .chain(mocks.map(|mocks| (mocks, mocks)))
-        .map(|(port, https)| (port, https, false, None))
-        .collect();
+    let mut page = (false, None);
+    // What the tailnet hands to the relay, once read, as an earlier coxd
+    // may have left it, and why it does not hand each port it does not.
+    let mut relayed: Option<BTreeSet<u16>> = None;
+    let mut why_not: BTreeMap<u16, String> = BTreeMap::new();
+    let mut changes = ports.as_ref().map(|ports| ports.changes());
     let mut told_dns = false;
     loop {
         let status = tokio::task::spawn_blocking(tailnet::status)
@@ -344,22 +355,30 @@ pub async fn follow_tailnet(
                 }
                 // Again until it does, as once Serve is on in the
                 // tailnet, saying why not only when that changes.
-                for (port, https, served, why_not) in serving.iter_mut().filter(|one| !one.2) {
-                    let (port, https) = (*port, *https);
-                    match tokio::task::spawn_blocking(move || tailnet::serve(program, port, https))
-                        .await
-                    {
-                        Ok(Ok(done)) => {
-                            *served = true;
+                if !page.0 {
+                    match serve_in_the_tailnet(program, port, 443).await {
+                        Ok(done) => {
+                            page.0 = true;
                             tracing::info!("{done}");
                         }
-                        Ok(Err(why)) => {
-                            if why_not.as_ref() != Some(&why) {
+                        Err(why) => {
+                            if page.1.as_ref() != Some(&why) {
                                 tracing::warn!("the tailnet does not serve the phone: {why}");
                             }
-                            *why_not = Some(why);
+                            page.1 = Some(why);
                         }
-                        Err(error) => tracing::error!("cannot ask tailscale: {error}"),
+                    }
+                }
+                if let Some(ports) = &ports {
+                    let relay = ports.relay();
+                    if relayed.is_none() {
+                        relayed =
+                            tokio::task::spawn_blocking(move || tailnet::relayed(program, relay))
+                                .await
+                                .ok();
+                    }
+                    if let Some(relayed) = &mut relayed {
+                        relay_in_the_tailnet(program, ports, relayed, &mut why_not).await;
                     }
                 }
                 if *owner.borrow() != status.owner {
@@ -373,8 +392,74 @@ pub async fn follow_tailnet(
                 }
             }
         }
-        tokio::time::sleep(LOOKS_AT_THE_TAILNET).await;
+        match &mut changes {
+            Some(changes) => {
+                tokio::select! {
+                    () = tokio::time::sleep(LOOKS_AT_THE_TAILNET) => {}
+                    told = changes.changed() => if told.is_err() {
+                        tokio::time::sleep(LOOKS_AT_THE_TAILNET).await;
+                    },
+                }
+            }
+            None => tokio::time::sleep(LOOKS_AT_THE_TAILNET).await,
+        }
     }
+}
+
+/// Has `tailscale serve`, through `program`, hand what coxd serves on
+/// `port` to the tailnet, at its port `https`.
+async fn serve_in_the_tailnet(
+    program: &'static str,
+    port: u16,
+    https: u16,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || tailnet::serve(program, port, https))
+        .await
+        .map_err(|error| format!("cannot ask tailscale: {error}"))?
+}
+
+/// Has the tailnet, through `program`, hand to the relay each port
+/// `ports` wants, and no other, where `relayed` are those it does: saying
+/// why it does not hand a port only when that changes, in `why_not`.
+async fn relay_in_the_tailnet(
+    program: &'static str,
+    ports: &relay::Ports,
+    relayed: &mut BTreeSet<u16>,
+    why_not: &mut BTreeMap<u16, String>,
+) {
+    let wanted = ports.wanted();
+    for &port in wanted.difference(&relayed.clone()) {
+        match serve_in_the_tailnet(program, ports.relay(), port).await {
+            Ok(done) => {
+                relayed.insert(port);
+                why_not.remove(&port);
+                tracing::info!(port, "{done}, to the relay");
+            }
+            Err(why) => {
+                if why_not.get(&port) != Some(&why) {
+                    tracing::warn!(
+                        port,
+                        "the tailnet does not hand the port to the phone: {why}"
+                    );
+                }
+                why_not.insert(port, why);
+            }
+        }
+    }
+    for &port in relayed.clone().difference(&wanted) {
+        match tokio::task::spawn_blocking(move || tailnet::unserve(program, port)).await {
+            Ok(Ok(())) => {
+                relayed.remove(&port);
+                tracing::info!(port, "the tailnet hands the port to the phone no more");
+            }
+            Ok(Err(why)) => {
+                tracing::warn!(port, "the tailnet still hands the port to the phone: {why}");
+            }
+            Err(error) => tracing::error!("cannot ask tailscale: {error}"),
+        }
+    }
+    why_not.retain(|port, _| wanted.contains(port));
+    ports.served(relayed.clone());
 }
 
 /// How often coxd asks Tailscale again of the Mac's login.
@@ -394,14 +479,14 @@ pub async fn listen(port: u16) -> anyhow::Result<TcpListener> {
 /// Serves the page on `listener` to the phones of the Mac's login in the
 /// tailnet, as `owner` has it, and those paired with `token`, telling the
 /// daemon, on `internal`, of the phones that follow the chats, and, with
-/// `pushes`, pushing to them what it says of the chats; the sketches'
-/// mocks it frames being served on `mocks`, if they are (see
-/// [`mocks`]).
+/// `pushes`, pushing to them what it says of the chats; the pages it
+/// frames being passed on by the relay, as `relayed` has it, if they are
+/// (see [`relay`]).
 pub async fn serve(
     listener: TcpListener,
     token: String,
     owner: Rc<RefCell<Option<tailnet::Owner>>>,
-    (pushes, mocks): (Option<Pushes>, Option<u16>),
+    (pushes, relayed): (Option<Pushes>, Option<Relayed>),
     internal: UnboundedSender<Internal>,
 ) {
     let pushes = pushes.map(|pushes| {
@@ -418,7 +503,7 @@ pub async fn serve(
         internal,
         last: Cell::new(0),
         pushes,
-        mocks,
+        relayed,
     });
     loop {
         let stream = match listener.accept().await {
@@ -437,6 +522,8 @@ pub async fn serve(
                         page.posted(request).await
                     } else if request.uri().path() == "/changes" {
                         page.changes(&request).await
+                    } else if request.uri().path() == "/pages" {
+                        page.pages(&request).await
                     } else if request.uri().path() == "/sketch" {
                         page.sketch(&request).await
                     } else if request.uri().path() == "/diagram" {
@@ -468,8 +555,15 @@ struct Page {
     last: Cell<u64>,
     /// coxd's key and the phones it pushes to, unless it pushes nothing.
     pushes: Option<Rc<RefCell<Pushes>>>,
-    /// The port the sketches' mocks are served on, if they are.
-    mocks: Option<u16>,
+    /// What the relay passes on to the phone, if it does.
+    relayed: Option<Relayed>,
+}
+
+/// What the relay passes on to the phone: the sketches' mocks, served on
+/// a port of the Mac's own, if they are, and the ports it passes on to.
+pub struct Relayed {
+    pub mocks: Option<u16>,
+    pub ports: Rc<relay::Ports>,
 }
 
 impl Page {
@@ -508,9 +602,6 @@ impl Page {
         if let Some(project) = path.strip_prefix("/project-icon/") {
             return project_icon(project);
         }
-        if path == "/mocks" {
-            return self.mocks(request.uri().query().unwrap_or_default());
-        }
         if path == "/events" {
             let chat = request.uri().query().and_then(|query| {
                 query
@@ -524,7 +615,7 @@ impl Page {
             Some((at, kind, text)) => {
                 let mut response = answer(StatusCode::OK, kind, *text);
                 if *at == "/" {
-                    self.frame_mocks(request.headers(), &mut response);
+                    self.frame_relayed(request.headers(), &mut response);
                 }
                 response
             }
@@ -532,14 +623,13 @@ impl Page {
         }
     }
 
-    /// Lets the page frame the sketches' mocks, served at the Mac's name
-    /// the page came for, with `headers`, on their port.
-    fn frame_mocks(&self, headers: &hyper::HeaderMap, response: &mut Response<Body>) {
-        let (Some(mocks), Some(name)) = (self.mocks, mocks::host_name(headers)) else {
+    /// Lets the page frame what the relay passes on, at the Mac's name
+    /// the page came for, with `headers`, on any port of it.
+    fn frame_relayed(&self, headers: &hyper::HeaderMap, response: &mut Response<Body>) {
+        let (Some(_), Some(name)) = (&self.relayed, relay::host_name(headers)) else {
             return;
         };
-        let policy =
-            format!("{PAGE_POLICY}; frame-src https://{name}:{mocks} http://{name}:{mocks}");
+        let policy = format!("{PAGE_POLICY}; frame-src https://{name}:* http://{name}:*");
         if let Ok(policy) = HeaderValue::from_str(&policy) {
             response
                 .headers_mut()
@@ -547,21 +637,77 @@ impl Page {
         }
     }
 
-    /// The mocks of the sketch whose folder `query`, `folder=<path>`,
-    /// names, as JSON: the port they are served on, the sketch's name,
-    /// and the paths of its pages.
-    fn mocks(&self, query: &str) -> Response<Body> {
-        let folder = url::form_urlencoded::parse(query.as_bytes())
-            .find_map(|(name, value)| (name == "folder").then(|| value.into_owned()));
-        let told = self.mocks.zip(folder).and_then(|(port, folder)| {
-            let sketches = storage::path(Kept::Sketches)?;
-            let (sketch, pages) = mocks::pages(&sketches, Path::new(&folder))?;
-            Some(serde_json::json!({ "port": port, "sketch": sketch, "pages": pages }))
-        });
-        match told {
-            Some(told) => answer(StatusCode::OK, "application/json", told.to_string()),
-            None => answer(StatusCode::NOT_FOUND, TEXT, "No sketch's mocks"),
+    /// The pages the chat `request` names, `?chat=<key>`, has for the
+    /// human to try, as JSON, each its name, the port of the Mac's own
+    /// address it is served on, which the relay passes on at the same
+    /// port of the Mac's name, and its path there: the mocks of the
+    /// sketch it works in, if it works in one, and the pages of its
+    /// stage served on the Mac's own address, as a web app being made
+    /// is. Told once the tailnet hands their ports to the relay, or after
+    /// a while, if it does not.
+    async fn pages(&self, request: &Request<Incoming>) -> Response<Body> {
+        if !self.paired(request) {
+            return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
         }
+        let Some(key) = chat_asked(request) else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "No chat");
+        };
+        let Some(relayed) = &self.relayed else {
+            return answer(
+                StatusCode::OK,
+                "application/json",
+                serde_json::json!({ "pages": [] }).to_string(),
+            );
+        };
+        let (asked, staged) = tokio::sync::oneshot::channel();
+        if self
+            .internal
+            .send(Internal::Pages { key, answer: asked })
+            .is_err()
+        {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        }
+        let Ok(Some((folder, staged))) = staged.await else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
+        };
+        let mut pages = Vec::new();
+        let mut ports = BTreeSet::new();
+        if let Some(mocks) = relayed.mocks
+            && let Some(sketches) = storage::path(Kept::Sketches)
+            && let Some((sketch, found)) = mocks::pages(&sketches, &folder)
+        {
+            ports.insert(mocks);
+            for page in found {
+                let path = path_of(std::iter::once(sketch.as_str()).chain(page.split('/')));
+                pages.push(serde_json::json!({ "name": page, "port": mocks, "path": path }));
+            }
+        }
+        let mut stage = BTreeSet::new();
+        for (address, title) in staged {
+            let Some((port, path)) = relay::on_the_mac(&address) else {
+                continue;
+            };
+            stage.insert(port);
+            let name = if title.is_empty() { address } else { title };
+            pages.push(serde_json::json!({ "name": name, "port": port, "path": path }));
+        }
+        relayed
+            .ports
+            .want(relay::Wanting::Stage(folder), stage.clone());
+        ports.extend(stage);
+        ports.retain(|port| relayed.ports.passes(*port));
+        pages.retain(|page| {
+            page["port"]
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok())
+                .is_some_and(|port| ports.contains(&port))
+        });
+        relayed.ports.until_served(&ports).await;
+        answer(
+            StatusCode::OK,
+            "application/json",
+            serde_json::json!({ "pages": pages }).to_string(),
+        )
     }
 
     /// What changed where the chat `request` names works, `?chat=<key>`,
@@ -963,6 +1109,15 @@ fn done_on_the_page(message: &ToDaemon) -> bool {
         | ToDaemon::NewProjectAside => true,
         _ => false,
     }
+}
+
+/// The path of `parts`, each as a URL has it, as `/a%20b/c.html`.
+fn path_of<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
+    let mut url = url::Url::parse("http://mac/").expect("an address");
+    if let Ok(mut path) = url.path_segments_mut() {
+        path.clear().extend(parts);
+    }
+    url.path().to_owned()
 }
 
 /// The chat the query of `request` names, `chat=<key>`.

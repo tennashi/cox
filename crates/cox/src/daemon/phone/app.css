@@ -520,9 +520,9 @@ pre code { padding: 0; background: none; font-size: inherit; color: var(--foregr
 
 /* The pages of a sketch, to try, as chips, and the frame that shows one
    over the chat. */
-.mocks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.mocks .label { margin-right: 4px; }
-.mocks button {
+.tries { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tries .label { margin-right: 4px; }
+.tries button {
   height: 28px;
   padding: 0 11px;
   border: 0;
@@ -532,11 +532,11 @@ pre code { padding: 0; background: none; font-size: inherit; color: var(--foregr
   font-size: 13px;
 }
 body.trying { overflow: hidden; }
-#mock, #changes, #reading, #settings { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--ground); }
-#mock .bar, #changes .bar, #reading .bar, #settings .bar { padding: calc(env(safe-area-inset-top) + 6px) 8px 6px; background: var(--surface); border-bottom: 1px solid var(--border); }
-#mock .bar .icon-button, #changes .bar .icon-button, #reading .bar .icon-button, #settings .bar .icon-button { font-size: 20px; color: var(--dim); }
-#mock .page, #changes .page, #reading .page, #settings .page { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 14px; }
-#mock iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+#trial, #changes, #reading, #settings { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--ground); }
+#trial .bar, #changes .bar, #reading .bar, #settings .bar { padding: calc(env(safe-area-inset-top) + 6px) 8px 6px; background: var(--surface); border-bottom: 1px solid var(--border); }
+#trial .bar .icon-button, #changes .bar .icon-button, #reading .bar .icon-button, #settings .bar .icon-button { font-size: 20px; color: var(--dim); }
+#trial .page, #changes .page, #reading .page, #settings .page { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 14px; }
+#trial iframe { flex: 1; width: 100%; border: 0; background: #fff; }
 
 /* What changed where the chat works, over the chat, as the window's
    "Changes" tab: a card for each file, headed by how it changed, its

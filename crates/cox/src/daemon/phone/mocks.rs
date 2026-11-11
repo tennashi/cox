@@ -1,36 +1,36 @@
-//! The pages of the sketches, served to the phone for the human to try
-//! a mock as it is, HTML and all, apart from Cox's own page.
+//! The pages of the sketches, served on the Mac's own address for the
+//! human to try a mock as it is, HTML and all, apart from Cox's own page.
 //!
 //! An agent makes a mock as a sketch from nothing, as plain HTML, for
-//! the human to try what the work is to be before they agree on it. The
-//! phone shows it in a frame over the chat, from the port after the
-//! page's, and `tailscale serve` hands that port of the Mac's name to
-//! the tailnet too: so a mock, another origin than Cox's page, reads
-//! nothing of it, and does nothing on it, since what the page posts has
-//! to say it comes from the page itself (see [`super::from_the_page`]).
-//! Cox's page cannot be framed by a mock, and a mock only by Cox's page.
+//! the human to try what the work is to be before they agree on it. coxd
+//! serves the sketches on the port two after the page's, as a dev server
+//! serves a web app, and the phone reaches them as it reaches any page
+//! served on the Mac, through the relay (see [`super::relay`]), which
+//! passes on what the human's phone alone sends: so a mock, another
+//! origin than Cox's page, reads nothing of it, and does nothing on it,
+//! since what the page posts has to say it comes from the page itself
+//! (see [`super::from_the_page`]).
 //!
-//! Only the human's phone gets a mock, as it gets the page: what a
-//! sketch's folder holds can be the project's code.
+//! What a sketch's folder holds can be the project's code, so a request
+//! is answered only as made to the Mac's own address, by its name, as a
+//! page whose own name was turned to `127.0.0.1` does not make it.
 
-use std::cell::RefCell;
 use std::convert::Infallible;
 use std::path::{Component, Path, PathBuf};
-use std::rc::Rc;
 
 use hyper::body::Incoming;
 use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use tokio::net::TcpListener;
 
-use super::{Body, TEXT, answer, paired, tailnet};
+use super::{Body, TEXT, answer};
 use crate::storage::{self, Kept};
 
-/// The port the mocks are served on, for the page served on `page`: the
-/// one after it.
+/// The port the mocks are served on, for the page served on `page`: two
+/// after it, the one after it being the relay's.
 #[must_use]
 pub fn port(page: u16) -> Option<u16> {
-    page.checked_add(1)
+    page.checked_add(2)
 }
 
 /// The folder the sketches keep what they discarded in, which is no
@@ -186,74 +186,54 @@ fn file(sketches: &Path, path: &str) -> Option<Found> {
     (!hidden && at.is_file()).then_some(Found::File(at))
 }
 
-/// The Mac's name the request came for, as `headers` say it, without
-/// its port: only one a name can be.
-pub(super) fn host_name(headers: &HeaderMap) -> Option<&str> {
-    let host = headers.get(header::HOST)?.to_str().ok()?;
-    let name = match host.rsplit_once(':') {
-        Some((name, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => name,
-        _ => host,
-    };
-    (!name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-'))
-    .then_some(name)
-}
-
-/// Serves the sketches' pages on `listener`, the port `https` of the
-/// tailnet too, to the phones of the Mac's login in the tailnet, as
-/// `owner` has it, and those paired with `token`, for the page served on
-/// `page` to frame.
-pub async fn serve(
-    listener: TcpListener,
-    token: String,
-    owner: Rc<RefCell<Option<tailnet::Owner>>>,
-    page: u16,
-    https: u16,
-) {
-    let token = Rc::new(token);
+/// Serves the sketches' pages on `listener`, which listens on `port` of
+/// the Mac's own address.
+pub async fn serve(listener: TcpListener, port: u16) {
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
             Err(error) => {
-                tracing::error!("a phone could not come for a sketch: {error}");
+                tracing::error!("a page could not come for a sketch: {error}");
                 continue;
             }
         };
-        let (token, owner) = (Rc::clone(&token), Rc::clone(&owner));
         tokio::task::spawn_local(async move {
             let service = hyper::service::service_fn(move |request: Request<Incoming>| {
-                let told = told(&request, &token, &owner, page, https);
+                let told = told(&request, port);
                 async move { Ok::<_, Infallible>(told) }
             });
             if let Err(error) = hyper::server::conn::http1::Builder::new()
                 .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
                 .await
             {
-                tracing::debug!("a phone's connection to the sketches ended: {error}");
+                tracing::debug!("a connection to the sketches ended: {error}");
             }
         });
     }
 }
 
-/// What `request` is told: the file of a sketch it asks for, for the
-/// human's phone alone.
-fn told(
-    request: &Request<Incoming>,
-    token: &str,
-    owner: &RefCell<Option<tailnet::Owner>>,
-    page: u16,
-    https: u16,
-) -> Response<Body> {
+/// Whether a request with `headers` was made to `port` of the Mac's own
+/// address, by its name.
+fn on_the_mac(headers: &HeaderMap, port: u16) -> bool {
+    headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .is_some_and(|host| {
+            host == format!("localhost:{port}") || host == format!("127.0.0.1:{port}")
+        })
+}
+
+/// What `request`, made to `port`, is told: the file of a sketch it asks
+/// for.
+fn told(request: &Request<Incoming>, port: u16) -> Response<Body> {
     if request.method() != Method::GET {
         return answer(StatusCode::METHOD_NOT_ALLOWED, TEXT, "Only read");
     }
-    if !paired(request.headers(), owner, token, https) {
+    if !on_the_mac(request.headers(), port) {
         return answer(
-            StatusCode::UNAUTHORIZED,
+            StatusCode::MISDIRECTED_REQUEST,
             TEXT,
-            "Cox does not know this phone: open Cox's page first.",
+            "The sketches are served at the Mac's own address alone.",
         );
     }
     let path = request.uri().path();
@@ -276,18 +256,11 @@ fn told(
         return answer(StatusCode::NOT_FOUND, TEXT, "Not found");
     };
     let mut response = answer(StatusCode::OK, kind(&at), bytes);
-    // A mock runs what it holds, as the scripts it loads from elsewhere,
-    // and is framed by Cox's page alone, as tailscale serves it or as
-    // the Mac's own address does.
-    let ancestors = host_name(request.headers()).map_or_else(
-        || "frame-ancestors 'none'".to_owned(),
-        |name| format!("frame-ancestors https://{name} http://{name}:{page}"),
-    );
-    if let Ok(policy) = HeaderValue::from_str(&ancestors) {
-        response
-            .headers_mut()
-            .insert(header::CONTENT_SECURITY_POLICY, policy);
-    }
+    // A mock runs what it holds, as the scripts it loads from elsewhere;
+    // the relay says who may frame it.
+    response
+        .headers_mut()
+        .remove(header::CONTENT_SECURITY_POLICY);
     response
 }
 
@@ -377,17 +350,16 @@ mod tests {
     }
 
     #[test]
-    fn takes_the_name_the_request_came_for() {
+    fn answers_only_as_made_to_the_macs_own_address() {
         let headers = |host: &str| {
             let mut headers = HeaderMap::new();
             headers.insert(header::HOST, host.parse().unwrap());
             headers
         };
-        assert_eq!(
-            host_name(&headers("mac.tail1234.ts.net:7422")),
-            Some("mac.tail1234.ts.net")
-        );
-        assert_eq!(host_name(&headers("127.0.0.1:7421")), Some("127.0.0.1"));
-        assert_eq!(host_name(&headers("evil;x")), None);
+        assert!(on_the_mac(&headers("localhost:7423"), 7423));
+        assert!(on_the_mac(&headers("127.0.0.1:7423"), 7423));
+        assert!(!on_the_mac(&headers("localhost:7424"), 7423));
+        assert!(!on_the_mac(&headers("evil.example:7423"), 7423));
+        assert!(!on_the_mac(&HeaderMap::new(), 7423));
     }
 }

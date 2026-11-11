@@ -39,7 +39,7 @@ use std::rc::Rc;
 use cox_core::entry::{Answer, Attachment};
 use cox_core::goal::Goal;
 use cox_core::store::{ChatId, Named, ProjectId, Record, Store};
-use cox_core::tabs::KeptTabs;
+use cox_core::tabs::{KeptTab, KeptTabs};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
@@ -120,6 +120,10 @@ pub enum Sketching {
     /// End it, a sketch from `from`.
     Ends { from: Sketch },
 }
+
+/// Where a chat works, and the pages of the stage there, each its address
+/// and title.
+pub type Staged = (PathBuf, Vec<(String, String)>);
 
 /// What the daemon's chats' tasks heard, marked with the chat's key and
 /// the generation of its agent.
@@ -208,6 +212,14 @@ pub enum Internal {
     Folder {
         key: u64,
         answer: oneshot::Sender<Option<PathBuf>>,
+    },
+    /// Where the chat `key` works, and the pages of the stage there, each
+    /// its address and title, for the phone to offer those of the Mac's
+    /// own address to try, told on `answer`, or nothing of a chat there is
+    /// none of.
+    Pages {
+        key: u64,
+        answer: oneshot::Sender<Option<Staged>>,
     },
     /// What the human may do of sketches in the chat `key`, for the phone
     /// to offer it as the window's menu does, told on `answer`, or nothing
@@ -2354,6 +2366,22 @@ impl Daemon {
             Internal::Act { message } => self.act(message),
             Internal::Folder { key, answer } => {
                 answer.send(self.slot(key).map(|slot| self.cwd(slot))).ok();
+            }
+            Internal::Pages { key, answer } => {
+                let pages = self.slot(key).map(|slot| self.cwd(slot)).map(|folder| {
+                    let pages = self
+                        .stage_in(&folder)
+                        .unwrap_or_default()
+                        .tabs
+                        .into_iter()
+                        .filter_map(|tab| match tab {
+                            KeptTab::Page { url, title } => Some((url, title)),
+                            _ => None,
+                        })
+                        .collect();
+                    (folder, pages)
+                });
+                answer.send(pages).ok();
             }
             Internal::Sketching { key, answer } => {
                 answer.send(self.sketching(key)).ok();
