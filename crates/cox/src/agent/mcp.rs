@@ -201,6 +201,16 @@ pub enum ChatRequest {
         why: Option<String>,
         answer: oneshot::Sender<Result<Option<String>, String>>,
     },
+    /// Show the human the icon kept as `file`, proposed for the chat's
+    /// project, made from the picture at `from`, for them to set or let
+    /// be, with `why`, if the agent said; answer whether the project has
+    /// an icon now, or why it cannot be proposed.
+    ProposeIcon {
+        file: String,
+        from: String,
+        why: Option<String>,
+        answer: oneshot::Sender<Result<bool, String>>,
+    },
     /// Show the human the project named `name`, proposed to be made of the
     /// chat, which is in none, for them to make, the chat moving into it,
     /// or to let be, with `why`, if the agent said, and the files of the
@@ -898,7 +908,7 @@ mod tests {
         let cwd = Path::new("/");
         let listed = answer_now(&ask("tools/list", &json!({})), cwd, &sent).unwrap();
         // Cox's own, the Android emulator's, and the Mac's windows' on macOS.
-        let tools = 20 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
+        let tools = 21 + 6 + if cfg!(target_os = "macos") { 6 } else { 0 };
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), tools);
         let called = ask("tools/call", &json!({ "name": "no_such_tool" }));
         let called = answer_now(&called, cwd, &sent).unwrap();

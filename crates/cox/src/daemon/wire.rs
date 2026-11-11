@@ -182,6 +182,9 @@ pub enum FromDaemon {
     },
     /// Show the chat `key`, which the human asked for, as when it opens.
     Reveal { key: u64 },
+    /// The project kept as `project` has another icon, as the human set
+    /// one an agent proposed: the window draws it as it is now.
+    Icon { project: ProjectId },
     /// The chat `key`, named `name`, comes to wait for the human, ended
     /// a turn, or its agent changed the plan the human left it to, as
     /// `body` says, for the window to tell the human, unless they look at
@@ -259,6 +262,13 @@ pub enum ToDaemon {
     /// The human answered the name proposed at `index` in the chat `key`
     /// for its project: rename it so, or let it be.
     AnswerNameProposal {
+        key: u64,
+        index: usize,
+        answer: Answer,
+    },
+    /// The human answered the icon proposed at `index` in the chat `key`
+    /// for its project: set it, or let it be.
+    AnswerIconProposal {
         key: u64,
         index: usize,
         answer: Answer,

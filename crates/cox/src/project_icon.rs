@@ -6,7 +6,9 @@
 //! The human chooses a picture of their own, which [`make`] crops to a
 //! square at its middle and scales, or an SVG, which it draws at that size;
 //! or has an agent draw one, as an SVG, from what it reads of the project
-//! (see [`generate`]).
+//! (see [`generate`]); or the agent of a chat of the project proposes one,
+//! from a picture it made or found, on a card in the conversation, which
+//! the human sets or lets be (see [`propose`]).
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -60,6 +62,31 @@ pub fn read(id: ProjectId) -> Option<Arc<Image>> {
 /// When the file is no picture Cox reads, or the icon cannot be written.
 pub fn set(id: ProjectId, from: &Path) -> anyhow::Result<()> {
     keep(id, &make(from)?)
+}
+
+/// Makes the icon of the picture in the file `from`, as [`make`] does,
+/// for an agent to propose for its chat's project, and keeps it as Cox
+/// keeps a picture shown in a conversation, for the card that proposes it
+/// to show it as the rail would draw it: answers the name of that copy.
+///
+/// # Errors
+///
+/// When the file is no picture Cox reads, or the copy cannot be written.
+pub fn propose(from: &Path) -> Result<String, String> {
+    let png = make(from).map_err(|error| format!("{error:#}"))?;
+    crate::media::keep_png(&png)
+}
+
+/// Gives the project kept as `id` the icon proposed for it, kept as
+/// [`propose`] named it, `file`, in place of the one it had.
+///
+/// # Errors
+///
+/// When Cox keeps no such icon, or it cannot be written.
+pub fn set_proposed(id: ProjectId, file: &str) -> anyhow::Result<()> {
+    let (path, _) = crate::media::kept(file).context("no icon of that name is kept")?;
+    let png = std::fs::read(&path).with_context(|| format!("cannot read {}", path.display()))?;
+    keep(id, &png)
 }
 
 /// Has an agent read the project kept as `id`, named `name`, in `folder`,

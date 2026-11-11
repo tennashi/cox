@@ -868,6 +868,19 @@ impl ChatView {
             Entry::AboutProposal { about, why, answer } => {
                 render_about_proposal(index, about, why.as_deref(), *answer, &mut writer, cx)
             }
+            Entry::IconProposal {
+                file,
+                from,
+                why,
+                answer,
+            } => render_icon_proposal(
+                index,
+                (file, from),
+                why.as_deref(),
+                *answer,
+                &mut writer,
+                cx,
+            ),
             Entry::ProjectProposal {
                 name,
                 why,
@@ -1491,6 +1504,105 @@ fn render_name_proposal(
         buttons,
     )
     .debug_selector(move || format!("name-proposal-{index}"))
+    .into_any_element()
+}
+
+/// How big the icon an agent proposes for its project is drawn on the
+/// card that proposes it, square.
+const PROPOSED_ICON: f32 = 64.;
+
+/// How big that icon is drawn on the line the card leaves once the human
+/// answered it, square.
+const ANSWERED_ICON: f32 = 16.;
+
+/// The icon kept as `file`, as the rail draws a project's, rounded,
+/// `size` points square.
+fn icon_of(file: &str, size: f32) -> Option<AnyElement> {
+    let (path, _) = crate::media::kept(file)?;
+    Some(
+        gpui::img(path)
+            .size(px(size))
+            .flex_shrink_0()
+            .rounded(px(size / 4.))
+            .into_any_element(),
+    )
+}
+
+/// The icon an agent proposed for the project, kept as `file`, made from
+/// the picture at `from`: while the human has not answered it, a card
+/// that shows it as the rail would draw it, with why the agent proposes
+/// it, and buttons to set it, or to let it be; then a line that says what
+/// they did.
+fn render_icon_proposal(
+    index: usize,
+    (file, from): (&str, &str),
+    why: Option<&str>,
+    answer: Option<Answer>,
+    writer: &mut Writer,
+    cx: &mut Context<ChatView>,
+) -> AnyElement {
+    if let Some(answer) = answer {
+        let title = format!("Proposed icon, from `{from}`");
+        let answer = match answer {
+            Answer::Set | Answer::Changed => "set",
+            Answer::Dismissed => "let be",
+        };
+        return line_of(index, None, ("✎", LINK), &title, writer)
+            .debug_selector(move || format!("icon-proposal-{index}"))
+            .children(icon_of(file, ANSWERED_ICON))
+            .child(div().flex_shrink_0().text_color(rgb(DIM)).child(answer))
+            .into_any_element();
+    }
+    let button = |name: &'static str, label: &'static str, first: bool| {
+        let id = format!("{name}-{index}");
+        answer_button(
+            SharedString::from(id.clone()),
+            id,
+            label,
+            first,
+            OFFERING_TONE,
+        )
+    };
+    let buttons = [
+        button("set-icon", "Set", true).on_click(cx.listener(move |view, _, _, cx| {
+            view.answer_icon_proposal(index, Answer::Set, cx);
+        })),
+        button("dismiss-icon", "Dismiss", false).on_click(cx.listener(move |view, _, _, cx| {
+            view.answer_icon_proposal(index, Answer::Dismissed, cx);
+        })),
+    ];
+    let shows = [
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .children(icon_of(file, PROPOSED_ICON))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .text_color(rgb(DIM))
+                        .child(ellipsis(SharedString::from(from.to_owned()))),
+                )
+                .into_any_element(),
+        ),
+        why.map(|why| {
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(DIM))
+                .child(writer.markdown(why))
+                .into_any_element()
+        }),
+    ];
+    answer_card(
+        OFFERING_TONE,
+        card_head("✎", OFFERING_TONE, "Proposed icon"),
+        "for the project, on the rail",
+        shows.into_iter().flatten(),
+        buttons,
+    )
+    .debug_selector(move || format!("icon-proposal-{index}"))
     .into_any_element()
 }
 

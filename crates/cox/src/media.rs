@@ -113,6 +113,16 @@ pub fn keep_text(text: &str, markdown: bool, folder: Option<&Path>) -> Result<St
     keep_bytes(text.as_bytes(), extension, folder).map(|(file, _)| file)
 }
 
+/// Keeps a copy of `png`, a picture Cox made to show, as the icon an agent
+/// proposes for its project, where Cox keeps them, and answers its name.
+///
+/// # Errors
+///
+/// When the copy cannot be written.
+pub fn keep_png(png: &[u8]) -> Result<String, String> {
+    keep_bytes(png, "png", None).map(|(file, _)| file)
+}
+
 /// Keeps `bytes` in `folder`, or where Cox keeps them, named after what
 /// they hold, with `extension`, and answers the copy's name and path.
 fn keep_bytes(

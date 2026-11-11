@@ -132,6 +132,20 @@ pub enum Entry {
         /// be.
         answer: Option<Answer>,
     },
+    /// An icon the agent proposed for the chat's project, for the human
+    /// to give the project, in place of the one it has, or to let be.
+    IconProposal {
+        /// The icon, as the rail would draw it, by the name of the copy
+        /// Cox keeps of it, as of a picture shown (see [`Entry::Media`]).
+        file: String,
+        /// The path of the picture the agent made it from, as it gave it.
+        from: String,
+        /// Why the agent proposes it, if it said.
+        why: Option<String>,
+        /// What the human did with it, once they did: set it, or let it
+        /// be.
+        answer: Option<Answer>,
+    },
     /// A project the agent of a chat in no project proposed to make of
     /// it, named `name`, for the human to make, the chat moving into it,
     /// or to let be.

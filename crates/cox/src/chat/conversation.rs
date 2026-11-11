@@ -918,6 +918,42 @@ impl Conversation {
         }
     }
 
+    /// Shows the icon kept as `file`, which the agent proposes for the
+    /// chat's project, made from the picture at `from`, for the human to
+    /// set or to let be, with `why` the agent proposes it, if it said.
+    pub fn propose_icon(&mut self, file: &str, from: &str, why: Option<String>) {
+        self.push(Entry::IconProposal {
+            file: file.to_owned(),
+            from: from.to_owned(),
+            why: why.filter(|why| !why.trim().is_empty()),
+            answer: None,
+        });
+    }
+
+    /// The icon proposed at `index`, by the name of the copy Cox keeps of
+    /// it, while the human has not answered it.
+    #[must_use]
+    pub fn proposed_icon(&self, index: usize) -> Option<&str> {
+        match self.entries.get(index)? {
+            Entry::IconProposal {
+                file, answer: None, ..
+            } => Some(file),
+            _ => None,
+        }
+    }
+
+    /// Takes the human's `answer` to the icon proposed at `index`, unless
+    /// they answered it already. Setting it is the caller's.
+    pub fn answer_icon_proposal(&mut self, index: usize, answer: Answer) {
+        if self.proposed_icon(index).is_none() {
+            return;
+        }
+        if let Some(Entry::IconProposal { answer: taken, .. }) = self.entries.get_mut(index) {
+            *taken = Some(answer);
+            self.changed.insert(index);
+        }
+    }
+
     /// Shows the project named `name`, which the agent proposes to make of
     /// the chat, for the human to make or to let be, with `why` the agent
     /// proposes it, if it said, and the sketch whose files go into it,

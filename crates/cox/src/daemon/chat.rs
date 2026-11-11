@@ -1336,6 +1336,26 @@ impl Chat {
         self.conversation.answer_about_proposal(index, answer);
     }
 
+    /// Shows the icon kept as `file`, which the agent proposes for the
+    /// chat's project, made from the picture at `from`, on a card in the
+    /// conversation, with `why`.
+    pub fn propose_icon(&mut self, file: &str, from: &str, why: Option<String>) {
+        self.conversation.propose_icon(file, from, why);
+    }
+
+    /// The icon proposed at `index`, by the name of the copy Cox keeps of
+    /// it, while the human has not answered it.
+    #[must_use]
+    pub fn proposed_icon(&self, index: usize) -> Option<String> {
+        self.conversation.proposed_icon(index).map(str::to_owned)
+    }
+
+    /// The human answered the icon proposed at `index`: set it, or let it
+    /// be.
+    pub fn answer_icon_proposal(&mut self, index: usize, answer: Answer) {
+        self.conversation.answer_icon_proposal(index, answer);
+    }
+
     /// The human chose, on the card at `index`, whether to keep what a
     /// chat learned in the wiki: answers which chat is to keep it, `None`
     /// for this one, when they chose to.

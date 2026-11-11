@@ -553,6 +553,25 @@ fn describe_entry(entry: &Entry) -> String {
                 None => format!("about proposal {about:?}, {answer}"),
             }
         }
+        Entry::IconProposal {
+            file,
+            from,
+            why,
+            answer,
+        } => {
+            let answer = match answer {
+                None => "open",
+                Some(Answer::Set | Answer::Changed) => "set",
+                Some(Answer::Dismissed) => "dismissed",
+            };
+            match why {
+                Some(why) => format!(
+                    "icon proposal {from:?} ({file}), {answer}: {}",
+                    text_of(why)
+                ),
+                None => format!("icon proposal {from:?} ({file}), {answer}"),
+            }
+        }
         Entry::ProjectProposal {
             name,
             why,

@@ -981,6 +981,16 @@ fn told_of_proposal(entry: &Entry) -> Option<String> {
                 "[you proposed what the project is: {about}; {answer}]"
             ))
         }
+        Entry::IconProposal { from, answer, .. } => {
+            let answer = match answer {
+                Some(Answer::Set | Answer::Changed) => "the human set it",
+                Some(Answer::Dismissed) => "the human let it be",
+                None => "the human has not answered",
+            };
+            Some(format!(
+                "[you proposed an icon for the project, from {from}; {answer}]"
+            ))
+        }
         Entry::ProjectProposal { name, answer, .. } => {
             let answer = match answer {
                 Some(Answer::Set | Answer::Changed) => {
@@ -1099,6 +1109,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
             Entry::Proposal { .. }
             | Entry::NameProposal { .. }
             | Entry::AboutProposal { .. }
+            | Entry::IconProposal { .. }
             | Entry::ProjectProposal { .. } => told_of_proposal(entry),
             Entry::Switched { from, to } => Some(format!(
                 "[the human switched the chat from the agent {from} to the agent {to}]"

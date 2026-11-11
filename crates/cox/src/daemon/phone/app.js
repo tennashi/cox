@@ -1028,6 +1028,8 @@ function entryNode(at, kind, value, asks) {
       return nameProposal(value, at);
     case "about_proposal":
       return aboutProposal(value, at);
+    case "icon_proposal":
+      return iconProposal(value, at);
     case "project_proposal":
       return projectProposal(value, at);
     case "keep":
@@ -1419,6 +1421,25 @@ function aboutProposal(proposed, index) {
     buttons([
       ["Set", { AnswerAboutProposal: { key: chat.key, index, answer: "set" } }, true],
       ["Dismiss", { AnswerAboutProposal: { key: chat.key, index, answer: "dismissed" } }],
+    ]));
+}
+
+// An icon the agent proposed for the project: while the human has not
+// answered it, a card in the accent that shows it as the rail would, with
+// why, to set it or let it be; then its line, which says what they did.
+function iconProposal(proposed, index) {
+  const answers = { set: "set", changed: "set", dismissed: "let be" };
+  if (proposed.answer) {
+    return line(`icon-proposal-${index}`, "✎", "var(--link)", `Proposed icon, from ${proposed.from}`, answers[proposed.answer], false);
+  }
+  const icon = el("img", { src: `/media/${encodeURIComponent(proposed.file)}`, alt: "" });
+  return el("div", { class: "card-offer" },
+    cardHead("✎", "Proposed icon", "for the project, on the rail"),
+    el("div", { class: "proposed-icon" }, el("span", { class: "square" }, icon), el("span", { class: "why" }, proposed.from)),
+    proposed.why ? el("div", { class: "why" }, proposed.why) : null,
+    buttons([
+      ["Set", { AnswerIconProposal: { key: chat.key, index, answer: "set" } }, true],
+      ["Dismiss", { AnswerIconProposal: { key: chat.key, index, answer: "dismissed" } }],
     ]));
 }
 

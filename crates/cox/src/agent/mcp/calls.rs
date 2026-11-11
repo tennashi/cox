@@ -37,6 +37,7 @@ const READ_CHAT: &str = "read_chat";
 const PROPOSE_GOAL: &str = "propose_goal";
 const PROPOSE_NAME: &str = "propose_name";
 const PROPOSE_ABOUT: &str = "propose_about";
+const PROPOSE_ICON: &str = "propose_icon";
 const PROPOSE_PROJECT: &str = "propose_project";
 const START_SKETCH: &str = "start_sketch";
 const WIKI_SEARCH: &str = "wiki_search";
@@ -115,15 +116,16 @@ pub(super) fn tools(only: Option<&[String]>) -> Value {
 }
 
 /// The names of the tools a chat gets, in a project or in none, as
-/// `in_project` says: those named in `only`, or all of them, but the one
-/// that propose a name for the chat's project and what it is, and the one
-/// that reads the project's other chats, for a chat in none, and the one
+/// `in_project` says: those named in `only`, or all of them, but the ones
+/// that propose a name for the chat's project, what it is and its icon,
+/// and the one that reads the project's other chats, for a chat in none,
+/// and the one
 /// that proposes a project to make of the chat, for a chat in one.
 pub(super) fn for_chat(only: Option<&[String]>, in_project: bool) -> Vec<String> {
     let left_out: &[&str] = if in_project {
         &[PROPOSE_PROJECT]
     } else {
-        &[PROPOSE_NAME, PROPOSE_ABOUT, READ_CHAT]
+        &[PROPOSE_NAME, PROPOSE_ABOUT, PROPOSE_ICON, READ_CHAT]
     };
     tools(only)
         .as_array()
@@ -235,6 +237,7 @@ fn all_tools() -> Value {
     propose_goal_tool(),
     propose_name_tool(),
     propose_about_tool(),
+    propose_icon_tool(),
     propose_project_tool(),
     start_sketch_tool(),
     ]);
@@ -673,6 +676,42 @@ fn propose_name_tool() -> Value {
     })
 }
 
+/// The tool that proposes an icon for the chat's project, as the agent
+/// learns of it.
+fn propose_icon_tool() -> Value {
+    json!(
+    {
+        "name": PROPOSE_ICON,
+        "description": "Proposes an icon for this chat's project to the human: the picture \
+            the rail of Cox's window draws for the project, in place of a folder, small and \
+            square. Give a picture in a file, as PNG, JPEG, GIF or WebP, or an SVG: when the \
+            project is an app with an icon of its own, as one you made for it, give that \
+            same file, its SVG or its largest PNG, so that the project looks as the app \
+            does; else the project's logo, or one you draw for it as an SVG and write to a \
+            file of your scratch. A picture that is not square is cropped to a square at its \
+            middle, and an SVG is drawn as large as fits, so draw one square, with no text \
+            too small to read at the rail's size. The human sees the icon on a card in the \
+            conversation, and sets it, in place of the one the project has, or lets it be; \
+            it is not the project's icon until they do. It answers at once, with whether \
+            the project has an icon now.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The picture to make the icon of: a path from the chat's \
+                        folder, or an absolute one.",
+                },
+                "why": {
+                    "type": "string",
+                    "description": "Why this icon, in a sentence, for the human to weigh it.",
+                },
+            },
+            "required": ["path"],
+        },
+    })
+}
+
 /// The tool that reads another chat of the project, as the agent learns
 /// of it.
 fn read_chat_tool() -> Value {
@@ -895,6 +934,7 @@ pub(super) async fn call(
         PROPOSE_GOAL => propose_goal(arguments, chats).await,
         PROPOSE_NAME => propose_name(arguments, chats).await,
         PROPOSE_ABOUT => propose_about(arguments, chats).await,
+        PROPOSE_ICON => propose_icon(arguments, cwd, chats).await,
         PROPOSE_PROJECT => propose_project(arguments, chats).await,
         SHOW_MEDIA => show_media(arguments, cwd, chats).await,
         START_SKETCH => start_sketch(arguments, chats).await,
@@ -1504,6 +1544,54 @@ async fn propose_name(
     Ok(format!(
         "The name is on a card in the conversation, for the human to rename the project to \
          or let be; it is not the project's name until they do. The project's name now: {now}"
+    ))
+}
+
+/// Makes the icon of the picture `arguments` name, in `cwd`, asks the
+/// window to show it to the human, proposed for the chat's project, and
+/// tells the agent whether the project has an icon now.
+async fn propose_icon(
+    arguments: &Value,
+    cwd: &Path,
+    chats: &UnboundedSender<ChatRequest>,
+) -> Result<String, String> {
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .ok_or("no path: give the picture to make the icon of as `path`")?
+        .to_owned();
+    let why = match arguments.get("why") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(why)) => Some(why.clone()),
+        Some(_) => return Err("`why` is not a string".to_owned()),
+    };
+    let from = cwd.join(&path);
+    // Drawing an SVG loads the system's fonts, which takes a while.
+    let file = tokio::task::spawn_blocking(move || crate::project_icon::propose(&from))
+        .await
+        .map_err(|_| "the icon was not made".to_owned())??;
+    let (answer, now) = oneshot::channel();
+    chats
+        .send(ChatRequest::ProposeIcon {
+            file,
+            from: path,
+            why,
+            answer,
+        })
+        .map_err(|_| "the chat has closed".to_owned())?;
+    let has = now
+        .await
+        .map_err(|_| "the chat closed before it showed the icon".to_owned())??;
+    let now = if has {
+        "The project has an icon now, which this one would replace."
+    } else {
+        "The project has no icon now, so the rail draws it as a folder."
+    };
+    Ok(format!(
+        "The icon is on a card in the conversation, for the human to set or let be; it is not \
+         the project's icon until they do. {now}"
     ))
 }
 
@@ -2229,8 +2317,9 @@ mod tests {
         assert_eq!(listed[8]["name"], SHOW_MEDIA);
         assert_eq!(listed[10]["name"], PROPOSE_NAME);
         assert_eq!(listed[11]["name"], PROPOSE_ABOUT);
-        assert_eq!(listed[12]["name"], PROPOSE_PROJECT);
-        assert_eq!(listed[13]["name"], START_SKETCH);
+        assert_eq!(listed[12]["name"], PROPOSE_ICON);
+        assert_eq!(listed[13]["name"], PROPOSE_PROJECT);
+        assert_eq!(listed[14]["name"], START_SKETCH);
     }
 
     #[test]
@@ -2899,17 +2988,74 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn proposes_an_icon_made_of_a_picture_and_tells_whether_there_is_one() {
+        let cwd = scratch("propose-icon");
+        fs::write(
+            cwd.join("logo.svg"),
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+                <rect width="64" height="64" fill="#0f766e"/></svg>"##,
+        )
+        .unwrap();
+        fs::write(cwd.join("notes.txt"), "no picture").unwrap();
+        let (sent, _requests) = unbounded_channel();
+        let (chats, mut asked) = unbounded_channel();
+        let window = tokio::spawn(async move {
+            let Some(ChatRequest::ProposeIcon {
+                file,
+                from,
+                why,
+                answer,
+            }) = asked.recv().await
+            else {
+                panic!("the window was not asked");
+            };
+            let _ = answer.send(Ok(false));
+            (file, from, why)
+        });
+        let propose = |arguments: Value| {
+            let params = json!({ "name": PROPOSE_ICON, "arguments": arguments });
+            let (sent, chats, cwd) = (sent.clone(), chats.clone(), cwd.clone());
+            async move { call(&params, &cwd, None, &sent, &chats).await.unwrap() }
+        };
+
+        // What is no picture, or no path, asks the window nothing.
+        let none = propose(json!({ "path": "notes.txt" })).await;
+        assert_eq!(none["isError"], true);
+        let blank = propose(json!({ "path": " " })).await;
+        assert_eq!(blank["isError"], true);
+        let answered = propose(json!({ "path": "logo.svg", "why": "The teal of the shop." })).await;
+        assert_eq!(answered["isError"], false);
+        let told = answered["content"][0]["text"].as_str().unwrap();
+        assert!(
+            told.ends_with("so the rail draws it as a folder."),
+            "{told}"
+        );
+
+        let (file, from, why) = window.await.unwrap();
+        assert_eq!(from, "logo.svg");
+        assert_eq!(why.as_deref(), Some("The teal of the shop."));
+        // The card shows the icon as the rail would draw it: square, in
+        // the logo's teal.
+        let (kept, _) = crate::media::kept(&file).expect("the icon is kept");
+        let icon = image::open(kept).unwrap().to_rgba8();
+        assert_eq!(
+            icon.dimensions(),
+            (crate::project_icon::SIZE, crate::project_icon::SIZE)
+        );
+        assert_eq!(icon.get_pixel(10, 10).0, [0x0f, 0x76, 0x6e, 255]);
+    }
+
     #[test]
     fn a_chat_in_no_project_gets_no_tool_to_say_what_its_project_is() {
         let none = for_chat(None, false);
-        assert!(
-            !none
-                .iter()
-                .any(|name| [PROPOSE_ABOUT, PROPOSE_NAME, READ_CHAT].contains(&name.as_str()))
-        );
+        assert!(!none.iter().any(|name| {
+            [PROPOSE_ABOUT, PROPOSE_NAME, PROPOSE_ICON, READ_CHAT].contains(&name.as_str())
+        }));
         assert!(none.iter().any(|name| name == PROPOSE_PROJECT));
         let some = for_chat(None, true);
         assert!(some.iter().any(|name| name == PROPOSE_ABOUT));
+        assert!(some.iter().any(|name| name == PROPOSE_ICON));
         assert!(some.iter().any(|name| name == READ_CHAT));
         assert!(!some.iter().any(|name| name == PROPOSE_PROJECT));
     }

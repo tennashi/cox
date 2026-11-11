@@ -1285,6 +1285,9 @@ impl Daemon {
             ToDaemon::AnswerAboutProposal { key, index, answer } => {
                 self.answer_about_proposal(key, index, answer);
             }
+            ToDaemon::AnswerIconProposal { key, index, answer } => {
+                self.answer_icon_proposal(key, index, answer);
+            }
             ToDaemon::AnswerProjectProposal { key, index, answer } => {
                 self.answer_project_proposal(key, index, answer);
             }
@@ -1576,6 +1579,57 @@ impl Daemon {
             .ok_or("the chat has closed")?
             .propose_about(about.trim(), why);
         Ok(now)
+    }
+
+    /// Shows the icon kept as `file`, made from the picture at `from`,
+    /// which the agent of the chat `key` proposes for its project, on a
+    /// card in the chat's conversation, and answers whether the project
+    /// has an icon now, or why it cannot be proposed.
+    fn propose_icon(
+        &mut self,
+        key: u64,
+        file: &str,
+        from: &str,
+        why: Option<String>,
+    ) -> Result<bool, String> {
+        let project = self.slot(key).ok_or("the chat has closed")?.project;
+        let id = self.projects[project]
+            .id
+            .ok_or("This chat is in no project: Cox's own chats have no icon to propose.")?;
+        let has = crate::project_icon::path(id).is_some_and(|path| path.is_file());
+        self.chat(key)
+            .ok_or("the chat has closed")?
+            .propose_icon(file, from, why);
+        Ok(has)
+    }
+
+    /// The human answered the icon proposed at `index` for the project of
+    /// the chat `key`: gives the project it, in place of the one it had,
+    /// and has the window draw it, or lets it be.
+    fn answer_icon_proposal(&mut self, key: u64, index: usize, answer: Answer) {
+        let Some(project) = self.slot(key).map(|slot| slot.project) else {
+            return;
+        };
+        let Some(file) = self.chat(key).and_then(|chat| chat.proposed_icon(index)) else {
+            return;
+        };
+        let answer = match answer {
+            Answer::Dismissed => Answer::Dismissed,
+            Answer::Set | Answer::Changed => Answer::Set,
+        };
+        if answer == Answer::Set {
+            let Some(id) = self.projects[project].id else {
+                return;
+            };
+            if let Err(error) = crate::project_icon::set_proposed(id, &file) {
+                tracing::error!("the project's icon is not set: {error:#}");
+                return;
+            }
+            self.tell(FromDaemon::Icon { project: id });
+        }
+        if let Some(chat) = self.chat(key) {
+            chat.answer_icon_proposal(index, answer);
+        }
     }
 
     /// The human answered what the project of the chat `key` is, as
@@ -2678,6 +2732,14 @@ impl Daemon {
             }
             ChatRequest::ProposeAbout { about, why, answer } => {
                 answer.send(self.propose_about(key, &about, why)).ok();
+            }
+            ChatRequest::ProposeIcon {
+                file,
+                from,
+                why,
+                answer,
+            } => {
+                answer.send(self.propose_icon(key, &file, &from, why)).ok();
             }
             ChatRequest::ProposeProject {
                 name,
