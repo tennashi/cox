@@ -528,6 +528,88 @@ mod tests {
     }
 
     #[test]
+    fn the_judge_runs_the_tests_only_as_picked() {
+        let policy = setup("The tests pass.", STANCE).policy;
+        let decide = |title| {
+            policy.decide(Asked {
+                title,
+                kind: Some(ToolKind::Execute),
+                locations: &[],
+            })
+        };
+        let picked = [
+            "cargo test -p cox --lib judge",
+            "cargo test -p cox --test chats goal -- --test-threads=1",
+            "cargo test --workspace --all-features -- --nocapture --exact chat::judge",
+            "cargo test -pcox judge -- --skip slow --include-ignored",
+            "cargo check --all-targets",
+            "cargo clippy --all-targets -- --deny warnings",
+            "cargo clippy -p cox --all-targets --all-features -- -D warnings",
+            "cargo clippy -- -Dwarnings -A clippy::too_many_lines",
+            "cargo xtask ci",
+            "npm test",
+            "make test",
+            "pytest",
+            "pytest -k greeting",
+            "pytest tests/test_greeting.py::test_names -x -q",
+            "pytest -m 'not slow' tests",
+            "go test ./...",
+            "go test -run TestGreeting -v ./greeting/...",
+            "go test -count=1 -race .",
+        ];
+        let refused: Vec<&str> = picked
+            .into_iter()
+            .filter(|title| decide(title) != Some(Decision::Allow))
+            .collect();
+        assert_eq!(refused, Vec::<&str>::new());
+        let steered = [
+            "pytest --basetemp=/tmp/x",
+            "pytest --basetemp /tmp/x",
+            "pytest -p evil",
+            "pytest -pevil",
+            "pytest --junitxml=/tmp/x.xml",
+            "pytest -c /tmp/x.ini",
+            "pytest --rootdir=/tmp",
+            "pytest --confcutdir=/tmp",
+            "pytest /tmp/x/test_x.py",
+            "pytest ../other",
+            "pytest -k --junitxml=/tmp/x.xml",
+            "cargo test -- --logfile /tmp/x",
+            "cargo test -- --logfile=/tmp/x",
+            "cargo test --target-dir /tmp/x",
+            "cargo test --manifest-path /tmp/x/Cargo.toml",
+            "cargo test -Zunstable-options",
+            "cargo clippy --fix",
+            "cargo clippy --fix --allow-dirty",
+            "cargo clippy --allow-dirty",
+            "cargo clippy -- --allow-dirty",
+            "cargo clippy -- -o /tmp/x",
+            "cargo check --target-dir=/tmp/x",
+            "cargo xtask ci --fix",
+            "go test -o /tmp/x ./...",
+            "go test -coverprofile=/tmp/x ./...",
+            "go test -cpuprofile /tmp/x ./...",
+            "go test -memprofile=/tmp/x ./...",
+            "go test -trace=/tmp/x ./...",
+            "go test -outputdir /tmp ./...",
+            "go test /tmp/x",
+            "go test -args -test.coverprofile=/tmp/x",
+            "make test --eval='test: ; sh -c x'",
+            "make test -f /tmp/x.mk",
+            "make test SHELL=/tmp/x",
+            "make test install",
+            "npm test --script-shell=/tmp/x",
+            "npm test --userconfig /tmp/x",
+            "npm test -- --outputFile=/tmp/x",
+        ];
+        let allowed: Vec<&str> = steered
+            .into_iter()
+            .filter(|title| decide(title).is_some())
+            .collect();
+        assert_eq!(allowed, Vec::<&str>::new());
+    }
+
+    #[test]
     fn the_projects_own_stance_replaces_the_default() {
         let folder = std::env::temp_dir().join(format!("cox-judge-stance-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
