@@ -920,6 +920,34 @@ mod tests {
     }
 
     #[test]
+    fn a_sketch_whose_repository_is_gone_leaves_the_one_around_it_be() {
+        let root = scratch("outer");
+        let outer = root.join("dotfiles");
+        repository(&outer);
+        let sketches = outer.join("cox/sketches");
+        let bundles = sketches.join(DISCARDED);
+        let empty = make(Sketch::Empty, &root, &sketches).unwrap();
+        std::fs::write(empty.join("notes.md"), "- greet\n").unwrap();
+        std::fs::remove_dir_all(empty.join(".git")).unwrap();
+        let head = git(&outer, &["rev-parse", "HEAD"]).unwrap();
+
+        for keep in [false, true] {
+            let error = discard(Sketch::Empty, &empty, "Gone", &bundles, keep).unwrap_err();
+            assert!(error.contains("not a Git repository of its own"), "{error}");
+            assert!(left_out(&empty).is_err());
+        }
+        assert_eq!(
+            std::fs::read_to_string(outer.join("main.rs")).unwrap(),
+            "fn main() {}\n"
+        );
+        assert_eq!(git(&outer, &["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(git(&outer, &["for-each-ref"]).unwrap().lines().count(), 1);
+        assert!(empty.join("notes.md").exists());
+        assert!(!bundles.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_size_reads_as_people_read_it() {
         assert_eq!(size(12), "12 bytes");
         assert_eq!(size(300 * 1024), "300 KB");
