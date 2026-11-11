@@ -63,7 +63,7 @@ encoding_rs = "0.8.42"
 url = "2.5.8"
 # The page coxd serves the human's phone: see `src/daemon/phone.rs`. The
 # versions tonic, for the Android emulator, has already.
-hyper = { version = "1.12.0", features = ["http1", "server"] }
+hyper = { version = "1.12.0", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 http-body = "1.1.0"
 http-body-util = "0.1.5"

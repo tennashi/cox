@@ -71,8 +71,8 @@ Every key is optional. Paths may be absolute or start with `~`.
 | `translation.command` | A command that reads text on standard input and writes its translation on standard output. `{from}` and `{to}` in its arguments stand for the languages. | none |
 | `translation.agent` | The name of an agent to translate with, used when there is no `command`. | the agent a new chat starts |
 | `phone` | `false` turns off the page for the phone. | on |
-| `phone.port` | The port of the page for the phone. The sketches' mocks are served on the next port. | `7421` |
-| `phone.tailscale` | `false` stops `coxd` from running `tailscale serve` for the page. | `true` |
+| `phone.port` | The port of the page for the phone. The relay, which passes the pages served on the Mac's own address on to the phone, listens on the next port, and the sketches' mocks are served on the one after. | `7421` |
+| `phone.tailscale` | `false` stops `coxd` from running `tailscale serve` for the page and the pages the relay passes on. | `true` |
 
 The settings card (Cmd-, or Ctrl-,) sets `agent`, `home`, `workflow`,
 `wiki` and `translation` for you, and leaves the rest of the file as it

@@ -41,9 +41,11 @@ const head = {
 };
 
 let listing = null;
-// The pages of the sketch the chat shown works in, for the human to try
-// them: { key, asked, told: { port, sketch, pages } }, as coxd lists them.
-let mocks = null;
+// The pages the chat shown has for the human to try, the mocks of the
+// sketch it works in and the pages of its stage served on the Mac's own
+// address: { key, asked, told: { pages: [{ name, port, path }] } }, as
+// coxd lists them.
+let pages = null;
 // What changed where the chat shown works, as the window's "Changes" tab
 // shows it: { key, asked, told: { since, files } or { error } }, as coxd
 // tells it.
@@ -158,8 +160,9 @@ function hear(told) {
     const patch = told.Patch.patch;
     chat.entries.length = patch.len;
     for (const [at, entry] of patch.entries) chat.entries[at] = entry;
-    // A turn that ended may have made the sketch's pages.
-    if (working(chat.state) && !working(patch.state) && mocks) mocks.asked = false;
+    // A turn that ended may have made the sketch's pages, or opened one
+    // on the stage.
+    if (working(chat.state) && !working(patch.state) && pages) pages.asked = false;
     // And changed the files.
     if (working(chat.state) && !working(patch.state) && changes) changes.asked = false;
     // And ended a sketch.
@@ -500,10 +503,10 @@ function drawChat() {
   const places = conversation(chat.entries, agent);
   const closes = closing(chat.entries, row);
   if (closes) places.push(place(closes, null, null, false));
-  // The sketch's pages, where the human reads on, to try them.
+  // The pages to try, where the human reads on.
   if (row) {
-    findMocks(row);
-    const tried = mockBar();
+    findPages(row);
+    const tried = pageBar();
     if (tried) places.push(place(tried, null, null, false));
   }
   if (working(chat.state)) {
@@ -850,58 +853,53 @@ function changedFile(file, open) {
     lines);
 }
 
-// Asks coxd for the pages of the sketch `row` works in, if it works in
-// one, unless it was asked since the chat was shown or its turn last
-// ended.
-function findMocks(row) {
-  // A sketch's chats work in its folder, as its setup says.
-  const folder = (row.setup && row.setup.folder) || row.folder;
-  if (!folder) return;
-  if (mocks && mocks.key === row.key && mocks.asked) return;
-  mocks = { key: row.key, asked: true, told: mocks && mocks.key === row.key ? mocks.told : null };
-  const asked = mocks;
-  fetch(`/mocks?folder=${encodeURIComponent(folder)}`)
+// Asks coxd for the pages the chat `row` has to try, unless it was asked
+// since the chat was shown or its turn last ended.
+function findPages(row) {
+  if (pages && pages.key === row.key && pages.asked) return;
+  pages = { key: row.key, asked: true, told: pages && pages.key === row.key ? pages.told : null };
+  const asked = pages;
+  fetch(`/pages?chat=${row.key}`)
     .then((answer) => (answer.ok ? answer.json() : null))
     .catch(() => null)
     .then((told) => {
-      if (mocks !== asked) return;
+      if (pages !== asked) return;
       const before = JSON.stringify(asked.told);
       asked.told = told;
       if (JSON.stringify(told) !== before && chat && chat.key === asked.key) draw();
     });
 }
 
-// The pages of the sketch, for the human to try, each a chip.
-function mockBar() {
-  const told = mocks && chat && mocks.key === chat.key && mocks.told;
+// The pages to try, each a chip.
+function pageBar() {
+  const told = pages && chat && pages.key === chat.key && pages.told;
   if (!told || !told.pages.length) return null;
-  return el("div", { class: "mocks" },
+  return el("div", { class: "tries" },
     el("span", { class: "label" }, "Try it"),
-    told.pages.map((page) => el("button", { type: "button", onclick: () => openMock(told, page) }, page)));
+    told.pages.map((page) => el("button", { type: "button", onclick: () => openPage(page) }, page.name)));
 }
 
-// Where coxd serves `page` of the sketch `told` names: the Mac's name the
-// page came for, at the port of the mocks, another origin than the page.
-function mockAddress(told, page) {
-  const path = [told.sketch, ...page.split("/")].map(encodeURIComponent).join("/");
-  return `${location.protocol}//${location.hostname}:${told.port}/${path}`;
+// Where the phone reaches `page`: at the Mac's name the page came for, at
+// the port it is served on of the Mac's own address, which the relay
+// passes on, another origin than the page.
+function pageAddress(page) {
+  return `${location.protocol}//${location.hostname}:${page.port}${page.path}`;
 }
 
-// Shows `page` of the sketch over the chat, in a frame, as the human
-// tries it: it runs as it would on its own, but cannot reach the page
-// that frames it.
-function openMock(told, page) {
-  const address = mockAddress(told, page);
+// Shows `page` over the chat, in a frame, as the human tries it: it runs
+// as it would on its own, but cannot reach the page that frames it.
+function openPage(page) {
+  const address = pageAddress(page);
   const frame = el("iframe", {
     src: address,
-    title: page,
+    title: page.name,
     sandbox: "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads",
   });
   const close = () => { viewer.remove(); document.body.classList.remove("trying"); };
-  const viewer = el("div", { id: "mock", role: "dialog", "aria-label": page },
+  const viewer = el("div", { id: "trial", role: "dialog", "aria-label": page.name },
     el("div", { class: "bar" },
       el("button", { type: "button", class: "icon-button", "aria-label": "Back to the chat", onclick: close }, "‹"),
-      el("span", { class: "page" }, page),
+      el("span", { class: "page" }, page.name),
       el("button", { type: "button", class: "icon-button", "aria-label": "Load again", onclick: () => { frame.src = address; } }, "↻"),
       el("a", { href: address, class: "icon-button", target: "_blank", rel: "noopener noreferrer", "aria-label": "Open on its own" }, "↗")),
     frame);
@@ -1775,7 +1773,7 @@ head.back.addEventListener("click", (event) => {
   location.hash = "";
 });
 window.addEventListener("hashchange", () => {
-  const trying = document.getElementById("mock");
+  const trying = document.getElementById("trial");
   if (trying) trying.remove();
   document.body.classList.remove("trying");
   opened.clear();

@@ -1,5 +1,6 @@
 //! The human's tailnet, which the phone reaches the page through: coxd
-//! has `tailscale serve` hand the page to it, and takes a phone that
+//! has `tailscale serve` hand the page to it, and each port the relay
+//! passes on (see [`super::relay`]), and takes a phone that
 //! comes through it as the human's own when Tailscale says it is of the
 //! same login as the Mac, with no secret to pair with.
 //!
@@ -130,29 +131,87 @@ fn served_in(bytes: &[u8], port: u16, https: u16) -> Served {
         format!("localhost:{port}"),
     ];
     let mut root = None;
-    for (at, web) in config
+    for (at, path, proxy) in handlers(&config) {
+        if !at.ends_with(&format!(":{https}")) {
+            continue;
+        }
+        if proxy.is_some_and(|proxy| page.iter().any(|page| page == proxy)) {
+            return Served::Already;
+        }
+        if path == "/" {
+            root = Some(format!("https://{}/", at.trim_end_matches(":443")));
+        }
+    }
+    root.map_or(Served::Nothing, Served::Other)
+}
+
+/// Each handler `config`, as `tailscale serve status --json` says it,
+/// has: where it serves, as `mac.tail1234.ts.net:443`, at which path,
+/// and what it passes on to, if it passes on.
+fn handlers(config: &serde_json::Value) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
+    config
         .get("Web")
         .and_then(serde_json::Value::as_object)
         .into_iter()
         .flatten()
-    {
-        for (path, handler) in web
-            .get("Handlers")
-            .and_then(serde_json::Value::as_object)
-            .into_iter()
-            .flatten()
-        {
-            let proxy = handler.get("Proxy").and_then(serde_json::Value::as_str);
-            let proxy = proxy.map(|proxy| proxy.trim_end_matches('/'));
-            if proxy.is_some_and(|proxy| page.iter().any(|page| page == proxy)) {
-                return Served::Already;
-            }
-            if path == "/" && at.ends_with(&format!(":{https}")) {
-                root = Some(format!("https://{}/", at.trim_end_matches(":443")));
-            }
-        }
+        .flat_map(|(at, web)| {
+            web.get("Handlers")
+                .and_then(serde_json::Value::as_object)
+                .into_iter()
+                .flatten()
+                .map(move |(path, handler)| {
+                    let proxy = handler.get("Proxy").and_then(serde_json::Value::as_str);
+                    (
+                        at.as_str(),
+                        path.as_str(),
+                        proxy.map(|proxy| proxy.trim_end_matches('/')),
+                    )
+                })
+        })
+}
+
+/// The ports of the tailnet that `tailscale serve status --json` says,
+/// in `bytes`, are handed to the relay, on `relay`.
+fn relayed_in(bytes: &[u8], relay: u16) -> std::collections::BTreeSet<u16> {
+    let Ok(config) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return std::collections::BTreeSet::new();
+    };
+    let to = [
+        format!("http://127.0.0.1:{relay}"),
+        format!("http://localhost:{relay}"),
+        format!("127.0.0.1:{relay}"),
+        format!("localhost:{relay}"),
+    ];
+    handlers(&config)
+        .filter(|(_, path, proxy)| {
+            *path == "/" && proxy.is_some_and(|proxy| to.iter().any(|to| to == proxy))
+        })
+        .filter_map(|(at, _, _)| at.rsplit_once(':')?.1.parse().ok())
+        .collect()
+}
+
+/// The ports of the tailnet handed to the relay, on `relay`, as
+/// `tailscale serve`, through `program`, says, as coxd left them.
+pub fn relayed(program: &str, relay: u16) -> std::collections::BTreeSet<u16> {
+    run(program, &["serve", "status", "--json"], ASKS)
+        .filter(|ran| ran.ok)
+        .map(|ran| relayed_in(&ran.out, relay))
+        .unwrap_or_default()
+}
+
+/// Has `tailscale serve`, through `program`, serve nothing at its port
+/// `https` any more.
+///
+/// # Errors
+///
+/// When `tailscale serve` fails.
+pub fn unserve(program: &str, https: u16) -> Result<(), String> {
+    let at = format!("--https={https}");
+    match run(program, &["serve", &at, "off"], ASKS) {
+        Some(ran) if ran.ok => Ok(()),
+        Some(ran) => Err(said(&ran)),
+        None => Err(format!("`{program}` does not start")),
     }
-    root.map_or(Served::Nothing, Served::Other)
 }
 
 /// Has `tailscale serve` hand what coxd serves on `port` to the
@@ -366,6 +425,27 @@ mod tests {
         );
         assert_eq!(served_in(b"{}", 7421, 443), Served::Nothing);
         assert_eq!(served_in(b"", 7421, 443), Served::Nothing);
+    }
+
+    #[test]
+    fn tells_which_ports_are_handed_to_the_relay() {
+        let served = br#"{"Web": {
+            "mac.tail1234.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7421"}}},
+            "mac.tail1234.ts.net:5173": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7422"}}},
+            "mac.tail1234.ts.net:7423": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7422"}}},
+            "mac.tail1234.ts.net:3000": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:3000"}}}
+        }}"#;
+        assert_eq!(
+            relayed_in(served, 7422),
+            std::collections::BTreeSet::from([5173, 7423])
+        );
+        assert_eq!(served_in(served, 7422, 5173), Served::Already);
+        assert_eq!(served_in(served, 7422, 8080), Served::Nothing);
+        assert_eq!(
+            served_in(served, 7422, 3000),
+            Served::Other("https://mac.tail1234.ts.net:3000/".to_owned())
+        );
+        assert!(relayed_in(b"", 7422).is_empty());
     }
 
     #[test]

@@ -78,11 +78,12 @@ pub fn run(
                             })
                             .ok();
                         let owner = std::rc::Rc::new(std::cell::RefCell::new(None));
-                        let mocks = serve_mocks(port, &token, &owner).await;
-                        if super::phone::tailscale() {
+                        let tailscale = super::phone::tailscale();
+                        let relayed = relay(port, &token, &owner, tailscale).await;
+                        if tailscale {
                             tokio::task::spawn_local(super::phone::follow_tailnet(
                                 port,
-                                mocks,
+                                relayed.as_ref().map(|relayed| Rc::clone(&relayed.ports)),
                                 std::rc::Rc::clone(&owner),
                             ));
                         }
@@ -90,7 +91,7 @@ pub fn run(
                             phone,
                             token,
                             owner,
-                            (pushes, mocks),
+                            (pushes, relayed),
                             internal.clone(),
                         ));
                     }
@@ -118,33 +119,51 @@ pub fn run(
     })
 }
 
-/// Serves the sketches' mocks to the phone, on the port after the page's
-/// `port`, with the page's `token` and `owner`: the port, unless it
-/// cannot be listened on.
-async fn serve_mocks(
+/// Starts the relay, which passes what is served on the Mac's own
+/// address on to the phone, on the port after the page's `port`, with the
+/// page's `token` and `owner`, and serves the sketches' mocks there, on
+/// the port after it, for it to pass them on too: what it passes on,
+/// unless it cannot listen. With `tailscale`, the phone waits for the
+/// tailnet to hand a port to the relay before it is told of it.
+async fn relay(
     port: u16,
     token: &str,
-    owner: &std::rc::Rc<std::cell::RefCell<Option<super::phone::tailnet::Owner>>>,
-) -> Option<u16> {
-    use super::phone::{listen, mocks};
-    let mocks = mocks::port(port)?;
-    match listen(mocks).await {
-        Ok(listener) => {
-            tokio::task::spawn_local(mocks::serve(
-                listener,
-                token.to_owned(),
-                std::rc::Rc::clone(owner),
-                port,
-                mocks,
-            ));
-            Some(mocks)
-        }
-        Err(error) => {
-            tracing::warn!("the sketches are not served to the phone: {error:#}");
-            None
-        }
-    }
+    owner: &Rc<std::cell::RefCell<Option<super::phone::tailnet::Owner>>>,
+    tailscale: bool,
+) -> Option<super::phone::Relayed> {
+    use super::phone::{Relayed, listen, mocks, relay};
+    let at = relay::port(port)?;
+    let listener = listen(at)
+        .await
+        .inspect_err(|error| tracing::warn!("nothing is passed on to the phone: {error:#}"))
+        .ok()?;
+    let ports = Rc::new(relay::Ports::new(port, at, tailscale));
+    tokio::task::spawn_local(relay::serve(
+        listener,
+        relay::Relay {
+            token: token.to_owned(),
+            owner: Rc::clone(owner),
+            page: port,
+            ports: Rc::clone(&ports),
+        },
+    ));
+    let mocks = match mocks::port(port) {
+        Some(mocks) => match listen(mocks).await {
+            Ok(listener) => {
+                tokio::task::spawn_local(mocks::serve(listener, mocks));
+                ports.want(relay::Wanting::Mocks, [mocks].into());
+                Some(mocks)
+            }
+            Err(error) => {
+                tracing::warn!("the sketches are not served: {error:#}");
+                None
+            }
+        },
+        None => None,
+    };
+    Some(Relayed { mocks, ports })
 }
+
 /// Listens on `socket`, unless a coxd answers there already: a socket no
 /// coxd answers at was left by one that ended.
 fn listen(socket: &Path) -> anyhow::Result<UnixListener> {
