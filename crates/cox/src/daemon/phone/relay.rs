@@ -14,7 +14,7 @@
 //! `localhost` itself does not.
 //!
 //! The relay passes on only what the human's phone sends, as Cox's page
-//! takes it (see [`super::paired`]), and only to the ports the phone was
+//! takes it (see [`super::Phones`]), and only to the ports the phone was
 //! told of ([`Ports`]). It passes it on as made on the Mac, to
 //! `localhost:<port>`, as a server that lets in only the names it knows,
 //! as a dev server does, takes it; without what is Cox's own, as the
@@ -38,7 +38,7 @@ use hyper_util::rt::TokioIo;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-use super::{COOKIE, paired};
+use super::{COOKIE, Phones};
 
 /// What the relay answers: what the port it passed on to answered, or
 /// why it did not.
@@ -194,11 +194,11 @@ fn came_for(headers: &HeaderMap) -> Option<(&str, Option<u16>)> {
     .then_some((name, port))
 }
 
-/// What the relay needs: the secret the human's phone pairs with, the
-/// page's port, which Cox's page is served on, and the ports it passes on
-/// to.
+/// What the relay needs: the human's phones, which it lets in as the
+/// page does, the page's port, which Cox's page is served on, and the
+/// ports it passes on to.
 pub struct Relay {
-    pub token: String,
+    pub phones: Rc<Phones>,
     pub page: u16,
     pub ports: Rc<Ports>,
 }
@@ -244,7 +244,7 @@ async fn relayed(request: Request<Incoming>, relay: &Relay) -> Response<Body> {
             format!("Cox passes nothing on to port {port}"),
         );
     }
-    if !paired(request.headers(), &relay.token) {
+    if !relay.phones.paired(request.headers()) {
         return told(
             StatusCode::UNAUTHORIZED,
             "Cox does not know this phone: open Cox's page first.".to_owned(),
@@ -593,7 +593,7 @@ mod tests {
         tokio::task::spawn_local(serve(
             listener,
             Relay {
-                token: "secret".to_owned(),
+                phones: Rc::new(Phones::new("secret".to_owned(), None)),
                 page: 7421,
                 ports,
             },

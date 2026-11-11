@@ -10,7 +10,8 @@
 //! and anything else there, can reach `127.0.0.1` too, every answer but
 //! the pairing is for the human alone: a phone that holds, in a cookie,
 //! the secret coxd keeps in `state/phone-token`, which it gets by
-//! opening, once, `/pair/<secret>`.
+//! opening, once, `/pair/<secret>`, until the human unpairs every phone,
+//! as coxd makes the secret again (see [`Phones`]).
 //!
 //! The page is the files in `phone/`, built into Cox. It follows the
 //! chats on `/events`, a stream of server-sent events, each a
@@ -209,6 +210,24 @@ fn token_at(file: &Path) -> anyhow::Result<String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).with_context(|| format!("cannot read {}", file.display())),
     }
+    new_token_at(file)
+}
+
+/// A new secret for a phone to pair with, kept in place of the one
+/// before, so that no phone paired with that one is let in any more,
+/// once coxd takes it up (see [`Phones::unpaired`]).
+///
+/// # Errors
+///
+/// When there is no place to keep it, or it cannot be made or kept.
+pub fn new_token() -> anyhow::Result<String> {
+    let file =
+        storage::path(Kept::PhoneToken).context("there is no place for the phone's secret")?;
+    new_token_at(&file)
+}
+
+/// A new secret, kept in `file` in place of the one before.
+fn new_token_at(file: &Path) -> anyhow::Result<String> {
     let mut random = [0_u8; 32];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut random))
@@ -456,30 +475,71 @@ pub async fn listen(port: u16) -> anyhow::Result<TcpListener> {
         .with_context(|| format!("cannot listen for the phone on port {port}"))
 }
 
-/// Serves the page on `listener` to the phones paired with `token`,
-/// telling the daemon, on `internal`, of the phones that follow the
-/// chats, and, with `pushes`, pushing to them what it says of the chats;
-/// the pages it frames being passed on by the relay, as `relayed` has
-/// it, if they are (see [`relay`]).
+/// The human's phones, as coxd holds them: the secret they are paired
+/// with, which the page and the relay let them in by, and where coxd
+/// pushes to them, unless it pushes nothing. One secret for them all, so
+/// that the human unpairs them all at once.
+pub struct Phones {
+    /// The secret, as the cookie of a paired phone holds it.
+    secret: RefCell<String>,
+    /// coxd's key and the phones it pushes to, unless it pushes nothing.
+    pushes: Option<Rc<RefCell<Pushes>>>,
+}
+
+impl Phones {
+    /// The phones paired with `secret`, pushed to as `pushes` says.
+    #[must_use]
+    pub fn new(secret: String, pushes: Option<Pushes>) -> Self {
+        Self {
+            secret: RefCell::new(secret),
+            pushes: pushes.map(|pushes| Rc::new(RefCell::new(pushes))),
+        }
+    }
+
+    /// Lets in only the phones paired with `secret` from now on, the
+    /// human having unpaired every phone, and pushes to none of them
+    /// until it asks again.
+    pub fn unpaired(&self, secret: String) {
+        *self.secret.borrow_mut() = secret;
+        if let Some(pushes) = &self.pushes {
+            pushes.borrow_mut().forget_all();
+        }
+    }
+
+    /// Whether a request with `headers` is the human's: holding the
+    /// secret in its cookie.
+    fn paired(&self, headers: &hyper::HeaderMap) -> bool {
+        let secret = self.secret.borrow();
+        headers
+            .get_all(header::COOKIE)
+            .iter()
+            .filter_map(|cookies| cookies.to_str().ok())
+            .flat_map(|cookies| cookies.split(';'))
+            .filter_map(|cookie| cookie.trim().strip_prefix(COOKIE)?.strip_prefix('='))
+            .any(|given| same(given.as_bytes(), secret.as_bytes()))
+    }
+}
+
+/// Serves the page on `listener` to the `phones`, telling the daemon, on
+/// `internal`, of the phones that follow the chats, and pushing to them
+/// what it says of the chats; the pages it frames being passed on by the
+/// relay, as `relayed` has it, if they are (see [`relay`]).
 pub async fn serve(
     listener: TcpListener,
-    token: String,
-    (pushes, relayed): (Option<Pushes>, Option<Relayed>),
+    phones: Rc<Phones>,
+    relayed: Option<Relayed>,
     internal: UnboundedSender<Internal>,
 ) {
-    let pushes = pushes.map(|pushes| {
-        let pushes = Rc::new(RefCell::new(pushes));
+    if let Some(pushes) = &phones.pushes {
         let (to, notices) = unbounded_channel();
         if internal.send(Internal::Push { to }).is_ok() {
-            tokio::task::spawn_local(push_all(Rc::clone(&pushes), notices));
+            tokio::task::spawn_local(push_all(Rc::clone(pushes), notices));
         }
-        pushes
-    });
+    }
     let page = Rc::new(Page {
-        token,
+        phones,
         internal,
         last: Cell::new(0),
-        pushes,
         relayed,
     });
     loop {
@@ -525,12 +585,10 @@ pub async fn serve(
 
 /// What answers the phones.
 struct Page {
-    token: String,
+    phones: Rc<Phones>,
     internal: UnboundedSender<Internal>,
     /// The number of the last phone that followed the chats.
     last: Cell<u64>,
-    /// coxd's key and the phones it pushes to, unless it pushes nothing.
-    pushes: Option<Rc<RefCell<Pushes>>>,
     /// What the relay passes on to the phone, if it does.
     relayed: Option<Relayed>,
 }
@@ -560,7 +618,7 @@ impl Page {
             );
         }
         if path == "/push" {
-            return match &self.pushes {
+            return match &self.phones.pushes {
                 Some(pushes) => answer(
                     StatusCode::OK,
                     "application/json",
@@ -842,7 +900,7 @@ impl Page {
     /// Pushes to the phone where `body` says, a `PushSubscription` as
     /// JSON, from now on.
     fn subscribe(&self, body: &[u8]) -> Response<Body> {
-        let Some(pushes) = &self.pushes else {
+        let Some(pushes) = &self.phones.pushes else {
             return answer(StatusCode::NOT_FOUND, TEXT, "coxd pushes nothing");
         };
         let Ok(subscription) = serde_json::from_slice::<Subscription>(body) else {
@@ -864,7 +922,7 @@ impl Page {
         struct Ended {
             endpoint: String,
         }
-        let Some(pushes) = &self.pushes else {
+        let Some(pushes) = &self.phones.pushes else {
             return answer(StatusCode::NOT_FOUND, TEXT, "coxd pushes nothing");
         };
         let Ok(ended) = serde_json::from_slice::<Ended>(body) else {
@@ -903,7 +961,8 @@ impl Page {
 
     /// Pairs the phone that opened `/pair/<token>`, when it is the secret.
     fn pair(&self, token: &str) -> Response<Body> {
-        if !same(token.as_bytes(), self.token.as_bytes()) {
+        let secret = self.phones.secret.borrow();
+        if !same(token.as_bytes(), secret.as_bytes()) {
             return answer(
                 StatusCode::FORBIDDEN,
                 "text/html; charset=utf-8",
@@ -915,8 +974,7 @@ impl Page {
         headers.insert(header::LOCATION, HeaderValue::from_static("/"));
         // Browsers keep a cookie 400 days at most.
         let cookie = format!(
-            "{COOKIE}={}; Path=/; Max-Age=34560000; HttpOnly; Secure; SameSite=Strict",
-            self.token
+            "{COOKIE}={secret}; Path=/; Max-Age=34560000; HttpOnly; Secure; SameSite=Strict"
         );
         if let Ok(cookie) = HeaderValue::from_str(&cookie) {
             headers.insert(header::SET_COOKIE, cookie);
@@ -924,9 +982,9 @@ impl Page {
         response
     }
 
-    /// Whether `request` is the human's (see [`paired`]).
+    /// Whether `request` is the human's (see [`Phones::paired`]).
     fn paired(&self, request: &Request<Incoming>) -> bool {
-        paired(request.headers(), &self.token)
+        self.phones.paired(request.headers())
     }
 
     /// The stream of events of a phone that follows the chats, watching
@@ -1047,18 +1105,6 @@ async fn push_all(pushes: Rc<RefCell<Pushes>>, mut notices: UnboundedReceiver<No
             });
         }
     }
-}
-
-/// Whether a request with `headers` is the human's: holding the secret,
-/// `token`, in its cookie.
-fn paired(headers: &hyper::HeaderMap, token: &str) -> bool {
-    headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|cookies| cookies.to_str().ok())
-        .flat_map(|cookies| cookies.split(';'))
-        .filter_map(|cookie| cookie.trim().strip_prefix(COOKIE)?.strip_prefix('='))
-        .any(|given| same(given.as_bytes(), token.as_bytes()))
 }
 
 /// Whether `request` comes from the page itself, and not from another
@@ -1433,6 +1479,82 @@ mod tests {
         std::fs::remove_dir_all(&folder).unwrap();
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn lets_in_no_phone_paired_before_the_human_unpairs_them() {
+        let folder = std::env::temp_dir().join(format!("cox-phone-unpair-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("phone-token");
+        let mut pushes =
+            Pushes::open_at(&folder.join("push-key"), folder.join("pushes.json")).unwrap();
+        pushes
+            .subscribe(Subscription {
+                endpoint: "https://web.push.apple.com/QAbc".to_owned(),
+                keys: push::Keys {
+                    p256dh: format!("BA{}", "A".repeat(85)),
+                    auth: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+                },
+            })
+            .unwrap();
+        let before = token_at(&file).unwrap();
+        let phones = Rc::new(Phones::new(before.clone(), Some(pushes)));
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, _heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(listener, Rc::clone(&phones), None, internal));
+            let get = |path: &str, secret: &str| {
+                format!(
+                    "GET {path} HTTP/1.1\r\nHost: x\r\nCookie: cox_phone={secret}\r\n\
+                     Connection: close\r\n\r\n"
+                )
+            };
+
+            let paired = ask(port, &get("/", &before), "").await;
+            assert!(paired.starts_with("HTTP/1.1 200"), "{paired}");
+
+            let after = new_token_at(&file).unwrap();
+            assert_ne!(after, before);
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), after);
+            phones.unpaired(after.clone());
+
+            let lost = ask(port, &get("/", &before), "").await;
+            assert!(lost.starts_with("HTTP/1.1 401"), "{lost}");
+            let leaked = ask(port, &get(&format!("/pair/{before}"), ""), "").await;
+            assert!(leaked.starts_with("HTTP/1.1 403"), "{leaked}");
+            let paired_again = ask(port, &get(&format!("/pair/{after}"), ""), "").await;
+            assert!(paired_again.starts_with("HTTP/1.1 303"), "{paired_again}");
+            assert!(
+                paired_again.contains(&format!("cox_phone={after};")),
+                "{paired_again}"
+            );
+            let new = ask(port, &get("/", &after), "").await;
+            assert!(new.starts_with("HTTP/1.1 200"), "{new}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+
+        let kept = std::fs::read_to_string(folder.join("pushes.json")).unwrap();
+        assert_eq!(
+            kept.trim(),
+            "[]",
+            "nothing is pushed to a phone paired before"
+        );
+        let reopened =
+            Pushes::open_at(&folder.join("push-key"), folder.join("pushes.json")).unwrap();
+        assert!(!reopened.any());
+        for kept in ["phone-token", "pushes.json"] {
+            let mode = std::fs::metadata(folder.join(kept)).unwrap().permissions();
+            assert_eq!(
+                std::os::unix::fs::PermissionsExt::mode(&mode) & 0o777,
+                0o600,
+                "{kept} is the human's alone"
+            );
+        }
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
     /// What the page answers `request`, written whole on a connection
     /// of its own to `port`, up to `until` in what it answers, or all of
     /// it when `until` is empty.
@@ -1461,7 +1583,7 @@ mod tests {
                 let listener = listen(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 let (internal, mut heard) = unbounded_channel();
-                tokio::task::spawn_local(serve(listener, "secret".to_owned(), (None, None), internal));
+                tokio::task::spawn_local(serve(listener, Rc::new(Phones::new("secret".to_owned(), None)), None, internal));
 
                 let unpaired = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", "").await;
                 assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
@@ -1551,7 +1673,12 @@ mod tests {
             let listener = listen(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let (internal, mut heard) = unbounded_channel();
-            tokio::task::spawn_local(serve(listener, "secret".to_owned(), (None, None), internal));
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
             let as_tailscale_says =
                 "Host: mac.tail1234.ts.net\r\nTailscale-User-Login: me@github\r\n";
 
@@ -1667,7 +1794,12 @@ mod tests {
             let listener = listen(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let (internal, mut heard) = unbounded_channel();
-            tokio::task::spawn_local(serve(listener, "secret".to_owned(), (None, None), internal));
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
             let get = |path: &str, cookie: &str| {
                 format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
             };
@@ -1719,7 +1851,12 @@ mod tests {
             let listener = listen(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let (internal, _heard) = unbounded_channel();
-            tokio::task::spawn_local(serve(listener, "secret".to_owned(), (None, None), internal));
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
             let get = |path: &str, cookie: &str| {
                 format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
             };
@@ -1753,8 +1890,8 @@ mod tests {
             let (internal, mut heard) = unbounded_channel();
             tokio::task::spawn_local(serve(
                 listener,
-                "secret".to_owned(),
-                (Some(pushes), None),
+                Rc::new(Phones::new("secret".to_owned(), Some(pushes))),
+                None,
                 internal,
             ));
             assert!(

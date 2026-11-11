@@ -67,6 +67,7 @@ pub fn run(
         tokio::task::spawn_local(accept(listener, to, internal.clone()));
         tokio::task::spawn_local(stop_when_asked(socket.to_owned(), bound, stop));
         tokio::task::spawn_local(schedules(internal.clone()));
+        let mut phones = None;
         if let Some(port) = super::phone::port() {
             match super::phone::token() {
                 Ok(token) => match super::phone::listen(port).await {
@@ -77,8 +78,9 @@ pub fn run(
                                 tracing::error!("nothing is pushed to the phones: {error:#}");
                             })
                             .ok();
+                        let served = Rc::new(super::phone::Phones::new(token, pushes));
                         let tailscale = super::phone::tailscale();
-                        let relayed = relay(port, &token, tailscale).await;
+                        let relayed = relay(port, &served, tailscale).await;
                         if tailscale {
                             tokio::task::spawn_local(super::phone::follow_tailnet(
                                 port,
@@ -87,10 +89,11 @@ pub fn run(
                         }
                         tokio::task::spawn_local(super::phone::serve(
                             phone,
-                            token,
-                            (pushes, relayed),
+                            Rc::clone(&served),
+                            relayed,
                             internal.clone(),
                         ));
+                        phones = Some(served);
                     }
                     // As when another Cox, run from elsewhere, serves its
                     // phone there.
@@ -100,7 +103,8 @@ pub fn run(
             }
         }
         tracing::info!(socket = %socket.display(), "coxd runs");
-        let daemon = Daemon::new(home, false, store(), spawns(), internal);
+        let mut daemon = Daemon::new(home, false, store(), spawns(), internal);
+        daemon.phones = phones;
         daemon.serve(None, from_window, heard, stopped).await;
         // Unless another coxd listens there now, as when the data folder
         // was made again.
@@ -117,12 +121,16 @@ pub fn run(
 }
 
 /// Starts the relay, which passes what is served on the Mac's own
-/// address on to the phone, on the port after the page's `port`, with the
-/// page's `token`, and serves the sketches' mocks there, on the port
+/// address on to the phone, on the port after the page's `port`, to the
+/// page's `phones`, and serves the sketches' mocks there, on the port
 /// after it, for it to pass them on too: what it passes on, unless it
 /// cannot listen. With `tailscale`, the phone waits for the
 /// tailnet to hand a port to the relay before it is told of it.
-async fn relay(port: u16, token: &str, tailscale: bool) -> Option<super::phone::Relayed> {
+async fn relay(
+    port: u16,
+    phones: &Rc<super::phone::Phones>,
+    tailscale: bool,
+) -> Option<super::phone::Relayed> {
     use super::phone::{Relayed, listen, mocks, relay};
     let at = relay::port(port)?;
     let listener = listen(at)
@@ -133,7 +141,7 @@ async fn relay(port: u16, token: &str, tailscale: bool) -> Option<super::phone::
     tokio::task::spawn_local(relay::serve(
         listener,
         relay::Relay {
-            token: token.to_owned(),
+            phones: Rc::clone(phones),
             page: port,
             ports: Rc::clone(&ports),
         },

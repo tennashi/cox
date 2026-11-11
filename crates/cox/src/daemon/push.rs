@@ -188,6 +188,12 @@ impl Pushes {
         }
     }
 
+    /// Pushes to no phone until one asks again.
+    pub fn forget_all(&mut self) {
+        self.subscriptions.clear();
+        self.keep();
+    }
+
     fn keep(&self) {
         let json = serde_json::to_vec_pretty(&self.subscriptions).unwrap_or_default();
         if let Err(error) = storage::keep_secret(&self.file, &json) {

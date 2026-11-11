@@ -204,6 +204,9 @@ pub enum FromDaemon {
     Prepare { key: u64, cwd: PathBuf, id: u64 },
     /// All the window asked before [`ToDaemon::Sync`] with `id` is done.
     Settled { id: u64 },
+    /// Every phone is unpaired, as the window asked with
+    /// [`ToDaemon::UnpairPhones`], unless `failed` says why not.
+    Unpaired { failed: Option<String> },
 }
 
 /// What a window tells the daemon: what the human did.
@@ -330,6 +333,9 @@ pub enum ToDaemon {
     /// Cox's own chats opened from now on work in `home`, as the
     /// human set it, or as the settings say now when `set` is false.
     Home { home: PathBuf, set: bool },
+    /// Unpair every phone: make the secret a phone pairs with again, so
+    /// that each pairs again, with the code the settings show then.
+    UnpairPhones,
     /// Rename the project kept as `project` `name`, and its folder with
     /// it, unless one of its chats is at work.
     RenameProject { project: ProjectId, name: String },

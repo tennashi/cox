@@ -402,6 +402,9 @@ pub struct Daemon {
     /// Where what the chats that need the human come to is pushed to
     /// their phones, if anywhere (see [`push`]).
     push: Option<UnboundedSender<push::Notice>>,
+    /// The phones coxd serves the page to, for the human to unpair them
+    /// all, unless it serves none.
+    phones: Option<Rc<phone::Phones>>,
     /// What the window was last told of the projects and chats.
     listed: Option<Listing>,
     /// The commands the window runs, by their numbers, with where their
@@ -552,6 +555,7 @@ impl Daemon {
             window_watches: HashSet::new(),
             viewers: HashMap::new(),
             push: None,
+            phones: None,
             listed: None,
             running: HashMap::new(),
             seeing: HashMap::new(),
@@ -869,6 +873,28 @@ impl Daemon {
         self.window_watches.insert(key);
         self.tell(FromDaemon::Tabs { key, tabs });
         self.tell(FromDaemon::Patch { key, patch });
+    }
+
+    /// Unpairs every phone, as the human asked in the settings: makes the
+    /// secret a phone pairs with again, lets in only the phones paired
+    /// with it from now on, pushes to none paired before, and ends what
+    /// each phone there follows the chats on. Tells the window whether it did.
+    fn unpair_phones(&mut self) {
+        let failed = match phone::new_token() {
+            Ok(secret) => {
+                if let Some(phones) = &self.phones {
+                    phones.unpaired(secret);
+                }
+                self.viewers.clear();
+                tracing::info!("every phone is unpaired");
+                None
+            }
+            Err(error) => {
+                tracing::error!("the phones cannot be unpaired: {error:#}");
+                Some(format!("{error:#}"))
+            }
+        };
+        self.tell(FromDaemon::Unpaired { failed });
     }
 
     /// Has the phone of the connection `id` hear on `phone` the projects
@@ -1384,6 +1410,7 @@ impl Daemon {
                     self.projects[0].folder = home;
                 }
             }
+            ToDaemon::UnpairPhones => self.unpair_phones(),
             ToDaemon::RenameProject { project, name } => self.rename_project(project, &name),
             ToDaemon::SetAbout { project, about } => {
                 if let Some(index) = self.index_of(project) {

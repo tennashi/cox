@@ -33,11 +33,11 @@ use cox_core::store::Store;
 use fake_agent::{BACKGROUND_FINISHED, BACKGROUND_STARTED, FakeAgent, LogsIn, Resumes, TITLE};
 use fake_daemon::{
     Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, kept_at,
-    open_again, settle, settle_on, settled,
+    open_again, settle, settle_on, settle_until, settled,
 };
 use gpui::{
     Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
-    TestAppContext, VisualTestContext,
+    ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext, point,
 };
 
 /// Where a test keeps its chats, which it opens too, to keep chats there
@@ -480,6 +480,46 @@ async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&between);
     let _ = std::fs::remove_dir_all(&other);
+}
+
+#[gpui::test]
+async fn the_settings_unpair_every_phone(cx: &mut TestAppContext) {
+    let home = scratch("unpair-home");
+    let (_agents, workspace, cx) = open_window(cx, home.clone());
+    let file = cox::storage::path(cox::storage::Kept::PhoneToken).unwrap();
+    let before = cox::daemon::phone::token().unwrap();
+
+    click(cx, "open-settings");
+    let settings = workspace.read_with(cx, |workspace, _| {
+        workspace.settings().expect("the settings are open").clone()
+    });
+    let described = |cx: &mut VisualTestContext| {
+        settings.read_with(cx, |settings, cx| settings.described(cx).join("\n"))
+    };
+    let card = cx.debug_bounds("settings").expect("the settings are drawn");
+    cx.simulate_event(ScrollWheelEvent {
+        position: card.center(),
+        delta: ScrollDelta::Lines(point(0., -1000.)),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    click(cx, "unpair-phones");
+    settle_until(cx, |cx| described(cx).contains("every phone unpaired")).await;
+
+    assert!(
+        described(cx).contains("Phone: the pairing code hidden"),
+        "{}",
+        described(cx)
+    );
+    let after = std::fs::read_to_string(&file).unwrap();
+    assert_ne!(after.trim(), before);
+    assert_eq!(after.trim().len(), 64);
+    let mode = std::fs::metadata(&file).unwrap().permissions();
+    assert_eq!(
+        std::os::unix::fs::PermissionsExt::mode(&mode) & 0o777,
+        0o600
+    );
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[gpui::test]
