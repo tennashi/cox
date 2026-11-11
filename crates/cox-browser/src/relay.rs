@@ -706,6 +706,7 @@ mod tests {
 
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
     use super::*;
@@ -948,6 +949,52 @@ mod tests {
             ask(&mut agent, r#"{"id":2,"method":"Target.attachToTarget","params":{"targetId":"OTHER","flatten":true}}"#, 1).await,
             [r#"{"id":2,"error":{"code":-32000,"message":"No target with given id found"}}"#]
         );
+    }
+
+    #[tokio::test]
+    async fn a_web_page_cannot_connect() {
+        let (_agent, relay, _named) = connect().await;
+        let mut request = format!("ws://127.0.0.1:{}/devtools/browser", relay.port)
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "Origin",
+            tungstenite::http::HeaderValue::from_static("https://evil.example"),
+        );
+
+        match tokio_tungstenite::connect_async(request).await {
+            Err(tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status(), 403);
+            }
+            other => panic!(
+                "the page is refused, not {:?}",
+                other.map(|(_, response)| response)
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_relay_stops_once_dropped() {
+        let (mut agent, relay, _named) = connect().await;
+        let port = relay.port;
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || drop(relay)),
+        )
+        .await
+        .expect("the relay's thread ends")
+        .unwrap();
+
+        assert!(
+            TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+                .await
+                .is_err()
+        );
+        let heard = tokio::time::timeout(Duration::from_secs(5), agent.next())
+            .await
+            .expect("the agent's connection ends");
+        assert!(!matches!(heard, Some(Ok(Message::Text(_)))), "{heard:?}");
     }
 
     /// Answers each `/json/version`, keeping the connection open as the
