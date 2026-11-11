@@ -333,6 +333,20 @@ button.pill:active { background: var(--hover); }
 .tdot.cox { background: var(--faint); }
 .tdot.asking { background: var(--asking); }
 
+/* What draws the places before those drawn, at the top. */
+.earlier {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.earlier:active { background: var(--hover); }
+
 .human { font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cox-line, .note { font-size: 12px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 

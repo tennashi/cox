@@ -48,7 +48,7 @@ use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited,
 use crate::agent::setup::{Policy, Setup, StageUse, keeps_in_wiki};
 use crate::agent::{self, Agent, AgentEvent, Start};
 use crate::agents::Agents;
-use crate::chat::conversation::{Conversation, Entry, Gathered, Patch, State};
+use crate::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
 use crate::chat::judge::{Heard, Starts};
 use crate::chat::sketch::{self, Sketch};
 use crate::stage::terminal::run_unseen;
@@ -212,6 +212,15 @@ pub enum Internal {
     Folder {
         key: u64,
         answer: oneshot::Sender<Option<PathBuf>>,
+    },
+    /// What the tool call, or the permission request, at `at` in the
+    /// conversation of the chat `key` shows, for the phone, which is told
+    /// the conversation without it, to show as the human opens it, told
+    /// on `answer`, or nothing where there is none.
+    Content {
+        key: u64,
+        at: usize,
+        answer: oneshot::Sender<Option<Vec<Content>>>,
     },
     /// Where the chat `key` works, and the pages of the stage there, each
     /// its address and title, for the phone to offer those of the Mac's
@@ -2420,6 +2429,17 @@ impl Daemon {
             Internal::Act { message } => self.act(message),
             Internal::Folder { key, answer } => {
                 answer.send(self.slot(key).map(|slot| self.cwd(slot))).ok();
+            }
+            Internal::Content { key, at, answer } => {
+                let content = self.chat(key).and_then(|chat| {
+                    match chat.conversation().entries().get(at)? {
+                        Entry::ToolCall { content, .. } | Entry::Permission { content, .. } => {
+                            Some(content.clone())
+                        }
+                        _ => None,
+                    }
+                });
+                answer.send(content).ok();
             }
             Internal::Pages { key, answer } => {
                 let pages = self.slot(key).map(|slot| self.cwd(slot)).map(|folder| {
