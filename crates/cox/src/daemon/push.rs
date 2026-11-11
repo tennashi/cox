@@ -518,6 +518,14 @@ mod tests {
         };
         pushes.subscribe(subscription.clone()).unwrap();
         pushes.subscribe(subscription.clone()).unwrap();
+        let mode = std::fs::metadata(folder.join("pushes.json"))
+            .unwrap()
+            .permissions();
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(&mode) & 0o777,
+            0o600,
+            "where to push to a phone is the human's alone"
+        );
 
         let again = Pushes::open_at(&folder.join("push-key"), folder.join("pushes.json")).unwrap();
         assert_eq!(again.public_key(), pushes.public_key());
