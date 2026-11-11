@@ -24,7 +24,7 @@ use crate::agent::setup::Setup;
 use crate::agent::{Agent, AgentEvent, AgentThread, Command};
 use crate::agents::Agents;
 use crate::chat::conversation::{
-    self, Answer, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch, State,
+    self, Answer, Came, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch, State,
     TerminalLogin,
 };
 use crate::chat::judge::{Heard, Judge, Starts};
@@ -991,6 +991,12 @@ impl Chat {
         {
             return;
         }
+        self.came(Came::Found(said));
+    }
+
+    /// The agent of the trigger that runs said `said`: the agent goes on if
+    /// the trigger found something.
+    fn found(&mut self, said: Result<String, String>) {
         self.asked = None;
         let running = self.running_trigger();
         let next = self.conversation.found(said);
@@ -998,11 +1004,26 @@ impl Chat {
         self.go_on(next);
     }
 
+    /// Takes `came`, what came back of what runs as the turn ended, or,
+    /// while the agent asks the human in the middle of it, has the
+    /// conversation keep it until they answered.
+    fn came(&mut self, came: Came) {
+        if self.conversation.state() == State::Asking {
+            self.conversation.hold(came);
+            return;
+        }
+        match came {
+            Came::Ran(ran) => self.checked(ran),
+            Came::Judged(judged) => self.judged(judged),
+            Came::Found(said) => self.found(said),
+        }
+    }
+
     /// Lets go of what ran as the turn ended, once the chat stopped it,
     /// as when the human did: the command stops, and the judge, or the
     /// agent of the trigger, that is asked is told to stop.
     fn let_checks_go(&mut self, was_checking: bool) {
-        if self.conversation.state() == State::Checking {
+        if self.conversation.runs_checks() {
             return;
         }
         self.check = None;
@@ -1118,7 +1139,7 @@ impl Chat {
     /// as `ran` says.
     pub fn heard_check(&mut self, generation: u64, ran: Result<Ran, String>) {
         if generation == self.generation {
-            self.checked(ran);
+            self.came(Came::Ran(ran));
         }
     }
 
@@ -1220,10 +1241,10 @@ impl Chat {
             return;
         }
         match heard {
-            Heard::Judged(judged) => self.judged(judged),
+            Heard::Judged(judged) => self.came(Came::Judged(judged)),
             Heard::Closed(error) => {
                 self.judge = None;
-                self.judged(Err(error));
+                self.came(Came::Judged(Err(error)));
             }
         }
     }
@@ -1377,7 +1398,7 @@ impl Chat {
         if goal.as_ref() != self.conversation.goal().map(Goal::what) {
             self.judge = None;
         }
-        let was_checking = self.conversation.state() == State::Checking;
+        let was_checking = self.conversation.runs_checks();
         self.conversation.set_goal(goal);
         self.let_checks_go(was_checking);
         if let Some(record) = &self.record
@@ -1439,6 +1460,9 @@ impl Chat {
             self.send(command);
         }
         self.settle_gathering();
+        if let Some(came) = self.conversation.take_held() {
+            self.came(came);
+        }
     }
 
     /// Logs in as `option` says: through the agent, or in a terminal on the
@@ -1508,7 +1532,7 @@ impl Chat {
 
     /// The human stopped the turn.
     pub fn stop(&mut self) {
-        let was_checking = self.conversation.state() == State::Checking;
+        let was_checking = self.conversation.runs_checks();
         if let Some(command) = self.conversation.cancel() {
             self.send(command);
         }

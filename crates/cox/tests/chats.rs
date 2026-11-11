@@ -1003,12 +1003,13 @@ async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestA
     );
 }
 
-/// A command that waits until `mark` is made, for less long than a test
+/// A command that waits until `mark` is made, at most as long as a test
 /// waits, and passes once it is.
 fn waiting_for(mark: &Path) -> String {
     let mark = mark.display();
+    let tries = GIVEN_UP.as_millis() / 50;
     format!(
-        "i=0; while [ ! -e '{mark}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done; \
+        "i=0; while [ ! -e '{mark}' ] && [ $i -lt {tries} ]; do sleep 0.05; i=$((i+1)); done; \
          test -e '{mark}'"
     )
 }
@@ -1108,7 +1109,7 @@ async fn what_the_goals_command_answers_as_the_agent_asks_is_taken_once_answered
     let command = format!("{} && touch '{}'", waiting_for(&mark), ended.display());
 
     ask_as_the_goal_is_checked(cx, &view, &command).await;
-    // The command ends while the human is asked.
+    // The command ends while the human is asked, and the daemon hears it.
     std::fs::write(&mark, "").unwrap();
     settle_until(cx, |_| ended.exists()).await;
     std::thread::sleep(std::time::Duration::from_millis(300));
