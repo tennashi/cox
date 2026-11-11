@@ -127,10 +127,79 @@ fn opens_folders_and_chooses_files(cx: &mut TestAppContext) {
 fn opens_with_the_folders_it_had_open(cx: &mut TestAppContext) {
     let root = scratch("kept", &["src/code/tree.rs", "README.md"]);
     let (tree, _, cx) = open(cx, &root, vec![root.join("src"), root.join("src/code")]);
+    // `src / code` is one row, as `code` is all there is in `src`.
     assert_eq!(
         shown(&tree, &root, cx),
-        ["src", "src/code", "src/code/tree.rs", "README.md"]
+        ["src/code", "src/code/tree.rs", "README.md"]
     );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn opens_a_folder_with_the_folders_that_are_all_there_is_in_it(cx: &mut TestAppContext) {
+    let root = scratch(
+        "compact",
+        &[
+            "docs/design/files/tree.md",
+            "docs/design/tabs.md",
+            "README.md",
+        ],
+    );
+    let (tree, _, cx) = open(cx, &root, Vec::new());
+    assert_eq!(shown(&tree, &root, cx), ["docs", "README.md"]);
+
+    // `docs` opens with `design`, which is all there is in it, as one
+    // row; `files` is not all there is in `design`.
+    click(1, cx);
+    assert_eq!(
+        shown(&tree, &root, cx),
+        [
+            "docs/design",
+            "docs/design/files",
+            "docs/design/tabs.md",
+            "README.md"
+        ]
+    );
+
+    // The row closes `design`, and `docs` stays open with it in it.
+    click(1, cx);
+    assert_eq!(shown(&tree, &root, cx), ["docs/design", "README.md"]);
+    assert_eq!(
+        tree.read_with(cx, |tree, _| tree.open()),
+        [root.join("docs")]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn keeps_the_folders_of_the_rows_at_the_top_there(cx: &mut TestAppContext) {
+    let files: Vec<String> = (0..60)
+        .map(|number| format!("src/file{number:02}.rs"))
+        .collect();
+    let files: Vec<&str> = files.iter().map(String::as_str).collect();
+    let root = scratch("pinned", &[files.as_slice(), &["README.md"]].concat());
+    let (_, chosen, cx) = open(cx, &root, vec![root.join("src")]);
+    // Nothing is above the first rows to keep at the top.
+    assert!(cx.debug_bounds("pinned-1").is_none());
+
+    let tree = cx.debug_bounds("tree").expect("the tree is drawn");
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: tree.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-300.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let pinned = cx.debug_bounds("pinned-1").expect("`src` stays at the top");
+    // Where the first row is, before the tree scrolls.
+    assert_eq!(pinned.top(), tree.top() + gpui::px(4.));
+
+    // Choosing it scrolls back to it, at the top.
+    cx.simulate_click(pinned.center(), Modifiers::none());
+    cx.run_until_parked();
+    let row = cx.debug_bounds("entry-1").expect("`src` is drawn");
+    assert_eq!(row.top(), tree.top() + gpui::px(4.));
+    // Not the file that was under it.
+    assert!(chosen.borrow().is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
 
