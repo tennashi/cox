@@ -968,6 +968,76 @@ mod tests {
         let _ = fs::remove_dir_all(&folder);
     }
 
+    /// What `answer` comes to, or `None` when it has not come to anything
+    /// within `time`.
+    fn done_within(answer: Answer, time: Duration) -> Option<Result<String, String>> {
+        let (sender, came) = std::sync::mpsc::channel();
+        thread::spawn(move || sender.send(done(answer)));
+        came.recv_timeout(time).ok()
+    }
+
+    #[test]
+    fn a_command_that_does_not_finish_is_given_up_and_the_next_translates() {
+        let folder = scratch("gives-up");
+        let translator = Translator::start(folder.clone(), None);
+        // The command's own child holds its output open as well.
+        let stuck = Translation {
+            language: "Japanese".to_owned(),
+            command: Some(vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "cat >/dev/null; sleep 60 & wait".to_owned(),
+            ]),
+            agent: None,
+        };
+        let way = Way::into("Japanese");
+        let answer = translator.text("Shrink.", way.clone(), stuck.clone());
+        let error = done_within(answer, Duration::from_secs(10))
+            .expect("the translation is given up")
+            .unwrap_err();
+        assert!(error.starts_with("gave up"), "{error}");
+        // Not kept: asked again, it is translated again.
+        let mut again = translator.text("Shrink.", way.clone(), stuck);
+        assert!(again.try_recv().is_err());
+        let quick = Translation {
+            command: Some(vec!["tr".to_owned(), "a-z".to_owned(), "A-Z".to_owned()]),
+            language: "Japanese".to_owned(),
+            agent: None,
+        };
+        let answer = translator.text("Grow.", way, quick);
+        assert_eq!(
+            done_within(answer, Duration::from_secs(20)),
+            Some(Ok("GROW.".to_owned()))
+        );
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn an_agent_that_does_not_answer_is_given_up() {
+        let folder = scratch("agent-gives-up");
+        let silent = Agents::new(
+            vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "cat >/dev/null".to_owned(),
+            ],
+            Vec::new(),
+            Vec::new(),
+        );
+        let translator = Translator::start(folder.clone(), Some(silent));
+        let asked = Translation {
+            language: "Japanese".to_owned(),
+            command: None,
+            agent: None,
+        };
+        let answer = translator.text("Shrink.", Way::into("Japanese"), asked);
+        let error = done_within(answer, Duration::from_secs(10))
+            .expect("the translation is given up")
+            .unwrap_err();
+        assert!(error.starts_with("gave up"), "{error}");
+        let _ = fs::remove_dir_all(&folder);
+    }
+
     /// What `answer` comes to once it is done.
     fn done(mut answer: Answer) -> Result<String, String> {
         loop {
