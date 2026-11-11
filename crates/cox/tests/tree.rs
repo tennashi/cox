@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cox::stage::tree::{Chosen, Tree};
+use cox_editor::changes::How;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
 /// A folder of its own for a test, with the files `paths`, empty, by
@@ -262,5 +263,41 @@ fn marks_the_file_shown_with_the_folders_it_is_in_open(cx: &mut TestAppContext) 
         tree.read_with(cx, |tree, _| tree.open()),
         [root.join("src"), root.join("src/code")]
     );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Runs Git in `folder`, as a test's repository.
+fn git(folder: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(folder)
+        .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[gpui::test]
+fn says_how_each_file_changed(cx: &mut TestAppContext) {
+    let root = scratch("hows", &["src/main.rs", "README.md"]);
+    git(&root, &["init", "--quiet"]);
+    git(&root, &["add", "--all"]);
+    git(&root, &["commit", "--quiet", "-m", "Files"]);
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("src/lib.rs"), "").unwrap();
+
+    let (tree, _, cx) = open(cx, &root, vec![root.join("src")]);
+    let hows = |cx: &mut VisualTestContext| {
+        tree.read_with(cx, |tree, _| {
+            ["src/lib.rs", "src/main.rs", "README.md"].map(|path| tree.how(&root.join(path)))
+        })
+    };
+    assert_eq!(hows(cx), [Some(How::Added), Some(How::Changed), None]);
+
+    // As the agent writes the file over as it was.
+    std::fs::write(root.join("src/main.rs"), "").unwrap();
+    look(cx);
+    assert_eq!(hows(cx), [Some(How::Added), None, None]);
     std::fs::remove_dir_all(root).unwrap();
 }
