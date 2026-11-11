@@ -63,6 +63,16 @@ let drawing = false;
 // What the human opened of the conversation, folded otherwise, as the
 // window keeps it: the work at its first entry, a step, a line.
 const opened = new Set();
+// What the tool calls and the answered permission requests show, by
+// their places in the conversation shown, once coxd told it: the
+// conversation comes without it, and the page asks for what one shows as
+// the human opens it.
+const contents = new Map();
+// How many places of the conversation are drawn, the last: a long chat's
+// earlier ones are drawn as the human asks for them, as many again each
+// time.
+const PLACES = 40;
+let drawnPlaces = PLACES;
 // Whether the human opened the plan under the head.
 let planOpen = false;
 // How many turns toward its goal a chat takes on a line of the human's,
@@ -137,6 +147,8 @@ function connect() {
   if (events) events.close();
   const key = shownKey();
   chat = key === null ? null : { key, entries: [], state: null, steers: false, title: null, goal: null, settings: [], commands: [], came: false };
+  contents.clear();
+  drawnPlaces = PLACES;
   events = new EventSource(key === null ? "/events" : `/events?chat=${key}`);
   events.onopen = () => { head.lost.hidden = true; };
   events.onerror = () => {
@@ -159,7 +171,11 @@ function hear(told) {
   } else if (told.Patch && chat && told.Patch.key === chat.key) {
     const patch = told.Patch.patch;
     chat.entries.length = patch.len;
-    for (const [at, entry] of patch.entries) chat.entries[at] = entry;
+    for (const [at, entry] of patch.entries) {
+      chat.entries[at] = entry;
+      contents.delete(at);
+    }
+    for (const at of contents.keys()) if (at >= patch.len) contents.delete(at);
     // A turn that ended may have made the sketch's pages, or opened one
     // on the stage.
     if (working(chat.state) && !working(patch.state) && pages) pages.asked = false;
@@ -958,13 +974,15 @@ function place(node, who, name, starts) {
 
 // The conversation, as the window lays it out: each entry, or the work
 // the agent did one after another, a place on the line, who speaks named
-// where they start.
+// where they start. Only the last of its places are drawn, under a button
+// that draws more of those before them.
 function conversation(entries, current) {
   // The agent speaking, as the chat switched from one to another.
   let agent = current;
   const switched = entries.find((entry) => entry && kindOf(entry)[0] === "switched");
   if (switched) agent = kindOf(switched)[1].from;
-  const places = [];
+  // Each place, to draw: what it holds is made only for those drawn.
+  const found = [];
   let speaking = null;
   const asking = chat.state === "Asking";
   for (let at = 0; at < entries.length; at++) {
@@ -981,20 +999,43 @@ function conversation(entries, current) {
     const starts = speaker !== null && speaker !== speaking;
     if (speaker !== null) speaking = speaker;
     const name = { you: "YOU", cox: "COX", agent: agent.toUpperCase() }[speaker];
-    const asks = kind === "permission" && (value.chosen === null || value.chosen === undefined)
-      && asking && at === entries.length - 1;
     if (folds) {
-      places.push(place(work(at, entries.slice(at, end).map(kindOf), starts ? name : null), starts ? speaker : null, null, starts));
+      const first = at;
+      found.push(() => place(work(first, entries.slice(first, end).map(kindOf), starts ? name : null),
+        starts ? speaker : null, null, starts));
       at = end - 1;
       continue;
     }
-    const node = entryNode(at, kind, value, asks);
-    if (!node) continue;
-    // What asks the human is marked by its amber dot alone.
-    if (asks) places.push(place(node, "asking", null, false));
-    else places.push(place(node, starts ? speaker : null, starts ? name : null, starts));
+    const asks = kind === "permission" && (value.chosen === null || value.chosen === undefined)
+      && asking && at === entries.length - 1;
+    const first = at;
+    found.push(() => {
+      const node = entryNode(first, kind, value, asks);
+      if (!node) return null;
+      // What asks the human is marked by its amber dot alone.
+      if (asks) return place(node, "asking", null, false);
+      return place(node, starts ? speaker : null, starts ? name : null, starts);
+    });
   }
+  const from = Math.max(0, found.length - drawnPlaces);
+  const places = found.slice(from).map((made) => made()).filter(Boolean);
+  if (from > 0) places.unshift(place(earlier(from), null, null, false));
   return places;
+}
+
+// The button over the places drawn, which draws as many again of the
+// `left` before them, where the human reads.
+function earlier(left) {
+  return el("button", {
+    type: "button",
+    class: "earlier",
+    onclick: () => {
+      const below = document.body.scrollHeight - window.scrollY;
+      drawnPlaces += PLACES;
+      draw();
+      window.scrollTo(0, document.body.scrollHeight - below);
+    },
+  }, `Earlier · ${left} more`);
 }
 
 // What the entry at `at`, of `kind`, holding `value`, shows.
@@ -1156,14 +1197,37 @@ function call(at, value) {
   const key = `content-${at}`;
   const marks = { completed: ["✓", "var(--accent)"], failed: ["✗", "var(--failed)"], cancelled: ["–", "var(--dim)"] };
   const [sign, color] = marks[value.result] || ["●", "var(--link)"];
-  const shows = value.content.map(content).filter(Boolean);
+  const opens = value.shows > 0;
   if (value.result === "failed" && !opened.has(`seen-${key}`)) {
     opened.add(`seen-${key}`);
     opened.add(key);
   }
   return el("div", { class: "call" },
-    line(key, sign, color, value.title, null, shows.length > 0),
-    shows.length && opened.has(key) ? shows : null);
+    line(key, sign, color, value.title, null, opens),
+    opens && opened.has(key) ? shownAt(at) : null);
+}
+
+// What the entry at `at` shows, as coxd tells it, asked for the first
+// time it is drawn open, and a hint while it comes.
+function shownAt(at) {
+  const known = contents.get(at);
+  if (known && known.content) return known.content.map(content).filter(Boolean);
+  if (!known) {
+    const asked = {};
+    contents.set(at, asked);
+    const key = chat.key;
+    fetch(`/content?chat=${key}&at=${at}`)
+      .then((answer) => (answer.ok ? answer.json() : { content: [] }))
+      .catch(() => null)
+      .then((told) => {
+        if (contents.get(at) !== asked || !chat || chat.key !== key) return;
+        // Asked again as it is drawn next, when coxd could not be reached.
+        if (!told) contents.delete(at);
+        else asked.content = told.content || [];
+        redraw();
+      });
+  }
+  return el("p", { class: "hint" }, "Reading…");
 }
 
 // What the agent thought, as an aside: its start, in italics, which a tap
@@ -1246,10 +1310,15 @@ function permission(at, asked, asks) {
   const chosen = asked.chosen === null || asked.chosen === undefined ? "no answer" : asked.options[asked.chosen];
   const answer = asked.by_setup ? `${chosen}, as the chat is set up` : chosen;
   const key = `content-${at}`;
-  const shows = [gathered(asked.gathered), ...asked.content.map(content)].filter(Boolean);
+  const found = gathered(asked.gathered);
+  // What it shows comes with it while it is not answered, and is asked
+  // for once it is.
+  const shows = asked.content ? asked.content.map(content).filter(Boolean) : null;
+  const more = shows ? shows.length > 0 : asked.shows > 0;
+  const opens = Boolean(found) || more;
   return el("div", { class: "call" },
-    line(key, "?", "var(--asking)", asked.title, answer, shows.length > 0),
-    shows.length && opened.has(key) ? shows : null);
+    line(key, "?", "var(--asking)", asked.title, answer, opens),
+    opens && opened.has(key) ? [found].concat(more ? shows || shownAt(at) : []) : null);
 }
 
 // A picture or a video shown in the conversation, with its caption, or

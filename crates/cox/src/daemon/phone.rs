@@ -18,7 +18,9 @@
 //! [`FromDaemon`] as JSON: the [`FromDaemon::Listing`] of the projects
 //! and chats whenever it changes, the [`FromDaemon::Patch`]es of the
 //! chat named by `?chat=<key>`, all of it first, and the
-//! [`FromDaemon::News`] of the chats that come to wait for the human.
+//! [`FromDaemon::News`] of the chats that come to wait for the human;
+//! but for what the conversation's tool calls show, which it asks for on
+//! `/content` as the human opens one (see [`for_the_phone`]).
 //! What the human does on it, as sending a line or answering what the
 //! agent asks, it posts to `/act`, a [`ToDaemon`] as JSON, as the window
 //! says it, which coxd does as the window's (see [`done_on_the_page`]
@@ -62,6 +64,7 @@ pub(crate) mod tailnet;
 use super::push::{self, Notice, Pushed, Pushes, Subscription};
 use super::wire::{FromDaemon, ToDaemon};
 use super::{Internal, Sketching};
+use crate::chat::conversation::{Content, Entry};
 use crate::storage::{self, Kept};
 use crate::ui::theme;
 
@@ -520,6 +523,8 @@ pub async fn serve(
                 async move {
                     let answer = if request.method() == Method::POST {
                         page.posted(request).await
+                    } else if request.uri().path() == "/content" {
+                        page.content(&request).await
                     } else if request.uri().path() == "/changes" {
                         page.changes(&request).await
                     } else if request.uri().path() == "/pages" {
@@ -707,6 +712,38 @@ impl Page {
             StatusCode::OK,
             "application/json",
             serde_json::json!({ "pages": pages }).to_string(),
+        )
+    }
+
+    /// What the tool call, or the permission request, `request` names
+    /// shows, `?chat=<key>&at=<place>`, as JSON, `{"content": [...]}`,
+    /// which the stream of events leaves out (see [`for_the_phone`]).
+    async fn content(&self, request: &Request<Incoming>) -> Response<Body> {
+        if !self.paired(request) {
+            return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
+        }
+        let (Some(key), Some(at)) = (chat_asked(request), place_asked(request)) else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "No chat or place");
+        };
+        let (asked, content) = tokio::sync::oneshot::channel();
+        if self
+            .internal
+            .send(Internal::Content {
+                key,
+                at,
+                answer: asked,
+            })
+            .is_err()
+        {
+            return answer(StatusCode::SERVICE_UNAVAILABLE, TEXT, "coxd is stopping");
+        }
+        let Ok(Some(content)) = content.await else {
+            return answer(StatusCode::NOT_FOUND, TEXT, "Nothing there");
+        };
+        answer(
+            StatusCode::OK,
+            "application/json",
+            serde_json::json!({ "content": content }).to_string(),
         )
     }
 
@@ -1129,6 +1166,14 @@ fn chat_asked(request: &Request<Incoming>) -> Option<u64> {
         .flatten()
 }
 
+/// The place in a conversation the query of `request` names, `at=<n>`.
+fn place_asked(request: &Request<Incoming>) -> Option<usize> {
+    let query = request.uri().query()?;
+    url::form_urlencoded::parse(query.as_bytes())
+        .find_map(|(name, value)| (name == "at").then(|| value.parse::<usize>().ok()))
+        .flatten()
+}
+
 /// What the human may do of sketches in a chat, as the page offers it:
 /// `{"start": "project"}`, or `"empty"`, what a sketch started beside the
 /// chat starts from at first, as the window's input has it; or
@@ -1301,7 +1346,7 @@ struct Events {
 impl Events {
     fn poll(&mut self, context: &mut Context<'_>) -> Poll<Option<Bytes>> {
         if let Poll::Ready(told) = self.told.poll_recv(context) {
-            return Poll::Ready(told.map(|told| event(&told)));
+            return Poll::Ready(told.map(event));
         }
         if self.beat.poll_tick(context).is_ready() {
             return Poll::Ready(Some(Bytes::from_static(b": beat\n\n")));
@@ -1316,13 +1361,68 @@ impl Drop for Events {
     }
 }
 
-/// `told` as a server-sent event: a line of JSON.
-fn event(told: &FromDaemon) -> Bytes {
-    let json = serde_json::to_string(told).unwrap_or_else(|error| {
-        tracing::error!("the phone cannot be told: {error}");
-        "null".to_owned()
-    });
+/// `told` as a server-sent event: a line of JSON, as [`for_the_phone`] has it.
+fn event(told: FromDaemon) -> Bytes {
+    let json = for_the_phone(told)
+        .and_then(|told| serde_json::to_string(&told))
+        .unwrap_or_else(|error| {
+            tracing::error!("the phone cannot be told: {error}");
+            "null".to_owned()
+        });
     Bytes::from(format!("data: {json}\n\n"))
+}
+
+/// `told` as the phone is told it: as the window is, but for what the
+/// tool calls of a conversation show, and the permission requests
+/// answered, of which it is told only how many things they show, as
+/// `shows`, and asks for them on `/content` as the human opens one. In a
+/// long chat, what they show, as the files the agent read and what its
+/// commands printed, is the most of the conversation, which a phone
+/// would wait for, and the human opens few of them.
+fn for_the_phone(told: FromDaemon) -> serde_json::Result<serde_json::Value> {
+    let FromDaemon::Patch { key, mut patch } = told else {
+        return serde_json::to_value(&told);
+    };
+    let entries = std::mem::take(&mut patch.entries);
+    let mut value = serde_json::to_value(FromDaemon::Patch { key, patch })?;
+    let entries = entries
+        .into_iter()
+        .map(|(at, entry)| Ok(serde_json::json!([at, told_entry(entry)?])))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    value["Patch"]["patch"]["entries"] = entries.into();
+    Ok(value)
+}
+
+/// `entry` as the phone is told it (see [`for_the_phone`]).
+fn told_entry(mut entry: Entry) -> serde_json::Result<serde_json::Value> {
+    let content = match &mut entry {
+        Entry::ToolCall { content, .. }
+        | Entry::Permission {
+            content,
+            chosen: Some(_),
+            ..
+        } => Some(std::mem::take(content)),
+        _ => None,
+    };
+    let mut value = serde_json::to_value(&entry)?;
+    let fields = value
+        .as_object_mut()
+        .and_then(|value| value.values_mut().next())
+        .and_then(serde_json::Value::as_object_mut);
+    if let (Some(content), Some(fields)) = (content, fields) {
+        let shows = content.iter().filter(|one| shows(one)).count();
+        fields.remove("content");
+        fields.insert("shows".to_owned(), shows.into());
+    }
+    Ok(value)
+}
+
+/// Whether the page shows `content`: what is not blank.
+fn shows(content: &Content) -> bool {
+    match content {
+        Content::Text(text) => !text.trim().is_empty(),
+        Content::Diff { .. } => true,
+    }
 }
 
 #[cfg(test)]
@@ -1493,6 +1593,128 @@ mod tests {
                     Some(Internal::Act { message: ToDaemon::Submit { key: 7, ref text, .. } }) if text == "go on"
                 ));
             });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
+    #[test]
+    fn tells_the_phone_how_many_things_a_call_shows_but_not_them() {
+        use crate::chat::conversation::{Patch, State};
+        let call = Entry::ToolCall {
+            id: "1".into(),
+            title: "Read a.rs".into(),
+            content: vec![
+                Content::Text("fn a() {}".into()),
+                Content::Text(" \n".into()),
+                Content::Diff {
+                    path: "/work/a.rs".into(),
+                    lines: Vec::new(),
+                },
+            ],
+            result: None,
+        };
+        let asked = |chosen| Entry::Permission {
+            id: "2".into(),
+            title: "Edit a.rs".into(),
+            content: vec![Content::Text("fn b() {}".into())],
+            options: vec!["Allow".into()],
+            chosen,
+            by_setup: false,
+            gathered: Vec::new(),
+        };
+        let patch = Patch {
+            len: 4,
+            entries: vec![
+                (0, Entry::Reply("Done.".into())),
+                (1, call),
+                (2, asked(Some(0))),
+                (3, asked(None)),
+            ],
+            state: State::Asking,
+            title: None,
+            goal: None,
+            settings: Vec::new(),
+            commands: Vec::new(),
+            before_asking: State::Idle,
+            keeps: true,
+            steers: false,
+        };
+        let told = for_the_phone(FromDaemon::Patch { key: 7, patch }).unwrap();
+        let told = &told["Patch"];
+        assert_eq!(told["key"], 7);
+        assert_eq!(told["patch"]["len"], 4);
+        assert_eq!(told["patch"]["state"], "Asking");
+        let entries = &told["patch"]["entries"];
+        assert_eq!(entries[0], serde_json::json!([0, {"reply": "Done."}]));
+        assert_eq!(
+            entries[1],
+            serde_json::json!([1, {"tool_call": {"id": "1", "title": "Read a.rs", "result": null, "shows": 2}}])
+        );
+        // An answered request is a line, which opens to what it showed;
+        // the one the human is asked shows it all.
+        assert_eq!(entries[2][1]["permission"]["shows"], 1);
+        assert!(entries[2][1]["permission"].get("content").is_none());
+        assert_eq!(
+            entries[3][1]["permission"]["content"],
+            serde_json::json!([{"text": "fn b() {}"}])
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tells_a_paired_phone_what_a_call_shows_as_it_asks() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, mut heard) = unbounded_channel();
+            let owner = Rc::new(RefCell::new(None));
+            tokio::task::spawn_local(serve(
+                listener,
+                "secret".to_owned(),
+                owner,
+                (None, None),
+                internal,
+            ));
+            let get = |path: &str, cookie: &str| {
+                format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
+            };
+            let cookie = "Cookie: cox_phone=secret\r\n";
+
+            let unpaired = ask(port, &get("/content?chat=7&at=3", ""), "").await;
+            assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
+            let nowhere = ask(port, &get("/content?chat=7", cookie), "").await;
+            assert!(nowhere.starts_with("HTTP/1.1 400"), "{nowhere}");
+
+            let request = get("/content?chat=7&at=3", cookie);
+            let asked = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Content {
+                key: 7,
+                at: 3,
+                answer,
+            }) = heard.recv().await
+            else {
+                panic!("coxd is not asked what the call shows");
+            };
+            answer
+                .send(Some(vec![Content::Text("printed".into())]))
+                .unwrap();
+            let told = asked.await.unwrap();
+            assert!(told.starts_with("HTTP/1.1 200"), "{told}");
+            assert!(
+                told.ends_with(r#"{"content":[{"text":"printed"}]}"#),
+                "{told}"
+            );
+
+            let request = get("/content?chat=7&at=4", cookie);
+            let asked = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Content { answer, .. }) = heard.recv().await else {
+                panic!("coxd is not asked what the call shows");
+            };
+            answer.send(None).unwrap();
+            let none = asked.await.unwrap();
+            assert!(none.starts_with("HTTP/1.1 404"), "{none}");
+        });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
             .expect("the page answers in time");
