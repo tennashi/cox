@@ -3923,3 +3923,34 @@ async fn the_human_asks_a_chat_to_keep_what_it_learned_in_the_wiki(cx: &mut Test
     assert!(asked.contains("wiki_write"), "{asked}");
     assert!(entries(cx, &view).contains(&Entry::Cox(asked)));
 }
+
+#[gpui::test]
+async fn an_agent_waits_for_no_chat_of_another_project(cx: &mut TestAppContext) {
+    let app = scratch("wait-other-project");
+    std::fs::create_dir_all(&app).unwrap();
+    let store = kept_store("wait-other-project-kept");
+    let (_, asks, workspace, cx) = open_window_asking(
+        cx,
+        scratch("wait-other-project-home"),
+        store,
+        Resumes::Resume,
+    );
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let (other, _) = keys(cx, &workspace, 0);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(app.clone()), window, cx);
+    });
+    say(cx, &workspace, "hi").await;
+
+    let (answer, waited) = tokio::sync::oneshot::channel();
+    asks.borrow()[1]
+        .send(ChatRequest::WaitChat {
+            chat: other,
+            answer,
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(waited.await.unwrap(), Err(format!("no chat {other}")));
+    let _ = std::fs::remove_dir_all(&app);
+}
