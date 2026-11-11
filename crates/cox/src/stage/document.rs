@@ -22,6 +22,7 @@ use crate::chat::hand::AddToChat;
 use crate::chat::region::{self, Described};
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::tab::{Shows, ShowsFile, TabContent};
+use crate::stage::tree;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::markdown::{self, Block};
 use crate::ui::paths::shortened;
@@ -219,7 +220,7 @@ impl ShowsFile for Document {
             TabContent::Document(document) => Some(document),
             TabContent::Page { .. }
             | TabContent::Code(_)
-            | TabContent::Tree(_)
+            | TabContent::Files(_)
             | TabContent::Changes(_)
             | TabContent::Flow(_)
             | TabContent::Terminal(_)
@@ -268,12 +269,16 @@ impl Render for Document {
             .debug_selector(|| "document-text".to_owned());
         let bar = div()
             .flex()
+            .items_center()
             .gap_2()
             .px_3()
             .py_1()
             .border_b_1()
             .border_color(rgb(BORDER))
             .text_color(rgb(DIM))
+            .when(tree::is_folded(cx), |bar| {
+                bar.child(tree::unfold_button("unfold-files"))
+            })
             .child(
                 div()
                     .debug_selector(|| "document-path".to_owned())

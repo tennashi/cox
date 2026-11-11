@@ -3,13 +3,14 @@
 //! chat shown. It holds tabs, each showing a page of
 //! the browser (see [`crate::stage::page`]), a Markdown file (see
 //! [`crate::stage::document`]), a file as it is written, such as code (see
-//! [`crate::stage::code`]), the project's files as a tree (see [`crate::stage::tree`]),
-//! what changed in them (see [`crate::stage::changes`]), or a terminal
+//! [`crate::stage::code`]), with the project's files as a tree beside it
+//! (see [`crate::stage::tree`]), or no file yet, to choose one there, what
+//! changed in the project's files (see [`crate::stage::changes`]), or a terminal
 //! (see [`crate::stage::terminal`]); and the pages of the stage's
 //! plugins (see [`crate::stage::plugins`]), such as the map of the
 //! project (see [`crate::stage::map`]), are pages of the browser. The first shows the page the
-//! stage starts on; the human opens more pages and terminals, and the
-//! tree, and closes tabs, and each agent opens and closes pages
+//! stage starts on; the human opens more pages, terminals and files,
+//! and closes tabs, and each agent opens and closes pages
 //! too, through its chat's relay. A page that asks for a window of its own
 //! gets a tab instead, and a link in a page to a file opens the file on a
 //! tab, as a link from the conversation does. With Cox's own tools (see [`crate::agent::mcp`]), the
@@ -17,8 +18,9 @@
 //! runs commands in terminals: a command gets the tab of the agent's last
 //! one that ended, or a new one. A link to a file opens it on a tab too:
 //! as Markdown if it is a Markdown file and the link names no lines, and
-//! as it is written otherwise. A click on a file in the tree opens it the
-//! same way.
+//! as it is written otherwise. A click on a file in the tree shows it the
+//! same way on the tab of a file shown, in place of what it showed, or on
+//! a tab of its own with Command held, or Control off macOS.
 //!
 //! Each tab is the human's, as every tab they open is, or of one of the
 //! chats, as every tab its agent opens is, or one the human handed to it
@@ -40,8 +42,8 @@
 //!   whose it is, and [`bar`] the bar of the tabs, which keeps the views
 //!   of the project, its files, what changed and the plugins' pages,
 //!   apart from the rest.
-//! - [`links`] is what opens on a tab, and which: a link, a file, or the
-//!   tree of the project's files.
+//! - [`links`] is what opens on a tab, and which: a link, a file, or a
+//!   file chosen on the tree of the project's files.
 //! - [`asked`] is what the agent asks of the stage, through the relay and
 //!   its tools.
 //! - [`page`] shows a page of the browser, and sends the human's input
@@ -51,7 +53,8 @@
 //! - [`servers`] holds the language servers a tab of code asks what the
 //!   code means, and [`outline`] asks them what a file defines, and
 //!   [`calls`] what a line of it calls, for the map.
-//! - [`tree`] shows the project's files, for the human to open one.
+//! - [`tree`] shows the project's files beside the tab of a file, for the
+//!   human to read another there.
 //! - [`changes`] shows what changed in them, for the human to read, and
 //!   to open a file where it changed.
 //! - [`terminal`] is a terminal the human types into, and the agent runs
@@ -102,7 +105,9 @@ use std::path::PathBuf;
 
 use cox_core::list::List;
 use cox_core::tabs::{KeptTab, KeptTabs};
-use gpui::{App, Context, Entity, Focusable, Subscription, Task, Window, actions, div, prelude::*};
+use gpui::{
+    App, Context, Entity, Focusable, Subscription, Task, Window, actions, div, prelude::*, px, rgb,
+};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::ToolRequest;
@@ -122,9 +127,11 @@ use crate::stage::page::{Opens, Page};
 use crate::stage::plugins::Plugins;
 use crate::stage::tab::{Shows, Tab, TabContent};
 use crate::stage::terminal::{Program, Running, Terminal};
+use crate::stage::tree::{Chosen, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
 use crate::ui::Panel;
 use crate::ui::input::LineInput;
+use crate::ui::theme::BORDER;
 
 actions!(
     stage,
@@ -133,7 +140,8 @@ actions!(
         NewPage,
         /// Opens a terminal with the human's shell.
         NewTerminal,
-        /// Asks for a file, and opens it on a tab.
+        /// Opens the tab of a file not chosen yet, beside the tree of the
+        /// project's files.
         OpenFile,
     ]
 );
@@ -208,6 +216,10 @@ pub struct Stage {
     _counting: Task<()>,
     /// Where the tabs scroll down the column beside the stage.
     strip: column::Strip,
+    /// The tree of the project's files, beside the tab of a file.
+    files: Entity<Tree>,
+    /// Shows the files chosen on the tree.
+    _chosen: Subscription,
 }
 
 impl Stage {
@@ -222,19 +234,31 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut stage = Self::empty(cef, cwd, panel, cx);
+        let mut stage = Self::empty(cef, cwd, panel, window, cx);
         stage.open_tab(url, true, window, cx);
         stage
     }
 
     /// A stage with no tab yet, whose pages can ask what the project's
     /// files define (see [`outline`]) and call (see [`calls`]).
-    fn empty(cef: Cef, cwd: PathBuf, panel: Entity<Panel>, cx: &mut Context<Self>) -> Self {
+    fn empty(
+        cef: Cef,
+        cwd: PathBuf,
+        panel: Entity<Panel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (outlines, asked) = Outlines::new();
         let answering = outline::answer(asked, outlines.clone(), cwd.clone(), cx);
         let (calls, asked_calls) = Calls::new();
         let answering_calls = calls::answer(asked_calls, calls.clone(), cwd.clone(), cx);
+        let files = cx.new(|cx| Tree::new(cwd.clone(), Vec::new(), cx));
+        let chosen = cx.subscribe_in(&files, window, |stage, _, chosen: &Chosen, window, cx| {
+            stage.open_chosen(chosen, window, cx);
+        });
         Self {
+            files,
+            _chosen: chosen,
             cef,
             plugins: Plugins::new(cwd.clone(), outlines, calls),
             menu: None,
@@ -307,7 +331,7 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut stage = Self::empty(cef, cwd, panel, cx);
+        let mut stage = Self::empty(cef, cwd, panel, window, cx);
         let kept = kept.unwrap_or_default();
         let owners: Vec<Option<u64>> = (0..kept.tabs.len())
             .map(|index| kept.owner(index))
@@ -333,7 +357,8 @@ impl Stage {
                     stage.push_file::<Code>(path, &text, lines, show, window, cx);
                 }
                 KeptTab::Files { open } => {
-                    stage.push_tree(open, show, window, cx);
+                    stage.files.update(cx, |files, cx| files.open_too(open, cx));
+                    stage.push_files(show, cx);
                 }
                 KeptTab::Changes { folder } => {
                     stage.push_changes(folder, show, window, cx);
@@ -439,6 +464,15 @@ impl Stage {
     /// kept, and draw them again.
     fn changed(&mut self, cx: &mut Context<Self>) {
         self.relock(cx);
+        // The tree marks the file of the tab shown, if it is the tab of a
+        // file.
+        if let Some(tab) = self.tabs.shown()
+            && tab.content.is_file()
+            && let file = tab.content.file(cx)
+            && self.files.read(cx).current() != file.as_deref()
+        {
+            self.files.update(cx, |files, cx| files.reveal(file, cx));
+        }
         if let Some(keep) = &self.keep {
             let tabs = self.tabs(cx);
             if self.kept.as_ref() != Some(&tabs) {
@@ -633,7 +667,7 @@ impl Stage {
             TabContent::Page { target, .. } => target.borrow().as_deref() == Some(page),
             TabContent::Document(_)
             | TabContent::Code(_)
-            | TabContent::Tree(_)
+            | TabContent::Files(_)
             | TabContent::Changes(_)
             | TabContent::Flow(_)
             | TabContent::Terminal(_)
@@ -773,6 +807,10 @@ impl Stage {
 
 impl Render for Stage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The tree of the project's files is beside the tab of a file,
+        // unless it is folded.
+        let beside =
+            self.tabs.shown().is_some_and(|tab| tab.content.is_file()) && !tree::is_folded(cx);
         div()
             .size_full()
             .flex()
@@ -784,6 +822,18 @@ impl Render for Stage {
                     .min_h_0()
                     .flex()
                     .child(self.render_column(cx))
+                    .when(beside, |stage| {
+                        stage.child(
+                            div()
+                                .debug_selector(|| "files".to_owned())
+                                .flex_shrink_0()
+                                .w(px(tree::WIDTH))
+                                .h_full()
+                                .border_r_1()
+                                .border_color(rgb(BORDER))
+                                .child(self.files.clone()),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()

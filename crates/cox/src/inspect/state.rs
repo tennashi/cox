@@ -384,7 +384,7 @@ fn tabs(told: &mut String, view: &ChatView, cx: &App) {
                 ),
                 None => format!("file {}", path.display()),
             },
-            KeptTab::Files { open } => format!("files, {} folders open", open.len()),
+            KeptTab::Files { .. } => "files, no file chosen".to_owned(),
             KeptTab::Changes { folder } => format!("changes in {}", folder.display()),
             KeptTab::Flow { call } => format!("flow of tool call {call}"),
             KeptTab::Android { device } => format!("android emulator {device}"),

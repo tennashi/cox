@@ -3116,7 +3116,7 @@ impl Render for Workspace {
                 workspace.fold(!workspace.folded, window, cx);
             }))
             .on_action(cx.listener(|workspace, _: &OpenFile, window, cx| {
-                workspace.on_stage(window, cx, |_, window, cx| Stage::choose_file(window, cx));
+                workspace.on_stage(window, cx, Stage::new_files);
             }))
             .on_action(cx.listener(|workspace, _: &AddRegionToChat, window, cx| {
                 workspace.lay_sheet(window, cx);

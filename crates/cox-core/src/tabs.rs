@@ -1,7 +1,7 @@
 //! What Cox keeps of a stage: the tabs it had open, in their order, which
 //! was shown, and which chat each is of. Not what runs in them: a page is
-//! kept by its address, a file by its path, the tree of the project's
-//! files by the folders open in it, what changed in them as such, the map
+//! kept by its address, a file by its path, the tab of a file not chosen
+//! yet as such, what changed in the project's files as such, the map
 //! of the project by where it is open, an Android emulator by the device
 //! it runs, a window of another app on the Mac by its app and title, the
 //! lists of the devices and of the windows as such, and a terminal only as
@@ -75,8 +75,10 @@ pub enum KeptTab {
     /// A file shown as it is written, such as code, by its absolute path,
     /// with the lines it was shown at, if any.
     File { path: PathBuf, lines: Option<Lines> },
-    /// The project's files as a tree, with the folders open in it, by
-    /// their absolute paths.
+    /// A file not chosen yet, beside the tree of the project's files. The
+    /// folders open in the tree, by their absolute paths, are those it
+    /// opens with, which a stage kept before the tree was beside the tabs
+    /// of files; it keeps none now.
     Files { open: Vec<PathBuf> },
     /// What changed in the files of the Git repository of a folder, by
     /// its absolute path, as Git tells it.

@@ -109,6 +109,10 @@ pub struct Code {
     /// The project's server that knows the language of the file, if the
     /// editor knows one.
     server: Option<Entity<LanguageServer>>,
+    /// The folder of the project whose servers the tab asks, when it
+    /// shows a file of another language than it did: none for a tab that
+    /// asks the one server it was given, if any.
+    project: Option<PathBuf>,
     /// The file, open on the server once it is ready.
     document: Option<OpenFile>,
     /// Where the tab was before it went to a place, to go back to, and
@@ -212,13 +216,7 @@ impl Code {
         server: Option<Entity<LanguageServer>>,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Once the server is ready, it gets the file.
-        let server_changes = server.as_ref().map(|server| {
-            cx.observe(server, |code, _, cx| {
-                code.open_on_server(cx);
-                cx.notify();
-            })
-        });
+        let server_changes = server.as_ref().map(|server| Self::hear(server, cx));
         let mut code = Self {
             file: File::new(path, text),
             look: Look {
@@ -227,6 +225,7 @@ impl Code {
                 ..Look::default()
             },
             server,
+            project: None,
             document: None,
             history: History::new(),
             pointed: None,
@@ -246,6 +245,14 @@ impl Code {
         code.parse(cx);
         code.open_on_server(cx);
         code
+    }
+
+    /// Hears `server` grow ready, which then gets the file.
+    fn hear(server: &Entity<LanguageServer>, cx: &mut Context<Self>) -> Subscription {
+        cx.observe(server, |code, _, cx| {
+            code.open_on_server(cx);
+            cx.notify();
+        })
     }
 
     #[must_use]
@@ -414,9 +421,44 @@ impl Code {
         self.hover = None;
         self.menu = None;
         self.document = None;
+        self.serve(cx);
         self.parse(cx);
         self.open_on_server(cx);
         true
+    }
+
+    /// Asks the project's server of the file's language, when the file is
+    /// of another than the server the tab asked knows.
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "what the server says is only heard: dropping it stops hearing it"
+    )]
+    fn serve(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.project.clone() else {
+            return;
+        };
+        let knows = self
+            .server
+            .as_ref()
+            .is_some_and(|server| server.read(cx).language_of(&self.file.path).is_some());
+        if knows {
+            return;
+        }
+        self.server = cx
+            .try_global::<Servers>()
+            .cloned()
+            .and_then(|servers| servers.of(&project, &self.file.path, cx));
+        self._server_changes = self.server.as_ref().map(|server| Self::hear(server, cx));
+    }
+
+    /// Shows the file at `path`, an absolute path, from its start, as the
+    /// human chose it: back goes to where the tab was.
+    pub fn go_to_file(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let here = self.visit();
+        if self.open(path, cx) && self.visit() != here {
+            self.history.leave(here);
+        }
+        cx.notify();
     }
 
     /// Goes to `range` of the file at `path`, as the server counts it,
@@ -860,7 +902,9 @@ impl ShowsFile for Code {
             .try_global::<Servers>()
             .cloned()
             .and_then(|servers| servers.of(cwd, &path, cx));
-        Self::new(path, text, lines, server, cx)
+        let mut code = Self::new(path, text, lines, server, cx);
+        code.project = Some(cwd.to_owned());
+        code
     }
 
     fn path(&self) -> &Path {
@@ -880,7 +924,7 @@ impl ShowsFile for Code {
             tab::TabContent::Code(code) => Some(code),
             tab::TabContent::Page { .. }
             | tab::TabContent::Document(_)
-            | tab::TabContent::Tree(_)
+            | tab::TabContent::Files(_)
             | tab::TabContent::Changes(_)
             | tab::TabContent::Flow(_)
             | tab::TabContent::Terminal(_)
