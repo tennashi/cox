@@ -6,12 +6,11 @@
 //! `{"phone": false}`, on [`PORT`], and only on the Mac's own `127.0.0.1`:
 //! the phone reaches it through `tailscale serve`, which hands the page
 //! to the human's tailnet over HTTPS, and which coxd sets up as it
-//! starts (see [`tailnet`]). Since any page in any browser on the Mac
-//! can reach `127.0.0.1` too, every answer but the pairing is for the
-//! human alone: a phone of the Mac's login in the tailnet, as `tailscale
-//! serve` says who it is, or else one that holds, in a cookie, the
-//! secret coxd keeps in `state/phone-token`, which it gets by opening,
-//! once, `/pair/<secret>`.
+//! starts (see [`tailnet`]). Since any page in any browser on the Mac,
+//! and anything else there, can reach `127.0.0.1` too, every answer but
+//! the pairing is for the human alone: a phone that holds, in a cookie,
+//! the secret coxd keeps in `state/phone-token`, which it gets by
+//! opening, once, `/pair/<secret>`.
 //!
 //! The page is the files in `phone/`, built into Cox. It follows the
 //! chats on `/events`, a stream of server-sent events, each a
@@ -83,9 +82,9 @@ const NOT_PAIRED: &str = "<!doctype html><meta charset=\"utf-8\"><meta name=\"vi
     content=\"width=device-width, initial-scale=1\"><title>Cox</title>\
     <link rel=\"stylesheet\" href=\"/theme.css\"><link rel=\"stylesheet\" href=\"/app.css\">\
     <main class=\"pair\"><h1>Cox</h1>\
-    <p>Cox does not know this phone. Open the page through Tailscale, logged in as the Mac \
-    is, or, on the Mac, run <code>cox --phone-link</code> and open the pairing link it prints \
-    here, or paste it:</p><form action=\"/pair\">\
+    <p>Cox does not know this phone. On the Mac, scan the pairing code in Cox's settings, or \
+    run <code>cox --phone-link</code> and open the pairing link it prints here, or paste \
+    it:</p><form action=\"/pair\">\
     <input name=\"link\" autocomplete=\"off\" placeholder=\"https://…/pair/…\">\
     <button>Pair</button></form></main>";
 
@@ -175,9 +174,8 @@ fn port_in(bytes: &[u8]) -> Result<Option<u16>, String> {
     }
 }
 
-/// Whether coxd has the tailnet hand the page to the phone, and takes a
-/// phone of the Mac's login there as the human's: unless `settings.json`
-/// says not, as `{"phone": {"tailscale": false}}`.
+/// Whether coxd has the tailnet hand the page to the phone: unless
+/// `settings.json` says not, as `{"phone": {"tailscale": false}}`.
 #[must_use]
 pub fn tailscale() -> bool {
     storage::path(Kept::Settings)
@@ -233,13 +231,12 @@ fn token_at(file: &Path) -> anyhow::Result<String> {
 /// that the secret is not logged by mistake.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Pairing {
-    /// The page, as a phone of the Mac's login opens it, with no pairing.
+    /// The page, as a paired phone opens it.
     pub page: String,
-    /// The link that pairs a phone of another login, or one that comes
-    /// some other way, with the secret in it.
+    /// The link that pairs a phone, with the secret in it.
     pub pair: String,
-    /// The Mac's login in the tailnet, whose phones need no pairing; none
-    /// when `tailscale` does not say the Mac's name there.
+    /// The Mac's login in the tailnet; none when `tailscale` does not say
+    /// the Mac's name there.
     pub login: Option<String>,
     /// Whether the tailnet's devices find each other by name, which the
     /// phone needs to find the Mac by its name.
@@ -279,10 +276,9 @@ pub fn pairing() -> anyhow::Result<Pairing> {
     })
 }
 
-/// What `cox --phone-link` prints: where the phone opens the page,
-/// through the tailnet when `tailscale` tells the Mac's name there, with
-/// what the tailnet lacks for it, and the link that pairs a phone of
-/// another login, or one that comes some other way.
+/// What `cox --phone-link` prints: the link that pairs a phone, and
+/// where it opens the page then, through the tailnet when `tailscale`
+/// tells the Mac's name there, with what the tailnet lacks for it.
 ///
 /// # Errors
 ///
@@ -317,9 +313,10 @@ pub fn link() -> anyhow::Result<String> {
     }
     let _ = write!(
         told,
-        "On a phone logged in to Tailscale as {login}, open:\n\n  https://{host}/\n\n\
-         and add it to the Home Screen to be told of the chats there.\n\n\
-         A phone of another login pairs once with:\n\n  https://{host}/pair/{token}\n",
+        "On a phone logged in to Tailscale as {login}, pair once with:\n\n  \
+         https://{host}/pair/{token}\n\n\
+         and add the page it opens, https://{host}/, to the Home Screen to be told of \
+         the chats there.\n",
         login = owner.login,
         host = owner.host,
     );
@@ -328,14 +325,9 @@ pub fn link() -> anyhow::Result<String> {
 
 /// Has the tailnet hand the page on `port` to the phone, at the Mac's
 /// name there, and each port the relay passes on to, as `ports` wants
-/// them, at that port of it, to the relay, and keeps `owner`, the Mac's
-/// login there, as Tailscale says it, every few minutes, so that a phone
-/// of that login comes in.
-pub async fn follow_tailnet(
-    port: u16,
-    ports: Option<Rc<relay::Ports>>,
-    owner: Rc<RefCell<Option<tailnet::Owner>>>,
-) {
+/// them, at that port of it, to the relay, asking Tailscale again every
+/// few minutes.
+pub async fn follow_tailnet(port: u16, ports: Option<Rc<relay::Ports>>) {
     let mut page = (false, None);
     // What the tailnet hands to the relay, once read, as an earlier coxd
     // may have left it, and why it does not hand each port it does not.
@@ -348,50 +340,38 @@ pub async fn follow_tailnet(
             .await
             .ok()
             .flatten();
-        match status {
-            Some((program, status)) => {
-                if !status.magic_dns && !told_dns {
-                    told_dns = true;
-                    tracing::warn!(
-                        "MagicDNS is off in the tailnet: a phone finds the Mac by its name only with it on"
-                    );
-                }
-                // Again until it does, as once Serve is on in the
-                // tailnet, saying why not only when that changes.
-                if !page.0 {
-                    match serve_in_the_tailnet(program, port, 443).await {
-                        Ok(done) => {
-                            page.0 = true;
-                            tracing::info!("{done}");
-                        }
-                        Err(why) => {
-                            if page.1.as_ref() != Some(&why) {
-                                tracing::warn!("the tailnet does not serve the phone: {why}");
-                            }
-                            page.1 = Some(why);
-                        }
-                    }
-                }
-                if let Some(ports) = &ports {
-                    let relay = ports.relay();
-                    if relayed.is_none() {
-                        relayed =
-                            tokio::task::spawn_blocking(move || tailnet::relayed(program, relay))
-                                .await
-                                .ok();
-                    }
-                    if let Some(relayed) = &mut relayed {
-                        relay_in_the_tailnet(program, ports, relayed, &mut why_not).await;
-                    }
-                }
-                if *owner.borrow() != status.owner {
-                    tracing::info!(login = ?status.owner.as_ref().map(|owner| &owner.login), "the phone of the Mac's login in the tailnet comes in");
-                }
-                *owner.borrow_mut() = status.owner;
+        if let Some((program, status)) = status {
+            if !status.magic_dns && !told_dns {
+                told_dns = true;
+                tracing::warn!(
+                    "MagicDNS is off in the tailnet: a phone finds the Mac by its name only with it on"
+                );
             }
-            None => {
-                if owner.borrow_mut().take().is_some() {
-                    tracing::info!("tailscale says nothing of the tailnet any more");
+            // Again until it does, as once Serve is on in the
+            // tailnet, saying why not only when that changes.
+            if !page.0 {
+                match serve_in_the_tailnet(program, port, 443).await {
+                    Ok(done) => {
+                        page.0 = true;
+                        tracing::info!("{done}");
+                    }
+                    Err(why) => {
+                        if page.1.as_ref() != Some(&why) {
+                            tracing::warn!("the tailnet does not serve the phone: {why}");
+                        }
+                        page.1 = Some(why);
+                    }
+                }
+            }
+            if let Some(ports) = &ports {
+                let relay = ports.relay();
+                if relayed.is_none() {
+                    relayed = tokio::task::spawn_blocking(move || tailnet::relayed(program, relay))
+                        .await
+                        .ok();
+                }
+                if let Some(relayed) = &mut relayed {
+                    relay_in_the_tailnet(program, ports, relayed, &mut why_not).await;
                 }
             }
         }
@@ -465,7 +445,7 @@ async fn relay_in_the_tailnet(
     ports.served(relayed.clone());
 }
 
-/// How often coxd asks Tailscale again of the Mac's login.
+/// How often coxd asks Tailscale again of the tailnet.
 const LOOKS_AT_THE_TAILNET: Duration = Duration::from_mins(5);
 
 /// Listens for the phone on `port` of the Mac's own address.
@@ -479,16 +459,14 @@ pub async fn listen(port: u16) -> anyhow::Result<TcpListener> {
         .with_context(|| format!("cannot listen for the phone on port {port}"))
 }
 
-/// Serves the page on `listener` to the phones of the Mac's login in the
-/// tailnet, as `owner` has it, and those paired with `token`, telling the
-/// daemon, on `internal`, of the phones that follow the chats, and, with
-/// `pushes`, pushing to them what it says of the chats; the pages it
-/// frames being passed on by the relay, as `relayed` has it, if they are
-/// (see [`relay`]).
+/// Serves the page on `listener` to the phones paired with `token`,
+/// telling the daemon, on `internal`, of the phones that follow the
+/// chats, and, with `pushes`, pushing to them what it says of the chats;
+/// the pages it frames being passed on by the relay, as `relayed` has
+/// it, if they are (see [`relay`]).
 pub async fn serve(
     listener: TcpListener,
     token: String,
-    owner: Rc<RefCell<Option<tailnet::Owner>>>,
     (pushes, relayed): (Option<Pushes>, Option<Relayed>),
     internal: UnboundedSender<Internal>,
 ) {
@@ -502,7 +480,6 @@ pub async fn serve(
     });
     let page = Rc::new(Page {
         token,
-        owner,
         internal,
         last: Cell::new(0),
         pushes,
@@ -552,9 +529,6 @@ pub async fn serve(
 /// What answers the phones.
 struct Page {
     token: String,
-    /// The Mac in the tailnet, whose login's phones come in, unless
-    /// Tailscale says nothing of it.
-    owner: Rc<RefCell<Option<tailnet::Owner>>>,
     internal: UnboundedSender<Internal>,
     /// The number of the last phone that followed the chats.
     last: Cell<u64>,
@@ -955,7 +929,7 @@ impl Page {
 
     /// Whether `request` is the human's (see [`paired`]).
     fn paired(&self, request: &Request<Incoming>) -> bool {
-        paired(request.headers(), &self.owner, &self.token, 443)
+        paired(request.headers(), &self.token)
     }
 
     /// The stream of events of a phone that follows the chats, watching
@@ -1078,20 +1052,9 @@ async fn push_all(pushes: Rc<RefCell<Pushes>>, mut notices: UnboundedReceiver<No
     }
 }
 
-/// Whether a request with `headers` is the human's: of the Mac's login
-/// in the tailnet, for its port `https` there, as `owner` has it, or
-/// holding the secret, `token`, in its cookie.
-fn paired(
-    headers: &hyper::HeaderMap,
-    owner: &RefCell<Option<tailnet::Owner>>,
-    token: &str,
-    https: u16,
-) -> bool {
-    if let Some(owner) = &*owner.borrow()
-        && tailnet::of_the_owner(headers, owner, https)
-    {
-        return true;
-    }
+/// Whether a request with `headers` is the human's: holding the secret,
+/// `token`, in its cookie.
+fn paired(headers: &hyper::HeaderMap, token: &str) -> bool {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -1501,24 +1464,10 @@ mod tests {
                 let listener = listen(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 let (internal, mut heard) = unbounded_channel();
-                let owner = Rc::new(RefCell::new(Some(tailnet::Owner {
-                    host: "mac.tail1234.ts.net".to_owned(),
-                    login: "me@github".to_owned(),
-                })));
-                tokio::task::spawn_local(serve(listener, "secret".to_owned(), owner, (None, None), internal));
+                tokio::task::spawn_local(serve(listener, "secret".to_owned(), (None, None), internal));
 
                 let unpaired = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", "").await;
                 assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
-                let through = |login: &str| {
-                    format!(
-                        "GET / HTTP/1.1\r\nHost: mac.tail1234.ts.net\r\n\
-                         Tailscale-User-Login: {login}\r\nConnection: close\r\n\r\n"
-                    )
-                };
-                let mine = ask(port, &through("me@github"), "").await;
-                assert!(mine.starts_with("HTTP/1.1 200"), "{mine}");
-                let shared = ask(port, &through("other@github"), "").await;
-                assert!(shared.starts_with("HTTP/1.1 401"), "{shared}");
                 let look = ask(
                     port,
                     "GET /app.css HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
@@ -1605,17 +1554,7 @@ mod tests {
             let listener = listen(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let (internal, mut heard) = unbounded_channel();
-            let owner = Rc::new(RefCell::new(Some(tailnet::Owner {
-                host: "mac.tail1234.ts.net".to_owned(),
-                login: "me@github".to_owned(),
-            })));
-            tokio::task::spawn_local(serve(
-                listener,
-                "secret".to_owned(),
-                owner,
-                (None, None),
-                internal,
-            ));
+            tokio::task::spawn_local(serve(listener, "secret".to_owned(), (None, None), internal));
             let as_tailscale_says =
                 "Host: mac.tail1234.ts.net\r\nTailscale-User-Login: me@github\r\n";
 
@@ -1731,14 +1670,7 @@ mod tests {
             let listener = listen(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let (internal, mut heard) = unbounded_channel();
-            let owner = Rc::new(RefCell::new(None));
-            tokio::task::spawn_local(serve(
-                listener,
-                "secret".to_owned(),
-                owner,
-                (None, None),
-                internal,
-            ));
+            tokio::task::spawn_local(serve(listener, "secret".to_owned(), (None, None), internal));
             let get = |path: &str, cookie: &str| {
                 format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
             };
@@ -1790,14 +1722,7 @@ mod tests {
             let listener = listen(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let (internal, _heard) = unbounded_channel();
-            let owner = Rc::new(RefCell::new(None));
-            tokio::task::spawn_local(serve(
-                listener,
-                "secret".to_owned(),
-                owner,
-                (None, None),
-                internal,
-            ));
+            tokio::task::spawn_local(serve(listener, "secret".to_owned(), (None, None), internal));
             let get = |path: &str, cookie: &str| {
                 format!("GET {path} HTTP/1.1\r\nHost: x\r\n{cookie}Connection: close\r\n\r\n")
             };
@@ -1832,7 +1757,6 @@ mod tests {
             tokio::task::spawn_local(serve(
                 listener,
                 "secret".to_owned(),
-                Rc::new(RefCell::new(None)),
                 (Some(pushes), None),
                 internal,
             ));
