@@ -17,6 +17,14 @@
 //! however the agent titles it. A policy can also keep the calls that
 //! change files to a folder: one it allows is allowed only when every
 //! file the agent says it works on is in the folder.
+//!
+//! A call of the kind `execute` is titled with its command, and a pattern
+//! matches the command's words, as a shell hands them to it, one space
+//! between. It is allowed only when a shell runs its title as that one
+//! command and no more: a title with a new line, or with a character such
+//! as `;`, `&`, `|`, `<`, `>`, `$`, a backtick or `*` out of quotes, is
+//! asked of the human, and so is a command with a flag that has it run
+//! another or write a file, such as `find`'s `-exec`.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -242,9 +250,18 @@ impl Policy {
     /// when it says nothing, and the human is to be asked.
     #[must_use]
     pub fn decide(&self, asked: Asked<'_>) -> Option<Decision> {
+        let runs = asked.kind == Some(ToolKind::Execute);
+        let command = runs.then(|| one_command(asked.title)).flatten();
+        let asked = Asked {
+            title: command.as_deref().unwrap_or(asked.title),
+            ..asked
+        };
         if self.reject.iter().any(|pattern| answers(pattern, asked)) {
             Some(Decision::Reject)
-        } else if self.allow.iter().any(|pattern| answers(pattern, asked)) && self.keeps(asked) {
+        } else if (!runs || command.is_some())
+            && self.allow.iter().any(|pattern| answers(pattern, asked))
+            && self.keeps(asked)
+        {
             Some(Decision::Allow)
         } else {
             None
@@ -293,6 +310,106 @@ fn kinded(pattern: &str) -> Option<(ToolKind, &str)> {
     pattern
         .split_once(':')
         .and_then(|(name, rest)| Some((ToolKind::named(name)?, rest)))
+}
+
+/// The flags that make a command run another program or write a file, as
+/// far as Cox knows, by the words the command starts with, for the
+/// commands a judge's agent may run (see [`crate::chat::judge::ALLOWED`]).
+const RUNS_OR_WRITES: &[(&[&str], &[&str])] = &[
+    (
+        &["find"],
+        &[
+            "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf",
+            "-fls",
+        ],
+    ),
+    (&["rg"], &["--pre", "--hostname-bin"]),
+    (&["git"], &["--output", "--ext-diff"]),
+    (&["cargo"], &["--config"]),
+    (
+        &["go", "test"],
+        &["-exec", "--exec", "-toolexec", "--toolexec"],
+    ),
+];
+
+/// The characters out of quotes with which a shell does more than take a
+/// command's words apart: runs another command, puts in what one prints
+/// or a variable holds, reads or writes a file, makes words of file names
+/// or braces, or leaves the rest out.
+const SHELL: &[char] = &[
+    ';', '&', '|', '<', '>', '(', ')', '$', '`', '*', '?', '[', '{', '}', '#',
+];
+
+/// The command a shell runs `title` as, its words one space between,
+/// when the shell runs that one command and no more, and the command has
+/// none of the flags of [`RUNS_OR_WRITES`].
+fn one_command(title: &str) -> Option<String> {
+    let words = words(title)?;
+    let runs_or_writes = RUNS_OR_WRITES.iter().any(|(command, flags)| {
+        words.len() >= command.len()
+            && words.iter().zip(*command).all(|(word, name)| word == name)
+            && words.iter().any(|word| {
+                flags.iter().any(|flag| {
+                    word.strip_prefix(flag)
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('='))
+                })
+            })
+    });
+    (!words.is_empty() && !runs_or_writes).then(|| words.join(" "))
+}
+
+/// The words of `line`, as a shell takes it apart and hands them to the
+/// command it runs, or `None` when the shell would do more with it: when
+/// it has one of [`SHELL`] out of quotes, a `^` that starts a word, which
+/// zsh can make file names of, a `$` or a backtick in double quotes, a
+/// control character other than a tab, or a quote it does not close. A
+/// word in single quotes is as it is, one in double quotes is but for
+/// `\"`, `\\`, `\$` and `` \` ``, and a backslash out of quotes keeps the
+/// character after it.
+fn words(line: &str) -> Option<Vec<String>> {
+    if line.chars().any(|c| c.is_control() && c != '\t') {
+        return None;
+    }
+    let mut words = Vec::new();
+    let mut word: Option<String> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\t' => words.extend(word.take()),
+            '\'' => {
+                let word = word.get_or_insert_default();
+                loop {
+                    match chars.next()? {
+                        '\'' => break,
+                        c => word.push(c),
+                    }
+                }
+            }
+            '"' => {
+                let word = word.get_or_insert_default();
+                loop {
+                    match chars.next()? {
+                        '"' => break,
+                        '$' | '`' => return None,
+                        '\\' => match chars.next()? {
+                            c @ ('"' | '\\' | '$' | '`') => word.push(c),
+                            c => {
+                                word.push('\\');
+                                word.push(c);
+                            }
+                        },
+                        c => word.push(c),
+                    }
+                }
+            }
+            '\\' => word.get_or_insert_default().push(chars.next()?),
+            '^' if word.as_deref().is_none_or(str::is_empty) => return None,
+            c if SHELL.contains(&c) => return None,
+            c => word.get_or_insert_default().push(c),
+        }
+    }
+    words.extend(word);
+    Some(words)
 }
 
 /// Whether `path` is in `folder`, as written: an absolute path under it

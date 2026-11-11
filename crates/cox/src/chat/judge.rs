@@ -60,29 +60,46 @@ const COMMAND: &str = "COMMAND:";
 
 /// The permission requests the judge's agent may go on with: reading and
 /// searching, by ACP's kinds of tool, and running what reads or tests,
-/// commands whose titles, as agents title them, are the command.
+/// commands whose titles, as agents title them, are the command. Each
+/// command is named whole, with or without more words after it, so that
+/// `git diff` is not `git difftool`. A command here with flags that have
+/// it run another program or write a file has them in
+/// [`crate::agent::setup::RUNS_OR_WRITES`].
 pub(crate) const ALLOWED: &[&str] = &[
     "read:*",
     "search:*",
-    "execute:ls*",
+    "execute:ls",
+    "execute:ls *",
     "execute:cat *",
     "execute:head *",
     "execute:tail *",
     "execute:find *",
     "execute:rg *",
     "execute:grep *",
-    "execute:git status*",
-    "execute:git diff*",
-    "execute:git log*",
-    "execute:git show*",
-    "execute:cargo check*",
-    "execute:cargo test*",
-    "execute:cargo clippy*",
-    "execute:cargo xtask ci*",
-    "execute:npm test*",
-    "execute:pytest*",
-    "execute:make test*",
-    "execute:go test*",
+    "execute:git status",
+    "execute:git status *",
+    "execute:git diff",
+    "execute:git diff *",
+    "execute:git log",
+    "execute:git log *",
+    "execute:git show",
+    "execute:git show *",
+    "execute:cargo check",
+    "execute:cargo check *",
+    "execute:cargo test",
+    "execute:cargo test *",
+    "execute:cargo clippy",
+    "execute:cargo clippy *",
+    "execute:cargo xtask ci",
+    "execute:cargo xtask ci *",
+    "execute:npm test",
+    "execute:npm test *",
+    "execute:pytest",
+    "execute:pytest *",
+    "execute:make test",
+    "execute:make test *",
+    "execute:go test",
+    "execute:go test *",
 ];
 
 /// How a judge's reply judges the goal.
