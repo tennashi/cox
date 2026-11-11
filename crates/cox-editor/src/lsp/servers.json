@@ -8,7 +8,9 @@
     "gopls": {
       "command": ["gopls"],
       "languages": ["go"],
-      "markers": ["go.work", "go.mod"]
+      "markers": ["go.work", "go.mod"],
+      "source": { "go": "golang.org/x/tools/gopls" },
+      "version": "v0.24.0"
     },
     "pyright": {
       "command": ["pyright-langserver", "--stdio"],
@@ -29,31 +31,12 @@
           "checkOnSave": false
         }
       },
-      "download": {
-        "version": "2026-11-09",
-        "platforms": {
-          "darwin-aarch64": {
-            "archive": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-aarch64-apple-darwin.gz",
-            "sha256": "e43a65008f8f4291320f33c0545dd577ad7623a7407b584a27155833d3722dfb",
-            "program": "rust-analyzer-aarch64-apple-darwin"
-          },
-          "darwin-x86_64": {
-            "archive": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-x86_64-apple-darwin.gz",
-            "sha256": "abf410a54e33e9f8b2d37f76dde8884db86a030d6a9cc70c0e3f87a77c084c5c",
-            "program": "rust-analyzer-x86_64-apple-darwin"
-          },
-          "linux-aarch64": {
-            "archive": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-aarch64-unknown-linux-gnu.gz",
-            "sha256": "813ca3cec78ac6dab99c7bc9d51e63578f6d401b994ecf29cc0dcad86f9b2cd4",
-            "program": "rust-analyzer-aarch64-unknown-linux-gnu"
-          },
-          "linux-x86_64": {
-            "archive": "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-x86_64-unknown-linux-gnu.gz",
-            "sha256": "8c039b25cb338b3970c731646677a4c9d4e9dd7a92c9ab9ae459c71467fbf4a9",
-            "program": "rust-analyzer-x86_64-unknown-linux-gnu"
-          }
-        }
-      }
+      "source": {
+        "github": "rust-lang/rust-analyzer",
+        "asset": "rust-analyzer-{target}.gz",
+        "program": "rust-analyzer-{target}"
+      },
+      "version": "2026-11-09"
     },
     "typescript-language-server": {
       "command": ["typescript-language-server", "--stdio"],

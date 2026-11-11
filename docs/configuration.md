@@ -276,12 +276,14 @@ more, so move them up out of it.
 ### Language servers
 
 Cox starts a language server for a code tab's language:
-`rust-analyzer`, which Cox downloads the first time it needs it, or
-`pyright-langserver`, `typescript-language-server`, `gopls` or `clangd`,
-if it is on `PATH`. You name servers of your own, for every project, in
-`servers.json` in the [data folder](#the-data-folder), as the settings
-screen's "Language servers" does, and a project names its own in
-`servers.json` in its folder, both in the same form as Cox's
+`rust-analyzer`, which Cox downloads the first time it needs it,
+`gopls`, which Cox installs with `go install` the first time it needs it
+(so `go` has to be on `PATH`), or `pyright-langserver`,
+`typescript-language-server` or `clangd`, if it is on `PATH`. You name
+servers of your own, for every project, in `servers.json` in the
+[data folder](#the-data-folder), as the settings screen's "Language
+servers" does, and a project names its own in `servers.json` in its
+folder, both in the same form as Cox's
 [`servers.json`](../crates/cox-editor/src/lsp/servers.json):
 
 ```json
@@ -309,22 +311,50 @@ Each server, by name, has:
 | `markers` | Files a folder of such a project has. |
 | `initializationOptions` | Sent to the server as it starts. |
 | `settings` | Sent by section, as the server asks for them. |
-| `download` | Where the server's program is downloaded from, instead of found on `PATH`: its `version`, and for each platform (`darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`) the `archive`'s URL, its `sha256`, and the `program`'s path in it. |
+| `source` | Where Cox gets the server's program, instead of finding it on `PATH`. Not in a project's `servers.json`. |
+| `version` | The version of the program Cox gets from the `source`. |
 
 A project's server for a language goes before yours, and yours before
 Cox's. For a server Cox already knows, each key the file gives replaces
 Cox's, as for `rust-analyzer` above; `null` turns the server off, as for
 `gopls` above.
 
-Cox checks a download by its SHA-256 and keeps each version apart, in
-`cache/servers/<name>/<version>` in its data folder, so projects that
-download different versions of a server each run their own. A file
-that gives one of Cox's servers a `command` and no `download` runs that
-command instead, as `["rust-analyzer"]` to run the one on `PATH`. Cox's
-own `rust-analyzer` is from its
-[releases](https://github.com/rust-lang/rust-analyzer/releases); a
-project can download a release of its own, written as in Cox's
-[`servers.json`](../crates/cox-editor/src/lsp/servers.json).
+#### Where Cox gets a server
+
+Where a server's program comes from, its `source`, is Cox's to say, and
+yours, in your `servers.json`, along with the version you use by
+default. A project says only which `version` it uses:
+
+```json
+{"servers": {"rust-analyzer": {"version": "2026-10-01"}}}
+```
+
+A `source` is one of:
+
+| Source | Meaning |
+| --- | --- |
+| `{"github": "<owner>/<repo>", "asset": "...", "program": "..."}` | The `asset` of the GitHub release tagged with the version, and the `program`'s path in it once unpacked. Cox checks the asset by the SHA-256 GitHub gives of it, and does not download an asset GitHub gives none of. |
+| `{"go": "<package>"}` | The Go package, installed with `go install <package>@<version>`, which checks it by Go's checksum database. |
+
+In `asset` and `program`, `{version}` stands for the version, `{target}`
+for the platform as Rust names it (`aarch64-apple-darwin`,
+`x86_64-unknown-linux-gnu`, ...), and `{os}` and `{arch}` for it as Cox
+does (`darwin`, `linux`; `aarch64`, `x86_64`). Cox's own `rust-analyzer`
+is
+`{"github": "rust-lang/rust-analyzer", "asset": "rust-analyzer-{target}.gz", "program": "rust-analyzer-{target}"}`.
+
+Cox keeps each version apart, in `cache/servers/<name>/<version>` in
+its data folder, so projects that use different versions of a server
+each run their own. A file that gives one of Cox's servers a `command`
+and no `source` runs that command instead, as `["rust-analyzer"]` to
+run the one on `PATH`.
+
+The environment says a server's version and source again, over the
+files: `COX_SERVER_<NAME>_VERSION` and `COX_SERVER_<NAME>_SOURCE`, the
+source as JSON, `<NAME>` being the server's name upper-cased with `_`
+for what is not a letter or a digit, as
+`COX_SERVER_RUST_ANALYZER_VERSION`. Cox reads its environment as it
+starts, so these hold for every project.
 
 ### Plugins
 
@@ -344,5 +374,6 @@ from `cox://api/...`, and draws in Cox's colors by linking
 | `RUST_LOG` | What Cox writes to standard error. Errors only by default. |
 | `COX_LOG` | What Cox keeps in its log files in `logs` in the data folder. Down to `debug` by default. |
 | `COX_REGISTRY` | Another ACP Registry to fetch, such as a mirror. |
+| `COX_SERVER_<NAME>_VERSION`, `COX_SERVER_<NAME>_SOURCE` | The version, and the source, of the language server `<name>` that Cox gets. See [Where Cox gets a server](#where-cox-gets-a-server). |
 | `ANDROID_HOME`, `ANDROID_SDK_ROOT` | The Android SDK whose emulator Cox runs. |
 | `ANDROID_AVD_HOME`, `ANDROID_EMULATOR_HOME`, `ANDROID_USER_HOME` | Where Cox finds the Android virtual devices. |
