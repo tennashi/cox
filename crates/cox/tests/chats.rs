@@ -979,6 +979,40 @@ async fn the_agent_asks_after_its_turn_ended_and_goes_on_once_answered(cx: &mut 
 }
 
 #[gpui::test]
+async fn the_human_answers_the_agent_after_setting_a_goal_as_it_asks(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch("asks-goal"));
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    view.read_with(cx, |view, _| {
+        view.set_goal(Some(KeptGoal::Command("true".to_owned())));
+    });
+    wait_until(cx, &view, |conversation| {
+        matches!(conversation.entries().last(), Some(Entry::Note(note)) if note.starts_with("Goal:"))
+    })
+    .await;
+
+    click(cx, "option-1");
+    wait_for_turn(cx, &view).await;
+    let entries = entries(cx, &view);
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            Entry::Permission {
+                chosen: Some(0),
+                ..
+            }
+        )),
+        "{entries:?}"
+    );
+}
+
+#[gpui::test]
 async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestAppContext) {
     let (agents, workspace, cx) = open_window(cx, scratch("went-on-stops"));
     cx.simulate_keystrokes("secondary-n");

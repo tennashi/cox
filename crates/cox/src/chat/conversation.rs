@@ -51,8 +51,8 @@ pub enum State {
     Idle,
     /// A turn is running.
     Busy,
-    /// The agent waits for the human to choose one of the options of the
-    /// last [`Entry::Permission`].
+    /// The agent waits for the human to answer the entry of
+    /// [`Conversation::asked_at`].
     Asking,
     /// The human asked the agent to stop the turn, and it has not ended
     /// yet.
@@ -1538,8 +1538,8 @@ impl Conversation {
     /// waits on one.
     #[must_use]
     pub fn asked(&self) -> Option<&[String]> {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { options, .. })) => Some(options),
+        match self.asked_entry() {
+            Some(Entry::Permission { options, .. }) => Some(options),
             _ => None,
         }
     }
@@ -1549,9 +1549,9 @@ impl Conversation {
     /// to log in.
     #[must_use]
     pub fn options_asked(&self) -> usize {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { options, .. })) => options.len(),
-            (State::Asking, Some(Entry::Login { options, .. })) => options.len(),
+        match self.asked_entry() {
+            Some(Entry::Permission { options, .. }) => options.len(),
+            Some(Entry::Login { options, .. }) => options.len(),
             _ => 0,
         }
     }
@@ -1559,10 +1559,32 @@ impl Conversation {
     /// Whether the agent waits for the human to log in.
     #[must_use]
     pub fn logging_in(&self) -> bool {
-        matches!(
-            (self.state, self.entries.last()),
-            (State::Asking, Some(Entry::Login { .. }))
-        )
+        matches!(self.asked_entry(), Some(Entry::Login { .. }))
+    }
+
+    /// The index of the entry the agent waits on the human to answer, a
+    /// permission request or the ways to log in, while it does. The agent
+    /// asks one thing at a time, and nothing more until it is answered,
+    /// so it is the last ask, wherever notes Cox added since put it.
+    #[must_use]
+    pub fn asked_at(&self) -> Option<usize> {
+        if self.state != State::Asking {
+            return None;
+        }
+        self.entries
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::Permission { .. } | Entry::Login { .. }))
+            .filter(|&index| {
+                matches!(
+                    self.entries[index],
+                    Entry::Permission { chosen: None, .. } | Entry::Login { chosen: None, .. }
+                )
+            })
+    }
+
+    /// The entry of [`Self::asked_at`].
+    fn asked_entry(&self) -> Option<&Entry> {
+        self.asked_at().map(|index| &self.entries[index])
     }
 
     /// Shows that the agent asks the human to log in, one of the ways of
@@ -1587,18 +1609,16 @@ impl Conversation {
     /// Chooses the way at `index` of logging in, while the agent waits for
     /// the human to log in, and returns it.
     pub fn choose_login(&mut self, index: usize) -> Option<LoginOption> {
-        if self.state != State::Asking {
-            return None;
-        }
-        let Some(Entry::Login {
+        let at = self.asked_at()?;
+        let Entry::Login {
             options, chosen, ..
-        }) = self.entries.last_mut()
+        } = &mut self.entries[at]
         else {
             return None;
         };
         let option = options.get(index)?.clone();
         *chosen = Some(index);
-        self.changed.insert(self.entries.len() - 1);
+        self.changed.insert(at);
         self.state = self.before_asking;
         Some(option)
     }
@@ -1608,16 +1628,12 @@ impl Conversation {
     /// answer are told: the call, what it is about to do, and the options.
     #[must_use]
     pub fn asked_about(&self) -> Option<String> {
-        let (
-            State::Asking,
-            Some(Entry::Permission {
-                title,
-                content,
-                options,
-                chosen: None,
-                ..
-            }),
-        ) = (self.state, self.entries.last())
+        let Some(Entry::Permission {
+            title,
+            content,
+            options,
+            ..
+        }) = self.asked_entry()
         else {
             return None;
         };
@@ -1746,8 +1762,8 @@ impl Conversation {
     /// permission request the agent waits on.
     #[must_use]
     pub fn gathering(&self) -> bool {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { gathered, .. })) => gathered
+        match self.asked_entry() {
+            Some(Entry::Permission { gathered, .. }) => gathered
                 .iter()
                 .any(|check| check.state == CheckState::Running),
             _ => false,
@@ -1758,8 +1774,8 @@ impl Conversation {
     /// request the agent waits on: the first line each said.
     #[must_use]
     pub fn headlines(&self) -> Vec<&str> {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { gathered, .. })) => gathered
+        match self.asked_entry() {
+            Some(Entry::Permission { gathered, .. }) => gathered
                 .iter()
                 .filter(|check| matches!(check.state, CheckState::Passed | CheckState::Failed))
                 .filter_map(|check| check.said.as_deref().and_then(headline))
@@ -1785,12 +1801,10 @@ impl Conversation {
     /// Chooses the option at `index` of the permission request the agent
     /// waits on, and returns the answer to send.
     pub fn choose(&mut self, index: usize) -> Option<Command> {
-        if self.state != State::Asking {
-            return None;
-        }
-        let Some(Entry::Permission {
+        let at = self.asked_at()?;
+        let Entry::Permission {
             options, chosen, ..
-        }) = self.entries.last_mut()
+        } = &mut self.entries[at]
         else {
             return None;
         };
@@ -1798,7 +1812,7 @@ impl Conversation {
             return None;
         }
         *chosen = Some(index);
-        self.changed.insert(self.entries.len() - 1);
+        self.changed.insert(at);
         self.state = self.before_asking;
         // The human answered as the plan stands: it is the one the plan
         // is told against from here.
@@ -2096,9 +2110,9 @@ impl Conversation {
     /// in, while it waits on the human.
     #[must_use]
     pub fn asking_for(&self) -> Option<&str> {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { title, .. })) => Some(title),
-            (State::Asking, Some(Entry::Login { .. })) => Some("log in"),
+        match self.asked_entry() {
+            Some(Entry::Permission { title, .. }) => Some(title),
+            Some(Entry::Login { .. }) => Some("log in"),
             _ => None,
         }
     }
@@ -3115,6 +3129,53 @@ mod tests {
         );
         assert_eq!(conversation.state(), State::Asking);
         assert!(conversation.choose(0).is_some());
+    }
+
+    #[test]
+    fn answers_a_permission_request_noted_past() {
+        let mut conversation = Conversation::new();
+        conversation.submit("permission");
+        conversation.apply(AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
+            title: Some("Run make".to_owned()),
+            content: None,
+            options: vec!["Allow".to_owned(), "Reject".to_owned()],
+        });
+        conversation.set_goal(Some(goal::Goal::Command("make".to_owned())));
+        conversation.note("A trigger ran.".to_owned());
+
+        assert_eq!(conversation.asking_for(), Some("Run make"));
+        assert_eq!(
+            conversation.asked(),
+            Some(&["Allow".to_owned(), "Reject".to_owned()][..])
+        );
+        assert_eq!(conversation.options_asked(), 2);
+        assert_eq!(
+            conversation.choose(1),
+            Some(Command::Answer(PermissionAnswer::Select(1)))
+        );
+        assert_eq!(conversation.state(), State::Busy);
+        assert!(conversation.entries().iter().any(|entry| matches!(
+            entry,
+            Entry::Permission {
+                chosen: Some(1),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn logs_in_noted_past() {
+        let mut conversation = Conversation::new();
+        conversation.submit("hello");
+        conversation.apply(asks_to_log_in());
+        conversation.note("A trigger ran.".to_owned());
+
+        assert!(conversation.logging_in());
+        assert_eq!(conversation.options_asked(), 2);
+        let chosen = conversation.choose_login(1).expect("there is a second way");
+        assert_eq!(chosen.id, "terminal");
+        assert_eq!(conversation.state(), State::Busy);
     }
 
     #[test]
