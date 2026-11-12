@@ -399,7 +399,7 @@ fn open_store() -> Store {
 }
 
 /// Binds the keys of every part of the window, and of quitting.
-fn bind_keys(cx: &mut App) {
+pub fn bind_keys(cx: &mut App) {
     crate::ui::input::bind_keys(cx);
     crate::ui::translation::bind_keys(cx);
     crate::chat::hand::bind_keys(cx);
