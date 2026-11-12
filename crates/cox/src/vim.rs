@@ -301,18 +301,13 @@ impl Region {
     }
 
     /// The mode the keys go to as the keyboard comes into the region, if
-    /// it has one: insert in what opens only to type a line in and in a
-    /// program, normal in a screen of settings, and where nothing is
-    /// typed. A page tells its own, by whether a field of it has the
-    /// keyboard.
+    /// it has one: insert in what opens only to type a line in, normal in
+    /// a screen of settings, where nothing is typed, and in a program, as
+    /// Neovim's terminal is, until the human types in it (see [`typing`]).
+    /// A page tells its own, by whether a field of it has the keyboard.
     const fn enters_in(self) -> Option<Mode> {
         match self {
-            Self::Goal
-            | Self::Sketch
-            | Self::Renaming
-            | Self::Address
-            | Self::Terminal
-            | Self::Android => Some(Mode::Insert),
+            Self::Goal | Self::Sketch | Self::Renaming | Self::Address => Some(Mode::Insert),
             Self::Command => Some(Mode::Command),
             Self::Settings
             | Self::ProjectCard
@@ -325,7 +320,9 @@ impl Region {
             | Self::Devices
             | Self::Flow
             | Self::Windows
-            | Self::MacWindow => Some(Mode::Normal),
+            | Self::MacWindow
+            | Self::Terminal
+            | Self::Android => Some(Mode::Normal),
             _ => None,
         }
     }
@@ -554,6 +551,16 @@ pub fn came(region: Region, window: &mut Window, cx: &mut App) {
     let was = vim.mode;
     vim.arrive(region);
     if vim.mode != was {
+        window.refresh();
+    }
+}
+
+/// Goes to insert mode in `region`, which the human means to type in, as
+/// by clicking a terminal or opening one, if Vim's keys are on.
+pub fn typing(region: Region, window: &mut Window, cx: &mut App) {
+    came(region, window, cx);
+    if cx.has_global::<Vim>() && cx.global::<Vim>().mode != Mode::Insert {
+        enter(Mode::Insert, cx);
         window.refresh();
     }
 }
@@ -801,6 +808,9 @@ mod tests {
     fn a_program_has_every_key_in_insert_mode_and_none_in_normal_mode() {
         for region in [Region::Terminal, Region::Android] {
             let mut vim = Vim::default();
+            vim.arrive(region);
+            assert_eq!(vim.mode(), Mode::Normal, "come to, {region:?}");
+            vim.mode = Mode::Insert;
             assert_eq!(
                 press(&mut vim, region, "j 1 escape ctrl-c ctrl-w g t :"),
                 [Outcome::Pass; 8],
@@ -845,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn back_from_the_line_a_program_is_in_normal_mode_and_else_in_insert_mode() {
+    fn back_from_the_line_a_program_is_in_normal_mode_and_a_line_s_input_in_insert_mode() {
         let mut vim = Vim::default();
         press(&mut vim, Region::Terminal, "ctrl-\\ ctrl-n :");
         vim.mode = Mode::Command;
@@ -854,7 +864,7 @@ mod tests {
         assert_eq!(vim.mode(), Mode::Normal);
         vim.arrive(Region::Chat);
         vim.arrive(Region::Terminal);
-        assert_eq!(vim.mode(), Mode::Insert);
+        assert_eq!(vim.mode(), Mode::Normal, "come to anew");
         press(&mut vim, Region::Command, "escape");
         vim.arrive(Region::Goal);
         assert_eq!(vim.mode(), Mode::Insert, "the line's command opened it");

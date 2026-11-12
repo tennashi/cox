@@ -20,7 +20,7 @@ use cox_browser::relay::AgentInput;
 use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, Context, Entity, FocusHandle, Focusable, Hitbox, IntoElement, KeyDownEvent,
-    Pixels, Subscription, Task, Window, div, prelude::*, px, rgb,
+    MouseButton, Pixels, Subscription, Task, Window, div, prelude::*, px, rgb,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -425,6 +425,9 @@ impl Render for Android {
                     .relative()
                     .track_focus(&self.focus_handle)
                     .key_context(KEY_CONTEXT)
+                    .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                        crate::vim::typing(crate::vim::Region::Android, window, cx);
+                    })
                     .on_key_down(cx.listener(Self::key_down))
                     .child(Display {
                         mirrored: cx.entity(),

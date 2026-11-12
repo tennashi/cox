@@ -458,6 +458,7 @@ impl Terminal {
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);
+        crate::vim::typing(Region::Terminal, window, cx);
         let Some((cell, side)) = self.cell_at(event.position) else {
             return;
         };

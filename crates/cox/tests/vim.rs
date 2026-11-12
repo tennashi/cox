@@ -400,6 +400,7 @@ fn open_terminal<'a>(
     cx.update(|window, cx| {
         window.activate_window();
         window.focus(&terminal.focus_handle(cx));
+        cox::vim::typing(cox::vim::Region::Terminal, window, cx);
     });
     cx.run_until_parked();
     (terminal, waiting, cx)
@@ -456,13 +457,46 @@ fn a_terminal_takes_every_key_in_insert_mode_escape_too(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn turned_on_in_a_terminal_the_keys_start_in_insert_mode(cx: &mut TestAppContext) {
+fn turned_on_in_a_terminal_the_keys_start_in_normal_mode(cx: &mut TestAppContext) {
     let (_terminal, _waiting, cx) = open_terminal(cx, "terminal-turned-on", "head -n 1");
     cx.update(|window, cx| {
         cox::vim::switch(false, window, cx);
         cox::vim::switch(true, window, cx);
     });
-    assert_eq!(mode(cx), Some(Mode::Insert));
+    assert_eq!(mode(cx), Some(Mode::Normal));
+}
+
+#[gpui::test]
+fn a_terminal_come_to_by_keys_is_in_normal_mode_and_a_click_types(cx: &mut TestAppContext) {
+    let (terminal, _waiting, cx) = open_terminal(cx, "terminal-come-to", "head -n 1");
+    assert_eq!(
+        mode(cx),
+        Some(Mode::Insert),
+        "opened to type in, as the stage opens one"
+    );
+
+    cx.update(|window, cx| {
+        window.blur();
+        cox::vim::came(cox::vim::Region::Workspace, window, cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.focus(&terminal.focus_handle(cx)));
+    cx.run_until_parked();
+    assert_eq!(mode(cx), Some(Mode::Normal), "come to again, as by ctrl-w");
+
+    cx.simulate_keystrokes("ctrl-w");
+    assert_eq!(
+        mode(cx),
+        Some(Mode::Normal),
+        "ctrl-w is Vim's, not the shell's"
+    );
+
+    let at = cx
+        .debug_bounds("terminal")
+        .expect("the terminal is drawn")
+        .center();
+    cx.simulate_click(at, gpui::Modifiers::default());
+    assert_eq!(mode(cx), Some(Mode::Insert), "a click types");
 }
 
 #[gpui::test]
@@ -556,7 +590,12 @@ fn open_android(cx: &mut TestAppContext) -> (Entity<FakePage>, &mut VisualTestCo
         asked: Vec::new(),
         context: "Android",
     });
-    cx.update(|window, cx| window.focus(&android.read(cx).focus));
+    cx.update(|window, cx| {
+        window.focus(&android.read(cx).focus);
+        cox::vim::came(cox::vim::Region::Android, window, cx);
+    });
+    assert_eq!(mode(cx), Some(Mode::Normal), "come to by keys");
+    cx.update(|window, cx| cox::vim::typing(cox::vim::Region::Android, window, cx));
     cx.run_until_parked();
     (android, cx)
 }
@@ -689,12 +728,14 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
     assert!(in_part(cx, "Terminal"));
     assert_eq!(
         shown_mode(cx),
-        Some("INSERT"),
-        "as the terminal took the keyboard"
+        Some("NORMAL"),
+        "come to by keys, as Neovim's terminal"
     );
     let terminal = terminals.borrow().last().cloned().expect("a terminal");
     shows(cx, &terminal, "300");
 
+    keys::press(cx, &workspace, "i");
+    assert_eq!(shown_mode(cx), Some("INSERT"));
     keys::press(cx, &workspace, "e c h o enter");
     shows(cx, &terminal, "echo\necho");
     keys::press(cx, &workspace, "ctrl-\\ ctrl-n");
@@ -712,12 +753,8 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
         in_part(cx, "Terminal"),
         "the stage shows the terminal still"
     );
-    assert_eq!(
-        shown_mode(cx),
-        Some("INSERT"),
-        "coming back, as Vim's :startinsert"
-    );
-    keys::press(cx, &workspace, "ctrl-\\ ctrl-n : escape");
+    assert_eq!(shown_mode(cx), Some("NORMAL"), "coming back by keys");
+    keys::press(cx, &workspace, ": escape");
     assert!(in_part(cx, "Terminal"));
     assert_eq!(shown_mode(cx), Some("NORMAL"), "back from the line");
 

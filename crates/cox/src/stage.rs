@@ -535,6 +535,7 @@ impl Stage {
         let changes = cx.observe(&terminal, |stage, _, cx| stage.changed(cx));
         self.push(TabContent::Terminal(terminal), changes, None, true, cx);
         self.focus_shown(window, cx);
+        crate::vim::typing(crate::vim::Region::Terminal, window, cx);
     }
 
     /// Shows the tab of the Android emulator's virtual devices, opening it
