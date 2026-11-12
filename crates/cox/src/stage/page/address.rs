@@ -1,10 +1,29 @@
 //! The page's address line, as a browser's: what is typed in it is an
-//! address to go to or words to search for (see [`Address`]).
+//! address to go to or words to search for (see [`Address`]), and while
+//! the human types, a line under it says which. It gets the keyboard with
+//! its whole text selected, so that typing replaces it, and Escape puts
+//! the page's address back and gives the keyboard back to the page.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use gpui::{
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
+    Subscription, Window, actions, deferred, div, prelude::*, px, relative, rgb,
+};
+
+use super::ADDRESS;
 use crate::daemon::phone::relay::on_the_mac;
 use crate::settings::SearchEngine;
+use crate::ui::input::{LineInput, Submitted};
+use crate::ui::theme::{BORDER, FAINT, SELECTED, SURFACE};
+use crate::vim::{self, Leave, Region};
+
+actions!(address, [Revert]);
+
+/// Binds Escape in the address line. Call once when the app starts.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new("escape", Revert, Some(ADDRESS))]);
+}
 
 /// What a line typed in a browser's address line asks for, as Chrome
 /// sorts it.
@@ -164,6 +183,170 @@ fn served_on_the_mac(http: &str) -> bool {
         _ => false,
     });
     every_address || on_the_mac(http).is_some()
+}
+
+/// What the human asks of the page from its address line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    /// Load this URL.
+    Go(String),
+    /// Take the keyboard back, with nothing loaded.
+    Back,
+}
+
+/// The address line of a page.
+pub struct AddressLine {
+    input: Entity<LineInput>,
+    /// The page's address, as the browser last said.
+    url: String,
+    /// What words typed are searched with, as the settings said when the
+    /// line last got the keyboard.
+    engine: SearchEngine,
+    /// Whether the mouse button went down on the line while it did not
+    /// have the keyboard, which that click brings with the whole text
+    /// selected.
+    clicked_from_elsewhere: bool,
+    _submitted: Subscription,
+}
+
+impl EventEmitter<Asked> for AddressLine {}
+
+impl AddressLine {
+    /// A line showing `url`, the page's address.
+    pub fn new(url: &str, cx: &mut Context<Self>) -> Self {
+        let input = cx.new(LineInput::new);
+        input.update(cx, |input, cx| input.set_text(url, cx));
+        let submitted = cx.subscribe(&input, |line, _, Submitted, cx| line.submitted(cx));
+        Self {
+            input,
+            url: url.to_owned(),
+            engine: crate::settings::search(),
+            clicked_from_elsewhere: false,
+            _submitted: submitted,
+        }
+    }
+
+    /// Gives the line the keyboard, with its whole text selected, so that
+    /// typing replaces it.
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.engine = crate::settings::search();
+        window.focus(&self.input.focus_handle(cx));
+        self.input.update(cx, LineInput::select_whole);
+        vim::typing(Region::Address, window, cx);
+    }
+
+    /// What is typed in the line.
+    #[must_use]
+    pub fn text<'a>(&self, cx: &'a App) -> &'a str {
+        self.input.read(cx).text()
+    }
+
+    /// What Enter does with what is typed, while the human types: while
+    /// the line has the keyboard and holds something else than the page's
+    /// address.
+    #[must_use]
+    pub fn said(&self, window: &Window, cx: &App) -> Option<String> {
+        let text = self.text(cx);
+        if !self.input.focus_handle(cx).is_focused(window) || text == self.url {
+            return None;
+        }
+        Some(Address::of(text)?.said(&self.engine))
+    }
+
+    /// The page went to `url`: the line shows it, unless the human is in
+    /// the middle of typing in it.
+    pub fn navigated(&mut self, url: &str, window: &Window, cx: &mut Context<Self>) {
+        let typing =
+            self.input.focus_handle(cx).is_focused(window) && self.text(cx) != self.url.as_str();
+        url.clone_into(&mut self.url);
+        if !typing {
+            self.show_url(cx);
+        }
+    }
+
+    /// The page is loading `url`, as the human or Cox asked.
+    pub fn went(&mut self, url: &str, cx: &mut Context<Self>) {
+        url.clone_into(&mut self.url);
+        self.show_url(cx);
+    }
+
+    fn show_url(&mut self, cx: &mut Context<Self>) {
+        if self.text(cx) != self.url.as_str() {
+            let url = self.url.clone();
+            self.input.update(cx, |input, cx| input.set_text(&url, cx));
+        }
+        cx.notify();
+    }
+
+    fn submitted(&mut self, cx: &mut Context<Self>) {
+        if let Some(address) = Address::of(self.text(cx)) {
+            cx.emit(Asked::Go(address.url(&self.engine)));
+        }
+    }
+
+    /// Escape: the page's address comes back, and the keyboard goes back
+    /// to the page.
+    fn revert(&mut self, cx: &mut Context<Self>) {
+        self.show_url(cx);
+        cx.emit(Asked::Back);
+    }
+
+    fn render_said(said: String) -> impl IntoElement {
+        deferred(
+            div()
+                .debug_selector(|| "address-says".to_owned())
+                .absolute()
+                .top(relative(1.))
+                .left_0()
+                .right_0()
+                .mt(px(4.))
+                .px(px(10.))
+                .py(px(4.))
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(rgb(SURFACE))
+                .text_size(px(12.))
+                .text_color(rgb(FAINT))
+                .truncate()
+                .child(said),
+        )
+        .with_priority(1)
+    }
+}
+
+impl Focusable for AddressLine {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.input.focus_handle(cx)
+    }
+}
+
+impl Render for AddressLine {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .debug_selector(|| "address".to_owned())
+            .key_context(ADDRESS)
+            .relative()
+            .flex_1()
+            .px_2()
+            .rounded_sm()
+            .bg(rgb(SELECTED))
+            .on_action(cx.listener(|line, _: &Revert, _, cx| line.revert(cx)))
+            .on_action(cx.listener(|line, _: &Leave, _, cx| line.revert(cx)))
+            .capture_any_mouse_down(cx.listener(|line, _, window, cx| {
+                line.clicked_from_elsewhere = !line.input.focus_handle(cx).is_focused(window);
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|line, _, window, cx| {
+                    if std::mem::take(&mut line.clicked_from_elsewhere) {
+                        line.focus(window, cx);
+                    }
+                }),
+            )
+            .child(self.input.clone())
+            .children(self.said(window, cx).map(Self::render_said))
+    }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //! Chromium with a window of its own gets from the window's menu and the
 //! page has to supply, and the rest, which goes to the page as it is.
 
-use gpui::{Context, Focusable as _, KeyDownEvent, KeyUpEvent, Keystroke, Window};
+use gpui::{Context, KeyDownEvent, KeyUpEvent, Keystroke, Window};
 
 use super::Page;
 use cox_browser::{EditCommand, Modifiers};
@@ -22,7 +22,8 @@ impl Page {
                 Shortcut::Edit(command) => self.browser.edit(command),
                 Shortcut::Reload => self.browser.reload(),
                 Shortcut::Address => {
-                    window.focus(&self.address.focus_handle(cx));
+                    self.address
+                        .update(cx, |address, cx| address.focus(window, cx));
                 }
             }
             cx.stop_propagation();

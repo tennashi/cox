@@ -4,7 +4,7 @@
 //! takes the label typed of a hint.
 
 use cox_browser::{Hint, How, Kind, Scroll};
-use gpui::{App, ClipboardItem, Context, Focusable as _, WeakEntity, Window, div, prelude::*, rgb};
+use gpui::{App, ClipboardItem, Context, WeakEntity, Window, div, prelude::*, rgb};
 
 use super::hints::{Hinting, Shown, Typed};
 use super::{Opens, Page};
@@ -183,19 +183,14 @@ impl Page {
         if self.is_plugin() {
             return;
         }
-        window.focus(&self.address.focus_handle(cx));
-        vim::typing(vim::Region::Address, window, cx);
+        self.address
+            .update(cx, |address, cx| address.focus(window, cx));
     }
 
-    /// Escape took the keys to normal mode: the hints go, or the address
-    /// line gives the keyboard back to the page, or the field that has
-    /// it lets it go.
-    pub(super) fn leave(&mut self, _: &Leave, window: &mut Window, cx: &mut Context<Self>) {
+    /// Escape took the keys to normal mode: the hints go, or the field
+    /// that has the keyboard lets it go.
+    pub(super) fn leave(&mut self, _: &Leave, _: &mut Window, _: &mut Context<Self>) {
         if self.stop_hinting() {
-            return;
-        }
-        if self.address.focus_handle(cx).is_focused(window) {
-            window.focus(&self.focus_handle);
             return;
         }
         self.browser.blur_field();
