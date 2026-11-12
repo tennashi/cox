@@ -15,7 +15,7 @@ use cox::agent::Start;
 use cox::agents::Agents;
 use cox::chat::judge::Starts;
 use cox::daemon::client::{self, Connected};
-use cox::daemon::wire::{Build, FromDaemon, Hello, ToDaemon};
+use cox::daemon::wire::{FromDaemon, Hello, ToDaemon};
 use cox::daemon::{Spawned, Spawns};
 use cox_core::entry::Attachment;
 use cox_core::store::Store;
@@ -77,11 +77,7 @@ fn run_keeping(
 /// `home`, marking `gone` once coxd goes.
 fn reach(socket: &Path, home: &Path, gone: &Arc<AtomicBool>) -> anyhow::Result<Connected> {
     let gone = Arc::clone(gone);
-    let hello = Hello {
-        home: Some(home.to_owned()),
-        command: Vec::new(),
-        build: Build::now(),
-    };
+    let hello = Hello::new(Some(home.to_owned()), Vec::new());
     client::connect(
         socket,
         &hello,
@@ -265,11 +261,10 @@ fn a_second_coxd_does_not_take_the_socket_of_one_that_runs() {
 
 #[test]
 fn what_the_window_and_coxd_say_reads_back_as_it_was() {
-    let hello = Hello {
-        home: Some(PathBuf::from("/tmp/home")),
-        command: vec!["node".to_owned(), "agent.mjs".to_owned()],
-        build: Build::now(),
-    };
+    let hello = Hello::new(
+        Some(PathBuf::from("/tmp/home")),
+        vec!["node".to_owned(), "agent.mjs".to_owned()],
+    );
     let line = serde_json::to_string(&hello).unwrap();
     assert!(!line.contains('\n'));
     assert_eq!(serde_json::from_str::<Hello>(&line).unwrap(), hello);

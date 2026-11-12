@@ -161,6 +161,14 @@ impl Build {
     }
 }
 
+/// What a window and coxd of this build say to each other, as a hash of
+/// the sources that define it (see `build.rs`): a window and a coxd of
+/// two builds that speak alike read each other.
+pub const SPEAKS: u64 = match u64::from_str_radix(env!("COX_SPEAKS"), 16) {
+    Ok(speaks) => speaks,
+    Err(_) => panic!("build.rs tells COX_SPEAKS in hex"),
+};
+
 /// What a window says first, as it comes to coxd, of the command line
 /// it was started with.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,16 +183,33 @@ pub struct Hello {
     /// tell it.
     #[serde(default)]
     pub build: Option<Build>,
+    /// What the window's build says to coxd (see [`SPEAKS`]), or none
+    /// from a window of a build that did not tell it.
+    #[serde(default)]
+    pub speaks: Option<u64>,
 }
 
 impl Hello {
-    /// How coxd of `build` answers this hello from a window it could
-    /// take, as a chat of its is `at_work` or not: it takes a window of
-    /// its own build only, and stops for one of another once no chat is
-    /// at work.
+    /// What a window of this build says first, with `home` and `command`
+    /// from its command line.
     #[must_use]
-    pub fn answer(&self, build: Option<Build>, at_work: bool) -> FromDaemon {
-        if self.build == build {
+    pub fn new(home: Option<PathBuf>, command: Vec<String>) -> Self {
+        Self {
+            home,
+            command,
+            build: Build::now(),
+            speaks: Some(SPEAKS),
+        }
+    }
+
+    /// How coxd of `build`, which `speaks` so, answers this hello from a
+    /// window it could take, as a chat of its is `at_work` or not: it
+    /// takes a window of its own build, and one of another that speaks
+    /// as it does while a chat is at work, and stops for any other once
+    /// no chat is at work.
+    #[must_use]
+    pub fn answer(&self, build: Option<Build>, speaks: Option<u64>, at_work: bool) -> FromDaemon {
+        if self.build == build || (at_work && self.speaks.is_some() && self.speaks == speaks) {
             FromDaemon::Joined
         } else if at_work {
             FromDaemon::Busy
@@ -198,7 +223,8 @@ impl Hello {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FromDaemon {
     /// The window's [`Hello`] was heard, from a window of the daemon's
-    /// build: what follows is the daemon's.
+    /// build, or of one that speaks as it does: what follows is the
+    /// daemon's.
     Joined,
     /// What a coxd of a build that did not tell builds apart answers a
     /// window it takes, of any build: a window takes it as
@@ -210,9 +236,9 @@ pub enum FromDaemon {
     /// xtask install` replaced its program, and no chat is at work: the
     /// daemon stops, for the window to start one of its own build.
     Outdated,
-    /// The window is of another build than the daemon's, which goes on as
-    /// it is, since a chat is at work: it does not take the window, which
-    /// comes again later.
+    /// The window is of another build than the daemon's, which speaks
+    /// otherwise, and the daemon goes on as it is, since a chat is at
+    /// work: it does not take the window, which comes again later.
     Busy,
     /// The projects and chats, as they are now.
     Listing(Listing),
@@ -419,40 +445,54 @@ mod tests {
     }
 
     #[test]
-    fn coxd_takes_a_window_of_its_own_build_only() {
-        let ours = Hello {
-            build: Some(built(1)),
-            ..Hello::default()
-        };
-        let theirs = Hello {
-            build: Some(built(2)),
-            ..Hello::default()
-        };
-        let untold = Hello::default();
-
-        for at_work in [false, true] {
-            assert_eq!(ours.answer(Some(built(1)), at_work), FromDaemon::Joined);
+    fn coxd_takes_a_window_of_its_build_or_one_that_speaks_alike_while_at_work() {
+        use FromDaemon::{Busy, Joined, Outdated};
+        let ours = Some(built(1));
+        let theirs = Some(built(2));
+        let alike = Some(7);
+        let unlike = Some(8);
+        let table = [
+            (ours, alike, ours, alike, false, Joined),
+            (ours, alike, ours, alike, true, Joined),
+            (ours, None, ours, alike, true, Joined),
+            (theirs, alike, ours, alike, true, Joined),
+            (theirs, alike, ours, alike, false, Outdated),
+            (theirs, unlike, ours, alike, true, Busy),
+            (theirs, unlike, ours, alike, false, Outdated),
+            (theirs, None, ours, alike, true, Busy),
+            (theirs, None, ours, alike, false, Outdated),
+            (theirs, alike, ours, None, true, Busy),
+            (theirs, None, ours, None, true, Busy),
+            (None, None, ours, alike, true, Busy),
+            (None, None, ours, alike, false, Outdated),
+        ];
+        for (build, speaks, coxd_build, coxd_speaks, at_work, answer) in table {
+            let hello = Hello {
+                build,
+                speaks,
+                ..Hello::default()
+            };
+            assert_eq!(
+                hello.answer(coxd_build, coxd_speaks, at_work),
+                answer,
+                "{hello:?} to coxd of {coxd_build:?} speaking {coxd_speaks:?}, at work: {at_work}"
+            );
         }
-        assert_eq!(theirs.answer(Some(built(1)), false), FromDaemon::Outdated);
-        assert_eq!(theirs.answer(Some(built(1)), true), FromDaemon::Busy);
-        assert_eq!(untold.answer(Some(built(1)), false), FromDaemon::Outdated);
-        assert_eq!(untold.answer(Some(built(1)), true), FromDaemon::Busy);
     }
 
     #[test]
     fn a_window_and_a_coxd_of_a_build_that_told_none_read_each_other_greeting() {
         let hello: Hello = serde_json::from_str(r#"{"home":null,"command":[]}"#).unwrap();
         assert_eq!(hello.build, None);
+        assert_eq!(hello.speaks, None);
         assert_eq!(
             serde_json::from_str::<FromDaemon>(r#""Welcome""#).unwrap(),
             FromDaemon::Welcome
         );
-        let told = Hello {
-            build: Build::now(),
-            ..Hello::default()
-        };
+        let told = Hello::new(None, Vec::new());
         let line = serde_json::to_string(&told).unwrap();
         assert_eq!(serde_json::from_str::<Hello>(&line).unwrap(), told);
         assert!(told.build.is_some(), "{line}");
+        assert_eq!(told.speaks, Some(SPEAKS), "{line}");
     }
 }

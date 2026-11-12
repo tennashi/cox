@@ -199,11 +199,7 @@ pub fn run(settings: Settings) -> ExitCode {
     crate::translate::start(agents.clone());
     crate::trigger::discuss::start(agents.clone());
     // 3. coxd, which runs the chats, in a process of its own.
-    let hello = crate::daemon::wire::Hello {
-        home: settings.home,
-        command: settings.command,
-        build: crate::daemon::wire::Build::now(),
-    };
+    let hello = crate::daemon::wire::Hello::new(settings.home, settings.command);
     let data = settings.data;
     let connected = crate::storage::path(crate::storage::Kept::Daemon)
         .ok_or_else(|| anyhow::anyhow!("there is no place for coxd's socket"))

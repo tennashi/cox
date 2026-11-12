@@ -10,9 +10,10 @@
 //! [`ToDaemon`] and each the daemon writes a [`FromDaemon`] (see
 //! [`super::wire`]). One window at a time: another is answered
 //! [`FromDaemon::Taken`]. A window of another [`Build`] than coxd's, as
-//! once `cargo xtask install` replaced the program coxd runs, is not
-//! taken: while a chat is at work it is answered [`FromDaemon::Busy`],
-//! and comes again later, and once none is, it is answered
+//! once `cargo xtask install` replaced the program coxd runs, is taken
+//! while a chat is at work if it speaks as coxd does (see
+//! [`super::wire::SPEAKS`]); else it is answered [`FromDaemon::Busy`]
+//! then, and comes again later. Once no chat is at work, it is answered
 //! [`FromDaemon::Outdated`], and coxd stops, for the window to start one
 //! of its own build (see [`super::client`]).
 //!
