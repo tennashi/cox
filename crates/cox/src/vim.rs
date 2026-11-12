@@ -300,6 +300,12 @@ impl Region {
         }
     }
 
+    /// Whether the region is typed in whatever the mode, as a field of a
+    /// page is: the page's address line, which Esc leaves.
+    const fn has_no_mode(self) -> bool {
+        matches!(self, Self::Address)
+    }
+
     /// The mode the keys go to as the keyboard comes into the region, if
     /// it has one: insert in what opens only to type a line in, normal in
     /// a screen of settings, where nothing is typed, and in a program, as
@@ -397,6 +403,9 @@ impl Vim {
 
     pub fn key(&mut self, keymap: &Keymap, region: Region, keystroke: &Keystroke) -> Outcome {
         self.arrive(region);
+        if region.has_no_mode() && self.mode != Mode::Insert {
+            self.mode = Mode::Insert;
+        }
         if !keymap.knows(region) {
             return Outcome::Pass;
         }
@@ -980,6 +989,13 @@ mod tests {
             press(&mut vim, Region::Address, "x"),
             [Outcome::Pass],
             "the address line is typed in"
+        );
+        assert_eq!(vim.mode(), Mode::Insert);
+        vim.mode = Mode::Normal;
+        assert_eq!(
+            press(&mut vim, Region::Address, "i x"),
+            [Outcome::Pass; 2],
+            "the address line has no normal mode"
         );
         assert_eq!(vim.mode(), Mode::Insert);
     }

@@ -324,6 +324,7 @@ impl Page {
                         gpui::MouseButton::Left,
                         cx.listener(move |_, _, window, cx| {
                             window.focus(&address.focus_handle(cx));
+                            crate::vim::typing(crate::vim::Region::Address, window, cx);
                         }),
                     )
                     .child(self.address.clone()),

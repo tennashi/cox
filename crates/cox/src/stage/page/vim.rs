@@ -184,7 +184,7 @@ impl Page {
             return;
         }
         window.focus(&self.address.focus_handle(cx));
-        Self::enter(Mode::Insert, window, cx);
+        vim::typing(vim::Region::Address, window, cx);
     }
 
     /// Escape took the keys to normal mode: the hints go, or the address
