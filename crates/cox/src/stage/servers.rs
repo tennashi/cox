@@ -20,6 +20,7 @@ use cox_editor::lsp::{self, Client, Error, Server, Status, languages};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::agents::download;
+use crate::settings::DIRECTORIES;
 use crate::storage::Kept;
 
 /// What starts a server in a project's folder, and answers it once it is
@@ -104,10 +105,8 @@ impl Servers {
     /// once, it goes on as it was started until Cox quits, whatever the
     /// project says of it since.
     ///
-    /// The server works in `cwd`, the chat's project's folder, when the
-    /// file is in it. Otherwise, it works in the outermost folder above the
-    /// file that is a project of the file's language, as one with a
-    /// `Cargo.toml` is for Rust, or else in the file's own folder.
+    /// The server works in the folder [`root_of`] says, so that each of a
+    /// project's directories gets one of its own.
     pub fn of(&self, cwd: &Path, path: &Path, cx: &mut App) -> Option<Entity<LanguageServer>> {
         let language = languages::id_of(path)?;
         let user = crate::storage::path(Kept::Servers);
@@ -116,22 +115,7 @@ impl Servers {
             tracing::warn!("{why}");
         }
         let server = known.of(language)?.clone();
-        let root = if path.starts_with(cwd) {
-            cwd.to_owned()
-        } else {
-            let folder = path.parent()?;
-            folder
-                .ancestors()
-                .filter(|folder| {
-                    server
-                        .markers
-                        .iter()
-                        .any(|marker| folder.join(marker).exists())
-                })
-                .last()
-                .unwrap_or(folder)
-                .to_owned()
-        };
+        let root = root_of(cwd, path, &server.markers)?;
         let key = (root, server.name.clone());
         if let Some(running) = self.running.borrow().get(&key) {
             return Some(running.clone());
@@ -141,6 +125,38 @@ impl Servers {
         self.running.borrow_mut().insert(key, running.clone());
         Some(running)
     }
+}
+
+/// The folder a server of a language works in, for the file at `path`,
+/// an absolute path, of a chat working in `cwd`: the outermost folder
+/// above the file that is a project of the language, as one with one of
+/// `markers` is, as a `Cargo.toml` is for Rust, but no further out than
+/// `cwd` when the file is in it. When none is, it is the directory of the
+/// project the file is in (see [`DIRECTORIES`]), as
+/// `<cwd>/directories/cox`, or else `cwd`, for a file in it, and the
+/// file's own folder for one that is not.
+fn root_of(cwd: &Path, path: &Path, markers: &[String]) -> Option<PathBuf> {
+    let folder = path.parent()?;
+    let inside = path.starts_with(cwd);
+    let marked = folder
+        .ancestors()
+        .take_while(|folder| !inside || folder.starts_with(cwd))
+        .filter(|folder| markers.iter().any(|marker| folder.join(marker).exists()))
+        .last();
+    if let Some(marked) = marked {
+        return Some(marked.to_owned());
+    }
+    if !inside {
+        return Some(folder.to_owned());
+    }
+    let directories = cwd.join(DIRECTORIES);
+    let directory = path
+        .strip_prefix(&directories)
+        .ok()
+        .and_then(|rest| rest.components().next())
+        .filter(|_| folder.starts_with(&directories) && folder != directories)
+        .map(|name| directories.join(name));
+    Some(directory.unwrap_or_else(|| cwd.to_owned()))
 }
 
 /// Where the program of a server is, as the settings screen says it.
@@ -281,5 +297,43 @@ impl LanguageServer {
             (State::Running(_), Status::Working(work)) => Some(format!("{name}: {work}")),
             (State::Running(_), Status::Stopped) => Some(format!("{name} stopped")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn a_server_works_in_the_directory_of_the_code_it_reads() {
+        let scratch = std::env::temp_dir().join(format!("cox-servers-root-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&scratch);
+        let project = scratch.join("projects").join("cox");
+        let cox = project.join(DIRECTORIES).join("cox");
+        let notes = project.join(DIRECTORIES).join("notes");
+        fs::create_dir_all(cox.join("crates/cox-editor/src")).unwrap();
+        fs::create_dir_all(notes.join("tools")).unwrap();
+        fs::write(cox.join("Cargo.toml"), "").unwrap();
+        fs::write(cox.join("crates/cox-editor/Cargo.toml"), "").unwrap();
+        let markers = ["Cargo.toml".to_owned()];
+        let root = |path: &Path| root_of(&project, path, &markers).unwrap();
+
+        // The outermost folder of the language, as a Cargo workspace.
+        assert_eq!(root(&cox.join("crates/cox-editor/src/lsp.rs")), cox);
+        // A directory with no marker is the server's all the same.
+        assert_eq!(root(&notes.join("tools/fmt.rs")), notes);
+        // What is in the project but not in a directory goes in the project.
+        assert_eq!(root(&project.join("scratch.rs")), project);
+        // No further out than the project, even when a folder above it is
+        // marked.
+        fs::write(scratch.join("Cargo.toml"), "").unwrap();
+        assert_eq!(root(&notes.join("tools/fmt.rs")), notes);
+        // A file out of the project goes to its own outermost folder.
+        let elsewhere = scratch.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        assert_eq!(root(&elsewhere.join("main.rs")), scratch);
+        let _ = fs::remove_dir_all(&scratch);
     }
 }
