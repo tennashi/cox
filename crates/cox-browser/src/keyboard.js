@@ -26,24 +26,25 @@ globalThis.coxVim ??= (() => {
     }
   };
 
-  const rectOf = ([element, offset]) => {
-    const rect = element.getBoundingClientRect();
-    return { x: offset.x + rect.left, y: offset.y + rect.top, width: rect.width, height: rect.height };
-  };
-
-  const shown = ([element, offset]) => {
-    const rect = rectOf([element, offset]);
-    if (rect.width < 2 || rect.height < 2) return false;
-    if (rect.y + rect.height < 0 || rect.x + rect.width < 0) return false;
-    if (rect.y > innerHeight || rect.x > innerWidth) return false;
-    if (getComputedStyle(element).visibility === 'hidden') return false;
-    if (element.tagName === 'IFRAME') return true;
-    const local = element.getBoundingClientRect();
+  // Where `element` is in sight, in the top page's coordinates: the first
+  // of the boxes it is laid out in (a link that wraps a heading and a line
+  // under it is more than one) whose middle shows the element and not
+  // something over it, or null.
+  const boxIn = (element, offset) => {
+    if (getComputedStyle(element).visibility === 'hidden') return null;
     const root = element.getRootNode();
-    const top = (root.elementFromPoint ? root : element.ownerDocument)
-      .elementFromPoint(local.left + local.width / 2, local.top + local.height / 2);
-    return !top || top === element || element.contains(top) || top.contains(element)
-      || (element.labels && [...element.labels].includes(top));
+    const finder = root.elementFromPoint ? root : element.ownerDocument;
+    for (const box of element.getClientRects()) {
+      const rect = { x: offset.x + box.left, y: offset.y + box.top, width: box.width, height: box.height };
+      if (rect.width < 2 || rect.height < 2) continue;
+      if (rect.y + rect.height < 0 || rect.x + rect.width < 0) continue;
+      if (rect.y > innerHeight || rect.x > innerWidth) continue;
+      if (element.tagName === 'IFRAME') return rect;
+      const top = finder.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      if (!top || top === element || element.contains(top) || top.contains(element)
+        || (element.labels && [...element.labels].includes(top))) return rect;
+    }
+    return null;
   };
 
   const kindOf = (element) => {
@@ -83,20 +84,18 @@ globalThis.coxVim ??= (() => {
     hints() {
       const all = [];
       walk(document, { x: 0, y: 0 }, all);
-      found = all.filter(shown);
-      return found.map((entry, id) => {
-        const rect = rectOf(entry);
-        return {
-          id,
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-          ...kindOf(entry[0]),
-          text: (entry[0].innerText || entry[0].value || entry[0].getAttribute('aria-label') || '')
-            .trim().slice(0, 80),
-        };
-      });
+      found = all.map(([element, offset]) => [element, boxIn(element, offset)])
+        .filter(([, rect]) => rect);
+      return found.map(([element, rect], id) => ({
+        id,
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        ...kindOf(element),
+        text: (element.innerText || element.value || element.getAttribute('aria-label') || '')
+          .trim().slice(0, 80),
+      }));
     },
     show(labels) {
       this.clear();
@@ -104,9 +103,8 @@ globalThis.coxVim ??= (() => {
       host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647';
       const shadow = host.attachShadow({ mode: 'closed' });
       for (const [id, label] of labels) {
-        const entry = found[id];
-        if (!entry) continue;
-        const rect = rectOf(entry);
+        const [, rect] = found[id] ?? [];
+        if (!rect) continue;
         const tag = document.createElement('span');
         tag.textContent = label;
         tag.style.cssText = `position:fixed;left:${Math.max(0, rect.x)}px;top:${Math.max(0, rect.y)}px;`
