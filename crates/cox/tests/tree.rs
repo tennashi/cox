@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox::stage::tree::{Chosen, Tree};
+use cox::stage::tree::{Chosen, Tree, Wrote};
 use cox_editor::changes::How;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
@@ -299,5 +299,41 @@ fn says_how_each_file_changed(cx: &mut TestAppContext) {
     std::fs::write(root.join("src/main.rs"), "").unwrap();
     look(cx);
     assert_eq!(hows(cx), [Some(How::Added), None, None]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn marks_the_files_the_agents_wrote_until_they_are_committed(cx: &mut TestAppContext) {
+    let root = scratch("writers", &["src/main.rs", "README.md"]);
+    git(&root, &["init", "--quiet"]);
+    git(&root, &["add", "--all"]);
+    git(&root, &["commit", "--quiet", "-m", "Files"]);
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("src/lib.rs"), "").unwrap();
+
+    let (tree, _, cx) = open(cx, &root, vec![root.join("src")]);
+    let main = root.join("src/main.rs").display().to_string();
+    let readme = root.join("README.md").display().to_string();
+    let wrote: Wrote = Rc::new(move |_| {
+        vec![
+            (1, vec![main.clone(), readme.clone()]),
+            (2, vec![main.clone()]),
+        ]
+    });
+    tree.update(cx, |tree, _| tree.set_wrote(wrote));
+    look(cx);
+    let writers = |cx: &mut VisualTestContext| {
+        tree.read_with(cx, |tree, _| {
+            ["src/main.rs", "src/lib.rs", "README.md"]
+                .map(|path| tree.writers(&root.join(path)).to_vec())
+        })
+    };
+    // Not `README.md`, as it was at the last commit, nor `lib.rs`, which
+    // the human wrote.
+    assert_eq!(writers(cx), [vec![1, 2], vec![], vec![]]);
+
+    git(&root, &["commit", "--quiet", "--all", "-m", "Main"]);
+    look(cx);
+    assert_eq!(writers(cx), [Vec::<u64>::new(), vec![], vec![]]);
     std::fs::remove_dir_all(root).unwrap();
 }

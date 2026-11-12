@@ -33,6 +33,12 @@ impl Stage {
         self.names = Some(names);
     }
 
+    /// From now on, `wrote` tells the tree of the project's files which
+    /// files the chats' agents wrote, for it to mark them in their colors.
+    pub fn set_wrote(&mut self, wrote: super::tree::Wrote, cx: &mut Context<Self>) {
+        self.files.update(cx, |tree, _| tree.set_wrote(wrote));
+    }
+
     /// The chats whose agents are at work, taking a turn, are those of
     /// `working` from now on.
     pub fn set_working(&mut self, working: HashSet<u64>, cx: &mut Context<Self>) {

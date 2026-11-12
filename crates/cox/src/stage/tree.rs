@@ -12,7 +12,9 @@
 //! marked brighter, and the folders the rows at the top are in stay at
 //! the top as the tree scrolls. A file that changed, as the Changes tab
 //! tells it, says how on its row, as `M` or `A`, and a folder with one in
-//! it says so with a dot. It looks now and then at the folders open in
+//! it says so with a dot; a file a chat's agent wrote there has a dot
+//! of the chat's color besides, as long as it differs from the last
+//! commit. It looks now and then at the folders open in
 //! it, and at what changed, so that it shows the files the agent writes,
 //! and no longer those it removes. The human folds it out of the way, beside every tab of a file
 //! at once, for as long as Cox runs.
@@ -22,6 +24,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Duration;
 
 use cox_core::tabs::KeptTab;
@@ -38,7 +41,7 @@ use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER,
-    SURFACE,
+    SURFACE, chat_color,
 };
 use crate::ui::tip;
 
@@ -60,6 +63,11 @@ pub struct Chosen {
     pub path: PathBuf,
     pub apart: bool,
 }
+
+/// What tells the tree which files the agent of each chat of the
+/// project wrote, by the chat's key, by the paths the agent named them
+/// by (see [`cox_core::entry::written`]).
+pub type Wrote = Rc<dyn Fn(&App) -> Vec<(u64, Vec<String>)>>;
 
 /// Whether the tree is folded, beside every tab of a file of every stage,
 /// for as long as Cox runs.
@@ -125,6 +133,15 @@ pub struct Tree {
     /// The folders with a file that changed in them, or in a folder in
     /// them.
     changed: HashSet<PathBuf>,
+    /// What tells which files the chats' agents wrote, once the stage
+    /// said.
+    wrote: Option<Wrote>,
+    /// The chats whose agents wrote each file that changed, by their keys,
+    /// in the order they first did.
+    writers: HashMap<PathBuf, Vec<u64>>,
+    /// Each path an agent named a file by, as the tree names it, through
+    /// no link.
+    canonical: HashMap<String, PathBuf>,
     scroll: ScrollHandle,
     focus_handle: FocusHandle,
     _follow: Task<()>,
@@ -150,10 +167,55 @@ impl Tree {
             current: None,
             hows: HashMap::new(),
             changed: HashSet::new(),
+            wrote: None,
+            writers: HashMap::new(),
+            canonical: HashMap::new(),
             scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             _follow: follow(cx),
         }
+    }
+
+    /// From now on, `wrote` tells the tree which files the chats' agents
+    /// wrote, as it next looks. Not now: the stage is told while its
+    /// window, which `wrote` reads, is busy making it.
+    pub fn set_wrote(&mut self, wrote: Wrote) {
+        self.wrote = Some(wrote);
+    }
+
+    /// The chats whose agents wrote the file at `path`, by their keys, as
+    /// the tree marks it: none once it is as at the last commit.
+    #[must_use]
+    pub fn writers(&self, path: &Path) -> &[u64] {
+        self.writers.get(path).map_or(&[], Vec::as_slice)
+    }
+
+    /// The chats whose agents wrote each file that differs from the last
+    /// commit, by its absolute path.
+    fn writers_now(&mut self, cx: &App) -> HashMap<PathBuf, Vec<u64>> {
+        let Some(wrote) = self.wrote.clone() else {
+            return HashMap::new();
+        };
+        let mut writers: HashMap<PathBuf, Vec<u64>> = HashMap::new();
+        for (chat, paths) in wrote(cx) {
+            for named in paths {
+                let path = self
+                    .canonical
+                    .entry(named)
+                    .or_insert_with_key(|named| {
+                        let path = self.root.join(named);
+                        std::fs::canonicalize(&path).unwrap_or(path)
+                    })
+                    .clone();
+                if self.hows.contains_key(&path) {
+                    let chats = writers.entry(path).or_default();
+                    if !chats.contains(&chat) {
+                        chats.push(chat);
+                    }
+                }
+            }
+        }
+        writers
     }
 
     /// How the file at `path` changed, as the tree says on its row.
@@ -266,6 +328,11 @@ impl Tree {
                 .map(Path::to_owned)
                 .collect();
             self.hows = hows;
+            changed = true;
+        }
+        let writers = self.writers_now(cx);
+        if self.writers != writers {
+            self.writers = writers;
             changed = true;
         }
         for (folder, now) in listed {
@@ -438,6 +505,7 @@ impl Tree {
                     .overflow_hidden()
                     .child(ellipsis(name.clone())),
             )
+            .children(self.writer_marks(entry))
             .children(self.change_mark(entry))
             .on_click(cx.listener(move |tree, click: &ClickEvent, _, cx| {
                 if let At::Pinned { place, above, .. } = at {
@@ -460,6 +528,24 @@ impl Tree {
 }
 
 impl Tree {
+    /// The dots of the colors of the chats whose agents wrote `entry`, if
+    /// it differs from the last commit.
+    fn writer_marks(&self, entry: &Listed) -> Option<AnyElement> {
+        let chats = self.writers.get(&entry.path)?;
+        Some(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .gap(px(2.))
+                .children(
+                    chats
+                        .iter()
+                        .map(|&chat| div().size(px(6.)).rounded_full().bg(rgb(chat_color(chat)))),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// What says on the row of `entry` how it changed: the letter of a
     /// file that changed, in the accent if it is new, as the Changes tab
     /// marks it; or a dot, for a folder with a file that changed in it.
