@@ -20,7 +20,7 @@ use super::code::Code;
 use super::plugins::Plugin;
 use super::tab::{Tab, TabContent};
 use super::terminal::Program;
-use super::typed::{Typed, typed};
+use super::typed::{Typed, Unmatched, typed};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{
@@ -67,9 +67,12 @@ actions!(
 pub(crate) const MENU_CONTEXT: &str = "StageMenu";
 
 /// The menu of the stage's +, while it is open: the line at its top,
-/// where the human types a URL, a file or a command.
+/// where the human types a URL, a file, a command, or, where Vim's `t`
+/// opened it, words to search for with `engine`.
 pub(super) struct Menu {
     input: Entity<LineInput>,
+    unmatched: Unmatched,
+    engine: crate::settings::SearchEngine,
     _typed: Subscription,
 }
 
@@ -176,12 +179,14 @@ impl Stage {
                     .child(icon(Icon::Plus, 15., FOREGROUND))
                     // The menu closes as the mouse goes down outside it,
                     // here too, so the button opens it as it comes up.
-                    .on_hint_click(cx.listener(|stage, _, window, cx| stage.open_menu(window, cx))),
+                    .on_hint_click(cx.listener(|stage, _, window, cx| {
+                        stage.open_menu(Unmatched::Command, window, cx);
+                    })),
             )
             .children(
                 self.menu
                     .as_ref()
-                    .map(|menu| Self::render_menu(&menu.input, cx)),
+                    .map(|menu| Self::render_menu(menu, &self.cwd, cx)),
             )
             .children(self.render_tab_menu(cx))
     }
@@ -274,17 +279,32 @@ impl Stage {
     }
 
     /// Opens the menu of the stage's +, with the keyboard in the line at
-    /// its top.
-    pub(super) fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// its top, where a line that is no URL, file or path opens what
+    /// `unmatched` says.
+    pub(super) fn open_menu(
+        &mut self,
+        unmatched: Unmatched,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let input = cx.new(LineInput::new);
-        let typed = cx.subscribe_in(&input, window, |stage, input, Submitted, window, cx| {
-            let line = input.read(cx).text().to_owned();
-            stage.close_menu(cx);
-            stage.open_typed(&line, window, cx);
-        });
+        let engine = crate::settings::search();
+        let searched = engine.clone();
+        let typed = cx.subscribe_in(
+            &input,
+            window,
+            move |stage, input, Submitted, window, cx| {
+                let line = input.read(cx).text().to_owned();
+                stage.close_menu(cx);
+                let typed = typed(&line, &stage.cwd, unmatched);
+                stage.open_typed(typed, &searched, Follow::NewTab, window, cx);
+            },
+        );
         window.focus(&input.focus_handle(cx));
         self.menu = Some(Menu {
             input,
+            unmatched,
+            engine,
             _typed: typed,
         });
         cx.notify();
@@ -295,10 +315,8 @@ impl Stage {
         cx.notify();
     }
 
-    /// Opens what the line of Vim's `:open` or `:tabopen` says, a URL or
-    /// a file, sorted as the menu sorts what is typed in it, but never a
-    /// command: what would run as one is a file of that name. A URL goes
-    /// to the page shown, when `follow` says here and a page is shown.
+    /// Opens what the line of Vim's `:open` or `:tabopen` says, sorted as
+    /// the menu Vim's `t` opens sorts what is typed in it.
     pub(super) fn open_line(
         &mut self,
         line: &str,
@@ -306,26 +324,42 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let typed = typed(line, &self.cwd, Unmatched::Search);
+        self.open_typed(typed, &crate::settings::search(), follow, window, cx);
+    }
+
+    /// Opens `typed`: a page, or the results of a search with `engine`, in the page shown when `follow` says here and a
+    /// page is shown, or else on a tab of its own; a file; or a command in
+    /// a terminal.
+    fn open_typed(
+        &mut self,
+        typed: Option<Typed>,
+        engine: &crate::settings::SearchEngine,
+        follow: Follow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let url = match typed {
+            Some(Typed::Page(url)) => url,
+            Some(Typed::Search(words)) => engine.url(&words),
+            Some(Typed::File(path)) => return self.open_typed_file(path, window, cx),
+            Some(Typed::Command(command)) => {
+                return self.start_terminal(Program::Command(command), window, cx);
+            }
+            None => return,
+        };
         let shown = self
             .tabs
             .shown()
             .and_then(|tab| tab.content.page())
             .cloned();
-        match (typed(line, &self.cwd), follow, shown) {
-            (Some(Typed::Page(url)), Follow::Here, Some(page)) => {
-                page.read(cx).load(&url);
-                self.focus_shown(window, cx);
-            }
-            (Some(Typed::Page(url)), ..) => {
+        match (follow, shown) {
+            (Follow::Here, Some(page)) => page.read(cx).load(&url),
+            _ => {
                 self.open_tab(&url, true, window, cx);
-                self.focus_shown(window, cx);
             }
-            (Some(Typed::File(path)), ..) => self.open_typed_file(path, window, cx),
-            (Some(Typed::Command(_)), ..) => {
-                self.open_typed_file(self.cwd.join(line.trim()), window, cx);
-            }
-            (None, ..) => {}
         }
+        self.focus_shown(window, cx);
     }
 
     /// Opens the file at `path` with the keyboard in its tab. A file that
@@ -337,65 +371,78 @@ impl Stage {
         }
     }
 
-    /// Opens what the human typed in the menu: a file, a page, or a
-    /// command in a terminal (see [`typed`]).
-    fn open_typed(&mut self, line: &str, window: &mut Window, cx: &mut Context<Self>) {
-        match typed(line, &self.cwd) {
-            Some(Typed::Page(url)) => {
-                self.open_tab(&url, true, window, cx);
-                self.focus_shown(window, cx);
-            }
-            Some(Typed::File(path)) => self.open_typed_file(path, window, cx),
-            Some(Typed::Command(command)) => {
-                self.start_terminal(Program::Command(command), window, cx);
-            }
-            None => {}
-        }
-    }
-
     /// The line at the top of the menu, where the human types a URL, a
-    /// file or a command, which says so while it is empty.
-    fn render_menu_line(input: &Entity<LineInput>, cx: &App) -> impl IntoElement + use<> {
-        let empty = input.read(cx).text().is_empty();
-        div().px(px(4.)).pt(px(4.)).pb(px(6.)).child(
-            div()
-                .debug_selector(|| "stage-menu-line".to_owned())
-                .h(px(32.))
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .rounded(px(VIEW_RADIUS))
-                .bg(rgb(SURFACE))
-                .border_1()
-                .border_color(rgb(ACCENT))
-                .text_size(px(13.))
-                .child(icon(Icon::Search, 13., FAINT))
-                .child(
-                    div()
-                        .relative()
-                        .flex_1()
-                        .min_w_0()
-                        .child(input.clone())
-                        .when(empty, |line| {
-                            line.child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .text_color(rgb(FAINT))
-                                    .child("URL, file or command"),
-                            )
-                        }),
-                ),
-        )
+    /// file, a command, or words to search for, which says so while it is
+    /// empty, and, where Vim's `t` opened the menu, what Enter does with
+    /// what is typed.
+    fn render_menu_line(menu: &Menu, cwd: &std::path::Path, cx: &App) -> impl IntoElement + use<> {
+        let input = &menu.input;
+        let text = input.read(cx).text();
+        let empty = text.is_empty();
+        let (placeholder, said) = match menu.unmatched {
+            Unmatched::Command => ("URL, file or command", None),
+            Unmatched::Search => (
+                "URL, file, search or !command",
+                typed(text, cwd, Unmatched::Search).map(|typed| typed.said(&menu.engine)),
+            ),
+        };
+        div()
+            .px(px(4.))
+            .pt(px(4.))
+            .pb(px(6.))
+            .child(
+                div()
+                    .debug_selector(|| "stage-menu-line".to_owned())
+                    .h(px(32.))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .rounded(px(VIEW_RADIUS))
+                    .bg(rgb(SURFACE))
+                    .border_1()
+                    .border_color(rgb(ACCENT))
+                    .text_size(px(13.))
+                    .child(icon(Icon::Search, 13., FAINT))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .child(input.clone())
+                            .when(empty, |line| {
+                                line.child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .text_color(rgb(FAINT))
+                                        .child(placeholder),
+                                )
+                            }),
+                    ),
+            )
+            .children(said.map(|said| {
+                div()
+                    .debug_selector(|| "stage-menu-says".to_owned())
+                    .px(px(10.))
+                    .pt(px(6.))
+                    .text_size(px(12.))
+                    .text_color(rgb(FAINT))
+                    .truncate()
+                    .child(said)
+            }))
     }
 
     /// The menu of what the human opens on the stage: the line where they
-    /// type a URL, a file or a command, then a page, a terminal, a file,
+    /// type a URL, a file, a command or words to search for, then a page, a terminal, a file,
     /// the Android emulator's devices, or, on macOS, other apps' windows.
-    fn render_menu(input: &Entity<LineInput>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let line = Self::render_menu_line(input, cx);
+    fn render_menu(
+        menu: &Menu,
+        cwd: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let line = Self::render_menu_line(menu, cwd, cx);
         let item = |id: &'static str, label: &'static str, glyph: Icon, key: &'static str| {
             div()
                 .id(id)
