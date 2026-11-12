@@ -481,6 +481,81 @@ async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_settings_name_the_search_engine(cx: &mut TestAppContext) {
+    let home = scratch("settings-search");
+    let (_agents, workspace, cx) = open_window(cx, home.clone());
+    let _ = cox::settings::keep("search", None);
+
+    click(cx, "open-settings");
+    let settings = workspace.read_with(cx, |workspace, _| {
+        workspace.settings().expect("the settings are open").clone()
+    });
+    let described = |cx: &mut VisualTestContext| {
+        settings.read_with(cx, |settings, cx| settings.described(cx).join("\n"))
+    };
+    assert_eq!(
+        cox::settings::search().url("a b"),
+        "https://www.google.com/search?q=a+b",
+        "Google, when the settings name none"
+    );
+    let card = cx.debug_bounds("settings").expect("the settings are drawn");
+    cx.simulate_event(ScrollWheelEvent {
+        position: card.center(),
+        delta: ScrollDelta::Lines(point(0., -1000.)),
+        modifiers: Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    click(cx, "search-input");
+
+    cx.simulate_input("https://duckduckgo.com/");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        described(cx).contains("Put %s where the words go."),
+        "{}",
+        described(cx)
+    );
+    assert_eq!(
+        cox::settings::kept("search"),
+        None,
+        "a wrong one is not kept"
+    );
+
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input("https://duckduckgo.com/?q=%s");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        described(cx).contains("saying \"Set.\""),
+        "{}",
+        described(cx)
+    );
+    assert_eq!(
+        cox::settings::search().url("rust & gpui"),
+        "https://duckduckgo.com/?q=rust+%26+gpui"
+    );
+
+    cox::settings::keep("search", Some("ftp://example.com/%s".into())).unwrap();
+    settings.update(cx, cox::settings::view::SettingsView::reread);
+    assert!(
+        described(cx).contains("Google is searched until it is."),
+        "{}",
+        described(cx)
+    );
+    assert_eq!(
+        cox::settings::search(),
+        cox::settings::SearchEngine::default(),
+        "a wrong one in the file is not used"
+    );
+
+    cx.simulate_keystrokes("secondary-a backspace enter");
+    assert_eq!(
+        cox::settings::kept("search"),
+        None,
+        "emptied, none is named"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[gpui::test]
 async fn the_settings_unpair_every_phone(cx: &mut TestAppContext) {
     let home = scratch("unpair-home");
     let (_agents, workspace, cx) = open_window(cx, home.clone());

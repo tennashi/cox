@@ -10,7 +10,8 @@
 //! workflow and wiki (see [`folder`]), the agents they run (see
 //! [`agents`]), the language servers of the code tabs (see [`servers`]),
 //! the language they read in (see [`translation`]), whether the keys
-//! work as in Vim (see [`keys`]), and the code a phone
+//! work as in Vim (see [`keys`]), the engine the stage searches with
+//! (see [`search`]), and the code a phone
 //! pairs with, beside the button that unpairs every phone (see
 //! [`phone`]).
 //! What the screen says the human selects, copies and translates (see
@@ -22,6 +23,7 @@ mod agents;
 mod folder;
 mod keys;
 mod phone;
+mod search;
 mod servers;
 mod translation;
 mod words;
@@ -38,6 +40,7 @@ use self::folder::FolderField;
 use self::keys::KeysSection;
 use self::phone::PhoneSection;
 pub use self::phone::UnpairPhones;
+use self::search::SearchSection;
 use self::servers::ServersSection;
 use self::translation::TranslationSection;
 use self::words::Words;
@@ -108,6 +111,7 @@ pub struct SettingsView {
     servers: Entity<ServersSection>,
     translation: Entity<TranslationSection>,
     keys: Entity<KeysSection>,
+    search: Entity<SearchSection>,
     phone: Entity<PhoneSection>,
     /// What the screen says, as the human selects it.
     words: Words,
@@ -169,6 +173,7 @@ impl SettingsView {
             servers: cx.new(|cx| ServersSection::new(words.clone(), cx)),
             translation: cx.new(|cx| TranslationSection::new(words.clone(), cx)),
             keys: cx.new(|_| KeysSection::new(words.clone())),
+            search: cx.new(|cx| SearchSection::new(words.clone(), cx)),
             phone,
             words,
             focus: cx.focus_handle(),
@@ -197,6 +202,7 @@ impl SettingsView {
         self.servers.update(cx, ServersSection::reread);
         self.translation.update(cx, TranslationSection::reread);
         self.keys.update(cx, KeysSection::reread);
+        self.search.update(cx, SearchSection::reread);
     }
 
     /// What the screen shows past the home and the agents, a line each, for
@@ -213,6 +219,7 @@ impl SettingsView {
         lines.extend(self.servers.read(cx).described(cx));
         lines.push(self.translation.read(cx).described(cx));
         lines.push(self.keys.read(cx).described());
+        lines.push(self.search.read(cx).described(cx));
         lines.push(self.phone.read(cx).described());
         lines
     }
@@ -225,6 +232,7 @@ impl SettingsView {
         self.agents.update(cx, AgentsSection::save_all);
         self.servers.update(cx, ServersSection::save_all);
         self.translation.update(cx, TranslationSection::keep_typed);
+        self.search.update(cx, SearchSection::keep_typed);
     }
 
     /// The input of the home's folder.
@@ -476,6 +484,7 @@ impl Render for SettingsView {
                     .child(div().mt_4().child(self.servers.clone()))
                     .child(div().mt_4().child(self.translation.clone()))
                     .child(div().mt_4().child(self.keys.clone()))
+                    .child(div().mt_4().child(self.search.clone()))
                     .child(div().mt_4().child(self.phone.clone())),
             )
     }
