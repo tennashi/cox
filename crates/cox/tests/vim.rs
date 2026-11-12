@@ -1927,12 +1927,15 @@ fn f_on_the_settings_flips_a_chip_in_sight(cx: &mut TestAppContext) {
 /// context, which keeps what the window's hints ask of the page.
 struct HintedPage {
     focus: gpui::FocusHandle,
+    listed: Rc<std::cell::Cell<bool>>,
     asked: Rc<RefCell<Vec<String>>>,
     answer: Rc<RefCell<Option<cox::vim::hints::Answer>>>,
 }
 
 /// The page of a [`HintedPage`], as the window's hints see it.
 struct PageHints {
+    page: gpui::WeakEntity<HintedPage>,
+    listed: Rc<std::cell::Cell<bool>>,
     asked: Rc<RefCell<Vec<String>>>,
     answer: Rc<RefCell<Option<cox::vim::hints::Answer>>>,
 }
@@ -1940,10 +1943,14 @@ struct PageHints {
 impl cox::vim::hints::Page for PageHints {
     fn ask(&self, answer: cox::vim::hints::Answer, _: &mut gpui::App) {
         self.asked.borrow_mut().push("ask".into());
+        self.listed.set(true);
         *self.answer.borrow_mut() = Some(answer);
     }
 
-    fn show(&self, labels: &[(u32, String)], _: &mut gpui::App) {
+    fn show(&self, labels: &[(u32, String)], cx: &mut gpui::App) {
+        if let Some(page) = self.page.upgrade() {
+            page.read(cx);
+        }
         let shown: Vec<String> = labels
             .iter()
             .map(|(id, label)| format!("{id}={label}"))
@@ -1954,11 +1961,17 @@ impl cox::vim::hints::Page for PageHints {
     }
 
     fn take(&self, id: u32, _: &mut gpui::Window, _: &mut gpui::App) {
-        self.asked.borrow_mut().push(format!("take {id}"));
+        let lost = if self.listed.get() {
+            ""
+        } else {
+            " after its hints were cleared"
+        };
+        self.asked.borrow_mut().push(format!("take {id}{lost}"));
     }
 
     fn clear(&self, _: &mut gpui::App) {
         self.asked.borrow_mut().push("clear".into());
+        self.listed.set(false);
     }
 }
 
@@ -1966,7 +1979,7 @@ impl gpui::Render for HintedPage {
     fn render(
         &mut self,
         window: &mut gpui::Window,
-        _: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         use cox::vim::hints::Hinted as _;
         use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
@@ -1987,6 +2000,8 @@ impl gpui::Render for HintedPage {
                     .on_hint_click(move |_, _, _| asked.borrow_mut().push("native".into())),
             )
             .child(cox::vim::hints::page(Rc::new(PageHints {
+                page: cx.entity().downgrade(),
+                listed: self.listed.clone(),
                 asked: self.asked.clone(),
                 answer: self.answer.clone(),
             })))
@@ -2001,6 +2016,7 @@ fn shift_f_labels_the_page_s_hints_and_the_window_s_in_one_sequence(cx: &mut Tes
     let answer = Rc::new(RefCell::new(None));
     let (page, cx) = cx.add_window_view(|_, cx| HintedPage {
         focus: cx.focus_handle(),
+        listed: Rc::default(),
         asked: asked.clone(),
         answer: answer.clone(),
     });
@@ -2012,13 +2028,13 @@ fn shift_f_labels_the_page_s_hints_and_the_window_s_in_one_sequence(cx: &mut Tes
     assert_eq!(taken(&asked), ["ask"]);
     assert_eq!(tags(cx).len(), 0, "no labels until the page answers");
     let answered = answer.borrow_mut().take().expect("the page was asked");
-    cx.update(|window, cx| answered(vec![7, 9], window, cx));
+    page.update_in(cx, |_, window, cx| answered(vec![7, 9], window, cx));
     cx.run_until_parked();
     assert_eq!(taken(&asked), ["show 7=a 9=d"]);
     assert_eq!(tag_over(cx, "native"), "s");
 
     cx.simulate_keystrokes("d");
-    assert_eq!(taken(&asked), ["clear", "take 9"]);
+    assert_eq!(taken(&asked), ["take 9", "clear"]);
     assert_eq!(tags(cx).len(), 0);
     assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
 
@@ -2028,7 +2044,7 @@ fn shift_f_labels_the_page_s_hints_and_the_window_s_in_one_sequence(cx: &mut Tes
     cx.run_until_parked();
     taken(&asked);
     cx.simulate_keystrokes("s");
-    assert_eq!(taken(&asked), ["clear", "native"]);
+    assert_eq!(taken(&asked), ["native", "clear"]);
 
     cx.simulate_keystrokes("shift-f");
     let answered = answer.borrow_mut().take().expect("the page was asked");

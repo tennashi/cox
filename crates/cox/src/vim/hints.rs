@@ -362,7 +362,7 @@ pub fn start(part: Option<Part>, window: &mut Window, cx: &mut App) -> bool {
                     Some(*waiting)
                 });
                 if pending == Some(0) {
-                    label(window, cx);
+                    window.defer(cx, label);
                 }
             }),
             cx,
@@ -473,11 +473,11 @@ pub fn typed(key: char, window: &mut Window, cx: &mut App) {
     match typed {
         None => show(cx),
         Some(chosen) => {
-            stop(cx);
             super::enter(super::Mode::Normal, cx);
             if let Some(target) = chosen {
                 take(target, window, cx);
             }
+            stop(cx);
         }
     }
     window.refresh();
