@@ -188,9 +188,15 @@ impl Pushes {
         }
     }
 
+    /// Pushes to no phone until one asks again.
+    pub fn forget_all(&mut self) {
+        self.subscriptions.clear();
+        self.keep();
+    }
+
     fn keep(&self) {
         let json = serde_json::to_vec_pretty(&self.subscriptions).unwrap_or_default();
-        if let Err(error) = std::fs::write(&self.file, json) {
+        if let Err(error) = storage::keep_secret(&self.file, &json) {
             tracing::error!("{} cannot be kept: {error}", self.file.display());
         }
     }
@@ -518,6 +524,14 @@ mod tests {
         };
         pushes.subscribe(subscription.clone()).unwrap();
         pushes.subscribe(subscription.clone()).unwrap();
+        let mode = std::fs::metadata(folder.join("pushes.json"))
+            .unwrap()
+            .permissions();
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(&mode) & 0o777,
+            0o600,
+            "where to push to a phone is the human's alone"
+        );
 
         let again = Pushes::open_at(&folder.join("push-key"), folder.join("pushes.json")).unwrap();
         assert_eq!(again.public_key(), pushes.public_key());

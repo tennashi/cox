@@ -4,10 +4,15 @@
 //! (see [`crate::daemon::phone::pairing`]). The code holds the secret, so
 //! it shows only once the human asks for it, and goes as they hide it,
 //! or as the screen closes.
+//!
+//! A phone lost, or a code seen by someone else, the human unpairs every
+//! phone: coxd makes the secret again, and lets in no phone paired with
+//! the one before (see [`crate::daemon::wire::ToDaemon::UnpairPhones`]).
+//! The code, if it showed, shows again, with the new secret.
 
 use gpui::{
-    Bounds, ClipboardItem, Context, Div, Window, canvas, div, fill, point, prelude::*, px, rgb,
-    size,
+    Bounds, ClipboardItem, Context, Div, EventEmitter, Window, canvas, div, fill, point,
+    prelude::*, px, rgb, size,
 };
 use qrcodegen::{QrCode, QrCodeEcc};
 
@@ -33,13 +38,21 @@ enum Shown {
     Code { pairing: Pairing, code: QrCode },
     /// Why there is no code.
     Failed(String),
+    /// Every phone is being unpaired, the code to show again after, with
+    /// the new secret, if `show`.
+    Unpairing { show: bool },
 }
+
+/// The human asked to unpair every phone.
+pub struct UnpairPhones;
 
 /// The phone, to pair.
 pub struct PhoneSection {
     shown: Shown,
     /// Whether the link was copied, since the code showed.
     copied: bool,
+    /// Whether every phone was unpaired, since the screen opened.
+    unpaired: bool,
     words: Words,
 }
 
@@ -50,6 +63,7 @@ impl PhoneSection {
         Self {
             shown: Shown::Hidden,
             copied: false,
+            unpaired: false,
             words,
         }
     }
@@ -58,20 +72,26 @@ impl PhoneSection {
     /// secret.
     #[must_use]
     pub fn described(&self) -> String {
-        match &self.shown {
+        let shown = match &self.shown {
             Shown::Hidden => "Phone: the pairing code hidden".to_owned(),
             Shown::Finding => "Phone: asking Tailscale where the page is".to_owned(),
             Shown::Code { pairing, .. } => {
                 format!("Phone: the pairing code shown, for {}", pairing.page)
             }
             Shown::Failed(why) => format!("Phone: no pairing code — {why}"),
+            Shown::Unpairing { .. } => "Phone: unpairing every phone".to_owned(),
+        };
+        if self.unpaired {
+            shown + "; every phone unpaired"
+        } else {
+            shown
         }
     }
 
     /// Asks Tailscale where the page is, apart from the window, which it
     /// may take seconds to answer, and shows the code once it does.
     fn show(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.shown, Shown::Finding) {
+        if matches!(self.shown, Shown::Finding | Shown::Unpairing { .. }) {
             return;
         }
         self.shown = Shown::Finding;
@@ -141,7 +161,8 @@ impl PhoneSection {
                     .child(
                         button("hide-pairing", "Hide", Kind::Quiet)
                             .on_click(cx.listener(|section, _, _, cx| section.hide(cx))),
-                    ),
+                    )
+                    .child(unpair_button(cx)),
             )
             .when(self.copied, |told| {
                 told.child(words.note(
@@ -150,6 +171,37 @@ impl PhoneSection {
                 ))
             });
         told
+    }
+
+    /// Asks coxd to unpair every phone, showing the code again after, if
+    /// it shows now.
+    fn unpair(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.shown, Shown::Finding | Shown::Unpairing { .. }) {
+            return;
+        }
+        let show = matches!(self.shown, Shown::Code { .. });
+        self.shown = Shown::Unpairing { show };
+        self.copied = false;
+        cx.emit(UnpairPhones);
+        cx.notify();
+    }
+
+    /// Every phone is unpaired, unless `failed` says why not.
+    pub fn unpaired(&mut self, failed: Option<String>, cx: &mut Context<Self>) {
+        let Shown::Unpairing { show } = self.shown else {
+            return;
+        };
+        if let Some(why) = failed {
+            self.shown = Shown::Failed(format!("The phones are still paired: {why}"));
+            cx.notify();
+            return;
+        }
+        self.unpaired = true;
+        self.shown = Shown::Hidden;
+        if show {
+            self.show(cx);
+        }
+        cx.notify();
     }
 
     fn hide(&mut self, cx: &mut Context<Self>) {
@@ -166,6 +218,14 @@ impl PhoneSection {
         }
     }
 }
+
+/// The button that unpairs every phone.
+fn unpair_button(cx: &mut Context<PhoneSection>) -> impl IntoElement + use<> {
+    button("unpair-phones", "Unpair every phone", Kind::Quiet)
+        .on_click(cx.listener(|section, _, _, cx| section.unpair(cx)))
+}
+
+impl EventEmitter<UnpairPhones> for PhoneSection {}
 
 /// The code `code`, dark on light, as readers read it best, with its
 /// quiet edge, `CODE_SIZE` wide.
@@ -210,13 +270,18 @@ impl Render for PhoneSection {
                 "Follow the chats from your phone, through Tailscale: a phone pairs once by \
                  scanning the code.",
             ));
-        match &self.shown {
+        let section = match &self.shown {
             Shown::Hidden => section
                 .child(
-                    div().mt_1().flex().child(
-                        button("show-pairing", "Show pairing code", Kind::Plain)
-                            .on_click(cx.listener(|section, _, _, cx| section.show(cx))),
-                    ),
+                    div()
+                        .mt_1()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            button("show-pairing", "Show pairing code", Kind::Plain)
+                                .on_click(cx.listener(|section, _, _, cx| section.show(cx))),
+                        )
+                        .child(unpair_button(cx)),
                 )
                 .child(words.note(
                     "The code holds the secret a phone pairs with: show it where no one else \
@@ -226,6 +291,7 @@ impl Render for PhoneSection {
             Shown::Finding => {
                 section.child(words.note("Asking Tailscale where the page is…", FAINT))
             }
+            Shown::Unpairing { .. } => section.child(words.note("Unpairing every phone…", FAINT)),
             Shown::Failed(why) => section.child(words.note(why, FAILED)).child(
                 div().flex().child(
                     button("show-pairing", "Try again", Kind::Plain)
@@ -252,6 +318,12 @@ impl Render for PhoneSection {
                         .child(told.text_color(rgb(DIM))),
                 )
             }
-        }
+        };
+        section.when(self.unpaired, |section| {
+            section.child(words.note(
+                "Every phone is unpaired: each pairs again with the pairing code.",
+                ACCENT,
+            ))
+        })
     }
 }

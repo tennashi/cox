@@ -9,7 +9,7 @@
 //! same, the Mac's name and login being no secret, and what the Mac
 //! itself sends to its name in the tailnet comes through `tailscale
 //! serve` as of the Mac's login. So every phone pairs, the human's own
-//! too (see [`super::paired`]).
+//! too (see [`super::Phones`]).
 
 use std::io::Read as _;
 use std::time::Duration;

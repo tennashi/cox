@@ -67,7 +67,7 @@ use crate::chat::view::{ChatView, OpenLink, Row, StageView};
 use crate::daemon::Link;
 use crate::daemon::wire::{ChatRow, FromDaemon, Listing, ProjectRow, StageAsk, ToDaemon};
 use crate::notices::AppNotices;
-use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView};
+use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView, UnpairPhones};
 
 mod project_card;
 
@@ -436,7 +436,7 @@ pub struct Workspace {
     /// run, ahead of what the settings keep.
     home_given: bool,
     /// The settings screen, while it is open.
-    settings: Option<(Entity<SettingsView>, [Subscription; 2])>,
+    settings: Option<(Entity<SettingsView>, [Subscription; 3])>,
     /// The card where the human edits a project, while it is open.
     project_card: Option<(Entity<ProjectCard>, [Subscription; 4])>,
     /// The sheet over the window the human drags a region on, for the
@@ -603,6 +603,11 @@ impl Workspace {
             FromDaemon::Settled { id } => {
                 if let Some(settled) = self.syncs.remove(&id) {
                     let _ = settled.send(());
+                }
+            }
+            FromDaemon::Unpaired { failed } => {
+                if let Some((settings, _)) = &self.settings {
+                    settings.update(cx, |settings, cx| settings.phones_unpaired(failed, cx));
                 }
             }
             // The greeting is over before the window hears the daemon.
@@ -1441,7 +1446,10 @@ impl Workspace {
                 cx.subscribe_in(&view, window, |workspace, _, Dismissed, window, cx| {
                     workspace.close_settings(window, cx);
                 });
-            self.settings = Some((view.clone(), [changed, dismissed]));
+            let unpair = cx.subscribe(&view, |workspace, _, UnpairPhones, _| {
+                workspace.tell(ToDaemon::UnpairPhones);
+            });
+            self.settings = Some((view.clone(), [changed, dismissed, unpair]));
             view
         };
         window.focus(&view.focus_handle(cx));

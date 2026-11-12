@@ -10,7 +10,8 @@
 //! workflow and wiki (see [`folder`]), the agents they run (see
 //! [`agents`]), the language servers of the code tabs (see [`servers`]),
 //! the language they read in (see [`translation`]), and the code a phone
-//! pairs with (see [`phone`]).
+//! pairs with, beside the button that unpairs every phone (see
+//! [`phone`]).
 //! What the screen says the human selects, copies and translates (see
 //! [`words`]).
 //! Escape, the ×, or a click beside the card closes it, keeping what
@@ -33,6 +34,7 @@ use gpui::{
 use self::agents::AgentsSection;
 use self::folder::FolderField;
 use self::phone::PhoneSection;
+pub use self::phone::UnpairPhones;
 use self::servers::ServersSection;
 use self::translation::TranslationSection;
 use self::words::Words;
@@ -103,7 +105,7 @@ pub struct SettingsView {
     words: Words,
     /// What has the keyboard while the human selects the words.
     focus: FocusHandle,
-    _subscriptions: [Subscription; 2],
+    _subscriptions: [Subscription; 3],
 }
 
 impl SettingsView {
@@ -116,6 +118,8 @@ impl SettingsView {
             input.set_placeholder("~/cox", cx);
             input
         });
+        let words = Words::default();
+        let phone = cx.new(|_| PhoneSection::new(words.clone()));
         let subscriptions = [
             cx.subscribe_in(&input, window, |view, _, Submitted, _, cx| {
                 view.submit(cx);
@@ -123,8 +127,8 @@ impl SettingsView {
             cx.subscribe_in(&input, window, |view, _, Blurred, _, cx| {
                 view.keep_typed(cx);
             }),
+            cx.subscribe(&phone, |_, _, UnpairPhones, cx| cx.emit(UnpairPhones)),
         ];
-        let words = Words::default();
         Self {
             home,
             given,
@@ -156,7 +160,7 @@ impl SettingsView {
             agents: cx.new(|cx| AgentsSection::new(words.clone(), cx)),
             servers: cx.new(|cx| ServersSection::new(words.clone(), cx)),
             translation: cx.new(|cx| TranslationSection::new(words.clone(), cx)),
-            phone: cx.new(|_| PhoneSection::new(words.clone())),
+            phone,
             words,
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
@@ -167,6 +171,13 @@ impl SettingsView {
     #[must_use]
     pub fn agents(&self) -> &Entity<AgentsSection> {
         &self.agents
+    }
+
+    /// Every phone is unpaired, as the human asked, unless `failed` says
+    /// why not.
+    pub fn phones_unpaired(&mut self, failed: Option<String>, cx: &mut Context<Self>) {
+        self.phone
+            .update(cx, |phone, cx| phone.unpaired(failed, cx));
     }
 
     /// Reads the settings again, as another program changed them.
@@ -368,6 +379,7 @@ impl SettingsView {
 
 impl EventEmitter<HomeChanged> for SettingsView {}
 impl EventEmitter<Dismissed> for SettingsView {}
+impl EventEmitter<UnpairPhones> for SettingsView {}
 
 impl Focusable for SettingsView {
     /// The input, which has the keyboard while the screen is open.
