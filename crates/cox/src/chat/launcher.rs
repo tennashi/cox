@@ -229,9 +229,13 @@ impl Stages for CefStages {
         let open_link: OpenLink = Rc::new(move |url, window, cx| {
             opens.update(cx, |stage, cx| stage.open(url, window, cx));
         });
+        let keyed = stage.clone();
         let view = StageView {
             view: stage.into(),
             panel,
+            by_keys: Rc::new(move |tabs, window, cx| {
+                keyed.update(cx, |stage, cx| stage.by_keys(tabs, window, cx));
+            }),
         };
         Some((view, open_link))
     }

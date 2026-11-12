@@ -88,16 +88,32 @@ as usual.
 
 | Mode | Key | Does |
 | --- | --- | --- |
-| Insert | Esc | Goes to normal mode. It does not stop the agent. |
+| Insert | Esc | Goes to normal mode, and closes the list of commands or files over the input. It does not stop the agent. |
 | Normal | `i`, `a`, `I`, `A` | Goes to insert mode at the cursor, after it, at the start of the line, or at its end. |
 | Normal | Ctrl-C | Stops the agent. |
 | Normal | Esc | Forgets a count typed. In the goal's, a sketch's or a rename's input, the settings or a project's card, it closes them as Esc does without Vim. |
+| Normal | Ctrl-W `h`, Ctrl-W `l` | Moves the keyboard to the part of the window at the left or the right: the rail, the stage, the chat. |
+| Normal | Ctrl-W `w` | Moves the keyboard to the next part, round from the chat to the rail. |
+| Normal | Ctrl-W `k` | In the chat, opens the list of the project's chats, with the keyboard in it. Ctrl-W `j` or Esc closes it. |
+| Normal | `gt`, `gT` | Shows the stage's next tab, or the one before. `3gt` shows its third tab, `3gT` the tab three before. |
+| Normal | Ctrl-W `c` | Closes the tab the stage shows. |
+
+On the rail and in the list of chats, `j` and `k` move the selection,
+`3j` three rows, `gg` to the first and `G` to the last. Enter or `l`
+opens what is selected: a project's chat, or the chat, with the keyboard
+in its input in normal mode. `o` opens a new chat in the project
+selected. The keyboard in the stage shows as a ring round its tab, and
+on the rail and the list as a ring round the row selected.
 
 In normal mode, keys that would type type nothing, and digits make a
 count, so they choose an option the agent asks only in insert mode. Keys with Cmd work as without Vim. The inputs that set a goal,
 start a sketch or rename a chat open in insert mode, and the settings
-and a project's card in normal mode. The stage's tabs keep every key
-of their own. While an input method composes, every key is its own.
+and a project's card in normal mode, and so do the rail, the list of
+chats and the stage's tabs. A terminal, an Android device and a web page
+keep every key of their own, Ctrl-W too, which a shell needs to delete a
+word: from one of them, the mouse or the app's own keys, such as
+Ctrl-Tab to the next chat, take the keyboard elsewhere. While an input
+method composes, every key is its own.
 
 ## `agents.json`
 

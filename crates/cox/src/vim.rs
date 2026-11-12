@@ -40,6 +40,10 @@ pub enum Region {
     /// The window, with no part of it holding the keyboard.
     #[default]
     Workspace,
+    /// The rail of projects down the window's left side.
+    Rail,
+    /// The list of the chosen project's chats, over the chat.
+    List,
     /// A chat's input.
     Chat,
     /// The input that sets a chat's goal.
@@ -72,6 +76,8 @@ pub enum Region {
 /// The key contexts that say the region the keyboard is in.
 const REGIONS: &[(&str, Region)] = &[
     ("Workspace", Region::Workspace),
+    (crate::workspace::RAIL, Region::Rail),
+    (crate::workspace::LIST, Region::List),
     (crate::chat::view::KEY_CONTEXT, Region::Chat),
     (crate::chat::view::GOAL, Region::Goal),
     (crate::chat::view::SKETCH, Region::Sketch),
@@ -117,11 +123,22 @@ impl Region {
 
     /// The mode the keys go to as the keyboard comes into the region, if
     /// it has one: insert in what opens only to type a line in, normal in
-    /// a screen of settings.
+    /// a screen of settings, and where nothing is typed.
     const fn enters_in(self) -> Option<Mode> {
         match self {
             Self::Goal | Self::Sketch | Self::Renaming => Some(Mode::Insert),
-            Self::Settings | Self::ProjectCard => Some(Mode::Normal),
+            Self::Settings
+            | Self::ProjectCard
+            | Self::Rail
+            | Self::List
+            | Self::Code
+            | Self::Document
+            | Self::Tree
+            | Self::Changes
+            | Self::Devices
+            | Self::Flow
+            | Self::Windows
+            | Self::MacWindow => Some(Mode::Normal),
             _ => None,
         }
     }
@@ -134,8 +151,8 @@ pub enum Outcome {
     Pass,
     /// It goes no further.
     Taken,
-    /// It does this, and goes no further.
-    Do(Command),
+    /// It does this, with the count typed before it, and goes no further.
+    Do(Command, Option<u32>),
 }
 
 /// Vim's keys as the human has them now.
@@ -198,13 +215,14 @@ impl Vim {
         keys.push(&key);
         match keymap.answer(self.mode, region, &keys) {
             Answer::Act(command) => {
+                let count = self.count;
                 self.reset();
                 match command {
                     Command::Normal => self.mode = Mode::Normal,
                     Command::Insert(_) => self.mode = Mode::Insert,
-                    Command::Stop | Command::Reset => {}
+                    Command::Stop | Command::Reset | Command::Window(_) => {}
                 }
-                Outcome::Do(command)
+                Outcome::Do(command, count)
             }
             Answer::Held => {
                 self.held.push(key);
@@ -285,11 +303,21 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     }
     match outcome {
         Outcome::Pass => return,
-        Outcome::Taken | Outcome::Do(Command::Normal | Command::Reset) => {}
-        Outcome::Do(Command::Stop) => {
+        Outcome::Taken | Outcome::Do(Command::Reset, _) => {}
+        Outcome::Do(Command::Normal, _) => {
+            window.dispatch_action(Box::new(crate::chat::view::CloseList), cx);
+        }
+        Outcome::Do(Command::Stop, _) => {
             window.dispatch_action(Box::new(crate::chat::view::Stop), cx);
         }
-        Outcome::Do(Command::Insert(place)) => {
+        Outcome::Do(Command::Window(act), count) => {
+            if let Some(Some(workspace)) = window.root::<crate::workspace::Workspace>() {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.act(act, region, count, window, cx);
+                });
+            }
+        }
+        Outcome::Do(Command::Insert(place), _) => {
             use crate::ui::input::{End, Home, Right};
             match place {
                 Place::Cursor => {}
@@ -306,7 +334,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
 mod tests {
     use gpui::{KeyContext, Keystroke};
 
-    use super::keymap::{Command, Keymap, Place};
+    use super::keymap::{Act, Command, Keymap, Pick, Place};
     use super::{Mode, Outcome, Region, Vim};
 
     fn press(vim: &mut Vim, region: Region, keys: &str) -> Vec<Outcome> {
@@ -358,7 +386,7 @@ mod tests {
         let mut vim = Vim::default();
         assert_eq!(
             press(&mut vim, Region::Chat, "shift-a"),
-            [Outcome::Do(Command::Insert(Place::LineEnd))]
+            [Outcome::Do(Command::Insert(Place::LineEnd), None)]
         );
         assert_eq!(vim.mode(), Mode::Insert);
         assert_eq!(
@@ -367,7 +395,7 @@ mod tests {
         );
         assert_eq!(
             press(&mut vim, Region::Chat, "escape"),
-            [Outcome::Do(Command::Normal)]
+            [Outcome::Do(Command::Normal, None)]
         );
         assert_eq!(vim.mode(), Mode::Normal);
     }
@@ -381,7 +409,7 @@ mod tests {
         assert_eq!(vim.count(), None);
         assert_eq!(
             press(&mut vim, Region::Chat, "escape"),
-            [Outcome::Do(Command::Reset)]
+            [Outcome::Do(Command::Reset, None)]
         );
         assert_eq!(press(&mut vim, Region::Chat, "0"), [Outcome::Taken]);
         assert_eq!(vim.count(), None);
@@ -392,7 +420,7 @@ mod tests {
         let mut vim = Vim::default();
         assert_eq!(
             press(&mut vim, Region::Goal, "escape escape"),
-            [Outcome::Do(Command::Normal), Outcome::Pass]
+            [Outcome::Do(Command::Normal, None), Outcome::Pass]
         );
         assert_eq!(press(&mut vim, Region::Settings, "escape"), [Outcome::Pass]);
     }
@@ -428,5 +456,34 @@ mod tests {
             );
         }
         assert_eq!(vim.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn a_count_goes_with_what_the_window_does() {
+        let mut vim = Vim::default();
+        assert_eq!(
+            press(&mut vim, Region::Chat, "3 g t"),
+            [
+                Outcome::Taken,
+                Outcome::Taken,
+                Outcome::Do(Command::Window(Act::NextTab), Some(3))
+            ]
+        );
+        assert_eq!(
+            press(&mut vim, Region::Rail, "j"),
+            [Outcome::Do(Command::Window(Act::Pick(Pick::Down)), None)]
+        );
+        assert_eq!(vim.count(), None);
+    }
+
+    #[test]
+    fn the_rail_and_the_quiet_tabs_are_in_normal_mode() {
+        for region in [Region::Rail, Region::List, Region::Code, Region::Tree] {
+            let mut vim = Vim::default();
+            press(&mut vim, Region::Chat, "i");
+            assert_eq!(vim.mode(), Mode::Insert);
+            assert_eq!(press(&mut vim, region, "x"), [Outcome::Taken], "{region:?}");
+            assert_eq!(vim.mode(), Mode::Normal, "{region:?}");
+        }
     }
 }

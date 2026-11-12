@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use cox::chat::conversation::State;
 use cox::chat::view::ChatView;
+use cox::stage::Tabs;
 use cox::stage::terminal::{Program, Running, Terminal};
 use cox::vim::Mode;
 use cox::workspace::Workspace;
 use gpui::{Entity, EntityInputHandler as _, Focusable as _, TestAppContext, VisualTestContext};
 
-use fake_daemon::settled;
+use fake_daemon::{FakeStages, Keyed, settled};
 
 fn scratch(name: &str) -> PathBuf {
     let directory = std::env::temp_dir().join(format!("cox-vim-{name}-{}", std::process::id()));
@@ -191,6 +192,208 @@ fn the_keys_are_the_input_method_s_while_it_composes(cx: &mut TestAppContext) {
     assert!(keys::shown_input(cx, &workspace).contains('j'));
 }
 
+/// Whether the keyboard is in the part of the window `context` names.
+fn in_part(cx: &mut VisualTestContext, context: &str) -> bool {
+    keys::keyed(cx).iter().any(|keyed| keyed == context)
+}
+
+/// Opens a chat in a folder of its own, a project of its own, and goes
+/// to normal mode.
+fn open_project(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, name: &str) {
+    let folder = scratch(name);
+    std::fs::create_dir_all(&folder).unwrap();
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(folder), window, cx);
+    });
+    settled(cx, workspace);
+    keys::press(cx, workspace, "escape");
+}
+
+fn chosen(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> usize {
+    workspace.read_with(cx, |workspace, _| workspace.chosen())
+}
+
+#[gpui::test]
+fn the_rail_chooses_a_project_and_opens_a_chat_in_it(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "rail");
+    keys::press(cx, &workspace, "secondary-n escape");
+    open_project(cx, &workspace, "rail-a");
+    open_project(cx, &workspace, "rail-b");
+    assert_eq!(chosen(cx, &workspace), 2);
+
+    keys::press(cx, &workspace, "ctrl-w h");
+    assert!(in_part(cx, "Rail"));
+    keys::press(cx, &workspace, "g g enter");
+    assert_eq!(chosen(cx, &workspace), 0);
+    assert!(in_part(cx, "Conversation"));
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+
+    keys::press(cx, &workspace, "ctrl-w h j l");
+    assert_eq!(chosen(cx, &workspace), 1);
+    keys::press(cx, &workspace, "ctrl-w h shift-g enter");
+    assert_eq!(chosen(cx, &workspace), 2);
+    keys::press(cx, &workspace, "ctrl-w h 2 k enter");
+    assert_eq!(chosen(cx, &workspace), 0);
+    keys::press(cx, &workspace, "ctrl-w h 9 j enter");
+    assert_eq!(chosen(cx, &workspace), 2);
+
+    keys::press(cx, &workspace, "ctrl-w h k o");
+    let chats = workspace.read_with(cx, |workspace, _| workspace.chats(1).count());
+    assert_eq!(chats, 2);
+    assert_eq!(chosen(cx, &workspace), 1);
+    assert_eq!(shown_mode(cx), Some("INSERT"));
+    keys::press(cx, &workspace, "h i");
+    assert_eq!(keys::shown_input(cx, &workspace), "hi");
+}
+
+#[gpui::test]
+fn control_w_goes_round_the_rail_and_the_chat(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "round");
+    keys::press(cx, &workspace, "secondary-n escape");
+
+    keys::press(cx, &workspace, "ctrl-w l");
+    assert!(in_part(cx, "Conversation"), "nothing is right of the chat");
+    keys::press(cx, &workspace, "ctrl-w w");
+    assert!(in_part(cx, "Rail"));
+    keys::press(cx, &workspace, "ctrl-w h");
+    assert!(in_part(cx, "Rail"), "nothing is left of the rail");
+    keys::press(cx, &workspace, "ctrl-w w");
+    assert!(in_part(cx, "Conversation"));
+    keys::press(cx, &workspace, "ctrl-w h ctrl-w l");
+    assert!(in_part(cx, "Conversation"));
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(keys::shown_input(cx, &workspace), "");
+}
+
+#[gpui::test]
+fn the_list_of_chats_shows_one_with_the_keys(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "list");
+    keys::press(cx, &workspace, "secondary-n escape secondary-n escape");
+    let second = shown_view(cx, &workspace);
+
+    keys::press(cx, &workspace, "ctrl-w k");
+    assert!(in_part(cx, "Chats"));
+    assert!(workspace.read_with(cx, |workspace, _| workspace.is_switching()));
+    keys::press(cx, &workspace, "escape");
+    assert!(in_part(cx, "Conversation"));
+    assert!(!workspace.read_with(cx, |workspace, _| workspace.is_switching()));
+
+    keys::press(cx, &workspace, "ctrl-w k g g enter");
+    let first = shown_view(cx, &workspace);
+    assert!(in_part(cx, "Conversation"));
+    keys::press(cx, &workspace, "ctrl-w k shift-g l");
+    let last = shown_view(cx, &workspace);
+    assert_ne!(first, last);
+    keys::press(cx, &workspace, "ctrl-w k k enter");
+    assert_eq!(shown_view(cx, &workspace), first);
+    assert!([first, last].contains(&second));
+
+    keys::press(cx, &workspace, "ctrl-w k o");
+    let chats = workspace.read_with(cx, |workspace, _| workspace.chats(0).count());
+    assert_eq!(chats, 3);
+    assert_eq!(shown_mode(cx), Some("INSERT"));
+}
+
+#[gpui::test]
+fn the_keys_of_the_stage_s_tabs_go_to_the_stage(cx: &mut TestAppContext) {
+    let keyed = Keyed::default();
+    let stages = FakeStages {
+        keyed: Some(keyed.clone()),
+        ..FakeStages::default()
+    };
+    cx.update(cox::vim::install);
+    let (workspace, cx) = keys::open_window_on(cx, scratch("tabs"), stages);
+    keys::press(cx, &workspace, "secondary-n escape");
+
+    keys::press(
+        cx,
+        &workspace,
+        "g t g shift-t 3 g t 2 g shift-t ctrl-w c ctrl-w h",
+    );
+    assert_eq!(
+        *keyed.borrow(),
+        [
+            Tabs::Along(1),
+            Tabs::Along(-1),
+            Tabs::Number(3),
+            Tabs::Along(-2),
+            Tabs::Close,
+            Tabs::Focus,
+        ]
+    );
+    assert_eq!(keys::shown_input(cx, &workspace), "");
+
+    keyed.borrow_mut().clear();
+    keys::press(cx, &workspace, "ctrl-w w");
+    assert!(in_part(cx, "Rail"));
+    keys::press(cx, &workspace, "ctrl-w l");
+    assert_eq!(*keyed.borrow(), [Tabs::Focus]);
+}
+
+#[gpui::test]
+fn escape_closes_the_list_over_the_input(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "completion");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    cx.simulate_input("hello");
+    keys::press(cx, &workspace, "enter");
+    for _ in 0..500 {
+        let known = view.read_with(cx, |view, _| !view.conversation().commands().is_empty());
+        if known && agent_state(cx, &view) == State::Idle {
+            break;
+        }
+        go_on(cx, &workspace);
+    }
+
+    cx.simulate_input("/co");
+    keys::press(cx, &workspace, "escape i enter");
+    assert_eq!(
+        keys::shown_input(cx, &workspace),
+        "",
+        "the line went as written"
+    );
+    for _ in 0..500 {
+        if agent_state(cx, &view) == State::Idle {
+            break;
+        }
+        go_on(cx, &workspace);
+    }
+
+    cx.simulate_input("/co");
+    keys::press(cx, &workspace, "enter");
+    assert!(
+        keys::shown_input(cx, &workspace).starts_with("/compact"),
+        "with the list open, Enter takes its command"
+    );
+}
+
+#[gpui::test]
+fn a_terminal_has_control_w_and_g_t(cx: &mut TestAppContext) {
+    cx.update(cox::vim::install);
+    cx.update(cox::app::bind_keys);
+    let cwd = scratch("terminal-keys");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let running = Running::start(Program::Command("head -n 1".to_owned()), &cwd).unwrap();
+    let (answer, mut waiting) = tokio::sync::oneshot::channel();
+    let (terminal, cx) = cx.add_window_view(|_, cx| Terminal::new(running, Some(answer), cx));
+    cx.update(|window, cx| window.focus(&terminal.focus_handle(cx)));
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("x space y ctrl-w g t enter");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let ran = loop {
+        cx.run_until_parked();
+        if let Ok(ran) = waiting.try_recv() {
+            break ran.expect("the command started");
+        }
+        assert!(std::time::Instant::now() < deadline, "head took too long");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(ran.output.ends_with("\nx gt"), "{:?}", ran.output);
+    let _ = std::fs::remove_dir_all(cwd);
+}
+
 #[gpui::test]
 fn a_terminal_has_every_key(cx: &mut TestAppContext) {
     cx.update(cox::vim::install);
@@ -232,4 +435,8 @@ fn off_the_keys_are_as_they_were(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "escape");
     go_on(cx, &workspace);
     assert_eq!(agent_state(cx, &view), State::Idle);
+
+    keys::press(cx, &workspace, "ctrl-w h g t");
+    assert!(!in_part(cx, "Rail"));
+    assert_eq!(keys::shown_input(cx, &workspace), "hgt");
 }

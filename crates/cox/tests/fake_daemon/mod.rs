@@ -16,6 +16,7 @@ use cox::chat::Stages;
 use cox::chat::judge::Starts;
 use cox::chat::view::{ChatView, OpenLink, StageView};
 use cox::daemon::{Running, Spawned, Spawns};
+use cox::stage::Tabs;
 use cox::ui::Panel;
 use cox::workspace::Workspace;
 use cox_acp::McpServer;
@@ -238,14 +239,19 @@ impl Render for FakeStage {
 /// was made on, in order.
 pub type Made = Rc<std::cell::RefCell<Vec<(PathBuf, Option<KeptTabs<u64>>)>>>;
 
-/// Makes the chats' stages: none, or, when `opened` or `made` is given, a
-/// stand-in for each, which notes in `opened` the links the human opens,
-/// and in `made` the stages made. The commands asked of a chat with none
-/// run in a shell.
+/// What Vim's keys asked of the stages' tabs, in order.
+pub type Keyed = Rc<std::cell::RefCell<Vec<Tabs>>>;
+
+/// Makes the chats' stages: none, or, when `opened`, `made` or `keyed`
+/// is given, a stand-in for each, which notes in `opened` the links the
+/// human opens, in `made` the stages made, and in `keyed` what Vim's keys
+/// ask of their tabs. The commands asked of a chat with none run in a
+/// shell.
 #[derive(Default)]
 pub struct FakeStages {
     pub opened: Option<Opened>,
     pub made: Option<Made>,
+    pub keyed: Option<Keyed>,
 }
 
 impl Stages for FakeStages {
@@ -256,16 +262,18 @@ impl Stages for FakeStages {
         _: &mut Window,
         cx: &mut App,
     ) -> Option<(StageView, OpenLink)> {
-        if self.opened.is_none() && self.made.is_none() {
+        if self.opened.is_none() && self.made.is_none() && self.keyed.is_none() {
             return None;
         }
         if let Some(made) = &self.made {
             made.borrow_mut().push((cwd, tabs));
         }
         let opened = self.opened.clone().unwrap_or_default();
+        let keyed = self.keyed.clone().unwrap_or_default();
         let view = StageView {
             view: cx.new(|_| FakeStage).into(),
             panel: cx.new(|_| Panel::default()),
+            by_keys: Rc::new(move |tabs, _, _| keyed.borrow_mut().push(tabs)),
         };
         let open_link: OpenLink =
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned()));

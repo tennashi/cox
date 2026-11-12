@@ -70,6 +70,7 @@ use crate::notices::AppNotices;
 use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView, UnpairPhones};
 
 pub(crate) mod project_card;
+mod vim;
 
 use crate::stage::changes::ShowTurn;
 use crate::stage::owners::ShowChat;
@@ -130,6 +131,12 @@ const COX: &str = "Cox";
 
 /// The key context of the input that renames a chat.
 pub(crate) const RENAMING: &str = "Renaming";
+
+/// The key context of the rail, while Vim's keys have it.
+pub(crate) const RAIL: &str = "Rail";
+
+/// The key context of the list of chats, while Vim's keys have it.
+pub(crate) const LIST: &str = "Chats";
 
 /// Why a command the agent asks to run does not run, in a chat with no
 /// stage.
@@ -467,6 +474,9 @@ pub struct Workspace {
     syncs: HashMap<u64, tokio::sync::oneshot::Sender<()>>,
     last_sync: u64,
     focus_handle: FocusHandle,
+    /// The rail, and the list of chats, as Vim's keys select along them.
+    rail: vim::Picker,
+    list: vim::Picker,
     /// Show the chat of a stage's tab that the human asks a stage to.
     shows_chats: Vec<Subscription>,
     _from_daemon: Task<()>,
@@ -550,6 +560,8 @@ impl Workspace {
             syncs: HashMap::new(),
             last_sync: 0,
             focus_handle: cx.focus_handle(),
+            rail: vim::Picker::new(cx),
+            list: vim::Picker::new(cx),
             shows_chats: Vec::new(),
             _from_daemon: heard,
         }
@@ -1996,16 +2008,19 @@ impl Workspace {
     /// which chooses it, marked when it is the one chosen and counting its
     /// chats that wait for the human, and at its foot the button that
     /// opens a folder, and the gear that opens the settings.
-    fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_rail(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Cox's own, a place of its own rather than a project, stands apart
         // from the projects under it, past a line.
         // A project put away, or deleted, is off the rail.
-        let projects = self
+        let shown = self
             .projects
             .iter()
             .enumerate()
-            .filter(|(_, project)| !project.archived && !project.deleted)
-            .flat_map(|(index, project)| {
+            .filter(|(_, project)| !project.archived && !project.deleted);
+        let picked = self.rail.picked(shown.clone().count(), window);
+        let projects = shown
+            .enumerate()
+            .flat_map(|(row, (index, project))| {
                 let apart = project.id.is_none().then(|| {
                     div()
                         .flex_shrink_0()
@@ -2014,12 +2029,20 @@ impl Workspace {
                         .bg(rgb(BORDER_STRONG))
                         .into_any_element()
                 });
-                std::iter::once(self.render_project(index, project, cx).into_any_element())
-                    .chain(apart)
+                let button = self
+                    .render_project(index, project, cx)
+                    .when(picked == Some(row), |button| {
+                        button.child(crate::ui::picked(PROJECT_RADIUS))
+                    });
+                std::iter::once(button.into_any_element()).chain(apart)
             })
             .collect::<Vec<_>>();
         div()
             .id("projects")
+            // With Vim's keys only: a click would take the keyboard here.
+            .when(crate::vim::mode(cx).is_some(), |rail| {
+                rail.track_focus(&self.rail.focus).key_context(RAIL)
+            })
             .w(px(RAIL_WIDTH))
             .h_full()
             .flex_shrink_0()
@@ -2340,7 +2363,7 @@ impl Workspace {
     /// chat shown, and the button that folds the panel; under it, the pill
     /// of the agent and the settings of the chat; then its conversation,
     /// under the list while it is open.
-    fn render_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_panel(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.shown().and_then(Chat::view).cloned();
         let settings = view
             .as_ref()
@@ -2419,7 +2442,7 @@ impl Workspace {
                     .border_t_1()
                     .border_color(rgb(BORDER))
                     .child(body)
-                    .children(self.switching.then(|| self.render_list(cx))),
+                    .children(self.switching.then(|| self.render_list(window, cx))),
             )
     }
 
@@ -2559,18 +2582,29 @@ impl Workspace {
     /// The list of the chats of the project chosen, over the conversation
     /// while it is open, with the row that opens another chat in the
     /// project, and "Archived" at its foot, if the human archived a chat.
-    fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_list(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let chosen = self.chosen;
         let folder = self.projects[chosen].folder.clone();
-        let rows = self
+        let chats = self
             .chats
             .iter()
             .enumerate()
-            .filter(|(_, chat)| chat.project == chosen)
-            .map(|(index, chat)| self.render_row(index, chat, cx))
+            .filter(|(_, chat)| chat.project == chosen);
+        let picked = self.list.picked(chats.clone().count(), window);
+        let rows = chats
+            .enumerate()
+            .map(|(row, (index, chat))| {
+                self.render_row(index, chat, cx)
+                    .when(picked == Some(row), |row| {
+                        row.relative().child(crate::ui::picked(ROW_RADIUS))
+                    })
+            })
             .collect::<Vec<_>>();
         div()
             .id("chats")
+            .when(crate::vim::mode(cx).is_some(), |list| {
+                list.track_focus(&self.list.focus).key_context(LIST)
+            })
             .debug_selector(|| "chats".to_owned())
             .occlude()
             .absolute()
@@ -3124,7 +3158,7 @@ impl Focusable for Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The parts mark again where they are drawn, for a region dragged.
         region::forget_marks();
         // The stage of the chat shown, or an empty card until it has one.
@@ -3141,7 +3175,7 @@ impl Render for Workspace {
         let chat = if self.folded {
             self.render_folded(cx).into_any_element()
         } else {
-            self.render_panel(cx).into_any_element()
+            self.render_panel(window, cx).into_any_element()
         };
         div()
             .track_focus(&self.focus_handle)
@@ -3187,7 +3221,7 @@ impl Render for Workspace {
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
             .text_size(px(14.))
-            .child(self.render_rail(cx))
+            .child(self.render_rail(window, cx))
             // The stage, and the chat at its right, as cards on the ground
             // the rail is on.
             .child(
