@@ -2488,11 +2488,11 @@ impl Daemon {
             .filter(|project| !project.archived && !project.deleted)
             .map(|project| project.folder.clone())
             .collect();
-        let scheduled = crate::trigger::scheduled(workflow, &home, &projects);
+        let arranged = storage::path(storage::Kept::Triggers);
+        let scheduled = crate::trigger::scheduled(workflow, &home, &projects, arranged.as_deref());
         if scheduled.is_empty() {
             return;
         }
-        let arranged = storage::path(storage::Kept::Triggers);
         let mut ran = self
             .ran
             .take()
@@ -2507,11 +2507,8 @@ impl Daemon {
                 .get(&id)
                 .and_then(|&key| self.slot(key))
                 .is_some_and(|slot| working(slot.state));
-            let off = crate::trigger::Arranged::read(arranged.as_deref(), &works)
-                .off
-                .contains(&trigger.file);
             let last = ran.last(&id);
-            if at_work || off || !cron.due(last, now) {
+            if at_work || !cron.due(last, now) {
                 continue;
             }
             tracing::info!(schedule = id, "a schedule runs");
