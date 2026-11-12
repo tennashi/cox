@@ -628,7 +628,10 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
                 Reach::Window => None,
             };
             let reaches = reach == Reach::Window || part.is_some();
-            if !reaches || !hints::start(part, window, cx) {
+            let started = reaches
+                && (hints::start(part, window, cx)
+                    || (part.is_some() && hints::start(None, window, cx)));
+            if !started {
                 enter(Mode::Normal, cx);
             }
         }

@@ -2056,3 +2056,17 @@ fn shift_f_labels_the_page_s_hints_and_the_window_s_in_one_sequence(cx: &mut Tes
     assert_eq!(tags(cx).len(), 0);
     assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
 }
+
+#[gpui::test]
+fn f_after_folding_the_chat_by_its_label_labels_the_folded_chat(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "hints-folded");
+    keys::press(cx, &workspace, "secondary-n escape f");
+    let fold = tag_over(cx, "fold-chat");
+    type_label(cx, &workspace, &fold);
+    assert!(workspace.read_with(cx, |workspace, _| workspace.is_folded()));
+
+    keys::press(cx, &workspace, "f");
+    let unfold = tag_over(cx, "unfold-chat");
+    type_label(cx, &workspace, &unfold);
+    assert!(!workspace.read_with(cx, |workspace, _| workspace.is_folded()));
+}

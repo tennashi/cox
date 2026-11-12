@@ -2793,6 +2793,8 @@ impl Workspace {
         card()
             .id("folded-chat")
             .debug_selector(|| "folded-chat".to_owned())
+            .relative()
+            .child(hints::part(Part::Chat))
             .w(px(FOLDED_WIDTH))
             .h_full()
             .flex_shrink_0()
