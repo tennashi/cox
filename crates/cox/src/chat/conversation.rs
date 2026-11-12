@@ -51,8 +51,8 @@ pub enum State {
     Idle,
     /// A turn is running.
     Busy,
-    /// The agent waits for the human to choose one of the options of the
-    /// last [`Entry::Permission`].
+    /// The agent waits for the human to answer the entry of
+    /// [`Conversation::asked_at`].
     Asking,
     /// The human asked the agent to stop the turn, and it has not ended
     /// yet.
@@ -131,6 +131,44 @@ pub struct Happened {
 enum At {
     Goal,
     Trigger(Due),
+}
+
+/// What runs as a turn ended, or as something else happened, while it
+/// does: as the chat checks, and as the agent asks the human in the
+/// middle of it, which it goes on with once they answered.
+#[derive(Debug)]
+struct Checks {
+    /// What runs now.
+    at: At,
+    /// The triggers due that have not run yet.
+    rest: VecDeque<Due>,
+    /// The entry that shows what runs, and the place in it of what runs
+    /// now.
+    marks: (usize, usize),
+    /// What happened whose triggers run, or `None` for those of a turn's
+    /// end.
+    event: Option<Happened>,
+    /// What the triggers `by: this` that went tell the agent once the
+    /// rest went, by their files.
+    tells: Vec<(PathBuf, String)>,
+    /// What came back of what runs now while the agent asked the human,
+    /// which the chat takes once they answered.
+    held: Option<Came>,
+}
+
+/// What came back of what runs as a turn ended, or as something else
+/// happened, as the host hands it to the conversation.
+#[derive(Debug)]
+pub enum Came {
+    /// How the command of the goal, or of the trigger that runs, went, as
+    /// [`Conversation::checked`] takes it.
+    Ran(Result<Ran, String>),
+    /// What the judge of the goal said, as [`Conversation::judged`] takes
+    /// it.
+    Judged(Result<String, String>),
+    /// What the agent of the trigger that runs said, as
+    /// [`Conversation::found`] takes it.
+    Found(Result<String, String>),
 }
 
 /// What a chat works until, and how far it has come.
@@ -296,8 +334,10 @@ pub struct Conversation {
     unkept: Unkept,
     /// Whose move it was when the agent asked the human to log in, or for
     /// their permission, which it is again once they have answered: the
-    /// agent's, when it asked in a turn, or the human's, when it asked as
-    /// it went on by itself after its turn ended.
+    /// agent's, when it asked in a turn, the human's, when it asked as it
+    /// went on by itself after its turn ended, or Cox's, when it asked as
+    /// what runs as the turn ended ran, which goes on then unless it was
+    /// given up meanwhile.
     before_asking: State,
     /// Whether the chat's agent can keep what it learned in the wiki, so
     /// that the chat asks the human whether to at its milestones.
@@ -313,28 +353,18 @@ pub struct Conversation {
     drift: Drift,
     /// The triggers due as the turn that runs ends, as the host said.
     due: Vec<Due>,
-    /// What runs now, as the turn ended, while something does.
-    at: Option<At>,
-    /// The triggers due that have not run yet, as the turn ended.
-    rest: VecDeque<Due>,
-    /// The entry that shows what runs as the turn ended, and the place
-    /// in it of what runs now.
-    marks: Option<(usize, usize)>,
+    /// What runs as the turn ended, or as something else happened, while
+    /// it does.
+    checks: Option<Checks>,
     /// Whether the goal was met as the turn ended, which asks the human
     /// whether to keep what was learned once the triggers pass too, and
     /// the host runs the triggers of.
     met: Met,
     /// How many turns the chat took on the human's last line.
     turns: usize,
-    /// What happened whose triggers run now, while they do; `None` while
-    /// those of a turn's end do.
-    event: Option<Happened>,
     /// What happened whose triggers wait for the chat to wait for the
     /// human, the first first.
     waiting: VecDeque<(Happened, Vec<Due>)>,
-    /// What the triggers `by: this` that went tell the agent once the
-    /// rest went, by their files.
-    tells: Vec<(PathBuf, String)>,
     /// The triggers `by: this` that told the agent on the last line, by
     /// their files, which a turn's end does not run again until the next.
     told_line: BTreeSet<PathBuf>,
@@ -378,14 +408,10 @@ impl Conversation {
             steering: 0,
             drift: Drift::default(),
             due: Vec::new(),
-            at: None,
-            rest: VecDeque::new(),
-            marks: None,
+            checks: None,
             met: Met::No,
             turns: 0,
-            event: None,
             waiting: VecDeque::new(),
-            tells: Vec::new(),
             told_line: BTreeSet::new(),
             raised_line: BTreeSet::new(),
         }
@@ -426,14 +452,10 @@ impl Conversation {
             steering: 0,
             drift: Drift::default(),
             due: Vec::new(),
-            at: None,
-            rest: VecDeque::new(),
-            marks: None,
+            checks: None,
             met: Met::No,
             turns: 0,
-            event: None,
             waiting: VecDeque::new(),
-            tells: Vec::new(),
             told_line: BTreeSet::new(),
             raised_line: BTreeSet::new(),
         }
@@ -686,6 +708,7 @@ impl Conversation {
     pub fn close(&mut self, note: String) {
         self.note(note);
         self.state = State::Closed;
+        self.checks = None;
     }
 
     /// Closes the conversation as the human switches it from the agent
@@ -697,6 +720,7 @@ impl Conversation {
             to: to.to_owned(),
         });
         self.state = State::Closed;
+        self.checks = None;
         self.settings.clear();
         self.commands.clear();
     }
@@ -821,7 +845,7 @@ impl Conversation {
             None => "The goal is cleared.".to_owned(),
         };
         self.push(Entry::Note(note));
-        if self.state == State::Checking {
+        if self.checks.is_some() {
             self.stop_checks(CheckState::Waiting);
         }
     }
@@ -1024,32 +1048,37 @@ impl Conversation {
         self.due = due;
     }
 
-    /// Starts what runs as the turn ended: the goal, if the chat has one,
-    /// then `due`, shown on one line of chips.
-    fn start_checks(&mut self, due: Vec<Due>) {
-        let goal = self.goal.is_some().then(|| Check {
-            name: "goal".to_owned(),
-            state: CheckState::Waiting,
-            said: None,
-        });
-        let marks = goal
-            .into_iter()
-            .chain(due.iter().map(|due| Check {
-                name: due.name.clone(),
+    /// Runs `at`, then `rest`, shown on a line of chips of their own, as
+    /// `happened`, or as the turn ended.
+    fn run_checks(&mut self, at: At, rest: VecDeque<Due>, happened: Option<Happened>) {
+        let first = match &at {
+            At::Goal => "goal",
+            At::Trigger(due) => due.name.as_str(),
+        };
+        let marks = std::iter::once(first)
+            .chain(rest.iter().map(|due| due.name.as_str()))
+            .map(|name| Check {
+                name: name.to_owned(),
                 state: CheckState::Waiting,
                 said: None,
-            }))
+            })
             .collect();
-        self.push(Entry::Checks(marks));
-        self.marks = Some((self.entries.len() - 1, 0));
-        self.rest = due.into();
-        self.met = Met::No;
+        self.push(match &happened {
+            Some(happened) => Entry::Event {
+                on: happened.on.clone(),
+                checks: marks,
+            },
+            None => Entry::Checks(marks),
+        });
+        self.checks = Some(Checks {
+            at,
+            rest,
+            marks: (self.entries.len() - 1, 0),
+            event: happened,
+            tells: Vec::new(),
+            held: None,
+        });
         self.state = State::Checking;
-        self.at = if self.goal.is_some() {
-            Some(At::Goal)
-        } else {
-            self.rest.pop_front().map(At::Trigger)
-        };
         self.mark(CheckState::Running);
     }
 
@@ -1074,27 +1103,11 @@ impl Conversation {
         };
         // A trigger by: this tells the agent once for a line.
         due.retain(|due| !matches!(due.does, Does::Tell(_)) || !self.told_line.contains(&due.file));
-        if due.is_empty() {
+        let mut rest = VecDeque::from(due);
+        let Some(first) = rest.pop_front() else {
             return self.run_waiting();
-        }
-        let marks = due
-            .iter()
-            .map(|due| Check {
-                name: due.name.clone(),
-                state: CheckState::Waiting,
-                said: None,
-            })
-            .collect();
-        self.push(Entry::Event {
-            on: happened.on.clone(),
-            checks: marks,
-        });
-        self.marks = Some((self.entries.len() - 1, 0));
-        self.rest = due.into();
-        self.event = Some(happened);
-        self.state = State::Checking;
-        self.at = self.rest.pop_front().map(At::Trigger);
-        self.mark(CheckState::Running);
+        };
+        self.run_checks(At::Trigger(first), rest, Some(happened));
         true
     }
 
@@ -1102,9 +1115,7 @@ impl Conversation {
     /// those of a turn's end.
     #[must_use]
     pub fn event(&self) -> Option<&Happened> {
-        self.event
-            .as_ref()
-            .filter(|_| self.state == State::Checking)
+        self.checks.as_ref()?.event.as_ref()
     }
 
     /// Whether the goal was met since this was last asked, for the host
@@ -1131,18 +1142,19 @@ impl Conversation {
     /// tell it once the rest went, and returns the next turn to send, if
     /// that was the last.
     pub fn tell(&mut self) -> Option<Command> {
+        self.taking()?;
         let due = self.trigger()?.clone();
         let Does::Tell(text) = due.does else {
             return None;
         };
-        self.tells.push((due.file, text));
+        self.checks.as_mut()?.tells.push((due.file, text));
         self.say("Told the chat's agent, once the rest went.");
         self.next(CheckState::Passed)
     }
 
     /// Marks what runs now as `state`, on the line of chips.
     fn mark(&mut self, state: CheckState) {
-        let Some((entry, at)) = self.marks else {
+        let Some((entry, at)) = self.check_at() else {
             return;
         };
         if let Some(marks) = self.entries.get_mut(entry).and_then(Entry::checks_mut)
@@ -1156,7 +1168,7 @@ impl Conversation {
     /// Keeps what what runs now `said`, on its chip, for the human to read
     /// there.
     fn say(&mut self, said: &str) {
-        let Some((entry, at)) = self.marks else {
+        let Some((entry, at)) = self.check_at() else {
             return;
         };
         if let Some(marks) = self.entries.get_mut(entry).and_then(Entry::checks_mut)
@@ -1180,17 +1192,15 @@ impl Conversation {
     /// turn to send.
     fn next(&mut self, state: CheckState) -> Option<Command> {
         self.mark(state);
-        if let Some((_, at)) = &mut self.marks {
-            *at += 1;
-        }
-        self.at = self.rest.pop_front().map(At::Trigger);
-        if self.at.is_some() {
+        let checks = self.checks.as_mut()?;
+        checks.marks.1 += 1;
+        if let Some(due) = checks.rest.pop_front() {
+            checks.at = At::Trigger(due);
             self.mark(CheckState::Running);
             return None;
         }
+        let Checks { event, tells, .. } = self.checks.take()?;
         self.state = State::Idle;
-        self.marks = None;
-        let event = self.event.take();
         if self.met == Met::Now {
             self.ask_to_keep_here(GOAL_MET);
             // Its triggers run once for a line, as the turns they start
@@ -1201,7 +1211,6 @@ impl Conversation {
                 Met::No
             };
         }
-        let tells = std::mem::take(&mut self.tells);
         if tells.is_empty() {
             return None;
         }
@@ -1225,24 +1234,23 @@ impl Conversation {
 
     /// Stops what runs as the turn ended, marking what runs now as
     /// `state`; what has not run yet stays waiting. The chat waits for the
-    /// human, unless it goes on, as [`Self::go_on`] says.
+    /// human, unless it goes on, as [`Self::go_on`] says; while the agent
+    /// asks them, it does once they answered.
     fn stop_checks(&mut self, state: CheckState) {
-        if self.at.is_some() {
-            self.mark(state);
+        self.mark(state);
+        self.checks = None;
+        if self.state == State::Asking {
+            self.before_asking = State::Idle;
+        } else {
+            self.state = State::Idle;
         }
-        self.at = None;
-        self.rest.clear();
-        self.marks = None;
-        self.state = State::Idle;
-        self.event = None;
-        self.tells.clear();
     }
 
     /// What runs now could not run: as a turn ends, what was to run after
     /// it does not, and the chat waits for the human; as something else
     /// happened, the rest runs.
     fn broken(&mut self) -> Option<Command> {
-        if self.event.is_some() {
+        if self.event().is_some() {
             return self.next(CheckState::Broken);
         }
         self.stop_checks(CheckState::Broken);
@@ -1269,15 +1277,49 @@ impl Conversation {
     /// of the line of chips, and its place in it, while something runs.
     #[must_use]
     pub fn check_at(&self) -> Option<(usize, usize)> {
-        self.marks.filter(|_| self.state == State::Checking)
+        Some(self.checks.as_ref()?.marks)
+    }
+
+    /// Whether what runs as the turn ended, or as something else
+    /// happened, runs: as the chat checks, and as the agent asks the
+    /// human in the middle of it.
+    #[must_use]
+    pub fn runs_checks(&self) -> bool {
+        self.checks.is_some()
+    }
+
+    /// Keeps `came`, what came back of what runs, while the agent asks
+    /// the human in the middle of it, for the host to take once they
+    /// answered (see [`Self::take_held`]).
+    pub fn hold(&mut self, came: Came) {
+        if let Some(checks) = &mut self.checks {
+            checks.held = Some(came);
+        }
+    }
+
+    /// What came back of what runs while the agent asked the human in the
+    /// middle of it, once they answered, for the host to take as it would
+    /// have then.
+    pub fn take_held(&mut self) -> Option<Came> {
+        self.taking()?;
+        self.checks.as_mut()?.held.take()
+    }
+
+    /// What runs, while the chat takes what comes back of it: as it
+    /// checks, not as the agent asks the human in the middle of it, when
+    /// the host holds what comes (see [`Self::hold`]).
+    fn taking(&self) -> Option<&Checks> {
+        self.checks
+            .as_ref()
+            .filter(|_| self.state == State::Checking)
     }
 
     /// The trigger that runs now, if one does.
     #[must_use]
     pub fn trigger(&self) -> Option<&Due> {
-        match (&self.state, &self.at) {
-            (State::Checking, Some(At::Trigger(due))) => Some(due),
-            _ => None,
+        match &self.checks.as_ref()?.at {
+            At::Trigger(due) => Some(due),
+            At::Goal => None,
         }
     }
 
@@ -1285,25 +1327,22 @@ impl Conversation {
     /// trigger that runs, while one does.
     #[must_use]
     pub fn checking(&self) -> Option<&str> {
-        match (self.state, &self.at) {
-            (State::Checking, Some(At::Goal)) => self.goal.as_ref()?.command(),
-            (
-                State::Checking,
-                Some(At::Trigger(Due {
-                    does: Does::Run(command),
-                    ..
-                })),
-            ) => Some(command),
-            _ => None,
+        match &self.checks.as_ref()?.at {
+            At::Goal => self.goal.as_ref()?.command(),
+            At::Trigger(Due {
+                does: Does::Run(command),
+                ..
+            }) => Some(command),
+            At::Trigger(_) => None,
         }
     }
 
     /// The words of the goal the judge is asked about, while it is.
     #[must_use]
     pub fn judging(&self) -> Option<&str> {
-        match (self.state, &self.at) {
-            (State::Checking, Some(At::Goal)) => self.goal.as_ref()?.words(),
-            _ => None,
+        match self.checks.as_ref()?.at {
+            At::Goal => self.goal.as_ref()?.words(),
+            At::Trigger(_) => None,
         }
     }
 
@@ -1322,6 +1361,7 @@ impl Conversation {
     /// chat has taken as many turns as one line gets, or the agent made
     /// no tool call in its last turns.
     pub fn checked(&mut self, ran: Result<Ran, String>) -> Option<Command> {
+        self.taking()?;
         let command = self.checking()?.to_owned();
         let trigger = self.trigger().map(|due| due.name.clone());
         let ran = match ran {
@@ -1360,7 +1400,7 @@ impl Conversation {
                 None => format!("Goal not met: `{command}` {ended}."),
             },
         };
-        if self.event.is_some() {
+        if self.event().is_some() {
             return self.next(CheckState::Failed);
         }
         let output = tail(&ran.output, OUTPUT_TAIL);
@@ -1384,6 +1424,7 @@ impl Conversation {
     /// what is due next runs, or the chat waits for the human, as after
     /// [`Conversation::checked`].
     pub fn judged(&mut self, judged: Result<String, String>) -> Option<Command> {
+        self.taking()?;
         self.judging()?;
         let said = match judged {
             Ok(said) => said,
@@ -1433,6 +1474,7 @@ impl Conversation {
     /// otherwise what is due next runs, or the chat waits for the human,
     /// as after [`Conversation::checked`].
     pub fn found(&mut self, said: Result<String, String>) -> Option<Command> {
+        self.taking()?;
         let name = self.asking()?.name.clone();
         let said = match said {
             Ok(said) => said,
@@ -1448,7 +1490,7 @@ impl Conversation {
         let why = match Verdict::of(&said) {
             Verdict::Met(_) => return self.passed(),
             // What happened besides a turn's end, the agent is not told.
-            Verdict::NotMet(_) | Verdict::Blocked(_) if self.event.is_some() => {
+            Verdict::NotMet(_) | Verdict::Blocked(_) if self.event().is_some() => {
                 return self.next(CheckState::Failed);
             }
             Verdict::NotMet(why) | Verdict::Blocked(why) => why,
@@ -1538,8 +1580,8 @@ impl Conversation {
     /// waits on one.
     #[must_use]
     pub fn asked(&self) -> Option<&[String]> {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { options, .. })) => Some(options),
+        match self.asked_entry() {
+            Some(Entry::Permission { options, .. }) => Some(options),
             _ => None,
         }
     }
@@ -1549,9 +1591,9 @@ impl Conversation {
     /// to log in.
     #[must_use]
     pub fn options_asked(&self) -> usize {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { options, .. })) => options.len(),
-            (State::Asking, Some(Entry::Login { options, .. })) => options.len(),
+        match self.asked_entry() {
+            Some(Entry::Permission { options, .. }) => options.len(),
+            Some(Entry::Login { options, .. }) => options.len(),
             _ => 0,
         }
     }
@@ -1559,10 +1601,32 @@ impl Conversation {
     /// Whether the agent waits for the human to log in.
     #[must_use]
     pub fn logging_in(&self) -> bool {
-        matches!(
-            (self.state, self.entries.last()),
-            (State::Asking, Some(Entry::Login { .. }))
-        )
+        matches!(self.asked_entry(), Some(Entry::Login { .. }))
+    }
+
+    /// The index of the entry the agent waits on the human to answer, a
+    /// permission request or the ways to log in, while it does. The agent
+    /// asks one thing at a time, and nothing more until it is answered,
+    /// so it is the last ask, wherever notes Cox added since put it.
+    #[must_use]
+    pub fn asked_at(&self) -> Option<usize> {
+        if self.state != State::Asking {
+            return None;
+        }
+        self.entries
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::Permission { .. } | Entry::Login { .. }))
+            .filter(|&index| {
+                matches!(
+                    self.entries[index],
+                    Entry::Permission { chosen: None, .. } | Entry::Login { chosen: None, .. }
+                )
+            })
+    }
+
+    /// The entry of [`Self::asked_at`].
+    fn asked_entry(&self) -> Option<&Entry> {
+        self.asked_at().map(|index| &self.entries[index])
     }
 
     /// Shows that the agent asks the human to log in, one of the ways of
@@ -1573,32 +1637,36 @@ impl Conversation {
             failed,
             chosen: None,
         });
-        // Asked as the human stopped the turn: the agent side gives up
-        // without the human.
-        if self.state != State::Stopping {
-            self.before_asking = match self.state {
-                State::Busy | State::Asking => State::Busy,
-                _ => State::Idle,
-            };
-            self.state = State::Asking;
-        }
+        self.wait_on_human();
+    }
+
+    /// Has the chat wait for the human to answer what the agent asks, and
+    /// then go back to what it was in the middle of: the agent's turn,
+    /// what runs as the turn ended, or waiting for the human, as when the
+    /// agent first asked, if it asks again meanwhile. Asked as the human
+    /// stopped the agent, the agent side gives up without them.
+    fn wait_on_human(&mut self) {
+        self.before_asking = match self.state {
+            State::Stopping | State::Asking => return,
+            State::Busy | State::Checking => self.state,
+            State::Idle | State::Closed => State::Idle,
+        };
+        self.state = State::Asking;
     }
 
     /// Chooses the way at `index` of logging in, while the agent waits for
     /// the human to log in, and returns it.
     pub fn choose_login(&mut self, index: usize) -> Option<LoginOption> {
-        if self.state != State::Asking {
-            return None;
-        }
-        let Some(Entry::Login {
+        let at = self.asked_at()?;
+        let Entry::Login {
             options, chosen, ..
-        }) = self.entries.last_mut()
+        } = &mut self.entries[at]
         else {
             return None;
         };
         let option = options.get(index)?.clone();
         *chosen = Some(index);
-        self.changed.insert(self.entries.len() - 1);
+        self.changed.insert(at);
         self.state = self.before_asking;
         Some(option)
     }
@@ -1608,16 +1676,12 @@ impl Conversation {
     /// answer are told: the call, what it is about to do, and the options.
     #[must_use]
     pub fn asked_about(&self) -> Option<String> {
-        let (
-            State::Asking,
-            Some(Entry::Permission {
-                title,
-                content,
-                options,
-                chosen: None,
-                ..
-            }),
-        ) = (self.state, self.entries.last())
+        let Some(Entry::Permission {
+            title,
+            content,
+            options,
+            ..
+        }) = self.asked_entry()
         else {
             return None;
         };
@@ -1746,8 +1810,8 @@ impl Conversation {
     /// permission request the agent waits on.
     #[must_use]
     pub fn gathering(&self) -> bool {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { gathered, .. })) => gathered
+        match self.asked_entry() {
+            Some(Entry::Permission { gathered, .. }) => gathered
                 .iter()
                 .any(|check| check.state == CheckState::Running),
             _ => false,
@@ -1758,8 +1822,8 @@ impl Conversation {
     /// request the agent waits on: the first line each said.
     #[must_use]
     pub fn headlines(&self) -> Vec<&str> {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { gathered, .. })) => gathered
+        match self.asked_entry() {
+            Some(Entry::Permission { gathered, .. }) => gathered
                 .iter()
                 .filter(|check| matches!(check.state, CheckState::Passed | CheckState::Failed))
                 .filter_map(|check| check.said.as_deref().and_then(headline))
@@ -1785,12 +1849,10 @@ impl Conversation {
     /// Chooses the option at `index` of the permission request the agent
     /// waits on, and returns the answer to send.
     pub fn choose(&mut self, index: usize) -> Option<Command> {
-        if self.state != State::Asking {
-            return None;
-        }
-        let Some(Entry::Permission {
+        let at = self.asked_at()?;
+        let Entry::Permission {
             options, chosen, ..
-        }) = self.entries.last_mut()
+        } = &mut self.entries[at]
         else {
             return None;
         };
@@ -1798,7 +1860,7 @@ impl Conversation {
             return None;
         }
         *chosen = Some(index);
-        self.changed.insert(self.entries.len() - 1);
+        self.changed.insert(at);
         self.state = self.before_asking;
         // The human answered as the plan stands: it is the one the plan
         // is told against from here.
@@ -1913,6 +1975,10 @@ impl Conversation {
     pub fn cancel(&mut self) -> Option<Command> {
         match self.state {
             State::Busy | State::Asking => {
+                if self.checks.is_some() {
+                    self.stop_checks(CheckState::Waiting);
+                    self.waiting.clear();
+                }
                 self.state = State::Stopping;
                 Some(Command::Cancel)
             }
@@ -1944,13 +2010,18 @@ impl Conversation {
         // turn it starts does not tell it again.
         let mut due = std::mem::take(&mut self.due);
         due.retain(|due| !matches!(due.does, Does::Tell(_)) || !self.told_line.contains(&due.file));
-        let check = reason == StopReason::EndTurn
-            && self.state == State::Busy
-            && (self.goal.is_some() || !due.is_empty());
-        if check {
-            self.start_checks(due);
+        let mut rest = VecDeque::from(due);
+        let first = if self.goal.is_some() {
+            Some(At::Goal)
         } else {
-            self.state = State::Idle;
+            rest.pop_front().map(At::Trigger)
+        };
+        match first {
+            Some(at) if reason == StopReason::EndTurn && self.state == State::Busy => {
+                self.met = Met::No;
+                self.run_checks(at, rest, None);
+            }
+            _ => self.state = State::Idle,
         }
     }
 
@@ -2096,9 +2167,9 @@ impl Conversation {
     /// in, while it waits on the human.
     #[must_use]
     pub fn asking_for(&self) -> Option<&str> {
-        match (self.state, self.entries.last()) {
-            (State::Asking, Some(Entry::Permission { title, .. })) => Some(title),
-            (State::Asking, Some(Entry::Login { .. })) => Some("log in"),
+        match self.asked_entry() {
+            Some(Entry::Permission { title, .. }) => Some(title),
+            Some(Entry::Login { .. }) => Some("log in"),
             _ => None,
         }
     }
@@ -2252,15 +2323,7 @@ impl Conversation {
                 options,
             } => {
                 self.ask(id, title, content, options, None);
-                // Asked before the agent heard it is to stop: the agent
-                // side answers it as cancelled, without the human.
-                if self.state != State::Stopping {
-                    self.before_asking = match self.state {
-                        State::Busy | State::Asking => State::Busy,
-                        _ => State::Idle,
-                    };
-                    self.state = State::Asking;
-                }
+                self.wait_on_human();
             }
             // Cox answered, as the chat is set up: the human sees what was
             // asked, and what was chosen, and the turn goes on.
@@ -2296,6 +2359,7 @@ impl Conversation {
         };
         self.push(Entry::Note(note));
         self.state = State::Closed;
+        self.checks = None;
         self.steering = 0;
         // The commands stay, for the line that starts the agent again.
     }
@@ -3118,6 +3182,53 @@ mod tests {
     }
 
     #[test]
+    fn answers_a_permission_request_noted_past() {
+        let mut conversation = Conversation::new();
+        conversation.submit("permission");
+        conversation.apply(AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
+            title: Some("Run make".to_owned()),
+            content: None,
+            options: vec!["Allow".to_owned(), "Reject".to_owned()],
+        });
+        conversation.set_goal(Some(goal::Goal::Command("make".to_owned())));
+        conversation.note("A trigger ran.".to_owned());
+
+        assert_eq!(conversation.asking_for(), Some("Run make"));
+        assert_eq!(
+            conversation.asked(),
+            Some(&["Allow".to_owned(), "Reject".to_owned()][..])
+        );
+        assert_eq!(conversation.options_asked(), 2);
+        assert_eq!(
+            conversation.choose(1),
+            Some(Command::Answer(PermissionAnswer::Select(1)))
+        );
+        assert_eq!(conversation.state(), State::Busy);
+        assert!(conversation.entries().iter().any(|entry| matches!(
+            entry,
+            Entry::Permission {
+                chosen: Some(1),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn logs_in_noted_past() {
+        let mut conversation = Conversation::new();
+        conversation.submit("hello");
+        conversation.apply(asks_to_log_in());
+        conversation.note("A trigger ran.".to_owned());
+
+        assert!(conversation.logging_in());
+        assert_eq!(conversation.options_asked(), 2);
+        let chosen = conversation.choose_login(1).expect("there is a second way");
+        assert_eq!(chosen.id, "terminal");
+        assert_eq!(conversation.state(), State::Busy);
+    }
+
+    #[test]
     fn asks_without_what_has_not_come_once_gathering_stops() {
         let mut conversation = Conversation::new();
         conversation.submit("permission");
@@ -3845,6 +3956,132 @@ mod tests {
         conversation.submit("fix");
         take_turn(&mut conversation, true);
         assert_eq!(conversation.state(), State::Idle);
+    }
+
+    /// The agent goes on by itself after its turn ended, and asks the
+    /// human's permission.
+    fn ask_after_the_turn(conversation: &mut Conversation) {
+        conversation.apply(AgentEvent::WentOn);
+        conversation.apply(AgentEvent::PermissionRequest {
+            id: "call-9".to_owned(),
+            title: Some("touch y.txt".to_owned()),
+            content: None,
+            options: vec!["Allow".to_owned(), "Reject".to_owned()],
+        });
+    }
+
+    #[test]
+    fn what_runs_as_the_turn_ended_goes_on_once_the_human_answers_the_agent() {
+        let mut conversation = Conversation::new();
+        conversation.set_goal(Some(goal::Goal::Command("make".to_owned())));
+        conversation.submit("fix");
+        conversation.set_due(ci_and_simplify());
+        take_turn(&mut conversation, true);
+
+        ask_after_the_turn(&mut conversation);
+        assert_eq!(conversation.state(), State::Asking);
+        assert_eq!(
+            conversation.choose(0),
+            Some(Command::Answer(PermissionAnswer::Select(0)))
+        );
+        assert_eq!(conversation.state(), State::Checking);
+        assert_eq!(conversation.checking(), Some("make"));
+
+        // `make` ends once the human answered: the goal is met, and the
+        // triggers run after it.
+        assert_eq!(conversation.checked(ran(0, "ok")), None);
+        assert_eq!(conversation.checking(), Some("cargo test"));
+        assert_eq!(conversation.checked(ran(0, "ok")), None);
+        assert_eq!(conversation.found(Ok("PASS".to_owned())), None);
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            marks(&conversation),
+            [
+                ("goal".to_owned(), CheckState::Passed),
+                ("ci".to_owned(), CheckState::Passed),
+                ("simplify".to_owned(), CheckState::Passed),
+            ]
+        );
+        assert!(matches!(
+            conversation.entries().last(),
+            Some(Entry::Keep { .. })
+        ));
+    }
+
+    #[test]
+    fn a_goal_judged_as_the_agent_asked_goes_on_once_the_human_answers() {
+        let mut conversation = toward_words(true);
+        ask_after_the_turn(&mut conversation);
+        conversation.choose(1);
+
+        assert_eq!(conversation.judging(), Some("The greeting names the user."));
+        let Some(Command::Prompt(Prompt { text: prompt, .. })) =
+            conversation.judged(Ok("FAIL: it says hello".to_owned()))
+        else {
+            panic!("the agent goes on toward the goal");
+        };
+        assert!(
+            prompt.starts_with("Goal not met, as judged: it says hello"),
+            "{prompt}"
+        );
+        assert_eq!(conversation.state(), State::Busy);
+    }
+
+    #[test]
+    fn stopping_the_agent_that_asks_as_the_goal_is_checked_gives_the_check_up() {
+        let mut conversation = toward_make(true);
+        ask_after_the_turn(&mut conversation);
+
+        assert_eq!(conversation.cancel(), Some(Command::Cancel));
+        assert_eq!(conversation.state(), State::Stopping);
+        conversation.apply(AgentEvent::TurnEnded(StopReason::Cancelled));
+        assert_eq!(conversation.state(), State::Idle);
+        assert_eq!(
+            marks(&conversation),
+            [("goal".to_owned(), CheckState::Waiting)]
+        );
+        assert_eq!(conversation.checked(ran(1, "")), None);
+        assert_eq!(
+            conversation.submit("again"),
+            Some(Command::Prompt("again".to_owned().into()))
+        );
+    }
+
+    #[test]
+    fn changing_the_goal_as_the_agent_asks_gives_the_check_up() {
+        let mut conversation = toward_make(true);
+        ask_after_the_turn(&mut conversation);
+
+        conversation.set_goal(None);
+        assert_eq!(conversation.state(), State::Asking);
+        assert_eq!(conversation.checking(), None);
+        assert_eq!(
+            marks(&conversation),
+            [("goal".to_owned(), CheckState::Waiting)]
+        );
+        // Once answered, the chat waits for the human.
+        assert_eq!(conversation.whole().before_asking, State::Idle);
+    }
+
+    #[test]
+    fn what_comes_back_as_the_agent_asks_is_taken_once_the_human_answers() {
+        let mut conversation = toward_make(true);
+        ask_after_the_turn(&mut conversation);
+        // While the human is asked, the chat takes nothing that comes back.
+        let entries = conversation.entries().len();
+        assert_eq!(conversation.checked(ran(0, "ok")), None);
+        assert_eq!(conversation.entries().len(), entries);
+        conversation.hold(Came::Ran(ran(1, "error")));
+        assert_eq!(conversation.state(), State::Asking);
+        assert!(conversation.take_held().is_none());
+
+        conversation.choose(0);
+        let Some(Came::Ran(ran)) = conversation.take_held() else {
+            panic!("what `make` answered is kept");
+        };
+        assert!(conversation.checked(ran).is_some());
+        assert_eq!(conversation.state(), State::Busy);
+        assert!(conversation.take_held().is_none());
     }
 
     #[test]

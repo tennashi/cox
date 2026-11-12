@@ -202,6 +202,7 @@ pub fn run(settings: Settings) -> ExitCode {
     let hello = crate::daemon::wire::Hello {
         home: settings.home,
         command: settings.command,
+        build: crate::daemon::wire::Build::now(),
     };
     let data = settings.data;
     let connected = crate::storage::path(crate::storage::Kept::Daemon)
@@ -211,6 +212,7 @@ pub fn run(settings: Settings) -> ExitCode {
                 &socket,
                 &hello,
                 &|| start_daemon(data.as_deref()),
+                &tell_waiting,
                 // The window shows nothing once coxd is gone.
                 cox_browser::quit::ask,
             )
@@ -260,6 +262,30 @@ pub fn run(settings: Settings) -> ExitCode {
             crate::inspect::start(window, devtools, inspected, cx);
         });
     ExitCode::SUCCESS
+}
+
+/// Tells the human why the window does not open yet: the coxd that runs
+/// the chats is of another build, which this window may not understand,
+/// and stops for this one only once none of its chats is at work.
+fn tell_waiting() {
+    const WAITING: &str = "Another build of Cox runs the chats, and one of them is at \
+                           work: this window opens once none is, with this build.";
+    tracing::warn!("{WAITING}");
+    eprintln!("cox: {WAITING}");
+    #[cfg(target_os = "macos")]
+    {
+        let shown = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(format!(
+                "display notification \"{WAITING}\" with title \"Cox\""
+            ))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if let Err(error) = shown {
+            tracing::error!("the human is not told: {error}");
+        }
+    }
 }
 
 /// Starts coxd, as this program run as `cox [--data <dir>] --daemon`,

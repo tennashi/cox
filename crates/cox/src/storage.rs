@@ -16,6 +16,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Where `cargo xtask install` puts Cox, from the home directory.
 const INSTALLED: &str = if cfg!(target_os = "macos") {
@@ -78,8 +79,8 @@ pub enum Kept {
     /// The icons the human gave the projects, as the rail draws them (see
     /// [`crate::project_icon`]).
     Icons,
-    /// Which triggers the human turned off, and the order they run in,
-    /// folder by folder (see [`crate::trigger`]).
+    /// Which triggers the human turned on or off, and the order they run
+    /// in, folder by folder (see [`crate::trigger`]).
     Triggers,
     /// How each trigger last ran, folder by folder (see
     /// [`crate::trigger`]).
@@ -267,8 +268,32 @@ fn move_in(path: &Path, moved: cox_core::moved::Moved<'_>) -> Result<(), String>
         return Ok(());
     }
     let text = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
-    fs::write(path, text + "\n")
+    write_whole(path, &(text + "\n"))
         .map_err(|error| format!("cannot write {}: {error}", path.display()))
+}
+
+/// Writes `text` to the file at `path` whole: to a file of this write's
+/// own beside it first, then put in its place, so that another process
+/// reading it meanwhile, as coxd reads which triggers the window turned
+/// on, reads it as it was or as it is now, and never part of each.
+///
+/// # Errors
+///
+/// When the file beside it cannot be written, or put in its place.
+pub fn write_whole(path: &Path, text: &str) -> std::io::Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut part = path.as_os_str().to_owned();
+    part.push(format!(
+        ".{}-{}.part",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let part = PathBuf::from(part);
+    let written = fs::write(&part, text).and_then(|()| fs::rename(&part, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&part);
+    }
+    written
 }
 
 /// Where the Cox at `exe` keeps what lasts. The installed one keeps it in

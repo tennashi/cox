@@ -28,6 +28,7 @@
 //! of changes scrolls as a short one does, and stays where the human
 //! scrolled to as the changes do.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -204,6 +205,18 @@ pub fn count(folder: &Path) -> Result<usize, String> {
         }
     }
     counted.ok_or_else(|| failed.unwrap_or_default())
+}
+
+/// How each file that changed in the repositories of `folder` changed,
+/// by its absolute path (see [`repositories`]), as [`changes::hows`]
+/// tells it; nothing of a repository Git can tell nothing of.
+#[must_use]
+pub fn hows(folder: &Path) -> HashMap<PathBuf, How> {
+    repositories(folder)
+        .into_iter()
+        .filter_map(|(_, folder)| changes::hows(&folder).ok())
+        .flatten()
+        .collect()
 }
 
 pub struct Changes {

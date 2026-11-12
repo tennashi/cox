@@ -90,7 +90,7 @@ mod tests {
         );
         assert_eq!(
             typed("localhost:3000", &folder),
-            Some(Typed::Page("https://localhost:3000".to_owned()))
+            Some(Typed::Page("http://localhost:3000".to_owned()))
         );
         assert_eq!(
             typed("about:blank", &folder),

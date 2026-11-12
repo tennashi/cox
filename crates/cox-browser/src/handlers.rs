@@ -103,6 +103,18 @@ wrap_task! {
     }
 }
 
+wrap_task! {
+    struct CloseBrowser {
+        host: BrowserHost,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            self.host.close_browser(1);
+        }
+    }
+}
+
 /// Creates the windowless browser `new` asks for. Call it on CEF's UI
 /// thread.
 fn create(new: NewBrowser) {
@@ -306,8 +318,9 @@ wrap_request_handler! {
         }
 
         /// A request of the page's at a `cox:` address is answered by what
-        /// the stage serves (see [`crate::scheme`]); the rest go to the
-        /// network, or the file, as usual.
+        /// the stage serves, as far as who made it may have it (see
+        /// [`crate::scheme`]); the rest go to the network, or the file, as
+        /// usual.
         fn resource_request_handler(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -315,12 +328,22 @@ wrap_request_handler! {
             request: Option<&mut cef::Request>,
             _is_navigation: c_int,
             _is_download: c_int,
-            _request_initiator: Option<&CefString>,
+            request_initiator: Option<&CefString>,
             _disable_default_handling: Option<&mut c_int>,
         ) -> Option<ResourceRequestHandler> {
             let serve = self.serve.as_ref()?;
-            let url = CefString::from(&request?.url()).to_string();
-            crate::scheme::is_served(&url).then(|| crate::scheme::handler(Arc::clone(serve)))
+            let request = request?;
+            let url = CefString::from(&request.url()).to_string();
+            if !crate::scheme::is_served(&url) {
+                return None;
+            }
+            let initiator = request_initiator.map(ToString::to_string).unwrap_or_default();
+            let handler =
+                crate::scheme::handler(Arc::clone(serve), &initiator, request.resource_type());
+            if handler.is_none() {
+                tracing::warn!(url, initiator, "a page at {initiator} may not have {url}");
+            }
+            handler
         }
     }
 }
@@ -498,17 +521,30 @@ wrap_life_span_handler! {
 
         /// The browser exists: it takes input now, and `DevTools` is
         /// asked for the page's target, which the page's agent is
-        /// kept to.
+        /// kept to. Unless the stage closed it already: then it closes.
         fn on_after_created(&self, browser: Option<&mut cef::Browser>) {
             if let Some(browser) = browser {
                 let host = browser.host();
                 {
+                    let mut shared = lock(&self.shared);
+                    shared.host.clone_from(&host);
+                    if shared.closed {
+                        drop(shared);
+                        // CEF crashes if the browser is closed before this
+                        // returns, so the close waits for a task.
+                        if let Some(host) = host {
+                            let mut task = CloseBrowser::new(host);
+                            cef::post_task(
+                                ThreadId::from(cef_thread_id_t::TID_UI),
+                                Some(&mut task),
+                            );
+                        }
+                        return;
+                    }
                     // CEF lays the page out again at the size reported
                     // from here on, which may have changed since CEF
                     // made the page: the stage's next size waits for a
                     // picture of it, as after any resize.
-                    let mut shared = lock(&self.shared);
-                    shared.host.clone_from(&host);
                     shared.resizing = Some(Resizing::new(Instant::now()));
                 }
                 let mut devtools = None;

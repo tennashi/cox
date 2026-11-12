@@ -15,15 +15,26 @@ concurrency:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    strategy:
+      # A failure on one system says nothing of the other, so let both finish.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the system libraries that gpui links on Linux
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libvulkan-dev libwayland-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev
+      - name: Install the tools that build CEF's wrapper on macOS
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: brew install cmake ninja
       - name: Install the toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - name: Restore dependencies and tools from the cache
@@ -32,3 +43,8 @@ jobs:
         run: cargo xtask setup
       - name: Run every check
         run: cargo xtask ci
+      - name: Assemble the app and sign it ad hoc on macOS
+        if: runner.os == 'macOS'
+        run: |
+          cargo xtask bundle
+          codesign --verify --deep --strict target/debug/Cox.app

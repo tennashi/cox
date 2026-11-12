@@ -361,6 +361,9 @@ fn within(earlier: Timestamp, later: Timestamp, limit: Duration) -> bool {
 /// `line`, one Cox kept, as far as the flow reads it.
 fn parse(line: &str) -> Option<Kept> {
     let kept: Value = serde_json::from_str(line).ok()?;
+    if said_again_whole(&kept) {
+        return None;
+    }
     let at: Timestamp = kept["timestamp"].as_str()?.parse().ok()?;
     let fields = &kept["fields"];
     let chat = kept["spans"]
@@ -384,6 +387,12 @@ fn parse(line: &str) -> Option<Kept> {
         chat,
         source,
     })
+}
+
+/// Whether `kept` is the whole of a message over the tools' socket,
+/// which is said in brief at `debug` too.
+fn said_again_whole(kept: &Value) -> bool {
+    kept["target"] == mcp::WIRE && kept["level"] == "TRACE"
 }
 
 /// The step `message`, which the agent sent over ACP, is of the call
@@ -477,7 +486,7 @@ fn tool_called(message: &Value, input: Option<&Value>) -> Option<(Value, String)
     } else {
         arguments
     };
-    if input.is_some_and(|input| input != given) {
+    if input.is_some_and(|input| mcp::in_brief(input) != mcp::in_brief(given)) {
         return None;
     }
     let said = if arguments.is_null() {
@@ -756,6 +765,45 @@ mod tests {
                 "`cox --mcp` passes on `tools/call` show_file",
                 "the agent says the call is completed",
             ]
+        );
+    }
+
+    #[test]
+    fn a_call_said_in_brief_over_the_socket_is_still_the_calls() {
+        let page = "a line of the page\n".repeat(1000);
+        let called = json!({ "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+            "params": { "name": "wiki_write", "arguments": { "path": "notes.md", "text": page } } });
+        let whole = wire(1.001, "agent", &called).replace(r#""DEBUG""#, r#""TRACE""#);
+        let lines = vec![
+            acp(
+                1.0,
+                "agent",
+                &update(
+                    "call-4",
+                    json!({ "sessionUpdate": "tool_call", "title": "Write notes.md",
+                        "rawInput": { "path": "notes.md", "text": page } }),
+                ),
+            ),
+            whole,
+            wire(1.001, "agent", &mcp::in_brief(&called)),
+            acp(
+                1.002,
+                "agent",
+                &update(
+                    "call-4",
+                    json!({ "sessionUpdate": "tool_call_update", "status": "completed" }),
+                ),
+            ),
+        ];
+
+        let flow = of_run(lines.into_iter(), PathBuf::from("run.jsonl"), "call-4").unwrap();
+
+        let said: Vec<&str> = flow.steps.iter().map(|step| step.said.as_str()).collect();
+        assert_eq!(said.len(), 3, "{said:?}");
+        assert!(
+            said[1].starts_with("`cox --mcp` passes on `tools/call` wiki_write "),
+            "{}",
+            said[1]
         );
     }
 

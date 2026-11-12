@@ -66,7 +66,7 @@ pub(crate) fn tick(browsers: &BrowsersRef) {
         for shared in browsers.all.iter().filter_map(std::sync::Weak::upgrade) {
             let host = {
                 let mut shared = lock(&shared);
-                if !shared.pacing.is_due(now) {
+                if shared.closed || !shared.pacing.is_due(now) {
                     continue;
                 }
                 shared.pacing.asked(now);

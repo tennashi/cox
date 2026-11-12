@@ -32,8 +32,8 @@ use cox_core::store::Named;
 use cox_core::store::Store;
 use fake_agent::{BACKGROUND_FINISHED, BACKGROUND_STARTED, FakeAgent, LogsIn, Resumes, TITLE};
 use fake_daemon::{
-    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, kept_at,
-    open_again, settle, settle_on, settle_until, settled,
+    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, given_up,
+    kept_at, open_again, settle, settle_on, settle_until, settled,
 };
 use gpui::{
     Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
@@ -280,11 +280,7 @@ async fn say(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, text: &s
 /// Waits until a turn of the chat `view` has ended.
 async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
     settle(cx).await;
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(GIVEN_UP);
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     tokio::select! {
         () = cx.condition(view, |view, _| {
             view.conversation().state() == State::Idle && !view.conversation().entries().is_empty()
@@ -1023,6 +1019,40 @@ async fn the_agent_asks_after_its_turn_ended_and_goes_on_once_answered(cx: &mut 
 }
 
 #[gpui::test]
+async fn the_human_answers_the_agent_after_setting_a_goal_as_it_asks(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch("asks-goal"));
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    view.read_with(cx, |view, _| {
+        view.set_goal(Some(KeptGoal::Command("true".to_owned())));
+    });
+    wait_until(cx, &view, |conversation| {
+        matches!(conversation.entries().last(), Some(Entry::Note(note)) if note.starts_with("Goal:"))
+    })
+    .await;
+
+    click(cx, "option-1");
+    wait_for_turn(cx, &view).await;
+    let entries = entries(cx, &view);
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            Entry::Permission {
+                chosen: Some(0),
+                ..
+            }
+        )),
+        "{entries:?}"
+    );
+}
+
+#[gpui::test]
 async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestAppContext) {
     let (agents, workspace, cx) = open_window(cx, scratch("went-on-stops"));
     cx.simulate_keystrokes("secondary-n");
@@ -1041,6 +1071,152 @@ async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestA
         entries(cx, &view).last(),
         Some(&Entry::Note("Stopped.".to_owned()))
     );
+}
+
+/// A command that waits until `mark` is made, at most as long as a test
+/// waits, and passes once it is.
+fn waiting_for(mark: &Path) -> String {
+    let mark = mark.display();
+    let tries = GIVEN_UP.as_millis() / 50;
+    format!(
+        "i=0; while [ ! -e '{mark}' ] && [ $i -lt {tries} ]; do sleep 0.05; i=$((i+1)); done; \
+         test -e '{mark}'"
+    )
+}
+
+/// Sets the goal of the chat `view` to pass once `command` does, and has
+/// the human send a line its agent goes on with after its turn ended,
+/// asking them, as `command` runs as the turn ended.
+async fn ask_as_the_goal_is_checked(
+    cx: &mut VisualTestContext,
+    view: &Entity<ChatView>,
+    command: &str,
+) {
+    view.read_with(cx, |view, _| {
+        view.set_goal(Some(KeptGoal::Command(command.to_owned())));
+    });
+    cx.simulate_input("background ask");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+}
+
+/// The chips of what ran as the last turn ended, by name.
+fn chips(entries: &[Entry]) -> Vec<(String, CheckState)> {
+    entries
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            Entry::Checks(checks) => Some(
+                checks
+                    .iter()
+                    .map(|check| (check.name.clone(), check.state))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+#[gpui::test]
+async fn the_goal_checked_as_the_agent_asks_goes_on_once_the_human_answers(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch("checks-ask");
+    let triggers = home.join("triggers");
+    std::fs::create_dir_all(&triggers).unwrap();
+    std::fs::write(
+        triggers.join("check.md"),
+        "---\non: turn.end\nby: shell\n---\ntrue\n",
+    )
+    .unwrap();
+    turn_on(&home, &triggers.join("check.md"));
+    let (_, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    let mark = home.join("made");
+    let command = waiting_for(&mark);
+
+    ask_as_the_goal_is_checked(cx, &view, &command).await;
+    click(cx, "option-1");
+    wait_until(cx, &view, |conversation| {
+        conversation.entries().last() == Some(&Entry::Reply(BACKGROUND_FINISHED.to_owned()))
+    })
+    .await;
+    let state = view.read_with(cx, |view, _| view.conversation().state());
+    assert_eq!(state, State::Checking);
+
+    // The command ends once the human answered: the goal is met, and the
+    // trigger runs after it.
+    std::fs::write(&mark, "").unwrap();
+    wait_for_turn(cx, &view).await;
+    let entries = entries(cx, &view);
+    assert!(
+        entries.contains(&Entry::Note(format!("Goal met: `{command}` passed."))),
+        "{entries:?}"
+    );
+    assert_eq!(
+        chips(&entries),
+        [
+            ("goal".to_owned(), CheckState::Passed),
+            ("check".to_owned(), CheckState::Passed),
+        ]
+    );
+}
+
+#[gpui::test]
+async fn what_the_goals_command_answers_as_the_agent_asks_is_taken_once_answered(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch("checks-held");
+    std::fs::create_dir_all(&home).unwrap();
+    let (_, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    let (mark, ended) = (home.join("made"), home.join("ended"));
+    let command = format!("{} && touch '{}'", waiting_for(&mark), ended.display());
+
+    ask_as_the_goal_is_checked(cx, &view, &command).await;
+    // The command ends while the human is asked, and the daemon hears it.
+    std::fs::write(&mark, "").unwrap();
+    settle_until(cx, |_| ended.exists()).await;
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    settle(cx).await;
+    let state = view.read_with(cx, |view, _| view.conversation().state());
+    assert_eq!(state, State::Asking);
+    click(cx, "option-1");
+    wait_for_turn(cx, &view).await;
+
+    let entries = entries(cx, &view);
+    assert!(
+        entries.contains(&Entry::Note(format!("Goal met: `{command}` passed."))),
+        "{entries:?}"
+    );
+    assert_eq!(chips(&entries), [("goal".to_owned(), CheckState::Passed)]);
+}
+
+#[gpui::test]
+async fn stopping_the_agent_that_asks_as_the_goal_is_checked_gives_the_check_up(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch("checks-stop");
+    std::fs::create_dir_all(&home).unwrap();
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    let mark = home.join("made");
+
+    ask_as_the_goal_is_checked(cx, &view, &waiting_for(&mark)).await;
+    click(cx, "stop");
+    wait_for_turn(cx, &view).await;
+    std::fs::write(&mark, "").unwrap();
+
+    assert_eq!(agents.borrow()[0].cancels(), 1);
+    let entries = entries(cx, &view);
+    assert_eq!(entries.last(), Some(&Entry::Note("Stopped.".to_owned())));
+    assert_eq!(chips(&entries), [("goal".to_owned(), CheckState::Waiting)]);
 }
 
 /// What the closed chat of [`kept_chat`] showed.
@@ -2465,11 +2641,7 @@ async fn wait_until(
     view: &Entity<ChatView>,
     until: impl Fn(&Conversation) -> bool,
 ) {
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(GIVEN_UP);
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     tokio::select! {
         () = cx.condition(view, |view, _| until(view.conversation())) => {}
         _ = timeout => panic!("the agent never got there"),
@@ -2563,6 +2735,7 @@ async fn the_triggers_of_a_permission_request_gather_before_the_human_is_told(
         "---\non: permission.asked\nby: shell\n---\nprintf 'Only x.txt changes\\nNothing else.\\n'\n",
     )
     .unwrap();
+    turn_on(&home, &triggers.join("touches.md"));
     let (_, workspace, cx) = open_window(cx, home.clone());
     let recorded = Rc::new(Recorded::default());
     let notices = Rc::clone(&recorded);
@@ -2738,6 +2911,7 @@ async fn a_trigger_of_the_folder_runs_as_a_turn_ends_until_it_passes(cx: &mut Te
         format!("---\non: turn.end\nby: shell\n---\n{command}\n"),
     )
     .unwrap();
+    turn_on(&home, &triggers.join("check.md"));
     let (agents, workspace, cx) = open_window(cx, home.clone());
     cx.simulate_keystrokes("secondary-n");
 
@@ -2773,6 +2947,67 @@ async fn a_trigger_of_the_folder_runs_as_a_turn_ends_until_it_passes(cx: &mut Te
         matches!(entries.last(), Some(Entry::Checks(_))),
         "{entries:?}"
     );
+}
+
+#[gpui::test]
+async fn a_trigger_of_the_project_runs_only_once_the_human_turns_it_on(cx: &mut TestAppContext) {
+    let home = scratch("trigger-turned-on");
+    let triggers = home.join("triggers");
+    std::fs::create_dir_all(&triggers).unwrap();
+    let ran = home.join("ran");
+    let mark = triggers.join("mark.md");
+    let touching = |then: &str| {
+        format!(
+            "---\non: turn.end\nby: shell\n---\ntouch {}{then}\n",
+            ran.display()
+        )
+    };
+    std::fs::write(&mark, touching("")).unwrap();
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+    cx.simulate_keystrokes("secondary-n");
+    let checks = |cx: &mut VisualTestContext| {
+        shown_entries(cx, &workspace)
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Checks(_)))
+            .count()
+    };
+
+    say(cx, &workspace, "hello").await;
+
+    assert!(!ran.exists(), "the trigger ran before it was turned on");
+    assert_eq!(checks(cx), 0);
+    assert_eq!(agents.borrow()[0].prompts().len(), 1);
+
+    turn_on(&home, &mark);
+    say(cx, &workspace, "again").await;
+    assert!(ran.exists(), "the trigger did not run once turned on");
+    assert_eq!(checks(cx), 1);
+
+    std::fs::remove_file(&ran).unwrap();
+    std::fs::write(&mark, touching(" && true")).unwrap();
+    say(cx, &workspace, "once more").await;
+    assert!(!ran.exists(), "the trigger ran as changed since turned on");
+    assert_eq!(checks(cx), 1);
+}
+
+/// Turns on the project's own trigger of `file` in `folder`, as its file
+/// is now, as the human does on the Triggers tab.
+fn turn_on(folder: &Path, file: &Path) {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turning = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let trigger = cox::trigger::Trigger::read(file, cox::trigger::Scope::Project)
+        .unwrap()
+        .unwrap();
+    cox::trigger::Change::Switch {
+        folder: folder.to_owned(),
+        file: file.to_owned(),
+        on: true,
+        sum: Some(trigger.sum),
+    }
+    .make(cox::storage::path(cox::storage::Kept::Triggers).as_deref())
+    .unwrap();
 }
 
 #[gpui::test]
@@ -3104,6 +3339,50 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
+#[gpui::test]
+async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppContext) {
+    let home = scratch("bounded-home");
+    let store = kept_store("bounded-kept");
+    let (_, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+
+    // The human answers every request of the first chat's, yet its agent
+    // asks for a chat that Cox answers everything of.
+    let (answer, _opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::OpenChat {
+            text: "permission".to_owned(),
+            setup: Setup {
+                policy: Policy {
+                    allow: vec!["*".to_owned()],
+                    ..Policy::default()
+                },
+                ..Setup::default()
+            },
+            goal: None,
+            sketch: None,
+            answer,
+        })
+        .unwrap();
+    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 2)
+        .await;
+
+    // The chat it opened asks the human too.
+    let view = view_at(cx, &workspace, 1);
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    let setup = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().setup().cloned().unwrap()
+    });
+    assert_eq!(setup.policy, Policy::default());
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
+}
+
 /// A Git repository at a scratch folder named after `name`, with
 /// `main.rs` committed, and someone to commit as.
 fn repository(name: &str) -> PathBuf {
@@ -3162,11 +3441,7 @@ async fn wait_for_discarded(
     workspace: &Entity<Workspace>,
     made: &std::path::Path,
 ) {
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(GIVEN_UP);
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     let made = made.to_owned();
     tokio::select! {
         () = cx.condition(workspace, move |_, _| !made.exists()) => {}
@@ -3962,4 +4237,35 @@ async fn the_human_asks_a_chat_to_keep_what_it_learned_in_the_wiki(cx: &mut Test
     assert_eq!(agents.borrow()[0].prompts().last(), Some(&asked));
     assert!(asked.contains("wiki_write"), "{asked}");
     assert!(entries(cx, &view).contains(&Entry::Cox(asked)));
+}
+
+#[gpui::test]
+async fn an_agent_waits_for_no_chat_of_another_project(cx: &mut TestAppContext) {
+    let app = scratch("wait-other-project");
+    std::fs::create_dir_all(&app).unwrap();
+    let store = kept_store("wait-other-project-kept");
+    let (_, asks, workspace, cx) = open_window_asking(
+        cx,
+        scratch("wait-other-project-home"),
+        store,
+        Resumes::Resume,
+    );
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let (other, _) = keys(cx, &workspace, 0);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(app.clone()), window, cx);
+    });
+    say(cx, &workspace, "hi").await;
+
+    let (answer, waited) = tokio::sync::oneshot::channel();
+    asks.borrow()[1]
+        .send(ChatRequest::WaitChat {
+            chat: other,
+            answer,
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(waited.await.unwrap(), Err(format!("no chat {other}")));
+    let _ = std::fs::remove_dir_all(&app);
 }

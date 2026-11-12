@@ -415,6 +415,24 @@ fn over_daemon(
 /// as CI's.
 pub const GIVEN_UP: Duration = Duration::from_secs(30);
 
+/// A wait that gives up after [`GIVEN_UP`]: what the receiver hears
+/// then, unless the sender is dropped first. A thread keeps the time,
+/// and ends as soon as the wait does, as a test waits many times, and
+/// macOS lets a process have only a few thousand threads.
+pub fn given_up() -> (
+    std::sync::mpsc::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+) {
+    let (waiting, ended) = std::sync::mpsc::channel();
+    let (timed_out, timeout) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        if ended.recv_timeout(GIVEN_UP) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+            let _ = timed_out.send(());
+        }
+    });
+    (waiting, timeout)
+}
+
 /// Waits until the daemon has done all the window told it, and the
 /// window has heard all the daemon said of it.
 pub async fn settle(cx: &mut VisualTestContext) {
@@ -434,11 +452,7 @@ pub async fn settle(cx: &mut VisualTestContext) {
 pub async fn settle_on(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) {
     for _ in 0..4 {
         let settled = workspace.update(cx, |workspace, _| workspace.sync());
-        let (timed_out, timeout) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            std::thread::sleep(GIVEN_UP);
-            let _ = timed_out.send(());
-        });
+        let (_waiting, timeout) = given_up();
         tokio::select! {
             _ = settled => {}
             _ = timeout => panic!("the daemon never settled"),

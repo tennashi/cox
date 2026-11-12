@@ -67,17 +67,43 @@ pub fn installed(
     let downloads = crate::storage::path(kept)
         .ok_or_else(|| anyhow::anyhow!("Cox has nowhere to keep what it downloads"))?;
     let folder = downloads.join(name(id)).join(name(&download.version));
+    installed_in(&folder, download, told)?;
+    Ok(folder)
+}
+
+/// Downloads and unpacks `download` in `folder`, unless it is there
+/// already, after `told` is told so.
+fn installed_in(folder: &Path, download: &Download, told: &dyn Fn(String)) -> anyhow::Result<()> {
     if folder.join(UNPACKED).exists() {
-        return Ok(folder);
+        return Ok(());
     }
     told(format!("Downloading {} …", download.archive));
-    let fetched = beside(&folder, "download");
-    fetch(&download.archive, &fetched)?;
-    let unpacked = check(&fetched, &download.sha256)
-        .and_then(|()| unpack(&fetched, file_name(&download.archive), &folder));
-    let _ = fs::remove_file(&fetched);
-    unpacked?;
-    Ok(folder)
+    one_at_a_time(folder, || {
+        let fetched = beside(folder, "download");
+        fetch(&download.archive, &fetched)?;
+        let unpacked = check(&fetched, &download.sha256)
+            .and_then(|()| unpack(&fetched, file_name(&download.archive), folder));
+        let _ = fs::remove_file(&fetched);
+        unpacked
+    })
+}
+
+/// Makes `folder` with `install`, unless it is there already, one at a
+/// time: while one install of `folder` runs, in any thread or process of
+/// Cox, another waits for it and then takes what it made.
+fn one_at_a_time(
+    folder: &Path,
+    install: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    if let Some(parent) = folder.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock = File::create(beside(folder, "lock"))?;
+    lock.lock()?;
+    if folder.join(UNPACKED).exists() {
+        return Ok(());
+    }
+    install()
 }
 
 /// Whether the program kept as `id` in `kept` is there at `version`,
@@ -176,29 +202,31 @@ pub fn go_installed(
         return Ok(folder);
     }
     told(format!("Installing {package}@{version} with go install …"));
-    let partial = beside(&folder, "partial");
-    let _ = fs::remove_dir_all(&partial);
-    fs::create_dir_all(&partial)?;
-    let installed = std::process::Command::new("go")
-        .args(["install", &format!("{package}@{version}")])
-        .env("GOBIN", &partial)
-        .output()
-        .map_err(|error| anyhow::anyhow!("go could not be run: {error}"))
-        .and_then(|output| {
-            anyhow::ensure!(
-                output.status.success(),
-                "go install {package}@{version} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-            File::create(partial.join(UNPACKED))?;
-            let _ = fs::remove_dir_all(&folder);
-            fs::rename(&partial, &folder)?;
-            Ok(())
-        });
-    if installed.is_err() {
+    one_at_a_time(&folder, || {
+        let partial = beside(&folder, "partial");
         let _ = fs::remove_dir_all(&partial);
-    }
-    installed?;
+        fs::create_dir_all(&partial)?;
+        let installed = std::process::Command::new("go")
+            .args(["install", &format!("{package}@{version}")])
+            .env("GOBIN", &partial)
+            .output()
+            .map_err(|error| anyhow::anyhow!("go could not be run: {error}"))
+            .and_then(|output| {
+                anyhow::ensure!(
+                    output.status.success(),
+                    "go install {package}@{version} failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                File::create(partial.join(UNPACKED))?;
+                let _ = fs::remove_dir_all(&folder);
+                fs::rename(&partial, &folder)?;
+                Ok(())
+            });
+        if installed.is_err() {
+            let _ = fs::remove_dir_all(&partial);
+        }
+        installed
+    })?;
     Ok(folder)
 }
 
@@ -416,6 +444,72 @@ mod tests {
             let mode = fs::metadata(&program).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0o111);
         }
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    /// Serves `body` over HTTP on a port of its own, slowly, to as many
+    /// as ask at once, counting how many asked.
+    fn serve_slowly(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead as _, BufReader};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let url = format!("http://{}/agent.tar.gz", listener.local_addr().unwrap());
+        let asked = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = asked.clone();
+        let body = std::sync::Arc::new(body);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let body = body.clone();
+                counted.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut line = String::new();
+                    while reader.read_line(&mut line).unwrap() > 2 {
+                        line.clear();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream.write_all(head.as_bytes()).unwrap();
+                    stream.write_all(&body).unwrap();
+                });
+            }
+        });
+        (url, asked)
+    }
+
+    #[test]
+    fn two_starts_at_once_download_an_agent_once() {
+        let scratch = scratch("twice");
+        let archive = scratch.join("agent.tar.gz");
+        tar_gz(&archive);
+        let (url, asked) = serve_slowly(fs::read(&archive).unwrap());
+        let download = Download {
+            version: "1.0.0".to_owned(),
+            archive: url,
+            sha256: sha256_of(&archive),
+        };
+        let folder = scratch.join("agent").join("1.0.0");
+
+        let starts: Vec<_> = (0..2)
+            .map(|_| {
+                let (folder, download) = (folder.clone(), download.clone());
+                std::thread::spawn(move || installed_in(&folder, &download, &|_| {}))
+            })
+            .collect();
+        for start in starts {
+            start.join().unwrap().unwrap();
+        }
+
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(folder.join(UNPACKED).exists());
+        assert_eq!(
+            fs::read_to_string(folder.join("bin/agent")).unwrap(),
+            "#!/bin/sh\necho agent\n"
+        );
         let _ = fs::remove_dir_all(&scratch);
     }
 
