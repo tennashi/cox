@@ -97,11 +97,13 @@ pub enum Kept {
     /// Where coxd pushes to each phone that asked to be told of the
     /// chats (see [`crate::daemon::push`]).
     Pushes,
+    /// The pages the stage visited (see [`crate::stage::page::history`]).
+    History,
 }
 
 impl Kept {
     /// All that Cox keeps.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Settings,
         Self::Agents,
         Self::Servers,
@@ -125,6 +127,7 @@ impl Kept {
         Self::PhoneToken,
         Self::PushKey,
         Self::Pushes,
+        Self::History,
     ];
 
     /// Where it is kept, from the folder Cox keeps what lasts in.
@@ -154,6 +157,7 @@ impl Kept {
             Self::PhoneToken => "state/phone-token",
             Self::PushKey => "state/push-key",
             Self::Pushes => "state/pushes.json",
+            Self::History => "state/history.json",
         }
     }
 }
