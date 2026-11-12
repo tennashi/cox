@@ -1,8 +1,8 @@
 //! The keys as in Vim, which the human turns on and off as Cox runs, on
 //! the settings screen or in `settings.json` with `{"vim": true}`: a
 //! mode, normal or insert, in the chat and what opens over it to type
-//! in, and in a page, where hint mode picks what to click by its label,
-//! and the keys of each (see [`keymap`]).
+//! in, and in a page; hint mode, which picks what to click in the window
+//! by its label (see [`hints`]); and the keys of each (see [`keymap`]).
 //!
 //! The keys are read ahead of the window's own, in one place
 //! ([`turn`]), which takes those Vim's keys do and leaves the rest as
@@ -11,6 +11,7 @@
 //! input method composes, every key is its own.
 
 pub mod ex;
+pub mod hints;
 pub mod keymap;
 pub mod line;
 pub mod search;
@@ -20,7 +21,7 @@ use gpui::{
     Subscription, Window, actions, px,
 };
 
-use self::keymap::{Answer, Command, Follow, Keymap, Motion, Place, Sent};
+use self::keymap::{Answer, Command, Follow, Keymap, Motion, Place, Reach, Sent};
 use self::search::{Find, Search};
 
 /// Moves what the part of the window with the keyboard shows, or its
@@ -431,7 +432,7 @@ impl Vim {
                 match command {
                     Command::Normal => self.mode = Mode::Normal,
                     Command::Insert(_) => self.mode = Mode::Insert,
-                    Command::Hint(_) => self.mode = Mode::Hint,
+                    Command::Hint(_) | Command::Hints(_) => self.mode = Mode::Hint,
                     Command::Stop
                     | Command::Line(_)
                     | Command::Again(_)
@@ -603,7 +604,12 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     let vim = cx.global_mut::<Vim>();
     let was = vim.mode;
     let outcome = vim.key(&Keymap::VIM, region, &event.keystroke);
-    if vim.mode != was {
+    let mode = vim.mode;
+    if mode != was {
+        window.refresh();
+    }
+    if mode != Mode::Hint && hints::shown() {
+        hints::stop(cx);
         window.refresh();
     }
     match outcome {
@@ -615,6 +621,19 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         }
         Outcome::Do(Command::Hint(follow), _) => {
             window.dispatch_action(Box::new(Hint { follow }), cx);
+        }
+        Outcome::Do(Command::Hints(reach), _) => {
+            let part = match reach {
+                Reach::Part => hints::Part::of(region),
+                Reach::Window => None,
+            };
+            let reaches = reach == Reach::Window || part.is_some();
+            if !reaches || !hints::start(part, window, cx) {
+                enter(Mode::Normal, cx);
+            }
+        }
+        Outcome::Do(Command::Send(Sent::Label(key)), _) if hints::shown() => {
+            hints::typed(key, window, cx);
         }
         Outcome::Do(Command::Stop, _) => {
             window.dispatch_action(Box::new(crate::chat::view::Stop), cx);
@@ -663,7 +682,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
 mod tests {
     use gpui::{KeyContext, Keystroke, px};
 
-    use super::keymap::{Act, Command, Follow, Keymap, Motion, Pick, Place, Prompt, Sent};
+    use super::keymap::{Act, Command, Follow, Keymap, Motion, Pick, Place, Prompt, Reach, Sent};
     use super::{Mode, Move, Outcome, Region, Vim};
 
     fn press(vim: &mut Vim, region: Region, keys: &str) -> Vec<Outcome> {
@@ -991,7 +1010,13 @@ mod tests {
             [Outcome::Do(Command::Normal, None)]
         );
         assert_eq!(vim.mode(), Mode::Normal);
-        press(&mut vim, Region::Page, "shift-f");
+        press(&mut vim, Region::Page, "; t");
+        assert_eq!(vim.mode(), Mode::Hint);
+        press(&mut vim, Region::Page, "escape");
+        assert_eq!(
+            press(&mut vim, Region::Rail, "shift-f"),
+            [Outcome::Do(Command::Hints(Reach::Window), None)]
+        );
         assert_eq!(vim.mode(), Mode::Hint);
         press(&mut vim, Region::Chat, "x");
         assert_eq!(vim.mode(), Mode::Normal);

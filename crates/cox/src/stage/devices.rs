@@ -23,6 +23,7 @@ use crate::stage::tab::Shows;
 use crate::ui::button::{self, Kind};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, ASKING, DIM, FAILED, FAINT, FOREGROUND};
+use crate::vim::hints::Hinted as _;
 
 pub(crate) const KEY_CONTEXT: &str = "Devices";
 
@@ -161,28 +162,30 @@ impl Devices {
                 )
                 .child(
                     button::button(("android-wipe-yes", index), "Wipe", Kind::Primary)
-                        .on_click(wipe),
+                        .on_hint_click(wipe),
                 )
-                .child(button("android-wipe-no", "Cancel").on_click(cx.listener(
-                    |devices, _, _, cx| {
-                        devices.wiping = None;
-                        cx.notify();
-                    },
-                )));
+                .child(
+                    button("android-wipe-no", "Cancel").on_hint_click(cx.listener(
+                        |devices, _, _, cx| {
+                            devices.wiping = None;
+                            cx.notify();
+                        },
+                    )),
+                );
         }
         match running {
             Some(running) => row
                 .child(div().text_color(rgb(ACCENT)).child("Running"))
-                .child(button("android-show", "Show").on_click(open))
-                .child(
-                    button("android-stop", "Stop").on_click(cx.listener(move |_, _, _, cx| {
+                .child(button("android-show", "Show").on_hint_click(open))
+                .child(button("android-stop", "Stop").on_hint_click(cx.listener(
+                    move |_, _, _, cx| {
                         cox_android::running::stop(&running);
                         cx.notify();
-                    })),
-                ),
+                    },
+                ))),
             None => row
-                .child(button("android-open", "Start").on_click(open))
-                .child(button("android-cold", "Cold boot").on_click({
+                .child(button("android-open", "Start").on_hint_click(open))
+                .child(button("android-cold", "Cold boot").on_hint_click({
                     let name = name.clone();
                     cx.listener(move |devices: &mut Self, _, _, cx| {
                         let boot = Boot {
@@ -193,12 +196,11 @@ impl Devices {
                     })
                 }))
                 .child(
-                    button::button(("android-wipe", index), "Wipe data", Kind::Quiet).on_click(
-                        cx.listener(move |devices, _, _, cx| {
+                    button::button(("android-wipe", index), "Wipe data", Kind::Quiet)
+                        .on_hint_click(cx.listener(move |devices, _, _, cx| {
                             devices.wiping = Some(name.clone());
                             cx.notify();
-                        }),
-                    ),
+                        })),
                 ),
         }
     }

@@ -27,6 +27,7 @@ use crate::ui::theme::{
     ACCENT, ASKING, BORDER_STRONG, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED, SURFACE,
 };
 use crate::ui::tip;
+use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Follow;
 
 /// How tall a view's button is, and the +, and how round each is.
@@ -175,7 +176,7 @@ impl Stage {
                     .child(icon(Icon::Plus, 15., FOREGROUND))
                     // The menu closes as the mouse goes down outside it,
                     // here too, so the button opens it as it comes up.
-                    .on_click(cx.listener(|stage, _, window, cx| stage.open_menu(window, cx))),
+                    .on_hint_click(cx.listener(|stage, _, window, cx| stage.open_menu(window, cx))),
             )
             .children(
                 self.menu
@@ -226,7 +227,7 @@ impl Stage {
                 glyph,
             )
             .children(counted)
-            .on_click(cx.listener(move |stage, _, window, cx| {
+            .on_hint_click(cx.listener(move |stage, _, window, cx| {
                 stage.show_plugin(&name, "", window, cx);
             }))
         };
@@ -263,7 +264,7 @@ impl Stage {
                             .text_color(rgb(ACCENT))
                             .child(count.to_string())
                     }))
-                    .on_click(cx.listener(|stage, _, window, cx| {
+                    .on_hint_click(cx.listener(|stage, _, window, cx| {
                         let cwd = stage.cwd.clone();
                         stage.show_changes(cwd, window, cx);
                     })),
@@ -417,6 +418,7 @@ impl Stage {
             div()
                 .id("stage-menu-items")
                 .key_context(MENU_CONTEXT)
+                .child(crate::vim::hints::cover())
                 .occlude()
                 .absolute()
                 .top(px(48.))
@@ -438,31 +440,30 @@ impl Stage {
                 }))
                 .child(line)
                 .child(
-                    item("new-tab", "Web page", Icon::Globe, NEW_PAGE_KEY).on_click(cx.listener(
-                        move |stage, _, window, cx| {
-                            close(stage, cx);
-                            stage.new_tab(window, cx);
-                        },
-                    )),
-                )
-                .child(
-                    item("new-terminal", "Terminal", Icon::Terminal, NEW_TERMINAL_KEY).on_click(
+                    item("new-tab", "Web page", Icon::Globe, NEW_PAGE_KEY).on_hint_click(
                         cx.listener(move |stage, _, window, cx| {
                             close(stage, cx);
-                            stage.new_terminal(window, cx);
+                            stage.new_tab(window, cx);
                         }),
                     ),
                 )
                 .child(
-                    item("open-files", "Files", Icon::Files, OPEN_FILE_KEY).on_click(cx.listener(
-                        move |stage, _, window, cx| {
+                    item("new-terminal", "Terminal", Icon::Terminal, NEW_TERMINAL_KEY)
+                        .on_hint_click(cx.listener(move |stage, _, window, cx| {
                             close(stage, cx);
-                            stage.new_files(window, cx);
-                        },
-                    )),
+                            stage.new_terminal(window, cx);
+                        })),
                 )
                 .child(
-                    item("android-devices", "Android devices", Icon::Phone, "").on_click(
+                    item("open-files", "Files", Icon::Files, OPEN_FILE_KEY).on_hint_click(
+                        cx.listener(move |stage, _, window, cx| {
+                            close(stage, cx);
+                            stage.new_files(window, cx);
+                        }),
+                    ),
+                )
+                .child(
+                    item("android-devices", "Android devices", Icon::Phone, "").on_hint_click(
                         cx.listener(move |stage, _, window, cx| {
                             close(stage, cx);
                             stage.show_devices(window, cx);
@@ -472,12 +473,12 @@ impl Stage {
                 // Other apps' windows are shown on macOS only.
                 .when(cfg!(target_os = "macos"), |menu| {
                     menu.child(
-                        item("mac-windows", "Mac windows", Icon::Window, "").on_click(cx.listener(
-                            move |stage, _, window, cx| {
+                        item("mac-windows", "Mac windows", Icon::Window, "").on_hint_click(
+                            cx.listener(move |stage, _, window, cx| {
                                 close(stage, cx);
                                 stage.show_windows(window, cx);
-                            },
-                        )),
+                            }),
+                        ),
                     )
                 }),
         )

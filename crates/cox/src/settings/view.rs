@@ -50,6 +50,7 @@ use crate::ui::theme::{
     LINK,
 };
 use crate::ui::{Copy, card};
+use crate::vim::hints::Hinted as _;
 
 actions!(
     cox,
@@ -366,7 +367,7 @@ impl SettingsView {
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(HOVER)))
                     .child(icon(Icon::Close, 14., FAINT))
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))),
+                    .on_hint_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))),
             )
     }
 
@@ -383,7 +384,7 @@ impl SettingsView {
             Kind::Plain,
         )
         .h(px(INPUT_HEIGHT))
-        .on_click(cx.listener(|_, _, window, cx| Self::choose(window, cx)))
+        .on_hint_click(cx.listener(|_, _, window, cx| Self::choose(window, cx)))
     }
 }
 

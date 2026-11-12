@@ -27,6 +27,7 @@ use crate::chat::mention;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::LineInput;
 use crate::ui::theme::{BORDER_STRONG, CODE_FONT, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
+use crate::vim::hints::Hinted as _;
 
 /// How wide the tip of a command grows, before what the command does is
 /// cut short.
@@ -514,6 +515,7 @@ impl ChatView {
             .id("completions")
             .debug_selector(|| "completions".to_owned())
             .occlude()
+            .child(crate::vim::hints::cover())
             .h(px(ROW_HEIGHT))
             .px(px(10.))
             .flex()
@@ -559,7 +561,7 @@ impl ChatView {
                         .child(format!("{}/{count}", chosen + 1)),
                 )
             })
-            .on_click(cx.listener(move |view, _, window, cx| {
+            .on_hint_click(cx.listener(move |view, _, window, cx| {
                 view.take_command(range.clone(), &name, cx);
                 window.focus(&view.input.focus_handle(cx));
             }));
@@ -597,6 +599,7 @@ impl ChatView {
                 .id("completions")
                 .debug_selector(|| "completions".to_owned())
                 .occlude()
+                .child(crate::vim::hints::cover())
                 .absolute()
                 .bottom_full()
                 .left(px(12.))
@@ -668,7 +671,7 @@ fn render_files(
                         .text_color(rgb(DIM))
                         .child(ellipsis(folder.to_owned())),
                 )
-                .on_click(cx.listener(move |view, _, window, cx| {
+                .on_hint_click(cx.listener(move |view, _, window, cx| {
                     view.take_file(range.clone(), &written, cx);
                     window.focus(&view.input.focus_handle(cx));
                 }))

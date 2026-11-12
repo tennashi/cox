@@ -17,6 +17,7 @@ use cox_core::entry::Attachment;
 
 use crate::translate::{Arriving, Way};
 use crate::ui::theme::{BORDER_STRONG, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED};
+use crate::vim::hints::Hinted as _;
 
 actions!(
     cox,
@@ -235,12 +236,14 @@ impl Render for TranslationCard {
             .child(div().flex_1().child(way))
             .when_some(copied, |head, text| {
                 head.child(
-                    button("translation-copy", "Copy").on_click(move |_, _, cx| {
+                    button("translation-copy", "Copy").on_hint_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                     }),
                 )
             })
-            .child(button("translation-close", "×").on_click(|_, window, cx| close(window, cx)));
+            .child(
+                button("translation-close", "×").on_hint_click(|_, window, cx| close(window, cx)),
+            );
         let body = match &self.translated {
             None => match &self.so_far {
                 None => div().text_color(rgb(DIM)).child("Translating…"),
@@ -261,6 +264,7 @@ impl Render for TranslationCard {
             .on_mouse_down_out(|_, window, cx| close(window, cx))
             // Keeping the keyboard, for Escape, after a click on it.
             .occlude()
+            .child(crate::vim::hints::cover())
             .on_mouse_down(MouseButton::Left, {
                 let focus = self.focus.clone();
                 move |_, window, _| window.focus(&focus)
@@ -319,7 +323,7 @@ impl TranslationCard {
             .min_w(px(200.))
             .child(
                 item("translation-translate", "Translate", translate)
-                    .on_click(cx.listener(|card, _, _, cx| card.translate(cx))),
+                    .on_hint_click(cx.listener(|card, _, _, cx| card.translate(cx))),
             )
             .when_some(handed, |menu, handed| {
                 menu.child(
@@ -328,18 +332,20 @@ impl TranslationCard {
                         "Add to chat",
                         crate::chat::hand::keys(),
                     )
-                    .on_click(move |_, window, cx| {
+                    .on_hint_click(move |_, window, cx| {
                         crate::chat::hand::hand(handed.clone(), cx);
                         close(window, cx);
                     }),
                 )
             })
-            .child(item("translation-copy-selection", "Copy", "").on_click(
-                move |_, window, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                    close(window, cx);
-                },
-            ));
+            .child(
+                item("translation-copy-selection", "Copy", "").on_hint_click(
+                    move |_, window, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                        close(window, cx);
+                    },
+                ),
+            );
         deferred(
             anchored()
                 .position(self.at)

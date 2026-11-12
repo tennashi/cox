@@ -35,6 +35,7 @@ use crate::ui::theme::{
     FAILED_MARK, FAINT, FOREGROUND, GROUND, HOVER, LINK, OFFERING_BUTTON, OFFERING_EDGE,
     OFFERING_GROUND, RAISED, REMOVED_GROUND, SURFACE, chat_color,
 };
+use crate::vim::hints::Hinted as _;
 
 /// How tall a picture shown in the conversation grows.
 const MEDIA_HEIGHT: f32 = 360.;
@@ -496,7 +497,7 @@ impl ChatView {
             .hover(|style| style.text_color(rgb(FOREGROUND)))
             .child(told.join(" · "))
             .child(disclosure(Some(open)).text_color(rgb(FAINT)))
-            .on_click(cx.listener(move |view, _, _, cx| {
+            .on_hint_click(cx.listener(move |view, _, _, cx| {
                 view.folds.flip(fold);
                 cx.notify();
             }));
@@ -587,7 +588,7 @@ impl ChatView {
                     .overflow_hidden()
                     .child(ellipsis(SharedString::from(short(title)))),
             )
-            .on_click(cx.listener(move |view, _, _, cx| {
+            .on_hint_click(cx.listener(move |view, _, _, cx| {
                 view.folds.flip(fold);
                 cx.notify();
             }))
@@ -614,7 +615,7 @@ impl ChatView {
                 .when(check.said.is_some(), |chip| {
                     chip.cursor_pointer()
                         .hover(|style| style.border_color(rgb(BORDER_STRONG)))
-                        .on_click(cx.listener(move |view, _, _, cx| {
+                        .on_hint_click(cx.listener(move |view, _, _, cx| {
                             view.folds.flip(fold);
                             cx.notify();
                         }))
@@ -731,7 +732,7 @@ impl ChatView {
                 .into_any_element(),
         );
         let merge = answer_button("merge", "merge".to_owned(), "Merge", true, OFFERING_TONE)
-            .on_click(cx.listener(|view, _, _, cx| {
+            .on_hint_click(cx.listener(|view, _, _, cx| {
                 view.merge();
                 cx.notify();
             }));
@@ -791,7 +792,7 @@ impl ChatView {
                     SharedString::from(format!("attached-{index}-{at}")).into(),
                     attachment,
                 )
-                .on_click(cx.listener(move |view, _, window, cx| {
+                .on_hint_click(cx.listener(move |view, _, window, cx| {
                     if opens(&uri) {
                         view.show_link(&uri, window, cx);
                     }
@@ -1034,7 +1035,7 @@ impl ChatView {
                 // An aside, which only its text marks as one to open.
                 line.cursor_pointer()
                     .hover(|style| style.text_color(rgb(DIM)))
-                    .on_click(cx.listener(move |view, _, _, cx| {
+                    .on_hint_click(cx.listener(move |view, _, _, cx| {
                         view.folds.flip(fold);
                         cx.notify();
                     })),
@@ -1192,7 +1193,7 @@ fn render_commits(
                     .flex_shrink_0()
                     .child(crate::stage::changes::counts(commit.added, commit.removed)),
             )
-            .on_click(cx.listener(move |view, _, window, cx| {
+            .on_hint_click(cx.listener(move |view, _, window, cx| {
                 if let Some(stage) = view.stage() {
                     let (folder, name, id) = (folder.clone(), name.clone(), id.clone());
                     stage.update(cx, |stage, cx| {
@@ -1401,17 +1402,19 @@ fn render_proposal(
         )
     };
     let buttons = [
-        button("set-goal", "Set goal", true).on_click(cx.listener(move |view, _, _, cx| {
+        button("set-goal", "Set goal", true).on_hint_click(cx.listener(move |view, _, _, cx| {
             view.answer_proposal(index, Answer::Set, cx);
         })),
-        button("change-goal", "Change…", false).on_click(cx.listener(
+        button("change-goal", "Change…", false).on_hint_click(cx.listener(
             move |view, _, window, cx| {
                 view.change_proposal(index, window, cx);
             },
         )),
-        button("dismiss-goal", "Dismiss", false).on_click(cx.listener(move |view, _, _, cx| {
-            view.answer_proposal(index, Answer::Dismissed, cx);
-        })),
+        button("dismiss-goal", "Dismiss", false).on_hint_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_proposal(index, Answer::Dismissed, cx);
+            },
+        )),
     ];
     let shows = [
         Some(writer.markdown(&read).into_any_element()),
@@ -1468,12 +1471,16 @@ fn render_name_proposal(
         )
     };
     let buttons = [
-        button("rename-project", "Rename", true).on_click(cx.listener(move |view, _, _, cx| {
-            view.answer_name_proposal(index, Answer::Set, cx);
-        })),
-        button("dismiss-name", "Dismiss", false).on_click(cx.listener(move |view, _, _, cx| {
-            view.answer_name_proposal(index, Answer::Dismissed, cx);
-        })),
+        button("rename-project", "Rename", true).on_hint_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_name_proposal(index, Answer::Set, cx);
+            },
+        )),
+        button("dismiss-name", "Dismiss", false).on_hint_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_name_proposal(index, Answer::Dismissed, cx);
+            },
+        )),
     ];
     let shows = [
         Some(
@@ -1559,12 +1566,14 @@ fn render_icon_proposal(
         )
     };
     let buttons = [
-        button("set-icon", "Set", true).on_click(cx.listener(move |view, _, _, cx| {
+        button("set-icon", "Set", true).on_hint_click(cx.listener(move |view, _, _, cx| {
             view.answer_icon_proposal(index, Answer::Set, cx);
         })),
-        button("dismiss-icon", "Dismiss", false).on_click(cx.listener(move |view, _, _, cx| {
-            view.answer_icon_proposal(index, Answer::Dismissed, cx);
-        })),
+        button("dismiss-icon", "Dismiss", false).on_hint_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_icon_proposal(index, Answer::Dismissed, cx);
+            },
+        )),
     ];
     let shows = [
         Some(
@@ -1634,12 +1643,14 @@ fn render_about_proposal(
         )
     };
     let buttons = [
-        button("set-about", "Set", true).on_click(cx.listener(move |view, _, _, cx| {
+        button("set-about", "Set", true).on_hint_click(cx.listener(move |view, _, _, cx| {
             view.answer_about_proposal(index, Answer::Set, cx);
         })),
-        button("dismiss-about", "Dismiss", false).on_click(cx.listener(move |view, _, _, cx| {
-            view.answer_about_proposal(index, Answer::Dismissed, cx);
-        })),
+        button("dismiss-about", "Dismiss", false).on_hint_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_about_proposal(index, Answer::Dismissed, cx);
+            },
+        )),
     ];
     let shows = [
         Some(
@@ -1702,14 +1713,16 @@ fn render_project_proposal(
         )
     };
     let buttons = [
-        button("make-project", "Make project", true).on_click(cx.listener(
+        button("make-project", "Make project", true).on_hint_click(cx.listener(
             move |view, _, _, cx| {
                 view.answer_project_proposal(index, Answer::Set, cx);
             },
         )),
-        button("dismiss-project", "Dismiss", false).on_click(cx.listener(move |view, _, _, cx| {
-            view.answer_project_proposal(index, Answer::Dismissed, cx);
-        })),
+        button("dismiss-project", "Dismiss", false).on_hint_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_project_proposal(index, Answer::Dismissed, cx);
+            },
+        )),
     ];
     let shows = [
         Some(
@@ -1777,14 +1790,16 @@ fn render_keep(
         )
     };
     let buttons = [
-        button("keep-in-wiki", "Save to wiki", true).on_click(cx.listener(
+        button("keep-in-wiki", "Save to wiki", true).on_hint_click(cx.listener(
             move |view, _, _, cx| {
                 view.answer_keep(index, true, cx);
             },
         )),
-        button("keep-not-now", "Not now", false).on_click(cx.listener(move |view, _, _, cx| {
-            view.answer_keep(index, false, cx);
-        })),
+        button("keep-not-now", "Not now", false).on_hint_click(cx.listener(
+            move |view, _, _, cx| {
+                view.answer_keep(index, false, cx);
+            },
+        )),
     ];
     let shows = [div()
         .text_color(rgb(DIM))
@@ -1823,7 +1838,7 @@ fn render_asking(
             i == 0,
             ASKING_TONE,
         )
-        .on_click(cx.listener(move |view, _, _, cx| view.choose(i, cx)))
+        .on_hint_click(cx.listener(move |view, _, _, cx| view.choose(i, cx)))
     });
     let head = line_of(index, None, ("?", ASKING), title, writer);
     // What the triggers gathered is what the human reads first.
@@ -1912,7 +1927,7 @@ fn render_media(
                 .text_color(rgb(DIM))
                 .child(SharedString::from(under)),
         )
-        .on_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .on_hint_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
         .into_any_element()
 }
 
@@ -1947,7 +1962,7 @@ fn render_changed(changed: usize, cx: &mut Context<ChatView>) -> AnyElement {
         .hover(|row| row.bg(rgb(HOVER)))
         .child(div().flex_1().child(said))
         .child(div().text_color(rgb(DIM)).child("Changes ›"))
-        .on_click(cx.listener(|view, _, window, cx| {
+        .on_hint_click(cx.listener(|view, _, window, cx| {
             if let Some(stage) = view.stage() {
                 stage.update(cx, |stage, cx| stage.show_folder_changes(window, cx));
             }
@@ -2036,7 +2051,7 @@ fn render_shown(
                 .text_color(rgb(DIM))
                 .child(SharedString::from(at))
         }))
-        .on_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .on_hint_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
         .into_any_element()
 }
 
@@ -2080,7 +2095,7 @@ fn render_shown_tile(
                 .child(ellipsis(SharedString::from(name))),
         )
         .tooltip(crate::ui::tip(path.to_owned()))
-        .on_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .on_hint_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
         .into_any_element()
 }
 
@@ -2112,7 +2127,7 @@ fn render_thumbnail(
         .cursor_pointer()
         .child(shown)
         .tooltip(crate::ui::tip(from.to_owned()))
-        .on_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
+        .on_hint_click(cx.listener(move |view, _, window, cx| view.show_link(&link, window, cx)))
         .into_any_element()
 }
 
@@ -2234,7 +2249,7 @@ fn flow_button(index: usize, id: &str, cx: &mut Context<ChatView>) -> impl IntoE
         .cursor_pointer()
         .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(LINK)))
         .child("flow")
-        .on_click(cx.listener(move |view, _, window, cx| {
+        .on_hint_click(cx.listener(move |view, _, window, cx| {
             // Not a click on the line, which opens what the call shows.
             cx.stop_propagation();
             view.show_link(&link, window, cx);
@@ -2253,7 +2268,7 @@ fn folding(
     };
     line.cursor_pointer()
         .hover(|style| style.bg(rgb(BUTTON)))
-        .on_click(cx.listener(move |view, _, _, cx| {
+        .on_hint_click(cx.listener(move |view, _, _, cx| {
             view.folds.flip(fold);
             cx.notify();
         }))

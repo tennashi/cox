@@ -22,6 +22,7 @@ use crate::ui::theme::{
     ACCENT_GROUND, BORDER, BUTTON_HOVER, CARD_INNER_RADIUS, CODE_FONT, DIM, FOREGROUND, GROUND,
     HOVER,
 };
+use crate::vim::hints::Hinted as _;
 
 /// How tall the list is, as a part of the tab's height.
 const HEIGHT: f32 = 0.35;
@@ -243,7 +244,7 @@ impl Code {
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(BUTTON_HOVER)).text_color(rgb(FOREGROUND)))
                     .child("×")
-                    .on_click(cx.listener(|code, _, _, cx| {
+                    .on_hint_click(cx.listener(|code, _, _, cx| {
                         code.locations = None;
                         cx.notify();
                     })),
@@ -266,7 +267,7 @@ impl Code {
                                 &locations.found[index],
                                 locations.chosen == Some(index),
                             )
-                            .on_click(move |_, window, cx| {
+                            .on_hint_click(move |_, window, cx| {
                                 code.update(cx, |code, cx| {
                                     window.focus(&code.focus_handle);
                                     code.choose(index, cx);

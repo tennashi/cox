@@ -209,6 +209,7 @@ impl Code {
             .id("code-hover")
             .debug_selector(|| "code-hover".to_owned())
             .occlude()
+            .child(crate::vim::hints::cover())
             .w(px(WIDTH))
             .max_h(px(HEIGHT))
             .overflow_y_scroll()

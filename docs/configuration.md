@@ -92,7 +92,7 @@ effect at once.
 chat's panel is folded or shows no chat, where the panel is. In normal
 mode keys do things; keys that would type type nothing, and digits make
 a count, as `3` of `3j`. In insert mode keys type. Hint mode picks what
-to click in a page by its label, and command mode types in the line at
+to click by its label, and command mode types in the line at
 the window's foot. Keys with Cmd work as without Vim. While an input
 method composes, every key is its own.
 
@@ -118,6 +118,13 @@ over the chat:
 | `gt`, `gT` | Shows the stage's next tab, or the one before. `3gt` shows its third tab, `3gT` the tab three before. |
 | Ctrl-W `c` | Closes the tab the stage shows. |
 | `:` | Opens the line at the window's foot for a command. |
+| `f` | Draws hints over what can be clicked or typed in, in the part with the keyboard: the rail, the list of chats, the chat, the settings, a project's card, or the stage, its tabs' bar and the tab shown. A page draws its own. |
+| `F` | Draws hints over the whole window, the page shown's among them, in one run of labels. |
+
+Typing a label narrows the hints to those it starts; the one left is
+clicked, or, if it is an input, gets the keyboard in insert mode. Esc
+takes the hints away. What is scrolled out of sight, or under the
+settings, a project's card or a menu, has no hint.
 
 A ring shows where the keyboard is: round the stage's tab, or round the
 row selected on the rail or in the list.
@@ -148,7 +155,7 @@ keyboard in its input. `o` opens a new chat in the project selected.
 | Code | `ga`, `gd`, Ctrl-O, Ctrl-I | Hands the lines to the chat, goes to the definition, goes back, goes forward. |
 | The tree | `l` or Enter, `h` | Opens what is selected, or closes its folder. |
 | Changes | Enter | Opens the file selected. |
-| A page | `f`, `F` | Draws hints; typing a label clicks it, or with `F` opens the link on a tab of its own. Esc takes the hints away. |
+| A page | `f`, `;t` | Draws hints over the page; typing a label clicks it, or with `;t` opens the link on a tab of its own. Esc takes the hints away. |
 | A page | `H`, `L`, `r`, `o`, `t` | Goes back, forward, loads again, takes the keyboard to the address, opens the stage's + menu. |
 | A page | `gi`, `yy`, `i` | Gives the keyboard to the first field, copies the address, goes to insert mode. Esc in a field goes back to normal mode. |
 | A terminal | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Scrolls back through what scrolled off, and to the end. |

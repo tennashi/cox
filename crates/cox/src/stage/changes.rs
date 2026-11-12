@@ -61,6 +61,7 @@ use crate::ui::theme::{
     FAILED_MARK, FAINT, FOREGROUND, HOVER, LINK, RAISED, REMOVED_GROUND, REMOVED_WORD, SELECTED,
     UI_FONT,
 };
+use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Motion;
 use crate::vim::{Move, Open};
 
@@ -715,7 +716,7 @@ impl Changes {
                         .text_color(rgb(color))
                         .child(mark)
                 }))
-                .on_click(cx.listener(move |changes, _, _, cx| {
+                .on_hint_click(cx.listener(move |changes, _, _, cx| {
                     changes.show(picked.clone(), cx);
                 }))
         });
@@ -756,7 +757,7 @@ impl Changes {
                 ),
             )
             .mb(px(6.))
-            .on_click(cx.listener(|changes, _, _, cx| changes.pick(Pick::Everything, cx)));
+            .on_hint_click(cx.listener(|changes, _, _, cx| changes.pick(Pick::Everything, cx)));
             rows.push(row.into_any_element());
         }
         let row = history_row(
@@ -766,7 +767,7 @@ impl Changes {
             "Not committed yet".into(),
             None,
         )
-        .on_click(cx.listener(|changes, _, _, cx| changes.pick(Pick::Uncommitted, cx)));
+        .on_hint_click(cx.listener(|changes, _, _, cx| changes.pick(Pick::Uncommitted, cx)));
         rows.push(row.into_any_element());
         for (index, commit) in history.commits.iter().enumerate() {
             let picked = Pick::Commit(commit.id.clone());
@@ -777,7 +778,7 @@ impl Changes {
                 commit.subject.clone().into(),
                 Some(commit_meta(commit).into_any_element()),
             )
-            .on_click(cx.listener(move |changes, _, _, cx| changes.pick(picked.clone(), cx)));
+            .on_hint_click(cx.listener(move |changes, _, _, cx| changes.pick(picked.clone(), cx)));
             rows.push(row.into_any_element());
         }
         let base = match &history.base {
@@ -844,7 +845,7 @@ impl Changes {
                 .text_color(rgb(LINK))
                 .hover(|link| link.text_color(rgb(FOREGROUND)))
                 .child(ellipsis(format!("From the turn: {} ›", turn.line)))
-                .on_click(cx.listener(move |_, _, _, cx| cx.emit(ShowTurn { chat, entry })))
+                .on_hint_click(cx.listener(move |_, _, _, cx| cx.emit(ShowTurn { chat, entry })))
         });
         Some(
             div()
@@ -903,8 +904,9 @@ impl Changes {
             return None;
         }
         let row = |selector: String, picked: Pick, label: &'static str, version: &Commit| {
-            version_row(selector, *pick == picked, label, version)
-                .on_click(cx.listener(move |changes, _, _, cx| changes.pick(picked.clone(), cx)))
+            version_row(selector, *pick == picked, label, version).on_hint_click(
+                cx.listener(move |changes, _, _, cx| changes.pick(picked.clone(), cx)),
+            )
         };
         let versions: Vec<&Commit> = commit.earlier.iter().chain([commit]).collect();
         let mut rows = vec![row(
@@ -1003,7 +1005,7 @@ impl Changes {
         } else {
             inner
                 .cursor_pointer()
-                .on_click(cx.listener(move |changes, _, _, cx| changes.choose(index, at, cx)))
+                .on_hint_click(cx.listener(move |changes, _, _, cx| changes.choose(index, at, cx)))
         };
         div()
             .px(px(INSET))

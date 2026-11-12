@@ -31,6 +31,7 @@ use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
 use crate::ui::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
+use crate::vim::hints::Hinted as _;
 
 pub(crate) const KEY_CONTEXT: &str = "Android";
 
@@ -337,20 +338,18 @@ impl Android {
                     .child(state)
             }))
             .when(running, |bar| {
-                bar.child(button("android-back", "Back").on_click(key("GoBack")))
-                    .child(button("android-home", "Home").on_click(key("GoHome")))
-                    .child(button("android-overview", "Overview").on_click(key("AppSwitch")))
+                bar.child(button("android-back", "Back").on_hint_click(key("GoBack")))
+                    .child(button("android-home", "Home").on_hint_click(key("GoHome")))
+                    .child(button("android-overview", "Overview").on_hint_click(key("AppSwitch")))
                     .child(
                         button("android-stop", "Stop")
-                            .on_click(cx.listener(|android, _, _, cx| android.close(cx))),
+                            .on_hint_click(cx.listener(|android, _, _, cx| android.close(cx))),
                     )
             })
             .when(!running, |bar| {
-                bar.child(
-                    button("android-start", "Start").on_click(
-                        cx.listener(|android, _, _, cx| android.open(Boot::default(), cx)),
-                    ),
-                )
+                bar.child(button("android-start", "Start").on_hint_click(
+                    cx.listener(|android, _, _, cx| android.open(Boot::default(), cx)),
+                ))
             })
     }
 }

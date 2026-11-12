@@ -34,6 +34,10 @@ pub enum Command {
     /// Draws hints over what can be clicked in the page, to follow the
     /// one whose label is typed next, in hint mode.
     Hint(Follow),
+    /// Draws hints over what can be clicked in the part of the window
+    /// with the keyboard, or in the whole window, to click the one whose
+    /// label is typed next, in hint mode.
+    Hints(Reach),
     /// Opens the line at the window's foot, to type in, in command mode.
     Line(Prompt),
     /// Finds the last text searched for again: the way it went, or the
@@ -51,12 +55,21 @@ pub enum Prompt {
     Search(Direction),
 }
 
+/// What hints are drawn over, out of a page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// The part of the window with the keyboard (`f`).
+    Part,
+    /// The whole window, the page shown too (`F`).
+    Window,
+}
+
 /// Where a hint typed in hint mode leads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Follow {
     /// Clicks it, or gives the keyboard to it if it takes text (`f`).
     Here,
-    /// Opens the link on a tab of its own (`F`).
+    /// Opens the link on a tab of its own (`;t`).
     NewTab,
 }
 
@@ -216,6 +229,48 @@ const PARTS: &[Region] = &[
     Region::Android,
 ];
 
+/// The parts `f` and `F` draw hints in: all but a page, which draws its
+/// own with `f`, and the screens over them.
+const HINTERS: &[Region] = &[
+    Region::Workspace,
+    Region::Rail,
+    Region::List,
+    Region::Chat,
+    Region::Code,
+    Region::Document,
+    Region::Tree,
+    Region::Changes,
+    Region::Devices,
+    Region::Flow,
+    Region::Windows,
+    Region::MacWindow,
+    Region::Terminal,
+    Region::Android,
+    Region::Settings,
+    Region::ProjectCard,
+];
+
+/// Where hint mode can be, which escape leaves.
+const HINTED: &[Region] = &[
+    Region::Workspace,
+    Region::Rail,
+    Region::List,
+    Region::Chat,
+    Region::Page,
+    Region::Code,
+    Region::Document,
+    Region::Tree,
+    Region::Changes,
+    Region::Devices,
+    Region::Flow,
+    Region::Windows,
+    Region::MacWindow,
+    Region::Terminal,
+    Region::Android,
+    Region::Settings,
+    Region::ProjectCard,
+];
+
 /// The parts Vim's `/` searches the text of.
 const SEARCHERS: &[Region] = &[
     Region::Page,
@@ -359,13 +414,20 @@ impl Keymap {
         send(TERMINAL, &["y"], Sent::Copy),
         bind(Mode::Normal, PAGE, &["i"], Command::Insert(Place::Cursor)),
         bind(Mode::Insert, PAGE, &["escape"], Command::Normal),
-        bind(Mode::Hint, PAGE, &["escape"], Command::Normal),
+        bind(Mode::Hint, HINTED, &["escape"], Command::Normal),
         bind(Mode::Normal, PAGE, &["f"], Command::Hint(Follow::Here)),
         bind(
             Mode::Normal,
             PAGE,
-            &["shift-f"],
+            &[";", "t"],
             Command::Hint(Follow::NewTab),
+        ),
+        bind(Mode::Normal, HINTERS, &["f"], Command::Hints(Reach::Part)),
+        bind(
+            Mode::Normal,
+            HINTED,
+            &["shift-f"],
+            Command::Hints(Reach::Window),
         ),
         send(PAGE, &["shift-h"], Sent::Back),
         send(PAGE, &["shift-l"], Sent::Forward),
@@ -455,8 +517,8 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::{
-        Act, Answer, Command, Direction, Follow, Keymap, Mode, Motion, Pick, Place, Prompt, Region,
-        Sent, Toward, bind,
+        Act, Answer, Command, Direction, Follow, Keymap, Mode, Motion, Pick, Place, Prompt, Reach,
+        Region, Sent, Toward, bind,
     };
 
     #[test]
@@ -698,9 +760,14 @@ mod tests {
         assert_eq!(answer(&["o"]), sent(Sent::Address));
         assert_eq!(answer(&["t"]), Answer::Act(Command::Window(Act::Menu)));
         assert_eq!(answer(&["f"]), Answer::Act(Command::Hint(Follow::Here)));
+        assert_eq!(answer(&[";"]), Answer::Held);
+        assert_eq!(
+            answer(&[";", "t"]),
+            Answer::Act(Command::Hint(Follow::NewTab))
+        );
         assert_eq!(
             answer(&["shift-f"]),
-            Answer::Act(Command::Hint(Follow::NewTab))
+            Answer::Act(Command::Hints(Reach::Window))
         );
         assert_eq!(answer(&["i"]), Answer::Act(Command::Insert(Place::Cursor)));
         assert_eq!(answer(&["escape"]), Answer::None);
@@ -724,6 +791,48 @@ mod tests {
                 Keymap::VIM.answer(Mode::Insert, Region::Page, keys),
                 Answer::None,
                 "{keys:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn f_hints_the_part_with_the_keyboard_and_shift_f_the_whole_window() {
+        for region in [
+            Region::Rail,
+            Region::List,
+            Region::Chat,
+            Region::Code,
+            Region::Terminal,
+            Region::Settings,
+            Region::ProjectCard,
+        ] {
+            let answer = |keys: &str| Keymap::VIM.answer(Mode::Normal, region, &[keys]);
+            assert_eq!(
+                answer("f"),
+                Answer::Act(Command::Hints(Reach::Part)),
+                "{region:?}"
+            );
+            assert_eq!(
+                answer("shift-f"),
+                Answer::Act(Command::Hints(Reach::Window)),
+                "{region:?}"
+            );
+            assert_eq!(
+                Keymap::VIM.answer(Mode::Hint, region, &["escape"]),
+                Answer::Act(Command::Normal),
+                "{region:?}"
+            );
+            assert_eq!(
+                Keymap::VIM.answer(Mode::Insert, region, &["f"]),
+                Answer::None,
+                "{region:?}"
+            );
+        }
+        for region in [Region::Goal, Region::Address, Region::Command] {
+            assert_eq!(
+                Keymap::VIM.answer(Mode::Normal, region, &["f"]),
+                Answer::None,
+                "{region:?}"
             );
         }
     }

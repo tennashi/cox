@@ -18,6 +18,7 @@ use crate::stage::heading::{INSET, TEXT_INSET, body, card, heading, note, parted
 use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
 use crate::ui::theme::{ASKING, DIM, FAILED, FAINT, FOREGROUND};
+use crate::vim::hints::Hinted as _;
 
 pub(crate) const KEY_CONTEXT: &str = "Windows";
 
@@ -102,7 +103,7 @@ impl Windows {
                     ),
             )
             .child(
-                button(("mac-window-show", index), "Show", Kind::Plain).on_click(cx.listener(
+                button(("mac-window-show", index), "Show", Kind::Plain).on_hint_click(cx.listener(
                     move |_, _, _, cx| {
                         cx.emit(ShowWindow(shown.clone()));
                     },
@@ -110,7 +111,7 @@ impl Windows {
             )
             .child(
                 button(("mac-window-front", index), "Bring to front", Kind::Plain)
-                    .on_click(move |_, _, _| cox_mac::bring_to_front(pid)),
+                    .on_hint_click(move |_, _, _| cox_mac::bring_to_front(pid)),
             )
     }
 }
@@ -144,7 +145,7 @@ fn asking(id: &'static str, what: &'static str, ask: fn()) -> impl IntoElement {
         .px(px(TEXT_INSET))
         .py_2()
         .child(div().flex_1().text_color(rgb(ASKING)).child(what))
-        .child(button((id, 0_usize), "Allow…", Kind::Primary).on_click(move |_, _, _| ask()))
+        .child(button((id, 0_usize), "Allow…", Kind::Primary).on_hint_click(move |_, _, _| ask()))
 }
 
 impl Shows for Windows {

@@ -884,9 +884,11 @@ impl Render for Stage {
             self.tabs.shown().is_some_and(|tab| tab.content.is_file()) && !tree::is_folded(cx);
         let picked = crate::vim::mode(cx).is_some() && self.has_focus(window, cx);
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
+            .child(crate::vim::hints::part(crate::vim::hints::Part::Stage))
             .child(self.render_bar(cx))
             .child(
                 div()

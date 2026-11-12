@@ -4,32 +4,8 @@
 
 use cox_browser::{Hint, Kind};
 
+use crate::vim::hints::{Answer, labels};
 use crate::vim::keymap::Follow;
-
-/// The letters labels are made of, those under the fingers first.
-const LETTERS: &[char] = &[
-    's', 'a', 'd', 'f', 'j', 'k', 'l', 'e', 'w', 'c', 'm', 'p', 'g', 'h',
-];
-
-/// Labels for `count` hints, all as long, so that none starts another.
-pub(super) fn labels(count: usize) -> Vec<String> {
-    let mut length = 1;
-    let mut most = LETTERS.len();
-    while most < count {
-        length += 1;
-        most = most.saturating_mul(LETTERS.len());
-    }
-    (0..count)
-        .map(|mut number| {
-            let mut label = vec![' '; length];
-            for at in (0..length).rev() {
-                label[at] = LETTERS[number % LETTERS.len()];
-                number /= LETTERS.len();
-            }
-            label.into_iter().collect()
-        })
-        .collect()
-}
 
 /// Where hint mode is over a page.
 pub(super) enum Hinting {
@@ -37,6 +13,11 @@ pub(super) enum Hinting {
     /// this says.
     Asked(Follow),
     Shown(Shown),
+    /// The window asked what can be clicked, for its hints (see
+    /// [`crate::vim::hints`]), to hear of it here.
+    AskedByWindow(Answer),
+    /// What the page listed for the window's hints.
+    Window(Vec<Hint>),
 }
 
 /// The hints drawn over a page, by their labels, and what was typed of
@@ -103,7 +84,7 @@ impl Shown {
 mod tests {
     use cox_browser::{Hint, Kind, Rect};
 
-    use super::{Follow, Shown, Typed, labels};
+    use super::{Follow, Shown, Typed};
 
     fn hint(id: u32, kind: Kind) -> Hint {
         Hint {
@@ -121,20 +102,6 @@ mod tests {
 
     fn link(id: u32) -> Hint {
         hint(id, Kind::Link(format!("https://example.com/{id}")))
-    }
-
-    #[test]
-    fn labels_are_as_long_as_they_need_and_none_starts_another() {
-        assert_eq!(labels(3), ["s", "a", "d"]);
-        assert_eq!(labels(14).len(), 14);
-        assert!(labels(14).iter().all(|label| label.len() == 1));
-        let many = labels(15);
-        assert_eq!(&many[..2], ["ss", "sa"]);
-        assert_eq!(many[14], "as");
-        let unique: std::collections::HashSet<_> = labels(200).into_iter().collect();
-        assert_eq!(unique.len(), 200);
-        assert!(labels(200).iter().all(|label| label.len() == 3));
-        assert_eq!(labels(0), Vec::<String>::new());
     }
 
     #[test]

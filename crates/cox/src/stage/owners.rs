@@ -17,6 +17,7 @@ use gpui::{
 
 use super::Stage;
 use super::tab::{Tab, TabContent};
+use crate::vim::hints::Hinted as _;
 
 /// What names the chats the stage's tabs are of, by their keys, as the
 /// list of chats names them.
@@ -208,44 +209,45 @@ impl Stage {
             .map(|chat| (chat, self.name_of(chat, cx)));
         let taken = tab.owner.is_some();
         let closes = self.tabs.len() > 1;
-        let menu = crate::ui::menu::menu()
-            .min_w(px(160.))
-            .text_size(px(13.))
-            .on_mouse_down_out(cx.listener(|stage, _, _, cx| stage.close_tab_menu(cx)))
-            .children(hand_to.map(|(chat, name)| {
-                item("hand-tab", format!("Hand to {name}").into()).on_click(cx.listener(
-                    move |stage, _, _, cx| {
-                        stage.close_tab_menu(cx);
-                        stage.hand(index, chat, cx);
-                    },
-                ))
-            }))
-            .when(taken, |menu| {
-                menu.child(
-                    item("take-tab-back", "Take back".into()).on_click(cx.listener(
+        let menu =
+            crate::ui::menu::menu()
+                .min_w(px(160.))
+                .text_size(px(13.))
+                .on_mouse_down_out(cx.listener(|stage, _, _, cx| stage.close_tab_menu(cx)))
+                .children(hand_to.map(|(chat, name)| {
+                    item("hand-tab", format!("Hand to {name}").into()).on_hint_click(cx.listener(
                         move |stage, _, _, cx| {
                             stage.close_tab_menu(cx);
-                            stage.take_back(index, cx);
+                            stage.hand(index, chat, cx);
                         },
-                    )),
-                )
-            })
-            .children(of_other.map(|(chat, name)| {
-                item("show-tab-chat", format!("Show {name}").into()).on_click(cx.listener(
-                    move |stage, _, _, cx| {
-                        stage.close_tab_menu(cx);
-                        cx.emit(ShowChat(chat));
-                    },
-                ))
-            }))
-            .when(closes, |menu| {
-                menu.child(item("close-tab", "Close tab".into()).on_click(cx.listener(
-                    move |stage, _, window, cx| {
-                        stage.close_tab_menu(cx);
-                        let _ = stage.close_tab(index, window, cx);
-                    },
-                )))
-            });
+                    ))
+                }))
+                .when(taken, |menu| {
+                    menu.child(item("take-tab-back", "Take back".into()).on_hint_click(
+                        cx.listener(move |stage, _, _, cx| {
+                            stage.close_tab_menu(cx);
+                            stage.take_back(index, cx);
+                        }),
+                    ))
+                })
+                .children(of_other.map(|(chat, name)| {
+                    item("show-tab-chat", format!("Show {name}").into()).on_hint_click(cx.listener(
+                        move |stage, _, _, cx| {
+                            stage.close_tab_menu(cx);
+                            cx.emit(ShowChat(chat));
+                        },
+                    ))
+                }))
+                .when(closes, |menu| {
+                    menu.child(
+                        item("close-tab", "Close tab".into()).on_hint_click(cx.listener(
+                            move |stage, _, window, cx| {
+                                stage.close_tab_menu(cx);
+                                let _ = stage.close_tab(index, window, cx);
+                            },
+                        )),
+                    )
+                });
         Some(deferred(anchored().position(at).child(menu)).with_priority(2))
     }
 }

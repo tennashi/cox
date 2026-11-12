@@ -8,6 +8,7 @@ use serde_json::Value;
 use super::chip;
 use super::words::Words;
 use crate::ui::theme::{FAILED, FAINT};
+use crate::vim::hints::Hinted as _;
 
 /// Whether the keys work as in Vim, to change.
 pub struct KeysSection {
@@ -59,8 +60,9 @@ impl Render for KeysSection {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut words = self.words.part();
         let chips = [(false, "vim-off", "Off"), (true, "vim-on", "On")].map(|(on, id, label)| {
-            chip(id.to_owned(), label.to_owned(), self.on == on)
-                .on_click(cx.listener(move |section, _, window, cx| section.choose(on, window, cx)))
+            chip(id.to_owned(), label.to_owned(), self.on == on).on_hint_click(
+                cx.listener(move |section, _, window, cx| section.choose(on, window, cx)),
+            )
         });
         let (told, color) = self.failed.as_ref().map_or(
             (

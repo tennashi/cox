@@ -4,7 +4,7 @@
 //! takes the label typed of a hint.
 
 use cox_browser::{Hint, How, Kind, Scroll};
-use gpui::{ClipboardItem, Context, Focusable as _, Window, div, prelude::*, rgb};
+use gpui::{App, ClipboardItem, Context, Focusable as _, WeakEntity, Window, div, prelude::*, rgb};
 
 use super::hints::{Hinting, Shown, Typed};
 use super::{Opens, Page};
@@ -13,7 +13,7 @@ use crate::stage::code::{Back, Forward};
 use crate::ui::theme::DIM;
 use crate::vim::keymap::{Follow, Motion};
 use crate::vim::search::{self, Direction, Find};
-use crate::vim::{self, Address, CopyAddress, FocusField, Label, Leave, Mode, Move, Reload};
+use crate::vim::{self, Address, CopyAddress, FocusField, Label, Leave, Mode, Move, Reload, hints};
 
 /// What Vim's `/` looks for in a page, and how many matches the page
 /// found of it, and which it selected, once it says.
@@ -214,6 +214,15 @@ impl Page {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if matches!(self.hinting, Some(Hinting::AskedByWindow(_))) {
+            let ids = hints.iter().map(|hint| hint.id).collect();
+            if let Some(Hinting::AskedByWindow(answer)) =
+                self.hinting.replace(Hinting::Window(hints))
+            {
+                answer(ids, window, cx);
+            }
+            return;
+        }
         let Some(Hinting::Asked(follow)) = self.hinting else {
             return;
         };
@@ -224,6 +233,27 @@ impl Page {
             self.hinting = None;
             Self::enter(Mode::Normal, window, cx);
         }
+    }
+
+    /// Takes the hint of `id`, of those listed for the window's hints,
+    /// with the keyboard in the page.
+    fn take_for_window(&mut self, id: u32, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Hinting::Window(hints)) = self.hinting.take() else {
+            return;
+        };
+        self.browser.clear_hints();
+        let Some(hint) = hints.into_iter().find(|hint| hint.id == id) else {
+            return;
+        };
+        window.focus(&self.focus_handle);
+        self.browser.focus();
+        let how = if hint.kind == Kind::Field {
+            How::Focus
+        } else {
+            How::Click
+        };
+        self.browser.activate(&hint, how);
+        cx.notify();
     }
 
     pub(super) fn label(&mut self, label: &Label, window: &mut Window, cx: &mut Context<Self>) {
@@ -245,6 +275,47 @@ impl Page {
                 self.stop_hinting();
                 Self::enter(Mode::Normal, window, cx);
             }
+        }
+    }
+}
+
+/// The page shown, whose hints join the window's.
+pub(super) struct WindowHints(pub(super) WeakEntity<Page>);
+
+impl hints::Page for WindowHints {
+    fn ask(&self, answer: hints::Answer, cx: &mut App) {
+        let Some(page) = self.0.upgrade() else {
+            return;
+        };
+        page.update(cx, |page, _| {
+            page.stop_hinting();
+            page.hinting = Some(Hinting::AskedByWindow(answer));
+            page.browser.hints();
+        });
+    }
+
+    fn show(&self, labels: &[(u32, String)], cx: &mut App) {
+        if let Some(page) = self.0.upgrade() {
+            page.read(cx).browser.show_hints(labels);
+        }
+    }
+
+    fn take(&self, id: u32, window: &mut Window, cx: &mut App) {
+        if let Some(page) = self.0.upgrade() {
+            page.update(cx, |page, cx| page.take_for_window(id, window, cx));
+        }
+    }
+
+    fn clear(&self, cx: &mut App) {
+        if let Some(page) = self.0.upgrade() {
+            page.update(cx, |page, _| {
+                if matches!(
+                    page.hinting,
+                    Some(Hinting::AskedByWindow(_) | Hinting::Window(_))
+                ) {
+                    page.stop_hinting();
+                }
+            });
         }
     }
 }

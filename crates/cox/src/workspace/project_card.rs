@@ -33,6 +33,7 @@ use crate::ui::theme::{
     ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED,
 };
 use crate::ui::tip;
+use crate::vim::hints::Hinted as _;
 
 actions!(
     cox,
@@ -663,7 +664,7 @@ impl ProjectCard {
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(HOVER)))
                     .child(icon(Icon::Close, 14., FAINT))
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))),
+                    .on_hint_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))),
             )
     }
 
@@ -803,7 +804,7 @@ impl ProjectCard {
                 .h(px(26.))
                 .text_size(px(12.))
                 .tooltip(tip(said))
-                .on_click(cx.listener(move |_, _, _, cx| cx.emit(to)))
+                .on_hint_click(cx.listener(move |_, _, _, cx| cx.emit(to)))
         };
         let (said, color) = self.said_of_icon();
         div()
@@ -899,7 +900,7 @@ impl ProjectCard {
                     .h(px(26.))
                     .text_size(px(12.))
                     .tooltip(tip("Rename it, and its folder"))
-                    .on_click(cx.listener(move |card, _, window, cx| {
+                    .on_hint_click(cx.listener(move |card, _, window, cx| {
                         card.start_editing(renamed.clone(), Gives::Name, window, cx);
                     })),
             )
@@ -913,7 +914,7 @@ impl ProjectCard {
                     } else {
                         "Make it a Git repository, with no remote yet"
                     }))
-                    .on_click(cx.listener(move |card, _, window, cx| {
+                    .on_hint_click(cx.listener(move |card, _, window, cx| {
                         if git {
                             card.start_editing(name.clone(), Gives::Remote, window, cx);
                         } else {
