@@ -45,7 +45,7 @@ use tokio::sync::oneshot;
 
 use crate::agent::instructions::Instructions;
 use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, Whereabouts};
-use crate::agent::setup::{Policy, Setup, StageUse, keeps_in_wiki};
+use crate::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
 use crate::agent::{self, Agent, AgentEvent, Start};
 use crate::agents::Agents;
 use crate::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
@@ -2905,18 +2905,20 @@ impl Daemon {
     }
 
     /// Opens a chat under the chat `key`, in its project, set up as
-    /// `setup` says, which works until `goal` is met if given, and gets
-    /// `text` as its first line, and answers how it goes by. A sketch, as
-    /// the setup's `sketch` makes it, works in a folder of its own; any
-    /// other chat works where the chat that opened it does.
+    /// `setup` says, kept to what the chat `key` may do (see
+    /// [`Setup::opened_by`]), which works until `goal` is met if given,
+    /// and gets `text` as its first line, and answers how it goes by. A
+    /// sketch, as the setup's `sketch` makes it, works in a folder of its
+    /// own; any other chat works where the chat that opened it does.
     fn open_chat(
         &mut self,
         key: u64,
         text: &str,
-        mut setup: Setup,
+        setup: Setup,
         goal: Option<Goal>,
     ) -> Result<OpenedChat, String> {
         let slot = self.slot(key).ok_or("the chat is gone")?;
+        let (mut setup, withheld) = setup.opened_by(slot.setup.as_ref());
         let folder = slot.setup.as_ref().and_then(|setup| setup.folder.clone());
         let project = slot.project;
         setup.folder = match setup.sketch {
@@ -2928,7 +2930,8 @@ impl Daemon {
             }
             None => folder,
         };
-        self.open_under(key, text, setup, goal)
+        let opened = self.open_under(key, text, setup, goal)?;
+        Ok(OpenedChat { withheld, ..opened })
     }
 
     /// Opens a chat under the chat `key`, set up as `setup` says, on
@@ -2951,6 +2954,7 @@ impl Daemon {
             folder: sketch
                 .and(slot.setup.as_ref())
                 .and_then(|setup| setup.folder.clone()),
+            withheld: Withheld::default(),
         };
         if let Some(chat) = self.chat(opened) {
             chat.tell(&opened_by, text, goal);
