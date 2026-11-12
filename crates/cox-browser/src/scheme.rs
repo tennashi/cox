@@ -13,6 +13,13 @@
 //! page at one `cox:` address reads JSON from another, as
 //! `cox://map/` reads `cox://api/map`.
 //!
+//! Only a page at a `cox:` address reads what is served there, and only
+//! what its scripts fetch has the stage do something, as run a trigger
+//! (see [`Asker`]). A page anywhere else may not fetch a `cox:` address,
+//! show it as a picture, or put it in a frame; it may send its tab
+//! there, as Cox, the human or an agent does, whom CEF does not tell
+//! apart from it, but the tab is only shown what is there.
+//!
 //! A `cox://open/<path>#L<line>` address is not served: a page going
 //! there asks the stage to open the file on a tab of its own, as a link
 //! to a `file:` address does (see [`crate::links`]), which a page that is
@@ -32,8 +39,8 @@ use cef::sys::{cef_return_value_t, cef_scheme_options_t};
 use cef::{
     Callback, CefString, ImplCallback, ImplRequest, ImplResourceHandler,
     ImplResourceRequestHandler, ImplResponse, ImplSchemeRegistrar, Request, ResourceHandler,
-    ResourceReadCallback, ResourceRequestHandler, Response, ReturnValue, SchemeRegistrar,
-    WrapResourceHandler, WrapResourceRequestHandler, wrap_resource_handler,
+    ResourceReadCallback, ResourceRequestHandler, ResourceType, Response, ReturnValue,
+    SchemeRegistrar, WrapResourceHandler, WrapResourceRequestHandler, wrap_resource_handler,
     wrap_resource_request_handler,
 };
 
@@ -53,10 +60,24 @@ pub struct Resource {
     pub body: Vec<u8>,
 }
 
-/// What a browser's pages get at `cox:` addresses: given the address,
-/// the resource there, or `None` for nothing there. It is called on a
-/// thread of its own, for each request.
-pub type Serve = Arc<dyn Fn(&str) -> Option<Resource> + Send + Sync>;
+/// Who asks for a `cox:` address, as far as the stage can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Asker {
+    /// A script of a page at a `cox:` address, a plugin's, fetching it:
+    /// the stage does what the address asks, as save a trigger.
+    Plugin,
+    /// Anyone else the stage answers: a page at a `cox:` address loading
+    /// it otherwise, as a stylesheet or a picture, or a tab going to it,
+    /// at the word of Cox, the human, an agent or a page elsewhere, whom
+    /// CEF does not tell apart. It is told what is there, and nothing is
+    /// done.
+    Anyone,
+}
+
+/// What a browser's pages get at `cox:` addresses: given the address
+/// and who asks for it, the resource there, or `None` for nothing there.
+/// It is called on a thread of its own, for each request.
+pub type Serve = Arc<dyn Fn(&str, Asker) -> Option<Resource> + Send + Sync>;
 
 /// Registers the scheme with CEF, in each of its processes: standard, so
 /// that addresses have a host and a path; secure, as `https:`; and open
@@ -104,15 +125,43 @@ pub(crate) fn chat_shown(url: &str) -> Option<u64> {
         .ok()
 }
 
-/// Answers the requests of one browser's pages at `cox:` addresses from
-/// its [`Serve`].
-pub(crate) fn handler(serve: Serve) -> ResourceRequestHandler {
-    Serving::new(serve)
+/// Who asks for a `cox:` address in a request for `resource`, made by
+/// the page whose origin is `initiator`, as `cox://map`; or `None` for a
+/// request the stage does not answer: a page elsewhere fetching the
+/// address, showing it as a picture, or putting it in a frame. CEF names
+/// `null` as the origin both of a tab Cox, the human or an agent sends
+/// there and of a `data:` or sandboxed page that does.
+pub(crate) fn asker(initiator: &str, resource: ResourceType) -> Option<Asker> {
+    if is_served(initiator) {
+        Some(if resource == ResourceType::XHR {
+            Asker::Plugin
+        } else {
+            Asker::Anyone
+        })
+    } else {
+        (resource == ResourceType::MAIN_FRAME).then_some(Asker::Anyone)
+    }
+}
+
+/// Answers a request for a `cox:` address, for `resource`, made by the
+/// page whose origin is `initiator`, from `serve`, as [`asker`] lets
+/// it; or `None` when it does not, which leaves the request to CEF, as
+/// for an address of a scheme no one serves.
+pub(crate) fn handler(
+    serve: Serve,
+    initiator: &str,
+    resource: ResourceType,
+) -> Option<ResourceRequestHandler> {
+    let asker = asker(initiator, resource)?;
+    let reader = is_served(initiator).then(|| Arc::from(initiator));
+    Some(Serving::new(serve, asker, reader))
 }
 
 wrap_resource_request_handler! {
     struct Serving {
         serve: Serve,
+        asker: Asker,
+        reader: Option<Arc<str>>,
     }
 
     impl ResourceRequestHandler {
@@ -138,6 +187,8 @@ wrap_resource_request_handler! {
             Some(Served::new(
                 self.serve.clone(),
                 Arc::from(url),
+                self.asker,
+                self.reader.clone(),
                 Arc::new(OnceLock::new()),
                 Arc::new(AtomicUsize::new(0)),
             ))
@@ -145,12 +196,16 @@ wrap_resource_request_handler! {
     }
 }
 
-// One response to `url`: the resource, or nothing there, once `serve`
-// answered, read out as CEF asks for it, from `read` bytes in.
+// One response to `url`, for `asker`, which the page at `reader`, the
+// origin of a `cox:` page, may read: the resource, or nothing there,
+// once `serve` answered, read out as CEF asks for it, from `read` bytes
+// in.
 wrap_resource_handler! {
     struct Served {
         serve: Serve,
         url: Arc<str>,
+        asker: Asker,
+        reader: Option<Arc<str>>,
         answer: Arc<OnceLock<Option<Resource>>>,
         read: Arc<AtomicUsize>,
     }
@@ -169,16 +224,17 @@ wrap_resource_handler! {
             };
             let Some(callback) = callback.map(|callback| callback.clone()) else {
                 // CEF gives no way to say later: answered here.
-                answer(&self.serve, &self.url, &self.answer);
+                answer(&self.serve, &self.url, self.asker, &self.answer);
                 *handle_request = 1;
                 return 1;
             };
             *handle_request = 0;
             let (serve, url, told) = (self.serve.clone(), self.url.clone(), self.answer.clone());
+            let asker = self.asker;
             let serving = std::thread::Builder::new()
                 .name("cox-serve".to_owned())
                 .spawn(move || {
-                    answer(&serve, &url, &told);
+                    answer(&serve, &url, asker, &told);
                     callback.cont();
                 });
             if let Err(error) = serving {
@@ -211,11 +267,13 @@ wrap_resource_handler! {
                 response.set_charset(Some(&CefString::from("utf-8")));
             }
             // A page at one `cox:` address reads another's.
-            response.set_header_by_name(
-                Some(&CefString::from("Access-Control-Allow-Origin")),
-                Some(&CefString::from("*")),
-                1,
-            );
+            if let Some(reader) = &self.reader {
+                response.set_header_by_name(
+                    Some(&CefString::from("Access-Control-Allow-Origin")),
+                    Some(&CefString::from(&**reader)),
+                    1,
+                );
+            }
             if let Some(length) = response_length {
                 *length = i64::try_from(resource.body.len()).unwrap_or(-1);
             }
@@ -256,11 +314,12 @@ wrap_resource_handler! {
 /// time.
 const SLOW: Duration = Duration::from_millis(100);
 
-/// Has `serve` answer `url`, keeping the answer in `told`, and says in the
-/// log how long it took, so that what answers slowly is found there.
-fn answer(serve: &Serve, url: &str, told: &OnceLock<Option<Resource>>) {
+/// Has `serve` answer `url` for `asker`, keeping the answer in `told`,
+/// and says in the log how long it took, so that what answers slowly is
+/// found there.
+fn answer(serve: &Serve, url: &str, asker: Asker, told: &OnceLock<Option<Resource>>) {
     let started = Instant::now();
-    let resource = serve(url);
+    let resource = serve(url, asker);
     let took = started.elapsed();
     let took_ms = took.as_millis();
     if took >= SLOW {
@@ -276,7 +335,38 @@ fn answer(serve: &Serve, url: &str, told: &OnceLock<Option<Resource>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{chat_shown, is_served, opened};
+    use cef::ResourceType;
+
+    use super::{Asker, asker, chat_shown, is_served, opened};
+
+    #[test]
+    fn only_a_cox_page_reads_and_only_its_scripts_have_things_done() {
+        assert_eq!(asker("cox://map", ResourceType::XHR), Some(Asker::Plugin));
+        assert_eq!(
+            asker("cox://map", ResourceType::STYLESHEET),
+            Some(Asker::Anyone)
+        );
+        assert_eq!(
+            asker("cox://wiki", ResourceType::IMAGE),
+            Some(Asker::Anyone)
+        );
+        assert_eq!(
+            asker("cox://activity", ResourceType::MAIN_FRAME),
+            Some(Asker::Anyone)
+        );
+        assert_eq!(asker("null", ResourceType::MAIN_FRAME), Some(Asker::Anyone));
+        assert_eq!(
+            asker("https://example.com", ResourceType::MAIN_FRAME),
+            Some(Asker::Anyone)
+        );
+        assert_eq!(asker("https://example.com", ResourceType::XHR), None);
+        assert_eq!(asker("http://127.0.0.1:8000", ResourceType::IMAGE), None);
+        assert_eq!(asker("https://example.com", ResourceType::SUB_FRAME), None);
+        assert_eq!(asker("null", ResourceType::XHR), None);
+        assert_eq!(asker("null", ResourceType::SUB_FRAME), None);
+        assert_eq!(asker("file://", ResourceType::XHR), None);
+        assert_eq!(asker("", ResourceType::XHR), None);
+    }
 
     #[test]
     fn cox_addresses_are_served() {
