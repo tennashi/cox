@@ -796,6 +796,29 @@ impl Workspace {
 
     /// Where `chat` works: the folder of its sketch, or the folder of its
     /// project it keeps to, or its project's.
+    /// What tells the stage of `folder` which files the agents of the
+    /// chats working there wrote: of the chats whose conversations are
+    /// read, as those the window showed.
+    fn wrote_in(folder: PathBuf, cx: &Context<Self>) -> crate::stage::tree::Wrote {
+        let workspace = cx.entity().downgrade();
+        Rc::new(move |cx: &App| {
+            let Some(workspace) = workspace.upgrade() else {
+                return Vec::new();
+            };
+            let workspace = workspace.read(cx);
+            workspace
+                .chats
+                .iter()
+                .filter(|chat| workspace.cwd_of(chat) == folder)
+                .filter_map(|chat| {
+                    let view = chat.view.as_ref()?.read(cx);
+                    let written = cox_core::entry::written(view.conversation().entries());
+                    Some((chat.key, written))
+                })
+                .collect()
+        })
+    }
+
     fn cwd_of(&self, chat: &Chat) -> PathBuf {
         chat.setup
             .as_ref()
@@ -918,6 +941,7 @@ impl Workspace {
         let Ok(stage) = made.view.downcast::<Stage>() else {
             return;
         };
+        let wrote = Self::wrote_in(folder.clone(), cx);
         let link = self.link.clone();
         let keep: crate::stage::Keep = Rc::new(move |tabs: &KeptTabs<u64>| {
             link.send(ToDaemon::Tabs {
@@ -931,6 +955,7 @@ impl Workspace {
         });
         stage.update(cx, |stage, cx| {
             stage.set_names(names);
+            stage.set_wrote(wrote, cx);
             stage.keep_with(keep, cx);
         });
         let shows = cx.subscribe_in(&stage, window, |workspace, _, ShowChat(key), window, cx| {

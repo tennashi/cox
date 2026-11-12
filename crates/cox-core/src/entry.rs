@@ -395,3 +395,93 @@ pub enum ToolCallResult {
     /// The turn was cancelled before the call ended.
     Cancelled,
 }
+
+/// The files the agent changed in `entries`, by the paths it named them
+/// by, each once, in the order it first changed them: those of the
+/// changes its tool calls that completed show, or that the permission
+/// asked for one showed.
+#[must_use]
+pub fn written(entries: &[Entry]) -> Vec<String> {
+    let completed: std::collections::HashSet<&str> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::ToolCall {
+                id,
+                result: Some(ToolCallResult::Completed),
+                ..
+            } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut written: Vec<String> = Vec::new();
+    for entry in entries {
+        let (Entry::ToolCall { id, content, .. } | Entry::Permission { id, content, .. }) = entry
+        else {
+            continue;
+        };
+        if !completed.contains(id.as_str()) {
+            continue;
+        }
+        for content in content {
+            if let Content::Diff { path, .. } = content
+                && !written.contains(path)
+            {
+                written.push(path.clone());
+            }
+        }
+    }
+    written
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diff(path: &str) -> Content {
+        Content::Diff {
+            path: path.to_owned(),
+            lines: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_files_written_are_those_of_the_calls_that_completed() {
+        let entries = [
+            // Asked for first, its change shown on the permission only.
+            Entry::Permission {
+                id: "1".to_owned(),
+                title: "Edit".to_owned(),
+                content: vec![diff("/work/a.rs")],
+                options: Vec::new(),
+                chosen: Some(0),
+                by_setup: false,
+                gathered: Vec::new(),
+            },
+            Entry::ToolCall {
+                id: "1".to_owned(),
+                title: "Edit".to_owned(),
+                content: Vec::new(),
+                result: Some(ToolCallResult::Completed),
+            },
+            Entry::ToolCall {
+                id: "2".to_owned(),
+                title: "Edit".to_owned(),
+                content: vec![diff("/work/b.rs"), diff("/work/a.rs")],
+                result: Some(ToolCallResult::Completed),
+            },
+            Entry::ToolCall {
+                id: "3".to_owned(),
+                title: "Edit".to_owned(),
+                content: vec![diff("/work/failed.rs")],
+                result: Some(ToolCallResult::Failed),
+            },
+            Entry::ToolCall {
+                id: "4".to_owned(),
+                title: "Edit".to_owned(),
+                content: vec![diff("/work/running.rs")],
+                result: None,
+            },
+        ];
+        assert_eq!(written(&entries), ["/work/a.rs", "/work/b.rs"]);
+    }
+}
