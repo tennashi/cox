@@ -3195,10 +3195,13 @@ impl Daemon {
             }
             return;
         };
-        let left_out = sketch::left_out(&folder).unwrap_or_else(|error| {
-            tracing::warn!("cannot tell what the sketch changed: {error}");
-            Vec::new()
-        });
+        let left_out = storage::path(storage::Kept::Sketches)
+            .ok_or_else(|| "Cox cannot tell where the sketches are".to_owned())
+            .and_then(|sketches| sketch::left_out(&folder, &sketches))
+            .unwrap_or_else(|error| {
+                tracing::warn!("cannot tell what the sketch changed: {error}");
+                Vec::new()
+            });
         let Some(line) = workflow::say(&text, &[("left_out", &sketch::left_out_lines(&left_out))])
         else {
             if let Some(chat) = self.chat(key) {
@@ -3254,9 +3257,8 @@ impl Daemon {
             .and_then(|chat| chat.last_reply())
             .unwrap_or_default();
         let discarded = storage::path(storage::Kept::Sketches)
-            .map(|sketches| sketches.join(sketch::DISCARDED))
             .ok_or_else(|| "Cox cannot tell where to keep discarded sketches".to_owned())
-            .and_then(|bundles| sketch::discard(started, &folder, &title, &bundles, ending.keep));
+            .and_then(|sketches| sketch::discard(started, &folder, &title, &sketches, ending.keep));
         let kept = discarded
             .as_ref()
             .ok()
@@ -3564,10 +3566,9 @@ impl Daemon {
             .slot(key)
             .map(|slot| slot.name.clone())
             .unwrap_or_default();
-        let bundles = storage::path(storage::Kept::Sketches)
-            .map(|sketches| sketches.join(sketch::DISCARDED))
+        let sketches = storage::path(storage::Kept::Sketches)
             .ok_or("Cox cannot tell where to keep what the sketch made")?;
-        sketch::discard(Sketch::Empty, folder, &title, &bundles, true)
+        sketch::discard(Sketch::Empty, folder, &title, &sketches, true)
     }
 
     /// Keeps and tells what changed: each chat's conversation, how each
