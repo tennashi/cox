@@ -33,6 +33,7 @@ mod events;
 mod favicon;
 mod frames;
 mod handlers;
+mod keyboard;
 mod links;
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -58,15 +59,17 @@ use cef::{
     CompositionUnderline, ContextMenuHandler, ContextMenuParams, DevToolsMessageObserver,
     DisplayHandler, ImplApp, ImplBrowser, ImplBrowserHost, ImplBrowserProcessHandler, ImplClient,
     ImplCommandLine, ImplContextMenuHandler, ImplContextMenuParams, ImplDevToolsMessageObserver,
-    ImplDisplayHandler, ImplFrame, ImplLifeSpanHandler, ImplLoadHandler, ImplMenuModel,
-    ImplRenderHandler, ImplRequest, ImplRequestHandler, ImplTask, LifeSpanHandler, LoadHandler,
-    MenuModel, Registration, RenderHandler, RequestHandler, ResourceRequestHandler,
-    SchemeRegistrar, Settings, Task, ThreadId, WindowInfo, WrapApp, WrapBrowserProcessHandler,
-    WrapClient, WrapContextMenuHandler, WrapDevToolsMessageObserver, WrapDisplayHandler,
-    WrapLifeSpanHandler, WrapLoadHandler, WrapRenderHandler, WrapRequestHandler, WrapTask,
-    wrap_app, wrap_browser_process_handler, wrap_client, wrap_context_menu_handler,
-    wrap_dev_tools_message_observer, wrap_display_handler, wrap_life_span_handler,
-    wrap_load_handler, wrap_render_handler, wrap_request_handler, wrap_task,
+    ImplDisplayHandler, ImplDomnode, ImplFrame, ImplLifeSpanHandler, ImplListValue,
+    ImplLoadHandler, ImplMenuModel, ImplProcessMessage, ImplRenderHandler,
+    ImplRenderProcessHandler, ImplRequest, ImplRequestHandler, ImplTask, LifeSpanHandler,
+    LoadHandler, MenuModel, Registration, RenderHandler, RenderProcessHandler, RequestHandler,
+    ResourceRequestHandler, SchemeRegistrar, Settings, Task, ThreadId, WindowInfo, WrapApp,
+    WrapBrowserProcessHandler, WrapClient, WrapContextMenuHandler, WrapDevToolsMessageObserver,
+    WrapDisplayHandler, WrapLifeSpanHandler, WrapLoadHandler, WrapRenderHandler,
+    WrapRenderProcessHandler, WrapRequestHandler, WrapTask, wrap_app, wrap_browser_process_handler,
+    wrap_client, wrap_context_menu_handler, wrap_dev_tools_message_observer, wrap_display_handler,
+    wrap_life_span_handler, wrap_load_handler, wrap_render_handler, wrap_render_process_handler,
+    wrap_request_handler, wrap_task,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::watch;
@@ -75,6 +78,7 @@ pub use crate::cursor::Cursor;
 use crate::events::{
     KeyKind, button_flag, button_type, event_flags, key_character, key_event, mouse_event,
 };
+pub use crate::keyboard::{Hint, How, Kind, Rect, Scroll};
 use crate::profile::Profile;
 pub use crate::timeline::{KeptUp, STUCK_AFTER, Stuck};
 use crate::viewport::{Resizing, StageSize, Viewport};
@@ -126,6 +130,13 @@ pub enum Event {
     /// at this point of the page, for the stage to offer what to do with
     /// the text: the browser shows no menu of its own.
     Selected { x: i32, y: i32, text: String },
+    /// What can be clicked or typed in, in sight in the page, as
+    /// [`Browser::hints`] asked.
+    Hints(Vec<Hint>),
+    /// The keyboard went to something in the page, or in a frame of it,
+    /// that takes text, or left it for something that does not: or a new
+    /// page started, where nothing has it yet.
+    EditableFocus { editable: bool },
 }
 
 /// Where the browser is in its history, as the toolbar shows it, and what
@@ -229,6 +240,8 @@ struct Shared {
     wheel: events::Wheel,
     /// When the wheel scrolled the page, and when CEF painted it, lately.
     timeline: timeline::Timeline,
+    /// The stage's own `DevTools` calls to the page, waiting for answers.
+    calls: keyboard::Calls,
 }
 
 impl Shared {
@@ -263,6 +276,7 @@ impl Shared {
             pacing: frames::Pacing::default(),
             wheel: events::Wheel::default(),
             timeline: timeline::Timeline::default(),
+            calls: keyboard::Calls::default(),
         }
     }
 }
@@ -403,6 +417,8 @@ pub struct Browser {
     shared: SharedRef,
     target: TargetId,
     stage_size: StageSize,
+    /// Where what the stage asks of the page answers, as CEF's events do.
+    events: UnboundedSender<Event>,
 }
 
 /// Starts CEF, and returns the handle to it.
@@ -551,7 +567,7 @@ impl Cef {
         let (target, target_id) = watch::channel(None);
         let new = NewBrowser {
             shared: Arc::clone(&shared),
-            events,
+            events: events.clone(),
             target: Arc::new(target),
             url: url.to_owned(),
             serve,
@@ -572,6 +588,7 @@ impl Cef {
                 shared,
                 target: target_id,
                 stage_size: Arc::clone(&self.stage_size),
+                events,
             },
             receiver,
         )
