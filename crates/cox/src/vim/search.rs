@@ -46,14 +46,19 @@ pub struct Find {
     pub direction: Direction,
 }
 
+/// Whether `query` is found in its own case only: when it has a capital.
+#[must_use]
+pub fn exact(query: &str) -> bool {
+    query.chars().any(char::is_uppercase)
+}
+
 /// Where `query` is in `text`, by bytes, none overlapping another.
 #[must_use]
 pub fn matches(query: &str, text: &str) -> Vec<Range<usize>> {
     if query.is_empty() {
         return Vec::new();
     }
-    let exact = query.chars().any(char::is_uppercase);
-    let (query, text) = if exact {
+    let (query, text) = if exact(query) {
         (query.to_owned(), text.to_owned())
     } else {
         (lower(query), lower(text))

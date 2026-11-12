@@ -31,6 +31,7 @@ use crate::ui::selection::{Piece, Selection, Spot, TextId};
 use crate::ui::theme::{
     BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE, CODE_FONT, DIM, LINK, RAISED, SELECTION,
 };
+use crate::vim::search::{self, Direction};
 
 /// How far each list a block is in moves it right.
 const INDENT: f32 = 20.;
@@ -303,6 +304,41 @@ impl Reading {
     /// Lets go of what is selected: answers whether something was.
     pub fn deselect(&mut self) -> bool {
         self.selection.take().is_some()
+    }
+
+    /// Selects the next match of `query` in the text the last frame laid
+    /// out, from what is selected, or from the first piece that shows, as
+    /// `direction` goes, and answers where the match starts as the frame
+    /// drew it.
+    pub fn find(&mut self, query: &str, direction: Direction) -> Option<Point<Pixels>> {
+        let texts = self.painted.0.borrow();
+        let from = match self.selection {
+            Some(selection) => {
+                let start = selection.anchor.min(selection.head);
+                let at = texts.iter().position(|text| text.id == start.text)?;
+                (at, start.offset)
+            }
+            None => (
+                texts
+                    .iter()
+                    .position(|text| !text.visible.is_empty())
+                    .unwrap_or(0),
+                0,
+            ),
+        };
+        let pieces: Vec<&str> = texts.iter().map(|text| text.text.as_ref()).collect();
+        let (at, range) = search::next(&pieces, from, query, direction)?;
+        let text = &texts[at];
+        let spot = |offset| Spot {
+            text: text.id,
+            offset,
+        };
+        let start = text.layout.position_for_index(range.start);
+        self.selection = Some(Selection {
+            anchor: spot(range.start),
+            head: spot(range.end),
+        });
+        start
     }
 
     /// The text selected.

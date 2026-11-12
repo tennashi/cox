@@ -68,6 +68,7 @@ use crate::ui::paths::shortened;
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::keymap::Motion;
+use crate::vim::search::{self, Find};
 use crate::vim::{Definition, Move, Visual};
 
 actions!(
@@ -170,6 +171,8 @@ struct Look {
     visual: Option<usize>,
     /// Which of the cursor and the scroll the next frame keeps to.
     follow: Follow,
+    /// What Vim's `/` looked for last, whose matches are marked.
+    found: Option<String>,
 }
 
 /// What the next frame keeps to, of the cursor of Vim's keys and the
@@ -998,6 +1001,36 @@ impl Code {
         cx.notify();
     }
 
+    /// Selects the next match of what Vim's `/` or `n` looks for, from
+    /// the one selected or the cursor's line, with the cursor on its line,
+    /// and marks the others.
+    fn find_text(&mut self, find: &Find, _: &mut Window, cx: &mut Context<Self>) {
+        let buffer = &self.file.buffer;
+        let lines: Vec<String> = (0..buffer.lines())
+            .map(|line| buffer.line(line).into_owned())
+            .collect();
+        let from = match self.look.selection {
+            Some((anchor, head)) => {
+                let start = anchor.min(head);
+                (start.line, start.column)
+            }
+            None => (self.look.cursor.unwrap_or_else(|| self.in_sight().start), 0),
+        };
+        self.look.found = Some(find.text.clone());
+        match search::next(&lines, from, &find.text, find.direction) {
+            Some((line, range)) => {
+                self.look.end_visual();
+                self.look.selection =
+                    Some((Place::new(line, range.start), Place::new(line, range.end)));
+                self.look.put_cursor(line);
+                self.look.follow = Follow::Cursor;
+                self.notice = None;
+            }
+            None => self.notice = Some(format!("{} not found", find.text)),
+        }
+        cx.notify();
+    }
+
     /// Goes to where the first name of the cursor's line is defined.
     fn definition(&mut self, _: &Definition, _: &mut Window, cx: &mut Context<Self>) {
         let Some(line) = self.look.cursor else {
@@ -1139,6 +1172,7 @@ impl Render for Code {
             .on_action(cx.listener(Self::move_by_keys))
             .on_action(cx.listener(Self::visual))
             .on_action(cx.listener(Self::definition))
+            .on_action(cx.listener(Self::find_text))
             .child(self.render_bar(cx))
             .child(
                 div()

@@ -883,6 +883,7 @@ impl gpui::Render for FakePage {
         _: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
+        use cox::vim::search::Find;
         use cox::vim::{Address, CopyAddress, FocusField, Hint, Label, Leave, Move, Reload};
         use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
 
@@ -905,6 +906,9 @@ impl gpui::Render for FakePage {
             }))
             .on_action(cx.listener(move |page, _: &Leave, _, _| keep(page, "leave".into())))
             .on_action(cx.listener(move |page, _: &Reload, _, _| keep(page, "reload".into())))
+            .on_action(cx.listener(move |page, find: &Find, _, _| {
+                keep(page, format!("find {} {:?}", find.text, find.direction));
+            }))
             .on_action(cx.listener(move |page, _: &FocusField, _, _| keep(page, "field".into())))
             .on_action(cx.listener(move |page, _: &CopyAddress, _, _| keep(page, "copy".into())))
             .on_action(cx.listener(move |page, _: &Address, _, _| keep(page, "address".into())))
@@ -1199,4 +1203,167 @@ fn off_there_is_no_line(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "secondary-n escape :");
     assert!(workspace.read_with(cx, |workspace, _| workspace.line().is_none()));
     assert!(!in_part(cx, "CommandLine"));
+}
+
+/// A window that keeps the line at its foot over a tab of the stage, as
+/// the workspace does, for tests of a tab in a window of its own.
+struct Host {
+    child: gpui::AnyView,
+    line: Entity<cox::vim::line::Line>,
+}
+
+impl gpui::Render for Host {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use cox::vim::line::OpenLine;
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+        gpui::div()
+            .relative()
+            .size_full()
+            .on_action(cx.listener(|host, open: &OpenLine, window, cx| {
+                host.line.update(cx, |line, cx| {
+                    line.open(open.prompt, cox::vim::ex::Names::default(), window, cx);
+                });
+            }))
+            .child(self.child.clone())
+            .child(self.line.clone())
+    }
+}
+
+/// Opens `build`'s view in a window that hosts the line, with the
+/// keyboard, and Vim's keys on.
+fn hosted<V: gpui::Render + gpui::Focusable>(
+    cx: &mut TestAppContext,
+    build: impl FnOnce(&mut gpui::Context<V>) -> V + 'static,
+) -> (Entity<V>, Entity<Host>, &mut VisualTestContext) {
+    use gpui::AppContext as _;
+
+    cx.update(cox::vim::install);
+    cx.update(cox::ui::input::bind_keys);
+    let (host, cx) = cx.add_window_view(|window, cx| Host {
+        child: cx.new(build).into(),
+        line: cx.new(|cx| cox::vim::line::Line::new(window, cx)),
+    });
+    let child = host.read_with(cx, |host, _| host.child.clone().downcast::<V>().unwrap());
+    cx.update(|window, cx| window.focus(&child.focus_handle(cx)));
+    cx.run_until_parked();
+    (child, host, cx)
+}
+
+/// Types `text` in the line `/` or `?` opened, and runs it.
+fn search_for(cx: &mut VisualTestContext, mark: &str, text: &str) {
+    type_keys(cx, mark);
+    cx.simulate_input(text);
+    type_keys(cx, "enter");
+}
+
+#[gpui::test]
+fn slash_and_n_find_text_in_code(cx: &mut TestAppContext) {
+    let path = folder("search-code", &[]).join("numbered.rs");
+    let text = numbered(40);
+    let (code, host, cx) = hosted(cx, move |cx| Code::new(path, &text, None, None, cx));
+    let selected = |cx: &mut VisualTestContext| code.read_with(cx, |code, _| code.selected_text());
+
+    search_for(cx, "/", "line_3");
+    assert!(!host.read_with(cx, |host, cx| host.line.read(cx).is_open()));
+    assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
+    assert_eq!(cursor(&code, cx), Some(2));
+    assert_eq!(selected(cx), "line_3");
+    type_keys(cx, "n");
+    assert_eq!(cursor(&code, cx), Some(29));
+    type_keys(cx, "n n");
+    assert_eq!(cursor(&code, cx), Some(31));
+    type_keys(cx, "shift-n");
+    assert_eq!(cursor(&code, cx), Some(30));
+
+    search_for(cx, "?", "LINE_1");
+    assert_eq!(cursor(&code, cx), Some(30), "a capital finds its own case");
+    assert!(
+        cx.debug_bounds("code-notice").is_some(),
+        "saying it is not found"
+    );
+    search_for(cx, "?", "line_1");
+    assert_eq!(cursor(&code, cx), Some(18));
+    type_keys(cx, "n");
+    assert_eq!(cursor(&code, cx), Some(17), "n goes the search's way");
+    type_keys(cx, "shift-n");
+    assert_eq!(cursor(&code, cx), Some(18));
+
+    type_keys(cx, "/ up");
+    assert_eq!(
+        host.read_with(cx, |host, cx| host.line.read(cx).text(cx).to_owned()),
+        "line_1"
+    );
+    type_keys(cx, "escape");
+    assert_eq!(cursor(&code, cx), Some(18), "escape found nothing");
+}
+
+#[gpui::test]
+fn slash_and_n_find_text_in_a_document(cx: &mut TestAppContext) {
+    cx.update(cox::stage::document::bind_keys);
+    let path = folder("search-document", &[]).join("long.md");
+    let mut text = String::new();
+    for line in 1..=300 {
+        write!(text, "Line {line}.\n\n").unwrap();
+    }
+    let (document, _, cx) = hosted(cx, move |cx| Document::new(path, text, cx));
+    let top = |cx: &mut VisualTestContext| {
+        cx.debug_bounds("document-text")
+            .expect("the text is drawn")
+            .origin
+            .y
+    };
+    let selected =
+        |cx: &mut VisualTestContext| document.read_with(cx, |document, _| document.selected_text());
+    let start = top(cx);
+
+    search_for(cx, "/", "line 25");
+    assert_eq!(selected(cx), "Line 25");
+    let first = start - top(cx);
+    assert!(first > px(0.), "scrolled to it: {first:?}");
+    type_keys(cx, "n");
+    assert_eq!(selected(cx), "Line 25");
+    let second = start - top(cx);
+    assert!(second > first * 5., "on to Line 250: {second:?}");
+    type_keys(cx, "shift-n");
+    assert_eq!(start - top(cx), first);
+}
+
+#[gpui::test]
+fn slash_and_n_ask_the_page_to_find_the_text(cx: &mut TestAppContext) {
+    let (page, _, cx) = hosted(cx, |cx| FakePage {
+        focus: cx.focus_handle(),
+        asked: Vec::new(),
+    });
+    type_keys(cx, "n");
+    assert_eq!(
+        asked(&page, cx),
+        Vec::<String>::new(),
+        "nothing searched yet"
+    );
+    search_for(cx, "/", "hello world");
+    assert_eq!(asked(&page, cx), ["find hello world Forward"]);
+    type_keys(cx, "n shift-n");
+    assert_eq!(
+        asked(&page, cx),
+        ["find hello world Forward", "find hello world Backward"]
+    );
+    search_for(cx, "?", "");
+    assert_eq!(
+        asked(&page, cx),
+        ["find hello world Backward"],
+        "an empty line finds the last text again"
+    );
+    type_keys(cx, "n");
+    assert_eq!(asked(&page, cx), ["find hello world Backward"]);
+}
+
+impl gpui::Focusable for FakePage {
+    fn focus_handle(&self, _: &gpui::App) -> gpui::FocusHandle {
+        self.focus.clone()
+    }
 }
