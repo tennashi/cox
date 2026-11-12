@@ -69,6 +69,8 @@ use crate::ui::theme::{
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, Panel, tip};
 
+use crate::vim::keymap::Motion;
+
 mod complete;
 mod entries;
 mod settings;
@@ -748,6 +750,29 @@ impl ChatView {
         crate::ui::translation::show(&text, window, cx);
     }
 
+    /// Scrolls the conversation as Vim's keys ask, while the keyboard is
+    /// in the input in normal mode.
+    fn move_by_keys(
+        &mut self,
+        motion: &crate::vim::Move,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let at = -self.list.scroll_px_offset_for_scrollbar().y;
+        let most = self.list.max_offset_for_scrollbar().height;
+        let height = self.list.viewport_bounds().size.height;
+        let to = motion.scrolled(at, most, window.line_height(), height);
+        match motion.motion {
+            Motion::Top => self.list.scroll_to(ListOffset::default()),
+            Motion::Bottom => self.list.scroll_to(ListOffset {
+                item_ix: self.places.len(),
+                offset_in_item: px(0.),
+            }),
+            _ => self.list.scroll_by(to - at),
+        }
+        cx.notify();
+    }
+
     /// Changes the conversation with `change`, keeping its end in view if
     /// it was: the human reads along as entries arrive, unless they have
     /// scrolled back to read something earlier.
@@ -974,6 +999,7 @@ impl ChatView {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::translate))
             .on_action(cx.listener(Self::add_to_chat))
+            .on_action(cx.listener(Self::move_by_keys))
             .capture_key_down(cx.listener(Self::choose_with_key))
             // The list over the input takes its keys first, while it is
             // open.

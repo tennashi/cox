@@ -44,6 +44,7 @@ use crate::ui::theme::{
     SURFACE, chat_color,
 };
 use crate::ui::tip;
+use crate::vim::{Close, Move, Open};
 
 pub(crate) const KEY_CONTEXT: &str = "Tree";
 
@@ -144,6 +145,9 @@ pub struct Tree {
     /// Each path an agent named a file by, as the tree names it, through
     /// no link.
     canonical: HashMap<String, PathBuf>,
+    /// The place of the row Vim's keys selected among the rows, once
+    /// they moved it.
+    picked: Option<usize>,
     scroll: ScrollHandle,
     focus_handle: FocusHandle,
     _follow: Task<()>,
@@ -172,6 +176,7 @@ impl Tree {
             wrote: None,
             writers: HashMap::new(),
             canonical: HashMap::new(),
+            picked: None,
             scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             _follow: follow(cx),
@@ -423,6 +428,91 @@ impl Tree {
         (entry, name)
     }
 
+    /// The place of the row Vim's keys select among `rows`, not empty:
+    /// the one they moved to, or else the file marked, or else the first.
+    fn picked_place(&self, rows: &[Row<'_>]) -> usize {
+        let marked = || {
+            rows.iter().position(|row| {
+                matches!(row, Row::Listed { entry, .. } if Some(&entry.path) == self.current.as_ref())
+            })
+        };
+        self.picked.or_else(marked).unwrap_or(0).min(rows.len() - 1)
+    }
+
+    /// Selects the row at `place`, and scrolls it into sight.
+    fn pick(&mut self, place: usize, cx: &mut Context<Self>) {
+        self.picked = Some(place);
+        self.scroll.scroll_to_item(place);
+        cx.notify();
+    }
+
+    /// Moves the selection as Vim's keys ask.
+    fn move_by_keys(&mut self, motion: &Move, _: &mut Window, cx: &mut Context<Self>) {
+        let rows = self.all_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let (at, last) = (self.picked_place(&rows), rows.len() - 1);
+        drop(rows);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a count of rows in sight, not below 0"
+        )]
+        let half = (f32::from(self.scroll.bounds().size.height) / ROW_HEIGHT / 2.) as usize;
+        let place = motion.moved(at, half, last);
+        self.pick(place, cx);
+    }
+
+    /// Opens the folder selected, or goes into it if it is open, or
+    /// chooses the file selected.
+    fn open_picked(&mut self, _: &Open, _: &mut Window, cx: &mut Context<Self>) {
+        let rows = self.all_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let place = self.picked_place(&rows);
+        let Row::Listed { entry, open, .. } = &rows[place] else {
+            return;
+        };
+        let (path, is_folder, open) = (entry.path.clone(), entry.is_folder, *open);
+        drop(rows);
+        if !is_folder {
+            self.picked = Some(place);
+            cx.emit(Chosen { path, apart: false });
+        } else if open {
+            let last = self.all_rows().len() - 1;
+            self.pick((place + 1).min(last), cx);
+        } else {
+            self.picked = Some(place);
+            self.toggle(&path, cx);
+        }
+    }
+
+    /// Closes the folder selected, if open, or else selects the folder
+    /// it is in.
+    fn close_picked(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
+        let rows = self.all_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let place = self.picked_place(&rows);
+        let open = match &rows[place] {
+            Row::Listed {
+                entry, open: true, ..
+            } => Some(entry.path.clone()),
+            _ => None,
+        };
+        let folder = folders_of(&rows, place).last().copied();
+        drop(rows);
+        if let Some(path) = open {
+            self.picked = Some(place);
+            self.toggle(&path, cx);
+        } else if let Some(folder) = folder {
+            self.pick(folder, cx);
+        }
+    }
+
     /// Scrolls so that the row at `place` is at the top, below the
     /// folders it is in, which stay there.
     fn scroll_to_folder(&self, place: usize, above: usize, cx: &mut Context<Self>) {
@@ -439,7 +529,13 @@ impl Tree {
     /// The row `row` of the tree, which a test finds as `entry-{number}`;
     /// or, as one of the folders the rows at the top are in, as
     /// `pinned-{number}`.
-    fn render_row(&self, row: &Row<'_>, at: At, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(
+        &self,
+        row: &Row<'_>,
+        at: At,
+        picked: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let (entry, name, depth, open) = match row {
             Row::Listed {
                 entry,
@@ -521,7 +617,9 @@ impl Tree {
                     });
                 }
             }));
-        if self.current.as_ref() == Some(&entry.path) {
+        if matches!(at, At::Listed(number) if picked == Some(number - 1)) {
+            row.bg(rgb(BUTTON_HOVER)).into_any_element()
+        } else if self.current.as_ref() == Some(&entry.path) {
             row.bg(rgb(ACCENT_GROUND)).into_any_element()
         } else {
             row.hover(|style| style.bg(rgb(HOVER))).into_any_element()
@@ -753,8 +851,9 @@ impl Focusable for Tree {
 }
 
 impl Render for Tree {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.all_rows();
+        let picked = self.picked.filter(|_| self.focus_handle.is_focused(window));
         let scrolled = -f32::from(self.scroll.offset().y);
         #[expect(
             clippy::cast_possible_truncation,
@@ -771,17 +870,20 @@ impl Render for Tree {
                     place,
                     above: index,
                 };
-                self.render_row(&rows[place], at, cx)
+                self.render_row(&rows[place], at, None, cx)
             })
             .collect();
         let rows: Vec<_> = rows
             .iter()
             .enumerate()
-            .map(|(index, row)| self.render_row(row, At::Listed(index + 1), cx))
+            .map(|(index, row)| self.render_row(row, At::Listed(index + 1), picked, cx))
             .collect();
         div()
             .track_focus(&self.focus_handle)
             .key_context(KEY_CONTEXT)
+            .on_action(cx.listener(Self::move_by_keys))
+            .on_action(cx.listener(Self::open_picked))
+            .on_action(cx.listener(Self::close_picked))
             .size_full()
             .flex()
             .flex_col()

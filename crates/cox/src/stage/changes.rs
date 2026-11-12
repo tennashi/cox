@@ -61,6 +61,8 @@ use crate::ui::theme::{
     FAILED_MARK, FAINT, FOREGROUND, HOVER, LINK, RAISED, REMOVED_GROUND, REMOVED_WORD, SELECTED,
     UI_FONT,
 };
+use crate::vim::keymap::Motion;
+use crate::vim::{Move, Open};
 
 pub(crate) const KEY_CONTEXT: &str = "Changes";
 
@@ -254,6 +256,9 @@ pub struct Changes {
     /// The rows of the tab, of the repository it shows: each file's,
     /// followed by its lines'.
     rows: Vec<Row>,
+    /// The index of the file Vim's keys selected, of the repository
+    /// shown, once they moved to one.
+    selected: Option<usize>,
     list: ListState,
     /// How far the lines of each file shown are scrolled across, by its
     /// path.
@@ -303,6 +308,7 @@ impl Changes {
             pick: None,
             picked: None,
             rows: Vec::new(),
+            selected: None,
             list: ListState::new(0, ListAlignment::Top, px(LINE_HEIGHT * 20.)),
             across: HashMap::new(),
             widest: HashMap::new(),
@@ -488,6 +494,7 @@ impl Changes {
         self.widest.clear();
         if !stay {
             self.across.clear();
+            self.selected = None;
         }
         self.rows = self
             .shown_diff()
@@ -548,6 +555,50 @@ impl Changes {
                 path: diff.top.join(&file.path),
                 line,
             });
+        }
+    }
+
+    /// Moves the selection from file to file as Vim's keys ask, the file
+    /// selected at the top, or scrolls by half the tab's height.
+    fn move_by_keys(&mut self, motion: &Move, window: &mut Window, cx: &mut Context<Self>) {
+        let files = self
+            .shown_diff()
+            .and_then(|read| read.as_ref().ok())
+            .map_or(0, |diff| diff.files.len());
+        let Some(last) = files.checked_sub(1) else {
+            return;
+        };
+        if matches!(motion.motion, Motion::HalfDown | Motion::HalfUp) {
+            let at = -self.list.scroll_px_offset_for_scrollbar().y;
+            let most = self.list.max_offset_for_scrollbar().height;
+            let height = self.list.viewport_bounds().size.height;
+            let to = motion.scrolled(at, most, window.line_height(), height);
+            self.list.scroll_by(to - at);
+            cx.notify();
+            return;
+        }
+        let index = match (self.selected, motion.motion) {
+            (None, Motion::Down | Motion::Up) => 0,
+            (at, _) => motion.moved(at.unwrap_or(0), 1, last),
+        };
+        self.selected = Some(index);
+        if let Some(row) = self
+            .rows
+            .iter()
+            .position(|row| matches!(row, Row::File(file) if *file == index))
+        {
+            self.list.scroll_to(ListOffset {
+                item_ix: row,
+                offset_in_item: px(0.),
+            });
+        }
+        cx.notify();
+    }
+
+    /// Opens the file selected, as a click on it does.
+    fn open_selected(&mut self, _: &Open, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.selected {
+            self.choose(index, None, cx);
         }
     }
 
@@ -900,7 +951,12 @@ impl Changes {
     }
 
     /// The row at `row` of the tab.
-    fn render_row(&self, row: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(
+        &self,
+        row: usize,
+        selected: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(&listed) = self.rows.get(row) else {
             return div().into_any_element();
         };
@@ -915,7 +971,15 @@ impl Changes {
         let across = self.across.get(&file.path).copied().unwrap_or_default();
         let last = line.map_or(file.lines.is_empty(), |line| line + 1 == file.lines.len());
         let (inner, at) = match line {
-            None => (file_row(row, file), None),
+            None => {
+                let head = file_row(row, file);
+                let head = if selected == Some(index) {
+                    head.bg(rgb(SELECTED))
+                } else {
+                    head
+                };
+                (head, None)
+            }
             Some(line) => {
                 let none = Look::default();
                 let look = looks
@@ -1674,7 +1738,12 @@ impl Render for Changes {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let list = list(
             self.list.clone(),
-            cx.processor(|changes, row, _, cx| changes.render_row(row, cx)),
+            cx.processor(|changes, row, window, cx| {
+                let selected = changes
+                    .selected
+                    .filter(|_| changes.focus_handle.is_focused(window));
+                changes.render_row(row, selected, cx)
+            }),
         )
         .flex_1()
         .min_h_0();
@@ -1684,6 +1753,8 @@ impl Render for Changes {
             .flex_col()
             .track_focus(&self.focus_handle)
             .key_context(KEY_CONTEXT)
+            .on_action(cx.listener(Self::move_by_keys))
+            .on_action(cx.listener(Self::open_selected))
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
             .text_size(px(13.))
