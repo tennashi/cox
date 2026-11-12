@@ -163,14 +163,28 @@ fn is_port(port: &str) -> bool {
 }
 
 /// `typed`, a host and what follows it, as a URL: over `http://` for a
-/// server on the Mac, over `https://` for any other.
+/// server on the Mac or the local network, as Chrome takes an address, a
+/// name of one word or a `.local` one, over `https://` for any other.
 fn on_the_web(typed: &str) -> String {
     let http = format!("http://{typed}");
-    if served_on_the_mac(&http) {
+    if served_on_the_mac(&http) || on_the_local_network(&http) {
         http
     } else {
         format!("https://{typed}")
     }
+}
+
+/// Whether `http` is of a host on the local network: an address, a name
+/// of one word, or one that ends in `.local`.
+fn on_the_local_network(http: &str) -> bool {
+    url::Url::parse(http).is_ok_and(|url| match url.host() {
+        Some(url::Host::Ipv4(_) | url::Host::Ipv6(_)) => true,
+        Some(url::Host::Domain(name)) => name
+            .rsplit('.')
+            .next()
+            .is_none_or(|last| !name.contains('.') || last == "local"),
+        None => false,
+    })
 }
 
 /// Whether `http` is a page of a server on the Mac: one the phone's relay
@@ -382,10 +396,10 @@ mod tests {
             ),
             ("node.js", Some(url("https://node.js"))),
             ("a.b", Some(url("https://a.b"))),
-            ("foo.local", Some(url("https://foo.local"))),
+            ("foo.local", Some(url("http://foo.local"))),
             ("日本.jp", Some(url("https://日本.jp"))),
-            ("myhost:8080/x", Some(url("https://myhost:8080/x"))),
-            ("192.168.1.1:8080", Some(url("https://192.168.1.1:8080"))),
+            ("myhost:8080/x", Some(url("http://myhost:8080/x"))),
+            ("192.168.1.1:8080", Some(url("http://192.168.1.1:8080"))),
             ("example.com?q=a", Some(url("https://example.com?q=a"))),
             ("gpui", Some(search("gpui"))),
             ("rust gpui", Some(search("rust gpui"))),
