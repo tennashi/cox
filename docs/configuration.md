@@ -187,11 +187,17 @@ with `;`, `&`, `|`, `<`, `>`, `(`, `)`, `$`, a backtick, `*`, `?`, `[`,
 `{`, `}` or `#` out of quotes, a `$` or backtick in double quotes, a `^`
 that starts a word, or a new line, and none with a flag that has it run
 another program or write a file, such as `find`'s `-exec` and
-`-delete`, `rg`'s `--pre` or `git`'s `--output`.
+`-delete`, `rg`'s `--pre` or `git`'s `--output`. A command that checks
+or tests the project, `cargo test`, `cargo check`, `cargo clippy`,
+`pytest` or `go test`, is allowed only with what picks what it checks
+and how much it says: packages, targets, features, names of tests,
+paths in the folder, `-k`, `-run` and the like, and after
+`cargo clippy --` the lints to deny, warn of, allow or forbid.
 
 Without `allow` and `reject`, a `new` agent may do what a goal's judge
 may: read and search, and run the usual tests, such as `git diff` and
-`cargo test`.
+`cargo test`, and `npm test`, `make test` and `cargo xtask ci` only as
+they are, with nothing after them.
 
 ### Schedules
 

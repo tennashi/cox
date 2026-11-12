@@ -24,7 +24,9 @@
 //! command and no more: a title with a new line, or with a character such
 //! as `;`, `&`, `|`, `<`, `>`, `$`, a backtick or `*` out of quotes, is
 //! asked of the human, and so is a command with a flag that has it run
-//! another or write a file, such as `find`'s `-exec`.
+//! another or write a file, such as `find`'s `-exec`, and a command that
+//! runs a project's tests, such as `pytest`, with any argument but those
+//! that pick the tests it runs.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -326,11 +328,211 @@ const RUNS_OR_WRITES: &[(&[&str], &[&str])] = &[
     (&["rg"], &["--pre", "--hostname-bin"]),
     (&["git"], &["--output", "--ext-diff"]),
     (&["cargo"], &["--config"]),
-    (
-        &["go", "test"],
-        &["-exec", "--exec", "-toolexec", "--toolexec"],
-    ),
 ];
+
+/// What may follow the words that a command running a project's tests
+/// starts with, by those words: only what picks the tests it runs and
+/// how much it says, since its other flags, many and more with each
+/// version, can have it write or delete a file or run another program.
+/// The first are what may follow the command, the second what may follow
+/// a `--` after it, when one may.
+const PICKS: &[(&[&str], Picks, Option<Picks>)] = &[
+    (
+        &["cargo", "test"],
+        Picks {
+            words: Words::Names,
+            ..CARGO
+        },
+        Some(LIBTEST),
+    ),
+    (&["cargo", "check"], CARGO, None),
+    (&["cargo", "clippy"], CARGO, Some(LINTS)),
+    (&["pytest"], PYTEST, None),
+    (&["go", "test"], GO_TEST, None),
+];
+
+/// What picks what Cargo builds and how, and how much it says: packages,
+/// targets, features, a release build, whether it may go online.
+const CARGO: Picks = Picks {
+    flags: &[
+        "--lib",
+        "--bins",
+        "--tests",
+        "--doc",
+        "--all-targets",
+        "--workspace",
+        "--all",
+        "--release",
+        "--all-features",
+        "--no-default-features",
+        "--no-fail-fast",
+        "--no-run",
+        "--locked",
+        "--frozen",
+        "--offline",
+        "-q",
+        "--quiet",
+        "-v",
+        "--verbose",
+    ],
+    named: &[
+        "-p",
+        "--package",
+        "--exclude",
+        "--test",
+        "--bin",
+        "-F",
+        "--features",
+        "-j",
+        "--jobs",
+    ],
+    words: Words::Never,
+};
+
+/// What picks the tests a Rust test runs, after `cargo test --`.
+const LIBTEST: Picks = Picks {
+    flags: &[
+        "--nocapture",
+        "--show-output",
+        "--exact",
+        "--ignored",
+        "--include-ignored",
+        "--list",
+        "-q",
+        "--quiet",
+    ],
+    named: &["--skip", "--test-threads"],
+    words: Words::Names,
+};
+
+/// The lints Clippy denies, warns of or allows, after `cargo clippy --`.
+const LINTS: Picks = Picks {
+    flags: &[],
+    named: &[
+        "-D", "--deny", "-W", "--warn", "-A", "--allow", "-F", "--forbid",
+    ],
+    words: Words::Never,
+};
+
+/// What picks the tests pytest runs, when it stops, and how much it says.
+const PYTEST: Picks = Picks {
+    flags: &[
+        "-q",
+        "--quiet",
+        "-v",
+        "-vv",
+        "--verbose",
+        "-x",
+        "--exitfirst",
+        "-s",
+    ],
+    named: &["-k", "-m"],
+    words: Words::Paths,
+};
+
+/// What picks the tests `go test` runs, how, and how much it says.
+const GO_TEST: Picks = Picks {
+    flags: &["-v", "-race", "-short", "-cover", "-failfast"],
+    named: &["-run", "-skip", "-count", "-timeout"],
+    words: Words::Paths,
+};
+
+/// The arguments a command may be given that pick what it runs.
+struct Picks {
+    /// The flags that stand alone.
+    flags: &'static [&'static str],
+    /// The flags followed by a name: in the next word, after an `=`, or,
+    /// for a flag of one letter, in the same word.
+    named: &'static [&'static str],
+    /// What the words that are not flags may be.
+    words: Words,
+}
+
+/// What a command's words that are not flags may be.
+#[derive(Clone, Copy)]
+enum Words {
+    /// None: every word is a flag.
+    Never,
+    /// Names, as of tests.
+    Names,
+    /// Paths in the folder the command runs in, which do not climb out.
+    Paths,
+}
+
+impl Picks {
+    /// Whether `words` are all of these.
+    fn take(&self, words: &[String]) -> bool {
+        let mut words = words.iter().map(String::as_str);
+        while let Some(word) = words.next() {
+            let taken = if self.flags.contains(&word) {
+                true
+            } else if let Some(rest) = self.named(word) {
+                let name = match rest {
+                    "" => words.next(),
+                    rest => Some(rest.strip_prefix('=').unwrap_or(rest)),
+                };
+                name.is_some_and(is_name)
+            } else {
+                is_name(word)
+                    && match self.words {
+                        Words::Never => false,
+                        Words::Names => true,
+                        Words::Paths => {
+                            let path = Path::new(word);
+                            !word.starts_with('~')
+                                && path.is_relative()
+                                && !path
+                                    .components()
+                                    .any(|component| component == Component::ParentDir)
+                        }
+                    }
+            };
+            if !taken {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// What follows the flag in `word`, when it is one of the flags
+    /// followed by a name: nothing, when the name is in the next word.
+    fn named<'w>(&self, word: &'w str) -> Option<&'w str> {
+        self.named.iter().find_map(|flag| {
+            word.strip_prefix(flag)
+                .filter(|rest| rest.is_empty() || rest.starts_with('=') || flag.len() == 2)
+        })
+    }
+}
+
+/// Whether `word` is a name, not a flag.
+fn is_name(word: &str) -> bool {
+    !word.is_empty() && !word.starts_with('-')
+}
+
+/// Whether `words` start with the words of `command`.
+fn starts(words: &[String], command: &[&str]) -> bool {
+    words.len() >= command.len() && words.iter().zip(command).all(|(word, name)| word == name)
+}
+
+/// Whether `words`, when they run a project's tests as one of [`PICKS`],
+/// give it only what picks the tests it runs.
+fn picked(words: &[String]) -> bool {
+    PICKS
+        .iter()
+        .filter(|(command, ..)| starts(words, command))
+        .all(|(command, before, after)| {
+            let rest = &words[command.len()..];
+            match rest.iter().position(|word| word == "--") {
+                None => before.take(rest),
+                Some(at) => {
+                    before.take(&rest[..at])
+                        && after
+                            .as_ref()
+                            .is_some_and(|after| after.take(&rest[at + 1..]))
+                }
+            }
+        })
+}
 
 /// The characters out of quotes with which a shell does more than take a
 /// command's words apart: runs another command, puts in what one prints
@@ -342,12 +544,12 @@ const SHELL: &[char] = &[
 
 /// The command a shell runs `title` as, its words one space between,
 /// when the shell runs that one command and no more, and the command has
-/// none of the flags of [`RUNS_OR_WRITES`].
+/// none of the flags of [`RUNS_OR_WRITES`] and, if it runs a project's
+/// tests, only what [`PICKS`] says picks them.
 fn one_command(title: &str) -> Option<String> {
     let words = words(title)?;
     let runs_or_writes = RUNS_OR_WRITES.iter().any(|(command, flags)| {
-        words.len() >= command.len()
-            && words.iter().zip(*command).all(|(word, name)| word == name)
+        starts(&words, command)
             && words.iter().any(|word| {
                 flags.iter().any(|flag| {
                     word.strip_prefix(flag)
@@ -355,7 +557,7 @@ fn one_command(title: &str) -> Option<String> {
                 })
             })
     });
-    (!words.is_empty() && !runs_or_writes).then(|| words.join(" "))
+    (!words.is_empty() && !runs_or_writes && picked(&words)).then(|| words.join(" "))
 }
 
 /// The words of `line`, as a shell takes it apart and hands them to the
