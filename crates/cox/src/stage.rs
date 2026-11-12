@@ -156,7 +156,7 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 /// What Vim's keys ask of a stage's tabs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tabs {
     /// The keyboard goes to the tab shown.
     Focus,
@@ -168,6 +168,19 @@ pub enum Tabs {
     Close,
     /// Opens the menu of the stage's +, with the keyboard in its line.
     Menu,
+    /// Opens what the line says, a URL or a file, sorted as the menu of
+    /// the stage's + sorts it: a URL in the page shown when `follow` says
+    /// here, and else on a tab of its own.
+    Open {
+        line: String,
+        follow: crate::vim::keymap::Follow,
+    },
+    /// Loads the page shown again.
+    Reload,
+    /// Goes back in the page shown.
+    Back,
+    /// Goes forward in the page shown.
+    Forward,
 }
 
 /// What keeps a stage's tabs as they change, each of a chat by its key.
@@ -820,6 +833,13 @@ impl Stage {
                 return;
             }
             Tabs::Menu => return self.open_menu(window, cx),
+            Tabs::Open { line, follow } => return self.open_line(&line, follow, window, cx),
+            Tabs::Reload | Tabs::Back | Tabs::Forward => {
+                if let Some(page) = self.tabs.shown().and_then(|tab| tab.content.page()) {
+                    page.read(cx).browse(&tabs);
+                }
+                return;
+            }
             Tabs::Along(step) => self.tabs.along(step),
             Tabs::Number(number) => number.checked_sub(1),
         };

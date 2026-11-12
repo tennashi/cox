@@ -1,6 +1,7 @@
 //! What a key does in Vim's keys: a table of what the keys do, by the
 //! mode, the region the keyboard is in, and the keys held before.
 
+use super::search::Direction;
 use super::{Mode, Region};
 
 /// What the keymap says of the keys pressed.
@@ -33,6 +34,21 @@ pub enum Command {
     /// Draws hints over what can be clicked in the page, to follow the
     /// one whose label is typed next, in hint mode.
     Hint(Follow),
+    /// Opens the line at the window's foot, to type in, in command mode.
+    Line(Prompt),
+    /// Finds the last text searched for again: the way it went, or the
+    /// other way (`n`, `N`).
+    Again(Direction),
+}
+
+/// What the line at the window's foot is opened for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Prompt {
+    /// A command of Cox's (`:`, see [`super::ex`]).
+    Ex,
+    /// Text to find in the part with the keyboard, forward (`/`) or back
+    /// (`?`).
+    Search(Direction),
 }
 
 /// Where a hint typed in hint mode leads.
@@ -82,6 +98,16 @@ pub enum Sent {
     Address,
     /// A key typed in hint mode, toward a hint's label.
     Label(char),
+    /// Runs the line at the window's foot (`enter`).
+    Accept,
+    /// Puts the next of what the line can go on to in it (`tab`).
+    NextFit,
+    /// Puts the one before in it (`shift-tab`).
+    PreviousFit,
+    /// Puts the line typed before in it (`up`).
+    Older,
+    /// Puts the line typed after in it (`down`).
+    Newer,
 }
 
 /// What the window does for Vim's keys: where the keyboard goes, and
@@ -188,6 +214,12 @@ const PARTS: &[Region] = &[
     Region::Windows,
     Region::MacWindow,
 ];
+
+/// The parts Vim's `/` searches the text of.
+const SEARCHERS: &[Region] = &[Region::Page, Region::Code, Region::Document];
+
+/// The line at the window's foot.
+const LINE: &[Region] = &[Region::Command];
 
 /// The parts with a selection to move: the rail and the list of chats.
 const PICKERS: &[Region] = &[Region::Rail, Region::List];
@@ -305,6 +337,54 @@ impl Keymap {
         send(PAGE, &["o"], Sent::Address),
         act(PAGE, &["t"], Act::Menu),
         bind(Mode::Insert, ADDRESS, &["escape"], Command::Normal),
+        bind(Mode::Normal, PARTS, &[":"], Command::Line(Prompt::Ex)),
+        bind(
+            Mode::Normal,
+            SEARCHERS,
+            &["/"],
+            Command::Line(Prompt::Search(Direction::Forward)),
+        ),
+        bind(
+            Mode::Normal,
+            SEARCHERS,
+            &["?"],
+            Command::Line(Prompt::Search(Direction::Backward)),
+        ),
+        bind(
+            Mode::Normal,
+            SEARCHERS,
+            &["n"],
+            Command::Again(Direction::Forward),
+        ),
+        bind(
+            Mode::Normal,
+            SEARCHERS,
+            &["shift-n"],
+            Command::Again(Direction::Backward),
+        ),
+        bind(Mode::Command, LINE, &["escape"], Command::Normal),
+        bind(Mode::Command, LINE, &["enter"], Command::Send(Sent::Accept)),
+        bind(Mode::Command, LINE, &["tab"], Command::Send(Sent::NextFit)),
+        bind(
+            Mode::Command,
+            LINE,
+            &["ctrl-n"],
+            Command::Send(Sent::NextFit),
+        ),
+        bind(
+            Mode::Command,
+            LINE,
+            &["shift-tab"],
+            Command::Send(Sent::PreviousFit),
+        ),
+        bind(
+            Mode::Command,
+            LINE,
+            &["ctrl-p"],
+            Command::Send(Sent::PreviousFit),
+        ),
+        bind(Mode::Command, LINE, &["up"], Command::Send(Sent::Older)),
+        bind(Mode::Command, LINE, &["down"], Command::Send(Sent::Newer)),
     ]);
 
     /// Whether any binding is in `region`.
@@ -337,7 +417,8 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::{
-        Act, Answer, Command, Follow, Keymap, Mode, Motion, Pick, Place, Region, Sent, Toward, bind,
+        Act, Answer, Command, Direction, Follow, Keymap, Mode, Motion, Pick, Place, Prompt, Region,
+        Sent, Toward, bind,
     };
 
     #[test]
@@ -594,6 +675,66 @@ mod tests {
             Keymap::VIM.answer(Mode::Normal, Region::Changes, &["h"]),
             Answer::None
         );
+    }
+
+    #[test]
+    fn colon_opens_the_line_from_every_part_and_slash_from_those_with_text() {
+        for region in [
+            Region::Chat,
+            Region::Rail,
+            Region::Page,
+            Region::Code,
+            Region::Tree,
+        ] {
+            assert_eq!(
+                Keymap::VIM.answer(Mode::Normal, region, &[":"]),
+                Answer::Act(Command::Line(Prompt::Ex)),
+                "{region:?}"
+            );
+        }
+        for region in [Region::Page, Region::Code, Region::Document] {
+            let answer = |keys: &str| Keymap::VIM.answer(Mode::Normal, region, &[keys]);
+            assert_eq!(
+                answer("/"),
+                Answer::Act(Command::Line(Prompt::Search(Direction::Forward)))
+            );
+            assert_eq!(
+                answer("?"),
+                Answer::Act(Command::Line(Prompt::Search(Direction::Backward)))
+            );
+            assert_eq!(answer("n"), Answer::Act(Command::Again(Direction::Forward)));
+            assert_eq!(
+                answer("shift-n"),
+                Answer::Act(Command::Again(Direction::Backward))
+            );
+        }
+        for (mode, region) in [
+            (Mode::Insert, Region::Chat),
+            (Mode::Normal, Region::Terminal),
+            (Mode::Normal, Region::Goal),
+        ] {
+            assert_eq!(Keymap::VIM.answer(mode, region, &[":"]), Answer::None);
+        }
+        assert_eq!(
+            Keymap::VIM.answer(Mode::Normal, Region::Tree, &["/"]),
+            Answer::None
+        );
+    }
+
+    #[test]
+    fn the_line_runs_cycles_and_goes_through_its_history() {
+        let answer = |keys: &str| Keymap::VIM.answer(Mode::Command, Region::Command, &[keys]);
+        let sent = |sent| Answer::Act(Command::Send(sent));
+        assert_eq!(answer("escape"), Answer::Act(Command::Normal));
+        assert_eq!(answer("enter"), sent(Sent::Accept));
+        assert_eq!(answer("tab"), sent(Sent::NextFit));
+        assert_eq!(answer("ctrl-n"), sent(Sent::NextFit));
+        assert_eq!(answer("shift-tab"), sent(Sent::PreviousFit));
+        assert_eq!(answer("ctrl-p"), sent(Sent::PreviousFit));
+        assert_eq!(answer("up"), sent(Sent::Older));
+        assert_eq!(answer("down"), sent(Sent::Newer));
+        assert_eq!(answer("q"), Answer::None);
+        assert_eq!(answer("j"), Answer::None);
     }
 
     #[test]

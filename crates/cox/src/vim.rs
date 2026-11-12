@@ -9,13 +9,17 @@
 //! key contexts. The stage's tabs keep every key of their own. While an
 //! input method composes, every key is its own.
 
+pub mod ex;
 pub mod keymap;
+pub mod line;
+pub mod search;
 
 use gpui::{
     Action, App, Global, KeyContext, Keystroke, KeystrokeEvent, Pixels, Window, actions, px,
 };
 
 use self::keymap::{Answer, Command, Follow, Keymap, Motion, Place, Sent};
+use self::search::{Find, Search};
 
 /// Moves what the part of the window with the keyboard shows, or its
 /// cursor, as Vim's keys ask: an action each part that moves so handles
@@ -137,6 +141,11 @@ impl Sent {
             Self::CopyAddress => Box::new(CopyAddress),
             Self::Address => Box::new(Address),
             Self::Label(key) => Box::new(Label { key }),
+            Self::Accept => Box::new(line::Accept),
+            Self::NextFit => Box::new(line::NextFit),
+            Self::PreviousFit => Box::new(line::PreviousFit),
+            Self::Older => Box::new(line::Older),
+            Self::Newer => Box::new(line::Newer),
         }
     }
 
@@ -151,14 +160,16 @@ impl Sent {
 }
 
 /// How the keys work: as Vim's normal mode, where they do things, as
-/// its insert mode, where they type, or as Vimperator's hint mode, where
-/// they type the label of a hint over a page.
+/// its insert mode, where they type, as Vimperator's hint mode, where
+/// they type the label of a hint over a page, or as Vim's command-line
+/// mode, where they type in the line at the window's foot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     #[default]
     Normal,
     Insert,
     Hint,
+    Command,
 }
 
 impl Mode {
@@ -169,6 +180,7 @@ impl Mode {
             Self::Normal => "NORMAL",
             Self::Insert => "INSERT",
             Self::Hint => "HINT",
+            Self::Command => "COMMAND",
         }
     }
 }
@@ -212,6 +224,8 @@ pub enum Region {
     Flow,
     Windows,
     MacWindow,
+    /// The line at the window's foot, which `:` and `/` open.
+    Command,
 }
 
 /// The key contexts that say the region the keyboard is in.
@@ -243,6 +257,7 @@ const REGIONS: &[(&str, Region)] = &[
     (crate::stage::flow::KEY_CONTEXT, Region::Flow),
     (crate::stage::windows::KEY_CONTEXT, Region::Windows),
     (crate::stage::mac_window::KEY_CONTEXT, Region::MacWindow),
+    (line::KEY_CONTEXT, Region::Command),
 ];
 
 impl Region {
@@ -270,6 +285,7 @@ impl Region {
     const fn enters_in(self) -> Option<Mode> {
         match self {
             Self::Goal | Self::Sketch | Self::Renaming | Self::Address => Some(Mode::Insert),
+            Self::Command => Some(Mode::Command),
             Self::Settings
             | Self::ProjectCard
             | Self::Rail
@@ -308,6 +324,8 @@ pub struct Vim {
     held: Vec<String>,
     /// Where the keyboard was at the last key.
     region: Region,
+    /// The last text searched for, which `n` and `N` find again.
+    search: Option<Search>,
 }
 
 impl Global for Vim {}
@@ -332,7 +350,7 @@ impl Vim {
         if region != self.region {
             self.region = region;
             self.reset();
-            if self.mode == Mode::Hint {
+            if matches!(self.mode, Mode::Hint | Mode::Command) {
                 self.mode = Mode::Normal;
             }
             if let Some(mode) = region.enters_in() {
@@ -373,6 +391,8 @@ impl Vim {
                     Command::Insert(_) => self.mode = Mode::Insert,
                     Command::Hint(_) => self.mode = Mode::Hint,
                     Command::Stop
+                    | Command::Line(_)
+                    | Command::Again(_)
                     | Command::Reset
                     | Command::Window(_)
                     | Command::Move(_)
@@ -459,6 +479,20 @@ pub fn enter(mode: Mode, cx: &mut App) {
     }
 }
 
+/// Keeps `search` as the last, for `n` and `N` to find again, if Vim's
+/// keys are on.
+pub fn searched(search: Search, cx: &mut App) {
+    if cx.has_global::<Vim>() {
+        cx.global_mut::<Vim>().search = Some(search);
+    }
+}
+
+/// The last text searched for, if Vim's keys are on.
+#[must_use]
+pub fn last_search(cx: &App) -> Option<&Search> {
+    cx.try_global::<Vim>()?.search.as_ref()
+}
+
 fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     if crate::ui::composing::any(cx) {
         return;
@@ -490,6 +524,18 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
                 });
             }
         }
+        Outcome::Do(Command::Line(prompt), _) => {
+            window.dispatch_action(Box::new(line::OpenLine { prompt }), cx);
+        }
+        Outcome::Do(Command::Again(direction), _) => {
+            if let Some(search) = last_search(cx) {
+                let find = Find {
+                    text: search.text.clone(),
+                    direction: search.direction.then(direction),
+                };
+                window.dispatch_action(Box::new(find), cx);
+            }
+        }
         Outcome::Do(Command::Move(motion), count) => {
             window.dispatch_action(Box::new(Move { motion, count }), cx);
         }
@@ -515,7 +561,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
 mod tests {
     use gpui::{KeyContext, Keystroke, px};
 
-    use super::keymap::{Act, Command, Follow, Keymap, Motion, Pick, Place, Sent};
+    use super::keymap::{Act, Command, Follow, Keymap, Motion, Pick, Place, Prompt, Sent};
     use super::{Mode, Move, Outcome, Region, Vim};
 
     fn press(vim: &mut Vim, region: Region, keys: &str) -> Vec<Outcome> {
@@ -795,6 +841,40 @@ mod tests {
         press(&mut vim, Region::Page, "shift-f");
         assert_eq!(vim.mode(), Mode::Hint);
         press(&mut vim, Region::Chat, "x");
+        assert_eq!(vim.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn the_line_types_every_key_but_its_own_and_its_mode_goes_as_it_closes() {
+        let mut vim = Vim::default();
+        assert_eq!(
+            press(&mut vim, Region::Code, ":"),
+            [Outcome::Do(Command::Line(Prompt::Ex), None)]
+        );
+        assert_eq!(vim.mode(), Mode::Normal, "the line says when it opens");
+        assert_eq!(
+            press(&mut vim, Region::Command, "q j 1 ctrl-w"),
+            [Outcome::Pass; 4]
+        );
+        assert_eq!(vim.mode(), Mode::Command);
+        assert_eq!(Mode::Command.label(), "COMMAND");
+        assert_eq!(
+            press(&mut vim, Region::Command, "tab enter"),
+            [
+                Outcome::Do(Command::Send(Sent::NextFit), None),
+                Outcome::Do(Command::Send(Sent::Accept), None)
+            ]
+        );
+        assert_eq!(
+            press(&mut vim, Region::Code, "j"),
+            [Outcome::Do(Command::Move(Motion::Down), None)]
+        );
+        assert_eq!(vim.mode(), Mode::Normal);
+        press(&mut vim, Region::Command, "x");
+        assert_eq!(
+            press(&mut vim, Region::Command, "escape"),
+            [Outcome::Do(Command::Normal, None)]
+        );
         assert_eq!(vim.mode(), Mode::Normal);
     }
 }

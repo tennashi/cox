@@ -8,6 +8,7 @@ use gpui::{ClipboardItem, Context, Focusable as _, Window};
 
 use super::hints::{Hinting, Shown, Typed};
 use super::{Opens, Page};
+use crate::stage::Tabs;
 use crate::stage::code::{Back, Forward};
 use crate::vim::keymap::{Follow, Motion};
 use crate::vim::{self, Address, CopyAddress, FocusField, Label, Leave, Mode, Move, Reload};
@@ -80,6 +81,22 @@ impl Page {
             Motion::Top => Scroll::Top,
             Motion::Bottom => Scroll::Bottom,
         });
+    }
+
+    /// Leaves the page for `url`, as Vim's `:open` asks.
+    pub(in crate::stage) fn load(&self, url: &str) {
+        self.browser.load(url);
+    }
+
+    /// Goes back or forward, or loads the page again, as Vim's `:back`,
+    /// `:forward` and `:reload` ask.
+    pub(in crate::stage) fn browse(&self, tabs: &Tabs) {
+        match tabs {
+            Tabs::Reload => self.browser.reload(),
+            Tabs::Back => self.browser.go_back(),
+            Tabs::Forward => self.browser.go_forward(),
+            _ => {}
+        }
     }
 
     pub(super) fn back(&mut self, _: &Back, _: &mut Window, _: &mut Context<Self>) {

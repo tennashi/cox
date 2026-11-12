@@ -20,6 +20,7 @@ use cox::stage::document::Document;
 use cox::stage::terminal::{Program, Running, Terminal};
 use cox::stage::tree::{Chosen, Tree};
 use cox::vim::Mode;
+use cox::vim::keymap::Follow;
 use cox::workspace::Workspace;
 use gpui::{
     Entity, EntityInputHandler as _, Focusable as _, ScrollDelta, ScrollWheelEvent, TestAppContext,
@@ -991,4 +992,211 @@ fn hint_mode_sends_the_labels_typed_to_the_page_until_escape(cx: &mut TestAppCon
     cx.update(|_, cx| cox::vim::enter(Mode::Normal, cx));
     cx.simulate_keystrokes("j");
     assert_eq!(asked(&page, cx), ["Down None"]);
+}
+
+/// What the line at the window's foot shows: whether it is open, what is
+/// typed in it, what the list over it holds, and what it said.
+#[derive(Debug, PartialEq, Eq)]
+struct Shown {
+    open: bool,
+    text: String,
+    fits: Vec<String>,
+    said: Option<String>,
+}
+
+fn line(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Shown {
+    workspace.read_with(cx, |workspace, cx| {
+        let line = workspace.line().expect("Vim's keys are on").read(cx);
+        Shown {
+            open: line.is_open(),
+            text: line.text(cx).to_owned(),
+            fits: line.fits().into_iter().map(|fit| fit.line).collect(),
+            said: line.said().map(str::to_owned),
+        }
+    })
+}
+
+#[gpui::test]
+fn colon_opens_the_line_whose_list_narrows_and_escape_closes_it(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line");
+    keys::press(cx, &workspace, "secondary-n escape :");
+    let shown = line(cx, &workspace);
+    assert!(shown.open);
+    assert_eq!(shown.fits.len(), cox::vim::ex::COMMANDS.len());
+    assert!(in_part(cx, "CommandLine"));
+    assert_eq!(shown_mode(cx), Some("COMMAND"));
+
+    keys::press(cx, &workspace, "s t");
+    assert_eq!(line(cx, &workspace).fits[0], "stop");
+    keys::press(cx, &workspace, "tab");
+    assert_eq!(line(cx, &workspace).text, "stop");
+    keys::press(cx, &workspace, "tab");
+    let second = line(cx, &workspace).fits[1].clone();
+    assert_eq!(line(cx, &workspace).text, second, "Tab goes along the list");
+    keys::press(cx, &workspace, "shift-tab");
+    assert_eq!(line(cx, &workspace).text, "stop");
+    keys::press(cx, &workspace, "ctrl-n ctrl-p");
+    assert_eq!(line(cx, &workspace).text, "stop");
+
+    keys::press(cx, &workspace, "escape");
+    assert!(!line(cx, &workspace).open);
+    assert!(in_part(cx, "Conversation"));
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(keys::shown_input(cx, &workspace), "");
+    let chats = workspace.read_with(cx, |workspace, _| workspace.chats(0).count());
+    assert_eq!(chats, 1, "escape ran nothing");
+}
+
+#[gpui::test]
+fn enter_runs_new_settings_and_an_action_by_its_name(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-run");
+    keys::press(cx, &workspace, "secondary-n escape");
+    let chats = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| workspace.chats(0).count())
+    };
+
+    keys::press(cx, &workspace, ": n e w enter");
+    assert_eq!(chats(cx), 2);
+    assert_eq!(shown_mode(cx), Some("INSERT"), "a new chat types at once");
+
+    keys::press(cx, &workspace, "escape : s e t enter");
+    assert!(in_part(cx, "Settings"));
+    keys::press(cx, &workspace, "escape");
+
+    keys::press(cx, &workspace, ":");
+    cx.simulate_input("cox::NewChat");
+    keys::press(cx, &workspace, "enter");
+    assert_eq!(chats(cx), 3);
+}
+
+#[gpui::test]
+fn colon_stop_stops_the_agent(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-stop");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    cx.simulate_input("wait");
+    keys::press(cx, &workspace, "enter");
+    go_on(cx, &workspace);
+    assert_eq!(agent_state(cx, &view), State::Busy);
+
+    keys::press(cx, &workspace, "escape : s t o p enter");
+    go_on(cx, &workspace);
+    assert_eq!(agent_state(cx, &view), State::Idle);
+}
+
+#[gpui::test]
+fn colon_quit_and_the_rest_go_to_the_stage(cx: &mut TestAppContext) {
+    let keyed = Keyed::default();
+    let stages = FakeStages {
+        keyed: Some(keyed.clone()),
+        ..FakeStages::default()
+    };
+    cx.update(cox::vim::install);
+    let (workspace, cx) = keys::open_window_on(cx, scratch("line-tabs"), stages);
+    keys::press(cx, &workspace, "secondary-n escape");
+
+    keys::press(
+        cx,
+        &workspace,
+        ": q enter : r e enter : b a enter : f o enter",
+    );
+    keys::press(cx, &workspace, ":");
+    cx.simulate_input("tabopen example.com");
+    keys::press(cx, &workspace, "enter :");
+    cx.simulate_input("o src/main.rs");
+    keys::press(cx, &workspace, "enter");
+    assert_eq!(
+        *keyed.borrow(),
+        [
+            Tabs::Close,
+            Tabs::Reload,
+            Tabs::Back,
+            Tabs::Forward,
+            Tabs::Open {
+                line: "example.com".to_owned(),
+                follow: Follow::NewTab
+            },
+            Tabs::Open {
+                line: "src/main.rs".to_owned(),
+                follow: Follow::Here
+            },
+        ]
+    );
+    assert_eq!(keys::shown_input(cx, &workspace), "");
+}
+
+#[gpui::test]
+fn the_line_keeps_what_was_typed_for_up_and_down(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-history");
+    keys::press(cx, &workspace, "secondary-n escape");
+    keys::press(cx, &workspace, ": q enter : h e l p enter");
+    assert!(line(cx, &workspace).open, ":help opens the line again");
+    assert_eq!(
+        line(cx, &workspace).fits.len(),
+        cox::vim::ex::COMMANDS.len(),
+        "listing every command"
+    );
+
+    keys::press(cx, &workspace, "up");
+    assert_eq!(line(cx, &workspace).text, "help");
+    keys::press(cx, &workspace, "up");
+    assert_eq!(line(cx, &workspace).text, "q");
+    keys::press(cx, &workspace, "up");
+    assert_eq!(line(cx, &workspace).text, "q", "there is none older");
+    keys::press(cx, &workspace, "down down");
+    assert_eq!(line(cx, &workspace).text, "");
+
+    keys::press(cx, &workspace, "h up");
+    assert_eq!(line(cx, &workspace).text, "help", "of those that start so");
+    keys::press(cx, &workspace, "up");
+    assert_eq!(line(cx, &workspace).text, "help");
+    keys::press(cx, &workspace, "escape");
+}
+
+#[gpui::test]
+fn the_line_says_so_of_a_command_it_does_not_know(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-unknown");
+    keys::press(cx, &workspace, "secondary-n escape : f o o enter");
+    let shown = line(cx, &workspace);
+    assert!(!shown.open);
+    assert_eq!(shown.said.as_deref(), Some("Not a command: foo"));
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    keys::press(cx, &workspace, ":");
+    assert_eq!(line(cx, &workspace).said, None);
+}
+
+#[gpui::test]
+fn colon_chat_shows_the_chat_whose_name_fits(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-chat");
+    keys::press(cx, &workspace, "secondary-n escape");
+    keys::press(cx, &workspace, "secondary-n escape");
+    let names: Vec<String> = workspace.read_with(cx, |workspace, _| {
+        workspace
+            .chats(0)
+            .map(|chat| chat.name().to_owned())
+            .collect()
+    });
+    let shown_key = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| {
+            workspace.shown().map(cox::workspace::Chat::key)
+        })
+    };
+    let first = workspace.read_with(cx, |workspace, _| workspace.chats(0).next().unwrap().key());
+    keys::press(cx, &workspace, ":");
+    cx.simulate_input("chat ");
+    assert_eq!(line(cx, &workspace).fits.len(), names.len());
+    keys::press(cx, &workspace, "escape");
+    assert_ne!(shown_key(cx), Some(first));
+    keys::press(cx, &workspace, ":");
+    cx.simulate_input(&format!("ch {}", names[0]));
+    keys::press(cx, &workspace, "enter");
+    assert_eq!(shown_key(cx), Some(first));
+}
+
+#[gpui::test]
+fn off_there_is_no_line(cx: &mut TestAppContext) {
+    let (workspace, cx) = keys::open_window(cx, scratch("line-off"));
+    keys::press(cx, &workspace, "secondary-n escape :");
+    assert!(workspace.read_with(cx, |workspace, _| workspace.line().is_none()));
+    assert!(!in_part(cx, "CommandLine"));
 }

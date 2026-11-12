@@ -7,6 +7,7 @@
 //! each virtual device the SDK has. The button of what changed counts the
 //! files that did, while the stage is open.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
@@ -26,6 +27,7 @@ use crate::ui::theme::{
     ACCENT, ASKING, BORDER_STRONG, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED, SURFACE,
 };
 use crate::ui::tip;
+use crate::vim::keymap::Follow;
 
 /// How tall a view's button is, and the +, and how round each is.
 const VIEW_HEIGHT: f32 = 28.;
@@ -292,6 +294,48 @@ impl Stage {
         cx.notify();
     }
 
+    /// Opens what the line of Vim's `:open` or `:tabopen` says, a URL or
+    /// a file, sorted as the menu sorts what is typed in it, but never a
+    /// command: what would run as one is a file of that name. A URL goes
+    /// to the page shown, when `follow` says here and a page is shown.
+    pub(super) fn open_line(
+        &mut self,
+        line: &str,
+        follow: Follow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = self
+            .tabs
+            .shown()
+            .and_then(|tab| tab.content.page())
+            .cloned();
+        match (typed(line, &self.cwd), follow, shown) {
+            (Some(Typed::Page(url)), Follow::Here, Some(page)) => {
+                page.read(cx).load(&url);
+                self.focus_shown(window, cx);
+            }
+            (Some(Typed::Page(url)), ..) => {
+                self.open_tab(&url, true, window, cx);
+                self.focus_shown(window, cx);
+            }
+            (Some(Typed::File(path)), ..) => self.open_typed_file(path, window, cx),
+            (Some(Typed::Command(_)), ..) => {
+                self.open_typed_file(self.cwd.join(line.trim()), window, cx);
+            }
+            (None, ..) => {}
+        }
+    }
+
+    /// Opens the file at `path` with the keyboard in its tab. A file that
+    /// cannot be read gets a tab all the same, which says why.
+    fn open_typed_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_path(&path, None, window, cx).is_err() {
+            self.show_file::<Code>(path, "", None, window, cx);
+            self.focus_shown(window, cx);
+        }
+    }
+
     /// Opens what the human typed in the menu: a file, a page, or a
     /// command in a terminal (see [`typed`]).
     fn open_typed(&mut self, line: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -300,14 +344,7 @@ impl Stage {
                 self.open_tab(&url, true, window, cx);
                 self.focus_shown(window, cx);
             }
-            Some(Typed::File(path)) => {
-                // A file that cannot be read gets a tab all the same,
-                // which says why.
-                if self.open_path(&path, None, window, cx).is_err() {
-                    self.show_file::<Code>(path, "", None, window, cx);
-                    self.focus_shown(window, cx);
-                }
-            }
+            Some(Typed::File(path)) => self.open_typed_file(path, window, cx),
             Some(Typed::Command(command)) => {
                 self.start_terminal(Program::Command(command), window, cx);
             }
