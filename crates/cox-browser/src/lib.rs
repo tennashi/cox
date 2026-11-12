@@ -211,6 +211,8 @@ struct Shared {
     popup: Option<PopupRect>,
     popup_frame: Option<Frame>,
     host: Option<BrowserHost>,
+    /// Whether the stage closed the browser, which may be before CEF made it.
+    closed: bool,
     /// Keeps CEF telling the browser's `DevTools` answers to the observer
     /// that learns the page's target id.
     devtools: Option<Registration>,
@@ -249,6 +251,7 @@ impl Shared {
             popup: None,
             popup_frame: None,
             host: None,
+            closed: false,
             devtools: None,
             caret: None,
             cursor: Cursor::Arrow,
@@ -900,9 +903,15 @@ impl Browser {
         self.shared().caret
     }
 
-    /// Closes the browser. CEF lets go of it on its own time.
+    /// Closes the browser now, or as soon as CEF makes it. CEF lets go of
+    /// it on its own time.
     pub fn close(&self) {
-        if let Some(host) = self.host() {
+        let host = {
+            let mut shared = self.shared();
+            shared.closed = true;
+            shared.host.clone()
+        };
+        if let Some(host) = host {
             host.close_browser(1);
         }
     }

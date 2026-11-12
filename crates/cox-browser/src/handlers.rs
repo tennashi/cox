@@ -103,6 +103,18 @@ wrap_task! {
     }
 }
 
+wrap_task! {
+    struct CloseBrowser {
+        host: BrowserHost,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            self.host.close_browser(1);
+        }
+    }
+}
+
 /// Creates the windowless browser `new` asks for. Call it on CEF's UI
 /// thread.
 fn create(new: NewBrowser) {
@@ -509,17 +521,30 @@ wrap_life_span_handler! {
 
         /// The browser exists: it takes input now, and `DevTools` is
         /// asked for the page's target, which the page's agent is
-        /// kept to.
+        /// kept to. Unless the stage closed it already: then it closes.
         fn on_after_created(&self, browser: Option<&mut cef::Browser>) {
             if let Some(browser) = browser {
                 let host = browser.host();
                 {
+                    let mut shared = lock(&self.shared);
+                    shared.host.clone_from(&host);
+                    if shared.closed {
+                        drop(shared);
+                        // CEF crashes if the browser is closed before this
+                        // returns, so the close waits for a task.
+                        if let Some(host) = host {
+                            let mut task = CloseBrowser::new(host);
+                            cef::post_task(
+                                ThreadId::from(cef_thread_id_t::TID_UI),
+                                Some(&mut task),
+                            );
+                        }
+                        return;
+                    }
                     // CEF lays the page out again at the size reported
                     // from here on, which may have changed since CEF
                     // made the page: the stage's next size waits for a
                     // picture of it, as after any resize.
-                    let mut shared = lock(&self.shared);
-                    shared.host.clone_from(&host);
                     shared.resizing = Some(Resizing::new(Instant::now()));
                 }
                 let mut devtools = None;
