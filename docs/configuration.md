@@ -56,7 +56,8 @@ Every key is optional. Paths may be absolute or start with `~`.
     "language": "Japanese",
     "command": ["plamo-translate", "--from", "{from}", "--to", "{to}"]
   },
-  "phone": {"port": 7421, "tailscale": true}
+  "phone": {"port": 7421, "tailscale": true},
+  "vim": true
 }
 ```
 
@@ -73,10 +74,30 @@ Every key is optional. Paths may be absolute or start with `~`.
 | `phone` | `false` turns off the page for the phone. | on |
 | `phone.port` | The port of the page for the phone. The relay, which passes the pages served on the Mac's own address on to the phone, listens on the next port, and the sketches' mocks are served on the one after. | `7421` |
 | `phone.tailscale` | `false` stops `coxd` from running `tailscale serve` for the page and the pages the relay passes on. | `true` |
+| `vim` | `true` makes the keys work as in Vim. See [Vim's keys](#vims-keys). | `false` |
 
 The settings card (Cmd-, or Ctrl-,) sets `agent`, `home`, `workflow`,
 `wiki` and `translation` for you, and leaves the rest of the file as it
-is. `coxd` reads `phone` only when it starts.
+is. `coxd` reads `phone` only when it starts, and the window `vim`.
+
+### Vim's keys
+
+With `"vim": true`, the chat's input has a mode, shown beside it as
+`NORMAL` or `INSERT`. A new chat starts in insert mode, where keys type
+as usual.
+
+| Mode | Key | Does |
+| --- | --- | --- |
+| Insert | Esc | Goes to normal mode. It does not stop the agent. |
+| Normal | `i`, `a`, `I`, `A` | Goes to insert mode at the cursor, after it, at the start of the line, or at its end. |
+| Normal | Ctrl-C | Stops the agent. |
+| Normal | Esc | Forgets a count typed. In the goal's, a sketch's or a rename's input, the settings or a project's card, it closes them as Esc does without Vim. |
+
+In normal mode, keys that would type type nothing, and digits make a
+count, so they choose an option the agent asks only in insert mode. Keys with Cmd work as without Vim. The inputs that set a goal,
+start a sketch or rename a chat open in insert mode, and the settings
+and a project's card in normal mode. The stage's tabs keep every key
+of their own. While an input method composes, every key is its own.
 
 ## `agents.json`
 

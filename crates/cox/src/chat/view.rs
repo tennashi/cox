@@ -87,13 +87,13 @@ actions!(
     ]
 );
 
-const KEY_CONTEXT: &str = "Conversation";
+pub(crate) const KEY_CONTEXT: &str = "Conversation";
 
 /// The key context of the input that sets the chat's goal.
-const GOAL: &str = "Goal";
+pub(crate) const GOAL: &str = "Goal";
 
 /// The key context of the input that starts a sketch of the chat.
-const SKETCH: &str = "Sketch";
+pub(crate) const SKETCH: &str = "Sketch";
 
 /// Binds the keys of the conversation. Escape is the stage's while the
 /// stage has the keyboard, and the input method's while it composes.
@@ -1184,6 +1184,7 @@ impl ChatView {
                         cx,
                     ))
                     .child(div().flex_1())
+                    .children(crate::vim::mode(cx).map(render_mode))
                     .when(running, |row| row.child(Self::render_stop(cx))),
             )
     }
@@ -1260,6 +1261,18 @@ impl ChatView {
             .child(label)
             .on_click(cx.listener(move |view, _, window, cx| start(view, window, cx)))
     }
+}
+
+/// The mode Vim's keys are in, beside the input, while they are on.
+fn render_mode(mode: crate::vim::Mode) -> impl IntoElement {
+    div()
+        .debug_selector(|| "vim-mode".to_owned())
+        .flex_shrink_0()
+        .px(px(4.))
+        .font_family(CODE_FONT)
+        .text_size(px(11.))
+        .text_color(rgb(FAINT))
+        .child(mode.label())
 }
 
 impl ChatView {

@@ -81,7 +81,7 @@ actions!(
     ]
 );
 
-const KEY_CONTEXT: &str = "Code";
+pub(crate) const KEY_CONTEXT: &str = "Code";
 
 /// Room between the text and the tab's edges.
 pub(super) const PADDING: f32 = 8.;

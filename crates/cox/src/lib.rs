@@ -33,6 +33,8 @@
 //!   elsewhere.
 //! - [`inspect`] answers for the window to an agent that debugs Cox, on a
 //!   socket, and is the client that asks it.
+//! - [`vim`] is the keys as in Vim, which the human turns on, read ahead
+//!   of the window's own.
 //! - [`ui`] is what all of the window's parts share: the text the human
 //!   types into, text that can be selected, Markdown, and how it all
 //!   looks.
@@ -71,6 +73,7 @@ pub mod translate;
 pub mod trash;
 pub mod trigger;
 pub mod ui;
+pub mod vim;
 pub mod wiki;
 pub mod workflow;
 pub mod workspace;

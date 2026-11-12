@@ -399,7 +399,8 @@ impl EntityInputHandler for Page {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.composing.take().is_some() {
+        if self.composing.is_some() {
+            self.compose(None, cx);
             self.browser.finish_composition();
         }
         cx.notify();
@@ -414,7 +415,7 @@ impl EntityInputHandler for Page {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.composing = None;
+        self.compose(None, cx);
         self.browser.commit(text);
         cx.notify();
     }
@@ -429,7 +430,7 @@ impl EntityInputHandler for Page {
         cx: &mut Context<Self>,
     ) {
         self.browser.compose(new_text, new_selected_range_utf16);
-        self.composing = Some(new_text.to_owned());
+        self.compose(Some(new_text.to_owned()), cx);
         cx.notify();
     }
 
@@ -520,6 +521,12 @@ fn in_window(length: i32) -> Pixels {
 }
 
 impl Page {
+    /// Keeps what the input method composes, and says whether it does.
+    fn compose(&mut self, text: Option<String>, cx: &mut Context<Self>) {
+        crate::ui::composing::note(cx.entity_id(), text.is_some(), cx);
+        self.composing = text;
+    }
+
     /// The menu of the text selected in the page, while it is open.
     fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (at, text) = self.menu.clone()?;

@@ -15,7 +15,8 @@
 //! {"language": "Japanese"}}` (see [`translation`]), and the agent a new
 //! chat talks to when the command line names none, by its name in
 //! `agents.json`, as `{"agent": "Claude"}` (see [`agent`]), which
-//! the human writes in it themselves.
+//! the human writes in it themselves, and whether the keys work as in
+//! Vim, as `{"vim": true}` (see [`crate::vim`]).
 //!
 //! Cox reads the file again as it changes, as when the human edits it
 //! while Cox runs (see [`follow`]).
@@ -62,6 +63,8 @@ pub struct Saved {
     /// as when Cox is opened from the Finder, the Dock or a launcher, if
     /// they named one.
     pub agent: Option<String>,
+    /// Whether the keys work as in Vim, which the human turns on.
+    pub vim: bool,
 }
 
 /// How the human reads the wiki, which the agents write in English, and
@@ -188,6 +191,14 @@ impl Saved {
                 None
             }
         };
+        let vim = match value.get("vim") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(vim)) => *vim,
+            Some(_) => {
+                tracing::error!("\"vim\" is neither true nor false");
+                false
+            }
+        };
         Ok(Self {
             home,
             workflow,
@@ -195,6 +206,7 @@ impl Saved {
             raw,
             translation,
             agent,
+            vim,
         })
     }
 }
@@ -272,6 +284,13 @@ pub fn follow(window: WindowHandle<Workspace>, agents: Agents, cx: &mut App) {
 #[must_use]
 pub fn agent() -> Option<String> {
     Saved::read().agent
+}
+
+/// Whether the keys work as in Vim, as `settings.json` says with
+/// `{"vim": true}`.
+#[must_use]
+pub fn vim() -> bool {
+    Saved::read().vim
 }
 
 /// A folder the human keeps their own in, which `settings.json` names,
@@ -596,6 +615,14 @@ mod tests {
         assert_eq!(saved.home, Some(PathBuf::from("/work")));
         assert_eq!(saved.workflow, None);
         assert_eq!(Saved::parse(br#"{"workflow": 3}"#).unwrap().workflow, None);
+    }
+
+    #[test]
+    fn vim_is_on_only_when_the_human_says_true() {
+        assert!(Saved::parse(br#"{"vim": true}"#).unwrap().vim);
+        for bytes in [&b"{}"[..], br#"{"vim": false}"#, br#"{"vim": "yes"}"#] {
+            assert!(!Saved::parse(bytes).unwrap().vim);
+        }
     }
 
     #[test]
