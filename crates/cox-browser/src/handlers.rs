@@ -476,6 +476,9 @@ wrap_load_handler! {
             {
                 let mut shared = lock(&self.shared);
                 shared.navigation.loading = is_loading == 1;
+                if is_loading == 1 {
+                    shared.navigation.failed = false;
+                }
                 shared.navigation.can_go_back = can_go_back == 1;
                 shared.navigation.can_go_forward = can_go_forward == 1;
             }
@@ -493,6 +496,21 @@ wrap_load_handler! {
             if frame.is_some_and(|frame| frame.is_main() == 1) {
                 lock(&self.shared).favicons.loading();
                 let _ = self.events.send(Event::EditableFocus { editable: false });
+            }
+        }
+
+        /// The page failed to load, or a frame of it did. A load stopped,
+        /// as by another, is no failure.
+        fn on_load_error(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            frame: Option<&mut cef::Frame>,
+            error_code: cef::Errorcode,
+            _error_text: Option<&CefString>,
+            _failed_url: Option<&CefString>,
+        ) {
+            if frame.is_some_and(|frame| frame.is_main() == 1) && error_code != cef::Errorcode::ABORTED {
+                lock(&self.shared).navigation.failed = true;
             }
         }
 
