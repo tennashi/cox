@@ -6,13 +6,15 @@
 //! A window reaches it on a Unix socket, `run/coxd.sock` in Cox's data
 //! folder (see [`crate::storage`]), one message a line, each a JSON
 //! object: the window says its [`Hello`] first, and the daemon answers
-//! [`FromDaemon::Welcome`], after which each line the window writes is a
+//! [`FromDaemon::Joined`], after which each line the window writes is a
 //! [`ToDaemon`] and each the daemon writes a [`FromDaemon`] (see
 //! [`super::wire`]). One window at a time: another is answered
-//! [`FromDaemon::Taken`]. When the program coxd runs was replaced since
-//! it started, as `cargo xtask install` replaces it, and no chat is at
-//! work, the next window is answered [`FromDaemon::Outdated`], and coxd
-//! stops, for the window to start the new one (see [`super::client`]).
+//! [`FromDaemon::Taken`]. A window of another [`Build`] than coxd's, as
+//! once `cargo xtask install` replaced the program coxd runs, is not
+//! taken: while a chat is at work it is answered [`FromDaemon::Busy`],
+//! and comes again later, and once none is, it is answered
+//! [`FromDaemon::Outdated`], and coxd stops, for the window to start one
+//! of its own build (see [`super::client`]).
 //!
 //! Every minute, coxd runs the human's schedules that are due (see
 //! [`crate::schedule`]), whether a window is there or not.
@@ -23,7 +25,7 @@
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::Context as _;
 use cox_core::store::Store;
@@ -32,7 +34,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use super::wire::{FromDaemon, Hello, ToDaemon};
+use super::wire::{Build, FromDaemon, Hello, ToDaemon};
 use super::{Daemon, Internal, Spawns};
 
 /// How often coxd looks whether it was asked to stop, and whether its
@@ -229,7 +231,7 @@ async fn accept(
     to: UnboundedSender<ToDaemon>,
     internal: UnboundedSender<Internal>,
 ) {
-    let program = Program::now();
+    let build = Build::now();
     let mut last = 0;
     loop {
         let stream = match listener.accept().await {
@@ -240,24 +242,17 @@ async fn accept(
             }
         };
         last += 1;
-        let replaced = program.replaced();
-        tokio::task::spawn_local(connect(
-            last,
-            stream,
-            replaced,
-            to.clone(),
-            internal.clone(),
-        ));
+        tokio::task::spawn_local(connect(last, stream, build, to.clone(), internal.clone()));
     }
 }
 
 /// Serves the window of the connection `id` on `stream`, telling the
-/// daemon it came, and, once the daemon took it, what it says, until it
-/// goes.
+/// daemon, of `build`, it came, and, once the daemon took it, what it
+/// says, until it goes.
 async fn connect(
     id: u64,
     stream: UnixStream,
-    replaced: bool,
+    build: Option<Build>,
     to: UnboundedSender<ToDaemon>,
     internal: UnboundedSender<Internal>,
 ) {
@@ -279,7 +274,7 @@ async fn connect(
         id,
         hello,
         window,
-        replaced,
+        build,
         answer,
     };
     if internal.send(attach).is_err() {
@@ -293,9 +288,9 @@ async fn connect(
         return;
     }
     match answer {
-        FromDaemon::Welcome => {}
+        FromDaemon::Joined => {}
         FromDaemon::Outdated => {
-            tracing::info!("coxd's program was replaced: it stops for the new one");
+            tracing::info!("a window of another build came: coxd stops for it");
             let _ = write.shutdown().await;
             let _ = internal.send(Internal::Quit);
             return;
@@ -347,31 +342,4 @@ async fn write_line(
     let mut line = serde_json::to_vec(message)?;
     line.push(b'\n');
     write.write_all(&line).await
-}
-
-/// The program coxd runs, as it was when coxd started, to tell whether
-/// it was replaced since.
-struct Program {
-    path: Option<PathBuf>,
-    modified: Option<SystemTime>,
-}
-
-impl Program {
-    fn now() -> Self {
-        let path = std::env::current_exe().ok();
-        let modified = path.as_deref().and_then(modified);
-        Self { path, modified }
-    }
-
-    /// Whether the program at the path coxd started from is another now.
-    fn replaced(&self) -> bool {
-        match (&self.path, self.modified) {
-            (Some(path), Some(then)) => modified(path) != Some(then),
-            _ => false,
-        }
-    }
-}
-
-fn modified(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok()?.modified().ok()
 }
