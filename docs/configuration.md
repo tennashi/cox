@@ -82,9 +82,45 @@ is. `coxd` reads `phone` only when it starts, and the window `vim`.
 
 ### Vim's keys
 
-With `"vim": true`, the chat's input has a mode, shown beside it as
-`NORMAL` or `INSERT`. A new chat starts in insert mode, where keys type
-as usual.
+With `"vim": true`, the keys work as in Vim, and in a web page as in
+Vimperator. Off, nothing changes.
+
+**Modes.** The keys are in one of four modes, shown as `NORMAL`,
+`INSERT`, `HINT` or `COMMAND` beside the chat's input, or, while the
+chat's panel is folded or shows no chat, where the panel is. In normal
+mode keys do things; keys that would type type nothing, and digits make
+a count, as `3` of `3j`. In insert mode keys type. Hint mode picks what
+to click in a page by its label, and command mode types in the line at
+the window's foot. Keys with Cmd work as without Vim. While an input
+method composes, every key is its own.
+
+**Regions.** Where the keyboard is decides what the keys do: the rail
+of projects, the list of chats, the chat, and each tab of the stage.
+The keyboard comes into a region in its own mode:
+
+| Region | Comes in |
+| --- | --- |
+| The chat's input | As it was: a new chat in insert mode. |
+| The inputs of a goal, a sketch, a rename, a page's address | Insert mode. |
+| The rail, the list of chats, the settings, a project's card, code, a document, the tree, changes | Normal mode. |
+| A web page | Insert mode while a field of it has the keyboard, else normal mode. |
+| A terminal, an Android device | Insert mode, every key going to the program. Back from the line at the window's foot, the mode the line left. |
+
+**Everywhere in normal mode**, but in the inputs and screens that open
+over the chat:
+
+| Key | Does |
+| --- | --- |
+| Ctrl-W `h`, Ctrl-W `l` | Moves the keyboard to the part at the left or the right: the rail, the stage, the chat. |
+| Ctrl-W `w` | Moves the keyboard to the next part, round from the chat to the rail. |
+| `gt`, `gT` | Shows the stage's next tab, or the one before. `3gt` shows its third tab, `3gT` the tab three before. |
+| Ctrl-W `c` | Closes the tab the stage shows. |
+| `:` | Opens the line at the window's foot for a command. |
+
+A ring shows where the keyboard is: round the stage's tab, or round the
+row selected on the rail or in the list.
+
+**The chat.**
 
 | Mode | Key | Does |
 | --- | --- | --- |
@@ -92,28 +128,60 @@ as usual.
 | Normal | `i`, `a`, `I`, `A` | Goes to insert mode at the cursor, after it, at the start of the line, or at its end. |
 | Normal | Ctrl-C | Stops the agent. |
 | Normal | Esc | Forgets a count typed. In the goal's, a sketch's or a rename's input, the settings or a project's card, it closes them as Esc does without Vim. |
-| Normal | Ctrl-W `h`, Ctrl-W `l` | Moves the keyboard to the part of the window at the left or the right: the rail, the stage, the chat. |
-| Normal | Ctrl-W `w` | Moves the keyboard to the next part, round from the chat to the rail. |
-| Normal | Ctrl-W `k` | In the chat, opens the list of the project's chats, with the keyboard in it. Ctrl-W `j` or Esc closes it. |
-| Normal | `gt`, `gT` | Shows the stage's next tab, or the one before. `3gt` shows its third tab, `3gT` the tab three before. |
-| Normal | Ctrl-W `c` | Closes the tab the stage shows. |
+| Normal | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Scrolls the conversation a line, half its height, or to its ends. |
+| Normal | Ctrl-W `k` | Opens the list of the project's chats, with the keyboard in it. Ctrl-W `j` or Esc closes it. |
 
-On the rail and in the list of chats, `j` and `k` move the selection,
+**The rail and the list of chats.** `j` and `k` move the selection,
 `3j` three rows, `gg` to the first and `G` to the last. Enter or `l`
-opens what is selected: a project's chat, or the chat, with the keyboard
-in its input in normal mode. `o` opens a new chat in the project
-selected. The keyboard in the stage shows as a ring round its tab, and
-on the rail and the list as a ring round the row selected.
+opens what is selected: a project's chat, or the chat, with the
+keyboard in its input. `o` opens a new chat in the project selected.
 
-In normal mode, keys that would type type nothing, and digits make a
-count, so they choose an option the agent asks only in insert mode. Keys with Cmd work as without Vim. The inputs that set a goal,
-start a sketch or rename a chat open in insert mode, and the settings
-and a project's card in normal mode, and so do the rail, the list of
-chats and the stage's tabs. A terminal, an Android device and a web page
-keep every key of their own, Ctrl-W too, which a shell needs to delete a
-word: from one of them, the mouse or the app's own keys, such as
-Ctrl-Tab to the next chat, take the keyboard elsewhere. While an input
-method composes, every key is its own.
+**The stage's tabs, in normal mode.**
+
+| Tab | Key | Does |
+| --- | --- | --- |
+| Code, a document, the tree, changes, a page | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Moves the cursor or the selection, or scrolls, a line, half the tab, or to its ends. In code, `12G` goes to line 12. |
+| Code, a document, a page, a terminal | `/`, `?`, `n`, `N` | Finds text forward or back, as typed, in any case unless it has a capital, and again either way. |
+| Code | `V`, `y` | Selects whole lines from the cursor's, and copies them. |
+| Code | `ga`, `gd`, Ctrl-O, Ctrl-I | Hands the lines to the chat, goes to the definition, goes back, goes forward. |
+| The tree | `l` or Enter, `h` | Opens what is selected, or closes its folder. |
+| Changes | Enter | Opens the file selected. |
+| A page | `f`, `F` | Draws hints; typing a label clicks it, or with `F` opens the link on a tab of its own. Esc takes the hints away. |
+| A page | `H`, `L`, `r`, `o`, `t` | Goes back, forward, loads again, takes the keyboard to the address, opens the stage's + menu. |
+| A page | `gi`, `yy`, `i` | Gives the keyboard to the first field, copies the address, goes to insert mode. Esc in a field goes back to normal mode. |
+| A terminal | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Scrolls back through what scrolled off, and to the end. |
+| A terminal | `V`, `y` | Makes what `/` found, or what the mouse selected, whole lines, and copies what is selected. |
+| A terminal, an Android device | `i` (and `a` in a terminal) | Goes back to insert mode. |
+
+**A terminal and an Android device.** As in Neovim's terminal mode,
+insert mode sends every key to the program, Esc, Ctrl-W and `:` too, so
+Vim, a pager or the shell inside works; an Android device gets Esc as
+Back. Ctrl-\ Ctrl-N goes to normal mode, where the keys go nowhere but
+to the table above. Ctrl-\ then any other key sends that key, so
+Ctrl-\ Ctrl-\ sends Ctrl-\. Typing in a terminal shows its end again.
+
+**The line at the window's foot.** `:` opens it for a command, `/` and
+`?` for text to find. Tab and Shift-Tab, or Ctrl-N and Ctrl-P, go along
+the list over it of what the line can go on to, Up and Down through
+what was typed before, Enter runs it and Esc closes it.
+
+| Command | Does |
+| --- | --- |
+| `:q[uit]` | Closes the tab the stage shows. |
+| `:st[op]` | Stops the agent's turn in the chat shown. |
+| `:new` | Opens a new chat in the project. |
+| `:o[pen]`, `:e[dit]` | Opens a URL in the page shown, or a file. |
+| `:t[abopen]` | Opens a URL or a file on a tab of its own. |
+| `:set[tings]` | Opens the settings. |
+| `:go[al]` | Sets the goal of the chat shown, or with nothing after it opens its input. |
+| `:sk[etch]` | Starts a sketch of the chat shown. |
+| `:re[load]`, `:ba[ck]`, `:fo[rward]` | Loads the page shown again, goes back, goes forward. |
+| `:ch[at]` | Shows the chat of the project whose name fits. |
+| `:pro[ject]` | Chooses the project whose name fits. |
+| `:h[elp]` | Lists the commands. |
+
+A name with `::` in it runs Cox's action of that name, as
+`:workspace::NewChat`.
 
 ## `agents.json`
 
