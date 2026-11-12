@@ -334,6 +334,15 @@ impl Region {
     }
 }
 
+/// What the line at the window's foot shows of Vim's keys, as Vim's
+/// `showmode` and `showcmd` do: the mode, and the count and keys held
+/// toward a command, as `3g` of `3gt`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Status {
+    pub mode: Mode,
+    pub held: String,
+}
+
 /// What becomes of a key Vim's keys read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -373,6 +382,20 @@ impl Vim {
     #[must_use]
     pub const fn count(&self) -> Option<u32> {
         self.count
+    }
+
+    /// What the line at the window's foot shows of the keys.
+    #[must_use]
+    pub fn status(&self) -> Status {
+        Status {
+            mode: self.mode,
+            held: self
+                .count
+                .map(|count| count.to_string())
+                .into_iter()
+                .chain(self.held.iter().cloned())
+                .collect(),
+        }
     }
 
     fn reset(&mut self) {
@@ -550,6 +573,13 @@ pub fn mode(cx: &App) -> Option<Mode> {
     cx.try_global::<Vim>().map(Vim::mode)
 }
 
+/// What the line at the window's foot shows of Vim's keys, while they
+/// are on.
+#[must_use]
+pub fn status(cx: &App) -> Option<Status> {
+    cx.try_global::<Vim>().map(Vim::status)
+}
+
 /// The keyboard came to `region`, before any key there: its mode shows
 /// at once, if Vim's keys are on.
 pub fn came(region: Region, window: &mut Window, cx: &mut App) {
@@ -557,9 +587,9 @@ pub fn came(region: Region, window: &mut Window, cx: &mut App) {
         return;
     }
     let vim = cx.global_mut::<Vim>();
-    let was = vim.mode;
+    let was = vim.status();
     vim.arrive(region);
-    if vim.mode != was {
+    if vim.status() != was {
         window.refresh();
     }
 }
@@ -618,10 +648,10 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     }
     let region = Region::of(&event.context_stack);
     let vim = cx.global_mut::<Vim>();
-    let was = vim.mode;
+    let was = vim.status();
     let outcome = vim.key(&Keymap::VIM, region, &event.keystroke);
     let mode = vim.mode;
-    if mode != was {
+    if vim.status() != was {
         window.refresh();
     }
     if mode != Mode::Hint && hints::shown() {

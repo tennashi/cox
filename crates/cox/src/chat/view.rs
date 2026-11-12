@@ -1222,7 +1222,6 @@ impl ChatView {
                         cx,
                     ))
                     .child(div().flex_1())
-                    .children(crate::vim::mode(cx).map(render_mode))
                     .when(running, |row| row.child(Self::render_stop(cx))),
             )
     }
@@ -1299,19 +1298,6 @@ impl ChatView {
             .child(label)
             .on_hint_click(cx.listener(move |view, _, window, cx| start(view, window, cx)))
     }
-}
-
-/// The mode Vim's keys are in, beside the input, while they are on, or
-/// where the chat's panel would be while it is folded or shows no chat.
-pub(crate) fn render_mode(mode: crate::vim::Mode) -> impl IntoElement {
-    div()
-        .debug_selector(|| "vim-mode".to_owned())
-        .flex_shrink_0()
-        .px(px(4.))
-        .font_family(CODE_FONT)
-        .text_size(px(11.))
-        .text_color(rgb(FAINT))
-        .child(mode.label())
 }
 
 impl ChatView {
