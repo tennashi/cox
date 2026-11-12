@@ -239,6 +239,28 @@ impl LineInput {
         });
     }
 
+    /// Puts `text` in the input, with `selected`, a range of byte offsets
+    /// of it, selected, and the cursor at the selection's end.
+    pub fn set_text_selected(
+        &mut self,
+        text: &str,
+        selected: Range<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, |draft| {
+            draft.set_text(text);
+            draft.move_to(selected.start);
+            draft.select_to(selected.end);
+        });
+    }
+
+    /// What is selected, as a range of byte offsets of the text: empty
+    /// at the cursor when nothing is.
+    #[must_use]
+    pub fn selected(&self) -> Range<usize> {
+        self.draft.selected().clone()
+    }
+
     /// Where the cursor is, as a byte offset of the text.
     #[must_use]
     pub fn cursor(&self) -> usize {

@@ -25,13 +25,11 @@ const WRITE_AFTER: Duration = Duration::from_secs(2);
 
 const DAY: u64 = 24 * 60 * 60;
 
-/// A page visited.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Visited {
     pub url: String,
     /// The page's title, empty until it had one.
     pub title: String,
-    /// How many times it was visited.
     pub visits: u32,
     /// When it was last visited, in seconds since 1970.
     pub last: u64,
@@ -88,7 +86,6 @@ impl History {
         storage::write_whole(file, &text)
     }
 
-    /// The pages, in no order.
     #[must_use]
     pub fn pages(&self) -> &[Visited] {
         &self.pages
@@ -241,7 +238,6 @@ fn frecency(page: &Visited, now: u64) -> u64 {
     u64::from(page.visits) * worth
 }
 
-/// Seconds since 1970, now.
 #[must_use]
 pub fn now() -> u64 {
     SystemTime::now()
@@ -294,7 +290,6 @@ pub fn visited(url: &str, title: &str, cx: &mut App) {
     }
 }
 
-/// The page at `url` is titled `title` now.
 pub fn titled(url: &str, title: &str, cx: &mut App) {
     if shared(cx).history.title(url, title) {
         write_soon(cx);
