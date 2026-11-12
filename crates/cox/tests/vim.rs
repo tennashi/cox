@@ -379,58 +379,350 @@ fn escape_closes_the_list_over_the_input(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
-fn a_terminal_has_control_w_and_g_t(cx: &mut TestAppContext) {
+/// Starts `command` in a terminal of its own window, with the keyboard
+/// and every key Cox binds, which answers once the command ends.
+fn open_terminal<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+    command: &str,
+) -> (
+    Entity<Terminal>,
+    tokio::sync::oneshot::Receiver<Result<cox::agent::mcp::Ran, String>>,
+    &'a mut VisualTestContext,
+) {
     cx.update(cox::vim::install);
     cx.update(cox::app::bind_keys);
-    let cwd = scratch("terminal-keys");
+    let cwd = scratch(name);
     std::fs::create_dir_all(&cwd).unwrap();
-    let running = Running::start(Program::Command("head -n 1".to_owned()), &cwd).unwrap();
-    let (answer, mut waiting) = tokio::sync::oneshot::channel();
+    let running = Running::start(Program::Command(command.to_owned()), &cwd).unwrap();
+    let (answer, waiting) = tokio::sync::oneshot::channel();
     let (terminal, cx) = cx.add_window_view(|_, cx| Terminal::new(running, Some(answer), cx));
-    cx.update(|window, cx| window.focus(&terminal.focus_handle(cx)));
+    cx.update(|window, cx| {
+        window.activate_window();
+        window.focus(&terminal.focus_handle(cx));
+    });
     cx.run_until_parked();
+    (terminal, waiting, cx)
+}
 
-    cx.simulate_keystrokes("x space y ctrl-w g t enter");
-
+/// What the command printed, once it ended.
+fn ran(
+    cx: &mut VisualTestContext,
+    waiting: &mut tokio::sync::oneshot::Receiver<Result<cox::agent::mcp::Ran, String>>,
+) -> String {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    let ran = loop {
+    loop {
         cx.run_until_parked();
         if let Ok(ran) = waiting.try_recv() {
-            break ran.expect("the command started");
+            break ran.expect("the command started").output;
         }
-        assert!(std::time::Instant::now() < deadline, "head took too long");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the command took too long"
+        );
         std::thread::sleep(Duration::from_millis(10));
-    };
-    assert!(ran.output.ends_with("\nx gt"), "{:?}", ran.output);
-    let _ = std::fs::remove_dir_all(cwd);
+    }
+}
+
+/// Waits until the terminal shows `text`.
+fn shows(cx: &mut VisualTestContext, terminal: &Entity<Terminal>, text: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !terminal.read_with(cx, |terminal, _| terminal.text().contains(text)) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no {text:?} in the terminal"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        cx.run_until_parked();
+    }
+}
+
+fn mode(cx: &mut VisualTestContext) -> Option<Mode> {
+    cx.update(|_, cx| cox::vim::mode(cx))
 }
 
 #[gpui::test]
-fn a_terminal_has_every_key(cx: &mut TestAppContext) {
-    cx.update(cox::vim::install);
+fn a_terminal_takes_every_key_in_insert_mode_escape_too(cx: &mut TestAppContext) {
+    let (_terminal, mut waiting, cx) = open_terminal(cx, "terminal-insert", "head -n 1 | cat -v");
+    assert_eq!(mode(cx), Some(Mode::Insert), "as the keyboard came in");
+
+    cx.simulate_keystrokes("x space y ctrl-w g t escape : j 1 enter");
+
+    assert!(
+        ran(cx, &mut waiting).ends_with("\nx gt^[:j1"),
+        "control-w erased y, and escape went on"
+    );
+    assert_eq!(mode(cx), Some(Mode::Insert));
+}
+
+#[gpui::test]
+fn control_backslash_control_n_leaves_a_terminal_for_normal_mode(cx: &mut TestAppContext) {
+    let (_terminal, mut waiting, cx) = open_terminal(cx, "terminal-normal", "head -n 1");
+
+    cx.simulate_keystrokes("a ctrl-\\ ctrl-n");
+    assert_eq!(mode(cx), Some(Mode::Normal));
+    cx.simulate_keystrokes("x j escape enter ctrl-c");
+    cx.simulate_keystrokes("i b ctrl-\\ c enter");
+
+    assert_eq!(ran(cx, &mut waiting), "abc\nabc");
+    assert_eq!(mode(cx), Some(Mode::Insert));
+}
+
+#[gpui::test]
+fn normal_mode_scrolls_back_through_a_terminal(cx: &mut TestAppContext) {
+    let (terminal, _waiting, cx) = open_terminal(cx, "terminal-scroll", "seq 1 200; cat");
+    shows(cx, &terminal, "200");
+    let back =
+        |cx: &mut VisualTestContext| terminal.read_with(cx, |terminal, _| terminal.scrolled_back());
+
+    cx.simulate_keystrokes("ctrl-\\ ctrl-n g g");
+    let top = back(cx);
+    assert!(top > 100, "at the top: {top}");
+    cx.simulate_keystrokes("shift-g");
+    assert_eq!(back(cx), 0);
+    cx.simulate_keystrokes("k 3 k");
+    assert_eq!(back(cx), 4);
+    cx.simulate_keystrokes("ctrl-u");
+    let half = back(cx) - 4;
+    assert!(half > 5, "half the terminal: {half}");
+    cx.simulate_keystrokes("j ctrl-d");
+    assert_eq!(back(cx), 3);
+
+    cx.simulate_keystrokes("i z");
+    assert_eq!(back(cx), 0, "typing shows the end again");
+    assert_eq!(mode(cx), Some(Mode::Insert));
+}
+
+#[gpui::test]
+fn slash_finds_in_a_terminal_and_shift_v_y_copies_the_line(cx: &mut TestAppContext) {
     cx.update(cox::app::bind_keys);
-    let cwd = scratch("terminal");
+    let cwd = scratch("terminal-search");
     std::fs::create_dir_all(&cwd).unwrap();
-    let running = Running::start(Program::Command("head -n 1".to_owned()), &cwd).unwrap();
-    let (answer, mut waiting) = tokio::sync::oneshot::channel();
-    let (terminal, cx) = cx.add_window_view(|_, cx| Terminal::new(running, Some(answer), cx));
-    cx.update(|window, cx| window.focus(&terminal.focus_handle(cx)));
-    cx.run_until_parked();
-
-    cx.simulate_keystrokes("j 1 i k enter");
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    let ran = loop {
-        cx.run_until_parked();
-        if let Ok(ran) = waiting.try_recv() {
-            break ran.expect("the command started");
-        }
-        assert!(std::time::Instant::now() < deadline, "head took too long");
-        std::thread::sleep(Duration::from_millis(10));
+    let running = Running::start(
+        Program::Command("for i in $(seq 1 200); do echo \"row $i end\"; done; cat".to_owned()),
+        &cwd,
+    )
+    .unwrap();
+    let (terminal, _, cx) = hosted(cx, move |cx| Terminal::new(running, None, cx));
+    cx.update(|window, _| window.activate_window());
+    shows(cx, &terminal, "row 200 end");
+    let selected = |cx: &mut VisualTestContext| {
+        terminal.read_with(cx, |terminal, _| {
+            terminal.selected_text().unwrap_or_default()
+        })
     };
-    assert_eq!(ran.output, "j1ik\nj1ik");
-    let _ = std::fs::remove_dir_all(cwd);
+    let back =
+        |cx: &mut VisualTestContext| terminal.read_with(cx, |terminal, _| terminal.scrolled_back());
+
+    type_keys(cx, "ctrl-\\ ctrl-n");
+    search_for(cx, "/", "w 15 e");
+    assert_eq!(selected(cx), "w 15 e");
+    let fifteen = back(cx);
+    assert!(fifteen > 100, "scrolled to it: {fifteen}");
+    assert_eq!(mode(cx), Some(Mode::Normal), "back from the line");
+
+    search_for(cx, "?", "w 15");
+    assert_eq!(selected(cx), "w 15", "the one before, going round");
+    assert!(back(cx) < fifteen);
+    type_keys(cx, "n shift-n");
+    assert_eq!(selected(cx), "w 15");
+
+    search_for(cx, "/", "w 150 e");
+    assert_eq!(selected(cx), "w 150 e");
+    type_keys(cx, "shift-v y");
+    let copied = cx
+        .update(|_, cx| cx.read_from_clipboard())
+        .and_then(|item| item.text());
+    assert_eq!(copied.as_deref().map(str::trim_end), Some("row 150 end"));
+}
+
+/// What stands for a tab running a program in these tests, as an Android
+/// device's: a part of the window in its key context that keeps the
+/// keys that reach it.
+fn open_android(cx: &mut TestAppContext) -> (Entity<FakePage>, &mut VisualTestContext) {
+    cx.update(cox::vim::install);
+    let (android, cx) = cx.add_window_view(|_, cx| FakePage {
+        focus: cx.focus_handle(),
+        asked: Vec::new(),
+        context: "Android",
+    });
+    cx.update(|window, cx| window.focus(&android.read(cx).focus));
+    cx.run_until_parked();
+    (android, cx)
+}
+
+#[gpui::test]
+fn an_android_device_takes_every_key_until_control_backslash_control_n(cx: &mut TestAppContext) {
+    let (android, cx) = open_android(cx);
+    cx.simulate_keystrokes("x escape ctrl-w g t :");
+    assert_eq!(
+        asked(&android, cx),
+        [
+            "key x",
+            "key escape",
+            "key ctrl-w",
+            "key g",
+            "key t",
+            "key :"
+        ]
+    );
+    assert_eq!(mode(cx), Some(Mode::Insert));
+
+    cx.simulate_keystrokes("ctrl-\\ ctrl-n");
+    assert_eq!(asked(&android, cx), ["leave"]);
+    assert_eq!(mode(cx), Some(Mode::Normal));
+    cx.simulate_keystrokes("x j escape enter g g y");
+    assert_eq!(asked(&android, cx), Vec::<String>::new());
+
+    cx.simulate_keystrokes("i y");
+    assert_eq!(asked(&android, cx), ["key y"]);
+}
+
+/// A stage of a test's own: tabs it shows one of, with the keyboard
+/// in it as Vim's keys ask, as the stage does.
+struct Tabbed {
+    tabs: Vec<(gpui::AnyView, gpui::FocusHandle)>,
+    shown: usize,
+}
+
+impl Tabbed {
+    fn by_keys(&mut self, tabs: &Tabs, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) {
+        let had_focus = self
+            .tabs
+            .get(self.shown)
+            .is_some_and(|(_, focus)| focus.contains_focused(window, cx));
+        match tabs {
+            Tabs::Focus => {}
+            Tabs::Along(step) => {
+                let count = isize::try_from(self.tabs.len()).unwrap();
+                self.shown = usize::try_from(
+                    (isize::try_from(self.shown).unwrap() + step).rem_euclid(count),
+                )
+                .unwrap();
+            }
+            Tabs::Close => {
+                self.tabs.remove(self.shown);
+                self.shown = self.shown.min(self.tabs.len().saturating_sub(1));
+            }
+            _ => return,
+        }
+        if (had_focus || *tabs == Tabs::Focus)
+            && let Some((_, focus)) = self.tabs.get(self.shown)
+        {
+            window.focus(focus);
+        }
+        cx.notify();
+    }
+}
+
+impl gpui::Render for Tabbed {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement as _, Styled as _};
+
+        gpui::div()
+            .size_full()
+            .children(self.tabs.get(self.shown).map(|(view, _)| view.clone()))
+    }
+}
+
+#[gpui::test]
+fn a_whole_session_by_keys(cx: &mut TestAppContext) {
+    use gpui::AppContext as _;
+
+    let terminals: Rc<RefCell<Vec<Entity<Terminal>>>> = Rc::default();
+    let made = Rc::clone(&terminals);
+    let built: fake_daemon::Built = Rc::new(move |cwd, _, cx| {
+        let page = cx.new(|cx| FakePage {
+            focus: cx.focus_handle(),
+            asked: Vec::new(),
+            context: "Page",
+        });
+        let running =
+            Running::start(Program::Command("seq 1 300; exec cat".to_owned()), &cwd).unwrap();
+        let terminal = cx.new(|cx| Terminal::new(running, None, cx));
+        made.borrow_mut().push(terminal.clone());
+        let tabs = vec![
+            (page.clone().into(), page.read(cx).focus.clone()),
+            (terminal.clone().into(), terminal.focus_handle(cx)),
+        ];
+        let stage = cx.new(|_| Tabbed { tabs, shown: 0 });
+        cox::chat::view::StageView {
+            view: stage.clone().into(),
+            panel: cx.new(|_| cox::ui::Panel::default()),
+            by_keys: Rc::new(move |tabs, window, cx| {
+                stage.update(cx, |stage, cx| stage.by_keys(&tabs, window, cx));
+            }),
+        }
+    });
+    cx.update(cox::vim::install);
+    let (workspace, cx) = keys::open_window_on(
+        cx,
+        scratch("session"),
+        FakeStages {
+            built: Some(built),
+            ..FakeStages::default()
+        },
+    );
+    cx.update(|window, _| window.activate_window());
+
+    keys::press(cx, &workspace, "secondary-n h i escape");
+    assert_eq!(keys::shown_input(cx, &workspace), "hi");
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+
+    keys::press(cx, &workspace, "ctrl-w h");
+    assert!(in_part(cx, "Page"));
+    keys::press(cx, &workspace, "g t");
+    assert!(in_part(cx, "Terminal"));
+    assert_eq!(
+        shown_mode(cx),
+        Some("INSERT"),
+        "as the terminal took the keyboard"
+    );
+    let terminal = terminals.borrow().last().cloned().expect("a terminal");
+    shows(cx, &terminal, "300");
+
+    keys::press(cx, &workspace, "e c h o enter");
+    shows(cx, &terminal, "echo\necho");
+    keys::press(cx, &workspace, "ctrl-\\ ctrl-n");
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    keys::press(cx, &workspace, "g g");
+    assert!(terminal.read_with(cx, |terminal, _| terminal.scrolled_back()) > 0);
+
+    keys::press(cx, &workspace, "ctrl-w l");
+    assert!(in_part(cx, "Conversation"));
+    assert_eq!(keys::shown_input(cx, &workspace), "hi");
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+
+    keys::press(cx, &workspace, "ctrl-w h");
+    assert!(
+        in_part(cx, "Terminal"),
+        "the stage shows the terminal still"
+    );
+    assert_eq!(
+        shown_mode(cx),
+        Some("INSERT"),
+        "coming back, as Vim's :startinsert"
+    );
+    keys::press(cx, &workspace, "ctrl-\\ ctrl-n : escape");
+    assert!(in_part(cx, "Terminal"));
+    assert_eq!(shown_mode(cx), Some("NORMAL"), "back from the line");
+
+    keys::press(cx, &workspace, ": q enter");
+    assert!(in_part(cx, "Page"), "the terminal closed");
+    keys::press(cx, &workspace, ": n e w enter");
+    let chats = workspace.read_with(cx, |workspace, _| workspace.chats(0).count());
+    assert_eq!(chats, 2);
+    assert!(in_part(cx, "Conversation"));
+    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert_eq!(keys::shown_input(cx, &workspace), "");
+
+    keys::press(cx, &workspace, "escape : g o a l enter");
+    assert!(in_part(cx, "Goal"));
+    assert_eq!(shown_mode(cx), Some("INSERT"), "before a key is typed");
 }
 
 #[gpui::test]
@@ -875,6 +1167,7 @@ fn g_d_goes_to_the_definition_of_the_first_name_of_the_line(cx: &mut TestAppCont
 struct FakePage {
     focus: gpui::FocusHandle,
     asked: Vec<String>,
+    context: &'static str,
 }
 
 impl gpui::Render for FakePage {
@@ -891,7 +1184,7 @@ impl gpui::Render for FakePage {
         gpui::div()
             .size_full()
             .track_focus(&self.focus)
-            .key_context("Page")
+            .key_context(self.context)
             .on_key_down(cx.listener(move |page, event: &gpui::KeyDownEvent, _, _| {
                 keep(page, format!("key {}", event.keystroke.unparse()));
             }))
@@ -929,6 +1222,7 @@ fn open_page(cx: &mut TestAppContext) -> (Entity<FakePage>, &mut VisualTestConte
     let (page, cx) = cx.add_window_view(|_, cx| FakePage {
         focus: cx.focus_handle(),
         asked: Vec::new(),
+        context: "Page",
     });
     cx.update(|window, cx| window.focus(&page.read(cx).focus));
     cx.run_until_parked();
@@ -1338,6 +1632,7 @@ fn slash_and_n_ask_the_page_to_find_the_text(cx: &mut TestAppContext) {
     let (page, _, cx) = hosted(cx, |cx| FakePage {
         focus: cx.focus_handle(),
         asked: Vec::new(),
+        context: "Page",
     });
     type_keys(cx, "n");
     assert_eq!(

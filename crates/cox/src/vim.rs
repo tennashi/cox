@@ -15,7 +15,8 @@ pub mod line;
 pub mod search;
 
 use gpui::{
-    Action, App, Global, KeyContext, Keystroke, KeystrokeEvent, Pixels, Window, actions, px,
+    Action, App, Context, FocusHandle, Global, KeyContext, Keystroke, KeystrokeEvent, Pixels,
+    Subscription, Window, actions, px,
 };
 
 use self::keymap::{Answer, Command, Follow, Keymap, Motion, Place, Sent};
@@ -278,13 +279,38 @@ impl Region {
             .unwrap_or_default()
     }
 
+    /// Whether the region is a program's, which gets every key its tab
+    /// sends in insert mode, and none in normal mode: a terminal's, or an
+    /// Android device's.
+    #[must_use]
+    pub const fn runs_a_program(self) -> bool {
+        matches!(self, Self::Terminal | Self::Android)
+    }
+
+    /// Whether the region's program gets `keystroke` from its tab: a
+    /// terminal every key, an Android device those with no Control or
+    /// Alt, which are Cox's.
+    const fn program_gets(self, keystroke: &Keystroke) -> bool {
+        match self {
+            Self::Terminal => true,
+            Self::Android => !keystroke.modifiers.control && !keystroke.modifiers.alt,
+            _ => false,
+        }
+    }
+
     /// The mode the keys go to as the keyboard comes into the region, if
-    /// it has one: insert in what opens only to type a line in, normal in
-    /// a screen of settings, and where nothing is typed. A page tells its
-    /// own, by whether a field of it has the keyboard.
+    /// it has one: insert in what opens only to type a line in and in a
+    /// program, normal in a screen of settings, and where nothing is
+    /// typed. A page tells its own, by whether a field of it has the
+    /// keyboard.
     const fn enters_in(self) -> Option<Mode> {
         match self {
-            Self::Goal | Self::Sketch | Self::Renaming | Self::Address => Some(Mode::Insert),
+            Self::Goal
+            | Self::Sketch
+            | Self::Renaming
+            | Self::Address
+            | Self::Terminal
+            | Self::Android => Some(Mode::Insert),
             Self::Command => Some(Mode::Command),
             Self::Settings
             | Self::ProjectCard
@@ -324,6 +350,9 @@ pub struct Vim {
     held: Vec<String>,
     /// Where the keyboard was at the last key.
     region: Region,
+    /// Where the keyboard was when it went to the line at the window's
+    /// foot, which gets it back in the mode the line left.
+    line_from: Option<Region>,
     /// The last text searched for, which `n` and `N` find again.
     search: Option<Search>,
 }
@@ -346,17 +375,29 @@ impl Vim {
         self.held.clear();
     }
 
-    pub fn key(&mut self, keymap: &Keymap, region: Region, keystroke: &Keystroke) -> Outcome {
-        if region != self.region {
-            self.region = region;
-            self.reset();
-            if matches!(self.mode, Mode::Hint | Mode::Command) {
-                self.mode = Mode::Normal;
-            }
-            if let Some(mode) = region.enters_in() {
-                self.mode = mode;
-            }
+    /// The keyboard is in `region`: coming in, the count and the keys
+    /// held go, and the mode is the region's, unless the keyboard is back
+    /// from the line, which left it in normal mode.
+    fn arrive(&mut self, region: Region) {
+        if region == self.region {
+            return;
         }
+        let back = self.region == Region::Command && self.line_from == Some(region);
+        if region == Region::Command {
+            self.line_from = Some(self.region);
+        }
+        self.region = region;
+        self.reset();
+        if matches!(self.mode, Mode::Hint | Mode::Command) {
+            self.mode = Mode::Normal;
+        }
+        if let Some(mode) = region.enters_in().filter(|_| !back) {
+            self.mode = mode;
+        }
+    }
+
+    pub fn key(&mut self, keymap: &Keymap, region: Region, keystroke: &Keystroke) -> Outcome {
+        self.arrive(region);
         if !keymap.knows(region) {
             return Outcome::Pass;
         }
@@ -407,11 +448,12 @@ impl Vim {
             Answer::None => {
                 let dropped = !self.held.is_empty();
                 self.reset();
-                if dropped || (self.mode == Mode::Normal && edits_text(keystroke)) {
-                    Outcome::Taken
+                let taken = if region.runs_a_program() {
+                    self.mode == Mode::Normal && region.program_gets(keystroke)
                 } else {
-                    Outcome::Pass
-                }
+                    dropped || (self.mode == Mode::Normal && edits_text(keystroke))
+                };
+                if taken { Outcome::Taken } else { Outcome::Pass }
             }
         }
     }
@@ -470,6 +512,37 @@ pub fn install(cx: &mut App) {
 #[must_use]
 pub fn mode(cx: &App) -> Option<Mode> {
     cx.try_global::<Vim>().map(Vim::mode)
+}
+
+/// The keyboard came to `region`, before any key there: its mode shows
+/// at once, if Vim's keys are on.
+pub fn came(region: Region, window: &mut Window, cx: &mut App) {
+    if !cx.has_global::<Vim>() {
+        return;
+    }
+    let vim = cx.global_mut::<Vim>();
+    let was = vim.mode;
+    vim.arrive(region);
+    if vim.mode != was {
+        window.refresh();
+    }
+}
+
+/// Tells Vim's keys each time `focus`, of the part in `region`, gets the
+/// keyboard, and now if it has it.
+pub fn follow_focus<T: 'static>(
+    region: Region,
+    focus: &FocusHandle,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) -> Subscription {
+    let arrived = move |_: &mut T, window: &mut Window, cx: &mut Context<T>| {
+        came(region, window, cx);
+    };
+    if focus.is_focused(window) {
+        cx.defer_in(window, arrived);
+    }
+    cx.on_focus(focus, window, arrived)
 }
 
 /// Goes to `mode`, if Vim's keys are on.
@@ -674,15 +747,66 @@ mod tests {
     }
 
     #[test]
-    fn the_stage_s_tabs_keep_every_key() {
-        let mut vim = Vim::default();
+    fn a_program_has_every_key_in_insert_mode_and_none_in_normal_mode() {
         for region in [Region::Terminal, Region::Android] {
+            let mut vim = Vim::default();
             assert_eq!(
-                press(&mut vim, region, "j 1 escape ctrl-c i"),
-                [Outcome::Pass; 5]
+                press(&mut vim, region, "j 1 escape ctrl-c ctrl-w g t :"),
+                [Outcome::Pass; 8],
+                "{region:?}"
             );
+            assert_eq!(vim.mode(), Mode::Insert, "{region:?}");
+            assert_eq!(
+                press(&mut vim, region, "ctrl-\\ x ctrl-\\ ctrl-\\"),
+                [Outcome::Taken, Outcome::Pass, Outcome::Taken, Outcome::Pass],
+                "a key after ctrl-\\ goes on, itself too"
+            );
+            assert_eq!(
+                press(&mut vim, region, "ctrl-\\ ctrl-n"),
+                [Outcome::Taken, Outcome::Do(Command::Normal, None)]
+            );
+            assert_eq!(vim.mode(), Mode::Normal);
+            assert_eq!(
+                press(&mut vim, region, "x escape enter up ctrl-\\ ctrl-n"),
+                [
+                    Outcome::Taken,
+                    Outcome::Taken,
+                    Outcome::Taken,
+                    Outcome::Taken,
+                    Outcome::Taken,
+                    Outcome::Do(Command::Normal, None)
+                ],
+                "{region:?}"
+            );
+            let control_c = if region == Region::Android {
+                Outcome::Pass
+            } else {
+                Outcome::Taken
+            };
+            assert_eq!(press(&mut vim, region, "ctrl-c"), [control_c], "{region:?}");
+            assert_eq!(press(&mut vim, region, "cmd-v"), [Outcome::Pass]);
+            assert_eq!(
+                press(&mut vim, region, "i"),
+                [Outcome::Do(Command::Insert(Place::Cursor), None)]
+            );
+            assert_eq!(vim.mode(), Mode::Insert);
         }
+    }
+
+    #[test]
+    fn back_from_the_line_a_program_is_in_normal_mode_and_else_in_insert_mode() {
+        let mut vim = Vim::default();
+        press(&mut vim, Region::Terminal, "ctrl-\\ ctrl-n :");
+        vim.mode = Mode::Command;
+        press(&mut vim, Region::Command, "escape");
+        vim.arrive(Region::Terminal);
         assert_eq!(vim.mode(), Mode::Normal);
+        vim.arrive(Region::Chat);
+        vim.arrive(Region::Terminal);
+        assert_eq!(vim.mode(), Mode::Insert);
+        press(&mut vim, Region::Command, "escape");
+        vim.arrive(Region::Goal);
+        assert_eq!(vim.mode(), Mode::Insert, "the line's command opened it");
     }
 
     #[test]

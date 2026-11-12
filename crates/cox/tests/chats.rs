@@ -349,6 +349,7 @@ async fn the_chats_of_a_folder_share_its_stage(cx: &mut TestAppContext) {
         opened: None,
         made: Some(Rc::clone(&made)),
         keyed: None,
+        built: None,
     };
     let (workspace, cx) =
         fake_daemon::open_window(cx, home.clone(), Kept::Memory, Fakes::default(), stages);

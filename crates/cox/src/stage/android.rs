@@ -56,6 +56,8 @@ pub struct Android {
     /// The display, as it came last.
     screen: Screen,
     focus_handle: FocusHandle,
+    /// Tells Vim's keys when the tab gets the keyboard, once drawn.
+    focused: Option<Subscription>,
     /// Hears the emulator, while the tab talks to one.
     hearing: Option<Task<()>>,
     /// Whether the agent's finger is on the display.
@@ -85,6 +87,7 @@ impl Android {
             status: Status::Ended("Not running".to_owned()),
             screen: Screen::default(),
             focus_handle: cx.focus_handle(),
+            focused: None,
             hearing: None,
             finger_down: false,
             pointer: AgentPointer::default(),
@@ -390,7 +393,15 @@ impl Render for Android {
         clippy::used_underscore_binding,
         reason = "the timer is only held: dropping it cancels it"
     )]
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.focused.is_none() {
+            self.focused = Some(crate::vim::follow_focus(
+                crate::vim::Region::Android,
+                &self.focus_handle,
+                window,
+                cx,
+            ));
+        }
         (self.look, self._pointer_changes) = pointer::look_now(&self.pointer, cx);
         let label = Mirrored::agent(self).and_then(|(look, (width, _))| {
             let drawn = self.screen.drawn_within()?;

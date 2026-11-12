@@ -1299,8 +1299,9 @@ impl ChatView {
     }
 }
 
-/// The mode Vim's keys are in, beside the input, while they are on.
-fn render_mode(mode: crate::vim::Mode) -> impl IntoElement {
+/// The mode Vim's keys are in, beside the input, while they are on, or
+/// where the chat's panel would be while it is folded or shows no chat.
+pub(crate) fn render_mode(mode: crate::vim::Mode) -> impl IntoElement {
     div()
         .debug_selector(|| "vim-mode".to_owned())
         .flex_shrink_0()
