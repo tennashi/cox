@@ -340,8 +340,7 @@ impl Stage {
         cx: &mut Context<Self>,
     ) {
         let url = match typed {
-            Some(Typed::Page(url)) => url,
-            Some(Typed::Search(words)) => engine.url(&words),
+            Some(Typed::Web(address)) => address.url(engine),
             Some(Typed::File(path)) => return self.open_typed_file(path, window, cx),
             Some(Typed::Command(command)) => {
                 return self.start_terminal(Program::Command(command), window, cx);

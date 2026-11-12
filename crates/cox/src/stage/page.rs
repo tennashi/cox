@@ -4,6 +4,8 @@
 //!
 //! - [`picture`] paints the browser's picture, and sends the mouse over
 //!   it to the page.
+//! - [`address`] sorts what is typed in the address line into an
+//!   address or words to search for.
 //! - [`keys`] sends the keys to the page, but for the browser's own
 //!   shortcuts.
 //! - [`vim`] is what Vim's keys do in the page, and [`hints`] the labels
@@ -16,6 +18,7 @@
 //! The right button over text selected in the page opens a menu of what
 //! to do with it, "Translate" and "Copy", as the browser shows none.
 
+pub mod address;
 mod hints;
 mod keys;
 mod picture;
@@ -35,9 +38,9 @@ use gpui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use self::address::Address;
 use self::picture::Picture;
 use crate::chat::region::{self, Described};
-use crate::daemon::phone::relay::on_the_mac;
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
@@ -259,10 +262,10 @@ impl Page {
     /// The human pressed Enter in the address line: go there, and give the
     /// page the keyboard.
     fn go(&mut self, address: &Entity<LineInput>, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(url) = address_to_url(address.read(cx).text()) else {
+        let Some(address) = Address::of(address.read(cx).text()) else {
             return;
         };
-        self.open(&url, window, cx);
+        self.open(&address.url(&crate::settings::search()), window, cx);
     }
 
     /// Opens `url`, and gives the page the keyboard.
@@ -500,47 +503,6 @@ impl EntityInputHandler for Page {
     }
 }
 
-/// What the human typed in the address line, as a URL to load: a scheme is
-/// taken as given, a host on the Mac, as `localhost:3000` or `0.0.0.0:8000`,
-/// opens over `http://`, and anything else is a host on the web, over
-/// `https://`. Blank is nothing.
-pub(super) fn address_to_url(typed: &str) -> Option<String> {
-    let typed = typed.trim();
-    if typed.is_empty() {
-        return None;
-    }
-    // `about:blank` and `http://...` have a scheme; `localhost:3000` has a
-    // port.
-    let has_scheme = typed.split_once(':').is_some_and(|(scheme, rest)| {
-        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
-            && !rest.starts_with(|c: char| c.is_ascii_digit())
-    });
-    if has_scheme {
-        return Some(typed.to_owned());
-    }
-    let http = format!("http://{typed}");
-    Some(if served_on_the_mac(&http) {
-        http
-    } else {
-        format!("https://{typed}")
-    })
-}
-
-/// Whether `http` is a page of a server on the Mac: one the phone's relay
-/// reaches, or one at `0.0.0.0` or `[::]`, every address of the Mac, where
-/// a server that listens on all of them says it is.
-fn served_on_the_mac(http: &str) -> bool {
-    let every_address = url::Url::parse(http).is_ok_and(|url| match url.host() {
-        Some(url::Host::Ipv4(ip)) => ip.is_unspecified(),
-        Some(url::Host::Ipv6(ip)) => ip.is_unspecified(),
-        _ => false,
-    });
-    every_address || on_the_mac(http).is_some()
-}
-
 /// A length of the page, in the browser's whole pixels, in the window's.
 #[expect(
     clippy::cast_precision_loss,
@@ -675,59 +637,5 @@ impl Render for Page {
                     ),
             )
             .children(self.render_menu(cx))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::address_to_url;
-
-    #[test]
-    fn a_scheme_is_taken_as_given() {
-        assert_eq!(
-            address_to_url("http://localhost:3000/"),
-            Some("http://localhost:3000/".to_owned())
-        );
-        assert_eq!(
-            address_to_url("about:blank"),
-            Some("about:blank".to_owned())
-        );
-    }
-
-    #[test]
-    fn a_host_is_on_the_web() {
-        assert_eq!(
-            address_to_url(" example.com/path "),
-            Some("https://example.com/path".to_owned())
-        );
-        assert_eq!(
-            address_to_url("localhost.example.com"),
-            Some("https://localhost.example.com".to_owned())
-        );
-    }
-
-    #[test]
-    fn a_host_of_the_mac_is_plain_http() {
-        for typed in [
-            "localhost",
-            "localhost:3000",
-            "localhost:5173/shop?item=2",
-            "app.localhost:4000/",
-            "127.0.0.1:8080",
-            "127.1.2.3",
-            "[::1]:3000/",
-            "0.0.0.0:8000",
-        ] {
-            assert_eq!(
-                address_to_url(typed),
-                Some(format!("http://{typed}")),
-                "{typed}"
-            );
-        }
-    }
-
-    #[test]
-    fn blank_is_nothing() {
-        assert_eq!(address_to_url("  "), None);
     }
 }

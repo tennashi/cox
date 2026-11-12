@@ -76,7 +76,7 @@ Every key is optional. Paths may be absolute or start with `~`.
 | `phone.port` | The port of the page for the phone. The relay, which passes the pages served on the Mac's own address on to the phone, listens on the next port, and the sketches' mocks are served on the one after. | `7421` |
 | `phone.tailscale` | `false` stops `coxd` from running `tailscale serve` for the page and the pages the relay passes on. | `true` |
 | `vim` | `true` makes the keys work as in Vim. See [Vim's keys](#vims-keys). | `false` |
-| `search` | The search engine: the address of its results, from `http://` or `https://`, with `%s` where the words go. Cox searches with it for the words typed after Vim's `t`, `:open` or `:tabopen`. One without `%s` is not used. | `https://www.google.com/search?q=%s` |
+| `search` | The search engine: the address of its results, from `http://` or `https://`, with `%s` where the words go. Cox searches with it for the words typed in a page's address line, as a browser does (a `?` first searches for whatever follows), and after Vim's `t`, `:open` or `:tabopen`. One without `%s` is not used. | `https://www.google.com/search?q=%s` |
 
 The settings card (Cmd-, or Ctrl-,) sets `agent`, `home`, `workflow`,
 `wiki`, `translation`, `vim` and `search` for you, and leaves the rest of the file
