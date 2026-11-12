@@ -42,6 +42,9 @@ pub struct AgentsSection {
     unreadable: Option<String>,
     /// The agent `settings.json` names, by its name.
     default: Option<String>,
+    /// Why `settings.json` does not name the agent the human chose, when
+    /// Cox could not keep it.
+    not_named: Option<String>,
     /// Whether the list of agents to add is open.
     adding: bool,
     /// What tells the next row from the others.
@@ -89,6 +92,7 @@ impl AgentsSection {
             listed: None,
             unreadable: None,
             default: None,
+            not_named: None,
             adding: false,
             next_key: 0,
             words,
@@ -261,8 +265,14 @@ impl AgentsSection {
     /// when the command line names none, or names none, keeping it.
     fn set_default(&mut self, name: Option<&str>) {
         match crate::settings::keep_agent(name) {
-            Ok(()) => self.default = name.map(str::to_owned),
-            Err(error) => tracing::error!("the agent a new chat talks to is not kept: {error:#}"),
+            Ok(()) => {
+                self.default = name.map(str::to_owned);
+                self.not_named = None;
+            }
+            Err(error) => {
+                tracing::error!("the agent a new chat talks to is not kept: {error:#}");
+                self.not_named = Some(format!("{error:#}"));
+            }
         }
     }
 
@@ -398,6 +408,9 @@ impl AgentsSection {
             .collect();
         if let Some(why) = &self.unreadable {
             lines.push(format!("agents.json cannot be read: {why}"));
+        }
+        if let Some(why) = &self.not_named {
+            lines.push(format!("settings.json does not name the agent: {why}"));
         }
         lines
     }
@@ -603,6 +616,12 @@ impl Render for AgentsSection {
                 FAILED,
             )
         });
+        let not_named = self.not_named.as_ref().map(|why| {
+            words.note(
+                &format!("Cox cannot name the agent a new chat talks to: {why}"),
+                FAILED,
+            )
+        });
         let rows: Vec<_> = self
             .rows
             .iter()
@@ -622,6 +641,7 @@ impl Render for AgentsSection {
             .children(commanded)
             .children(unreadable)
             .child(div().mt_1().flex().flex_col().gap_2().children(rows))
+            .children(not_named)
             .when(self.unreadable.is_none(), |section| {
                 section
                     .child(
