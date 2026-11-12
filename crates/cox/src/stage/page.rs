@@ -42,6 +42,8 @@ use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
 use cox_browser::{Browser, Caret, Event, Navigation, TargetId};
 
+pub(crate) const KEY_CONTEXT: &str = "Page";
+
 pub struct Page {
     browser: Browser,
     focus_handle: FocusHandle,
@@ -605,7 +607,7 @@ impl Render for Page {
                     .flex_1()
                     .min_h_0()
                     .track_focus(&self.focus_handle)
-                    .key_context("Stage")
+                    .key_context(KEY_CONTEXT)
                     .on_key_down(cx.listener(Self::key_down))
                     .on_key_up(cx.listener(Self::key_up))
                     .child(Picture { page: cx.entity() })

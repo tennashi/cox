@@ -45,6 +45,8 @@ use crate::ui::theme::{
 };
 use crate::ui::tip;
 
+pub(crate) const KEY_CONTEXT: &str = "Tree";
+
 /// How often the tab looks at the folders open in it.
 const LOOK_EVERY: Duration = Duration::from_secs(1);
 
@@ -779,6 +781,7 @@ impl Render for Tree {
             .collect();
         div()
             .track_focus(&self.focus_handle)
+            .key_context(KEY_CONTEXT)
             .size_full()
             .flex()
             .flex_col()
@@ -888,6 +891,7 @@ impl Render for Unchosen {
         let folded = is_folded(cx);
         div()
             .track_focus(&self.focus_handle)
+            .key_context(KEY_CONTEXT)
             .size_full()
             .flex()
             .flex_col()

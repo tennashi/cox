@@ -32,6 +32,8 @@ use crate::stage::tab::Shows;
 use crate::ui::markdown;
 use crate::ui::theme::{ACCENT, BORDER, CODE, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
 
+pub(crate) const KEY_CONTEXT: &str = "Flow";
+
 /// What a link to the flow of a tool call starts with, followed by the
 /// call's id.
 const LINK_PREFIX: &str = "cox:flow/";
@@ -456,6 +458,7 @@ impl Render for Flow {
         });
         body()
             .track_focus(&self.focus_handle)
+            .key_context(KEY_CONTEXT)
             .text_color(rgb(FOREGROUND))
             .child(self.render_heading())
             .children(error)

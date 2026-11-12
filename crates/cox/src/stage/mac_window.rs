@@ -30,6 +30,8 @@ use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
 use crate::ui::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
 
+pub(crate) const KEY_CONTEXT: &str = "MacWindow";
+
 /// Why a tab that was not shown its window ended, as it opens.
 const NOT_SHOWN: &str = "Not shown";
 
@@ -484,6 +486,7 @@ impl Render for MacWindow {
                     .min_h_0()
                     .relative()
                     .track_focus(&self.focus_handle)
+                    .key_context(KEY_CONTEXT)
                     .child(Display {
                         mirrored: cx.entity(),
                     })

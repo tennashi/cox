@@ -62,6 +62,8 @@ use crate::ui::theme::{
     UI_FONT,
 };
 
+pub(crate) const KEY_CONTEXT: &str = "Changes";
+
 /// How often the tab looks at what changed.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
 
@@ -1681,6 +1683,7 @@ impl Render for Changes {
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
+            .key_context(KEY_CONTEXT)
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
             .text_size(px(13.))
