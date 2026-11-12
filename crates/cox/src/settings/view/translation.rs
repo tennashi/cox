@@ -9,13 +9,12 @@
 use gpui::{App, Context, Entity, Focusable, Subscription, Window, div, prelude::*, px, rgb};
 use serde_json::{Map, Value};
 
+use super::chip;
 use super::words::Words;
 use crate::agents::{Agents, line};
 use crate::ui::button::INPUT_HEIGHT;
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::theme::{
-    ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, FAILED, FAINT, FOREGROUND,
-};
+use crate::ui::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
 
 /// What translates.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,29 +257,6 @@ impl TranslationSection {
         }
         names
     }
-}
-
-/// A chip that chooses what translates, lit when it is chosen.
-fn chip(id: String, label: String, chosen: bool) -> gpui::Stateful<gpui::Div> {
-    let selector = id.clone();
-    div()
-        .id(gpui::SharedString::from(id))
-        .debug_selector(move || selector.clone())
-        .h(px(28.))
-        .px_3()
-        .flex()
-        .items_center()
-        .rounded_full()
-        .text_size(px(12.))
-        .border_1()
-        .border_color(rgb(if chosen { ACCENT } else { BORDER }))
-        .bg(rgb(if chosen { ACCENT_GROUND } else { BUTTON }))
-        .text_color(rgb(if chosen { ACCENT } else { FOREGROUND }))
-        .when(!chosen, |chip| {
-            chip.cursor_pointer()
-                .hover(|style| style.bg(rgb(BUTTON_HOVER)))
-        })
-        .child(label)
 }
 
 impl Render for TranslationSection {

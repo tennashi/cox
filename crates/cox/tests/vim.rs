@@ -755,6 +755,73 @@ fn off_the_keys_are_as_they_were(cx: &mut TestAppContext) {
     assert_eq!(keys::shown_input(cx, &workspace), "hgt");
 }
 
+/// Opens the settings, clicks `chip` of Vim's keys, and closes them.
+fn choose_on_the_settings(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    chip: &'static str,
+) {
+    keys::press(cx, workspace, "secondary-,");
+    let card = cx.debug_bounds("settings").expect("the settings are drawn");
+    cx.simulate_event(ScrollWheelEvent {
+        position: card.center(),
+        delta: ScrollDelta::Lines(gpui::point(0., -1000.)),
+        modifiers: gpui::Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    settled(cx, workspace);
+    let at = cx.debug_bounds(chip).expect("the chip is drawn").center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    settled(cx, workspace);
+    keys::press(cx, workspace, "escape");
+    assert!(workspace.read_with(cx, |workspace, _| workspace.settings().is_none()));
+}
+
+fn kept_vim() -> Option<serde_json::Value> {
+    let file = cox::storage::path(cox::storage::Kept::Settings).unwrap();
+    let text = std::fs::read_to_string(file).unwrap_or_default();
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|settings| settings.get("vim").cloned())
+}
+
+#[gpui::test]
+fn the_settings_turn_the_keys_on_and_off_at_once(cx: &mut TestAppContext) {
+    let (workspace, cx) = keys::open_window(cx, scratch("setting"));
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    cx.simulate_input("wait");
+    keys::press(cx, &workspace, "enter");
+    go_on(cx, &workspace);
+    assert_eq!(agent_state(cx, &view), State::Busy);
+
+    choose_on_the_settings(cx, &workspace, "vim-on");
+    assert_eq!(kept_vim(), Some(serde_json::Value::Bool(true)));
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    keys::press(cx, &workspace, "i h i escape");
+    go_on(cx, &workspace);
+    assert_eq!(keys::shown_input(cx, &workspace), "hi");
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(
+        agent_state(cx, &view),
+        State::Busy,
+        "escape with Vim's keys"
+    );
+
+    choose_on_the_settings(cx, &workspace, "vim-off");
+    assert_eq!(kept_vim(), None);
+    assert_eq!(shown_mode(cx), None);
+    keys::press(cx, &workspace, "j");
+    assert_eq!(keys::shown_input(cx, &workspace), "hij");
+    keys::press(cx, &workspace, "escape");
+    go_on(cx, &workspace);
+    assert_eq!(
+        agent_state(cx, &view),
+        State::Idle,
+        "escape without Vim's keys"
+    );
+}
+
 /// A folder of its own for a test, with the files `paths`, saying their
 /// names, by its real path, as the tabs name their files.
 fn folder(name: &str, paths: &[&str]) -> PathBuf {

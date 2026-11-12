@@ -9,7 +9,8 @@
 //! project there from then on. Under it are the folders of the human's
 //! workflow and wiki (see [`folder`]), the agents they run (see
 //! [`agents`]), the language servers of the code tabs (see [`servers`]),
-//! the language they read in (see [`translation`]), and the code a phone
+//! the language they read in (see [`translation`]), whether the keys
+//! work as in Vim (see [`keys`]), and the code a phone
 //! pairs with, beside the button that unpairs every phone (see
 //! [`phone`]).
 //! What the screen says the human selects, copies and translates (see
@@ -19,6 +20,7 @@
 
 mod agents;
 mod folder;
+mod keys;
 mod phone;
 mod servers;
 mod translation;
@@ -33,6 +35,7 @@ use gpui::{
 
 use self::agents::AgentsSection;
 use self::folder::FolderField;
+use self::keys::KeysSection;
 use self::phone::PhoneSection;
 pub use self::phone::UnpairPhones;
 use self::servers::ServersSection;
@@ -42,7 +45,10 @@ use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::paths::shortened;
-use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK};
+use crate::ui::theme::{
+    ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, HOVER,
+    LINK,
+};
 use crate::ui::{Copy, card};
 
 actions!(
@@ -100,6 +106,7 @@ pub struct SettingsView {
     agents: Entity<AgentsSection>,
     servers: Entity<ServersSection>,
     translation: Entity<TranslationSection>,
+    keys: Entity<KeysSection>,
     phone: Entity<PhoneSection>,
     /// What the screen says, as the human selects it.
     words: Words,
@@ -160,6 +167,7 @@ impl SettingsView {
             agents: cx.new(|cx| AgentsSection::new(words.clone(), cx)),
             servers: cx.new(|cx| ServersSection::new(words.clone(), cx)),
             translation: cx.new(|cx| TranslationSection::new(words.clone(), cx)),
+            keys: cx.new(|_| KeysSection::new(words.clone())),
             phone,
             words,
             focus: cx.focus_handle(),
@@ -187,6 +195,7 @@ impl SettingsView {
         self.agents.update(cx, AgentsSection::reread);
         self.servers.update(cx, ServersSection::reread);
         self.translation.update(cx, TranslationSection::reread);
+        self.keys.update(cx, KeysSection::reread);
     }
 
     /// What the screen shows past the home and the agents, a line each, for
@@ -202,6 +211,7 @@ impl SettingsView {
         ];
         lines.extend(self.servers.read(cx).described(cx));
         lines.push(self.translation.read(cx).described(cx));
+        lines.push(self.keys.read(cx).described());
         lines.push(self.phone.read(cx).described());
         lines
     }
@@ -464,7 +474,31 @@ impl Render for SettingsView {
                     .child(div().mt_4().child(self.agents.clone()))
                     .child(div().mt_4().child(self.servers.clone()))
                     .child(div().mt_4().child(self.translation.clone()))
+                    .child(div().mt_4().child(self.keys.clone()))
                     .child(div().mt_4().child(self.phone.clone())),
             )
     }
+}
+
+/// A chip that chooses among a setting's choices, lit when it is chosen.
+fn chip(id: String, label: String, chosen: bool) -> gpui::Stateful<gpui::Div> {
+    let selector = id.clone();
+    div()
+        .id(gpui::SharedString::from(id))
+        .debug_selector(move || selector.clone())
+        .h(px(28.))
+        .px_3()
+        .flex()
+        .items_center()
+        .rounded_full()
+        .text_size(px(12.))
+        .border_1()
+        .border_color(rgb(if chosen { ACCENT } else { BORDER }))
+        .bg(rgb(if chosen { ACCENT_GROUND } else { BUTTON }))
+        .text_color(rgb(if chosen { ACCENT } else { FOREGROUND }))
+        .when(!chosen, |chip| {
+            chip.cursor_pointer()
+                .hover(|style| style.bg(rgb(BUTTON_HOVER)))
+        })
+        .child(label)
 }

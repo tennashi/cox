@@ -77,13 +77,15 @@ Every key is optional. Paths may be absolute or start with `~`.
 | `vim` | `true` makes the keys work as in Vim. See [Vim's keys](#vims-keys). | `false` |
 
 The settings card (Cmd-, or Ctrl-,) sets `agent`, `home`, `workflow`,
-`wiki` and `translation` for you, and leaves the rest of the file as it
-is. `coxd` reads `phone` only when it starts, and the window `vim`.
+`wiki`, `translation` and `vim` for you, and leaves the rest of the file
+as it is. `coxd` reads `phone` only when it starts.
 
 ### Vim's keys
 
 With `"vim": true`, the keys work as in Vim, and in a web page as in
-Vimperator. Off, nothing changes.
+Vimperator. Off, nothing changes. The settings card turns them on and
+off under **Vim's keys**, and so does editing the file. Either takes
+effect at once.
 
 **Modes.** The keys are in one of four modes, shown as `NORMAL`,
 `INSERT`, `HINT` or `COMMAND` beside the chat's input, or, while the
