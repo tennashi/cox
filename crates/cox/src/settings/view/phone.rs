@@ -1,7 +1,6 @@
 //! The phone on the settings screen: where a phone follows the chats,
 //! and the code it pairs with, so that the human pairs one without a
-//! terminal. A phone logged in to Tailscale as the Mac is opens the page
-//! as it is; another scans the code, which opens the link that pairs it
+//! terminal: a phone scans the code, which opens the link that pairs it
 //! (see [`crate::daemon::phone::pairing`]). The code holds the secret, so
 //! it shows only once the human asks for it, and goes as they hide it,
 //! or as the screen closes.
@@ -103,8 +102,8 @@ impl PhoneSection {
     fn told(&self, pairing: &Pairing, words: &mut Part, cx: &mut Context<Self>) -> Div {
         let opens = match &pairing.login {
             Some(login) => format!(
-                "A phone logged in to Tailscale as {login} opens {} as it is. Another \
-                 scans the code once, and keeps what it pairs with.",
+                "A phone logged in to Tailscale as {login} scans the code once, keeps \
+                 what it pairs with, and opens {} from then on.",
                 pairing.page
             ),
             None => format!(
@@ -208,8 +207,7 @@ impl Render for PhoneSection {
             .gap_2()
             .child(words.heading("PHONE"))
             .child(words.about(
-                "Follow the chats from your phone, through Tailscale: a phone logged in to \
-                 Tailscale as this Mac opens the page as it is, and another pairs once by \
+                "Follow the chats from your phone, through Tailscale: a phone pairs once by \
                  scanning the code.",
             ));
         match &self.shown {

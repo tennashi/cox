@@ -22,7 +22,6 @@
 //! and a WebSocket's too, as the one a dev server reloads the page on.
 //! What the relay passes back, Cox's page alone may frame.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -39,7 +38,7 @@ use hyper_util::rt::TokioIo;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-use super::{COOKIE, paired, tailnet};
+use super::{COOKIE, paired};
 
 /// What the relay answers: what the port it passed on to answered, or
 /// why it did not.
@@ -195,11 +194,11 @@ fn came_for(headers: &HeaderMap) -> Option<(&str, Option<u16>)> {
     .then_some((name, port))
 }
 
-/// What the relay needs: who the human's phone is, the page's port,
-/// which Cox's page is served on, and the ports it passes on to.
+/// What the relay needs: the secret the human's phone pairs with, the
+/// page's port, which Cox's page is served on, and the ports it passes on
+/// to.
 pub struct Relay {
     pub token: String,
-    pub owner: Rc<RefCell<Option<tailnet::Owner>>>,
     pub page: u16,
     pub ports: Rc<Ports>,
 }
@@ -245,7 +244,7 @@ async fn relayed(request: Request<Incoming>, relay: &Relay) -> Response<Body> {
             format!("Cox passes nothing on to port {port}"),
         );
     }
-    if !paired(request.headers(), &relay.owner, &relay.token, port) {
+    if !paired(request.headers(), &relay.token) {
         return told(
             StatusCode::UNAUTHORIZED,
             "Cox does not know this phone: open Cox's page first.".to_owned(),
@@ -595,10 +594,6 @@ mod tests {
             listener,
             Relay {
                 token: "secret".to_owned(),
-                owner: Rc::new(RefCell::new(Some(tailnet::Owner {
-                    host: "mac.ts.net".to_owned(),
-                    login: "me@github".to_owned(),
-                }))),
                 page: 7421,
                 ports,
             },
@@ -639,12 +634,32 @@ mod tests {
                 assert!(stranger.starts_with("HTTP/1.1 401"), "{stranger}");
                 let elsewhere = asked(
                     relay,
-                    "GET / HTTP/1.1\r\nhost: mac.ts.net:22\r\ntailscale-user-login: me@github\r\n\
+                    "GET / HTTP/1.1\r\nhost: mac.ts.net:22\r\ncookie: cox_phone=secret\r\n\
                      connection: close\r\n\r\n"
                         .to_owned(),
                 )
                 .await;
                 assert!(elsewhere.starts_with("HTTP/1.1 404"), "{elsewhere}");
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn passes_nothing_on_for_what_tailscale_would_say_alone() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (at, relay, mut seen) = relayed_app().await;
+                let told = asked(
+                    relay,
+                    format!(
+                        "GET / HTTP/1.1\r\nhost: mac.ts.net:{at}\r\n\
+                         tailscale-user-login: me@github\r\nconnection: close\r\n\r\n"
+                    ),
+                )
+                .await;
+                assert!(told.starts_with("HTTP/1.1 401"), "{told}");
+                assert!(seen.try_recv().is_err(), "the app was sent the request");
             })
             .await;
     }
@@ -661,7 +676,7 @@ mod tests {
                     .write_all(
                         format!(
                             "GET /hmr HTTP/1.1\r\nhost: mac.ts.net:{at}\r\n\
-                             tailscale-user-login: me@github\r\nconnection: Upgrade\r\n\
+                             cookie: cox_phone=secret\r\nconnection: Upgrade\r\n\
                              upgrade: websocket\r\n\r\n"
                         )
                         .as_bytes(),

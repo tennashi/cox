@@ -79,20 +79,17 @@ pub fn run(
                                 tracing::error!("nothing is pushed to the phones: {error:#}");
                             })
                             .ok();
-                        let owner = std::rc::Rc::new(std::cell::RefCell::new(None));
                         let tailscale = super::phone::tailscale();
-                        let relayed = relay(port, &token, &owner, tailscale).await;
+                        let relayed = relay(port, &token, tailscale).await;
                         if tailscale {
                             tokio::task::spawn_local(super::phone::follow_tailnet(
                                 port,
                                 relayed.as_ref().map(|relayed| Rc::clone(&relayed.ports)),
-                                std::rc::Rc::clone(&owner),
                             ));
                         }
                         tokio::task::spawn_local(super::phone::serve(
                             phone,
                             token,
-                            owner,
                             (pushes, relayed),
                             internal.clone(),
                         ));
@@ -123,16 +120,11 @@ pub fn run(
 
 /// Starts the relay, which passes what is served on the Mac's own
 /// address on to the phone, on the port after the page's `port`, with the
-/// page's `token` and `owner`, and serves the sketches' mocks there, on
-/// the port after it, for it to pass them on too: what it passes on,
-/// unless it cannot listen. With `tailscale`, the phone waits for the
+/// page's `token`, and serves the sketches' mocks there, on the port
+/// after it, for it to pass them on too: what it passes on, unless it
+/// cannot listen. With `tailscale`, the phone waits for the
 /// tailnet to hand a port to the relay before it is told of it.
-async fn relay(
-    port: u16,
-    token: &str,
-    owner: &Rc<std::cell::RefCell<Option<super::phone::tailnet::Owner>>>,
-    tailscale: bool,
-) -> Option<super::phone::Relayed> {
+async fn relay(port: u16, token: &str, tailscale: bool) -> Option<super::phone::Relayed> {
     use super::phone::{Relayed, listen, mocks, relay};
     let at = relay::port(port)?;
     let listener = listen(at)
@@ -144,7 +136,6 @@ async fn relay(
         listener,
         relay::Relay {
             token: token.to_owned(),
-            owner: Rc::clone(owner),
             page: port,
             ports: Rc::clone(&ports),
         },
