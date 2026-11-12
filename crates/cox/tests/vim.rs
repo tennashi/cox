@@ -41,7 +41,7 @@ fn open_window<'a>(
     cx: &'a mut TestAppContext,
     name: &str,
 ) -> (Entity<Workspace>, &'a mut VisualTestContext) {
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     keys::open_window(cx, scratch(name))
 }
 
@@ -313,7 +313,7 @@ fn the_keys_of_the_stage_s_tabs_go_to_the_stage(cx: &mut TestAppContext) {
         keyed: Some(keyed.clone()),
         ..FakeStages::default()
     };
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     let (workspace, cx) = keys::open_window_on(cx, scratch("tabs"), stages);
     keys::press(cx, &workspace, "secondary-n escape");
 
@@ -390,7 +390,7 @@ fn open_terminal<'a>(
     tokio::sync::oneshot::Receiver<Result<cox::agent::mcp::Ran, String>>,
     &'a mut VisualTestContext,
 ) {
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     cx.update(cox::app::bind_keys);
     let cwd = scratch(name);
     std::fs::create_dir_all(&cwd).unwrap();
@@ -452,6 +452,16 @@ fn a_terminal_takes_every_key_in_insert_mode_escape_too(cx: &mut TestAppContext)
         ran(cx, &mut waiting).ends_with("\nx gt^[:j1"),
         "control-w erased y, and escape went on"
     );
+    assert_eq!(mode(cx), Some(Mode::Insert));
+}
+
+#[gpui::test]
+fn turned_on_in_a_terminal_the_keys_start_in_insert_mode(cx: &mut TestAppContext) {
+    let (_terminal, _waiting, cx) = open_terminal(cx, "terminal-turned-on", "head -n 1");
+    cx.update(|window, cx| {
+        cox::vim::switch(false, window, cx);
+        cox::vim::switch(true, window, cx);
+    });
     assert_eq!(mode(cx), Some(Mode::Insert));
 }
 
@@ -540,7 +550,7 @@ fn slash_finds_in_a_terminal_and_shift_v_y_copies_the_line(cx: &mut TestAppConte
 /// device's: a part of the window in its key context that keeps the
 /// keys that reach it.
 fn open_android(cx: &mut TestAppContext) -> (Entity<FakePage>, &mut VisualTestContext) {
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     let (android, cx) = cx.add_window_view(|_, cx| FakePage {
         focus: cx.focus_handle(),
         asked: Vec::new(),
@@ -658,7 +668,7 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
             }),
         }
     });
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     let (workspace, cx) = keys::open_window_on(
         cx,
         scratch("session"),
@@ -776,7 +786,7 @@ fn open_code<'a>(
     vim: bool,
 ) -> (Entity<Code>, &'a mut VisualTestContext) {
     if vim {
-        cx.update(cox::vim::install);
+        cx.update(|cx| cox::vim::turn(true, cx));
     }
     cx.update(cox::stage::code::bind_keys);
     cx.update(cox::chat::hand::bind_keys);
@@ -917,7 +927,7 @@ fn off_code_has_no_cursor_and_its_keys_are_as_they_were(cx: &mut TestAppContext)
 
 #[gpui::test]
 fn a_document_scrolls_by_lines_halves_and_to_its_ends(cx: &mut TestAppContext) {
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     cx.update(cox::stage::document::bind_keys);
     let path = folder("document", &[]).join("long.md");
     let mut text = String::new();
@@ -958,7 +968,7 @@ fn a_document_scrolls_by_lines_halves_and_to_its_ends(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_tree_moves_a_selection_and_opens_and_closes_folders(cx: &mut TestAppContext) {
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     let root = folder("tree", &["a/one.rs", "a/two.rs", "b.rs", "c.rs"]);
     let open = root.clone();
     let (tree, cx) = cx.add_window_view(|_, cx| Tree::new(open, Vec::new(), cx));
@@ -1033,7 +1043,7 @@ fn changed(name: &str, paths: &[&str]) -> PathBuf {
 
 #[gpui::test]
 fn changes_move_from_file_to_file_and_open_one(cx: &mut TestAppContext) {
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     let root = changed("changes", &["a.txt", "b.txt", "c.txt"]);
     let (folder, cwd) = (root.clone(), root.clone());
     let (changes, cx) = cx.add_window_view(|_, cx| Changes::new(folder, &cwd, cx));
@@ -1120,7 +1130,7 @@ fn the_conversation_scrolls_from_the_input_in_normal_mode(cx: &mut TestAppContex
 
 #[gpui::test]
 fn g_d_goes_to_the_definition_of_the_first_name_of_the_line(cx: &mut TestAppContext) {
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     cx.update(cox::stage::code::bind_keys);
     let directory = folder("definition", &[]);
     fake_lsp::write_project(&directory);
@@ -1218,7 +1228,7 @@ impl gpui::Render for FakePage {
 }
 
 fn open_page(cx: &mut TestAppContext) -> (Entity<FakePage>, &mut VisualTestContext) {
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     let (page, cx) = cx.add_window_view(|_, cx| FakePage {
         focus: cx.focus_handle(),
         asked: Vec::new(),
@@ -1304,7 +1314,7 @@ struct Shown {
 
 fn line(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Shown {
     workspace.read_with(cx, |workspace, cx| {
-        let line = workspace.line().expect("Vim's keys are on").read(cx);
+        let line = workspace.line().read(cx);
         Shown {
             open: line.is_open(),
             text: line.text(cx).to_owned(),
@@ -1389,7 +1399,7 @@ fn colon_quit_and_the_rest_go_to_the_stage(cx: &mut TestAppContext) {
         keyed: Some(keyed.clone()),
         ..FakeStages::default()
     };
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     let (workspace, cx) = keys::open_window_on(cx, scratch("line-tabs"), stages);
     keys::press(cx, &workspace, "secondary-n escape");
 
@@ -1495,7 +1505,7 @@ fn colon_chat_shows_the_chat_whose_name_fits(cx: &mut TestAppContext) {
 fn off_there_is_no_line(cx: &mut TestAppContext) {
     let (workspace, cx) = keys::open_window(cx, scratch("line-off"));
     keys::press(cx, &workspace, "secondary-n escape :");
-    assert!(workspace.read_with(cx, |workspace, _| workspace.line().is_none()));
+    assert!(!line(cx, &workspace).open);
     assert!(!in_part(cx, "CommandLine"));
 }
 
@@ -1536,7 +1546,7 @@ fn hosted<V: gpui::Render + gpui::Focusable>(
 ) -> (Entity<V>, Entity<Host>, &mut VisualTestContext) {
     use gpui::AppContext as _;
 
-    cx.update(cox::vim::install);
+    cx.update(|cx| cox::vim::turn(true, cx));
     cx.update(cox::ui::input::bind_keys);
     let (host, cx) = cx.add_window_view(|window, cx| Host {
         child: cx.new(build).into(),

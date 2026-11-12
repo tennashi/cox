@@ -144,10 +144,10 @@ impl Workspace {
         }
     }
 
-    /// The line at the window's foot, while Vim's keys are on.
+    /// The line at the window's foot.
     #[must_use]
-    pub fn line(&self) -> Option<&Entity<Line>> {
-        self.line.as_ref()
+    pub fn line(&self) -> &Entity<Line> {
+        &self.line
     }
 
     /// Opens the line at the window's foot, with the names of the chats
@@ -159,9 +159,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(line) = self.line.clone() else {
-            return;
-        };
+        let line = self.line.clone();
         let names = Names {
             chats: self
                 .rows(Region::List)
@@ -260,9 +258,7 @@ impl Workspace {
 
     /// Says `said` on the line at the window's foot.
     fn say(&self, said: impl Into<String>, cx: &mut Context<Self>) {
-        if let Some(line) = &self.line {
-            line.update(cx, |line, cx| line.say(said, cx));
-        }
+        self.line.update(cx, |line, cx| line.say(said, cx));
     }
 
     /// The rows of the part `region` says, by their indices among the

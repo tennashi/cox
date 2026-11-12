@@ -1,10 +1,11 @@
-//! The keys as in Vim, which the human turns on in `settings.json` with
-//! `{"vim": true}`: a mode, normal or insert, in the chat and what opens
-//! over it to type in, and in a page, where hint mode picks what to click
-//! by its label, and the keys of each (see [`keymap`]).
+//! The keys as in Vim, which the human turns on and off as Cox runs, on
+//! the settings screen or in `settings.json` with `{"vim": true}`: a
+//! mode, normal or insert, in the chat and what opens over it to type
+//! in, and in a page, where hint mode picks what to click by its label,
+//! and the keys of each (see [`keymap`]).
 //!
 //! The keys are read ahead of the window's own, in one place
-//! ([`install`]), which takes those Vim's keys do and leaves the rest as
+//! ([`turn`]), which takes those Vim's keys do and leaves the rest as
 //! they were. Where the keyboard is, its region, is told by the window's
 //! key contexts. The stage's tabs keep every key of their own. While an
 //! input method composes, every key is its own.
@@ -501,11 +502,39 @@ fn edits_text(keystroke: &Keystroke) -> bool {
         )
 }
 
-/// Reads every key ahead of the window's own, with Vim's keys, from now
-/// on. Called as the app starts, when the human turned them on.
-pub fn install(cx: &mut App) {
-    cx.set_global(Vim::default());
-    cx.intercept_keystrokes(intercept).detach();
+/// The keys are read ahead of the window's own, for Vim's keys while
+/// they are on.
+struct Reading;
+
+impl Global for Reading {}
+
+/// Turns Vim's keys on, in normal mode, or off, from the next key.
+pub fn turn(on: bool, cx: &mut App) {
+    if on == cx.has_global::<Vim>() {
+        return;
+    }
+    if on {
+        if !cx.has_global::<Reading>() {
+            cx.set_global(Reading);
+            cx.intercept_keystrokes(intercept).detach();
+        }
+        cx.set_global(Vim::default());
+    } else {
+        cx.remove_global::<Vim>();
+    }
+    cx.refresh_windows();
+}
+
+/// Turns Vim's keys on or off while `window` is open, as the human
+/// changes the setting: on, in the mode of where its keyboard is.
+pub fn switch(on: bool, window: &mut Window, cx: &mut App) {
+    if on == cx.has_global::<Vim>() {
+        return;
+    }
+    turn(on, cx);
+    if on {
+        came(Region::of(&window.context_stack()), window, cx);
+    }
 }
 
 /// The mode the keys are in, if Vim's keys are on.
@@ -567,7 +596,7 @@ pub fn last_search(cx: &App) -> Option<&Search> {
 }
 
 fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
-    if crate::ui::composing::any(cx) {
+    if !cx.has_global::<Vim>() || crate::ui::composing::any(cx) {
         return;
     }
     let region = Region::of(&event.context_stack);

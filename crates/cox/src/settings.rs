@@ -233,8 +233,9 @@ pub fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
 /// Follows `settings.json` and `agents.json` as they change, as when the
 /// human edits them, for as long as `window` is: the agents are those
 /// `agents.json` lists now, a new chat talking to the one `settings.json`
-/// names, and Cox's own chats open from then on work in the home
-/// it names, unless `--home` gave another.
+/// names, Cox's own chats open from then on work in the home
+/// it names, unless `--home` gave another, and Vim's keys are on or off
+/// as it says.
 pub fn follow(window: WindowHandle<Workspace>, agents: Agents, cx: &mut App) {
     let files: Vec<PathBuf> = [Kept::Settings, Kept::Agents, Kept::Servers]
         .into_iter()
@@ -256,15 +257,16 @@ pub fn follow(window: WindowHandle<Workspace>, agents: Agents, cx: &mut App) {
             }
             seen = now;
             let agents = agents.clone();
-            let home = cx
+            let (home, vim) = cx
                 .background_executor()
                 .spawn(async move {
                     let saved = Saved::read();
                     agents.reload(saved.agent.as_deref());
-                    home_for_chats(saved.home)
+                    (home_for_chats(saved.home), saved.vim)
                 })
                 .await;
-            let followed = window.update(cx, |workspace, _, cx| {
+            let followed = window.update(cx, |workspace, window, cx| {
+                crate::vim::switch(vim, window, cx);
                 workspace.follow_home(home, cx);
                 if let Some(view) = workspace.settings().cloned() {
                     view.update(cx, view::SettingsView::reread);
