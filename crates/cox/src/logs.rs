@@ -17,7 +17,8 @@
 //! - `cox_acp::wire`: every ACP message between Cox and an agent.
 //! - `cox_acp::stderr`: what an agent writes to standard error.
 //! - `cox::agent::mcp::wire`: every message between an agent and Cox's
-//!   tool server.
+//!   tool server, in brief; at `trace`, whole, with what it carries:
+//!   pages, commands' output, screenshots.
 //! - `cox::agent::mcp::asks`: what a tool asks of the stage, and
 //!   `cox::stage::asked`, the stage carrying it out.
 //! - `cox_browser::scheme`: how long each answer at a `cox:` address took;
@@ -27,6 +28,7 @@
 use std::backtrace::Backtrace;
 use std::fs::{self, File};
 use std::io;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -44,6 +46,9 @@ pub const RUNS_KEPT: usize = 20;
 
 /// What the file of a run keeps when `COX_LOG` does not say.
 const KEPT: &str = "info,cox=debug";
+
+/// The mode of a run's file: what the agents say is the human's user's only.
+const OWNER_ONLY: u32 = 0o600;
 
 /// The target a panic is said under, which only the file of the run takes:
 /// on standard error, Rust says it already.
@@ -139,7 +144,11 @@ fn open(directory: &Path) -> io::Result<(PathBuf, File)> {
     prune(directory, RUNS_KEPT - 1)?;
     let time = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ");
     let path = directory.join(format!("{time}-{}.jsonl", std::process::id()));
-    let file = File::options().create(true).append(true).open(&path)?;
+    let file = File::options()
+        .create(true)
+        .append(true)
+        .mode(OWNER_ONLY)
+        .open(&path)?;
     Ok((path, file))
 }
 
@@ -176,7 +185,17 @@ fn keep_panics() {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::net::UnixStream;
+    use std::pin::Pin;
+    use std::sync::Arc;
+
+    use serde_json::{Value, json};
+
     use super::*;
+    use crate::agent::mcp::{self, Answered, Serves};
 
     /// A directory of its own for a test.
     fn scratch(name: &str) -> PathBuf {
@@ -234,6 +253,89 @@ mod tests {
             "{name}"
         );
         fs::remove_dir_all(directory.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_run_file_is_the_owners_only() {
+        let directory = scratch("mode");
+
+        let (path, _) = open(&directory).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A tool server whose every call answers a screenshot of `bytes`
+    /// bytes of base64.
+    struct Screenshot {
+        bytes: usize,
+    }
+
+    impl Serves for Screenshot {
+        fn tools(&self) -> Value {
+            json!([])
+        }
+
+        fn call<'a>(
+            &'a self,
+            _params: &'a Value,
+        ) -> Pin<Box<dyn Future<Output = Answered> + Send + 'a>> {
+            let data = "iVBORw0K".repeat(self.bytes / 8);
+            Box::pin(async move {
+                Ok(json!({
+                    "content": [{ "type": "image", "data": data, "mimeType": "image/png" }],
+                    "isError": false,
+                }))
+            })
+        }
+    }
+
+    #[test]
+    fn a_screenshot_over_the_tools_socket_is_kept_in_brief() {
+        let directory = scratch("wire");
+        let socket = directory.join("mcp");
+        let listener = mcp::listen(&socket).unwrap();
+        let path = directory.join("run.jsonl");
+        let file = File::create(&path).unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let subscriber =
+                tracing_subscriber::registry().with(kept(file).with_filter(EnvFilter::new(KEPT)));
+            tracing::subscriber::with_default(subscriber, || {
+                mcp::serve(listener, Arc::new(Screenshot { bytes: 1 << 20 }), async {
+                    let _ = stopped.await;
+                })
+            })
+        });
+
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "android_look", "arguments": {} } });
+        writeln!(stream, "{call}").unwrap();
+        let mut answer = String::new();
+        BufReader::new(&stream).read_line(&mut answer).unwrap();
+        assert!(answer.len() > 1 << 20);
+        stop.send(()).unwrap();
+        server.join().unwrap().unwrap();
+
+        let kept = fs::read_to_string(&path).unwrap();
+        let wire: Vec<Value> = kept
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|line| line["target"] == mcp::WIRE)
+            .collect();
+        let froms: Vec<&str> = wire
+            .iter()
+            .map(|line| line["fields"]["from"].as_str().unwrap())
+            .collect();
+        assert_eq!(froms, ["agent", "cox"]);
+        let answered: Value =
+            serde_json::from_str(wire[1]["fields"]["message"].as_str().unwrap()).unwrap();
+        assert_eq!(answered["id"], 3);
+        assert_eq!(answered["result"]["content"][0]["mimeType"], "image/png");
+        assert!(kept.len() < 4096, "{} bytes kept", kept.len());
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
