@@ -229,8 +229,8 @@ const PARTS: &[Region] = &[
     Region::Android,
 ];
 
-/// The parts `f` and `F` draw hints in: all but a page, which draws its
-/// own with `f`, and the screens over them.
+/// The parts `f` draws hints in: all but a page, which draws its own,
+/// and the screens over them.
 const HINTERS: &[Region] = &[
     Region::Workspace,
     Region::Rail,

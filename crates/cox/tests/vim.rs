@@ -1770,7 +1770,6 @@ fn tag_over(cx: &mut VisualTestContext, selector: &'static str) -> String {
         .map_or_else(|| panic!("no hint over {selector}"), |(label, _)| label)
 }
 
-/// Types `label` toward a hint, a key a letter.
 fn type_label(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, label: &str) {
     let keys: Vec<String> = label.chars().map(String::from).collect();
     keys::press(cx, workspace, &keys.join(" "));
