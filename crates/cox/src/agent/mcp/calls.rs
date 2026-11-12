@@ -18,7 +18,7 @@ use crate::agent::mcp::{
     ASKS, Answered, ChatRequest, Ended, INVALID_PARAMS, Ran, ToolRequest, Whereabouts, answered,
     answered_with_picture,
 };
-use crate::agent::setup::{Policy, Setup, StageUse};
+use crate::agent::setup::{Policy, Setup, StageUse, Withheld};
 use crate::chat::sketch::Sketch;
 use crate::{raw, wiki};
 
@@ -827,7 +827,12 @@ fn open_chat_tool() -> Value {
             \"drive\" (the default); `allow` and `reject` are patterns of the titles of \
             its permission requests, as they show in the conversation, which Cox answers \
             in the human's place, once each, with `*` for any run of characters (a title \
-            both match is rejected, and the human is asked about the rest); `goal` is \
+            both match is rejected, and the human is asked about the rest). It may do no \
+            more than this chat: it gets only the tools this chat gets, drives its stage \
+            only if this chat does, rejects what this chat's setup rejects too, and \
+            allows only a pattern this chat's setup allows as written, or covers with \
+            `*` or a kind and `:*`; a chat the human set up with nothing allows nothing, \
+            and the answer says what was held back. `goal` is \
             what the chat works until it is met, as a goal the human sets: `$ ` and a \
             shell command, which has to pass, or words, which an agent judges; `sketch` \
             makes the chat a sketch, which works in a folder of its own, apart from the \
@@ -867,7 +872,8 @@ fn open_chat_tool() -> Value {
                         of ACP's kinds of tool (read, edit, delete, move, search, execute, \
                         think, fetch, switch_mode, other) and a colon, of the titles of the \
                         calls of that kind, such as \"read:*\", \"search:*\" or \
-                        \"execute:cargo test*\".",
+                        \"execute:cargo test*\". Only the patterns this chat's own setup \
+                        allows are kept.",
                 },
                 "reject": {
                     "type": "array",
@@ -1411,7 +1417,39 @@ async fn open_chat(
             ])
         );
     }
+    if let Some(withheld) = withheld(&opened.withheld) {
+        let _ = write!(told, " {withheld}");
+    }
     Ok(told)
+}
+
+/// What the agent is told of what a chat it opened was not given, as
+/// more than its own chat may do, or `None` when nothing was withheld.
+fn withheld(withheld: &Withheld) -> Option<String> {
+    let quoted = |items: &[String]| {
+        items
+            .iter()
+            .map(|item| format!("`{item}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut held = Vec::new();
+    if !withheld.allow.is_empty() {
+        held.push(format!(
+            "it does not allow {}, which this chat's setup does not allow, and the human is \
+             asked instead",
+            quoted(&withheld.allow)
+        ));
+    }
+    match withheld.tools.as_deref() {
+        None => {}
+        Some([]) => held.push("it gets none of Cox's tools".to_owned()),
+        Some(tools) => held.push(format!("it gets only Cox's tools {}", quoted(tools))),
+    }
+    if withheld.stage {
+        held.push("it does not drive its stage".to_owned());
+    }
+    (!held.is_empty()).then(|| format!("It may do no more than this chat, so {}.", held.join("; ")))
 }
 
 /// Waits for the chat `arguments` name to end its turn, or to come to
@@ -2461,6 +2499,7 @@ mod tests {
                 number: 3,
                 name: "A warmer greeting.".to_owned(),
                 folder: Some("/sketches/greet-1".into()),
+                withheld: Withheld::default(),
             }));
             (sketch, what)
         });
@@ -2767,6 +2806,7 @@ mod tests {
                 number: 3,
                 name: "Chat 3".to_owned(),
                 folder: None,
+                withheld: Withheld::default(),
             }));
             goal
         });
@@ -2802,6 +2842,11 @@ mod tests {
                 number: 7,
                 name: "Chat 2".to_owned(),
                 folder: Some("/sketches/greet-1".into()),
+                withheld: Withheld {
+                    allow: vec!["cargo *".to_owned()],
+                    tools: Some(vec!["show_file".to_owned()]),
+                    stage: false,
+                },
             }));
             (text, setup, goal, sketch)
         });
@@ -2823,6 +2868,14 @@ mod tests {
         assert!(told.contains("Chat 2") && told.contains("chat 7"), "{told}");
         assert!(
             told.contains("a sketch, working in /sketches/greet-1"),
+            "{told}"
+        );
+        assert!(
+            told.ends_with(
+                " It may do no more than this chat, so it does not allow `cargo *`, which this \
+                 chat's setup does not allow, and the human is asked instead; it gets only \
+                 Cox's tools `show_file`."
+            ),
             "{told}"
         );
         let (text, setup, goal, sketch) = window.await.unwrap();

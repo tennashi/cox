@@ -111,7 +111,7 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::ToolRequest;
-use cox_browser::relay::{Pages, Relay};
+use cox_browser::relay::{Pages, Relay, Serving};
 use cox_browser::{Cef, TargetId};
 
 use cox_android::device::Boot;
@@ -171,9 +171,7 @@ pub struct Stage {
     /// The tabs, and which is shown. There is always one once the stage
     /// has started: closing the last tab is refused.
     tabs: List<Tab>,
-    /// The pages of each chat whose relay started, as the relay knows
-    /// them, by the chat's key.
-    pages: HashMap<u64, Pages>,
+    relays: HashMap<u64, Relayed>,
     /// The chat whose agent the stage carries out what it asks for, while
     /// it does.
     acting: Option<u64>,
@@ -196,8 +194,6 @@ pub struct Stage {
     keep: Option<Keep>,
     /// The tabs as they were last kept.
     kept: Option<KeptTabs<u64>>,
-    /// What carries out what the relay and the agent's tools ask, once
-    /// the stage works with the agent.
     heard: Vec<Task<()>>,
     /// The plugins the stage shows as pages, and what they read of the
     /// folder.
@@ -220,6 +216,12 @@ pub struct Stage {
     files: Entity<Tree>,
     /// Shows the files chosen on the tree.
     _chosen: Subscription,
+}
+
+struct Relayed {
+    pages: Pages,
+    _hearing: Task<()>,
+    _serving: Serving,
 }
 
 impl Stage {
@@ -269,7 +271,7 @@ impl Stage {
             strip: column::Strip::default(),
             cwd,
             tabs: List::new(),
-            pages: HashMap::new(),
+            relays: HashMap::new(),
             acting: None,
             working: HashSet::new(),
             worked_on: HashMap::new(),
@@ -301,9 +303,12 @@ impl Stage {
                     relay.pages.opening().is(target.clone());
                 }
             }
-            self.pages.insert(chat, relay.pages);
-            self.heard
-                .push(Self::hear(chat, relay.from_agent, window, cx));
+            let relayed = Relayed {
+                _hearing: Self::hear(chat, relay.from_agent, window, cx),
+                pages: relay.pages,
+                _serving: relay.serving,
+            };
+            self.relays.insert(chat, relayed);
         }
         if let Some(from_tools) = from_tools {
             self.heard
@@ -688,7 +693,11 @@ impl Stage {
         cx: &mut Context<Self>,
     ) -> TargetId {
         // Every chat's relay hears of it before CEF makes it.
-        let openings: Vec<_> = self.pages.values().map(Pages::opening).collect();
+        let openings: Vec<_> = self
+            .relays
+            .values()
+            .map(|relayed| relayed.pages.opening())
+            .collect();
         let (browser, events) = self.cef.open(url, Some(self.plugins.serve()));
         let target = browser.target_id();
         for opening in openings {

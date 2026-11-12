@@ -346,9 +346,8 @@ impl ChatView {
             let speaker = Speaker::of(entry);
             // A speaker is named where they start, and what asks the
             // human is marked wherever it is.
-            let asking = matches!(entry, Entry::Permission { chosen: None, .. })
-                && self.conversation.state() == State::Asking
-                && first + 1 == entries.len();
+            let asking = matches!(entry, Entry::Permission { .. })
+                && self.conversation.asked_at() == Some(first);
             let starts = speaker.is_some() && speaker != speaking;
             if speaker.is_some() {
                 speaking = speaker;
@@ -758,10 +757,7 @@ impl ChatView {
         writer: &mut Writer,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let asking = self.conversation.state() == State::Asking
-            && chosen.is_none()
-            && index + 1 == self.conversation.entries().len();
-        if asking {
+        if self.conversation.asked_at() == Some(index) {
             let title = conversation::login_title(failed);
             let names: Vec<String> = options.iter().map(conversation::login_label).collect();
             return render_asking(index, (&title, &[], &[]), &names, writer, cx);
@@ -946,10 +942,7 @@ impl ChatView {
                 gathered,
                 ..
             } => {
-                let asking = self.conversation.state() == State::Asking
-                    && chosen.is_none()
-                    && index + 1 == self.conversation.entries().len();
-                if asking {
+                if self.conversation.asked_at() == Some(index) {
                     let asked = (title.as_str(), content.as_slice(), gathered.as_slice());
                     render_asking(index, asked, options, &mut writer, cx)
                 } else {

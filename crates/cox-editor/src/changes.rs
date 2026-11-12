@@ -221,6 +221,58 @@ pub fn count(folder: &Path) -> Result<usize, String> {
         .sum())
 }
 
+/// How each file that changed in the repository `folder` is in changed,
+/// by its absolute path, as [`read`] tells it, without reading what
+/// changed in each. A file that moved counts where it is now.
+///
+/// # Errors
+///
+/// When `folder` is not in a Git repository, or Git cannot tell what
+/// changed, with what Git said.
+pub fn hows(folder: &Path) -> Result<HashMap<PathBuf, How>, String> {
+    let (top, _, from) = since(folder)?;
+    // As a tree of the files names them, through no link.
+    let top = std::fs::canonicalize(&top).unwrap_or(top);
+    let names = git(
+        &top,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--find-renames",
+            "--name-status",
+            "-z",
+            &from,
+            "--",
+        ],
+    )?;
+    let mut hows = HashMap::new();
+    let mut fields = names.split('\0').filter(|field| !field.is_empty());
+    while let Some(status) = fields.next() {
+        let how = match status.chars().next() {
+            Some('A' | 'C') => How::Added,
+            Some('D') => How::Removed,
+            Some('R') => How::Moved,
+            _ => How::Changed,
+        };
+        // A file that moved, or was copied, is named where it was first.
+        if matches!(how, How::Moved) || status.starts_with('C') {
+            fields.next();
+        }
+        let Some(path) = fields.next() else {
+            break;
+        };
+        hows.insert(top.join(path), how);
+    }
+    let untracked = git(&top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    hows.extend(
+        untracked
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(|path| (top.join(path), How::Added)),
+    );
+    Ok(hows)
+}
+
 /// The top of the worktree `folder` is in, what its files changed since,
 /// and the commit or tree that is, for Git to tell what changed from it.
 fn since(folder: &Path) -> Result<(PathBuf, Since, String), String> {
@@ -507,6 +559,31 @@ mod tests {
             ],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn tells_how_each_file_changed_without_reading_the_lines() {
+        let folder = repository(
+            "hows",
+            &[("a.txt", "one\n"), ("b.txt", "two\n"), ("c.txt", "three\n")],
+        );
+        std::fs::write(folder.join("a.txt"), "1\n").unwrap();
+        std::fs::remove_file(folder.join("b.txt")).unwrap();
+        git(&folder, &["mv", "c.txt", "moved.txt"]).unwrap();
+        std::fs::write(folder.join("new.txt"), "new\n").unwrap();
+        let top = std::fs::canonicalize(&folder).unwrap();
+        let mut hows: Vec<_> = hows(&folder).unwrap().into_iter().collect();
+        hows.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            hows,
+            [
+                (top.join("a.txt"), How::Changed),
+                (top.join("b.txt"), How::Removed),
+                (top.join("moved.txt"), How::Moved),
+                (top.join("new.txt"), How::Added),
+            ]
+        );
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]

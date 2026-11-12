@@ -88,7 +88,7 @@ impl Stage {
     /// work on: the pages of the chats that take a turn, those their
     /// agents last worked on, or else opened, or the human handed them.
     pub(super) fn relock(&self, cx: &App) {
-        for (&chat, pages) in &self.pages {
+        for (&chat, relayed) in &self.relays {
             let locked = self
                 .tabs
                 .iter()
@@ -101,7 +101,7 @@ impl Stage {
                     (user != chat).then(|| (page, self.name_of(user, cx).to_string()))
                 })
                 .collect::<HashMap<_, _>>();
-            pages.lock(locked);
+            relayed.pages.lock(locked);
         }
     }
 

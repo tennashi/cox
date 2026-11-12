@@ -33,6 +33,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use self::picture::Picture;
 use crate::chat::region::{self, Described};
+use crate::daemon::phone::relay::on_the_mac;
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
@@ -467,7 +468,9 @@ impl EntityInputHandler for Page {
 }
 
 /// What the human typed in the address line, as a URL to load: a scheme is
-/// taken as given, anything else is a host on the web. Blank is nothing.
+/// taken as given, a host on the Mac, as `localhost:3000` or `0.0.0.0:8000`,
+/// opens over `http://`, and anything else is a host on the web, over
+/// `https://`. Blank is nothing.
 pub(super) fn address_to_url(typed: &str) -> Option<String> {
     let typed = typed.trim();
     if typed.is_empty() {
@@ -482,11 +485,27 @@ pub(super) fn address_to_url(typed: &str) -> Option<String> {
                 .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
             && !rest.starts_with(|c: char| c.is_ascii_digit())
     });
-    Some(if has_scheme {
-        typed.to_owned()
+    if has_scheme {
+        return Some(typed.to_owned());
+    }
+    let http = format!("http://{typed}");
+    Some(if served_on_the_mac(&http) {
+        http
     } else {
         format!("https://{typed}")
     })
+}
+
+/// Whether `http` is a page of a server on the Mac: one the phone's relay
+/// reaches, or one at `0.0.0.0` or `[::]`, every address of the Mac, where
+/// a server that listens on all of them says it is.
+fn served_on_the_mac(http: &str) -> bool {
+    let every_address = url::Url::parse(http).is_ok_and(|url| match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_unspecified(),
+        Some(url::Host::Ipv6(ip)) => ip.is_unspecified(),
+        _ => false,
+    });
+    every_address || on_the_mac(http).is_some()
 }
 
 /// A length of the page, in the browser's whole pixels, in the window's.
@@ -627,9 +646,29 @@ mod tests {
             Some("https://example.com/path".to_owned())
         );
         assert_eq!(
-            address_to_url("localhost:3000"),
-            Some("https://localhost:3000".to_owned())
+            address_to_url("localhost.example.com"),
+            Some("https://localhost.example.com".to_owned())
         );
+    }
+
+    #[test]
+    fn a_host_of_the_mac_is_plain_http() {
+        for typed in [
+            "localhost",
+            "localhost:3000",
+            "localhost:5173/shop?item=2",
+            "app.localhost:4000/",
+            "127.0.0.1:8080",
+            "127.1.2.3",
+            "[::1]:3000/",
+            "0.0.0.0:8000",
+        ] {
+            assert_eq!(
+                address_to_url(typed),
+                Some(format!("http://{typed}")),
+                "{typed}"
+            );
+        }
     }
 
     #[test]

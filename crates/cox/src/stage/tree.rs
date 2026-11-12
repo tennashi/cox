@@ -10,30 +10,35 @@
 //! row with it, as `docs / design`, and opens with it. Lines down the
 //! tree show which folder a row is in, the line of the folder of the file
 //! marked brighter, and the folders the rows at the top are in stay at
-//! the top as the tree scrolls. It looks now and then at the folders open in
-//! it, so that it shows the files the agent writes, and no longer those it
-//! removes. The human folds it out of the way, beside every tab of a file
+//! the top as the tree scrolls. A file that changed, as the Changes tab
+//! tells it, says how on its row, as `M` or `A`, and a folder with one in
+//! it says so with a dot. It looks now and then at the folders open in
+//! it, and at what changed, so that it shows the files the agent writes,
+//! and no longer those it removes. The human folds it out of the way, beside every tab of a file
 //! at once, for as long as Cox runs.
 //!
 //! [`Unchosen`] is the tab of a file not chosen yet, which the human opens
 //! to choose one from the tree.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cox_core::tabs::KeptTab;
+use cox_editor::changes::How;
 use cox_editor::files::{self, Listed};
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, EventEmitter, FocusHandle, Focusable, FontWeight,
     Global, ScrollHandle, Stateful, Task, Window, div, prelude::*, px, rgb,
 };
 
+use crate::stage::changes;
 use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::theme::{
-    ACCENT_GROUND, BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER, SURFACE,
+    ACCENT, ACCENT_GROUND, BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER,
+    SURFACE,
 };
 use crate::ui::tip;
 
@@ -114,6 +119,12 @@ pub struct Tree {
     listed: HashMap<PathBuf, Result<Vec<Listed>, String>>,
     /// The file of the tab shown, which the tree marks.
     current: Option<PathBuf>,
+    /// How each file that changed changed, by its absolute path, as the
+    /// tab last looked.
+    hows: HashMap<PathBuf, How>,
+    /// The folders with a file that changed in them, or in a folder in
+    /// them.
+    changed: HashSet<PathBuf>,
     scroll: ScrollHandle,
     focus_handle: FocusHandle,
     _follow: Task<()>,
@@ -137,10 +148,18 @@ impl Tree {
             open,
             listed,
             current: None,
+            hows: HashMap::new(),
+            changed: HashSet::new(),
             scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             _follow: follow(cx),
         }
+    }
+
+    /// How the file at `path` changed, as the tree says on its row.
+    #[must_use]
+    pub fn how(&self, path: &Path) -> Option<How> {
+        self.hows.get(path).copied()
     }
 
     /// The folders open, besides the project's.
@@ -226,14 +245,29 @@ impl Tree {
         cx.notify();
     }
 
-    /// The tab looked at its folders again, and found what is in them now:
-    /// draws them again if that changed.
+    /// The tab looked at its folders again, and at what changed in them,
+    /// and found what is in them now, and how each file that changed
+    /// changed: draws them again if that changed.
     fn looked(
         &mut self,
         listed: HashMap<PathBuf, Result<Vec<Listed>, String>>,
+        hows: HashMap<PathBuf, How>,
         cx: &mut Context<Self>,
     ) {
         let mut changed = false;
+        if self.hows != hows {
+            self.changed = hows
+                .keys()
+                .flat_map(|path| {
+                    path.ancestors()
+                        .skip(1)
+                        .take_while(|folder| folder.starts_with(&self.root))
+                })
+                .map(Path::to_owned)
+                .collect();
+            self.hows = hows;
+            changed = true;
+        }
         for (folder, now) in listed {
             if self.listed.get(&folder) != Some(&now) {
                 self.listed.insert(folder, now);
@@ -399,10 +433,12 @@ impl Tree {
             .child(icon(kind, 14., FAINT).flex_shrink_0())
             .child(
                 div()
+                    .flex_1()
                     .min_w_0()
                     .overflow_hidden()
                     .child(ellipsis(name.clone())),
             )
+            .children(self.change_mark(entry))
             .on_click(cx.listener(move |tree, click: &ClickEvent, _, cx| {
                 if let At::Pinned { place, above, .. } = at {
                     tree.scroll_to_folder(place, above, cx);
@@ -420,6 +456,35 @@ impl Tree {
         } else {
             row.hover(|style| style.bg(rgb(HOVER))).into_any_element()
         }
+    }
+}
+
+impl Tree {
+    /// What says on the row of `entry` how it changed: the letter of a
+    /// file that changed, in the accent if it is new, as the Changes tab
+    /// marks it; or a dot, for a folder with a file that changed in it.
+    fn change_mark(&self, entry: &Listed) -> Option<AnyElement> {
+        if entry.is_folder {
+            return self.changed.contains(&entry.path).then(|| {
+                div()
+                    .flex_shrink_0()
+                    .size(px(6.))
+                    .mr(px(4.))
+                    .rounded_full()
+                    .bg(rgb(FAINT))
+                    .into_any_element()
+            });
+        }
+        let how = self.hows.get(&entry.path)?;
+        Some(
+            div()
+                .flex_shrink_0()
+                .w(px(14.))
+                .text_size(px(11.))
+                .text_color(rgb(if *how == How::Added { ACCENT } else { DIM }))
+                .child(how.letter().to_string())
+                .into_any_element(),
+        )
     }
 }
 
@@ -549,30 +614,36 @@ fn list(folder: &Path) -> Result<Vec<Listed>, String> {
     files::list(folder).map_err(|error| error.to_string())
 }
 
-/// Looks at the folders of the tab of `cx` now and then, for as long as
-/// the tab is.
+/// Looks at the folders of the tab of `cx`, and at what changed in the
+/// project, now and then, from the start, for as long as the tab is.
 fn follow(cx: &mut Context<Tree>) -> Task<()> {
     cx.spawn(async move |this, cx| {
         loop {
-            cx.background_executor().timer(LOOK_EVERY).await;
-            let Ok(folders) = this.read_with(cx, |tree, _| tree.folders()) else {
+            let Ok((root, folders)) =
+                this.read_with(cx, |tree, _| (tree.root.clone(), tree.folders()))
+            else {
                 break;
             };
-            let listed = cx
+            let (listed, hows) = cx
                 .background_executor()
                 .spawn(async move {
-                    folders
+                    let listed = folders
                         .into_iter()
                         .map(|folder| {
                             let listed = list(&folder);
                             (folder, listed)
                         })
-                        .collect()
+                        .collect();
+                    (listed, changes::hows(&root))
                 })
                 .await;
-            if this.update(cx, |tree, cx| tree.looked(listed, cx)).is_err() {
+            if this
+                .update(cx, |tree, cx| tree.looked(listed, hows, cx))
+                .is_err()
+            {
                 break;
             }
+            cx.background_executor().timer(LOOK_EVERY).await;
         }
     })
 }

@@ -1,26 +1,18 @@
 //! The human's tailnet, which the phone reaches the page through: coxd
 //! has `tailscale serve` hand the page to it, and each port the relay
-//! passes on (see [`super::relay`]), and takes a phone that
-//! comes through it as the human's own when Tailscale says it is of the
-//! same login as the Mac, with no secret to pair with.
+//! passes on (see [`super::relay`]).
 //!
 //! `tailscale serve` passes on what comes to the Mac's name in the
-//! tailnet, `https://<name>/`, to the page on `127.0.0.1`, with the
-//! login of whoever sent it, in `Tailscale-User-Login`, which it takes
-//! out of what a phone sends itself, so that no one fakes it through
-//! the tailnet. A page in a browser on the Mac, which reaches
-//! `127.0.0.1` too, cannot add the header without asking first, as
-//! browsers have it, which nothing here answers, nor send it under the
-//! Mac's name in the tailnet, as a page whose name was turned to
-//! `127.0.0.1` would send its own; so a request is the human's when it
-//! comes for the Mac's name with the Mac's login. What else runs on the
-//! Mac as the human can send it so too: that is the human's.
+//! tailnet, `https://<name>/`, to the page on `127.0.0.1`, saying the
+//! login of whoever sent it in `Tailscale-User-Login`. coxd does not go
+//! by it: anything on the Mac that reaches `127.0.0.1` can send the
+//! same, the Mac's name and login being no secret, and what the Mac
+//! itself sends to its name in the tailnet comes through `tailscale
+//! serve` as of the Mac's login. So every phone pairs, the human's own
+//! too (see [`super::paired`]).
 
 use std::io::Read as _;
 use std::time::Duration;
-
-use hyper::HeaderMap;
-use hyper::header;
 
 /// Where `tailscale` is: on `PATH`, as Homebrew's or the app's own
 /// installed from its settings, or in the app.
@@ -33,9 +25,6 @@ const PROGRAMS: &[&str] = &[
 /// from where the app does not run it, may never answer, and `tailscale
 /// serve` waits for Serve to be turned on in a tailnet that has it off.
 const ASKS: Duration = Duration::from_secs(5);
-
-/// The header `tailscale serve` says who sent a request in.
-const LOGIN: &str = "tailscale-user-login";
 
 /// The Mac in the tailnet: its name there, as `mac.tail1234.ts.net`, and
 /// the login it is of, as `someone@github`.
@@ -91,19 +80,6 @@ fn status_in(bytes: &[u8]) -> Option<Status> {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     Some(Status { owner, magic_dns })
-}
-
-/// Whether a request with `headers` is the human's, of `owner`'s login
-/// and for the Mac's name in the tailnet at the port `https`, as
-/// `tailscale serve` passes one on.
-pub fn of_the_owner(headers: &HeaderMap, owner: &Owner, https: u16) -> bool {
-    let login = headers.get(LOGIN).and_then(|login| login.to_str().ok());
-    let host = headers
-        .get(header::HOST)
-        .and_then(|host| host.to_str().ok());
-    let at_port = format!("{}:{https}", owner.host);
-    let came = host.is_some_and(|host| host == at_port || (https == 443 && host == owner.host));
-    login == Some(owner.login.as_str()) && came
 }
 
 /// How the tailnet hands what coxd serves on `port` to the phone.
@@ -355,60 +331,6 @@ mod tests {
             })
         );
         assert_eq!(status_in(b"not json"), None);
-    }
-
-    #[test]
-    fn takes_only_the_owner_coming_for_the_mac() {
-        let owner = Owner {
-            host: "mac.tail1234.ts.net".to_owned(),
-            login: "someone@github".to_owned(),
-        };
-        let headers = |host: &str, login: Option<&str>| {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::HOST, host.parse().unwrap());
-            if let Some(login) = login {
-                headers.insert(LOGIN, login.parse().unwrap());
-            }
-            headers
-        };
-        assert!(of_the_owner(
-            &headers("mac.tail1234.ts.net", Some("someone@github")),
-            &owner,
-            443
-        ));
-        assert!(of_the_owner(
-            &headers("mac.tail1234.ts.net:443", Some("someone@github")),
-            &owner,
-            443
-        ));
-        // Someone else the Mac is shared with.
-        assert!(!of_the_owner(
-            &headers("mac.tail1234.ts.net", Some("other@github")),
-            &owner,
-            443
-        ));
-        // A page whose own name was turned to 127.0.0.1.
-        assert!(!of_the_owner(
-            &headers("evil.example:7421", Some("someone@github")),
-            &owner,
-            443
-        ));
-        assert!(!of_the_owner(
-            &headers("mac.tail1234.ts.net", None),
-            &owner,
-            443
-        ));
-        // The sketches, served at a port of their own.
-        assert!(of_the_owner(
-            &headers("mac.tail1234.ts.net:7422", Some("someone@github")),
-            &owner,
-            7422
-        ));
-        assert!(!of_the_owner(
-            &headers("mac.tail1234.ts.net", Some("someone@github")),
-            &owner,
-            7422
-        ));
     }
 
     #[test]

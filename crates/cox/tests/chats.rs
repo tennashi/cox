@@ -32,8 +32,8 @@ use cox_core::store::Named;
 use cox_core::store::Store;
 use fake_agent::{BACKGROUND_FINISHED, BACKGROUND_STARTED, FakeAgent, LogsIn, Resumes, TITLE};
 use fake_daemon::{
-    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, kept_at,
-    open_again, settle, settle_on, settle_until, settled,
+    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, given_up,
+    kept_at, open_again, settle, settle_on, settle_until, settled,
 };
 use gpui::{
     Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
@@ -280,11 +280,7 @@ async fn say(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, text: &s
 /// Waits until a turn of the chat `view` has ended.
 async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
     settle(cx).await;
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(GIVEN_UP);
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     tokio::select! {
         () = cx.condition(view, |view, _| {
             view.conversation().state() == State::Idle && !view.conversation().entries().is_empty()
@@ -979,6 +975,40 @@ async fn the_agent_asks_after_its_turn_ended_and_goes_on_once_answered(cx: &mut 
     assert_eq!(
         shown_entries(cx, &workspace).last(),
         Some(&Entry::Reply("echo: hello".to_owned()))
+    );
+}
+
+#[gpui::test]
+async fn the_human_answers_the_agent_after_setting_a_goal_as_it_asks(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch("asks-goal"));
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, &workspace);
+    cx.simulate_input("permission");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    view.read_with(cx, |view, _| {
+        view.set_goal(Some(KeptGoal::Command("true".to_owned())));
+    });
+    wait_until(cx, &view, |conversation| {
+        matches!(conversation.entries().last(), Some(Entry::Note(note)) if note.starts_with("Goal:"))
+    })
+    .await;
+
+    click(cx, "option-1");
+    wait_for_turn(cx, &view).await;
+    let entries = entries(cx, &view);
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            Entry::Permission {
+                chosen: Some(0),
+                ..
+            }
+        )),
+        "{entries:?}"
     );
 }
 
@@ -2571,11 +2601,7 @@ async fn wait_until(
     view: &Entity<ChatView>,
     until: impl Fn(&Conversation) -> bool,
 ) {
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(GIVEN_UP);
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     tokio::select! {
         () = cx.condition(view, |view, _| until(view.conversation())) => {}
         _ = timeout => panic!("the agent never got there"),
@@ -3273,6 +3299,50 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
+#[gpui::test]
+async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppContext) {
+    let home = scratch("bounded-home");
+    let store = kept_store("bounded-kept");
+    let (_, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+
+    // The human answers every request of the first chat's, yet its agent
+    // asks for a chat that Cox answers everything of.
+    let (answer, _opened) = tokio::sync::oneshot::channel();
+    asks.borrow()[0]
+        .send(ChatRequest::OpenChat {
+            text: "permission".to_owned(),
+            setup: Setup {
+                policy: Policy {
+                    allow: vec!["*".to_owned()],
+                    ..Policy::default()
+                },
+                ..Setup::default()
+            },
+            goal: None,
+            sketch: None,
+            answer,
+        })
+        .unwrap();
+    cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 2)
+        .await;
+
+    // The chat it opened asks the human too.
+    let view = view_at(cx, &workspace, 1);
+    wait_until(cx, &view, |conversation| {
+        conversation.state() == State::Asking
+    })
+    .await;
+    let setup = workspace.read_with(cx, |workspace, _| {
+        workspace.chats(0).nth(1).unwrap().setup().cloned().unwrap()
+    });
+    assert_eq!(setup.policy, Policy::default());
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
+}
+
 /// A Git repository at a scratch folder named after `name`, with
 /// `main.rs` committed, and someone to commit as.
 fn repository(name: &str) -> PathBuf {
@@ -3331,11 +3401,7 @@ async fn wait_for_discarded(
     workspace: &Entity<Workspace>,
     made: &std::path::Path,
 ) {
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(GIVEN_UP);
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     let made = made.to_owned();
     tokio::select! {
         () = cx.condition(workspace, move |_, _| !made.exists()) => {}
@@ -4131,4 +4197,35 @@ async fn the_human_asks_a_chat_to_keep_what_it_learned_in_the_wiki(cx: &mut Test
     assert_eq!(agents.borrow()[0].prompts().last(), Some(&asked));
     assert!(asked.contains("wiki_write"), "{asked}");
     assert!(entries(cx, &view).contains(&Entry::Cox(asked)));
+}
+
+#[gpui::test]
+async fn an_agent_waits_for_no_chat_of_another_project(cx: &mut TestAppContext) {
+    let app = scratch("wait-other-project");
+    std::fs::create_dir_all(&app).unwrap();
+    let store = kept_store("wait-other-project-kept");
+    let (_, asks, workspace, cx) = open_window_asking(
+        cx,
+        scratch("wait-other-project-home"),
+        store,
+        Resumes::Resume,
+    );
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, &workspace, "hello").await;
+    let (other, _) = keys(cx, &workspace, 0);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(app.clone()), window, cx);
+    });
+    say(cx, &workspace, "hi").await;
+
+    let (answer, waited) = tokio::sync::oneshot::channel();
+    asks.borrow()[1]
+        .send(ChatRequest::WaitChat {
+            chat: other,
+            answer,
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(waited.await.unwrap(), Err(format!("no chat {other}")));
+    let _ = std::fs::remove_dir_all(&app);
 }

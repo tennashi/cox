@@ -1,6 +1,7 @@
 //! How a window reaches coxd (see [`super::process`]): on its socket,
 //! starting it first when none answers there, or again when the one that
-//! answers is outdated, and then carrying what the window tells the
+//! answers is outdated, waiting while the one that answers is of another
+//! build and at work, and then carrying what the window tells the
 //! daemon, and what the daemon tells it, a line each, on threads of its
 //! own.
 
@@ -21,6 +22,10 @@ const STARTS_WITHIN: Duration = Duration::from_secs(10);
 /// How often it looks whether it does.
 const LOOK_EVERY: Duration = Duration::from_millis(50);
 
+/// How often a window comes again to a coxd of another build that was at
+/// work.
+const AGAIN_EVERY: Duration = Duration::from_secs(2);
+
 /// The daemon a window reached: what to tell it, and what it tells. Once
 /// all of `link` is dropped, the daemon lets the window go.
 pub struct Connected {
@@ -29,7 +34,9 @@ pub struct Connected {
 }
 
 /// Reaches coxd on `socket`, saying `hello`, starting it with `start`
-/// when none answers there, or when the one there is outdated. Once the
+/// when none answers there, or when the one there is outdated. While the
+/// one there is of another build and a chat of it is at work, the window
+/// comes again until none is, having called `waiting` once. Once the
 /// daemon goes, the window hears no more, and `gone` is called.
 ///
 /// # Errors
@@ -39,10 +46,12 @@ pub fn connect(
     socket: &Path,
     hello: &Hello,
     start: &dyn Fn() -> std::io::Result<()>,
+    waiting: &dyn Fn(),
     gone: impl FnOnce() + Send + 'static,
 ) -> anyhow::Result<Connected> {
-    // The outdated coxd stops, and the new one is started, once.
-    for _ in 0..2 {
+    let mut restarted = false;
+    let mut waited = false;
+    loop {
         let stream = if let Ok(stream) = UnixStream::connect(socket) {
             stream
         } else {
@@ -50,7 +59,7 @@ pub fn connect(
             wait_for(socket)?
         };
         match greet(&stream, hello)? {
-            (FromDaemon::Welcome, reader) => return Ok(carry(stream, reader, gone)),
+            (FromDaemon::Joined, reader) => return Ok(carry(stream, reader, gone)),
             (FromDaemon::Taken, _) => bail!("another Cox window has the chats already"),
             (FromDaemon::Outdated, mut reader) => {
                 tracing::info!("coxd was outdated, and stops for the new one");
@@ -58,11 +67,23 @@ pub fn connect(
                 let mut rest = String::new();
                 while reader.read_line(&mut rest).is_ok_and(|read| read > 0) {}
                 wait_gone(socket);
+                if restarted {
+                    bail!("coxd stays outdated");
+                }
+                restarted = true;
+            }
+            (FromDaemon::Busy | FromDaemon::Welcome, _) => {
+                tracing::warn!("coxd is of another build, at work: the window waits");
+                if !waited {
+                    waiting();
+                    waited = true;
+                }
+                drop(stream);
+                std::thread::sleep(AGAIN_EVERY);
             }
             (other, _) => bail!("coxd answered {other:?}"),
         }
     }
-    bail!("coxd stays outdated")
 }
 
 /// Waits until coxd answers on `socket`.
@@ -155,5 +176,69 @@ fn carry(
     Connected {
         link: Link { to },
         from_daemon,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::net::UnixListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    /// A coxd on `socket` that answers each window that comes, in turn,
+    /// the line of `answers`, counting in `heard` the hellos it heard.
+    fn coxd(socket: &Path, answers: &'static [&'static str], heard: &Arc<AtomicUsize>) {
+        let _ = std::fs::remove_file(socket);
+        let listener = UnixListener::bind(socket).unwrap();
+        let heard = Arc::clone(heard);
+        std::thread::spawn(move || {
+            let mut windows = Vec::new();
+            for answer in answers {
+                let (stream, _) = listener.accept().unwrap();
+                let mut hello = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut hello)
+                    .unwrap();
+                heard.fetch_add(1, Ordering::SeqCst);
+                (&stream)
+                    .write_all(format!("{answer}\n").as_bytes())
+                    .unwrap();
+                windows.push(stream);
+            }
+            std::thread::park();
+        });
+    }
+
+    #[test]
+    fn a_window_waits_out_a_coxd_that_does_not_say_it_is_of_its_build() {
+        let socket = std::env::temp_dir().join(format!("cox-greet-{}.sock", std::process::id()));
+        let heard = Arc::new(AtomicUsize::new(0));
+        coxd(
+            &socket,
+            &[r#""Welcome""#, r#""Busy""#, r#""Joined""#],
+            &heard,
+        );
+        let waited = AtomicUsize::new(0);
+
+        let connected = connect(
+            &socket,
+            &Hello::default(),
+            &|| Err(std::io::Error::other("coxd runs already")),
+            &|| {
+                waited.fetch_add(1, Ordering::SeqCst);
+            },
+            || {},
+        );
+
+        assert!(connected.is_ok(), "{:?}", connected.err());
+        assert_eq!(
+            heard.load(Ordering::SeqCst),
+            3,
+            "the window comes again, past the coxd that welcomed it as any window, and the busy one"
+        );
+        assert_eq!(waited.load(Ordering::SeqCst), 1, "the human is told once");
+        let _ = std::fs::remove_file(&socket);
     }
 }

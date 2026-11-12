@@ -45,7 +45,7 @@ use tokio::sync::oneshot;
 
 use crate::agent::instructions::Instructions;
 use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, Whereabouts};
-use crate::agent::setup::{Policy, Setup, StageUse, keeps_in_wiki};
+use crate::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
 use crate::agent::{self, Agent, AgentEvent, Start};
 use crate::agents::Agents;
 use crate::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
@@ -56,7 +56,7 @@ use crate::storage;
 use crate::trigger::By;
 use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
-use wire::{ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
+use wire::{Build, ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
 /// What the project of chats with no folder is called.
 const COX: &str = "Cox";
@@ -180,14 +180,13 @@ pub enum Internal {
     /// The command `id`, which the window runs, is not waited for any more.
     Cancel { id: u64 },
     /// A window came, as the connection `id`, saying `hello`, to hear
-    /// what the daemon says on `window`, when the daemon's own program
-    /// was `replaced` since it started, or not. `answer` hears how the
-    /// daemon took it.
+    /// what the daemon says on `window`, the daemon being of `build`.
+    /// `answer` hears how the daemon took it.
     Attach {
         id: u64,
         hello: Hello,
         window: UnboundedSender<FromDaemon>,
-        replaced: bool,
+        build: Option<Build>,
         answer: oneshot::Sender<FromDaemon>,
     },
     /// The window of the connection `id` went.
@@ -1727,16 +1726,25 @@ impl Daemon {
         lines[from..].to_vec()
     }
 
+    /// The chats the agent of the chat `key` may ask about, open or not:
+    /// those of its project; none while it is gone.
+    fn seen_by(&self, key: u64) -> Option<impl Iterator<Item = &Slot>> {
+        let project = self.slot(key)?.project;
+        Some(
+            self.chats
+                .iter()
+                .chain(&self.archived)
+                .filter(move |slot| slot.project == project),
+        )
+    }
+
     /// What the chat kept as `number`, of the project of the chat `key`,
     /// talked through, as its agent reads it, or why it cannot.
     fn read_chat(&self, key: u64, number: i64) -> Result<String, String> {
-        let project = self.slot(key).ok_or("the chat has closed")?.project;
         let slot = self
-            .chats
-            .iter()
-            .chain(&self.archived)
+            .seen_by(key)
+            .ok_or("the chat has closed")?
             .find(|slot| slot.kept.is_some_and(|kept| kept.number() == number))
-            .filter(|slot| slot.project == project)
             .ok_or_else(|| format!("This project has no chat {number}."))?;
         let entries = match &slot.chat {
             Some(chat) => chat.conversation().entries().to_vec(),
@@ -2407,10 +2415,10 @@ impl Daemon {
                 id,
                 hello,
                 window,
-                replaced,
+                build,
                 answer,
             } => {
-                let taken = self.attach(id, hello, window, replaced);
+                let taken = self.attach(id, hello, window, build);
                 answer.send(taken).ok();
             }
             Internal::Detach { id } => {
@@ -2550,15 +2558,14 @@ impl Daemon {
 
     /// Takes the window of the connection `id`, which says `hello`, to
     /// tell what it does on `window` from now on, unless another window
-    /// is there, or the daemon's own program was `replaced` and no chat
-    /// is at work, when the daemon is to stop for the new one. Answers
-    /// which of those it is.
+    /// is there, or the window is of another build than the daemon's,
+    /// `build` (see [`Hello::answer`]). Answers which of those it is.
     fn attach(
         &mut self,
         id: u64,
         hello: Hello,
         window: UnboundedSender<FromDaemon>,
-        replaced: bool,
+        build: Option<Build>,
     ) -> FromDaemon {
         if self.window.is_some() {
             return FromDaemon::Taken;
@@ -2568,13 +2575,14 @@ impl Daemon {
             .iter()
             .chain(&self.archived)
             .any(|slot| working(slot.state));
-        if replaced && !at_work {
-            return FromDaemon::Outdated;
+        let answer = hello.answer(build, at_work);
+        if answer == FromDaemon::Busy {
+            tracing::warn!("a window of another build waits, since a chat is at work");
         }
-        if replaced {
-            tracing::warn!("the daemon goes on as it was, since a chat is at work");
+        if answer != FromDaemon::Joined {
+            return answer;
         }
-        let Hello { home, command } = hello;
+        let Hello { home, command, .. } = hello;
         // A window not given a home leaves Cox's own chats where
         // the settings say now, which may have changed while none was
         // there.
@@ -2590,7 +2598,7 @@ impl Daemon {
         self.window_watches.clear();
         self.listed = None;
         self.shown = None;
-        FromDaemon::Welcome
+        FromDaemon::Joined
     }
 
     /// Lets the window go: what it was asked to run it does not, and the
@@ -2779,7 +2787,7 @@ impl Daemon {
                 let opened = self.open_chat(key, &text, setup, goal);
                 answer.send(opened).ok();
             }
-            ChatRequest::WaitChat { chat, answer } => self.wait_chat(chat, answer),
+            ChatRequest::WaitChat { chat, answer } => self.wait_chat(key, chat, answer),
             ChatRequest::SaveToWiki { chat } => self.save_to_wiki_of(key, chat),
             ChatRequest::WikiWritten { page } => {
                 let in_sketch = self.sketch_of(key).is_some();
@@ -2882,10 +2890,19 @@ impl Daemon {
             .is_some_and(|slot| !working(slot.state) && keeps_in_wiki(slot.setup.as_ref()))
     }
 
-    /// Answers `answer` with how the chat that goes by `key` stands once it
-    /// is not at work, or at once when it is not.
-    fn wait_chat(&mut self, key: u64, answer: oneshot::Sender<Result<Waited, String>>) {
-        if self.slot(key).is_none() {
+    /// Answers `answer` with how the chat that goes by `key`, of the
+    /// project of the chat `asking`, stands once it is not at work, or at
+    /// once when it is not.
+    fn wait_chat(
+        &mut self,
+        asking: u64,
+        key: u64,
+        answer: oneshot::Sender<Result<Waited, String>>,
+    ) {
+        let seen = self
+            .seen_by(asking)
+            .is_some_and(|mut chats| chats.any(|slot| slot.key == key));
+        if !seen {
             answer.send(Err(format!("no chat {key}"))).ok();
             return;
         }
@@ -2902,18 +2919,20 @@ impl Daemon {
     }
 
     /// Opens a chat under the chat `key`, in its project, set up as
-    /// `setup` says, which works until `goal` is met if given, and gets
-    /// `text` as its first line, and answers how it goes by. A sketch, as
-    /// the setup's `sketch` makes it, works in a folder of its own; any
-    /// other chat works where the chat that opened it does.
+    /// `setup` says, kept to what the chat `key` may do (see
+    /// [`Setup::opened_by`]), which works until `goal` is met if given,
+    /// and gets `text` as its first line, and answers how it goes by. A
+    /// sketch, as the setup's `sketch` makes it, works in a folder of its
+    /// own; any other chat works where the chat that opened it does.
     fn open_chat(
         &mut self,
         key: u64,
         text: &str,
-        mut setup: Setup,
+        setup: Setup,
         goal: Option<Goal>,
     ) -> Result<OpenedChat, String> {
         let slot = self.slot(key).ok_or("the chat is gone")?;
+        let (mut setup, withheld) = setup.opened_by(slot.setup.as_ref());
         let folder = slot.setup.as_ref().and_then(|setup| setup.folder.clone());
         let project = slot.project;
         setup.folder = match setup.sketch {
@@ -2925,7 +2944,8 @@ impl Daemon {
             }
             None => folder,
         };
-        self.open_under(key, text, setup, goal)
+        let opened = self.open_under(key, text, setup, goal)?;
+        Ok(OpenedChat { withheld, ..opened })
     }
 
     /// Opens a chat under the chat `key`, set up as `setup` says, on
@@ -2948,6 +2968,7 @@ impl Daemon {
             folder: sketch
                 .and(slot.setup.as_ref())
                 .and_then(|setup| setup.folder.clone()),
+            withheld: Withheld::default(),
         };
         if let Some(chat) = self.chat(opened) {
             chat.tell(&opened_by, text, goal);
@@ -3192,10 +3213,13 @@ impl Daemon {
             }
             return;
         };
-        let left_out = sketch::left_out(&folder).unwrap_or_else(|error| {
-            tracing::warn!("cannot tell what the sketch changed: {error}");
-            Vec::new()
-        });
+        let left_out = storage::path(storage::Kept::Sketches)
+            .ok_or_else(|| "Cox cannot tell where the sketches are".to_owned())
+            .and_then(|sketches| sketch::left_out(&folder, &sketches))
+            .unwrap_or_else(|error| {
+                tracing::warn!("cannot tell what the sketch changed: {error}");
+                Vec::new()
+            });
         let Some(line) = workflow::say(&text, &[("left_out", &sketch::left_out_lines(&left_out))])
         else {
             if let Some(chat) = self.chat(key) {
@@ -3251,9 +3275,8 @@ impl Daemon {
             .and_then(|chat| chat.last_reply())
             .unwrap_or_default();
         let discarded = storage::path(storage::Kept::Sketches)
-            .map(|sketches| sketches.join(sketch::DISCARDED))
             .ok_or_else(|| "Cox cannot tell where to keep discarded sketches".to_owned())
-            .and_then(|bundles| sketch::discard(started, &folder, &title, &bundles, ending.keep));
+            .and_then(|sketches| sketch::discard(started, &folder, &title, &sketches, ending.keep));
         let kept = discarded
             .as_ref()
             .ok()
@@ -3561,10 +3584,9 @@ impl Daemon {
             .slot(key)
             .map(|slot| slot.name.clone())
             .unwrap_or_default();
-        let bundles = storage::path(storage::Kept::Sketches)
-            .map(|sketches| sketches.join(sketch::DISCARDED))
+        let sketches = storage::path(storage::Kept::Sketches)
             .ok_or("Cox cannot tell where to keep what the sketch made")?;
-        sketch::discard(Sketch::Empty, folder, &title, &bundles, true)
+        sketch::discard(Sketch::Empty, folder, &title, &sketches, true)
     }
 
     /// Keeps and tells what changed: each chat's conversation, how each

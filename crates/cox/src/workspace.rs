@@ -606,7 +606,11 @@ impl Workspace {
                 }
             }
             // The greeting is over before the window hears the daemon.
-            FromDaemon::Welcome | FromDaemon::Taken | FromDaemon::Outdated => {}
+            FromDaemon::Joined
+            | FromDaemon::Welcome
+            | FromDaemon::Taken
+            | FromDaemon::Outdated
+            | FromDaemon::Busy => {}
         }
     }
 
