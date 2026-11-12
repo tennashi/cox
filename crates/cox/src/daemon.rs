@@ -201,6 +201,12 @@ pub enum Internal {
     /// The phone of the connection `id` watches the conversation of the
     /// chat `key` from now on, or none.
     ViewChat { id: u64, key: Option<u64> },
+    /// The key of the chat kept as `number`, told on `answer`, or nothing
+    /// of a chat there is none of.
+    Key {
+        number: i64,
+        answer: oneshot::Sender<Option<u64>>,
+    },
     /// The phone of the connection `id` went.
     Unview { id: u64 },
     /// The human did `message` on their phone, as they would in the
@@ -963,7 +969,7 @@ impl Daemon {
             return;
         }
         let _ = push.send(push::Notice {
-            key: *key,
+            kept: self.slot(*key).and_then(|slot| slot.kept),
             title: name.clone(),
             body: body.clone(),
         });
@@ -2462,6 +2468,15 @@ impl Daemon {
                 self.view_chat(id, key);
             }
             Internal::Act { message } => self.act(message),
+            Internal::Key { number, answer } => {
+                let key = self
+                    .chats
+                    .iter()
+                    .chain(&self.archived)
+                    .find(|slot| slot.kept.is_some_and(|kept| kept.number() == number))
+                    .map(|slot| slot.key);
+                answer.send(key).ok();
+            }
             Internal::Folder { key, answer } => {
                 answer.send(self.slot(key).map(|slot| self.cwd(slot))).ok();
             }
@@ -3910,6 +3925,85 @@ fn showed_in_sketch(entries: &[Entry], sources: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No agents, for a daemon whose chats stay closed.
+    struct NoAgents;
+
+    impl Spawns for NoAgents {
+        fn agents(&self) -> Agents {
+            Agents::new(Vec::new(), Vec::new(), Vec::new())
+        }
+
+        fn chat(&self, _: PathBuf, _: Start, _: &str, _: Option<u16>, _: bool) -> Spawned {
+            unreachable!("no chat's agent starts")
+        }
+
+        fn starts(&self, _: &str) -> Starts {
+            Rc::new(|_, _| unreachable!("no judge starts"))
+        }
+    }
+
+    #[test]
+    fn the_phone_reaches_the_chat_it_named_after_coxd_starts_again() {
+        let store = Rc::new(Store::in_memory().unwrap());
+        let gone = store.project(Path::new("/tmp/cox-gone"), "Gone").unwrap();
+        store.add_chat(Some(gone), "Before").unwrap();
+        let here = store.project(Path::new("/tmp/cox-here"), "Here").unwrap();
+        let named = store.add_chat(Some(here), "Named").unwrap();
+        let next = store.add_chat(Some(here), "Next").unwrap();
+        let start = || {
+            Daemon::new(
+                std::env::temp_dir(),
+                false,
+                Rc::clone(&store),
+                Rc::new(NoAgents),
+                unbounded_channel().0,
+            )
+        };
+        let key_of = |daemon: &mut Daemon, kept: ChatId| {
+            let (answer, key) = oneshot::channel();
+            daemon.hear(Internal::Key {
+                number: kept.number(),
+                answer,
+            });
+            key.blocking_recv().unwrap()
+        };
+
+        let mut before = start();
+        let held = key_of(&mut before, named).unwrap();
+        drop(before);
+        store.delete_project(gone).unwrap();
+        let mut after = start();
+        assert_eq!(
+            key_of(&mut after, next),
+            Some(held),
+            "the key the phone held names another chat now"
+        );
+
+        let key = key_of(&mut after, named).unwrap();
+        after.act(ToDaemon::SetGoal {
+            key,
+            goal: Some(Goal::Words("Meant for Named".to_owned())),
+        });
+        let goals: Vec<_> = store
+            .chats()
+            .unwrap()
+            .into_iter()
+            .map(|chat| (chat.name, chat.goal))
+            .collect();
+        assert_eq!(
+            goals,
+            [
+                (
+                    "Named".to_owned(),
+                    Some(Goal::Words("Meant for Named".to_owned()))
+                ),
+                ("Next".to_owned(), None),
+            ]
+        );
+        let none = store.add_chat(Some(here), "Not listed").unwrap();
+        assert_eq!(key_of(&mut after, none), None);
+    }
 
     #[test]
     fn a_sketch_keeps_the_pictures_it_showed_beside_its_source() {

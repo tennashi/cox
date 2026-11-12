@@ -124,11 +124,12 @@ async function post(path, body) {
 }
 
 // Does `message` in coxd, as the window would: a ToDaemon, as serde
-// writes it. Says so under the input when coxd would not.
+// writes it, in the chat shown. Says so under the input when coxd would
+// not.
 async function act(message) {
   compose.failed.hidden = true;
   try {
-    await post("/act", message);
+    await post(chat ? `/act?kept=${chat.kept}` : "/act", message);
     return true;
   } catch (error) {
     compose.failed.textContent = `Not done: ${error.message}`;
@@ -137,19 +138,25 @@ async function act(message) {
   }
 }
 
-// The chat the address names, as `#chat/12`.
-function shownKey() {
-  const match = /^#chat\/(\d+)$/.exec(location.hash);
+// The chat the address names by the number it is kept by, as `#kept/12`.
+function shownKept() {
+  const match = /^#kept\/(\d+)$/.exec(location.hash);
   return match ? Number(match[1]) : null;
+}
+
+// The key of the chat kept as `kept`, as coxd last listed it.
+function keyOf(kept) {
+  const row = listing && listing.chats.concat(listing.archived).find((one) => one.kept === kept);
+  return row ? row.key : null;
 }
 
 function connect() {
   if (events) events.close();
-  const key = shownKey();
-  chat = key === null ? null : { key, entries: [], state: null, steers: false, title: null, goal: null, settings: [], commands: [], came: false };
+  const kept = shownKept();
+  chat = kept === null ? null : { kept, key: keyOf(kept), entries: [], state: null, steers: false, title: null, goal: null, settings: [], commands: [], came: false };
   contents.clear();
   drawnPlaces = PLACES;
-  events = new EventSource(key === null ? "/events" : `/events?chat=${key}`);
+  events = new EventSource(kept === null ? "/events" : `/events?kept=${kept}`);
   events.onopen = () => { head.lost.hidden = true; };
   events.onerror = () => {
     head.lost.hidden = false;
@@ -165,6 +172,7 @@ function hear(told) {
   if (told === null || typeof told !== "object") return;
   if (told.Listing) {
     listing = told.Listing;
+    if (chat) chat.key = keyOf(chat.kept);
     // A sketch opened as a project, or on its way to an end, ends no more.
     if (sketching) sketching.asked = false;
     showOpened();
@@ -271,7 +279,7 @@ function chatRow(row, opts) {
   const stands = standing(row);
   const sketch = row.setup && row.setup.sketch;
   return el("li", { class: [row.open ? null : "closed", waits(row) ? "waits" : null].filter(Boolean).join(" ") || null },
-    el("a", { href: `#chat/${row.key}`, title: stands.words },
+    el("a", { href: row.kept === null ? null : `#kept/${row.kept}`, title: stands.words },
       opts.child && row.parent !== null ? el("span", { class: "small" }, "↳") : null,
       el("span", { class: `dot ${stands.dot}` }),
       el("span", { class: "name" }, row.name),
@@ -340,7 +348,7 @@ function showOpened() {
   const opened = listing.chats.find((row) => inProject(row) && !opening.known.has(row.key));
   if (!opened) return;
   opening = null;
-  location.hash = `#chat/${opened.key}`;
+  location.hash = `#kept/${opened.kept}`;
 }
 
 function drawHead(row) {
@@ -680,7 +688,7 @@ function findChanges(row) {
   if (changes && changes.key === row.key && changes.asked) return;
   changes = { key: row.key, asked: true, told: changes && changes.key === row.key ? changes.told : null };
   const asked = changes;
-  fetch(`/changes?chat=${row.key}`)
+  fetch(`/changes?kept=${row.kept}`)
     .then((answer) => (answer.ok ? answer.json() : null))
     .catch(() => null)
     .then((told) => {
@@ -699,7 +707,7 @@ function findSketching(row) {
   if (sketching && sketching.key === row.key && sketching.asked) return;
   sketching = { key: row.key, asked: true, told: sketching && sketching.key === row.key ? sketching.told : null };
   const asked = sketching;
-  fetch(`/sketch?chat=${row.key}`)
+  fetch(`/sketch?kept=${row.kept}`)
     .then((answer) => (answer.ok ? answer.json() : null))
     .catch(() => null)
     .then((told) => {
@@ -875,7 +883,7 @@ function findPages(row) {
   if (pages && pages.key === row.key && pages.asked) return;
   pages = { key: row.key, asked: true, told: pages && pages.key === row.key ? pages.told : null };
   const asked = pages;
-  fetch(`/pages?chat=${row.key}`)
+  fetch(`/pages?kept=${row.kept}`)
     .then((answer) => (answer.ok ? answer.json() : null))
     .catch(() => null)
     .then((told) => {
@@ -1225,7 +1233,7 @@ function shownAt(at) {
     const asked = {};
     contents.set(at, asked);
     const key = chat.key;
-    fetch(`/content?chat=${key}&at=${at}`)
+    fetch(`/content?kept=${chat.kept}&at=${at}`)
       .then((answer) => (answer.ok ? answer.json() : { content: [] }))
       .catch(() => null)
       .then((told) => {

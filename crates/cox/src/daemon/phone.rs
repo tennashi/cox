@@ -17,14 +17,19 @@
 //! chats on `/events`, a stream of server-sent events, each a
 //! [`FromDaemon`] as JSON: the [`FromDaemon::Listing`] of the projects
 //! and chats whenever it changes, the [`FromDaemon::Patch`]es of the
-//! chat named by `?chat=<key>`, all of it first, and the
+//! chat named by `?kept=<number>`, all of it first, and the
 //! [`FromDaemon::News`] of the chats that come to wait for the human;
 //! but for what the conversation's tool calls show, which it asks for on
 //! `/content` as the human opens one (see [`for_the_phone`]).
 //! What the human does on it, as sending a line or answering what the
-//! agent asks, it posts to `/act`, a [`ToDaemon`] as JSON, as the window
-//! says it, which coxd does as the window's (see [`done_on_the_page`]
-//! for which).
+//! agent asks, it posts to `/act?kept=<number>`, a [`ToDaemon`] as JSON,
+//! as the window says it, which coxd does as the window's (see
+//! [`done_on_the_page`] for which).
+//!
+//! The page names a chat by the number it is kept by, `kept`, never by
+//! its key: its address, and the notices pushed to it, outlast coxd,
+//! which numbers the keys anew each time it starts, and a key the page
+//! held could name another chat then.
 //!
 //! The page lists, too, the pages a chat has for the human to try, on
 //! `/pages`: the mocks of the sketch it works in, and the pages of its
@@ -50,6 +55,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use bytes::Bytes;
+use cox_core::store::ChatId;
 use http_body::Frame;
 use hyper::body::Incoming;
 use hyper::header::{self, HeaderValue};
@@ -567,6 +573,8 @@ pub async fn serve(
                         page.sketch(&request).await
                     } else if request.uri().path() == "/diagram" {
                         page.diagram(&request).await
+                    } else if request.uri().path() == "/events" {
+                        page.events(&request).await
                     } else {
                         page.answer(&request)
                     };
@@ -636,15 +644,6 @@ impl Page {
         if let Some(project) = path.strip_prefix("/project-icon/") {
             return project_icon(project);
         }
-        if path == "/events" {
-            let chat = request.uri().query().and_then(|query| {
-                query
-                    .split('&')
-                    .find_map(|pair| pair.strip_prefix("chat="))
-                    .and_then(|key| key.parse().ok())
-            });
-            return self.events(chat);
-        }
         match FILES.iter().find(|(at, _, _)| *at == path) {
             Some((at, kind, text)) => {
                 let mut response = answer(StatusCode::OK, kind, *text);
@@ -671,7 +670,7 @@ impl Page {
         }
     }
 
-    /// The pages the chat `request` names, `?chat=<key>`, has for the
+    /// The pages the chat `request` names, `?kept=<number>`, has for the
     /// human to try, as JSON, each its name, the port of the Mac's own
     /// address it is served on, which the relay passes on at the same
     /// port of the Mac's name, and its path there: the mocks of the
@@ -683,8 +682,9 @@ impl Page {
         if !self.paired(request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
         }
-        let Some(key) = chat_asked(request) else {
-            return answer(StatusCode::BAD_REQUEST, TEXT, "No chat");
+        let key = match self.chat_named(request).await {
+            Ok(key) => key,
+            Err((status, why)) => return answer(status, TEXT, why),
         };
         let Some(relayed) = &self.relayed else {
             return answer(
@@ -745,14 +745,18 @@ impl Page {
     }
 
     /// What the tool call, or the permission request, `request` names
-    /// shows, `?chat=<key>&at=<place>`, as JSON, `{"content": [...]}`,
+    /// shows, `?kept=<number>&at=<place>`, as JSON, `{"content": [...]}`,
     /// which the stream of events leaves out (see [`for_the_phone`]).
     async fn content(&self, request: &Request<Incoming>) -> Response<Body> {
         if !self.paired(request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
         }
-        let (Some(key), Some(at)) = (chat_asked(request), place_asked(request)) else {
-            return answer(StatusCode::BAD_REQUEST, TEXT, "No chat or place");
+        let Some(at) = place_asked(request) else {
+            return answer(StatusCode::BAD_REQUEST, TEXT, "No place");
+        };
+        let key = match self.chat_named(request).await {
+            Ok(key) => key,
+            Err((status, why)) => return answer(status, TEXT, why),
         };
         let (asked, content) = tokio::sync::oneshot::channel();
         if self
@@ -776,15 +780,16 @@ impl Page {
         )
     }
 
-    /// What changed where the chat `request` names works, `?chat=<key>`,
+    /// What changed where the chat `request` names works, `?kept=<number>`,
     /// as JSON, as the window's "Changes" tab shows it (see
     /// [`told_changes`]).
     async fn changes(&self, request: &Request<Incoming>) -> Response<Body> {
         if !self.paired(request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
         }
-        let Some(key) = chat_asked(request) else {
-            return answer(StatusCode::BAD_REQUEST, TEXT, "No chat");
+        let key = match self.chat_named(request).await {
+            Ok(key) => key,
+            Err((status, why)) => return answer(status, TEXT, why),
         };
         let (asked, folder) = tokio::sync::oneshot::channel();
         if self
@@ -813,14 +818,15 @@ impl Page {
     }
 
     /// What the human may do of sketches in the chat `request` names,
-    /// `?chat=<key>`, as JSON, as the window's menu offers it (see
+    /// `?kept=<number>`, as JSON, as the window's menu offers it (see
     /// [`told_sketching`]).
     async fn sketch(&self, request: &Request<Incoming>) -> Response<Body> {
         if !self.paired(request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
         }
-        let Some(key) = chat_asked(request) else {
-            return answer(StatusCode::BAD_REQUEST, TEXT, "No chat");
+        let key = match self.chat_named(request).await {
+            Ok(key) => key,
+            Err((status, why)) => return answer(status, TEXT, why),
         };
         let (asked, sketching) = tokio::sync::oneshot::channel();
         if self
@@ -874,7 +880,8 @@ impl Page {
     }
 
     /// Does what the page posted, as `request` says it, from the page
-    /// itself: at `/act`, what the human did on it; at `/push`, where to
+    /// itself: at `/act`, what the human did on it, in the chat the query
+    /// names, if it is done in one; at `/push`, where to
     /// push to the phone; and at `/push/end`, where to push no more.
     async fn posted(&self, request: Request<Incoming>) -> Response<Body> {
         if !self.paired(&request) {
@@ -884,13 +891,14 @@ impl Page {
             return answer(StatusCode::FORBIDDEN, TEXT, "Not from the page");
         }
         let path = request.uri().path().to_owned();
+        let kept = chat_asked(&request);
         let body = http_body_util::Limited::new(request.into_body(), MOST);
         let Ok(body) = http_body_util::BodyExt::collect(body).await else {
             return answer(StatusCode::PAYLOAD_TOO_LARGE, TEXT, "Too long");
         };
         let body = body.to_bytes();
         match path.as_str() {
-            "/act" => self.act(&body),
+            "/act" => self.act(kept, &body).await,
             "/push" => self.subscribe(&body),
             "/push/end" => self.unsubscribe(&body),
             _ => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
@@ -934,13 +942,24 @@ impl Page {
 
     /// Does what the human did on the page, as `body` says it, a
     /// [`ToDaemon`] as JSON, as the window would: only what the page
-    /// does.
-    fn act(&self, body: &[u8]) -> Response<Body> {
-        let Ok(message) = serde_json::from_slice::<ToDaemon>(body) else {
+    /// does, and what it does in a chat, in the chat kept as `kept`,
+    /// whichever key the page says.
+    async fn act(&self, kept: Option<i64>, body: &[u8]) -> Response<Body> {
+        let Ok(mut message) = serde_json::from_slice::<ToDaemon>(body) else {
             return answer(StatusCode::BAD_REQUEST, TEXT, "Not understood");
         };
-        if !done_on_the_page(&message) {
-            return answer(StatusCode::FORBIDDEN, TEXT, "Not done from the phone");
+        match done_on_the_page(&mut message) {
+            None => return answer(StatusCode::FORBIDDEN, TEXT, "Not done from the phone"),
+            Some(Done::Apart) => {}
+            Some(Done::In(key)) => {
+                let Some(kept) = kept else {
+                    return answer(StatusCode::BAD_REQUEST, TEXT, "No chat");
+                };
+                let Some(found) = self.key_of(kept).await else {
+                    return answer(StatusCode::NOT_FOUND, TEXT, "No such chat");
+                };
+                *key = found;
+            }
         }
         // A sketch ends only in a way the human's workflow says, as the
         // window's menu offers it.
@@ -987,9 +1006,49 @@ impl Page {
         self.phones.paired(request.headers())
     }
 
+    /// The key of the chat named, in the query of `request`, by the number
+    /// it is kept by, or the answer to a request that names none, or a
+    /// chat there is none of.
+    async fn chat_named(
+        &self,
+        request: &Request<Incoming>,
+    ) -> Result<u64, (StatusCode, &'static str)> {
+        let Some(kept) = chat_asked(request) else {
+            return Err((StatusCode::BAD_REQUEST, "No chat"));
+        };
+        self.key_of(kept)
+            .await
+            .ok_or((StatusCode::NOT_FOUND, "No such chat"))
+    }
+
+    /// The key of the chat kept as `kept`, as coxd says it, or nothing of
+    /// a chat there is none of.
+    async fn key_of(&self, kept: i64) -> Option<u64> {
+        let (asked, key) = tokio::sync::oneshot::channel();
+        self.internal
+            .send(Internal::Key {
+                number: kept,
+                answer: asked,
+            })
+            .ok()?;
+        key.await.ok().flatten()
+    }
+
     /// The stream of events of a phone that follows the chats, watching
-    /// the conversation of `chat`, if it names one.
-    fn events(&self, chat: Option<u64>) -> Response<Body> {
+    /// the conversation of the chat `request` names, `?kept=<number>`, if
+    /// it names one there is.
+    async fn events(&self, request: &Request<Incoming>) -> Response<Body> {
+        if !self.paired(request) {
+            return answer(
+                StatusCode::UNAUTHORIZED,
+                "text/html; charset=utf-8",
+                NOT_PAIRED,
+            );
+        }
+        let chat = match chat_asked(request) {
+            Some(kept) => self.key_of(kept).await,
+            None => None,
+        };
         let id = self.last.get() + 1;
         self.last.set(id);
         let (phone, told) = unbounded_channel();
@@ -1087,7 +1146,7 @@ const TEXT: &str = "text/plain; charset=utf-8";
 async fn push_all(pushes: Rc<RefCell<Pushes>>, mut notices: UnboundedReceiver<Notice>) {
     while let Some(notice) = notices.recv().await {
         let ready = pushes.borrow().pushes(&notice);
-        let chat = notice.key;
+        let chat = notice.kept.map(ChatId::number);
         for ready in ready {
             let pushes = Rc::clone(&pushes);
             tokio::task::spawn_local(async move {
@@ -1130,28 +1189,35 @@ fn from_the_page(request: &Request<Incoming>) -> bool {
     said && same_origin
 }
 
-/// Whether the phone may do `message`: what its page does, and nothing
-/// of the window's own, as what the stage carried out.
-fn done_on_the_page(message: &ToDaemon) -> bool {
+/// What the phone does, as its page does it.
+enum Done<'a> {
+    /// In the chat whose key it holds.
+    In(&'a mut u64),
+    /// In no chat, as opening one.
+    Apart,
+}
+
+/// What the phone does in `message`, if it may: what its page does, and
+/// nothing of the window's own, as what the stage carried out.
+fn done_on_the_page(message: &mut ToDaemon) -> Option<Done<'_>> {
     match message {
-        ToDaemon::Submit { attached, .. } => attached.is_empty(),
-        ToDaemon::Choose { .. }
-        | ToDaemon::Stop { .. }
-        | ToDaemon::SetGoal { .. }
-        | ToDaemon::AnswerProposal { .. }
-        | ToDaemon::ChangeProposal { .. }
-        | ToDaemon::AnswerNameProposal { .. }
-        | ToDaemon::AnswerAboutProposal { .. }
-        | ToDaemon::AnswerIconProposal { .. }
-        | ToDaemon::AnswerProjectProposal { .. }
-        | ToDaemon::AnswerKeep { .. }
-        | ToDaemon::Merge { .. }
-        | ToDaemon::Set { .. }
-        | ToDaemon::StartSketch { .. }
-        | ToDaemon::EndSketch { .. }
-        | ToDaemon::NewChat { .. }
-        | ToDaemon::NewProjectAside => true,
-        _ => false,
+        ToDaemon::Submit { key, attached, .. } => attached.is_empty().then_some(Done::In(key)),
+        ToDaemon::Choose { key, .. }
+        | ToDaemon::Stop { key }
+        | ToDaemon::SetGoal { key, .. }
+        | ToDaemon::AnswerProposal { key, .. }
+        | ToDaemon::ChangeProposal { key, .. }
+        | ToDaemon::AnswerNameProposal { key, .. }
+        | ToDaemon::AnswerAboutProposal { key, .. }
+        | ToDaemon::AnswerIconProposal { key, .. }
+        | ToDaemon::AnswerProjectProposal { key, .. }
+        | ToDaemon::AnswerKeep { key, .. }
+        | ToDaemon::Merge { key }
+        | ToDaemon::Set { key, .. }
+        | ToDaemon::StartSketch { key, .. }
+        | ToDaemon::EndSketch { key, .. } => Some(Done::In(key)),
+        ToDaemon::NewChat { .. } | ToDaemon::NewProjectAside => Some(Done::Apart),
+        _ => None,
     }
 }
 
@@ -1164,11 +1230,12 @@ fn path_of<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
     url.path().to_owned()
 }
 
-/// The chat the query of `request` names, `chat=<key>`.
-fn chat_asked(request: &Request<Incoming>) -> Option<u64> {
+/// The chat the query of `request` names by the number it is kept by,
+/// `kept=<number>`.
+fn chat_asked(request: &Request<Incoming>) -> Option<i64> {
     let query = request.uri().query()?;
     url::form_urlencoded::parse(query.as_bytes())
-        .find_map(|(name, value)| (name == "chat").then(|| value.parse::<u64>().ok()))
+        .find_map(|(name, value)| (name == "kept").then(|| value.parse::<i64>().ok()))
         .flatten()
 }
 
@@ -1617,9 +1684,13 @@ mod tests {
 
                 let events = tokio::task::spawn_local(ask(
                     port,
-                    "GET /events?chat=7 HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n\r\n",
+                    "GET /events?kept=12 HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n\r\n",
                     "}}\n\n",
                 ));
+                let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
+                    panic!("coxd is not asked the key of the chat kept as 12");
+                };
+                answer.send(Some(7)).unwrap();
                 let Some(Internal::View { id, phone }) = heard.recv().await else {
                     panic!("the phone did not come");
                 };
@@ -1644,7 +1715,7 @@ mod tests {
                 let line = r#"{"Submit":{"key":7,"text":"go on"}}"#;
                 let posted = |headers: &str| {
                     format!(
-                        "POST /act HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n{headers}\
+                        "POST /act?kept=12 HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n{headers}\
                          Content-Type: application/json\r\nContent-Length: {}\r\n\
                          Connection: close\r\n\r\n{line}",
                         line.len()
@@ -1654,12 +1725,6 @@ mod tests {
                 assert!(elsewhere.starts_with("HTTP/1.1 403"), "{elsewhere}");
                 let unsaid = ask(port, &posted(""), "").await;
                 assert!(unsaid.starts_with("HTTP/1.1 403"), "{unsaid}");
-                let done = ask(port, &posted("Origin: http://x\r\nX-Cox: phone\r\n"), "").await;
-                assert!(done.starts_with("HTTP/1.1 204"), "{done}");
-                assert!(matches!(
-                    heard.recv().await,
-                    Some(Internal::Act { message: ToDaemon::Submit { key: 7, ref text, .. } }) if text == "go on"
-                ));
             });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
@@ -1685,7 +1750,7 @@ mod tests {
             let line = r#"{"Submit":{"key":7,"text":"go on"}}"#;
             let posted = |cookie: &str| {
                 format!(
-                    "POST /act HTTP/1.1\r\n{as_tailscale_says}{cookie}X-Cox: phone\r\n\
+                    "POST /act?kept=12 HTTP/1.1\r\n{as_tailscale_says}{cookie}X-Cox: phone\r\n\
                      Origin: https://mac.tail1234.ts.net\r\nContent-Type: application/json\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{line}",
                     line.len()
@@ -1710,7 +1775,14 @@ mod tests {
                 "the page, what it posts, and whether a line was sent as the human's"
             );
 
-            let paired = ask(port, &posted("Cookie: cox_phone=secret\r\n"), "").await;
+            let with_the_secret = posted("Cookie: cox_phone=secret\r\n");
+            let paired =
+                tokio::task::spawn_local(async move { ask(port, &with_the_secret, "").await });
+            let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
+                panic!("coxd is not asked the key of the chat");
+            };
+            answer.send(Some(7)).unwrap();
+            let paired = paired.await.unwrap();
             assert!(paired.starts_with("HTTP/1.1 204"), "{paired}");
             assert!(matches!(
                 heard.recv().await,
@@ -1805,13 +1877,17 @@ mod tests {
             };
             let cookie = "Cookie: cox_phone=secret\r\n";
 
-            let unpaired = ask(port, &get("/content?chat=7&at=3", ""), "").await;
+            let unpaired = ask(port, &get("/content?kept=12&at=3", ""), "").await;
             assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
-            let nowhere = ask(port, &get("/content?chat=7", cookie), "").await;
+            let nowhere = ask(port, &get("/content?kept=12", cookie), "").await;
             assert!(nowhere.starts_with("HTTP/1.1 400"), "{nowhere}");
 
-            let request = get("/content?chat=7&at=3", cookie);
+            let request = get("/content?kept=12&at=3", cookie);
             let asked = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
+                panic!("coxd is not asked the key of the chat kept as 12");
+            };
+            answer.send(Some(7)).unwrap();
             let Some(Internal::Content {
                 key: 7,
                 at: 3,
@@ -1830,14 +1906,112 @@ mod tests {
                 "{told}"
             );
 
-            let request = get("/content?chat=7&at=4", cookie);
+            let request = get("/content?kept=12&at=4", cookie);
             let asked = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Key { answer, .. }) = heard.recv().await else {
+                panic!("coxd is not asked the key of the chat");
+            };
+            answer.send(Some(7)).unwrap();
             let Some(Internal::Content { answer, .. }) = heard.recv().await else {
                 panic!("coxd is not asked what the call shows");
             };
             answer.send(None).unwrap();
             let none = asked.await.unwrap();
             assert!(none.starts_with("HTTP/1.1 404"), "{none}");
+        });
+        tokio::time::timeout(Duration::from_secs(30), test)
+            .await
+            .expect("the page answers in time");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reaches_a_chat_by_the_number_it_is_kept_by_alone() {
+        let local = tokio::task::LocalSet::new();
+        let test = local.run_until(async {
+            let listener = listen(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (internal, mut heard) = unbounded_channel();
+            tokio::task::spawn_local(serve(
+                listener,
+                Rc::new(Phones::new("secret".to_owned(), None)),
+                None,
+                internal,
+            ));
+            let posted = |path: &str, line: &str| {
+                format!(
+                    "POST {path} HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n\
+                     Origin: http://x\r\nX-Cox: phone\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{line}",
+                    line.len()
+                )
+            };
+            let line = r#"{"Submit":{"key":7,"text":"go on"}}"#;
+
+            let unpaired = ask(
+                port,
+                "GET /events?kept=12 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+                "",
+            )
+            .await;
+            assert!(unpaired.starts_with("HTTP/1.1 401"), "{unpaired}");
+            let by_key = ask(port, &posted("/act", line), "").await;
+            assert!(by_key.starts_with("HTTP/1.1 400"), "{by_key}");
+            let old = ask(port, &posted("/act?chat=7", line), "").await;
+            assert!(old.starts_with("HTTP/1.1 400"), "{old}");
+
+            let request = posted("/act?kept=13", line);
+            let gone = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Key { number: 13, answer }) = heard.recv().await else {
+                panic!("coxd is not asked the key of the chat kept as 13");
+            };
+            answer.send(None).unwrap();
+            let gone = gone.await.unwrap();
+            assert!(gone.starts_with("HTTP/1.1 404"), "{gone}");
+
+            let request = posted("/act?kept=12", line);
+            let done = tokio::task::spawn_local(async move { ask(port, &request, "").await });
+            let Some(Internal::Key { number: 12, answer }) = heard.recv().await else {
+                panic!("coxd is not asked the key of the chat kept as 12");
+            };
+            answer.send(Some(3)).unwrap();
+            let done = done.await.unwrap();
+            assert!(done.starts_with("HTTP/1.1 204"), "{done}");
+            assert!(
+                matches!(
+                    heard.recv().await,
+                    Some(Internal::Act { message: ToDaemon::Submit { key: 3, ref text, .. } }) if text == "go on"
+                ),
+                "the line goes to the chat kept as 12, not to the key the page held"
+            );
+
+            let opened = ask(port, &posted("/act", r#"{"NewChat":{"folder":null}}"#), "").await;
+            assert!(opened.starts_with("HTTP/1.1 204"), "{opened}");
+            assert!(
+                matches!(
+                    heard.recv().await,
+                    Some(Internal::Act {
+                        message: ToDaemon::NewChat { folder: None }
+                    })
+                ),
+                "nothing done in another chat on the way"
+            );
+
+            let events = tokio::task::spawn_local(ask(
+                port,
+                "GET /events?chat=7 HTTP/1.1\r\nHost: x\r\nCookie: cox_phone=secret\r\n\r\n",
+                "",
+            ));
+            let Some(Internal::View { id, .. }) = heard.recv().await else {
+                panic!("the phone did not come");
+            };
+            assert!(
+                matches!(
+                    heard.recv().await,
+                    Some(Internal::ViewChat { id: of, key: None }) if of == id
+                ),
+                "an address of an older coxd watches no chat"
+            );
+            events.abort();
         });
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
@@ -2059,40 +2233,55 @@ mod tests {
 
     #[test]
     fn does_only_what_the_page_does() {
+        let done = |mut message: ToDaemon| {
+            done_on_the_page(&mut message).map(|done| match done {
+                Done::In(key) => Some(*key),
+                Done::Apart => None,
+            })
+        };
         let line = |attached: Vec<cox_core::entry::Attachment>| ToDaemon::Submit {
             key: 1,
             text: "go on".to_owned(),
             attached,
         };
-        assert!(done_on_the_page(&line(Vec::new())));
-        assert!(done_on_the_page(&ToDaemon::Choose { key: 1, index: 0 }));
-        assert!(done_on_the_page(&ToDaemon::Stop { key: 1 }));
-        assert!(done_on_the_page(&ToDaemon::Merge { key: 1 }));
-        assert!(done_on_the_page(&ToDaemon::Set {
-            key: 1,
-            id: "model".to_owned(),
-            value: "opus".to_owned(),
-        }));
-        assert!(done_on_the_page(&ToDaemon::StartSketch {
-            key: 1,
-            sketch: crate::chat::sketch::Sketch::Empty,
-            what: "a mock".to_owned(),
-        }));
-        assert!(done_on_the_page(&ToDaemon::NewChat { folder: None }));
-        assert!(done_on_the_page(&ToDaemon::NewProjectAside));
-        assert!(!done_on_the_page(&ToDaemon::NewProject));
-        assert!(!done_on_the_page(&ToDaemon::Open { folder: None }));
-        assert!(!done_on_the_page(&ToDaemon::Archive {
-            key: 1,
-            archived: true
-        }));
+        assert_eq!(done(line(Vec::new())), Some(Some(1)));
+        assert_eq!(done(ToDaemon::Choose { key: 1, index: 0 }), Some(Some(1)));
+        assert_eq!(done(ToDaemon::Stop { key: 1 }), Some(Some(1)));
+        assert_eq!(done(ToDaemon::Merge { key: 1 }), Some(Some(1)));
+        assert_eq!(
+            done(ToDaemon::Set {
+                key: 1,
+                id: "model".to_owned(),
+                value: "opus".to_owned(),
+            }),
+            Some(Some(1))
+        );
+        assert_eq!(
+            done(ToDaemon::StartSketch {
+                key: 1,
+                sketch: crate::chat::sketch::Sketch::Empty,
+                what: "a mock".to_owned(),
+            }),
+            Some(Some(1))
+        );
+        assert_eq!(done(ToDaemon::NewChat { folder: None }), Some(None));
+        assert_eq!(done(ToDaemon::NewProjectAside), Some(None));
+        assert_eq!(done(ToDaemon::NewProject), None);
+        assert_eq!(done(ToDaemon::Open { folder: None }), None);
+        assert_eq!(
+            done(ToDaemon::Archive {
+                key: 1,
+                archived: true
+            }),
+            None
+        );
         let picture = cox_core::entry::Attachment {
             label: "region".to_owned(),
             uri: "cox://region".to_owned(),
             text: String::new(),
             picture: Some("/etc/passwd".into()),
         };
-        assert!(!done_on_the_page(&line(vec![picture])));
+        assert_eq!(done(line(vec![picture])), None);
     }
 
     #[test]
