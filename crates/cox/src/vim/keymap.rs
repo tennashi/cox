@@ -30,6 +30,18 @@ pub enum Command {
     Move(Motion),
     /// What the part with the keyboard does, as an action of its own.
     Send(Sent),
+    /// Draws hints over what can be clicked in the page, to follow the
+    /// one whose label is typed next, in hint mode.
+    Hint(Follow),
+}
+
+/// Where a hint typed in hint mode leads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Follow {
+    /// Clicks it, or gives the keyboard to it if it takes text (`f`).
+    Here,
+    /// Opens the link on a tab of its own (`F`).
+    NewTab,
 }
 
 /// Where Vim's keys move what a part of the window shows, or its cursor
@@ -61,6 +73,15 @@ pub enum Sent {
     Definition,
     Open,
     Close,
+    Reload,
+    /// Gives the keyboard to the page's first field (`gi`).
+    FocusField,
+    /// Copies the page's address (`yy`).
+    CopyAddress,
+    /// Takes the keyboard to the page's address line (`o`).
+    Address,
+    /// A key typed in hint mode, toward a hint's label.
+    Label(char),
 }
 
 /// What the window does for Vim's keys: where the keyboard goes, and
@@ -82,6 +103,9 @@ pub enum Act {
     PreviousTab,
     /// Closes the tab the stage shows (`ctrl-w c`).
     CloseTab,
+    /// Opens the menu of the stage's +, to type what another tab opens
+    /// (`t`).
+    Menu,
 }
 
 /// Where `ctrl-w` moves the keyboard: left or right along the rail, the
@@ -148,13 +172,13 @@ const LINES: &[Region] = &[Region::Chat, Region::Goal, Region::Sketch, Region::R
 
 /// The parts of the window `ctrl-w` and the stage's tabs' keys work in:
 /// all but the inputs, screens and menus that open over them, and the
-/// tabs that take every key, a terminal's, an Android device's and a
-/// page's.
+/// tabs that take every key, a terminal's and an Android device's.
 const PARTS: &[Region] = &[
     Region::Workspace,
     Region::Rail,
     Region::List,
     Region::Chat,
+    Region::Page,
     Region::Code,
     Region::Document,
     Region::Tree,
@@ -169,16 +193,19 @@ const PARTS: &[Region] = &[
 const PICKERS: &[Region] = &[Region::Rail, Region::List];
 
 /// The parts Vim's keys scroll, or move a cursor or selection in: the
-/// conversation, from the chat's input, and the stage's tabs that take
-/// no text.
+/// conversation, from the chat's input, a page, and the stage's tabs
+/// that take no text.
 const MOVERS: &[Region] = &[
     Region::Chat,
+    Region::Page,
     Region::Code,
     Region::Document,
     Region::Tree,
     Region::Changes,
 ];
 
+const PAGE: &[Region] = &[Region::Page];
+const ADDRESS: &[Region] = &[Region::Address];
 const CODE: &[Region] = &[Region::Code];
 const TREE: &[Region] = &[Region::Tree];
 const CHANGES: &[Region] = &[Region::Changes];
@@ -260,6 +287,24 @@ impl Keymap {
         send(TREE, &["enter"], Sent::Open),
         send(TREE, &["h"], Sent::Close),
         send(CHANGES, &["enter"], Sent::Open),
+        bind(Mode::Normal, PAGE, &["i"], Command::Insert(Place::Cursor)),
+        bind(Mode::Insert, PAGE, &["escape"], Command::Normal),
+        bind(Mode::Hint, PAGE, &["escape"], Command::Normal),
+        bind(Mode::Normal, PAGE, &["f"], Command::Hint(Follow::Here)),
+        bind(
+            Mode::Normal,
+            PAGE,
+            &["shift-f"],
+            Command::Hint(Follow::NewTab),
+        ),
+        send(PAGE, &["shift-h"], Sent::Back),
+        send(PAGE, &["shift-l"], Sent::Forward),
+        send(PAGE, &["r"], Sent::Reload),
+        send(PAGE, &["g", "i"], Sent::FocusField),
+        send(PAGE, &["y", "y"], Sent::CopyAddress),
+        send(PAGE, &["o"], Sent::Address),
+        act(PAGE, &["t"], Act::Menu),
+        bind(Mode::Insert, ADDRESS, &["escape"], Command::Normal),
     ]);
 
     /// Whether any binding is in `region`.
@@ -292,7 +337,7 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::{
-        Act, Answer, Command, Keymap, Mode, Motion, Pick, Place, Region, Sent, Toward, bind,
+        Act, Answer, Command, Follow, Keymap, Mode, Motion, Pick, Place, Region, Sent, Toward, bind,
     };
 
     #[test]
@@ -349,7 +394,6 @@ mod tests {
         for region in [
             Region::Terminal,
             Region::Android,
-            Region::Page,
             Region::Goal,
             Region::Settings,
         ] {
@@ -361,7 +405,7 @@ mod tests {
                 );
             }
         }
-        for region in [Region::Terminal, Region::Android, Region::Page] {
+        for region in [Region::Terminal, Region::Android] {
             assert!(!Keymap::VIM.knows(region), "{region:?}");
         }
         assert!(Keymap::VIM.knows(Region::Code));
@@ -371,7 +415,13 @@ mod tests {
     #[test]
     fn control_w_and_the_tabs_keys_work_in_every_part_in_normal_mode() {
         let answer = |region, keys: &[&str]| Keymap::VIM.answer(Mode::Normal, region, keys);
-        for region in [Region::Chat, Region::Rail, Region::List, Region::Code] {
+        for region in [
+            Region::Chat,
+            Region::Rail,
+            Region::List,
+            Region::Page,
+            Region::Code,
+        ] {
             assert_eq!(answer(region, &["ctrl-w"]), Answer::Held, "{region:?}");
             assert_eq!(
                 answer(region, &["ctrl-w", "h"]),
@@ -443,6 +493,7 @@ mod tests {
         ];
         for region in [
             Region::Chat,
+            Region::Page,
             Region::Code,
             Region::Document,
             Region::Tree,
@@ -461,10 +512,54 @@ mod tests {
                 );
             }
         }
-        for region in [Region::Terminal, Region::Page, Region::Goal] {
+        for region in [Region::Terminal, Region::Goal] {
             assert_eq!(
                 Keymap::VIM.answer(Mode::Normal, region, &["j"]),
                 Answer::None
+            );
+        }
+    }
+
+    #[test]
+    fn a_page_goes_back_and_forth_reloads_hints_and_opens_as_vimperator_does() {
+        let answer = |keys: &[&str]| Keymap::VIM.answer(Mode::Normal, Region::Page, keys);
+        let sent = |sent| Answer::Act(Command::Send(sent));
+        assert_eq!(answer(&["shift-h"]), sent(Sent::Back));
+        assert_eq!(answer(&["shift-l"]), sent(Sent::Forward));
+        assert_eq!(answer(&["r"]), sent(Sent::Reload));
+        assert_eq!(answer(&["g"]), Answer::Held);
+        assert_eq!(answer(&["g", "i"]), sent(Sent::FocusField));
+        assert_eq!(answer(&["y"]), Answer::Held);
+        assert_eq!(answer(&["y", "y"]), sent(Sent::CopyAddress));
+        assert_eq!(answer(&["o"]), sent(Sent::Address));
+        assert_eq!(answer(&["t"]), Answer::Act(Command::Window(Act::Menu)));
+        assert_eq!(answer(&["f"]), Answer::Act(Command::Hint(Follow::Here)));
+        assert_eq!(
+            answer(&["shift-f"]),
+            Answer::Act(Command::Hint(Follow::NewTab))
+        );
+        assert_eq!(answer(&["i"]), Answer::Act(Command::Insert(Place::Cursor)));
+        assert_eq!(answer(&["escape"]), Answer::None);
+    }
+
+    #[test]
+    fn escape_leaves_a_page_s_field_its_hints_and_its_address_for_normal_mode() {
+        for (mode, region) in [
+            (Mode::Insert, Region::Page),
+            (Mode::Hint, Region::Page),
+            (Mode::Insert, Region::Address),
+        ] {
+            assert_eq!(
+                Keymap::VIM.answer(mode, region, &["escape"]),
+                Answer::Act(Command::Normal),
+                "{mode:?} {region:?}"
+            );
+        }
+        for keys in [&["j"][..], &["f"], &["ctrl-w"], &["shift-h"]] {
+            assert_eq!(
+                Keymap::VIM.answer(Mode::Insert, Region::Page, keys),
+                Answer::None,
+                "{keys:?}"
             );
         }
     }

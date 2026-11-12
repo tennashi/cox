@@ -6,6 +6,8 @@
 //!   it to the page.
 //! - [`keys`] sends the keys to the page, but for the browser's own
 //!   shortcuts.
+//! - [`vim`] is what Vim's keys do in the page, and [`hints`] the labels
+//!   of hint mode.
 //!
 //! Over the picture, the tab draws the agent's pointer: where the agent
 //! points, clicks and types, as the relay saw it (see
@@ -14,8 +16,10 @@
 //! The right button over text selected in the page opens a menu of what
 //! to do with it, "Translate" and "Copy", as the browser shows none.
 
+mod hints;
 mod keys;
 mod picture;
+mod vim;
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -43,6 +47,9 @@ use cox_browser::relay::AgentInput;
 use cox_browser::{Browser, Caret, Event, Navigation, TargetId};
 
 pub(crate) const KEY_CONTEXT: &str = "Page";
+
+/// The key context of the page's address line.
+pub(crate) const ADDRESS: &str = "Address";
 
 pub struct Page {
     browser: Browser,
@@ -73,6 +80,11 @@ pub struct Page {
     /// The menu of the text selected in the page, where it opened, while
     /// it is open.
     menu: Option<(Point<Pixels>, String)>,
+    /// Whether a field of the page has the keyboard, as the page last
+    /// said.
+    editable: bool,
+    /// The hints over the page, in hint mode.
+    hinting: Option<hints::Hinting>,
     _events: Task<()>,
     /// Checks now and then that the browser answered the last resize.
     _ticks: Task<()>,
@@ -109,18 +121,20 @@ impl Page {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
-        let focused = browser.clone();
-        let blurred = browser.clone();
         let focus = [
-            cx.on_focus(&focus_handle, window, move |_, _, _| focused.focus()),
-            cx.on_blur(&focus_handle, window, move |_, _, _| blurred.blur()),
+            cx.on_focus(&focus_handle, window, Self::focused),
+            cx.on_blur(&focus_handle, window, |page, _, _| page.blurred()),
         ];
-        let task = cx.spawn(async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             // Painted, created or closed: the tab looks different either way.
             while let Some(event) = events.recv().await {
-                let shown = this.update(cx, |page, cx| {
+                let shown = this.update_in(cx, |page, window, cx| {
                     match event {
-                        Event::Navigated => page.navigated(cx),
+                        Event::Navigated => page.navigated(window, cx),
+                        Event::EditableFocus { editable } => {
+                            page.editable_focus(editable, window, cx);
+                        }
+                        Event::Hints(hints) => page.hints_listed(hints, window, cx),
                         Event::Favicon => page.favicon_changed(),
                         Event::Popup(url) => cx.emit(Opens::Tab(url)),
                         Event::FileLink(url) => cx.emit(Opens::File(url)),
@@ -169,6 +183,8 @@ impl Page {
             _pointer_changes: None,
             origin: Point::default(),
             menu: None,
+            editable: false,
+            hinting: None,
             _events: task,
             _ticks: ticks,
             _submitted: submitted,
@@ -218,8 +234,11 @@ impl Page {
 
     /// The browser moved, or the page's title changed: show where, unless
     /// the human is in the middle of typing an address of their own.
-    fn navigated(&mut self, cx: &mut Context<Self>) {
-        self.navigation = self.browser.navigation();
+    fn navigated(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let was = std::mem::replace(&mut self.navigation, self.browser.navigation());
+        if was.url != self.navigation.url || was.loading != self.navigation.loading {
+            self.refocus(window, cx);
+        }
         let url = self.navigation.url.clone();
         let typing = self.address.read(cx).text() != self.address_shown;
         if !typing && url != self.address_shown {
@@ -287,6 +306,7 @@ impl Page {
             .child(
                 div()
                     .debug_selector(|| "address".to_owned())
+                    .key_context(ADDRESS)
                     .flex_1()
                     .px_2()
                     .rounded_sm()
@@ -603,6 +623,16 @@ impl Render for Page {
             .size_full()
             .flex()
             .flex_col()
+            .on_action(cx.listener(Self::move_by_keys))
+            .on_action(cx.listener(Self::back))
+            .on_action(cx.listener(Self::forward))
+            .on_action(cx.listener(Self::reload))
+            .on_action(cx.listener(Self::focus_field))
+            .on_action(cx.listener(Self::copy_address))
+            .on_action(cx.listener(Self::go_to_address))
+            .on_action(cx.listener(Self::leave))
+            .on_action(cx.listener(Self::hint))
+            .on_action(cx.listener(Self::label))
             .when(!self.is_plugin(), |page| {
                 page.child(self.render_toolbar(cx))
             })

@@ -135,6 +135,7 @@ impl Workspace {
                 cx,
             ),
             Act::CloseTab => self.tabs(Tabs::Close, window, cx),
+            Act::Menu => self.tabs(Tabs::Menu, window, cx),
         }
     }
 

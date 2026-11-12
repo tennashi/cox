@@ -272,7 +272,7 @@ impl Stage {
 
     /// Opens the menu of the stage's +, with the keyboard in the line at
     /// its top.
-    fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(LineInput::new);
         let typed = cx.subscribe_in(&input, window, |stage, input, Submitted, window, cx| {
             let line = input.read(cx).text().to_owned();
