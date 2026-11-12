@@ -115,7 +115,7 @@ over the chat:
 | --- | --- |
 | Ctrl-W `h`, Ctrl-W `l` | Moves the keyboard to the part at the left or the right: the rail, the stage, the chat. |
 | Ctrl-W `w` | Moves the keyboard to the next part, round from the chat to the rail. |
-| `gt`, `gT` | Shows the stage's next tab, or the one before. `3gt` shows its third tab, `3gT` the tab three before. |
+| `gt`, `gT` | Shows the stage's next tab, or the one before, among those listed beside the stage: the views on its bar, as the map or Knowledge, are left out. `3gt` shows its third tab, `3gT` the tab three before. |
 | Ctrl-W `c` | Closes the tab the stage shows. |
 | `:` | Opens the line at the window's foot for a command. |
 | `f` | Draws hints over what can be clicked or typed in, in the part with the keyboard: the rail, the list of chats, the chat, the settings, a project's card, or the stage, its tabs' bar and the tab shown. A page draws its own. With nothing there to click, as when the chat is folded away with the keyboard in it, over the whole window, as `F`. |
