@@ -2479,3 +2479,70 @@ fn control_w_stops_at_the_tree_of_files_as_at_a_window(cx: &mut TestAppContext) 
     keys::press(cx, &workspace, "ctrl-w w");
     assert!(in_part(cx, tree), "round, on to the tree");
 }
+
+/// A row's input the card opens, for a remote or a name, is to type in,
+/// so it opens in insert mode and Enter gives what was typed.
+#[gpui::test]
+fn the_project_card_s_row_input_types_at_once_and_enter_links(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "card-link");
+    let folder = scratch("card-link-project");
+    let repository = folder.join("directories").join("app");
+    std::fs::create_dir_all(&repository).unwrap();
+    let git = |args: &[&str]| {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repository)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    };
+    git(&["init", "-q"]);
+    // With a commit of its own, linking only names the remote, and
+    // fetches nothing.
+    git(&[
+        "-c",
+        "user.name=Cox",
+        "-c",
+        "user.email=cox@example.com",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "first",
+    ]);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(folder.clone()), window, cx);
+    });
+    settled(cx, &workspace);
+    keys::press(cx, &workspace, "escape");
+    workspace.update_in(cx, |workspace, window, cx| {
+        let project = workspace.chosen();
+        workspace.open_project_card(project, window, cx);
+    });
+    cx.run_until_parked();
+    let card = workspace.read_with(cx, |workspace, _| {
+        workspace.project_card().expect("the card is open").clone()
+    });
+    assert_eq!(shown_mode(cx), Some("Normal"));
+
+    let center = cx
+        .debug_bounds("project-directory-action-0")
+        .expect("the row's Link is drawn")
+        .center();
+    cx.simulate_click(center, gpui::Modifiers::none());
+    assert_eq!(shown_mode(cx), Some("Insert"), "the remote's input types");
+    cx.simulate_input("https://example.com/app.git");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    let said = cx.read(|cx| card.read(cx).described(cx));
+    assert!(
+        said.contains(&"Directory app (Git, remote https://example.com/app.git)".to_owned()),
+        "{said:?}"
+    );
+    let _ = std::fs::remove_dir_all(&folder);
+}
