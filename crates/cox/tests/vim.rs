@@ -1897,6 +1897,49 @@ fn slash_and_n_find_text_in_a_document(cx: &mut TestAppContext) {
     assert_eq!(start - top(cx), first);
 }
 
+/// `]]` and `[[` select a document's blocks one after another, from the
+/// first in sight, scrolling to them, and `y` copies the one selected.
+#[gpui::test]
+fn brackets_go_from_block_to_block_of_a_document_and_y_copies_one(cx: &mut TestAppContext) {
+    let path = folder("document-blocks", &[]).join("blocks.md");
+    let mut text = String::from("# Title\n\nFirst paragraph.\n\n- an item\n- another\n\n");
+    for line in 1..=200 {
+        write!(text, "Line {line}.\n\n").unwrap();
+    }
+    let (document, _, cx) = hosted(cx, move |cx| Document::new(path, text, cx));
+    let selected =
+        |cx: &mut VisualTestContext| document.read_with(cx, |document, _| document.selected_text());
+    let top = |cx: &mut VisualTestContext| {
+        cx.debug_bounds("document-text")
+            .expect("the text is drawn")
+            .origin
+            .y
+    };
+
+    type_keys(cx, "] ]");
+    assert_eq!(selected(cx), "Title", "the first block in sight");
+    type_keys(cx, "] ]");
+    assert_eq!(selected(cx), "First paragraph.");
+    type_keys(cx, "] ] ] ]");
+    assert_eq!(selected(cx), "another");
+    type_keys(cx, "[ [");
+    assert_eq!(selected(cx), "an item");
+
+    type_keys(cx, "y");
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("an item"));
+
+    let start = top(cx);
+    type_keys(cx, "shift-g");
+    type_keys(cx, "[ [");
+    assert_eq!(selected(cx), "First paragraph.", "on from what is selected");
+    assert_eq!(top(cx), start, "scrolled back to it");
+    search_for(cx, "/", "line 150");
+    type_keys(cx, "] ]");
+    assert_eq!(selected(cx), "Line 151.");
+    assert!(start - top(cx) > px(0.), "scrolled to it");
+}
+
 #[gpui::test]
 fn slash_and_n_ask_the_page_to_find_the_text(cx: &mut TestAppContext) {
     let (page, _, cx) = hosted(cx, |cx| FakePage {

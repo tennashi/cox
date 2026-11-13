@@ -429,6 +429,40 @@ impl Reading {
         start
     }
 
+    /// Selects the whole of the piece of text after what is selected, or
+    /// before it, as `direction` goes, or with nothing selected the first
+    /// piece that shows, passing those with no text, and answers where it
+    /// starts as the last frame drew it.
+    pub fn select_piece(&mut self, direction: Direction) -> Option<Point<Pixels>> {
+        let texts = self.painted.0.borrow();
+        let mut pieces = texts.iter().filter(|text| !text.text.is_empty());
+        let piece = match (self.selection, direction) {
+            (None, _) => pieces.find(|text| !text.visible.is_empty()),
+            (Some(selection), Direction::Forward) => {
+                let end = selection.anchor.max(selection.head).text;
+                pieces.find(|text| text.id > end)
+            }
+            (Some(selection), Direction::Backward) => {
+                let start = selection.anchor.min(selection.head).text;
+                pieces.rfind(|text| text.id < start)
+            }
+        }?;
+        let selection = Selection {
+            anchor: Spot {
+                text: piece.id,
+                offset: 0,
+            },
+            head: Spot {
+                text: piece.id,
+                offset: piece.text.len(),
+            },
+        };
+        let start = piece.layout.position_for_index(0);
+        drop(texts);
+        self.selection = Some(selection);
+        start
+    }
+
     /// The text selected.
     #[must_use]
     pub fn selected_text(&self) -> String {
