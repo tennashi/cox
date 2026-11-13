@@ -1123,6 +1123,8 @@ async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestA
     .await;
     click(cx, "stop");
     wait_for_turn(cx, &view).await;
+    // No turn runs to end on the cancel: the agent hears it on its own.
+    settle_until(cx, |_| agents.borrow()[0].cancels() > 0).await;
 
     assert_eq!(agents.borrow()[0].cancels(), 1);
     assert_eq!(
@@ -1279,8 +1281,10 @@ async fn stopping_the_agent_that_asks_as_the_goal_is_checked_gives_the_check_up(
     click(cx, "stop");
     wait_for_turn(cx, &view).await;
     std::fs::write(&mark, "").unwrap();
+    // No turn runs to end on the cancel: the agent hears it on its own.
+    settle_until(cx, |_| agent.cancels() > 0).await;
 
-    assert_eq!(agents.borrow()[0].cancels(), 1);
+    assert_eq!(agent.cancels(), 1);
     let entries = entries(cx, &view);
     assert_eq!(entries.last(), Some(&Entry::Note("Stopped.".to_owned())));
     assert_eq!(chips(&entries), [("goal".to_owned(), CheckState::Waiting)]);
@@ -2079,108 +2083,204 @@ fn repository_with_a_commit(folder: &Path) {
     git(folder, &["commit", "-q", "--allow-empty", "-m", "first"]);
 }
 
-#[gpui::test]
-fn directories_are_made_cloned_and_linked_on_the_projects_card(cx: &mut TestAppContext) {
+/// The card of a project, `untitled-1`, open over the window, with what a
+/// test of its directories reads.
+struct ProjectsCard {
+    /// The workspace the card is open on.
+    workspace: Entity<Workspace>,
+    /// The input that makes, or clones, a directory.
+    input: Entity<LineInput>,
+    /// Where the project's directories are made.
+    directories: PathBuf,
+    /// The URL of a repository with a commit, to clone.
+    url: String,
+}
+
+impl ProjectsCard {
+    /// What the card says of itself, as a screen reader would.
+    fn described(&self, cx: &mut VisualTestContext) -> Vec<String> {
+        cx.read(|cx| {
+            self.workspace
+                .read(cx)
+                .project_card()
+                .expect("the card is open")
+                .read(cx)
+                .described(cx)
+        })
+    }
+
+    /// The input open on a row, for its remote or its name, if one is.
+    fn row_input_open(&self, cx: &mut VisualTestContext) -> Option<Entity<LineInput>> {
+        cx.read(|cx| {
+            let card = self
+                .workspace
+                .read(cx)
+                .project_card()
+                .expect("the card is open")
+                .read(cx);
+            card.row_input().map(|(_, input)| input.clone())
+        })
+    }
+
+    /// The input open on a row, for its remote or its name.
+    fn row_input(&self, cx: &mut VisualTestContext) -> Entity<LineInput> {
+        self.row_input_open(cx)
+            .expect("an input is open on the row")
+    }
+
+    /// Makes the directory `app`, as the human does on the card.
+    fn make_app(&self, cx: &mut VisualTestContext) {
+        enter("app", &self.input, cx);
+    }
+
+    /// Makes `app`, then a repository of it, which the human does on its
+    /// row.
+    fn make_app_a_repository(&self, cx: &mut VisualTestContext) {
+        self.make_app(cx);
+        click(cx, "project-directory-action-0");
+        cx.run_until_parked();
+    }
+
+    /// Makes `app` a repository, then links it to [`Self::url`], which
+    /// the human types on its row.
+    fn link_app(&self, cx: &mut VisualTestContext) {
+        self.make_app_a_repository(cx);
+        click(cx, "project-directory-action-0");
+        let remote = self.row_input(cx);
+        enter(&self.url, &remote, cx);
+    }
+}
+
+/// Types `text` in `input`, with the keyboard there, and presses Enter.
+fn enter(text: &str, input: &Entity<LineInput>, cx: &mut VisualTestContext) {
+    input.update(cx, |input, cx| input.set_text(text, cx));
+    cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+}
+
+/// Opens the card of a project with no directories yet, beside a
+/// repository with a commit, in a folder of the test's own.
+fn open_projects_card(cx: &mut TestAppContext) -> (ProjectsCard, &mut VisualTestContext) {
     let root = scratch::folder("directories");
     let origin = root.join("origin.git");
     repository_with_a_commit(&origin);
     let app = root.join("projects").join("untitled-1");
-    let directories = app.join("directories");
     let (store, _) = kept_chat(&app, None);
     let (_, workspace, cx) = open_window_resuming(cx, root.join("home"), store, Resumes::Resume);
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.open_project_card(1, window, cx);
     });
-    let card = workspace.read_with(cx, |workspace, _| {
-        workspace.project_card().expect("the card is open").clone()
+    let input = workspace.read_with(cx, |workspace, cx| {
+        let card = workspace.project_card().expect("the card is open");
+        card.read(cx).directory_input().clone()
     });
-    let described = |cx: &mut VisualTestContext| cx.read(|cx| card.read(cx).described(cx));
-    let input = card.read_with(cx, |card, _| card.directory_input().clone());
-    // The card has the project's icon too, which it has none of yet.
-    let said = described(cx);
+    let card = ProjectsCard {
+        workspace,
+        input,
+        directories: app.join("directories"),
+        url: origin.display().to_string(),
+    };
+    (card, cx)
+}
+
+#[gpui::test]
+fn the_projects_card_shows_a_folder_for_an_icon_until_it_has_one(cx: &mut TestAppContext) {
+    let (card, cx) = open_projects_card(cx);
+    let said = card.described(cx);
     assert!(
         said.contains(&"Icon: none, a folder".to_owned()),
         "{said:?}"
     );
-    let enter = |text: &str, input: &Entity<LineInput>, cx: &mut VisualTestContext| {
-        input.update(cx, |input, cx| input.set_text(text, cx));
-        cx.update(|window, cx| window.focus(&input.focus_handle(cx)));
-        cx.simulate_keystrokes("enter");
-        cx.run_until_parked();
-    };
+}
 
-    // A URL clones the repository into a directory named after it.
-    let url = origin.display().to_string();
-    enter(&url, &input, cx);
-    assert!(directories.join("origin").join(".git").is_dir());
-    let said = described(cx);
+#[gpui::test]
+fn a_url_on_the_projects_card_clones_the_repository_into_a_directory_named_after_it(
+    cx: &mut TestAppContext,
+) {
+    let (card, cx) = open_projects_card(cx);
+    enter(&card.url, &card.input, cx);
+    assert!(card.directories.join("origin").join(".git").is_dir());
+    let said = card.described(cx);
     assert!(
-        said.contains(&format!("Directory origin (Git, remote {url})"))
+        said.contains(&format!("Directory origin (Git, remote {})", card.url))
             && said.contains(&"Under it: Cloned into origin.".to_owned()),
         "{said:?}"
     );
-    // The same again is not cloned over it.
-    enter(&url, &input, cx);
-    let said = described(cx);
+}
+
+#[gpui::test]
+fn a_repository_cloned_already_is_not_cloned_over_its_directory(cx: &mut TestAppContext) {
+    let (card, cx) = open_projects_card(cx);
+    enter(&card.url, &card.input, cx);
+    enter(&card.url, &card.input, cx);
+    let said = card.described(cx);
     assert!(
         said.contains(&"Under it: The project has a directory origin already.".to_owned()),
         "{said:?}"
     );
+}
 
-    // A name alone makes a directory, which is no repository yet.
-    enter("app", &input, cx);
-    assert!(directories.join("app").is_dir());
-    assert!(!directories.join("app").join(".git").exists());
-    let said = described(cx);
+#[gpui::test]
+fn a_name_on_the_projects_card_makes_a_directory_that_is_no_repository(cx: &mut TestAppContext) {
+    let (card, cx) = open_projects_card(cx);
+    card.make_app(cx);
+    assert!(card.directories.join("app").is_dir());
+    assert!(!card.directories.join("app").join(".git").exists());
+    let said = card.described(cx);
     assert!(
         said.contains(&"Directory app".to_owned())
             && said.contains(&"Under it: Made app.".to_owned()),
         "{said:?}"
     );
+}
 
-    // It becomes one, with no remote.
-    click(cx, "project-directory-action-0");
-    cx.run_until_parked();
-    assert!(directories.join("app").join(".git").is_dir());
-    let said = described(cx);
+#[gpui::test]
+fn a_directory_becomes_a_repository_with_no_remote_on_its_row(cx: &mut TestAppContext) {
+    let (card, cx) = open_projects_card(cx);
+    card.make_app_a_repository(cx);
+    assert!(card.directories.join("app").join(".git").is_dir());
+    let said = card.described(cx);
     assert!(
         said.contains(&"Directory app (Git, no remote)".to_owned()),
         "{said:?}"
     );
+}
 
-    // And, linked to a remote while it has nothing yet, takes its branch.
-    click(cx, "project-directory-action-0");
-    let remote = card
-        .read_with(cx, |card, _| {
-            card.row_input().map(|(_, input)| input.clone())
-        })
-        .expect("the remote's input is open");
-    enter(&url, &remote, cx);
-    let said = described(cx);
+#[gpui::test]
+fn a_repository_with_nothing_yet_linked_to_a_remote_takes_its_branch(cx: &mut TestAppContext) {
+    let (card, cx) = open_projects_card(cx);
+    card.link_app(cx);
+    let said = card.described(cx);
     assert!(
-        said.contains(&format!("Directory app (Git, remote {url})"))
+        said.contains(&format!("Directory app (Git, remote {})", card.url))
             && said.contains(&"Under it: Linked app to its remote, and took its main.".to_owned()),
         "{said:?}"
     );
-    assert!(card.read_with(cx, |card, _| card.row_input().is_none()));
+    assert!(card.row_input_open(cx).is_none());
+}
 
-    // Nothing typed makes a directory named as the project.
-    enter("", &input, cx);
-    assert!(directories.join("untitled-1").is_dir());
+#[gpui::test]
+fn nothing_typed_on_the_projects_card_makes_a_directory_named_as_the_project(
+    cx: &mut TestAppContext,
+) {
+    let (card, cx) = open_projects_card(cx);
+    enter("", &card.input, cx);
+    assert!(card.directories.join("untitled-1").is_dir());
+}
 
-    // A directory is renamed on its row, its folder with it.
+#[gpui::test]
+fn a_directory_is_renamed_on_its_row_its_folder_with_it(cx: &mut TestAppContext) {
+    let (card, cx) = open_projects_card(cx);
+    card.link_app(cx);
     click(cx, "project-directory-rename-0");
-    let name = card
-        .read_with(cx, |card, _| {
-            card.row_input().map(|(_, input)| input.clone())
-        })
-        .expect("the name's input is open");
+    let name = card.row_input(cx);
     enter("web", &name, cx);
-    assert!(directories.join("web").join(".git").is_dir());
-    assert!(!directories.join("app").exists());
-    let said = described(cx);
+    assert!(card.directories.join("web").join(".git").is_dir());
+    assert!(!card.directories.join("app").exists());
+    let said = card.described(cx);
     assert!(
-        said.contains(&format!("Directory web (Git, remote {url})"))
+        said.contains(&format!("Directory web (Git, remote {})", card.url))
             && said.contains(&"Under it: Renamed app to web.".to_owned()),
         "{said:?}"
     );
@@ -2394,10 +2494,11 @@ async fn a_closed_chat_sets_its_session_as_it_was_set(cx: &mut TestAppContext) {
     click(cx, "settings");
     click(cx, "setting-0");
     click(cx, "choice-0");
-    assert_eq!(
-        store.settings(kept).unwrap(),
-        fake_settings("large", "plan")
-    );
+    // The daemon keeps what the human set, on its thread.
+    settle_until(cx, |_| {
+        store.settings(kept).unwrap() == fake_settings("large", "plan")
+    })
+    .await;
     assert_eq!(
         store.choices(FIRST_AGENT).unwrap(),
         [(fake_agent::MODEL.to_owned(), "large".to_owned())]
@@ -2414,7 +2515,7 @@ async fn a_closed_chat_sets_its_session_as_it_was_set(cx: &mut TestAppContext) {
     let view = shown(cx, &workspace);
     let set = view.read_with(cx, |view, _| view.conversation().settings().to_vec());
     assert_eq!(set, fake_settings("large", "plan"));
-    assert_eq!(store.settings(kept).unwrap(), set);
+    settle_until(cx, |_| store.settings(kept).unwrap() == set).await;
 }
 
 #[gpui::test]
