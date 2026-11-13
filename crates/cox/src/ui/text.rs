@@ -1279,4 +1279,91 @@ mod tests {
         // has them.
         assert_eq!(copied(&reading, id(0, 0), id(1, 0)), "b\na");
     }
+
+    /// A reading of the pieces `pieces`, each of its entry and part, its
+    /// text, and the top it shows at, 20 pixels apart and 10 tall.
+    fn reading(pieces: &[(usize, usize, &str)]) -> Reading {
+        let reading = Reading::default();
+        for (at, &(entry, part, text)) in pieces.iter().enumerate() {
+            #[expect(clippy::cast_precision_loss, reason = "a few pieces")]
+            let top = at as f32 * 20.;
+            reading.painted.push(piece(entry, part, text, top));
+        }
+        reading
+    }
+
+    fn spot(entry: usize, part: usize, offset: usize) -> Spot {
+        Spot {
+            text: id(entry, part),
+            offset,
+        }
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_it_is_on() {
+        let reading = reading(&[(0, 0, "hello wide world")]);
+
+        let word = reading.painted.word_at(spot(0, 0, 8));
+
+        assert_eq!(reading.painted.copy(&word), "wide");
+    }
+
+    #[test]
+    fn a_double_click_on_spaces_selects_the_spaces() {
+        let reading = reading(&[(0, 0, "a   b")]);
+
+        let word = reading.painted.word_at(spot(0, 0, 2));
+
+        assert_eq!(reading.painted.copy(&word), "   ");
+    }
+
+    #[test]
+    fn a_word_in_no_piece_shown_is_nothing() {
+        let reading = reading(&[(0, 0, "hello")]);
+
+        let word = reading.painted.word_at(spot(5, 0, 2));
+
+        assert_eq!(word, Selection::at(spot(5, 0, 2)));
+    }
+
+    #[test]
+    fn a_spot_between_pieces_is_the_start_of_the_piece_below() {
+        let reading = reading(&[(0, 0, "first"), (1, 0, "second")]);
+
+        let found = reading.painted.spot_at(point(px(5.), px(15.)));
+
+        assert_eq!(found, Some(spot(1, 0, 0)));
+    }
+
+    #[test]
+    fn a_spot_below_every_piece_is_the_end_of_the_last() {
+        let reading = reading(&[(0, 0, "first"), (1, 0, "second")]);
+
+        let found = reading.painted.spot_at(point(px(5.), px(500.)));
+
+        assert_eq!(found, Some(spot(1, 0, "second".len())));
+    }
+
+    #[test]
+    fn no_spot_is_in_text_that_shows_nowhere() {
+        let reading = Reading::default();
+
+        assert_eq!(reading.painted.spot_at(point(px(5.), px(5.))), None);
+    }
+
+    #[test]
+    fn an_entry_with_no_text_laid_out_is_not_selected() {
+        let mut reading = reading(&[(0, 0, "only")]);
+
+        reading.select_entry(3);
+
+        assert_eq!(reading.selected_entry(), None);
+    }
+
+    #[test]
+    fn nothing_selected_copies_nothing() {
+        let reading = reading(&[(0, 0, "text")]);
+
+        assert_eq!(reading.selected_text(), "");
+    }
 }
