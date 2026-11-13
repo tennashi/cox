@@ -166,24 +166,53 @@ mod tests {
         words.iter().map(|&word| word.to_owned()).collect()
     }
 
-    #[test]
-    fn the_listing_changes_keeping_what_the_screen_does_not_show() {
+    /// A `servers.json` in a folder of the test's own that gives
+    /// rust-analyzer settings and no command, and its path.
+    fn listing_file() -> (TempDir, PathBuf) {
         let folder = TempDir::new();
         let file = folder.join("servers.json");
-        assert_eq!(Listing::read_from(&file).unwrap(), Listing::default());
         fs::write(
             &file,
             r#"{"servers": {"rust-analyzer": {"settings": {"rust-analyzer": {}}}}}"#,
         )
         .unwrap();
-        let mut listing = Listing::read_from(&file).unwrap();
-        assert_eq!(listing.named("rust-analyzer"), Named::Given(None));
-        listing.set("rust-analyzer", &words(&["rust-analyzer"]), None);
-        listing.set("zls", &words(&["zls"]), Some(&words(&["zig"])));
-        listing.turn_off("gopls");
-        listing.keep_in(&file).unwrap();
+        (folder, file)
+    }
 
-        let mut listing = Listing::read_from(&file).unwrap();
+    /// The listing of `file`, changed by `change`, as it reads once kept.
+    fn kept(file: &Path, change: impl FnOnce(&mut Listing)) -> Listing {
+        let mut listing = Listing::read_from(file).unwrap();
+        change(&mut listing);
+        listing.keep_in(file).unwrap();
+        Listing::read_from(file).unwrap()
+    }
+
+    #[test]
+    fn no_file_lists_no_servers() {
+        let folder = TempDir::new();
+
+        let listing = Listing::read_from(&folder.join("servers.json")).unwrap();
+
+        assert_eq!(listing, Listing::default());
+    }
+
+    #[test]
+    fn a_server_given_with_no_command_is_named_so() {
+        let (_folder, file) = listing_file();
+
+        let listing = Listing::read_from(&file).unwrap();
+
+        assert_eq!(listing.named("rust-analyzer"), Named::Given(None));
+    }
+
+    #[test]
+    fn a_command_set_is_kept_with_the_settings_the_screen_does_not_show() {
+        let (_folder, file) = listing_file();
+
+        let listing = kept(&file, |listing| {
+            listing.set("rust-analyzer", &words(&["rust-analyzer"]), None);
+        });
+
         assert_eq!(
             listing.named("rust-analyzer"),
             Named::Given(Some(words(&["rust-analyzer"])))
@@ -192,27 +221,87 @@ mod tests {
             listing.servers["rust-analyzer"]["settings"],
             serde_json::json!({"rust-analyzer": {}})
         );
+    }
+
+    #[test]
+    fn a_server_set_with_languages_is_kept_knowing_them() {
+        let (_folder, file) = listing_file();
+
+        let listing = kept(&file, |listing| {
+            listing.set("zls", &words(&["zls"]), Some(&words(&["zig"])));
+        });
+
         assert_eq!(
             listing.servers["zls"]["languages"],
             serde_json::json!(["zig"])
         );
+    }
+
+    #[test]
+    fn a_server_turned_off_is_named_off_and_one_never_named_is_not() {
+        let (_folder, file) = listing_file();
+
+        let listing = kept(&file, |listing| listing.turn_off("gopls"));
+
         assert_eq!(listing.named("gopls"), Named::Off);
         assert_eq!(listing.named("clangd"), Named::No);
-        assert_eq!(listing.names(), words(&["rust-analyzer", "zls", "gopls"]));
-        listing.forget("gopls");
-        assert_eq!(listing.named("gopls"), Named::No);
-        listing.unset_command("rust-analyzer");
-        assert_eq!(listing.named("rust-analyzer"), Named::Given(None));
+    }
 
-        // What Cox's editor reads of it is what the listing says.
-        listing.keep_in(&file).unwrap();
+    #[test]
+    fn the_servers_are_named_in_the_order_they_were_given() {
+        let (_folder, file) = listing_file();
+
+        let listing = kept(&file, |listing| {
+            listing.set("zls", &words(&["zls"]), None);
+            listing.turn_off("gopls");
+        });
+
+        assert_eq!(listing.names(), words(&["rust-analyzer", "zls", "gopls"]));
+    }
+
+    #[test]
+    fn a_server_forgotten_is_not_named() {
+        let (_folder, file) = listing_file();
+        kept(&file, |listing| listing.turn_off("gopls"));
+
+        let listing = kept(&file, |listing| listing.forget("gopls"));
+
+        assert_eq!(listing.named("gopls"), Named::No);
+    }
+
+    #[test]
+    fn a_server_whose_command_is_unset_runs_coxs_again_downloaded_as_cox_has_it() {
+        let (_folder, file) = listing_file();
+        kept(&file, |listing| {
+            listing.set("rust-analyzer", &words(&["rust-analyzer"]), None);
+        });
+
+        let listing = kept(&file, |listing| listing.unset_command("rust-analyzer"));
+
+        assert_eq!(listing.named("rust-analyzer"), Named::Given(None));
+        let (servers, left_out) = cox_editor::lsp::Servers::of_files([file.as_path()]);
+        assert!(left_out.is_empty(), "{left_out:?}");
+        assert!(servers.of("rust").unwrap().source.is_some());
+    }
+
+    #[test]
+    fn coxs_editor_runs_the_command_the_listing_sets_for_a_language() {
+        let (_folder, file) = listing_file();
+
+        kept(&file, |listing| {
+            listing.set("zls", &words(&["zls"]), Some(&words(&["zig"])));
+        });
+
         let (servers, left_out) = cox_editor::lsp::Servers::of_files([file.as_path()]);
         assert!(left_out.is_empty(), "{left_out:?}");
         assert_eq!(servers.of("zig").unwrap().command, ["zls"]);
-        // Cox's command again, it is downloaded as Cox has it.
-        assert!(servers.of("rust").unwrap().source.is_some());
+    }
 
+    #[test]
+    fn a_file_whose_servers_are_not_named_cannot_be_read() {
+        let (_folder, file) = listing_file();
         fs::write(&file, r#"{"servers": []}"#).unwrap();
+
         assert!(Listing::read_from(&file).is_err());
     }
 }

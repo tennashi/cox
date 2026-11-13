@@ -147,46 +147,112 @@ mod tests {
         words.iter().map(|&word| word.to_owned()).collect()
     }
 
-    #[test]
-    fn the_listing_changes_keeping_what_cox_does_not_know() {
+    /// An `agents.json` in a folder of the test's own that lists Codex
+    /// with a note Cox does not know, and its path.
+    fn listing_file() -> (TempDir, PathBuf) {
         let folder = TempDir::new();
         let file = folder.join("agents.json");
-        assert_eq!(Listing::read_from(&file).unwrap(), Listing::default());
-
         fs::write(
             &file,
             r#"[{"name": "Codex", "command": ["codex-acp"], "note": "mine"}]"#,
         )
         .unwrap();
-        let mut listing = Listing::read_from(&file).unwrap();
-        listing
-            .set(None, "Claude", &words(&["npx", "-y", "claude-agent-acp"]))
-            .unwrap();
-        listing
-            .set(Some("Codex"), "Codex CLI", &words(&["X=1", "codex-acp"]))
-            .unwrap();
-        assert!(listing.set(Some("Gone"), "Gone", &[]).is_err());
-        assert!(listing.set(None, "Claude", &[]).is_err());
-        listing.keep_in(&file).unwrap();
+        (folder, file)
+    }
 
-        let listing = Listing::read_from(&file).unwrap();
+    /// The listing of `file`, changed by `change`, as it reads once kept.
+    fn kept(file: &Path, change: impl FnOnce(&mut Listing)) -> Listing {
+        let mut listing = Listing::read_from(file).unwrap();
+        change(&mut listing);
+        listing.keep_in(file).unwrap();
+        Listing::read_from(file).unwrap()
+    }
+
+    #[test]
+    fn no_file_lists_no_agents() {
+        let folder = TempDir::new();
+
+        let listing = Listing::read_from(&folder.join("agents.json")).unwrap();
+
+        assert_eq!(listing, Listing::default());
+    }
+
+    #[test]
+    fn an_agent_added_is_kept_after_those_listed() {
+        let (_folder, file) = listing_file();
+
+        let listing = kept(&file, |listing| {
+            listing
+                .set(None, "Claude", &words(&["npx", "-y", "claude-agent-acp"]))
+                .unwrap();
+        });
+
         assert_eq!(
             listing.agents(),
             [
-                ("Codex CLI".to_owned(), words(&["X=1", "codex-acp"])),
+                ("Codex".to_owned(), words(&["codex-acp"])),
                 (
                     "Claude".to_owned(),
                     words(&["npx", "-y", "claude-agent-acp"])
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn an_agent_changed_is_kept_in_its_place_with_what_cox_does_not_know() {
+        let (_folder, file) = listing_file();
+
+        let listing = kept(&file, |listing| {
+            listing
+                .set(Some("Codex"), "Codex CLI", &words(&["X=1", "codex-acp"]))
+                .unwrap();
+        });
+
+        assert_eq!(
+            listing.agents(),
+            [("Codex CLI".to_owned(), words(&["X=1", "codex-acp"]))]
+        );
         assert_eq!(listing.agents[0]["note"], "mine");
+    }
 
-        let mut listing = listing;
-        listing.remove("Codex CLI");
+    #[test]
+    fn an_agent_not_listed_cannot_be_changed() {
+        let (_folder, file) = listing_file();
+        let mut listing = Listing::read_from(&file).unwrap();
+
+        assert!(listing.set(Some("Gone"), "Gone", &[]).is_err());
+
         assert_eq!(listing.agents().len(), 1);
+    }
 
+    #[test]
+    fn an_agent_cannot_take_the_name_of_another() {
+        let (_folder, file) = listing_file();
+        let mut listing = Listing::read_from(&file).unwrap();
+        listing
+            .set(None, "Claude", &words(&["claude-agent-acp"]))
+            .unwrap();
+
+        assert!(listing.set(None, "Claude", &[]).is_err());
+
+        assert_eq!(listing.agents().len(), 2);
+    }
+
+    #[test]
+    fn an_agent_removed_is_no_longer_listed() {
+        let (_folder, file) = listing_file();
+
+        let listing = kept(&file, |listing| listing.remove("Codex"));
+
+        assert_eq!(listing.agents(), []);
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_list_cannot_be_read() {
+        let (_folder, file) = listing_file();
         fs::write(&file, r#"{"name": "Codex"}"#).unwrap();
+
         assert!(Listing::read_from(&file).is_err());
     }
 }
