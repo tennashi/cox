@@ -38,7 +38,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use cox_core::entry::CheckState;
 use sha2::{Digest as _, Sha256};
@@ -1194,7 +1193,7 @@ pub fn tree(folder: &Path) -> Option<String> {
         std::fs::copy(&index, &scratch).ok()?;
     }
     let with = |args: &[&str]| {
-        let output = Command::new("git")
+        let output = crate::git::command()
             .args(args)
             .current_dir(folder)
             .env("GIT_INDEX_FILE", &scratch)
@@ -1235,7 +1234,7 @@ pub fn changed_between(folder: &Path, from: &str, to: &str) -> Option<Vec<String
 
 /// What `git args` printed in `folder`, if it ran and passed.
 fn git(folder: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(args)
         .current_dir(folder)
         .output()

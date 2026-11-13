@@ -125,7 +125,7 @@ pub fn clone(url: &str, into: &Path) -> Result<(), String> {
     if let Some(parent) = into.parent() {
         make(parent)?;
     }
-    git(Command::new("git")
+    git(crate::git::command()
         .arg("clone")
         .arg("--")
         .arg(url)
@@ -170,7 +170,7 @@ pub fn link(folder: &Path, url: &str) -> Result<Linked, String> {
 /// Runs Git with `args` in `folder`, answering what it printed, or why
 /// it failed.
 fn run(folder: &Path, args: &[&str]) -> Result<String, String> {
-    git(Command::new("git").arg("-C").arg(folder).args(args))
+    git(crate::git::command().arg("-C").arg(folder).args(args))
 }
 
 /// Runs `command` of Git, asking nothing, and answers what it printed,
