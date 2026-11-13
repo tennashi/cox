@@ -45,12 +45,49 @@ wrap_app! {
             Some(StageProcessHandler::new(Arc::clone(&self.browsers)))
         }
 
+        fn render_process_handler(&self) -> Option<RenderProcessHandler> {
+            Some(FocusReporter::new())
+        }
+
         /// Each process of CEF learns the `cox:` scheme the stage serves
         /// (see [`crate::scheme`]).
         fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
             if let Some(registrar) = registrar {
                 crate::scheme::register(*registrar);
             }
+        }
+    }
+}
+
+/// The name of the message a page's renderer sends as the keyboard goes
+/// to something that takes text, or leaves it, with whether it does.
+const EDITABLE: &str = "cox-editable";
+
+wrap_render_process_handler! {
+    struct FocusReporter {}
+
+    impl RenderProcessHandler {
+        /// Runs in the renderer: tells the browser whether what has the
+        /// keyboard now, in the page or a frame of it, takes text.
+        fn on_focused_node_changed(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            frame: Option<&mut cef::Frame>,
+            node: Option<&mut cef::Domnode>,
+        ) {
+            let Some(frame) = frame else { return };
+            let editable = node.is_some_and(|node| node.is_editable() == 1);
+            let Some(mut message) = cef::process_message_create(Some(&CefString::from(EDITABLE)))
+            else {
+                return;
+            };
+            if let Some(arguments) = message.argument_list() {
+                arguments.set_bool(0, c_int::from(editable));
+            }
+            frame.send_process_message(
+                cef::ProcessId::from(cef::sys::cef_process_id_t::PID_BROWSER),
+                Some(&mut message),
+            );
         }
     }
 }
@@ -142,6 +179,7 @@ fn create(new: NewBrowser) {
         ..Default::default()
     };
     let mut client = StageClient::new(
+        events.clone(),
         StageRenderHandler::new(Arc::clone(&shared), events.clone()),
         StageLifeSpanHandler::new(Arc::clone(&shared), events.clone(), target),
         StageLoadHandler::new(Arc::clone(&shared), events.clone()),
@@ -175,19 +213,31 @@ fn create(new: NewBrowser) {
 
 wrap_dev_tools_message_observer! {
     struct TargetObserver {
+        shared: SharedRef,
         target: Arc<watch::Sender<Option<String>>>,
     }
 
     impl DevToolsMessageObserver {
-        /// The answer to `Target.getTargetInfo`, the only method Cox
-        /// calls through CEF, which names the page's target.
+        /// The answer to a call of the stage's (see [`crate::keyboard`]),
+        /// or to `Target.getTargetInfo`, which names the page's target.
         fn on_dev_tools_method_result(
             &self,
             _browser: Option<&mut cef::Browser>,
-            _message_id: c_int,
+            message_id: c_int,
             success: c_int,
             result: Option<&[u8]>,
         ) {
+            if message_id != crate::keyboard::TARGET_INFO {
+                let reply = lock(&self.shared).calls.take(message_id);
+                if let Some(reply) = reply {
+                    reply(
+                        result
+                            .filter(|_| success == 1)
+                            .and_then(|result| serde_json::from_slice(result).ok()),
+                    );
+                }
+                return;
+            }
             let target = result
                 .filter(|_| success == 1)
                 .and_then(|result| serde_json::from_slice::<serde_json::Value>(result).ok())
@@ -203,6 +253,7 @@ wrap_dev_tools_message_observer! {
 
 wrap_client! {
     struct StageClient {
+        events: UnboundedSender<Event>,
         render: RenderHandler,
         life_span: LifeSpanHandler,
         load: LoadHandler,
@@ -234,6 +285,26 @@ wrap_client! {
 
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
             Some(self.context_menu.clone())
+        }
+
+        /// A renderer of the page tells whether the keyboard is in
+        /// something that takes text (see [`FocusReporter`]).
+        fn on_process_message_received(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _source_process: cef::ProcessId,
+            message: Option<&mut cef::ProcessMessage>,
+        ) -> c_int {
+            let Some(message) = message else { return 0 };
+            if CefString::from(&message.name()).to_string() != EDITABLE {
+                return 0;
+            }
+            let editable = message
+                .argument_list()
+                .is_some_and(|arguments| arguments.bool(0) == 1);
+            let _ = self.events.send(Event::EditableFocus { editable });
+            1
         }
     }
 }
@@ -383,6 +454,7 @@ wrap_load_handler! {
         ) {
             if frame.is_some_and(|frame| frame.is_main() == 1) {
                 lock(&self.shared).favicons.loading();
+                let _ = self.events.send(Event::EditableFocus { editable: false });
             }
         }
 
@@ -555,10 +627,11 @@ wrap_life_span_handler! {
                     host.notify_screen_info_changed();
                     host.was_resized();
                     host.set_focus(1);
-                    let mut observer = TargetObserver::new(Arc::clone(&self.target));
+                    let mut observer =
+                        TargetObserver::new(Arc::clone(&self.shared), Arc::clone(&self.target));
                     devtools = host.add_dev_tools_message_observer(Some(&mut observer));
                     host.execute_dev_tools_method(
-                        0,
+                        crate::keyboard::TARGET_INFO,
                         Some(&CefString::from("Target.getTargetInfo")),
                         None,
                     );

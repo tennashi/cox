@@ -166,6 +166,8 @@ pub enum Tabs {
     Number(usize),
     /// Closes the tab shown.
     Close,
+    /// Opens the menu of the stage's +, with the keyboard in its line.
+    Menu,
 }
 
 /// What keeps a stage's tabs as they change, each of a chat by its key.
@@ -817,6 +819,7 @@ impl Stage {
                 }
                 return;
             }
+            Tabs::Menu => return self.open_menu(window, cx),
             Tabs::Along(step) => self.tabs.along(step),
             Tabs::Number(number) => number.checked_sub(1),
         };

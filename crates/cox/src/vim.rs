@@ -1,6 +1,7 @@
 //! The keys as in Vim, which the human turns on in `settings.json` with
 //! `{"vim": true}`: a mode, normal or insert, in the chat and what opens
-//! over it to type in, and the keys of each (see [`keymap`]).
+//! over it to type in, and in a page, where hint mode picks what to click
+//! by its label, and the keys of each (see [`keymap`]).
 //!
 //! The keys are read ahead of the window's own, in one place
 //! ([`install`]), which takes those Vim's keys do and leaves the rest as
@@ -14,7 +15,7 @@ use gpui::{
     Action, App, Global, KeyContext, Keystroke, KeystrokeEvent, Pixels, Window, actions, px,
 };
 
-use self::keymap::{Answer, Command, Keymap, Motion, Place, Sent};
+use self::keymap::{Answer, Command, Follow, Keymap, Motion, Place, Sent};
 
 /// Moves what the part of the window with the keyboard shows, or its
 /// cursor, as Vim's keys ask: an action each part that moves so handles
@@ -79,6 +80,21 @@ impl Move {
     }
 }
 
+/// Draws hints over what can be clicked in the page with the keyboard,
+/// for hint mode.
+#[derive(Clone, Debug, PartialEq, Eq, Action)]
+#[action(namespace = vim, no_json)]
+pub struct Hint {
+    pub follow: Follow,
+}
+
+/// A key typed in hint mode, toward the label of a hint.
+#[derive(Clone, Debug, PartialEq, Eq, Action)]
+#[action(namespace = vim, no_json)]
+pub struct Label {
+    pub key: char,
+}
+
 actions!(
     vim,
     [
@@ -90,6 +106,17 @@ actions!(
         Open,
         /// Closes the folder selected, or selects the folder it is in.
         Close,
+        /// The keys went back to normal mode: what was typed in leaves the
+        /// keyboard, and hints go.
+        Leave,
+        /// Loads the page again.
+        Reload,
+        /// Gives the keyboard to the page's first field.
+        FocusField,
+        /// Copies the page's address.
+        CopyAddress,
+        /// Takes the keyboard to the page's address line.
+        Address,
     ]
 );
 
@@ -105,6 +132,11 @@ impl Sent {
             Self::Definition => Box::new(Definition),
             Self::Open => Box::new(Open),
             Self::Close => Box::new(Close),
+            Self::Reload => Box::new(Reload),
+            Self::FocusField => Box::new(FocusField),
+            Self::CopyAddress => Box::new(CopyAddress),
+            Self::Address => Box::new(Address),
+            Self::Label(key) => Box::new(Label { key }),
         }
     }
 
@@ -118,13 +150,15 @@ impl Sent {
     }
 }
 
-/// How the keys work: as Vim's normal mode, where they do things, or as
-/// its insert mode, where they type.
+/// How the keys work: as Vim's normal mode, where they do things, as
+/// its insert mode, where they type, or as Vimperator's hint mode, where
+/// they type the label of a hint over a page.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     #[default]
     Normal,
     Insert,
+    Hint,
 }
 
 impl Mode {
@@ -134,6 +168,7 @@ impl Mode {
         match self {
             Self::Normal => "NORMAL",
             Self::Insert => "INSERT",
+            Self::Hint => "HINT",
         }
     }
 }
@@ -165,6 +200,8 @@ pub enum Region {
     /// The menu of the stage's +.
     StageMenu,
     Page,
+    /// A page's address line.
+    Address,
     Terminal,
     Code,
     Document,
@@ -195,6 +232,7 @@ const REGIONS: &[(&str, Region)] = &[
     (crate::chat::region::KEY_CONTEXT, Region::Sheet),
     (crate::stage::bar::MENU_CONTEXT, Region::StageMenu),
     (crate::stage::page::KEY_CONTEXT, Region::Page),
+    (crate::stage::page::ADDRESS, Region::Address),
     (crate::stage::terminal::KEY_CONTEXT, Region::Terminal),
     (crate::stage::code::KEY_CONTEXT, Region::Code),
     (crate::stage::document::KEY_CONTEXT, Region::Document),
@@ -227,10 +265,11 @@ impl Region {
 
     /// The mode the keys go to as the keyboard comes into the region, if
     /// it has one: insert in what opens only to type a line in, normal in
-    /// a screen of settings, and where nothing is typed.
+    /// a screen of settings, and where nothing is typed. A page tells its
+    /// own, by whether a field of it has the keyboard.
     const fn enters_in(self) -> Option<Mode> {
         match self {
-            Self::Goal | Self::Sketch | Self::Renaming => Some(Mode::Insert),
+            Self::Goal | Self::Sketch | Self::Renaming | Self::Address => Some(Mode::Insert),
             Self::Settings
             | Self::ProjectCard
             | Self::Rail
@@ -293,6 +332,9 @@ impl Vim {
         if region != self.region {
             self.region = region;
             self.reset();
+            if self.mode == Mode::Hint {
+                self.mode = Mode::Normal;
+            }
             if let Some(mode) = region.enters_in() {
                 self.mode = mode;
             }
@@ -305,6 +347,11 @@ impl Vim {
             return Outcome::Pass;
         }
         let key = keystroke.unparse();
+        if self.mode == Mode::Hint && key != "escape" {
+            return label_key(keystroke).map_or(Outcome::Taken, |key| {
+                Outcome::Do(Command::Send(Sent::Label(key)), None)
+            });
+        }
         if self.mode == Mode::Normal && self.held.is_empty() {
             if key == "escape" && self.count.is_some() {
                 self.reset();
@@ -324,6 +371,7 @@ impl Vim {
                 match command {
                     Command::Normal => self.mode = Mode::Normal,
                     Command::Insert(_) => self.mode = Mode::Insert,
+                    Command::Hint(_) => self.mode = Mode::Hint,
                     Command::Stop
                     | Command::Reset
                     | Command::Window(_)
@@ -363,6 +411,20 @@ impl Vim {
     }
 }
 
+/// The character `keystroke` types toward a hint's label, shifted or not,
+/// if it types one.
+fn label_key(keystroke: &Keystroke) -> Option<char> {
+    let modifiers = &keystroke.modifiers;
+    if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+        return None;
+    }
+    let mut chars = keystroke.key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(key), None) => Some(key.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
 /// Whether `keystroke`, gone on to an input, would change its text, which
 /// normal mode keeps it from.
 fn edits_text(keystroke: &Keystroke) -> bool {
@@ -390,11 +452,10 @@ pub fn mode(cx: &App) -> Option<Mode> {
     cx.try_global::<Vim>().map(Vim::mode)
 }
 
-/// Goes to insert mode, if Vim's keys are on: for a new chat, which the
-/// human opens to type in.
-pub fn insert(cx: &mut App) {
+/// Goes to `mode`, if Vim's keys are on.
+pub fn enter(mode: Mode, cx: &mut App) {
     if cx.has_global::<Vim>() {
-        cx.global_mut::<Vim>().mode = Mode::Insert;
+        cx.global_mut::<Vim>().mode = mode;
     }
 }
 
@@ -414,6 +475,10 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         Outcome::Taken | Outcome::Do(Command::Reset, _) => {}
         Outcome::Do(Command::Normal, _) => {
             window.dispatch_action(Box::new(crate::chat::view::CloseList), cx);
+            window.dispatch_action(Box::new(Leave), cx);
+        }
+        Outcome::Do(Command::Hint(follow), _) => {
+            window.dispatch_action(Box::new(Hint { follow }), cx);
         }
         Outcome::Do(Command::Stop, _) => {
             window.dispatch_action(Box::new(crate::chat::view::Stop), cx);
@@ -450,7 +515,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
 mod tests {
     use gpui::{KeyContext, Keystroke, px};
 
-    use super::keymap::{Act, Command, Keymap, Motion, Pick, Place, Sent};
+    use super::keymap::{Act, Command, Follow, Keymap, Motion, Pick, Place, Sent};
     use super::{Mode, Move, Outcome, Region, Vim};
 
     fn press(vim: &mut Vim, region: Region, keys: &str) -> Vec<Outcome> {
@@ -565,7 +630,7 @@ mod tests {
     #[test]
     fn the_stage_s_tabs_keep_every_key() {
         let mut vim = Vim::default();
-        for region in [Region::Terminal, Region::Android, Region::Page] {
+        for region in [Region::Terminal, Region::Android] {
             assert_eq!(
                 press(&mut vim, region, "j 1 escape ctrl-c i"),
                 [Outcome::Pass; 5]
@@ -660,5 +725,76 @@ mod tests {
             assert_eq!(press(&mut vim, region, "x"), [Outcome::Taken], "{region:?}");
             assert_eq!(vim.mode(), Mode::Normal, "{region:?}");
         }
+    }
+
+    #[test]
+    fn a_page_keeps_its_mode_as_the_keyboard_comes_in_and_its_field_says_it() {
+        let mut vim = Vim::default();
+        press(&mut vim, Region::Chat, "i");
+        assert_eq!(press(&mut vim, Region::Page, "x"), [Outcome::Pass]);
+        assert_eq!(vim.mode(), Mode::Insert);
+        vim.mode = Mode::Normal;
+        assert_eq!(
+            press(&mut vim, Region::Page, "3 j"),
+            [
+                Outcome::Taken,
+                Outcome::Do(Command::Move(Motion::Down), Some(3))
+            ]
+        );
+        assert_eq!(
+            press(&mut vim, Region::Page, "cmd-l cmd-c"),
+            [Outcome::Pass; 2]
+        );
+        assert_eq!(
+            press(&mut vim, Region::Address, "x"),
+            [Outcome::Pass],
+            "the address line is typed in"
+        );
+        assert_eq!(vim.mode(), Mode::Insert);
+    }
+
+    #[test]
+    fn a_page_s_field_takes_every_key_but_escape() {
+        let mut vim = Vim::default();
+        press(&mut vim, Region::Page, "x");
+        vim.mode = Mode::Insert;
+        assert_eq!(
+            press(&mut vim, Region::Page, "j f g g ctrl-w shift-h 1 enter"),
+            [Outcome::Pass; 8]
+        );
+        assert_eq!(
+            press(&mut vim, Region::Page, "escape"),
+            [Outcome::Do(Command::Normal, None)]
+        );
+        assert_eq!(vim.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn hint_mode_types_labels_until_escape_or_the_keyboard_leaves() {
+        let mut vim = Vim::default();
+        assert_eq!(
+            press(&mut vim, Region::Page, "f"),
+            [Outcome::Do(Command::Hint(Follow::Here), None)]
+        );
+        assert_eq!(vim.mode(), Mode::Hint);
+        assert_eq!(Mode::Hint.label(), "HINT");
+        let label = |key| Outcome::Do(Command::Send(Sent::Label(key)), None);
+        assert_eq!(
+            press(&mut vim, Region::Page, "j shift-k 1"),
+            [label('j'), label('k'), label('1')]
+        );
+        assert_eq!(
+            press(&mut vim, Region::Page, "ctrl-w enter"),
+            [Outcome::Taken; 2]
+        );
+        assert_eq!(
+            press(&mut vim, Region::Page, "escape"),
+            [Outcome::Do(Command::Normal, None)]
+        );
+        assert_eq!(vim.mode(), Mode::Normal);
+        press(&mut vim, Region::Page, "shift-f");
+        assert_eq!(vim.mode(), Mode::Hint);
+        press(&mut vim, Region::Chat, "x");
+        assert_eq!(vim.mode(), Mode::Normal);
     }
 }

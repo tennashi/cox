@@ -867,3 +867,128 @@ fn g_d_goes_to_the_definition_of_the_first_name_of_the_line(cx: &mut TestAppCont
     type_keys(cx, "ctrl-o");
     assert_eq!(shown(cx), "main.rs");
 }
+
+/// What stands for a page in these tests, which need CEF to be one: a
+/// part of the window in the page's key context that keeps what Vim's
+/// keys ask of it, and the keys that reach it.
+struct FakePage {
+    focus: gpui::FocusHandle,
+    asked: Vec<String>,
+}
+
+impl gpui::Render for FakePage {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use cox::vim::{Address, CopyAddress, FocusField, Hint, Label, Leave, Move, Reload};
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+        let keep = |page: &mut Self, asked: String| page.asked.push(asked);
+        gpui::div()
+            .size_full()
+            .track_focus(&self.focus)
+            .key_context("Page")
+            .on_key_down(cx.listener(move |page, event: &gpui::KeyDownEvent, _, _| {
+                keep(page, format!("key {}", event.keystroke.unparse()));
+            }))
+            .on_action(cx.listener(move |page, motion: &Move, _, _| {
+                keep(page, format!("{:?} {:?}", motion.motion, motion.count));
+            }))
+            .on_action(cx.listener(move |page, hint: &Hint, _, _| {
+                keep(page, format!("hint {:?}", hint.follow));
+            }))
+            .on_action(cx.listener(move |page, label: &Label, _, _| {
+                keep(page, format!("label {}", label.key));
+            }))
+            .on_action(cx.listener(move |page, _: &Leave, _, _| keep(page, "leave".into())))
+            .on_action(cx.listener(move |page, _: &Reload, _, _| keep(page, "reload".into())))
+            .on_action(cx.listener(move |page, _: &FocusField, _, _| keep(page, "field".into())))
+            .on_action(cx.listener(move |page, _: &CopyAddress, _, _| keep(page, "copy".into())))
+            .on_action(cx.listener(move |page, _: &Address, _, _| keep(page, "address".into())))
+            .on_action(cx.listener(move |page, _: &cox::stage::code::Back, _, _| {
+                keep(page, "back".into());
+            }))
+            .on_action(
+                cx.listener(move |page, _: &cox::stage::code::Forward, _, _| {
+                    keep(page, "forward".into());
+                }),
+            )
+            .child("page")
+    }
+}
+
+fn open_page(cx: &mut TestAppContext) -> (Entity<FakePage>, &mut VisualTestContext) {
+    cx.update(cox::vim::install);
+    let (page, cx) = cx.add_window_view(|_, cx| FakePage {
+        focus: cx.focus_handle(),
+        asked: Vec::new(),
+    });
+    cx.update(|window, cx| window.focus(&page.read(cx).focus));
+    cx.run_until_parked();
+    (page, cx)
+}
+
+fn asked(page: &Entity<FakePage>, cx: &mut VisualTestContext) -> Vec<String> {
+    page.update(cx, |page, _| std::mem::take(&mut page.asked))
+}
+
+#[gpui::test]
+fn a_page_in_normal_mode_scrolls_goes_back_and_reloads_with_vimperator_s_keys(
+    cx: &mut TestAppContext,
+) {
+    let (page, cx) = open_page(cx);
+    cx.simulate_keystrokes("j 3 j ctrl-d ctrl-u g g shift-g");
+    assert_eq!(
+        asked(&page, cx),
+        [
+            "Down None",
+            "Down Some(3)",
+            "HalfDown None",
+            "HalfUp None",
+            "Top None",
+            "Bottom None"
+        ]
+    );
+    cx.simulate_keystrokes("2 shift-h shift-l r g i y y o x");
+    assert_eq!(
+        asked(&page, cx),
+        [
+            "back", "back", "forward", "reload", "field", "copy", "address"
+        ]
+    );
+    assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
+}
+
+#[gpui::test]
+fn a_page_s_field_takes_every_key_and_escape_leaves_it(cx: &mut TestAppContext) {
+    let (page, cx) = open_page(cx);
+    cx.update(|_, cx| cox::vim::enter(Mode::Insert, cx));
+    cx.simulate_keystrokes("j f g g escape");
+    assert_eq!(
+        asked(&page, cx),
+        ["key j", "key f", "key g", "key g", "leave"]
+    );
+    assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
+
+    cx.simulate_keystrokes("i cmd-c k escape");
+    assert_eq!(asked(&page, cx), ["key cmd-c", "key k", "leave"]);
+}
+
+#[gpui::test]
+fn hint_mode_sends_the_labels_typed_to_the_page_until_escape(cx: &mut TestAppContext) {
+    let (page, cx) = open_page(cx);
+    cx.simulate_keystrokes("f");
+    assert_eq!(asked(&page, cx), ["hint Here"]);
+    assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Hint));
+    cx.simulate_keystrokes("s j shift-k escape");
+    assert_eq!(asked(&page, cx), ["label s", "label j", "label k", "leave"]);
+    assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
+
+    cx.simulate_keystrokes("shift-f");
+    assert_eq!(asked(&page, cx), ["hint NewTab"]);
+    cx.update(|_, cx| cox::vim::enter(Mode::Normal, cx));
+    cx.simulate_keystrokes("j");
+    assert_eq!(asked(&page, cx), ["Down None"]);
+}

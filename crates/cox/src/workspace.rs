@@ -1267,7 +1267,7 @@ impl Workspace {
     /// Opens a chat in the project of `folder`, or of Cox's own when there
     /// is none, and shows it.
     pub fn open(&mut self, folder: Option<PathBuf>, _: &mut Window, cx: &mut Context<Self>) {
-        crate::vim::insert(cx);
+        crate::vim::enter(crate::vim::Mode::Insert, cx);
         self.tell(ToDaemon::Open { folder });
     }
 
