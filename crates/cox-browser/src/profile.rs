@@ -110,8 +110,8 @@ mod tests {
 
     #[test]
     fn a_second_run_gets_a_throwaway_profile_until_the_first_ends() {
-        let root = std::env::temp_dir().join(format!("cox-profile-{}", std::process::id()));
-        let kept = root.join("stage");
+        let root = tempfile::TempDir::new().unwrap();
+        let kept = root.path().join("stage");
 
         let first = Profile::open_at(Some(kept.clone()));
         assert!(first.is_kept());
@@ -125,7 +125,6 @@ mod tests {
         assert!(third.is_kept());
         third.discard();
         assert!(kept.is_dir(), "the kept profile stays");
-        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

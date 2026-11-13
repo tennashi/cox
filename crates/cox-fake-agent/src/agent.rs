@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::mcp::Server;
-use crate::scenario::{Ask, AuthRequired, Call, Scenario, Step, fill, put_in};
+use crate::scenario::{Ask, AuthRequired, Call, Event, Scenario, Step, fill, put_in};
 
 /// How long the agent takes between the words it says.
 const WORD: Duration = Duration::from_millis(30);
@@ -401,6 +401,7 @@ impl<W: Write> Agent<W> {
             Step::Ask(ask) => return self.ask(session, ask),
             Step::Call(call) => self.call(session, call),
             Step::Sleep(milliseconds) => return self.pause(Duration::from_millis(*milliseconds)),
+            Step::WaitFor(Event::Steer) => return self.wait_for_steer(),
             Step::Stderr(line) => eprintln!("{}", text(line)),
             Step::Fail(error) => return Went::Failed(text(error)),
         }
@@ -530,6 +531,21 @@ impl<W: Write> Agent<W> {
             match self.input.recv_timeout(left) {
                 Err(RecvTimeoutError::Timeout) => return Went::On,
                 Err(RecvTimeoutError::Disconnected) => return Went::Gone,
+                Ok(message) if message["method"] == "session/cancel" => return Went::Cancelled,
+                Ok(message) => self.hold(message),
+            }
+        }
+    }
+
+    /// Waits until a line is steered into the turn, unless Cox cancels the
+    /// turn or goes first.
+    fn wait_for_steer(&mut self) -> Went {
+        loop {
+            if !self.steered.is_empty() {
+                return Went::On;
+            }
+            match self.input.recv() {
+                Err(_) => return Went::Gone,
                 Ok(message) if message["method"] == "session/cancel" => return Went::Cancelled,
                 Ok(message) => self.hold(message),
             }

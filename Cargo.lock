@@ -1590,6 +1590,7 @@ dependencies = [
  "base64 0.22.1",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1625,6 +1626,7 @@ dependencies = [
  "objc2",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "tracing",
@@ -1639,6 +1641,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "tempfile",
 ]
 
 [[package]]
@@ -1649,6 +1652,7 @@ dependencies = [
  "ropey",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tree-sitter",
@@ -1669,8 +1673,12 @@ dependencies = [
 name = "cox-fake-agent"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "cox-acp",
  "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -9144,6 +9152,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "resvg",
+ "roxmltree",
  "serde_json",
  "xshell",
 ]

@@ -122,4 +122,37 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn shows_a_file_emptied_as_each_line_removed() {
+        assert_eq!(
+            lines(Some("one\ntwo\n"), ""),
+            [
+                Line::Removed("one".to_owned()),
+                Line::Removed("two".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn shows_an_unchanged_file_as_its_lines_left_out() {
+        assert_eq!(lines(Some("one\ntwo\n"), "one\ntwo\n"), [Line::Skipped(2)]);
+    }
+
+    #[test]
+    fn shows_a_new_empty_file_as_no_lines() {
+        assert_eq!(lines(None, ""), []);
+    }
+
+    #[test]
+    fn shows_lines_without_their_breaks_of_either_kind() {
+        assert_eq!(
+            lines(Some("one\r\ntwo\r\n"), "one\r\n2\r\n"),
+            [
+                Line::Same("one".to_owned()),
+                Line::Removed("two".to_owned()),
+                Line::Added("2".to_owned()),
+            ]
+        );
+    }
 }

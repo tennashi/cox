@@ -32,3 +32,6 @@ pub mod lsp;
 pub mod map;
 pub mod syntax;
 pub mod words;
+
+#[cfg(test)]
+mod scratch;

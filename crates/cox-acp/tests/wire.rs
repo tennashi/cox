@@ -58,35 +58,56 @@ impl<S: Subscriber + for<'span> LookupSpan<'span>> Layer<S> for Heard {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn what_goes_between_cox_and_the_agent_is_said_in_its_span() {
-    let heard = Arc::new(Mutex::new(Vec::new()));
-    // The agent's side runs on other threads, so this is for all of them.
+    let heard = Arc::new(Mutex::new(Vec::<Said>::new()));
+    // The agent's side runs on other threads, so this is for all of them,
+    // which is why it is the only test of its binary.
     tracing::subscriber::set_global_default(
         tracing_subscriber::registry().with(Heard(Arc::clone(&heard))),
     )
     .unwrap();
-    // An agent that says something on its standard error, answers Cox's
-    // first request, and goes.
+    // An agent that says something on its standard error, then opens a
+    // session, and goes once Cox does.
     let script = r#"echo starting >&2
-read request
-id=$(printf '%s' "$request" | sed 's/.*"id":\([0-9]*\).*/\1/')
-echo '{"jsonrpc":"2.0","id":'"$id"',"result":{"protocolVersion":1,"agentCapabilities":{}}}'
-sleep 1"#;
+while read -r request; do
+  id=$(printf '%s' "$request" | sed 's/.*"id":\("[^"]*"\).*/\1/')
+  case "$request" in
+    *'"method":"initialize"'*)
+      echo '{"jsonrpc":"2.0","id":'"$id"',"result":{"protocolVersion":1,"agentCapabilities":{}}}' ;;
+    *'"method":"session/new"'*)
+      echo '{"jsonrpc":"2.0","id":'"$id"',"result":{"sessionId":"s"}}' ;;
+  esac
+done"#;
 
     let agent = {
         let span = tracing::info_span!("chat", id = 3);
         let _entered = span.enter();
         cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script.to_owned()]).unwrap()
     };
+    let folder = tempfile::TempDir::new().unwrap();
     let connected = cox_acp::connect(
         agent,
-        std::env::temp_dir(),
+        folder.path().to_owned(),
         Vec::new(),
         None,
         |_| {},
         async |_, _| anyhow::bail!("no login"),
-        async |_| Ok(()),
+        // Open until what the agent wrote to its standard error is said.
+        async |_| {
+            while !heard
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|said| said.target == cox_acp::STDERR)
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok(())
+        },
     );
-    let _ = tokio::time::timeout(Duration::from_secs(5), connected).await;
+    tokio::time::timeout(Duration::from_secs(30), connected)
+        .await
+        .expect("the agent's standard error is said in time")
+        .unwrap();
 
     let heard = heard.lock().unwrap();
     let find = |target: &str, from: &str, says: &str| {

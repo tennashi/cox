@@ -15,3 +15,7 @@ serde_json = "1.0.149"
 # To render the app's icon in `bundle`; gpui draws its icons with the same.
 resvg = { version = "0.45.1", default-features = false }
 xshell.workspace = true
+
+[dev-dependencies]
+# To read the property lists `bundle` and `install` write.
+roxmltree = "0.20.0"

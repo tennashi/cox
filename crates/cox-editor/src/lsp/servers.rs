@@ -354,12 +354,22 @@ impl Servers {
     /// to, is left out.
     #[must_use]
     pub fn of_project(user: Option<&Path>, root: &Path) -> (Self, Vec<String>) {
+        Self::of_project_in(user, root, &|variable| std::env::var(variable).ok())
+    }
+
+    /// [`Servers::of_project`], with `environment` answering a variable's
+    /// value.
+    fn of_project_in(
+        user: Option<&Path>,
+        root: &Path,
+        environment: &dyn Fn(&str) -> Option<String>,
+    ) -> (Self, Vec<String>) {
         let project = root.join(PROJECT_SERVERS);
         Self::layered(
             user.map(|user| (user, Writer::Trusted))
                 .into_iter()
                 .chain([(project.as_path(), Writer::Project)]),
-            &|variable| std::env::var(variable).ok(),
+            environment,
         )
     }
 
@@ -507,6 +517,8 @@ impl Servers {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    use crate::scratch::Folder;
 
     use super::*;
 
@@ -710,25 +722,25 @@ mod tests {
 
     #[test]
     fn a_project_with_no_file_has_coxs_servers() {
-        let root = std::env::temp_dir().join(format!("cox-servers-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root = Folder::new();
         assert_eq!(
-            Servers::of_project(None, &root),
+            Servers::of_project_in(None, &root, &|_| None),
             (Servers::built_in(), Vec::new())
         );
+    }
+
+    #[test]
+    fn a_project_file_that_cannot_be_read_is_left_out_saying_why() {
+        let root = Folder::new();
         std::fs::write(root.join(PROJECT_SERVERS), "{").unwrap();
-        let (servers, left_out) = Servers::of_project(None, &root);
+        let (servers, left_out) = Servers::of_project_in(None, &root, &|_| None);
         assert_eq!(servers, Servers::built_in());
         assert!(left_out[0].contains("servers.json"), "{left_out:?}");
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn a_project_names_servers_over_the_humans_over_coxs() {
-        let root = std::env::temp_dir().join(format!("cox-servers-user-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root = Folder::new();
         let user = root.join("user.json");
         std::fs::write(
             &user,
@@ -744,13 +756,12 @@ mod tests {
             r#"{ "servers": { "zls": { "command": ["/opt/zls"] } } }"#,
         )
         .unwrap();
-        let (servers, left_out) = Servers::of_project(Some(&user), &root);
+        let (servers, left_out) = Servers::of_project_in(Some(&user), &root, &|_| None);
         assert!(left_out.is_empty(), "{left_out:?}");
         assert_eq!(servers.of("go").unwrap().command[0], "go");
         assert_eq!(servers.of("zig").unwrap().command, ["/opt/zls"]);
         assert_eq!(servers.of("python"), None);
         assert!(servers.of("rust").is_some());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

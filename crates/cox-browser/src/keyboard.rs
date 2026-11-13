@@ -145,6 +145,15 @@ impl Calls {
         self.last
     }
 
+    /// Calls with none waiting, the last id given being `last`.
+    #[cfg(test)]
+    fn given_up_to(last: i32) -> Self {
+        Self {
+            last,
+            waiting: HashMap::new(),
+        }
+    }
+
     /// What waits for the answer to the call `id`, if anything does.
     pub(super) fn take(&mut self, id: i32) -> Option<Reply> {
         self.waiting.remove(&id)
@@ -330,9 +339,19 @@ mod tests {
         let first = calls.add(Box::new(|_| {}));
         let second = calls.add(Box::new(|_| {}));
         assert_eq!((first, second), (1, 2));
-        assert!(calls.take(first).is_some());
-        assert!(calls.take(first).is_none());
-        calls.last = i32::MAX;
+    }
+
+    #[test]
+    fn a_call_is_taken_once() {
+        let mut calls = Calls::default();
+        let id = calls.add(Box::new(|_| {}));
+        assert!(calls.take(id).is_some());
+        assert!(calls.take(id).is_none());
+    }
+
+    #[test]
+    fn the_ids_start_again_past_zero_after_the_largest() {
+        let mut calls = Calls::given_up_to(i32::MAX);
         assert_eq!(calls.add(Box::new(|_| {})), 1);
     }
 }

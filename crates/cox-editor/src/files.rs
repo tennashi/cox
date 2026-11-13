@@ -90,11 +90,11 @@ fn order(a: &Listed, b: &Listed) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Folder;
 
     /// A folder of its own for a test, with the files `paths`, empty.
-    fn folder(test: &str, paths: &[&str]) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("cox-files-{test}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+    fn folder(paths: &[&str]) -> Folder {
+        let root = Folder::new();
         for path in paths {
             let path = root.join(path);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -109,9 +109,8 @@ mod tests {
 
     #[test]
     fn lists_folders_first_then_files_by_name() {
-        let root = folder("order", &["b.rs", "A.md", "src/main.rs", "Cargo.toml"]);
+        let root = folder(&["b.rs", "A.md", "src/main.rs", "Cargo.toml"]);
         let listed = list(&root).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(names(&listed), ["src", "A.md", "b.rs", "Cargo.toml"]);
         assert!(listed[0].is_folder);
         assert!(!listed[1].is_folder);
@@ -120,50 +119,38 @@ mod tests {
 
     #[test]
     fn leaves_out_what_git_ignores_and_git_itself() {
-        let root = folder(
-            "ignored",
-            &[
-                ".gitignore",
-                ".github/ci.yml",
-                ".git/HEAD",
-                "target/debug/cox",
-                "main.rs",
-            ],
-        );
+        let root = folder(&[
+            ".gitignore",
+            ".github/ci.yml",
+            ".git/HEAD",
+            "target/debug/cox",
+            "main.rs",
+        ]);
         std::fs::write(root.join(".gitignore"), "/target\n").unwrap();
         let listed = list(&root).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(names(&listed), [".github", ".gitignore", "main.rs"]);
     }
 
     #[test]
     fn a_folder_inside_follows_the_gitignore_above_it() {
-        let root = folder(
-            "above",
-            &[".gitignore", "crate/src/lib.rs", "crate/out/built"],
-        );
+        let root = folder(&[".gitignore", "crate/src/lib.rs", "crate/out/built"]);
         std::fs::write(root.join(".gitignore"), "/crate/out\n").unwrap();
         let listed = list(&root.join("crate")).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(names(&listed), ["src"]);
     }
 
     #[test]
     fn all_lists_the_files_at_every_depth_the_shallower_first() {
-        let root = folder(
-            "all",
-            &[
-                ".gitignore",
-                "src/main.rs",
-                "src/ui/input.rs",
-                "target/x",
-                "README.md",
-            ],
-        );
+        let root = folder(&[
+            ".gitignore",
+            "src/main.rs",
+            "src/ui/input.rs",
+            "target/x",
+            "README.md",
+        ]);
         std::fs::write(root.join(".gitignore"), "/target\n").unwrap();
         let all_of_them = all(&root, 100);
         let two = all(&root, 2);
-        std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(
             all_of_them,
             [".gitignore", "README.md", "src/main.rs", "src/ui/input.rs"]

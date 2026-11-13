@@ -717,22 +717,163 @@ fn info_plist(name: &str, identifier: &str, helper: bool) -> String {
 mod tests {
     use std::path::Path;
 
-    use super::{Build, ICNS_IMAGES, ICON, Run, icns, launch_agent, user_unit};
+    use serde_json::{Map, Value, json};
+    use xshell::Shell;
+
+    use super::{
+        APP, Build, COXD_LABEL, ICNS_IMAGES, ICON, Run, icns, info_plist, launch_agent, replace,
+        user_unit,
+    };
+
+    /// The property list `text` says, as JSON: a dictionary as an object,
+    /// an array as an array, a string as a string, and true and false.
+    fn plist(text: &str) -> Value {
+        fn value(node: roxmltree::Node) -> Value {
+            let elements = || node.children().filter(roxmltree::Node::is_element);
+            match node.tag_name().name() {
+                "dict" => {
+                    let mut dict = Map::new();
+                    let mut children = elements();
+                    while let (Some(key), Some(item)) = (children.next(), children.next()) {
+                        assert_eq!(key.tag_name().name(), "key", "a dict alternates keys");
+                        dict.insert(key.text().unwrap_or_default().to_owned(), value(item));
+                    }
+                    Value::Object(dict)
+                }
+                "array" => Value::Array(elements().map(value).collect()),
+                "string" => Value::from(node.text().unwrap_or_default()),
+                "true" => Value::Bool(true),
+                "false" => Value::Bool(false),
+                other => panic!("the property list has no {other}"),
+            }
+        }
+        let options = roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..roxmltree::ParsingOptions::default()
+        };
+        let document = roxmltree::Document::parse_with_options(text, options).unwrap();
+        let root = document.root_element();
+        assert_eq!(root.tag_name().name(), "plist");
+        value(root.children().find(roxmltree::Node::is_element).unwrap())
+    }
 
     #[test]
-    fn coxd_starts_at_login_as_the_installed_cox() {
-        let agent = launch_agent(Path::new(
+    fn the_launch_agent_starts_the_installed_coxd_at_login_once() {
+        let agent = plist(&launch_agent(Path::new(
             "/Users/me/Applications/Cox.app/Contents/MacOS/Cox",
-        ));
-        assert!(agent.contains(
-            "<array>\n\t\t<string>/Users/me/Applications/Cox.app/Contents/MacOS/Cox</string>\n\
-             \t\t<string>--daemon</string>\n\t</array>"
-        ));
-        assert!(agent.contains("<key>RunAtLoad</key>\n\t<true/>"));
-        assert!(!agent.contains("KeepAlive"));
+        )));
+        assert_eq!(agent["Label"], COXD_LABEL);
+        assert_eq!(
+            agent["ProgramArguments"],
+            json!([
+                "/Users/me/Applications/Cox.app/Contents/MacOS/Cox",
+                "--daemon"
+            ])
+        );
+        assert_eq!(agent["RunAtLoad"], true);
+        assert_eq!(agent.get("KeepAlive"), None, "coxd is not started again");
+    }
+
+    #[test]
+    fn the_launch_agent_names_a_cox_whose_path_xml_would_read_otherwise() {
+        let cox = "/Users/me/<Tom & Jerry>/Cox.app/Contents/MacOS/Cox";
+        let agent = plist(&launch_agent(Path::new(cox)));
+        assert_eq!(agent["ProgramArguments"][0], cox);
+    }
+
+    #[test]
+    fn the_user_unit_starts_the_installed_coxd_at_login() {
         let unit = user_unit(Path::new("/home/me/.local/bin/cox"));
         assert!(unit.contains("\nExecStart=\"/home/me/.local/bin/cox\" --daemon\n"));
         assert!(unit.ends_with("[Install]\nWantedBy=default.target\n"));
+    }
+
+    #[test]
+    fn the_user_unit_quotes_a_cox_whose_path_has_quotes() {
+        let unit = user_unit(Path::new(r#"/home/me/a "b" \c/cox"#));
+        assert!(
+            unit.contains(r#"ExecStart="/home/me/a \"b\" \\c/cox" --daemon"#),
+            "{unit}"
+        );
+    }
+
+    #[test]
+    fn the_app_has_its_icon_and_shows_in_the_dock() {
+        let app = plist(&info_plist(APP, "com.example.cox", false));
+        assert_eq!(app["CFBundleExecutable"], APP);
+        assert_eq!(app["CFBundleIdentifier"], "com.example.cox");
+        assert_eq!(app["CFBundleIconFile"], APP);
+        assert_eq!(app["CFBundleShortVersionString"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(app.get("LSUIElement"), None);
+    }
+
+    #[test]
+    fn a_helper_stays_out_of_the_dock_with_no_icon() {
+        let helper = plist(&info_plist("Cox Helper", "com.example.cox.helper", true));
+        assert_eq!(helper["CFBundleExecutable"], "Cox Helper");
+        assert_eq!(helper["LSUIElement"], true);
+        assert_eq!(helper.get("CFBundleIconFile"), None);
+    }
+
+    #[test]
+    fn the_app_and_its_helpers_run_without_the_nano_zone() {
+        for helper in [false, true] {
+            let info = plist(&info_plist(APP, "com.example.cox", helper));
+            assert_eq!(info["LSEnvironment"]["MallocNanoZone"], "0");
+        }
+    }
+
+    #[test]
+    fn replace_puts_what_is_made_where_nothing_was() {
+        let sh = Shell::new().unwrap();
+        let folder = sh.create_temp_dir().unwrap();
+        let path = folder.path().join("Cox.app");
+
+        replace(&sh, &path, |staged| Ok(std::fs::write(staged, "new")?)).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(names(folder.path()), ["Cox.app"]);
+    }
+
+    #[test]
+    fn replace_puts_what_is_made_in_place_of_what_was_there() {
+        let sh = Shell::new().unwrap();
+        let folder = sh.create_temp_dir().unwrap();
+        let path = folder.path().join("Cox.app");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("old"), "").unwrap();
+
+        replace(&sh, &path, |staged| {
+            std::fs::create_dir(staged)?;
+            Ok(std::fs::write(staged.join("new"), "")?)
+        })
+        .unwrap();
+
+        assert_eq!(names(&path), ["new"]);
+        assert_eq!(names(folder.path()), ["Cox.app"]);
+    }
+
+    #[test]
+    fn replace_leaves_what_was_there_when_making_fails() {
+        let sh = Shell::new().unwrap();
+        let folder = sh.create_temp_dir().unwrap();
+        let path = folder.path().join("Cox.app");
+        std::fs::write(&path, "old").unwrap();
+
+        let replaced = replace(&sh, &path, |_| anyhow::bail!("the build failed"));
+
+        assert!(replaced.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    /// The names in the folder `folder`, sorted.
+    fn names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
     }
 
     #[test]
@@ -786,8 +927,12 @@ mod tests {
     }
 
     #[test]
-    fn run_plays_a_scenario_or_runs_an_agent() {
+    fn run_with_nothing_asked_runs_cox_as_it_is() {
         assert_eq!(parse(&[]).unwrap(), Run::default());
+    }
+
+    #[test]
+    fn run_takes_a_scenario_a_data_folder_and_headless() {
         assert_eq!(
             parse(&["--headless", "--data", "d", "s.json"]).unwrap(),
             Run {
@@ -797,14 +942,25 @@ mod tests {
                 agent: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn run_takes_the_agent_and_its_arguments_after_a_double_dash() {
         assert_eq!(
             parse(&["--", "npx", "--yes", "agent"]).unwrap().agent,
             ["npx", "--yes", "agent"]
         );
+    }
+
+    #[test]
+    fn run_refuses_a_scenario_and_an_agent_together() {
         assert!(parse(&["s.json", "--", "agent"]).is_err());
-        assert!(parse(&["a.json", "b.json"]).is_err());
-        assert!(parse(&["--data"]).is_err());
-        assert!(parse(&["--fast"]).is_err());
-        assert!(parse(&["--"]).is_err());
+    }
+
+    #[test]
+    fn run_refuses_what_it_cannot_take() {
+        for args in [&["a.json", "b.json"][..], &["--data"], &["--fast"], &["--"]] {
+            assert!(parse(args).is_err(), "run refuses {args:?}");
+        }
     }
 }

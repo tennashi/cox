@@ -471,13 +471,7 @@ fn split_line(said: &str) -> (&str, Option<usize>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let directory = std::env::temp_dir().join(format!("cox-map-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::canonicalize(directory).unwrap()
-    }
+    use crate::scratch::Folder;
 
     const A_MAP: &str = r#"{
       "tiers": [
@@ -499,7 +493,7 @@ mod tests {
 
     #[test]
     fn the_map_is_read_from_the_projects_file() {
-        let root = scratch("read");
+        let root = Folder::new();
         assert_eq!(read(&root, None), Ok(None));
         assert_eq!(read(&root, Some("parts")), Ok(None));
         std::fs::create_dir_all(root.join(MAPS_FOLDER)).unwrap();
@@ -534,7 +528,7 @@ mod tests {
 
     #[test]
     fn a_project_has_maps_by_name() {
-        let root = scratch("named");
+        let root = Folder::new();
         std::fs::create_dir_all(root.join(MAPS_FOLDER)).unwrap();
         std::fs::write(root.join(MAPS_FOLDER).join("parts.json"), A_MAP).unwrap();
         std::fs::write(
@@ -579,7 +573,7 @@ mod tests {
 
     #[test]
     fn the_facts_of_a_box_are_what_it_holds_as_the_project_has_it() {
-        let root = scratch("facts");
+        let root = Folder::new();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {\n}\n").unwrap();
         let changed = HashMap::from([(root.join("src/main.rs"), (3, 1))]);
@@ -624,7 +618,7 @@ mod tests {
     }
     #[test]
     fn what_changed_rolls_up_to_the_box_that_opens_the_tier() {
-        let root = scratch("rollup");
+        let root = Folder::new();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
         std::fs::write(root.join("src/lib.rs"), "\n").unwrap();
