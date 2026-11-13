@@ -23,7 +23,7 @@ use super::{Leave, Mode, Status};
 use crate::ui::input::{Blurred, LineInput};
 use crate::ui::menu;
 use crate::ui::theme::{
-    ACCENT, ASKING, BORDER, BORDER_STRONG, FAILED, FAINT, GAP, LINK, SELECTED, SURFACE,
+    ACCENT, ASKING, BORDER, BORDER_STRONG, FAILED, FAINT, FOREGROUND, GAP, LINK, SELECTED, SURFACE,
 };
 
 pub const KEY_CONTEXT: &str = "CommandLine";
@@ -389,6 +389,7 @@ impl Line {
             Mode::Insert => ACCENT,
             Mode::Hint => ASKING,
             Mode::Command => LINK,
+            Mode::Visual(_) => FOREGROUND,
         };
         div()
             .debug_selector(|| "vim-status".to_owned())

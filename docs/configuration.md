@@ -89,8 +89,8 @@ Vimperator. Off, nothing changes. The settings card turns them on and
 off under **Vim's keys**, and so does editing the file. Either takes
 effect at once.
 
-**Modes.** The keys are in one of four modes, Normal, Insert, Hint or
-Command, shown in a pill at the left of the window's foot, as Vim's
+**Modes.** The keys are in one of five modes, Normal, Insert, Visual, Hint
+or Command, shown in a pill at the left of the window's foot, as Vim's
 `showmode`, wherever the keyboard is. At its right, as Vim's `showcmd`, are the count and the keys typed
 toward a command that is not yet whole, as `3g` of `3gt`. The line `:`
 and `/` open takes its place. In normal mode keys do things; keys that
@@ -147,6 +147,7 @@ selected.
 | Normal | `s`, `S`, `c` and a motion, `cc`, `C` | Takes out the same, and goes to insert mode in its place. `cw` changes the word, not the spaces after it. |
 | Normal | `y` and a motion, `yy`, `Y`, `p`, `P` | Copies what the motion goes over, or whole lines, and puts what was copied after the cursor or before it; whole lines under or over its line. What is taken out or copied goes on the clipboard. |
 | Normal | `u`, Ctrl-R | Undoes the last edit, and does it again. |
+| Normal | `v`, `V` | Goes to visual mode, which selects characters or whole lines from the cursor, as the window's foot shows. Motions grow what is selected, `d` or `x`, `c` or `s`, and `y` take it out, change it or copy it, `v` and `V` switch or stop, and Esc lets it go. |
 | Normal | Ctrl-C | Stops the agent. |
 | Normal | Esc | Forgets a count typed. In the goal's, a sketch's or a rename's input, the settings or a project's card, it closes them as Esc does without Vim. |
 | Normal | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Scrolls the conversation a line, half its height, or to its ends. |

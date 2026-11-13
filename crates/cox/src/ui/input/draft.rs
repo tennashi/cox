@@ -22,6 +22,8 @@ pub struct Draft {
     /// Byte range the input method is composing.
     marked: Option<Range<usize>>,
     history: History,
+    /// What Vim's visual mode selects, while it is on.
+    visual: Option<normal::Selecting>,
 }
 
 /// The text and its selection as they were before an edit, to go back to.
@@ -120,6 +122,7 @@ impl Draft {
         self.move_to(self.text.len());
         self.marked = None;
         self.history = History::default();
+        self.visual = None;
     }
 
     /// Goes back to the text before the last edit, if there is one.

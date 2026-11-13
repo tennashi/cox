@@ -552,6 +552,16 @@ impl LineInput {
         self.edit(cx, Draft::leave_insert);
     }
 
+    /// Visual mode is left: what it selected is let go of.
+    fn leave_visual(
+        &mut self,
+        _: &crate::vim::LeaveVisual,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, Draft::end_visual);
+    }
+
     /// Does what Vim's normal mode asks of the text, keeping what it takes
     /// out or yanks on the clipboard, and putting from it. An input of one
     /// line puts whole lines as one.
@@ -919,6 +929,7 @@ impl Render for LineInput {
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::settle))
             .on_action(cx.listener(Self::edit_text))
+            .on_action(cx.listener(Self::leave_visual))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::newline))
