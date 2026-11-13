@@ -1488,6 +1488,13 @@ fn kept_chat(
     (store, kept)
 }
 
+/// Opens the card of the first project after Cox's own, as the human
+/// does, from the menu of its square on the rail.
+fn edit_the_kept_project(cx: &mut VisualTestContext) {
+    right_click(cx, "project-2");
+    click(cx, "edit-project");
+}
+
 /// Shows the chat kept, the only one of the first project after Cox's
 /// own, as the human does: chooses the project on the rail, then the chat
 /// on its list.
@@ -1558,9 +1565,7 @@ fn a_chat_whose_folder_is_gone_does_not_start_again(cx: &mut TestAppContext) {
     assert!(agents.borrow().is_empty());
 
     // The card says so, and does not rename it.
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.open_project_card(1, window, cx);
-    });
+    edit_the_kept_project(cx);
     let card = workspace.read_with(cx, |workspace, _| {
         workspace.project_card().expect("the card is open").clone()
     });
@@ -1592,9 +1597,7 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
         Resumes::Resume,
     );
     let name = |cx: &mut VisualTestContext| {
-        workspace.update_in(cx, |workspace, window, cx| {
-            workspace.open_project_card(1, window, cx);
-        });
+        edit_the_kept_project(cx);
         let card = workspace.read_with(cx, |workspace, _| {
             workspace.project_card().expect("the card is open").clone()
         });
@@ -2439,9 +2442,7 @@ fn open_projects_card(cx: &mut TestAppContext) -> (ProjectsCard, &mut VisualTest
     let app = root.join("projects").join("untitled-1");
     let (store, _) = kept_chat(&app, None);
     let (_, workspace, cx) = open_window_resuming(cx, root.join("home"), store, Resumes::Resume);
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.open_project_card(1, window, cx);
-    });
+    edit_the_kept_project(cx);
     let input = workspace.read_with(cx, |workspace, cx| {
         let card = workspace.project_card().expect("the card is open");
         card.read(cx).directory_input().clone()
@@ -2691,17 +2692,24 @@ async fn a_chat_kept_with_no_session_is_told_the_conversation_so_far(cx: &mut Te
 }
 
 #[gpui::test]
-async fn a_new_chat_keeps_its_agents_session(cx: &mut TestAppContext) {
+async fn a_new_chat_goes_on_with_its_agents_session_once_cox_starts_again(
+    cx: &mut TestAppContext,
+    cx_again: &mut TestAppContext,
+) {
     let store = kept_store("chats-3");
-    let (_, workspace, cx) = open_window_keeping(cx, scratch::folder("session"), store.clone());
-    cx.simulate_keystrokes("secondary-n");
-    say(cx, &workspace, "hello").await;
+    let home = scratch::folder("session");
+    {
+        let (_, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
+        cx.simulate_keystrokes("secondary-n");
+        say(cx, &workspace, "hello").await;
+        cx.update(|window, _| window.remove_window());
+        cx.run_until_parked();
+    }
 
-    let chats = store.chats().unwrap();
-    assert_eq!(
-        store.session(chats[0].id).unwrap().as_deref(),
-        Some("session-1")
-    );
+    let (agents, workspace, cx) = open_window_keeping(cx_again, home, store);
+    click(cx, "chat-1");
+    say(cx, &workspace, "again").await;
+    assert_eq!(agents.borrow()[0].resumed(), ["session-1"]);
 }
 
 /// The fake agent's settings, set as `model` and `mode` say.
@@ -3112,6 +3120,8 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
     );
 
     // A click on the notice shows the chat, whose turn then ends in sight.
+    // The system shows the notice, outside the window, and its click comes
+    // to the workspace as this.
     cx.update(|window, cx| {
         workspace.update(cx, |workspace, cx| workspace.reveal(first_key, window, cx));
     });
@@ -3148,6 +3158,7 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
     right_click(cx, "chat-1");
     click(cx, "archive-chat");
     settle_on(cx, &workspace).await;
+    // From a click on its notice, as above.
     cx.update(|window, cx| {
         workspace.update(cx, |workspace, cx| workspace.reveal(first_key, window, cx));
     });
