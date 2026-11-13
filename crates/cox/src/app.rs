@@ -410,6 +410,7 @@ pub fn bind_keys(cx: &mut App) {
     crate::stage::document::bind_keys(cx);
     crate::stage::code::bind_keys(cx);
     crate::stage::bind_keys(cx);
+    crate::stage::page::address::bind_keys(cx);
     crate::workspace::bind_keys(cx);
     // After the window's, which a terminal's own keys stand before.
     crate::stage::terminal::bind_keys(cx);

@@ -105,9 +105,7 @@ use std::path::PathBuf;
 
 use cox_core::list::List;
 use cox_core::tabs::{KeptTab, KeptTabs};
-use gpui::{
-    App, Context, Entity, Focusable, Subscription, Task, Window, actions, div, prelude::*, px, rgb,
-};
+use gpui::{App, Context, Entity, Subscription, Task, Window, actions, div, prelude::*, px, rgb};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::ToolRequest;
@@ -130,7 +128,6 @@ use crate::stage::terminal::{Program, Running, Terminal};
 use crate::stage::tree::{Chosen, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
 use crate::ui::Panel;
-use crate::ui::input::LineInput;
 use crate::ui::theme::{BORDER, CARD_INNER_RADIUS};
 
 actions!(
@@ -875,8 +872,7 @@ impl Stage {
         self.open_tab(BLANK, true, window, cx);
         if let Some(page) = self.tabs.shown().and_then(|tab| tab.content.page()) {
             let address = page.read(cx).address().clone();
-            window.focus(&address.focus_handle(cx));
-            address.update(cx, LineInput::select_whole);
+            address.update(cx, |address, cx| address.focus(window, cx));
         }
     }
 }

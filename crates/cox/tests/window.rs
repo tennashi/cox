@@ -15,6 +15,7 @@ use agent_client_protocol::schema::v1::{
 use cox::agent::setup::{Policy, Setup};
 use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
 use cox::chat::view::ChatView;
+use cox::stage::page::address::{AddressLine, Asked};
 use cox::ui::input::{Blurred, LineInput};
 use cox::workspace::Workspace;
 use cox_acp::McpServer;
@@ -1269,4 +1270,115 @@ async fn the_files_chip_starts_a_path_at_the_cursor(cx: &mut TestAppContext) {
     cx.simulate_input("and");
     click(cx, "start-file");
     assert_eq!(input_text(cx, &view), "@src and @");
+}
+
+/// A page's address line, on its own in a window, showing the page's
+/// address, without the keyboard, and what it asked of the page.
+fn address_line(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<AddressLine>,
+    Rc<std::cell::RefCell<Vec<Asked>>>,
+    &mut VisualTestContext,
+) {
+    cx.update(cox::ui::input::bind_keys);
+    cx.update(cox::stage::page::address::bind_keys);
+    let (line, cx) = cx.add_window_view(|_, cx| AddressLine::new("https://example.com/", cx));
+    let asked: Rc<std::cell::RefCell<Vec<Asked>>> = Rc::default();
+    let keep = Rc::clone(&asked);
+    cx.update(|_, cx| {
+        cx.subscribe(&line, move |_, asked: &Asked, _| {
+            keep.borrow_mut().push(asked.clone());
+        })
+        .detach();
+    });
+    cx.run_until_parked();
+    (line, asked, cx)
+}
+
+fn address_text(cx: &mut VisualTestContext, line: &Entity<AddressLine>) -> String {
+    cx.update(|_, cx| line.read(cx).text(cx).to_owned())
+}
+
+fn address_said(cx: &mut VisualTestContext, line: &Entity<AddressLine>) -> Option<String> {
+    cx.update(|window, cx| line.read(cx).said(window, cx))
+}
+
+/// The first click on the address line selects its whole text, so that
+/// typing replaces it; a click while it has the keyboard puts the cursor
+/// there. A line under it says what Enter does.
+#[gpui::test]
+fn typing_in_the_address_line_replaces_the_address_and_says_what_enter_does(
+    cx: &mut TestAppContext,
+) {
+    let (line, asked, cx) = address_line(cx);
+    assert_eq!(address_said(cx, &line), None);
+
+    click_on(cx, "address");
+    cx.run_until_parked();
+    assert_eq!(address_said(cx, &line), None);
+    cx.simulate_input("rust gpui");
+    assert_eq!(address_text(cx, &line), "rust gpui");
+    assert_eq!(
+        address_said(cx, &line).as_deref(),
+        Some("Search google.com for rust gpui")
+    );
+    assert!(cx.debug_bounds("address-says").is_some());
+
+    click_on(cx, "address");
+    cx.run_until_parked();
+    cx.simulate_input("!");
+    let text = address_text(cx, &line);
+    assert_eq!(text.len(), "rust gpui!".len(), "{text}");
+    assert_ne!(text, "!");
+
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input("example.com/a b");
+    assert_eq!(
+        address_said(cx, &line).as_deref(),
+        Some("Go to https://example.com/a%20b")
+    );
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        *asked.borrow(),
+        [Asked::Go("https://example.com/a%20b".to_owned())]
+    );
+}
+
+/// Escape puts the page's address back and gives the keyboard back to the
+/// page; the keys that bring the keyboard to the line select its text.
+#[gpui::test]
+fn escape_in_the_address_line_puts_the_page_s_address_back(cx: &mut TestAppContext) {
+    let (line, asked, cx) = address_line(cx);
+    cx.update(|window, cx| line.update(cx, |line, cx| line.focus(window, cx)));
+    cx.run_until_parked();
+    cx.simulate_input("gpui");
+    assert_eq!(address_text(cx, &line), "gpui");
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(address_text(cx, &line), "https://example.com/");
+    assert_eq!(*asked.borrow(), [Asked::Back]);
+    assert_eq!(address_said(cx, &line), None);
+}
+
+/// While the human types in the address line, the page going elsewhere
+/// leaves what they typed; once the line has lost the keyboard, it shows
+/// where the page went.
+#[gpui::test]
+fn the_address_line_shows_where_the_page_went_unless_it_is_typed_in(cx: &mut TestAppContext) {
+    let (line, _, cx) = address_line(cx);
+    let navigated = |cx: &mut VisualTestContext, url: &'static str| {
+        cx.update(|window, cx| line.update(cx, |line, cx| line.navigated(url, window, cx)));
+    };
+    cx.update(|window, cx| line.update(cx, |line, cx| line.focus(window, cx)));
+    cx.run_until_parked();
+    cx.simulate_input("gpui");
+    navigated(cx, "https://example.com/next");
+    assert_eq!(address_text(cx, &line), "gpui");
+
+    let elsewhere = cx.update(|_, cx| cx.focus_handle());
+    cx.update(|window, _| window.focus(&elsewhere));
+    cx.run_until_parked();
+    navigated(cx, "https://example.com/last");
+    assert_eq!(address_text(cx, &line), "https://example.com/last");
 }

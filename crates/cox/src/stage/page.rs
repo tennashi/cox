@@ -4,6 +4,8 @@
 //!
 //! - [`picture`] paints the browser's picture, and sends the mouse over
 //!   it to the page.
+//! - [`address`] is the address line, and sorts what is typed there
+//!   into an address or words to search for.
 //! - [`keys`] sends the keys to the page, but for the browser's own
 //!   shortcuts.
 //! - [`vim`] is what Vim's keys do in the page, and [`hints`] the labels
@@ -16,6 +18,7 @@
 //! The right button over text selected in the page opens a menu of what
 //! to do with it, "Translate" and "Copy", as the browser shows none.
 
+pub mod address;
 mod hints;
 mod keys;
 mod picture;
@@ -35,13 +38,12 @@ use gpui::{
 };
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use self::address::{AddressLine, Asked};
 use self::picture::Picture;
 use crate::chat::region::{self, Described};
-use crate::daemon::phone::relay::on_the_mac;
 use crate::stage::pointer;
 use crate::stage::tab::Shows;
-use crate::ui::input::{LineInput, Submitted};
-use crate::ui::theme::{BORDER, BUTTON, DISABLED, SELECTED};
+use crate::ui::theme::{BORDER, BUTTON, DISABLED};
 use crate::vim::hints::Hinted as _;
 use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
@@ -67,10 +69,7 @@ pub struct Page {
     /// shows.
     favicon: Option<Arc<Image>>,
     /// The line the human types an address into.
-    address: Entity<LineInput>,
-    /// The address last put in that line by the browser, to tell the
-    /// human's own typing from it.
-    address_shown: String,
+    address: Entity<AddressLine>,
     /// The agent's pointer, and how it looks as of the last render.
     pointer: AgentPointer,
     look: Option<Look>,
@@ -91,7 +90,7 @@ pub struct Page {
     _events: Task<()>,
     /// Checks now and then that the browser answered the last resize.
     _ticks: Task<()>,
-    _submitted: Subscription,
+    _asked: Subscription,
     /// Tell the browser when the page gets the keyboard and loses it, so
     /// that the page shows its caret and focus rings just while it has it.
     _focus: [Subscription; 2],
@@ -166,19 +165,17 @@ impl Page {
             }
         });
         let navigation = browser.navigation();
-        let address = cx.new(LineInput::new);
-        address.update(cx, |address, cx| address.set_text(&navigation.url, cx));
-        let submitted =
-            cx.subscribe_in(&address, window, |page, address, Submitted, window, cx| {
-                page.go(address, window, cx);
-            });
+        let address = cx.new(|cx| AddressLine::new(&navigation.url, cx));
+        let asked = cx.subscribe_in(&address, window, |page, _, asked, window, cx| match asked {
+            Asked::Go(url) => page.open(url, window, cx),
+            Asked::Back => cx.focus_self(window),
+        });
         Self {
             browser,
             focus_handle,
             image: None,
             popup: None,
             composing: None,
-            address_shown: navigation.url.clone(),
             navigation,
             favicon: None,
             address,
@@ -192,14 +189,14 @@ impl Page {
             finding: None,
             _events: task,
             _ticks: ticks,
-            _submitted: submitted,
+            _asked: asked,
             _focus: focus,
         }
     }
 
     /// The address line.
     #[must_use]
-    pub fn address(&self) -> &Entity<LineInput> {
+    pub fn address(&self) -> &Entity<AddressLine> {
         &self.address
     }
 
@@ -248,28 +245,13 @@ impl Page {
             self.finding = None;
         }
         let url = self.navigation.url.clone();
-        let typing = self.address.read(cx).text() != self.address_shown;
-        if !typing && url != self.address_shown {
-            self.address
-                .update(cx, |address, cx| address.set_text(&url, cx));
-            self.address_shown = url;
-        }
-    }
-
-    /// The human pressed Enter in the address line: go there, and give the
-    /// page the keyboard.
-    fn go(&mut self, address: &Entity<LineInput>, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(url) = address_to_url(address.read(cx).text()) else {
-            return;
-        };
-        self.open(&url, window, cx);
+        self.address
+            .update(cx, |address, cx| address.navigated(&url, window, cx));
     }
 
     /// Opens `url`, and gives the page the keyboard.
     pub fn open(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.address
-            .update(cx, |address, cx| address.set_text(url, cx));
-        url.clone_into(&mut self.address_shown);
+        self.address.update(cx, |address, cx| address.went(url, cx));
         self.browser.load(url);
         cx.focus_self(window);
         cx.notify();
@@ -289,7 +271,6 @@ impl Page {
             can_go_forward,
             ..
         } = self.navigation;
-        let address = self.address.clone();
         div()
             .flex()
             .items_center()
@@ -311,24 +292,7 @@ impl Page {
             } else {
                 Self::button("reload", "↻", true, Browser::reload, cx)
             })
-            .child(
-                div()
-                    .debug_selector(|| "address".to_owned())
-                    .key_context(ADDRESS)
-                    .flex_1()
-                    .px_2()
-                    .rounded_sm()
-                    .bg(rgb(SELECTED))
-                    // A click brings the keyboard to the address line.
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(move |_, _, window, cx| {
-                            window.focus(&address.focus_handle(cx));
-                            crate::vim::typing(crate::vim::Region::Address, window, cx);
-                        }),
-                    )
-                    .child(self.address.clone()),
-            )
+            .child(self.address.clone())
             .children(self.finding.as_ref().map(vim::Finding::render))
     }
 
@@ -504,47 +468,6 @@ impl EntityInputHandler for Page {
     }
 }
 
-/// What the human typed in the address line, as a URL to load: a scheme is
-/// taken as given, a host on the Mac, as `localhost:3000` or `0.0.0.0:8000`,
-/// opens over `http://`, and anything else is a host on the web, over
-/// `https://`. Blank is nothing.
-pub(super) fn address_to_url(typed: &str) -> Option<String> {
-    let typed = typed.trim();
-    if typed.is_empty() {
-        return None;
-    }
-    // `about:blank` and `http://...` have a scheme; `localhost:3000` has a
-    // port.
-    let has_scheme = typed.split_once(':').is_some_and(|(scheme, rest)| {
-        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
-            && !rest.starts_with(|c: char| c.is_ascii_digit())
-    });
-    if has_scheme {
-        return Some(typed.to_owned());
-    }
-    let http = format!("http://{typed}");
-    Some(if served_on_the_mac(&http) {
-        http
-    } else {
-        format!("https://{typed}")
-    })
-}
-
-/// Whether `http` is a page of a server on the Mac: one the phone's relay
-/// reaches, or one at `0.0.0.0` or `[::]`, every address of the Mac, where
-/// a server that listens on all of them says it is.
-fn served_on_the_mac(http: &str) -> bool {
-    let every_address = url::Url::parse(http).is_ok_and(|url| match url.host() {
-        Some(url::Host::Ipv4(ip)) => ip.is_unspecified(),
-        Some(url::Host::Ipv6(ip)) => ip.is_unspecified(),
-        _ => false,
-    });
-    every_address || on_the_mac(http).is_some()
-}
-
 /// A length of the page, in the browser's whole pixels, in the window's.
 #[expect(
     clippy::cast_precision_loss,
@@ -679,59 +602,5 @@ impl Render for Page {
                     ),
             )
             .children(self.render_menu(cx))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::address_to_url;
-
-    #[test]
-    fn a_scheme_is_taken_as_given() {
-        assert_eq!(
-            address_to_url("http://localhost:3000/"),
-            Some("http://localhost:3000/".to_owned())
-        );
-        assert_eq!(
-            address_to_url("about:blank"),
-            Some("about:blank".to_owned())
-        );
-    }
-
-    #[test]
-    fn a_host_is_on_the_web() {
-        assert_eq!(
-            address_to_url(" example.com/path "),
-            Some("https://example.com/path".to_owned())
-        );
-        assert_eq!(
-            address_to_url("localhost.example.com"),
-            Some("https://localhost.example.com".to_owned())
-        );
-    }
-
-    #[test]
-    fn a_host_of_the_mac_is_plain_http() {
-        for typed in [
-            "localhost",
-            "localhost:3000",
-            "localhost:5173/shop?item=2",
-            "app.localhost:4000/",
-            "127.0.0.1:8080",
-            "127.1.2.3",
-            "[::1]:3000/",
-            "0.0.0.0:8000",
-        ] {
-            assert_eq!(
-                address_to_url(typed),
-                Some(format!("http://{typed}")),
-                "{typed}"
-            );
-        }
-    }
-
-    #[test]
-    fn blank_is_nothing() {
-        assert_eq!(address_to_url("  "), None);
     }
 }

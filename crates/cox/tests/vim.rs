@@ -2166,3 +2166,39 @@ fn f_after_folding_the_chat_by_its_label_labels_the_folded_chat(cx: &mut TestApp
     type_label(cx, &workspace, &unfold);
     assert!(!workspace.read_with(cx, |workspace, _| workspace.is_folded()));
 }
+
+/// Vim's Escape in a page's address line puts the page's address back, as
+/// Escape does with Vim's keys off, and leaves insert mode.
+#[gpui::test]
+fn escape_in_the_address_line_puts_the_page_s_address_back(cx: &mut TestAppContext) {
+    use cox::stage::page::address::{AddressLine, Asked};
+
+    cx.update(cox::ui::input::bind_keys);
+    cx.update(cox::stage::page::address::bind_keys);
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let (line, cx) = cx.add_window_view(|_, cx| AddressLine::new("https://example.com/", cx));
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let keep = Rc::clone(&asked);
+    cx.update(|_, cx| {
+        cx.subscribe(&line, move |_, asked: &Asked, _| {
+            keep.borrow_mut().push(asked.clone());
+        })
+        .detach();
+    });
+    cx.update(|window, cx| line.update(cx, |line, cx| line.focus(window, cx)));
+    cx.run_until_parked();
+    cx.simulate_input("rust gpui");
+    assert_eq!(
+        cx.update(|_, cx| line.read(cx).text(cx).to_owned()),
+        "rust gpui"
+    );
+    assert_eq!(mode(cx), Some(Mode::Insert));
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        cx.update(|_, cx| line.read(cx).text(cx).to_owned()),
+        "https://example.com/"
+    );
+    assert_eq!(*asked.borrow(), [Asked::Back]);
+    assert_eq!(mode(cx), Some(Mode::Normal));
+}
