@@ -1879,3 +1879,164 @@ impl Render for Changes {
             )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{TempDir, run_git};
+
+    /// A Git repository at `folder` with nothing committed and one file
+    /// Git does not track yet, `new.txt`.
+    fn repository_with_a_new_file(folder: &Path) {
+        std::fs::create_dir_all(folder).unwrap();
+        run_git(folder, &["init", "--quiet"]).unwrap();
+        std::fs::write(folder.join("new.txt"), "new\n").unwrap();
+    }
+
+    fn now() -> i64 {
+        i64::try_from(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap()
+    }
+
+    fn line(kind: Kind, at: usize) -> Line {
+        Line {
+            kind,
+            old: None,
+            new: None,
+            at,
+            text: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_projects_repositories_are_its_directories_that_are_ones() {
+        let project = TempDir::new();
+        repository_with_a_new_file(&project.join(DIRECTORIES).join("app"));
+        std::fs::create_dir_all(project.join(DIRECTORIES).join("notes")).unwrap();
+
+        let found = repositories(&project);
+
+        assert_eq!(
+            found,
+            [(
+                Some("app".to_owned()),
+                project.join(DIRECTORIES).join("app")
+            )]
+        );
+    }
+
+    #[test]
+    fn a_project_whose_folder_is_a_repository_lists_it_first() {
+        let project = TempDir::new();
+        repository_with_a_new_file(&project);
+        repository_with_a_new_file(&project.join(DIRECTORIES).join("app"));
+
+        let found = repositories(&project);
+
+        assert_eq!(
+            found,
+            [
+                (None, project.to_path_buf()),
+                (
+                    Some("app".to_owned()),
+                    project.join(DIRECTORIES).join("app")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_files_changed_in_each_repository_of_a_project_add_up() {
+        let project = TempDir::new();
+        repository_with_a_new_file(&project.join(DIRECTORIES).join("app"));
+        repository_with_a_new_file(&project.join(DIRECTORIES).join("lib"));
+
+        assert_eq!(count(&project), Ok(2));
+    }
+
+    #[test]
+    fn a_folder_in_no_repository_has_no_count_of_what_changed() {
+        assert!(count(Path::new("/")).is_err());
+    }
+
+    #[test]
+    fn each_file_changed_is_told_by_its_absolute_path() {
+        let folder = TempDir::new();
+        run_git(&folder, &["init", "--quiet"]).unwrap();
+        std::fs::write(folder.join("kept.txt"), "one\n").unwrap();
+        run_git(&folder, &["add", "kept.txt"]).unwrap();
+        run_git(&folder, &["commit", "--quiet", "-m", "first"]).unwrap();
+        std::fs::write(folder.join("kept.txt"), "two\n").unwrap();
+        std::fs::write(folder.join("new.txt"), "new\n").unwrap();
+
+        let told = hows(&folder);
+
+        assert_eq!(
+            told,
+            HashMap::from([
+                (folder.join("kept.txt"), How::Changed),
+                (folder.join("new.txt"), How::Added),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_folder_in_no_repository_has_no_file_changed() {
+        assert_eq!(hows(Path::new("/")), HashMap::new());
+    }
+
+    #[test]
+    fn a_time_under_a_minute_ago_is_now() {
+        assert_eq!(ago(now() - 30), "now");
+    }
+
+    #[test]
+    fn a_time_to_come_is_now() {
+        assert_eq!(ago(now() + 3600), "now");
+    }
+
+    #[test]
+    fn a_time_long_ago_is_told_in_whole_minutes_hours_or_days() {
+        let ago = |seconds: i64| ago(now() - seconds);
+
+        assert_eq!(
+            [ago(150), ago(2 * 3600 + 1800), ago(3 * 86_400 + 3600)],
+            ["2m", "2h", "3d"]
+        );
+    }
+
+    #[test]
+    fn a_stretch_opens_where_it_first_changes() {
+        let lines = [
+            line(Kind::Stretch, 10),
+            line(Kind::Same, 10),
+            line(Kind::Same, 11),
+            line(Kind::Added, 12),
+            line(Kind::Removed, 13),
+        ];
+
+        assert_eq!(first_changed(&lines), Some(12));
+    }
+
+    #[test]
+    fn a_stretch_with_no_change_before_the_next_opens_where_it_starts() {
+        let lines = [
+            line(Kind::Stretch, 10),
+            line(Kind::Same, 10),
+            line(Kind::Stretch, 40),
+            line(Kind::Added, 40),
+        ];
+
+        assert_eq!(first_changed(&lines), Some(10));
+    }
+
+    #[test]
+    fn no_lines_open_nowhere() {
+        assert_eq!(first_changed(&[]), None);
+    }
+}
