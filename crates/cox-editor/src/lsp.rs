@@ -885,8 +885,27 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test]
-    async fn asks_a_server_of_the_files_it_opens() {
+    /// The messages of `heard` that are of `method`.
+    fn of<'a>(heard: &'a [Value], method: &str) -> Vec<&'a Value> {
+        heard
+            .iter()
+            .filter(|message| message.get("method").and_then(Value::as_str) == Some(method))
+            .collect()
+    }
+
+    /// The answer the client gave the server's request `id`.
+    fn answer_to<'a>(heard: &'a [Value], id: &str) -> &'a Value {
+        heard
+            .iter()
+            .find(|message| message.get("method").is_none() && message["id"] == id)
+            .unwrap_or_else(|| panic!("the client answers {id}: {heard:#?}"))
+    }
+
+    /// A client of the fake server, which answers all but its call
+    /// hierarchy at first, started on the project `/src` with options and
+    /// settings of its own; what the server hears; and the server's
+    /// thread.
+    async fn started() -> (Client, Arc<Mutex<Vec<Value>>>, std::thread::JoinHandle<()>) {
         let heard = Arc::default();
         let (output, input, server) = serve(Arc::clone(&heard), "", answering());
         let fake = Server {
@@ -897,84 +916,233 @@ mod tests {
         let client = Client::over(output, input, Path::new("/src"), &fake)
             .await
             .unwrap();
-        assert_eq!(client.encoding(), Encoding::Utf8);
-        assert!(client.supports(Feature::Hover));
-        assert!(client.supports(Feature::Definition));
+        (client, heard, server)
+    }
+
+    /// Waits until the client has heard all the fake server said as it
+    /// started: its settings asked, its call hierarchy registered, and
+    /// its work begun.
+    async fn settled(client: &Client) {
         client
             .status()
             .wait_for(|status| *status == Status::Working("Indexing: 1/2".to_owned()))
             .await
             .unwrap();
+    }
 
-        // Opened twice, the file is opened on the server once, and closed
-        // once neither holds it.
-        let main = Path::new("/src/main.rs");
-        let document = client.open(main, "rust", "fn main() {}").unwrap();
-        let again = client.open(main, "rust", "fn main() {}").unwrap();
-        again.change("fn main() { run(); }");
-        again.change("fn main() { run(); }");
-        let at = Position {
-            line: 0,
-            character: 3,
-        };
-        let hover = client.hover(&document, at).await.unwrap().unwrap();
-        assert_eq!(hover.markdown, "fn main()");
-        let defined = client.definition(&document, at).await.unwrap();
-        assert_eq!(defined[0].path, Path::new("/src/lib.rs"));
-        assert!(matches!(
-            client.references(&document, at).await,
-            Err(Error::Answered { code: -32801, .. })
-        ));
-        let symbols = client.symbols(&document).await.unwrap();
+    /// Drops `client`, and answers all the server heard once it ended.
+    fn ended(
+        client: Client,
+        heard: &Mutex<Vec<Value>>,
+        server: std::thread::JoinHandle<()>,
+    ) -> Vec<Value> {
+        drop(client);
+        server.join().unwrap();
+        lock(heard).clone()
+    }
+
+    const MAIN: &str = "/src/main.rs";
+
+    const AT_MAIN: Position = Position {
+        line: 0,
+        character: 3,
+    };
+
+    #[tokio::test]
+    async fn a_server_is_told_its_options_when_it_starts() {
+        let (client, heard, server) = started().await;
+        let heard = ended(client, &heard, server);
+        let initialize = of(&heard, "initialize");
+        assert_eq!(
+            initialize[0]["params"]["initializationOptions"],
+            json!({ "fake": true })
+        );
+        assert_eq!(initialize[0]["params"]["rootUri"], "file:///src/");
+    }
+
+    #[tokio::test]
+    async fn a_server_counts_characters_and_answers_as_it_says_when_it_starts() {
+        let (client, _heard, _server) = started().await;
+        assert_eq!(client.encoding(), Encoding::Utf8);
+        assert!(client.supports(Feature::Hover));
+        assert!(client.supports(Feature::Definition));
+        assert!(client.supports(Feature::References));
+    }
+
+    #[tokio::test]
+    async fn the_server_is_told_the_settings_of_each_section_it_asks() {
+        let (client, heard, server) = started().await;
+        settled(&client).await;
+        let heard = ended(client, &heard, server);
+        assert_eq!(answer_to(&heard, "settings")["result"], json!([true, null]));
+    }
+
+    #[tokio::test]
+    async fn the_work_the_server_says_it_does_is_the_status() {
+        let (client, _heard, _server) = started().await;
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), settled(&client)).await,
+            Ok(())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_that_registers_its_call_hierarchy_later_is_asked_for_calls() {
+        let (client, heard, server) = started().await;
+        settled(&client).await;
         assert!(client.supports(Feature::Calls));
-        assert_eq!(symbols[0].name, "main");
-        assert_eq!(symbols[0].kind, "function");
-        assert_eq!(symbols[0].selection.start.character, 3);
-        let (function, calls) = client.calls(&document, at).await.unwrap().unwrap();
+        let document = client.open(Path::new(MAIN), "rust", "").unwrap();
+        let (function, calls) = client.calls(&document, AT_MAIN).await.unwrap().unwrap();
         assert_eq!(function.name, "main");
         assert_eq!(calls[0].to.name, "run");
         assert_eq!(calls[0].to.path, Path::new("/src/lib.rs"));
         assert_eq!(calls[0].from[0].start.line, 0);
-        drop(again);
         drop(document);
-        drop(client);
-        server.join().unwrap();
+        let heard = ended(client, &heard, server);
+        assert_eq!(
+            of(&heard, "callHierarchy/outgoingCalls")[0]["params"]["item"]["data"],
+            7,
+            "the item the server prepared goes back to it as it was"
+        );
+    }
 
+    #[tokio::test]
+    async fn a_file_opened_twice_is_opened_once_and_closed_once_neither_holds_it() {
+        let (client, heard, server) = started().await;
+        let document = client
+            .open(Path::new(MAIN), "rust", "fn main() {}")
+            .unwrap();
+        let again = client
+            .open(Path::new(MAIN), "rust", "fn main() {}")
+            .unwrap();
+        drop(again);
+        // Answered, the server has heard all that came before.
+        client.hover(&document, AT_MAIN).await.unwrap();
+        assert_eq!(of(&lock(&heard), "textDocument/didClose").len(), 0);
+
+        drop(document);
+        let heard = ended(client, &heard, server);
+        assert_eq!(of(&heard, "textDocument/didOpen").len(), 1);
+        let closed = of(&heard, "textDocument/didClose");
+        assert_eq!(closed.len(), 1);
         assert_eq!(
-            methods(&heard),
-            [
-                "initialize",
-                "initialized",
-                "answer",
-                "answer",
-                "textDocument/didOpen",
-                "textDocument/didChange",
-                "textDocument/hover",
-                "textDocument/definition",
-                "textDocument/references",
-                "textDocument/documentSymbol",
-                "textDocument/prepareCallHierarchy",
-                "callHierarchy/outgoingCalls",
-                "textDocument/didClose",
-                "shutdown",
-                "exit",
-            ]
-        );
-        let heard = lock(&heard);
-        // It is told its options when it starts, and the settings of each
-        // section it asks for.
-        assert_eq!(
-            heard[0]["params"]["initializationOptions"],
-            json!({ "fake": true })
-        );
-        assert_eq!(heard[2]["result"], json!([true, null]));
-        assert_eq!(heard[5]["params"]["textDocument"]["version"], 1);
-        // The item the server prepared goes back to it as it was.
-        assert_eq!(heard[11]["params"]["item"]["data"], 7);
-        assert_eq!(
-            heard[6]["params"]["textDocument"]["uri"],
+            closed[0]["params"]["textDocument"]["uri"],
             "file:///src/main.rs"
         );
+    }
+
+    #[tokio::test]
+    async fn a_file_is_opened_with_its_language_and_text() {
+        let (client, heard, server) = started().await;
+        let document = client
+            .open(Path::new(MAIN), "rust", "fn main() {}")
+            .unwrap();
+        drop(document);
+        let heard = ended(client, &heard, server);
+        assert_eq!(
+            of(&heard, "textDocument/didOpen")[0]["params"]["textDocument"],
+            json!({
+                "uri": "file:///src/main.rs",
+                "languageId": "rust",
+                "version": 0,
+                "text": "fn main() {}",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_change_is_told_once_with_the_next_version_and_the_whole_text() {
+        let (client, heard, server) = started().await;
+        let document = client
+            .open(Path::new(MAIN), "rust", "fn main() {}")
+            .unwrap();
+        document.change("fn main() { run(); }");
+        document.change("fn main() { run(); }");
+        drop(document);
+        let heard = ended(client, &heard, server);
+        let changes = of(&heard, "textDocument/didChange");
+        assert_eq!(changes.len(), 1, "the same text is told once");
+        assert_eq!(
+            changes[0]["params"],
+            json!({
+                "textDocument": { "uri": "file:///src/main.rs", "version": 1 },
+                "contentChanges": [{ "text": "fn main() { run(); }" }],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_held_open_and_opened_again_with_other_text_is_changed() {
+        let (client, heard, server) = started().await;
+        let document = client
+            .open(Path::new(MAIN), "rust", "fn main() {}")
+            .unwrap();
+        let again = client.open(Path::new(MAIN), "rust", "fn run() {}").unwrap();
+        drop((document, again));
+        let heard = ended(client, &heard, server);
+        assert_eq!(of(&heard, "textDocument/didOpen").len(), 1);
+        let changes = of(&heard, "textDocument/didChange");
+        assert_eq!(
+            changes[0]["params"]["contentChanges"],
+            json!([{ "text": "fn run() {}" }])
+        );
+    }
+
+    #[tokio::test]
+    async fn the_server_says_what_a_name_is_and_where_it_is_defined() {
+        let (client, heard, server) = started().await;
+        let document = client
+            .open(Path::new(MAIN), "rust", "fn main() {}")
+            .unwrap();
+        let hover = client.hover(&document, AT_MAIN).await.unwrap().unwrap();
+        assert_eq!(hover.markdown, "fn main()");
+        let defined = client.definition(&document, AT_MAIN).await.unwrap();
+        assert_eq!(defined[0].path, Path::new("/src/lib.rs"));
+        assert_eq!(defined[0].range.start.line, 2);
+        drop(document);
+        let heard = ended(client, &heard, server);
+        for method in ["textDocument/hover", "textDocument/definition"] {
+            assert_eq!(
+                of(&heard, method)[0]["params"],
+                json!({
+                    "textDocument": { "uri": "file:///src/main.rs" },
+                    "position": { "line": 0, "character": 3 },
+                }),
+                "{method} asks of the name at the place"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_error_the_server_answers_is_the_requests_error() {
+        let (client, _heard, _server) = started().await;
+        let document = client.open(Path::new(MAIN), "rust", "").unwrap();
+        assert!(matches!(
+            client.references(&document, AT_MAIN).await,
+            Err(Error::Answered { code: -32801, message }) if message == "content modified"
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_symbols_of_a_file_are_named_with_their_kinds_and_places() {
+        let (client, _heard, _server) = started().await;
+        let document = client.open(Path::new(MAIN), "rust", "").unwrap();
+        let symbols = client.symbols(&document).await.unwrap();
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "main");
+        assert_eq!(symbols[0].kind, "function");
+        assert_eq!(symbols[0].selection.start.character, 3);
+    }
+
+    #[tokio::test]
+    async fn a_client_dropped_shuts_its_server_down() {
+        let (client, heard, server) = started().await;
+        let heard = ended(client, &heard, server);
+        let methods: Vec<_> = heard
+            .iter()
+            .filter_map(|message| message.get("method").and_then(Value::as_str))
+            .collect();
+        assert_eq!(methods[methods.len() - 2..], ["shutdown", "exit"]);
     }
 
     #[tokio::test]
@@ -1033,6 +1201,103 @@ mod tests {
         drop(client);
         server.join().unwrap();
         assert!(!methods(&heard).contains(&"textDocument/references".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn the_requests_waiting_when_the_server_stops_are_answered_that_it_stopped() {
+        let (output, mut writes) = std::io::pipe().unwrap();
+        let (reads, input) = std::io::pipe().unwrap();
+        // It answers `initialize`, and stops once it has heard two
+        // requests more.
+        let server = std::thread::spawn(move || {
+            let mut reads = BufReader::new(reads);
+            let mut asked = 0;
+            while let Some(message) = read_message(&mut reads) {
+                if message["method"] == "initialize" {
+                    let body = json!({ "jsonrpc": "2.0", "id": message["id"], "result": {
+                        "capabilities": { "hoverProvider": true, "definitionProvider": true },
+                    } })
+                    .to_string();
+                    write!(writes, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+                } else if message.get("id").is_some() {
+                    asked += 1;
+                    if asked == 2 {
+                        return;
+                    }
+                }
+            }
+        });
+        let client = Client::over(output, input, Path::new("/src"), &Server::default())
+            .await
+            .unwrap();
+        let document = client.open(Path::new(MAIN), "rust", "").unwrap();
+
+        let (hover, definition) = tokio::join!(
+            client.hover(&document, AT_MAIN),
+            client.definition(&document, AT_MAIN)
+        );
+
+        assert!(matches!(hover, Err(Error::Stopped)), "{hover:?}");
+        assert!(matches!(definition, Err(Error::Stopped)), "{definition:?}");
+        server.join().unwrap();
+    }
+
+    /// A server, run by `sh`, that answers `initialize`, Cox's first
+    /// request, with `capabilities`, and reads on.
+    fn shell_server(capabilities: &Value) -> Server {
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "result": { "capabilities": capabilities } })
+            .to_string();
+        let script = format!(
+            "printf 'Content-Length: {}\\r\\n\\r\\n%s' '{body}'; cat > /dev/null",
+            body.len()
+        );
+        Server {
+            name: "shell".to_owned(),
+            command: vec!["sh".to_owned(), "-c".to_owned(), script],
+            ..Server::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_server_is_started_as_its_command_says() {
+        let root = crate::scratch::Folder::new();
+        let client = Client::start(&shell_server(&json!({ "hoverProvider": true })), &root)
+            .await
+            .unwrap();
+        assert!(client.supports(Feature::Hover));
+        assert!(!client.supports(Feature::Definition));
+    }
+
+    #[tokio::test]
+    async fn a_server_with_no_command_is_not_started() {
+        let root = crate::scratch::Folder::new();
+        let error = Client::start(&Server::default(), &root).await.err();
+        assert!(
+            matches!(&error, Some(Error::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_that_cannot_run_is_not_started() {
+        let root = crate::scratch::Folder::new();
+        let missing = Server {
+            command: vec![root.join("no-such-server").to_string_lossy().into_owned()],
+            ..Server::default()
+        };
+        let error = Client::start(&missing, &root).await.err();
+        assert!(matches!(&error, Some(Error::Io(_))), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_ends_before_it_is_ready_has_stopped() {
+        let root = crate::scratch::Folder::new();
+        let ends = Server {
+            command: vec!["true".to_owned()],
+            ..Server::default()
+        };
+        let error = Client::start(&ends, &root).await.err();
+        assert!(matches!(&error, Some(Error::Stopped)), "{error:?}");
     }
 
     #[tokio::test]

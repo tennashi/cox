@@ -254,11 +254,13 @@ pub(super) fn read_message(output: &mut impl BufRead) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::BufReader;
+    use std::io::{BufReader, ErrorKind, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use serde_json::json;
 
-    use super::read_message;
+    use super::{read_message, write};
 
     #[test]
     fn reads_messages_after_their_headers() {
@@ -270,5 +272,49 @@ mod tests {
         // The message that is not JSON is skipped.
         assert_eq!(read_message(&mut output), Some(json!([1, 2, 3])));
         assert_eq!(read_message(&mut output), None);
+    }
+
+    #[test]
+    fn writes_each_message_in_order_until_the_client_is_gone() {
+        let (sent, to_write) = mpsc::channel();
+        sent.send(b"Content-Length: 2\r\n\r\n{}".to_vec()).unwrap();
+        sent.send(b"Content-Length: 2\r\n\r\n[]".to_vec()).unwrap();
+        drop(sent);
+        let mut input = Vec::new();
+        write(&mut input, &to_write);
+        assert_eq!(
+            input,
+            b"Content-Length: 2\r\n\r\n{}Content-Length: 2\r\n\r\n[]"
+        );
+    }
+
+    /// A server's input it no longer reads.
+    struct Closed;
+
+    impl Write for Closed {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stops_writing_once_the_server_stops_reading() {
+        let (sent, to_write) = mpsc::channel();
+        sent.send(b"{}".to_vec()).unwrap();
+        let (stopped, writer_stopped) = mpsc::channel();
+        std::thread::spawn(move || {
+            write(Closed, &to_write);
+            stopped.send(()).unwrap();
+        });
+        assert_eq!(
+            writer_stopped.recv_timeout(Duration::from_secs(10)),
+            Ok(()),
+            "the writer stops while the client still holds its end"
+        );
+        drop(sent);
     }
 }
