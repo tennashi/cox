@@ -1,4 +1,4 @@
-//! The cursor Vim's keys move in the code: on a line, at a character,
+//! The cursor Vim's keys move in code and in an input: on a line, at a character,
 //! and across the text by characters and words, as Vim moves it.
 
 use cox_editor::buffer::{Point as Place, is_word};
@@ -8,19 +8,19 @@ use crate::vim::keymap::Across;
 /// Where the cursor is: its line, and the character it goes to on each
 /// line, which a shorter line holds it before, as Vim's `curswant` does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Cursor {
-    pub(super) line: usize,
+pub(crate) struct Cursor {
+    pub(crate) line: usize,
     /// The character, from 0, or [`usize::MAX`] for each line's last.
     want: usize,
 }
 
 impl Cursor {
-    pub(super) const fn on(line: usize) -> Self {
+    pub(crate) const fn on(line: usize) -> Self {
         Self { line, want: 0 }
     }
 
     /// The cursor at `place` of `text`, its line.
-    pub(super) fn at(place: Place, text: &str) -> Self {
+    pub(crate) fn at(place: Place, text: &str) -> Self {
         Self {
             line: place.line,
             want: text[..place.column.min(text.len())].chars().count(),
@@ -28,13 +28,13 @@ impl Cursor {
     }
 
     /// The same character, on `line`.
-    pub(super) const fn to_line(self, line: usize) -> Self {
+    pub(crate) const fn to_line(self, line: usize) -> Self {
         Self { line, ..self }
     }
 
     /// Where it is on its line, `text`: at the character it goes to, or
     /// the line's last, as a byte of the line.
-    pub(super) fn place(self, text: &str) -> Place {
+    pub(crate) fn place(self, text: &str) -> Place {
         let last = text.chars().count().saturating_sub(1);
         let column = text
             .char_indices()
@@ -173,7 +173,7 @@ impl Text<'_> {
 
 /// Where the cursor at `at` goes in `lines`, the text, as `across` asks,
 /// `times` times.
-pub(super) fn moved(across: Across, at: Cursor, times: usize, lines: &[String]) -> Cursor {
+pub(crate) fn moved(across: Across, at: Cursor, times: usize, lines: &[String]) -> Cursor {
     let Some(line) = lines.get(at.line) else {
         return at;
     };

@@ -165,7 +165,7 @@ fn a_new_chat_types_at_once_and_normal_mode_types_nothing(cx: &mut TestAppContex
     assert_eq!(keys::shown_input(cx, &workspace), "hello");
     assert_eq!(shown_mode(cx), Some("Insert"));
 
-    keys::press(cx, &workspace, "escape j k 0 x space enter backspace");
+    keys::press(cx, &workspace, "escape j k z space enter backspace");
     assert_eq!(keys::shown_input(cx, &workspace), "hello");
     assert_eq!(shown_mode(cx), Some("Normal"));
 }
@@ -179,10 +179,12 @@ fn i_a_and_their_capitals_type_where_vim_does(cx: &mut TestAppContext) {
     assert_eq!(keys::shown_input(cx, &workspace), "xhello");
     keys::press(cx, &workspace, "shift-a y escape");
     assert_eq!(keys::shown_input(cx, &workspace), "xhelloy");
+    // Escape left the cursor on the y, as Vim's, so a goes in after the
+    // l two to its left.
     keys::press(cx, &workspace, "left left a z escape");
-    assert_eq!(keys::shown_input(cx, &workspace), "xhellozy");
+    assert_eq!(keys::shown_input(cx, &workspace), "xhellzoy");
     keys::press(cx, &workspace, "left i w");
-    assert_eq!(keys::shown_input(cx, &workspace), "xhellowzy");
+    assert_eq!(keys::shown_input(cx, &workspace), "xhelwlzoy");
     assert_eq!(shown_mode(cx), Some("Insert"));
 }
 
@@ -935,8 +937,9 @@ fn the_settings_turn_the_keys_on_and_off_at_once(cx: &mut TestAppContext) {
     choose_on_the_settings(cx, &workspace, "vim-off");
     assert_eq!(kept_vim(), None);
     assert_eq!(shown_mode(cx), None);
+    // Where Escape left the cursor, on the i.
     keys::press(cx, &workspace, "j");
-    assert_eq!(keys::shown_input(cx, &workspace), "hij");
+    assert_eq!(keys::shown_input(cx, &workspace), "hji");
     keys::press(cx, &workspace, "escape");
     go_on(cx, &workspace);
     assert_eq!(
@@ -2597,4 +2600,42 @@ fn control_w_and_control_u_take_out_what_is_typed_in_insert_mode(cx: &mut TestAp
         "normal mode's Control-W waits for its window key"
     );
     assert_eq!(keys::shown_input(cx, &workspace), "again");
+}
+
+/// In normal mode the keys edit the chat's input as Vim edits a line:
+/// Escape puts the cursor on the last character, motions move it, and
+/// `d`, `c`, `x`, `y` and `p` take out, change, keep and put, with `u`
+/// to undo.
+#[gpui::test]
+fn normal_mode_edits_the_chat_s_input_as_vim_edits_a_line(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "edit-line");
+    keys::press(cx, &workspace, "secondary-n");
+    cx.simulate_input("say hello world");
+    keys::press(cx, &workspace, "escape");
+    assert_eq!(shown_mode(cx), Some("Normal"));
+    let typed = |cx: &mut VisualTestContext| keys::shown_input(cx, &workspace);
+
+    keys::press(cx, &workspace, "0 w d w");
+    assert_eq!(typed(cx), "say world");
+    keys::press(cx, &workspace, "u");
+    assert_eq!(typed(cx), "say hello world");
+
+    keys::press(cx, &workspace, "$ x");
+    assert_eq!(typed(cx), "say hello worl");
+    keys::press(cx, &workspace, "b c i w");
+    assert_eq!(shown_mode(cx), Some("Insert"), "c goes on to type");
+    cx.simulate_input("there");
+    keys::press(cx, &workspace, "escape");
+    assert_eq!(typed(cx), "say hello there");
+
+    keys::press(cx, &workspace, "0 y w $ p");
+    assert_eq!(typed(cx), "say hello theresay ");
+    keys::press(cx, &workspace, "d d");
+    assert_eq!(typed(cx), "");
+    keys::press(cx, &workspace, "u");
+    assert_eq!(typed(cx), "say hello theresay ");
+
+    // Escape out of hints leaves the cursor where it is.
+    keys::press(cx, &workspace, "$ f escape x");
+    assert_eq!(typed(cx), "say hello theresay");
 }

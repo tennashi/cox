@@ -10,6 +10,7 @@
 //! key contexts. The stage's tabs keep every key of their own. While an
 //! input method composes, every key is its own.
 
+pub(crate) mod cursor;
 pub mod ex;
 pub mod hints;
 pub mod keymap;
@@ -21,7 +22,7 @@ use gpui::{
     Subscription, Window, actions, px,
 };
 
-use self::keymap::{Across, Answer, Command, Follow, Keymap, Motion, Place, Reach, Sent};
+use self::keymap::{Across, Answer, Command, Edit, Follow, Keymap, Motion, Place, Reach, Sent};
 use self::search::{Find, Search};
 
 /// Moves what the part of the window with the keyboard shows, or its
@@ -43,6 +44,25 @@ pub struct MoveAcross {
     pub across: Across,
     /// The count typed before the keys, as `3` of `3w`.
     pub count: Option<u32>,
+}
+
+/// Does to the text of the input with the keyboard what normal mode
+/// asks: an action only an input handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = vim, no_json)]
+pub struct EditText {
+    pub edit: Edit,
+    /// The count typed before the keys, as `3` of `3x`.
+    pub count: Option<u32>,
+}
+
+impl EditText {
+    /// How many times the edit goes: the count, or once.
+    #[must_use]
+    pub fn times(&self) -> usize {
+        self.count
+            .map_or(1, |count| usize::try_from(count).unwrap_or(usize::MAX))
+    }
 }
 
 impl Move {
@@ -476,7 +496,9 @@ impl Vim {
                 self.reset();
                 match command {
                     Command::Normal => self.mode = Mode::Normal,
-                    Command::Insert(_) => self.mode = Mode::Insert,
+                    Command::Insert(_) | Command::Edit(Edit::Change(_)) => {
+                        self.mode = Mode::Insert;
+                    }
                     Command::Hint(_) | Command::Hints(_) => self.mode = Mode::Hint,
                     Command::Stop
                     | Command::Line(_)
@@ -485,6 +507,7 @@ impl Vim {
                     | Command::Window(_)
                     | Command::Move(_)
                     | Command::Across(_)
+                    | Command::Edit(_)
                     | Command::Send(_) => {}
                 }
                 Outcome::Do(command, count)
@@ -692,6 +715,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     let region = Region::of(&event.context_stack);
     let vim = cx.global_mut::<Vim>();
     let was = vim.status();
+    let typed = vim.mode == Mode::Insert;
     let outcome = vim.key(&Keymap::VIM, region, &event.keystroke);
     let mode = vim.mode;
     if vim.status() != was {
@@ -705,6 +729,9 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         Outcome::Pass => return,
         Outcome::Taken | Outcome::Do(Command::Reset, _) => {}
         Outcome::Do(Command::Normal, _) => {
+            if typed {
+                window.dispatch_action(Box::new(crate::ui::input::Settle), cx);
+            }
             window.dispatch_action(Box::new(crate::chat::view::CloseList), cx);
             window.dispatch_action(Box::new(Leave), cx);
         }
@@ -760,6 +787,9 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
                 window.dispatch_action(sent.action(), cx);
             }
         }
+        Outcome::Do(Command::Edit(edit), count) => {
+            window.dispatch_action(Box::new(EditText { edit, count }), cx);
+        }
         Outcome::Do(Command::Insert(place), _) => {
             use crate::ui::input::{End, Home, Right};
             match place {
@@ -777,7 +807,9 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
 mod tests {
     use gpui::{KeyContext, Keystroke, px};
 
-    use super::keymap::{Act, Command, Follow, Keymap, Motion, Pick, Place, Prompt, Reach, Sent};
+    use super::keymap::{
+        Across, Act, Command, Edit, Follow, Keymap, Motion, Pick, Place, Prompt, Reach, Sent,
+    };
     use super::{Mode, Move, Outcome, Region, Vim};
 
     fn press(vim: &mut Vim, region: Region, keys: &str) -> Vec<Outcome> {
@@ -815,7 +847,7 @@ mod tests {
     fn normal_mode_types_nothing_and_leaves_the_window_s_other_keys() {
         let mut vim = Vim::default();
         assert_eq!(
-            press(&mut vim, Region::Chat, "x shift-k space enter backspace"),
+            press(&mut vim, Region::Chat, "z shift-k space enter backspace"),
             [Outcome::Taken; 5]
         );
         assert_eq!(
@@ -854,7 +886,14 @@ mod tests {
             press(&mut vim, Region::Chat, "escape"),
             [Outcome::Do(Command::Reset, None)]
         );
-        assert_eq!(press(&mut vim, Region::Chat, "0"), [Outcome::Taken]);
+        assert_eq!(
+            press(&mut vim, Region::Chat, "0"),
+            [Outcome::Do(
+                Command::Edit(Edit::Move(Across::LineStart)),
+                None
+            )],
+            "0 with no count goes to the line's start"
+        );
         assert_eq!(vim.count(), None);
     }
 

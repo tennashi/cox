@@ -46,6 +46,42 @@ pub enum Command {
     /// Finds the last text searched for again: the way it went, or the
     /// other way (`n`, `N`).
     Again(Direction),
+    /// What normal mode does to the text of the input with the keyboard,
+    /// with the count typed before (see [`super::EditText`]).
+    Edit(Edit),
+}
+
+/// What normal mode does to the text of an input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edit {
+    /// Moves the cursor (`h`, `w`, `$`).
+    Move(Across),
+    /// Takes out what the span covers, keeping it to put (`x`, `dw`, `dd`).
+    Delete(Span),
+    /// Takes it out and goes to insert mode in its place (`s`, `cw`, `cc`).
+    Change(Span),
+    /// Keeps it to put (`yw`, `yy`).
+    Yank(Span),
+    /// Puts what was kept after the cursor, or its line, or before them
+    /// (`p`, `P`).
+    Put {
+        before: bool,
+    },
+    Undo,
+    Redo,
+}
+
+/// What an edit of normal mode covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Span {
+    /// From the cursor to where the motion takes it.
+    To(Across),
+    /// Its whole lines, from the cursor's (`dd`).
+    Line,
+    /// The word under the cursor, or the run of spaces (`iw`).
+    InnerWord,
+    /// The word with the spaces after it, or else before it (`aw`).
+    AWord,
 }
 
 /// What the line at the window's foot is opened for.
@@ -346,6 +382,10 @@ const fn across(regions: &'static [Region], keys: &'static [&'static str], to: A
     bind(Mode::Normal, regions, keys, Command::Across(to))
 }
 
+const fn edit(keys: &'static [&'static str], edit: Edit) -> Binding {
+    bind(Mode::Normal, FORMS, keys, Command::Edit(edit))
+}
+
 const fn send(regions: &'static [Region], keys: &'static [&'static str], sent: Sent) -> Binding {
     bind(Mode::Normal, regions, keys, Command::Send(sent))
 }
@@ -383,6 +423,58 @@ impl Keymap {
             &["shift-a"],
             Command::Insert(Place::LineEnd),
         ),
+        edit(&["h"], Edit::Move(Across::Left)),
+        edit(&["l"], Edit::Move(Across::Right)),
+        edit(&["w"], Edit::Move(Across::WordForward)),
+        edit(&["b"], Edit::Move(Across::WordBack)),
+        edit(&["e"], Edit::Move(Across::WordEnd)),
+        edit(&["0"], Edit::Move(Across::LineStart)),
+        edit(&["^"], Edit::Move(Across::FirstNonBlank)),
+        edit(&["$"], Edit::Move(Across::LineEnd)),
+        edit(&["d", "h"], Edit::Delete(Span::To(Across::Left))),
+        edit(&["d", "l"], Edit::Delete(Span::To(Across::Right))),
+        edit(&["d", "w"], Edit::Delete(Span::To(Across::WordForward))),
+        edit(&["d", "b"], Edit::Delete(Span::To(Across::WordBack))),
+        edit(&["d", "e"], Edit::Delete(Span::To(Across::WordEnd))),
+        edit(&["d", "0"], Edit::Delete(Span::To(Across::LineStart))),
+        edit(&["d", "^"], Edit::Delete(Span::To(Across::FirstNonBlank))),
+        edit(&["d", "$"], Edit::Delete(Span::To(Across::LineEnd))),
+        edit(&["d", "d"], Edit::Delete(Span::Line)),
+        edit(&["d", "i", "w"], Edit::Delete(Span::InnerWord)),
+        edit(&["d", "a", "w"], Edit::Delete(Span::AWord)),
+        edit(&["c", "h"], Edit::Change(Span::To(Across::Left))),
+        edit(&["c", "l"], Edit::Change(Span::To(Across::Right))),
+        edit(&["c", "w"], Edit::Change(Span::To(Across::WordForward))),
+        edit(&["c", "b"], Edit::Change(Span::To(Across::WordBack))),
+        edit(&["c", "e"], Edit::Change(Span::To(Across::WordEnd))),
+        edit(&["c", "0"], Edit::Change(Span::To(Across::LineStart))),
+        edit(&["c", "^"], Edit::Change(Span::To(Across::FirstNonBlank))),
+        edit(&["c", "$"], Edit::Change(Span::To(Across::LineEnd))),
+        edit(&["c", "c"], Edit::Change(Span::Line)),
+        edit(&["c", "i", "w"], Edit::Change(Span::InnerWord)),
+        edit(&["c", "a", "w"], Edit::Change(Span::AWord)),
+        edit(&["y", "h"], Edit::Yank(Span::To(Across::Left))),
+        edit(&["y", "l"], Edit::Yank(Span::To(Across::Right))),
+        edit(&["y", "w"], Edit::Yank(Span::To(Across::WordForward))),
+        edit(&["y", "b"], Edit::Yank(Span::To(Across::WordBack))),
+        edit(&["y", "e"], Edit::Yank(Span::To(Across::WordEnd))),
+        edit(&["y", "0"], Edit::Yank(Span::To(Across::LineStart))),
+        edit(&["y", "^"], Edit::Yank(Span::To(Across::FirstNonBlank))),
+        edit(&["y", "$"], Edit::Yank(Span::To(Across::LineEnd))),
+        edit(&["y", "y"], Edit::Yank(Span::Line)),
+        edit(&["y", "i", "w"], Edit::Yank(Span::InnerWord)),
+        edit(&["y", "a", "w"], Edit::Yank(Span::AWord)),
+        edit(&["x"], Edit::Delete(Span::To(Across::Right))),
+        edit(&["shift-x"], Edit::Delete(Span::To(Across::Left))),
+        edit(&["shift-d"], Edit::Delete(Span::To(Across::LineEnd))),
+        edit(&["s"], Edit::Change(Span::To(Across::Right))),
+        edit(&["shift-s"], Edit::Change(Span::Line)),
+        edit(&["shift-c"], Edit::Change(Span::To(Across::LineEnd))),
+        edit(&["shift-y"], Edit::Yank(Span::Line)),
+        edit(&["p"], Edit::Put { before: false }),
+        edit(&["shift-p"], Edit::Put { before: true }),
+        edit(&["u"], Edit::Undo),
+        edit(&["ctrl-r"], Edit::Redo),
         act(PARTS, &["ctrl-w", "h"], Act::Go(Toward::Left)),
         act(PARTS, &["ctrl-w", "l"], Act::Go(Toward::Right)),
         act(PARTS, &["ctrl-w", "w"], Act::Go(Toward::Round)),

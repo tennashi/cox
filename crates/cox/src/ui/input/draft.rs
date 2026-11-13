@@ -8,6 +8,8 @@ use std::ops::Range;
 
 use unicode_segmentation::UnicodeSegmentation;
 
+mod normal;
+
 /// The text in an input, with its selection and composition.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Draft {
