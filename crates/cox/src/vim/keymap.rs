@@ -29,6 +29,9 @@ pub enum Command {
     /// Moves what the part with the keyboard shows, or its cursor, with
     /// the count typed before (see [`super::Move`]).
     Move(Motion),
+    /// Moves the cursor of code across its text, with the count typed
+    /// before (see [`super::MoveAcross`]).
+    Across(Across),
     /// What the part with the keyboard does, as an action of its own.
     Send(Sent),
     /// Draws hints over what can be clicked in the page, to follow the
@@ -89,6 +92,28 @@ pub enum Motion {
     Top,
     /// To the bottom, or to the count's line (`G`).
     Bottom,
+}
+
+/// Where Vim's keys move the cursor of code: along its line, or to the
+/// words before and after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Across {
+    /// A character left, or the count's (`h`).
+    Left,
+    /// A character right, or the count's (`l`).
+    Right,
+    /// To the next word's start (`w`).
+    WordForward,
+    /// To the start of the word, or of the one before (`b`).
+    WordBack,
+    /// To the end of the word, or of the next (`e`).
+    WordEnd,
+    /// To the line's start (`0`).
+    LineStart,
+    /// To the line's first character that is no space (`^`).
+    FirstNonBlank,
+    /// To the line's end, the count's lines down less one (`$`).
+    LineEnd,
 }
 
 /// The actions of the parts of the window Vim's keys send.
@@ -317,6 +342,10 @@ const fn go(regions: &'static [Region], keys: &'static [&'static str], motion: M
     bind(Mode::Normal, regions, keys, Command::Move(motion))
 }
 
+const fn across(regions: &'static [Region], keys: &'static [&'static str], to: Across) -> Binding {
+    bind(Mode::Normal, regions, keys, Command::Across(to))
+}
+
 const fn send(regions: &'static [Region], keys: &'static [&'static str], sent: Sent) -> Binding {
     bind(Mode::Normal, regions, keys, Command::Send(sent))
 }
@@ -376,6 +405,14 @@ impl Keymap {
         go(MOVERS, &["ctrl-u"], Motion::HalfUp),
         go(MOVERS, &["g", "g"], Motion::Top),
         go(MOVERS, &["shift-g"], Motion::Bottom),
+        across(CODE, &["h"], Across::Left),
+        across(CODE, &["l"], Across::Right),
+        across(CODE, &["w"], Across::WordForward),
+        across(CODE, &["b"], Across::WordBack),
+        across(CODE, &["e"], Across::WordEnd),
+        across(CODE, &["0"], Across::LineStart),
+        across(CODE, &["^"], Across::FirstNonBlank),
+        across(CODE, &["$"], Across::LineEnd),
         send(CODE, &["shift-v"], Sent::Visual),
         send(CODE, &["y"], Sent::Copy),
         send(CODE, &["g", "a"], Sent::AddToChat),
@@ -517,8 +554,8 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::{
-        Act, Answer, Command, Direction, Follow, Keymap, Mode, Motion, Pick, Place, Prompt, Reach,
-        Region, Sent, Toward, bind,
+        Across, Act, Answer, Command, Direction, Follow, Keymap, Mode, Motion, Pick, Place, Prompt,
+        Reach, Region, Sent, Toward, bind,
     };
 
     #[test]
@@ -850,6 +887,28 @@ mod tests {
         assert_eq!(
             Keymap::VIM.answer(Mode::Normal, Region::Document, &["y"]),
             Answer::None
+        );
+    }
+
+    #[test]
+    fn code_moves_its_cursor_by_characters_and_words() {
+        let code = |key: &str| Keymap::VIM.answer(Mode::Normal, Region::Code, &[key]);
+        for (key, across) in [
+            ("h", Across::Left),
+            ("l", Across::Right),
+            ("w", Across::WordForward),
+            ("b", Across::WordBack),
+            ("e", Across::WordEnd),
+            ("0", Across::LineStart),
+            ("^", Across::FirstNonBlank),
+            ("$", Across::LineEnd),
+        ] {
+            assert_eq!(code(key), Answer::Act(Command::Across(across)), "{key}");
+        }
+        assert_eq!(
+            Keymap::VIM.answer(Mode::Normal, Region::Tree, &["w"]),
+            Answer::None,
+            "only code has a cursor in a line"
         );
     }
 

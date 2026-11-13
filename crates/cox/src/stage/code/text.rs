@@ -9,7 +9,7 @@ use gpui::{
     App, Bounds, ContentMask, CursorStyle, Element, ElementId, Entity, Font, FontStyle, FontWeight,
     GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId,
     Pixels, Point, ShapedLine, SharedString, Style, TextRun, Window, fill, font, point, px,
-    relative, rgb, size,
+    relative, rgb, rgba, size,
 };
 
 use super::file::Spans;
@@ -78,6 +78,8 @@ pub(super) struct Painted {
     /// The line of the cursor Vim's keys move, under the text, with a bar
     /// beside its number.
     cursor: Option<Bounds<Pixels>>,
+    /// The character of the cursor Vim's keys move, under the text.
+    block: Option<Bounds<Pixels>>,
     /// Under the text, within it.
     selection: Vec<Bounds<Pixels>>,
     /// The matches of what Vim's `/` looked for, under the selection.
@@ -202,6 +204,7 @@ impl Text {
                 shown,
             });
         }
+        painted.block = cursor.and_then(|line| code.block(line, &laid));
         (painted.hovered, painted.link) = code.names(&laid);
         painted.found = code.matches_in_sight(&laid);
         self.code.update(cx, |code, _| {
@@ -240,11 +243,12 @@ impl Code {
         if let Some(line) = self.look.reveal {
             scroll.y = line_height * line as f32 - height * REVEAL_AT;
         }
-        let cursor = self.look.reveal.or(self.look.cursor).filter(|_| vim);
+        let cursor = self.look.reveal.or(self.cursor()).filter(|_| vim);
         if self.look.follow == Follow::Cursor
             && let Some(line) = cursor
         {
             scroll.y = scrolled_to(line, scroll.y, line_height, height);
+            scroll.x = self.across_to(line, scroll.x, laid);
         }
         let most = self.most_scroll(laid);
         let scroll = point(
@@ -254,6 +258,46 @@ impl Code {
         let lines = self.file.buffer.lines();
         let cursor = vim.then(|| kept_in_sight(cursor, scroll.y, line_height, height, lines));
         (scroll, cursor)
+    }
+}
+
+impl Code {
+    /// Where the character of the cursor Vim's keys move is drawn, on
+    /// `line`, laid out as `laid`: a cell wide past the line's end.
+    fn block(&self, line: usize, laid: &Laid) -> Option<Bounds<Pixels>> {
+        let text = self.file.buffer.line(line);
+        let column = self.look.cursor_on(line).place(&text).column;
+        let next = text[column..]
+            .chars()
+            .next()
+            .map_or(column, |c| column + c.len_utf8());
+        let at = laid.stretch(line, &(column..next))?;
+        Some(Bounds::new(
+            at.origin,
+            size(at.size.width.max(laid.cell_width), at.size.height),
+        ))
+    }
+
+    /// How far the text scrolls across from `scroll` for the cursor's
+    /// character on `line` to be in sight, laid out as `laid`.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "character counts are far below what f32 keeps exactly"
+    )]
+    fn across_to(&self, line: usize, scroll: Pixels, laid: &Laid) -> Pixels {
+        let text = self.file.buffer.line(line);
+        let column = self.look.cursor_on(line).place(&text).column;
+        let shown = Shown::of(&text);
+        let cells = shown.text[..shown.index_of(column)].chars().count() as f32;
+        let left = laid.cell_width * cells;
+        let right = left + laid.cell_width + px(PADDING * 2.);
+        if left < scroll {
+            left
+        } else if right > scroll + laid.text.size.width {
+            right - laid.text.size.width
+        } else {
+            scroll
+        }
     }
 }
 
@@ -470,6 +514,9 @@ impl Element for Text {
                 }
                 for at in &painted.selection {
                     window.paint_quad(fill(*at, rgb(SELECTION)));
+                }
+                if let Some(at) = painted.block {
+                    window.paint_quad(fill(at, rgba(ACCENT << 8 | 0x66)));
                 }
                 for (origin, line) in &painted.text {
                     line.paint(*origin, line_height, window, cx).ok();
