@@ -2232,28 +2232,34 @@ mod tests {
 
     #[test]
     fn does_only_what_the_page_does() {
-        let done = |mut message: ToDaemon| {
-            done_on_the_page(&mut message).map(|done| match done {
-                Done::In(key) => Some(*key),
-                Done::Apart => None,
-            })
+        /// What the phone may do with a message.
+        #[derive(Debug, PartialEq)]
+        enum May {
+            InChat(u64),
+            Apart,
+            Not,
+        }
+        let done = |mut message: ToDaemon| match done_on_the_page(&mut message) {
+            Some(Done::In(key)) => May::InChat(*key),
+            Some(Done::Apart) => May::Apart,
+            None => May::Not,
         };
         let line = |attached: Vec<cox_core::entry::Attachment>| ToDaemon::Submit {
             key: 1,
             text: "go on".to_owned(),
             attached,
         };
-        assert_eq!(done(line(Vec::new())), Some(Some(1)));
-        assert_eq!(done(ToDaemon::Choose { key: 1, index: 0 }), Some(Some(1)));
-        assert_eq!(done(ToDaemon::Stop { key: 1 }), Some(Some(1)));
-        assert_eq!(done(ToDaemon::Merge { key: 1 }), Some(Some(1)));
+        assert_eq!(done(line(Vec::new())), May::InChat(1));
+        assert_eq!(done(ToDaemon::Choose { key: 1, index: 0 }), May::InChat(1));
+        assert_eq!(done(ToDaemon::Stop { key: 1 }), May::InChat(1));
+        assert_eq!(done(ToDaemon::Merge { key: 1 }), May::InChat(1));
         assert_eq!(
             done(ToDaemon::Set {
                 key: 1,
                 id: "model".to_owned(),
                 value: "opus".to_owned(),
             }),
-            Some(Some(1))
+            May::InChat(1)
         );
         assert_eq!(
             done(ToDaemon::StartSketch {
@@ -2261,18 +2267,18 @@ mod tests {
                 sketch: crate::chat::sketch::Sketch::Empty,
                 what: "a mock".to_owned(),
             }),
-            Some(Some(1))
+            May::InChat(1)
         );
-        assert_eq!(done(ToDaemon::NewChat { folder: None }), Some(None));
-        assert_eq!(done(ToDaemon::NewProjectAside), Some(None));
-        assert_eq!(done(ToDaemon::NewProject), None);
-        assert_eq!(done(ToDaemon::Open { folder: None }), None);
+        assert_eq!(done(ToDaemon::NewChat { folder: None }), May::Apart);
+        assert_eq!(done(ToDaemon::NewProjectAside), May::Apart);
+        assert_eq!(done(ToDaemon::NewProject), May::Not);
+        assert_eq!(done(ToDaemon::Open { folder: None }), May::Not);
         assert_eq!(
             done(ToDaemon::Archive {
                 key: 1,
                 archived: true
             }),
-            None
+            May::Not
         );
         let picture = cox_core::entry::Attachment {
             label: "region".to_owned(),
@@ -2280,7 +2286,7 @@ mod tests {
             text: String::new(),
             picture: Some("/etc/passwd".into()),
         };
-        assert_eq!(done(line(vec![picture])), None);
+        assert_eq!(done(line(vec![picture])), May::Not);
     }
 
     #[test]
