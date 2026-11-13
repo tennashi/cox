@@ -43,9 +43,7 @@ const KEPT_LINES: usize = 12;
 pub struct Device {
     name: String,
     to: UnboundedSender<Input>,
-    frame: Arc<Mutex<Option<Frame>>>,
-    /// Whether a frame waits in `frame` that the tab was told of.
-    told: Arc<AtomicBool>,
+    newest: Arc<Newest>,
     /// The process of the emulator Cox started, once it runs.
     started: Arc<AtomicI32>,
 }
@@ -127,8 +125,7 @@ impl Device {
         let this = Self {
             name: device.to_owned(),
             to,
-            frame: Arc::default(),
-            told: Arc::default(),
+            newest: Arc::default(),
             started: Arc::default(),
         };
         let worker = Worker {
@@ -136,8 +133,7 @@ impl Device {
             program,
             boot,
             events,
-            frame: this.frame.clone(),
-            told: this.told.clone(),
+            newest: this.newest.clone(),
             started: this.started.clone(),
         };
         let spawned = std::thread::Builder::new()
@@ -163,9 +159,7 @@ impl Device {
     /// The newest frame, if one came since the last taken.
     #[must_use]
     pub fn take_frame(&self) -> Option<Frame> {
-        let frame = self.frame.lock().ok()?.take();
-        self.told.store(false, Ordering::Release);
-        frame
+        self.newest.take()
     }
 
     /// Stops the emulator, if Cox started it: one that ran already goes
@@ -192,9 +186,38 @@ struct Worker {
     program: Option<PathBuf>,
     boot: Boot,
     events: UnboundedSender<Event>,
-    frame: Arc<Mutex<Option<Frame>>>,
-    told: Arc<AtomicBool>,
+    newest: Arc<Newest>,
     started: Arc<AtomicI32>,
+}
+
+/// The newest frame, which the thread puts and the tab takes.
+#[derive(Default)]
+struct Newest {
+    frame: Mutex<Option<Frame>>,
+    /// Whether the tab was told of the frame waiting, and has not taken
+    /// it since.
+    told: AtomicBool,
+}
+
+impl Newest {
+    /// Keeps `frame` as the newest, and tells the tab by `events`, unless
+    /// it was told already of one it has not taken.
+    fn put(&self, frame: Frame, events: &UnboundedSender<Event>) {
+        if let Ok(mut newest) = self.frame.lock() {
+            *newest = Some(frame);
+        }
+        if !self.told.swap(true, Ordering::AcqRel) {
+            events.send(Event::Frame).ok();
+        }
+    }
+
+    /// The newest frame, if one came since the last taken. The tab is
+    /// readied to be told before the frame is taken, so that one put as it
+    /// is taken is told of, not left waiting untold.
+    fn take(&self) -> Option<Frame> {
+        self.told.store(false, Ordering::Release);
+        self.frame.lock().ok()?.take()
+    }
 }
 
 impl Worker {
@@ -331,14 +354,8 @@ impl Worker {
     /// Keeps `image` as the newest frame, and tells the tab, unless it was
     /// told already of one it has not taken.
     fn show(&self, image: crate::proto::Image) {
-        let Some(frame) = frame_of(image) else {
-            return;
-        };
-        if let Ok(mut newest) = self.frame.lock() {
-            *newest = Some(frame);
-        }
-        if !self.told.swap(true, Ordering::AcqRel) {
-            self.events.send(Event::Frame).ok();
+        if let Some(frame) = frame_of(image) {
+            self.newest.put(frame, &self.events);
         }
     }
 }
@@ -632,5 +649,38 @@ mod tests {
     #[test]
     fn an_empty_image_is_no_frame() {
         assert!(frame_of(crate::proto::Image::default()).is_none());
+    }
+
+    fn frame(seq: u32) -> Frame {
+        Frame {
+            width: 1,
+            height: 1,
+            bgra: vec![0; 4],
+            seq,
+        }
+    }
+
+    #[test]
+    fn the_tab_is_told_once_of_frames_it_has_not_taken_and_takes_the_newest() {
+        let (events, mut told) = unbounded_channel();
+        let newest = Newest::default();
+        newest.put(frame(1), &events);
+        newest.put(frame(2), &events);
+        assert_eq!(told.try_recv(), Ok(Event::Frame));
+        assert!(told.try_recv().is_err(), "told once");
+        assert_eq!(newest.take().map(|frame| frame.seq), Some(2));
+        assert!(newest.take().is_none(), "a frame is taken once");
+    }
+
+    #[test]
+    fn a_frame_put_after_one_is_taken_is_told_again() {
+        let (events, mut told) = unbounded_channel();
+        let newest = Newest::default();
+        newest.put(frame(1), &events);
+        assert_eq!(told.try_recv(), Ok(Event::Frame));
+        assert!(newest.take().is_some());
+        newest.put(frame(2), &events);
+        assert_eq!(told.try_recv(), Ok(Event::Frame));
+        assert_eq!(newest.take().map(|frame| frame.seq), Some(2));
     }
 }
