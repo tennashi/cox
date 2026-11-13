@@ -129,6 +129,14 @@ impl Move {
     }
 }
 
+/// Gives the keyboard back to the input beside the part that has it, to
+/// type in, as `place` says: from the conversation, `i` and `a`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = vim, no_json)]
+pub struct TypeInInput {
+    pub place: Place,
+}
+
 /// Draws hints over what can be clicked in the page with the keyboard,
 /// for hint mode.
 #[derive(Clone, Debug, PartialEq, Eq, Action)]
@@ -288,6 +296,8 @@ pub enum Region {
     List,
     /// A chat's input.
     Chat,
+    /// A chat's conversation, which a cursor moves through.
+    Reading,
     /// The input that sets a chat's goal.
     Goal,
     /// The input that starts a sketch of a chat.
@@ -325,6 +335,7 @@ const REGIONS: &[(&str, Region)] = &[
     (crate::workspace::RAIL, Region::Rail),
     (crate::workspace::LIST, Region::List),
     (crate::chat::view::KEY_CONTEXT, Region::Chat),
+    (crate::chat::view::READING, Region::Reading),
     (crate::chat::view::GOAL, Region::Goal),
     (crate::chat::view::SKETCH, Region::Sketch),
     (crate::workspace::RENAMING, Region::Renaming),
@@ -394,12 +405,14 @@ impl Region {
         matches!(self, Self::Settings | Self::ProjectCard)
     }
 
-    /// Whether `v` and `V` select there in visual mode: in code, and in
-    /// an input. A terminal's `V` only makes its selection whole lines.
+    /// Whether `v` and `V` select there in visual mode: in code, in the
+    /// conversation, and in an input. A terminal's `V` only makes its
+    /// selection whole lines.
     const fn has_visual_mode(self) -> bool {
         matches!(
             self,
             Self::Code
+                | Self::Reading
                 | Self::Chat
                 | Self::Goal
                 | Self::Sketch
@@ -428,6 +441,7 @@ impl Region {
             | Self::ProjectCard
             | Self::Rail
             | Self::List
+            | Self::Reading
             | Self::Code
             | Self::Document
             | Self::Tree
@@ -882,6 +896,9 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         }
         Outcome::Do(Command::Edit(edit), count) => {
             window.dispatch_action(Box::new(EditText { edit, count }), cx);
+        }
+        Outcome::Do(Command::Insert(place), _) if region == Region::Reading => {
+            window.dispatch_action(Box::new(TypeInInput { place }), cx);
         }
         Outcome::Do(Command::Insert(place), _) => {
             use crate::ui::input::{End, Home, Right};

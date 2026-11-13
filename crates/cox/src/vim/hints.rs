@@ -79,9 +79,12 @@ impl Part {
         match region {
             Region::Rail => Some(Self::Rail),
             Region::List => Some(Self::List),
-            Region::Workspace | Region::Chat | Region::Goal | Region::Sketch | Region::Renaming => {
-                Some(Self::Chat)
-            }
+            Region::Workspace
+            | Region::Chat
+            | Region::Reading
+            | Region::Goal
+            | Region::Sketch
+            | Region::Renaming => Some(Self::Chat),
             Region::Settings => Some(Self::Settings),
             Region::ProjectCard => Some(Self::ProjectCard),
             Region::Terminal

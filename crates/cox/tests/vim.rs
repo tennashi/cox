@@ -367,24 +367,24 @@ fn the_list_of_chats_shows_one_with_the_keys(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "secondary-n escape secondary-n escape");
     let second = shown_view(cx, &workspace);
 
-    keys::press(cx, &workspace, "ctrl-w k");
+    keys::press(cx, &workspace, "ctrl-w k ctrl-w k");
     assert!(in_part(cx, "Chats"));
     assert!(workspace.read_with(cx, |workspace, _| workspace.is_switching()));
     keys::press(cx, &workspace, "escape");
     assert!(in_part(cx, "Conversation"));
     assert!(!workspace.read_with(cx, |workspace, _| workspace.is_switching()));
 
-    keys::press(cx, &workspace, "ctrl-w k g g enter");
+    keys::press(cx, &workspace, "ctrl-w k ctrl-w k g g enter");
     let first = shown_view(cx, &workspace);
     assert!(in_part(cx, "Conversation"));
-    keys::press(cx, &workspace, "ctrl-w k shift-g l");
+    keys::press(cx, &workspace, "ctrl-w k ctrl-w k shift-g l");
     let last = shown_view(cx, &workspace);
     assert_ne!(first, last);
-    keys::press(cx, &workspace, "ctrl-w k k enter");
+    keys::press(cx, &workspace, "ctrl-w k ctrl-w k k enter");
     assert_eq!(shown_view(cx, &workspace), first);
     assert!([first, last].contains(&second));
 
-    keys::press(cx, &workspace, "ctrl-w k o");
+    keys::press(cx, &workspace, "ctrl-w k ctrl-w k o");
     let chats = workspace.read_with(cx, |workspace, _| workspace.chats(0).count());
     assert_eq!(chats, 3);
     assert_eq!(shown_mode(cx), Some("Insert"));
@@ -3099,4 +3099,280 @@ fn v_and_shift_v_select_in_the_chat_s_input_in_visual_mode(cx: &mut TestAppConte
         " there worl",
         "Escape let go, leaving the cursor where it went"
     );
+}
+
+/// Sends `lines` to the chat shown, one after another, each once the
+/// agent is done with the one before.
+fn converse(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    view: &Entity<ChatView>,
+    lines: &[&str],
+) {
+    for line in lines {
+        cx.simulate_input(line);
+        keys::press(cx, workspace, "enter");
+        for _ in 0..500 {
+            if agent_state(cx, view) == State::Idle {
+                break;
+            }
+            go_on(cx, workspace);
+        }
+    }
+}
+
+/// Where the cursor of the conversation is: the entry, the piece of it,
+/// and the byte in the piece.
+fn reading_cursor(
+    cx: &mut VisualTestContext,
+    view: &Entity<ChatView>,
+) -> Option<(usize, usize, usize)> {
+    view.read_with(cx, |view, _| {
+        view.reading_cursor()
+            .map(|spot| (spot.text.entry, spot.text.part, spot.offset))
+    })
+}
+
+/// `ctrl-w k` takes the keyboard from the chat's input up to its
+/// conversation, in normal mode with a cursor, and on to the list of
+/// chats; `ctrl-w j`, `i` and `a` take it back to the input.
+#[gpui::test]
+fn control_w_k_goes_up_to_the_conversation_and_j_i_and_a_back(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "reading-go");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    converse(cx, &workspace, &view, &["alpha beta"]);
+    keys::press(cx, &workspace, "escape ctrl-w k");
+    assert!(
+        in_part(cx, "ChatReading"),
+        "the conversation has the keyboard"
+    );
+    assert_eq!(shown_mode(cx), Some("Normal"));
+    assert_eq!(
+        reading_cursor(cx, &view),
+        Some((0, 0, 0)),
+        "the cursor starts on the first row in sight"
+    );
+
+    keys::press(cx, &workspace, "3 escape");
+    assert!(
+        in_part(cx, "ChatReading"),
+        "escape leaves the keyboard there"
+    );
+    assert_eq!(agent_state(cx, &view), State::Idle);
+    assert_eq!(held(cx), "", "escape forgets the count");
+
+    keys::press(cx, &workspace, "ctrl-w j");
+    assert!(in_part(cx, "LineInput"), "ctrl-w j goes back to the input");
+    keys::press(cx, &workspace, "ctrl-w k ctrl-w k");
+    assert!(in_part(cx, "Chats"), "up from the conversation is the list");
+    keys::press(cx, &workspace, "escape");
+    assert!(in_part(cx, "LineInput"));
+
+    keys::press(cx, &workspace, "ctrl-w k i");
+    assert!(in_part(cx, "LineInput"));
+    assert_eq!(shown_mode(cx), Some("Insert"));
+    cx.simulate_input("xz");
+    keys::press(cx, &workspace, "escape h ctrl-w k a");
+    assert_eq!(shown_mode(cx), Some("Insert"));
+    cx.simulate_input("y");
+    assert_eq!(
+        keys::shown_input(cx, &workspace),
+        "xyz",
+        "a types after the input's cursor"
+    );
+
+    keys::press(cx, &workspace, "escape ctrl-w k ctrl-w h");
+    assert!(
+        in_part(cx, "Rail"),
+        "left of the conversation, as of the chat"
+    );
+    keys::press(cx, &workspace, "ctrl-w l");
+    assert!(in_part(cx, "LineInput"));
+    keys::press(cx, &workspace, "0 x");
+    assert_eq!(
+        keys::shown_input(cx, &workspace),
+        "yz",
+        "normal mode edits the input as before"
+    );
+}
+
+/// In the conversation `h`, `l`, `w`, `b`, `e`, `0` and `$` move the
+/// cursor along the text and `j` and `k` from row to row, entry to entry.
+#[gpui::test]
+fn the_conversation_s_cursor_moves_by_characters_words_and_rows(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "reading-move");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    converse(cx, &workspace, &view, &["alpha beta", "gamma"]);
+    keys::press(cx, &workspace, "escape ctrl-w k g g");
+    let moves = [
+        ("w", (0, 0, 6)),
+        ("e", (0, 0, 9)),
+        ("b", (0, 0, 6)),
+        ("2 h", (0, 0, 4)),
+        ("l", (0, 0, 5)),
+        ("0", (0, 0, 0)),
+        ("$", (0, 0, 9)),
+        ("j", (1, 0, 15)),
+        ("j", (2, 0, 4)),
+        ("j", (3, 0, 10)),
+        ("2 k", (1, 0, 15)),
+        ("0", (1, 0, 0)),
+        ("3 w", (1, 0, 12)),
+        ("w", (2, 0, 0)),
+        ("b", (1, 0, 12)),
+        ("5 e", (3, 0, 10)),
+        ("g g", (0, 0, 0)),
+    ];
+    for (keys, at) in moves {
+        keys::press(cx, &workspace, keys);
+        assert_eq!(reading_cursor(cx, &view), Some(at), "after {keys}");
+    }
+    assert_eq!(keys::shown_input(cx, &workspace), "", "nothing was typed");
+}
+
+/// `v` selects characters from the cursor and `V` whole pieces of text,
+/// motions grow what they select, `y` copies it and `escape` lets it go.
+#[gpui::test]
+fn visual_mode_selects_in_the_conversation_and_y_copies(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "reading-visual");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    converse(cx, &workspace, &view, &["alpha beta", "gamma"]);
+    keys::press(cx, &workspace, "escape ctrl-w k g g");
+    let copied = |cx: &mut VisualTestContext| cx.read_from_clipboard().and_then(|item| item.text());
+    let selected = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.selected_text());
+
+    keys::press(cx, &workspace, "w v");
+    assert_eq!(shown_mode(cx), Some("Visual"));
+    assert_eq!(selected(cx), "b", "the character under the cursor");
+    keys::press(cx, &workspace, "e");
+    assert_eq!(selected(cx), "beta");
+    keys::press(cx, &workspace, "y");
+    assert_eq!(copied(cx).as_deref(), Some("beta"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
+    assert_eq!(selected(cx), "", "y lets go of what it copied");
+    assert_eq!(reading_cursor(cx, &view), Some((0, 0, 6)), "at its start");
+
+    keys::press(cx, &workspace, "j l v 3 l y");
+    assert_eq!(
+        copied(cx).as_deref(),
+        Some("lpha"),
+        "j keeps to the x, in the echo below"
+    );
+
+    keys::press(cx, &workspace, "j shift-v");
+    assert_eq!(shown_mode(cx), Some("Visual Line"));
+    assert_eq!(selected(cx), "gamma", "the whole piece");
+    keys::press(cx, &workspace, "j");
+    assert!(
+        selected(cx).starts_with("gamma") && selected(cx).ends_with("echo: gamma"),
+        "grown to the next piece: {:?}",
+        selected(cx)
+    );
+    keys::press(cx, &workspace, "escape");
+    assert_eq!(shown_mode(cx), Some("Normal"));
+    assert_eq!(selected(cx), "", "escape lets it go");
+
+    keys::press(cx, &workspace, "g g v $ g a");
+    let attached = view.read_with(cx, |view, _| view.attached().to_vec());
+    assert_eq!(attached.len(), 1, "ga hands what is selected to the chat");
+    assert_eq!(attached[0].text, "alpha beta");
+    assert_eq!(keys::shown_input(cx, &workspace), "", "nothing was typed");
+}
+
+/// `/`, `n` and `]]` put the conversation's cursor on the start of what
+/// they select.
+#[gpui::test]
+fn finding_in_the_conversation_puts_its_cursor_on_what_is_found(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "reading-find");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    converse(cx, &workspace, &view, &["alpha beta", "gamma"]);
+    keys::press(cx, &workspace, "escape ctrl-w k g g");
+
+    keys::press(cx, &workspace, "/ g a m m a enter");
+    assert!(in_part(cx, "ChatReading"), "back from the line");
+    assert_eq!(reading_cursor(cx, &view), Some((2, 0, 0)));
+    keys::press(cx, &workspace, "n");
+    assert_eq!(reading_cursor(cx, &view), Some((3, 0, 6)));
+    keys::press(cx, &workspace, "[ [");
+    assert_eq!(reading_cursor(cx, &view), Some((2, 0, 0)));
+    keys::press(cx, &workspace, "[ [");
+    assert_eq!(reading_cursor(cx, &view), Some((1, 0, 0)));
+    keys::press(cx, &workspace, "e");
+    assert_eq!(
+        reading_cursor(cx, &view),
+        Some((1, 0, 3)),
+        "and moves on from there"
+    );
+}
+
+/// The cursor keeps in sight: the conversation scrolls as it moves, and
+/// it moves into sight as the conversation scrolls.
+#[gpui::test]
+fn the_conversation_s_cursor_keeps_in_sight(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "reading-sight");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    let filler = "filler ".repeat(400);
+    for _ in 0..4 {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(filler.clone()));
+        keys::press(cx, &workspace, "secondary-v enter");
+        for _ in 0..500 {
+            if agent_state(cx, &view) == State::Idle {
+                break;
+            }
+            go_on(cx, &workspace);
+        }
+    }
+    keys::press(cx, &workspace, "escape ctrl-w k g g");
+    let down = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            -view.scroll().scroll_px_offset_for_scrollbar().y
+        })
+    };
+    assert_eq!(down(cx), px(0.));
+    assert_eq!(reading_cursor(cx, &view), Some((0, 0, 0)));
+
+    let mut rows = 0;
+    while down(cx) == px(0.) && rows < 500 {
+        keys::press(cx, &workspace, "j");
+        rows += 1;
+    }
+    assert!(down(cx) > px(0.), "the rows below scroll into sight");
+
+    keys::press(cx, &workspace, "g g");
+    let first = reading_cursor(cx, &view);
+    keys::press(cx, &workspace, "ctrl-d");
+    assert!(down(cx) > px(0.));
+    assert_ne!(
+        reading_cursor(cx, &view),
+        first,
+        "scrolled out of sight, the cursor goes to the first row in sight"
+    );
+
+    keys::press(cx, &workspace, "g g");
+    let middle = view.read_with(cx, |view, _| view.scroll().viewport_bounds().center());
+    cx.simulate_event(ScrollWheelEvent {
+        position: middle,
+        delta: ScrollDelta::Lines(gpui::point(0., -20.)),
+        modifiers: gpui::Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    settled(cx, &workspace);
+    assert!(down(cx) > px(0.), "the wheel scrolls");
+    assert_ne!(
+        reading_cursor(cx, &view),
+        first,
+        "scrolled by the wheel, the cursor goes into sight too"
+    );
+
+    keys::press(cx, &workspace, "shift-g");
+    let last = reading_cursor(cx, &view).expect("a cursor");
+    assert!(last.0 >= 2, "G puts the cursor near the end: {last:?}");
+    keys::press(cx, &workspace, "g g");
+    assert_eq!(down(cx), px(0.));
+    assert_eq!(reading_cursor(cx, &view), Some((0, 0, 0)));
 }
