@@ -114,10 +114,21 @@ pub enum Step {
     Call(Call),
     /// Waits this many milliseconds.
     Sleep(u64),
+    /// Waits until the event happens, unless Cox cancels the turn or goes
+    /// first.
+    WaitFor(Event),
     /// Writes the line to standard error.
     Stderr(String),
     /// Ends the turn with an error saying this.
     Fail(String),
+}
+
+/// Something a [`Step::WaitFor`] waits for.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Event {
+    /// Cox steers a line into the turn, as `{ "wait_for": "steer" }`.
+    Steer,
 }
 
 /// ACP's `session/request_permission`: its `toolCall` and `options`, and

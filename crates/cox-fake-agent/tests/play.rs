@@ -8,9 +8,12 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use tempfile::TempDir;
 
 /// The agent, playing a scenario, as Cox talks to it.
 struct Agent {
+    /// The folder of the scenario's file, removed once the agent goes.
+    folder: TempDir,
     child: Child,
     input: ChildStdin,
     heard: Receiver<Value>,
@@ -18,9 +21,10 @@ struct Agent {
 }
 
 impl Agent {
-    /// Starts the agent on `scenario`, written to a file named `name`.
-    fn play(name: &str, scenario: &Value) -> Self {
-        let path = scratch(name);
+    /// Starts the agent on `scenario`, written to a file of its own.
+    fn play(scenario: &Value) -> Self {
+        let folder = TempDir::new().unwrap();
+        let path = folder.path().join("scenario.json");
         std::fs::write(&path, scenario.to_string()).unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_cox-fake-agent"))
             .arg(&path)
@@ -40,6 +44,7 @@ impl Agent {
             }
         });
         Self {
+            folder,
             child,
             input,
             heard,
@@ -48,12 +53,17 @@ impl Agent {
     }
 
     /// Starts the agent and a session with it, handing it `servers`.
-    fn session(name: &str, scenario: &Value, servers: &Value) -> Self {
-        let mut agent = Self::play(name, scenario);
+    fn session(scenario: &Value, servers: &Value) -> Self {
+        let mut agent = Self::play(scenario);
         agent.ask("initialize", &json!({ "protocolVersion": 1 }));
         let (_, opened) = agent.ask("session/new", &json!({ "cwd": "/", "mcpServers": servers }));
         assert_eq!(opened["result"]["sessionId"], "fake-1");
         agent
+    }
+
+    /// The file of the scenario the agent plays.
+    fn scenario(&self) -> PathBuf {
+        self.folder.path().join("scenario.json")
     }
 
     fn send(&mut self, message: &Value) {
@@ -110,10 +120,6 @@ impl Drop for Agent {
     }
 }
 
-fn scratch(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("cox-fake-agent-{}-{name}.json", std::process::id()))
-}
-
 /// The updates among `sent`.
 fn updates(sent: &[Value]) -> Vec<&Value> {
     sent.iter()
@@ -139,7 +145,7 @@ fn a_turn_takes_its_steps_in_order() {
         { "say": "It prints hello." },
         { "update": { "sessionUpdate": "session_info_update", "title": "Greeting" } },
     ] }] });
-    let mut agent = Agent::session("order", &scenario, &json!([]));
+    let mut agent = Agent::session(&scenario, &json!([]));
 
     let (sent, answer) = agent.turn("what does it print?");
 
@@ -160,7 +166,7 @@ fn a_turn_goes_on_by_itself_after_it_ended() {
         "steps": [{ "say": "Started." }],
         "after": [{ "sleep": 10 }, { "say": "Finished." }],
     }] });
-    let mut agent = Agent::session("after", &scenario, &json!([]));
+    let mut agent = Agent::session(&scenario, &json!([]));
 
     let (sent, answer) = agent.turn("run it in the background");
     let (went_on, _) =
@@ -178,7 +184,7 @@ fn each_line_takes_the_first_turn_left_that_answers_it() {
         { "steps": [{ "say": "First." }], "stop": "max_tokens" },
         { "steps": [{ "say": "Second." }] },
     ] });
-    let mut agent = Agent::session("when", &scenario, &json!([]));
+    let mut agent = Agent::session(&scenario, &json!([]));
 
     let (sent, answer) = agent.turn("hello");
     assert_eq!(replied(&sent), "First.");
@@ -203,7 +209,7 @@ fn an_ask_goes_on_as_cox_answers() {
         "then": { "allow": [{ "say": "Edited." }], "reject": [{ "say": "Left as it was." }] },
     } });
     let scenario = json!({ "turns": [{ "steps": [ask] }, { "steps": [ask] }] });
-    let mut agent = Agent::session("ask", &scenario, &json!([]));
+    let mut agent = Agent::session(&scenario, &json!([]));
 
     for (chosen, said) in [("reject", "Left as it was."), ("allow", "Edited.")] {
         let id = agent.prompt("edit it");
@@ -226,7 +232,7 @@ fn cancelling_ends_the_turn() {
         { "steps": [{ "say": "Working." }, { "sleep": 60_000 }, { "say": "Never said." }] },
         { "steps": [{ "say": "Still here." }] },
     ] });
-    let mut agent = Agent::session("cancel", &scenario, &json!([]));
+    let mut agent = Agent::session(&scenario, &json!([]));
 
     let id = agent.prompt("go");
     agent.until(|message| message["params"]["update"]["content"]["text"] == "Working.");
@@ -242,12 +248,30 @@ fn cancelling_ends_the_turn() {
 }
 
 #[test]
+fn cancelling_ends_a_turn_waiting_for_a_steer() {
+    let scenario = json!({ "turns": [
+        { "steps": [{ "say": "Working." }, { "wait_for": "steer" }, { "say": "Never said." }] },
+    ] });
+    let mut agent = Agent::session(&scenario, &json!([]));
+
+    let id = agent.prompt("go");
+    agent.until(|message| message["params"]["update"]["content"]["text"] == "Working.");
+    agent.send(&json!({
+        "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": "fake-1" },
+    }));
+    let (sent, answer) = agent.until(|message| message["id"] == id);
+
+    assert_eq!(answer["result"]["stopReason"], "cancelled");
+    assert_eq!(replied(&sent), "");
+}
+
+#[test]
 fn a_line_steered_into_a_turn_takes_its_turn_before_the_turn_ends() {
     let scenario = json!({ "turns": [
-        { "steps": [{ "say": "Working." }, { "sleep": 300 }, { "say": "Done." }] },
+        { "steps": [{ "say": "Working." }, { "wait_for": "steer" }, { "say": "Done." }] },
         { "when": "also", "steps": [{ "say": "And that too." }] },
     ] });
-    let mut agent = Agent::play("steer", &scenario);
+    let mut agent = Agent::play(&scenario);
     let (_, initialized) = agent.ask("initialize", &json!({ "protocolVersion": 1 }));
     assert_eq!(
         initialized["result"]["_meta"]["steering"]["supported"],
@@ -291,7 +315,7 @@ done"#;
         { "call": { "tool": "wait_chat", "arguments": { "chat": "{result:number after as chat }" } } },
         { "say": "It said: {result}" },
     ] }] });
-    let mut agent = Agent::session("call", &scenario, &servers);
+    let mut agent = Agent::session(&scenario, &servers);
 
     let (sent, answer) = agent.turn("get it reviewed");
 
@@ -324,7 +348,7 @@ fn a_session_has_the_settings_of_the_scenario_and_sets_them() {
         ],
     });
     let scenario = json!({ "configOptions": [model], "turns": [] });
-    let mut agent = Agent::play("settings", &scenario);
+    let mut agent = Agent::play(&scenario);
     agent.ask("initialize", &json!({ "protocolVersion": 1 }));
     let (_, opened) = agent.ask("session/new", &json!({ "cwd": "/", "mcpServers": [] }));
     assert_eq!(opened["result"]["configOptions"], json!([model]));
@@ -355,7 +379,7 @@ fn ways_to_log_in() -> Value {
 #[test]
 fn an_agent_that_asks_to_log_in_opens_a_session_once_cox_has() {
     let scenario = json!({ "authMethods": ways_to_log_in(), "turns": [] });
-    let mut agent = Agent::play("login", &scenario);
+    let mut agent = Agent::play(&scenario);
     let (_, initialized) = agent.ask("initialize", &json!({ "protocolVersion": 1 }));
     assert_eq!(initialized["result"]["authMethods"], ways_to_log_in());
     let new = json!({ "cwd": "/", "mcpServers": [] });
@@ -378,11 +402,16 @@ fn logging_in_in_a_terminal_logs_in_the_agent_of_the_scenario() {
         "authRequired": "prompt",
         "turns": [{ "steps": [{ "say": "Hello." }] }],
     });
-    let mut agent = Agent::session("terminal-login", &scenario, &json!([]));
+    let mut agent = Agent::session(&scenario, &json!([]));
     let (_, refused) = agent.turn("hi");
     assert_eq!(refused["error"]["code"], -32000);
 
-    let path = scratch("terminal-login");
+    let path = agent.scenario();
+    let _login = Removed(
+        std::env::temp_dir()
+            .join("cox-fake-agent-logins")
+            .join(path.to_string_lossy().replace('/', "%")),
+    );
     let logged_in = Command::new(env!("CARGO_BIN_EXE_cox-fake-agent"))
         .arg(&path)
         .arg("--log-in")
@@ -390,18 +419,23 @@ fn logging_in_in_a_terminal_logs_in_the_agent_of_the_scenario() {
         .unwrap();
     assert!(logged_in.status.success());
     let (sent, answer) = agent.turn("hi");
-    let _ = std::fs::remove_file(
-        std::env::temp_dir()
-            .join("cox-fake-agent-logins")
-            .join(path.to_string_lossy().replace('/', "%")),
-    );
     assert_eq!(answer["result"]["stopReason"], "end_turn");
     assert_eq!(replied(&sent), "Hello.");
 }
 
+/// A file removed once dropped, even when a test fails.
+struct Removed(PathBuf);
+
+impl Drop for Removed {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[test]
 fn a_scenario_it_cannot_read_stops_it() {
-    let path = scratch("broken");
+    let folder = TempDir::new().unwrap();
+    let path = folder.path().join("broken.json");
     std::fs::write(&path, r#"{ "turns": [{ "steps": [{ "shout": "x" }] }] }"#).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_cox-fake-agent"))
