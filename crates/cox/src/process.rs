@@ -39,19 +39,40 @@ mod tests {
         flags >= 0 && flags & libc::FD_CLOEXEC != 0
     }
 
+    /// Set in the copy of the test program that checks `close_on_exec`
+    /// alone, where no other test marks its files meanwhile.
+    const ALONE: &str = "COX_CLOSE_ON_EXEC_ALONE";
+
     #[test]
     fn every_open_file_is_marked_to_close_when_a_program_starts() {
+        if std::env::var_os(ALONE).is_none() {
+            let alone = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "process::tests::every_open_file_is_marked_to_close_when_a_program_starts",
+                    "--test-threads=1",
+                ])
+                .env(ALONE, "1")
+                .output()
+                .unwrap();
+            let said = String::from_utf8_lossy(&alone.stdout);
+            assert!(
+                alone.status.success() && said.contains("1 passed"),
+                "the check alone did not pass: {said}"
+            );
+            return;
+        }
         let open = std::fs::File::open("/dev/null").unwrap();
         // A copy, which stays open across `exec`, like CEF's port.
         // SAFETY: `open` is a valid descriptor; the copy is closed below.
         let inherited = unsafe { libc::dup(open.as_raw_fd()) };
         assert!(inherited > 2);
-        assert!(!closes_on_exec(inherited));
+        assert!(!closes_on_exec(inherited), "a copy starts open across exec");
 
         close_on_exec();
 
-        assert!(closes_on_exec(inherited));
-        assert!(closes_on_exec(open.as_raw_fd()));
+        assert!(closes_on_exec(inherited), "the copy is marked");
+        assert!(closes_on_exec(open.as_raw_fd()), "the original is marked");
         // SAFETY: `inherited` is open, and nothing else uses it.
         unsafe { libc::close(inherited) };
     }
