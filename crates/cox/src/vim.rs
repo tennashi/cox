@@ -179,6 +179,8 @@ impl Sent {
             Self::PreviousFit => Box::new(line::PreviousFit),
             Self::Older => Box::new(line::Older),
             Self::Newer => Box::new(line::Newer),
+            Self::NextEntry => Box::new(crate::chat::view::NextEntry),
+            Self::PreviousEntry => Box::new(crate::chat::view::PreviousEntry),
         }
     }
 

@@ -182,6 +182,10 @@ pub enum Sent {
     Older,
     /// Puts the line typed after in it (`down`).
     Newer,
+    /// Selects the next entry of the conversation (`]]`).
+    NextEntry,
+    /// Selects the entry before (`[[`).
+    PreviousEntry,
 }
 
 /// What the window does for Vim's keys: where the keyboard goes, and
@@ -506,6 +510,9 @@ impl Keymap {
         across(CODE, &["0"], Across::LineStart),
         across(CODE, &["^"], Across::FirstNonBlank),
         across(CODE, &["$"], Across::LineEnd),
+        send(&[Region::Chat], &["]", "]"], Sent::NextEntry),
+        send(&[Region::Chat], &["[", "["], Sent::PreviousEntry),
+        send(&[Region::Chat], &["g", "y"], Sent::Copy),
         send(CODE, &["shift-v"], Sent::Visual),
         send(CODE, &["y"], Sent::Copy),
         send(CODE, &["g", "a"], Sent::AddToChat),

@@ -1,20 +1,39 @@
-//! Vim's `/`, `?`, `n` and `N` in the conversation: the entries whose
-//! text has what is searched for, in the order the search goes through
-//! them, each scrolled to until one, laid out, shows a match, which is
-//! selected and brought into sight.
+//! Vim's keys going through the conversation: `/`, `?`, `n` and `N`,
+//! to the entries whose text has what is searched for, and `]]` and `[[`,
+//! from entry to entry. Each entry is scrolled to until one, laid out,
+//! shows what is looked for, which is selected and brought into sight.
 
 use std::collections::VecDeque;
 
 use cox_core::entry::Entry;
-use gpui::{Context, IntoElement, ListOffset, Window, canvas, px};
+use gpui::{
+    Context, InteractiveElement as _, IntoElement, ListOffset, Window, actions, canvas, px,
+};
 
 use super::ChatView;
 use crate::vim::search::{self, Direction, Find};
 
+actions!(
+    chat,
+    [
+        /// Selects the next entry of the conversation (`]]`).
+        NextEntry,
+        /// Selects the entry before (`[[`).
+        PreviousEntry,
+    ]
+);
+
+/// What a search through the conversation looks for in an entry.
+enum Looked {
+    /// The next match of `query`, as `direction` goes.
+    Text { query: String, direction: Direction },
+    /// The whole entry, if it shows text.
+    Whole,
+}
+
 /// A search going through the conversation.
 pub(super) struct Finding {
-    query: String,
-    direction: Direction,
+    looked: Looked,
     /// The entries left to look in, each with whether to look after what
     /// is selected in it: the one it starts in, the first time.
     left: VecDeque<(usize, bool)>,
@@ -23,36 +42,90 @@ pub(super) struct Finding {
 }
 
 impl ChatView {
-    /// Starts a search through the conversation, from what is selected,
-    /// or the first entry in sight; the frame that lays the next entry
-    /// with a match out finds it (see [`Self::go_on_finding`]).
-    pub(super) fn find_text(&mut self, find: &Find, _: &mut Window, cx: &mut Context<Self>) {
-        let entries = self.conversation.entries();
-        let start = self.reading.selected_entry().or_else(|| {
-            let top = self.list.logical_scroll_top().item_ix;
-            self.places.get(top).map(super::entries::Place::first)
-        });
-        let Some(start) = start.filter(|&start| start < entries.len()) else {
-            return;
-        };
-        let has =
-            |entry: usize| !search::matches(&find.text, &searched(&entries[entry])).is_empty();
-        let left = order(start, entries.len(), find.direction)
-            .filter(|&(entry, _)| has(entry))
-            .collect();
+    /// The entry a search starts from: the one with what is selected, or
+    /// the first in sight.
+    fn searched_from(&self) -> Option<usize> {
+        self.reading
+            .selected_entry()
+            .or_else(|| {
+                let top = self.list.logical_scroll_top().item_ix;
+                self.places.get(top).map(super::entries::Place::first)
+            })
+            .filter(|&start| start < self.conversation.entries().len())
+    }
+
+    /// Starts going through the conversation; the frame that lays out the
+    /// next entry to look in finds in it (see [`Self::go_on_finding`]).
+    fn look(&mut self, looked: Looked, left: VecDeque<(usize, bool)>, cx: &mut Context<Self>) {
         self.finding = Some(Finding {
-            query: find.text.clone(),
-            direction: find.direction,
+            looked,
             left,
             scrolled: None,
         });
         cx.notify();
     }
 
-    /// Goes on with the search, once a frame laid the conversation out:
-    /// selects the match in the next entry that has one as laid out, and
-    /// brings it into sight, a third of the way down; or scrolls to the
-    /// entry, for the next frame to lay it out.
+    /// Starts a search through the conversation, from what is selected,
+    /// or the first entry in sight, round to it again.
+    pub(super) fn find_text(&mut self, find: &Find, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(start) = self.searched_from() else {
+            return;
+        };
+        let entries = self.conversation.entries();
+        let has =
+            |entry: usize| !search::matches(&find.text, &searched(&entries[entry])).is_empty();
+        let left = order(start, entries.len(), find.direction)
+            .filter(|&(entry, _)| has(entry))
+            .collect();
+        let looked = Looked::Text {
+            query: find.text.clone(),
+            direction: find.direction,
+        };
+        self.look(looked, left, cx);
+    }
+
+    /// Selects the entry after the one selected, or with none, the first
+    /// in sight: the next that shows text, to the conversation's end.
+    pub(super) fn next_entry(&mut self, _: &NextEntry, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(start) = self.searched_from() else {
+            return;
+        };
+        let first = if self.reading.selected_entry().is_some() {
+            start + 1
+        } else {
+            start
+        };
+        let left = (first..self.conversation.entries().len())
+            .map(|entry| (entry, false))
+            .collect();
+        self.look(Looked::Whole, left, cx);
+    }
+
+    /// Selects the entry before the one selected, or with none, the first
+    /// in sight: the one before that shows text, to the conversation's
+    /// start.
+    pub(super) fn previous_entry(
+        &mut self,
+        _: &PreviousEntry,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(start) = self.searched_from() else {
+            return;
+        };
+        let last = if self.reading.selected_entry().is_some() {
+            start
+        } else {
+            start + 1
+        };
+        let left = (0..last).rev().map(|entry| (entry, false)).collect();
+        self.look(Looked::Whole, left, cx);
+    }
+
+    /// Goes on going through the conversation, once a frame laid it out:
+    /// selects what is looked for in the next entry that shows it as laid
+    /// out, and brings it into sight, a third of the way down; or scrolls
+    /// to the entry, for the next frame to lay it out.
     pub(super) fn go_on_finding(&mut self, cx: &mut Context<Self>) {
         let Some(mut finding) = self.finding.take() else {
             return;
@@ -77,10 +150,13 @@ impl ChatView {
                 cx.notify();
                 return;
             }
-            if let Some(at) = self
-                .reading
-                .find_in(entry, &finding.query, finding.direction, after)
-            {
+            let found = match &finding.looked {
+                Looked::Text { query, direction } => {
+                    self.reading.find_in(entry, query, *direction, after)
+                }
+                Looked::Whole => self.reading.select_entry(entry),
+            };
+            if let Some(at) = found {
                 let view = self.list.viewport_bounds();
                 self.list
                     .scroll_by(at.y - view.origin.y - view.size.height / 3.);
@@ -93,6 +169,14 @@ impl ChatView {
 }
 
 impl ChatView {
+    /// Takes Vim's keys that go through the conversation on `element`.
+    pub(super) fn go_through_by_keys(element: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+        element
+            .on_action(cx.listener(Self::find_text))
+            .on_action(cx.listener(Self::next_entry))
+            .on_action(cx.listener(Self::previous_entry))
+    }
+
     /// What finds in the conversation once it is painted, while a search
     /// goes on: right after the frame, which cannot ask for another.
     pub(super) fn render_finding(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {

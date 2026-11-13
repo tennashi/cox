@@ -404,6 +404,31 @@ impl Reading {
         start
     }
 
+    /// Selects the whole of entry `entry`, as the last frame laid it out,
+    /// if it shows text, and answers where it starts as the frame drew it.
+    pub fn select_entry(&mut self, entry: usize) -> Option<Point<Pixels>> {
+        let texts = self.painted.0.borrow();
+        let mut pieces = texts
+            .iter()
+            .filter(|text| text.id.entry == entry && text.current && !text.text.is_empty());
+        let first = pieces.next()?;
+        let last = pieces.next_back().unwrap_or(first);
+        let selection = Selection {
+            anchor: Spot {
+                text: first.id,
+                offset: 0,
+            },
+            head: Spot {
+                text: last.id,
+                offset: last.text.len(),
+            },
+        };
+        let start = first.layout.position_for_index(0);
+        drop(texts);
+        self.selection = Some(selection);
+        start
+    }
+
     /// The text selected.
     #[must_use]
     pub fn selected_text(&self) -> String {

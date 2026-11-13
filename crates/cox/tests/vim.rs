@@ -2704,3 +2704,38 @@ fn slash_finds_in_the_conversation_and_n_goes_on(cx: &mut TestAppContext) {
     );
     assert_eq!(keys::shown_input(cx, &workspace), "", "nothing was typed");
 }
+
+/// `]]` and `[[` select the conversation's entries one after another,
+/// from the first in sight, and `gy` copies the one selected.
+#[gpui::test]
+fn brackets_go_from_entry_to_entry_and_gy_copies_one(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "chat-entries");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    for line in ["alpha", "beta"] {
+        cx.simulate_input(line);
+        keys::press(cx, &workspace, "enter");
+        for _ in 0..500 {
+            if agent_state(cx, &view) == State::Idle {
+                break;
+            }
+            go_on(cx, &workspace);
+        }
+    }
+    keys::press(cx, &workspace, "escape g g");
+    let selected = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.selected_text());
+
+    keys::press(cx, &workspace, "] ]");
+    assert_eq!(selected(cx), "alpha", "the first entry in sight");
+    keys::press(cx, &workspace, "] ]");
+    assert_eq!(selected(cx), "echo: alpha");
+    keys::press(cx, &workspace, "] ] ] ]");
+    assert_eq!(selected(cx), "echo: beta");
+    keys::press(cx, &workspace, "[ [");
+    assert_eq!(selected(cx), "beta");
+
+    keys::press(cx, &workspace, "g y");
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("beta"));
+    assert_eq!(keys::shown_input(cx, &workspace), "", "nothing was typed");
+}
