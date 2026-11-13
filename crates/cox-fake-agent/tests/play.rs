@@ -465,3 +465,128 @@ fn the_scenarios_that_come_with_it_read() {
         );
     }
 }
+
+/// The fake agent run with `args`, reading nothing.
+fn run_with(args: &[&std::ffi::OsStr]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_cox-fake-agent"))
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn arguments_it_does_not_take_stop_it_saying_how_to_run_it() {
+    for args in [
+        &[][..],
+        &["--log-in"],
+        &["--from-log"],
+        &["s.json", "--log-out"],
+        &["--from-log", "run.log", "--chat"],
+        &["a.json", "b.json", "c.json"],
+    ] {
+        let args: Vec<_> = args.iter().map(std::ffi::OsStr::new).collect();
+        let output = run_with(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).starts_with("Usage: cox-fake-agent"),
+            "{args:?}"
+        );
+    }
+}
+
+/// A line of a run Cox kept: `message`, from `from`, in the chat 1.
+fn kept(at: &str, from: &str, message: &Value) -> String {
+    json!({
+        "timestamp": format!("2026-11-01T{at}Z"),
+        "level": "DEBUG",
+        "fields": { "message": message.to_string(), "from": from },
+        "target": "cox_acp::wire",
+        "spans": [{ "name": "chat", "id": 1 }, { "name": "connection" }],
+    })
+    .to_string()
+}
+
+/// A run Cox kept, in which the agent of the chat 1 answered a prompt
+/// with `Hello.`.
+fn kept_run() -> String {
+    [
+        kept(
+            "10:00:00.000",
+            "cox",
+            &json!({ "jsonrpc": "2.0", "id": 1, "method": "session/prompt" }),
+        ),
+        kept(
+            "10:00:00.000",
+            "agent",
+            &json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "s",
+                "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Hello." } } } }),
+        ),
+        kept(
+            "10:00:00.000",
+            "agent",
+            &json!({ "jsonrpc": "2.0", "id": 1, "result": { "stopReason": "end_turn" } }),
+        ),
+    ]
+    .join("\n")
+}
+
+#[test]
+fn a_scenario_written_from_a_run_plays_what_the_agent_did() {
+    let folder = TempDir::new().unwrap();
+    let run = folder.path().join("run.log");
+    std::fs::write(&run, kept_run()).unwrap();
+
+    let written = run_with(&["--from-log".as_ref(), run.as_os_str()]);
+    assert!(
+        written.status.success(),
+        "{}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+    let scenario: Value = serde_json::from_slice(&written.stdout).unwrap();
+    let mut agent = Agent::session(&scenario, &json!([]));
+    let (sent, answer) = agent.turn("hi");
+
+    assert_eq!(replied(&sent), "Hello.");
+    assert_eq!(answer["result"]["stopReason"], "end_turn");
+}
+
+#[test]
+fn a_scenario_is_written_from_the_chat_of_a_run_named() {
+    let folder = TempDir::new().unwrap();
+    let run = folder.path().join("run.log");
+    std::fs::write(&run, kept_run()).unwrap();
+
+    let named = run_with(&[
+        "--from-log".as_ref(),
+        run.as_os_str(),
+        "--chat".as_ref(),
+        "1".as_ref(),
+    ]);
+    let other = run_with(&[
+        "--from-log".as_ref(),
+        run.as_os_str(),
+        "--chat".as_ref(),
+        "2".as_ref(),
+    ]);
+
+    assert!(named.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&named.stdout).unwrap()["turns"][0]["steps"][0]["update"]["content"]
+            ["text"],
+        "Hello."
+    );
+    assert_eq!(other.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&other.stderr).contains("no chat 2"));
+}
+
+#[test]
+fn a_run_it_cannot_read_stops_it() {
+    let folder = TempDir::new().unwrap();
+    let missing = folder.path().join("missing.log");
+
+    let output = run_with(&["--from-log".as_ref(), missing.as_os_str()]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot read"));
+}
