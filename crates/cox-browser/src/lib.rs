@@ -57,17 +57,18 @@ use cef::rc::Rc as _;
 use cef::{
     App, BrowserHost, BrowserProcessHandler, BrowserSettings, CefString, Client, CommandLine,
     CompositionUnderline, ContextMenuHandler, ContextMenuParams, DevToolsMessageObserver,
-    DisplayHandler, ImplApp, ImplBrowser, ImplBrowserHost, ImplBrowserProcessHandler, ImplClient,
-    ImplCommandLine, ImplContextMenuHandler, ImplContextMenuParams, ImplDevToolsMessageObserver,
-    ImplDisplayHandler, ImplDomnode, ImplFrame, ImplLifeSpanHandler, ImplListValue,
-    ImplLoadHandler, ImplMenuModel, ImplProcessMessage, ImplRenderHandler,
-    ImplRenderProcessHandler, ImplRequest, ImplRequestHandler, ImplTask, LifeSpanHandler,
-    LoadHandler, MenuModel, Registration, RenderHandler, RenderProcessHandler, RequestHandler,
-    ResourceRequestHandler, SchemeRegistrar, Settings, Task, ThreadId, WindowInfo, WrapApp,
-    WrapBrowserProcessHandler, WrapClient, WrapContextMenuHandler, WrapDevToolsMessageObserver,
-    WrapDisplayHandler, WrapLifeSpanHandler, WrapLoadHandler, WrapRenderHandler,
-    WrapRenderProcessHandler, WrapRequestHandler, WrapTask, wrap_app, wrap_browser_process_handler,
-    wrap_client, wrap_context_menu_handler, wrap_dev_tools_message_observer, wrap_display_handler,
+    DisplayHandler, FindHandler, ImplApp, ImplBrowser, ImplBrowserHost, ImplBrowserProcessHandler,
+    ImplClient, ImplCommandLine, ImplContextMenuHandler, ImplContextMenuParams,
+    ImplDevToolsMessageObserver, ImplDisplayHandler, ImplDomnode, ImplFindHandler, ImplFrame,
+    ImplLifeSpanHandler, ImplListValue, ImplLoadHandler, ImplMenuModel, ImplProcessMessage,
+    ImplRenderHandler, ImplRenderProcessHandler, ImplRequest, ImplRequestHandler, ImplTask,
+    LifeSpanHandler, LoadHandler, MenuModel, Registration, RenderHandler, RenderProcessHandler,
+    RequestHandler, ResourceRequestHandler, SchemeRegistrar, Settings, Task, ThreadId, WindowInfo,
+    WrapApp, WrapBrowserProcessHandler, WrapClient, WrapContextMenuHandler,
+    WrapDevToolsMessageObserver, WrapDisplayHandler, WrapFindHandler, WrapLifeSpanHandler,
+    WrapLoadHandler, WrapRenderHandler, WrapRenderProcessHandler, WrapRequestHandler, WrapTask,
+    wrap_app, wrap_browser_process_handler, wrap_client, wrap_context_menu_handler,
+    wrap_dev_tools_message_observer, wrap_display_handler, wrap_find_handler,
     wrap_life_span_handler, wrap_load_handler, wrap_render_handler, wrap_render_process_handler,
     wrap_request_handler, wrap_task,
 };
@@ -137,6 +138,9 @@ pub enum Event {
     /// that takes text, or left it for something that does not: or a new
     /// page started, where nothing has it yet.
     EditableFocus { editable: bool },
+    /// What [`Browser::find`] looks for is in the page this many times,
+    /// and the match selected is the `active`th, from 1, or none is.
+    Found { count: u32, active: u32 },
 }
 
 /// Where the browser is in its history, as the toolbar shows it, and what
@@ -732,6 +736,21 @@ impl Browser {
     pub fn reload(&self) {
         if let Some(browser) = self.browser() {
             browser.reload();
+        }
+    }
+
+    /// Finds `text` in the page, as `forward` says, in its case only when
+    /// `exact`, and selects the match after the one selected, when `next`
+    /// says it goes on from it, or else the first. The page answers with
+    /// [`Event::Found`].
+    pub fn find(&self, text: &str, forward: bool, exact: bool, next: bool) {
+        if let Some(host) = self.host() {
+            host.find(
+                Some(&CefString::from(text)),
+                i32::from(forward),
+                i32::from(exact),
+                i32::from(next),
+            );
         }
     }
 

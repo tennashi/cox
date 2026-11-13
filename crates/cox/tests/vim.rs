@@ -20,6 +20,7 @@ use cox::stage::document::Document;
 use cox::stage::terminal::{Program, Running, Terminal};
 use cox::stage::tree::{Chosen, Tree};
 use cox::vim::Mode;
+use cox::vim::keymap::Follow;
 use cox::workspace::Workspace;
 use gpui::{
     Entity, EntityInputHandler as _, Focusable as _, ScrollDelta, ScrollWheelEvent, TestAppContext,
@@ -882,6 +883,7 @@ impl gpui::Render for FakePage {
         _: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
+        use cox::vim::search::Find;
         use cox::vim::{Address, CopyAddress, FocusField, Hint, Label, Leave, Move, Reload};
         use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
 
@@ -904,6 +906,9 @@ impl gpui::Render for FakePage {
             }))
             .on_action(cx.listener(move |page, _: &Leave, _, _| keep(page, "leave".into())))
             .on_action(cx.listener(move |page, _: &Reload, _, _| keep(page, "reload".into())))
+            .on_action(cx.listener(move |page, find: &Find, _, _| {
+                keep(page, format!("find {} {:?}", find.text, find.direction));
+            }))
             .on_action(cx.listener(move |page, _: &FocusField, _, _| keep(page, "field".into())))
             .on_action(cx.listener(move |page, _: &CopyAddress, _, _| keep(page, "copy".into())))
             .on_action(cx.listener(move |page, _: &Address, _, _| keep(page, "address".into())))
@@ -991,4 +996,374 @@ fn hint_mode_sends_the_labels_typed_to_the_page_until_escape(cx: &mut TestAppCon
     cx.update(|_, cx| cox::vim::enter(Mode::Normal, cx));
     cx.simulate_keystrokes("j");
     assert_eq!(asked(&page, cx), ["Down None"]);
+}
+
+/// What the line at the window's foot shows: whether it is open, what is
+/// typed in it, what the list over it holds, and what it said.
+#[derive(Debug, PartialEq, Eq)]
+struct Shown {
+    open: bool,
+    text: String,
+    fits: Vec<String>,
+    said: Option<String>,
+}
+
+fn line(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Shown {
+    workspace.read_with(cx, |workspace, cx| {
+        let line = workspace.line().expect("Vim's keys are on").read(cx);
+        Shown {
+            open: line.is_open(),
+            text: line.text(cx).to_owned(),
+            fits: line.fits().into_iter().map(|fit| fit.line).collect(),
+            said: line.said().map(str::to_owned),
+        }
+    })
+}
+
+#[gpui::test]
+fn colon_opens_the_line_whose_list_narrows_and_escape_closes_it(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line");
+    keys::press(cx, &workspace, "secondary-n escape :");
+    let shown = line(cx, &workspace);
+    assert!(shown.open);
+    assert_eq!(shown.fits.len(), cox::vim::ex::COMMANDS.len());
+    assert!(in_part(cx, "CommandLine"));
+    assert_eq!(shown_mode(cx), Some("COMMAND"));
+
+    keys::press(cx, &workspace, "s t");
+    assert_eq!(line(cx, &workspace).fits[0], "stop");
+    keys::press(cx, &workspace, "tab");
+    assert_eq!(line(cx, &workspace).text, "stop");
+    keys::press(cx, &workspace, "tab");
+    let second = line(cx, &workspace).fits[1].clone();
+    assert_eq!(line(cx, &workspace).text, second, "Tab goes along the list");
+    keys::press(cx, &workspace, "shift-tab");
+    assert_eq!(line(cx, &workspace).text, "stop");
+    keys::press(cx, &workspace, "ctrl-n ctrl-p");
+    assert_eq!(line(cx, &workspace).text, "stop");
+
+    keys::press(cx, &workspace, "escape");
+    assert!(!line(cx, &workspace).open);
+    assert!(in_part(cx, "Conversation"));
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(keys::shown_input(cx, &workspace), "");
+    let chats = workspace.read_with(cx, |workspace, _| workspace.chats(0).count());
+    assert_eq!(chats, 1, "escape ran nothing");
+}
+
+#[gpui::test]
+fn enter_runs_new_settings_and_an_action_by_its_name(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-run");
+    keys::press(cx, &workspace, "secondary-n escape");
+    let chats = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| workspace.chats(0).count())
+    };
+
+    keys::press(cx, &workspace, ": n e w enter");
+    assert_eq!(chats(cx), 2);
+    assert_eq!(shown_mode(cx), Some("INSERT"), "a new chat types at once");
+
+    keys::press(cx, &workspace, "escape : s e t enter");
+    assert!(in_part(cx, "Settings"));
+    keys::press(cx, &workspace, "escape");
+
+    keys::press(cx, &workspace, ":");
+    cx.simulate_input("cox::NewChat");
+    keys::press(cx, &workspace, "enter");
+    assert_eq!(chats(cx), 3);
+}
+
+#[gpui::test]
+fn colon_stop_stops_the_agent(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-stop");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    cx.simulate_input("wait");
+    keys::press(cx, &workspace, "enter");
+    go_on(cx, &workspace);
+    assert_eq!(agent_state(cx, &view), State::Busy);
+
+    keys::press(cx, &workspace, "escape : s t o p enter");
+    go_on(cx, &workspace);
+    assert_eq!(agent_state(cx, &view), State::Idle);
+}
+
+#[gpui::test]
+fn colon_quit_and_the_rest_go_to_the_stage(cx: &mut TestAppContext) {
+    let keyed = Keyed::default();
+    let stages = FakeStages {
+        keyed: Some(keyed.clone()),
+        ..FakeStages::default()
+    };
+    cx.update(cox::vim::install);
+    let (workspace, cx) = keys::open_window_on(cx, scratch("line-tabs"), stages);
+    keys::press(cx, &workspace, "secondary-n escape");
+
+    keys::press(
+        cx,
+        &workspace,
+        ": q enter : r e enter : b a enter : f o enter",
+    );
+    keys::press(cx, &workspace, ":");
+    cx.simulate_input("tabopen example.com");
+    keys::press(cx, &workspace, "enter :");
+    cx.simulate_input("o src/main.rs");
+    keys::press(cx, &workspace, "enter");
+    assert_eq!(
+        *keyed.borrow(),
+        [
+            Tabs::Close,
+            Tabs::Reload,
+            Tabs::Back,
+            Tabs::Forward,
+            Tabs::Open {
+                line: "example.com".to_owned(),
+                follow: Follow::NewTab
+            },
+            Tabs::Open {
+                line: "src/main.rs".to_owned(),
+                follow: Follow::Here
+            },
+        ]
+    );
+    assert_eq!(keys::shown_input(cx, &workspace), "");
+}
+
+#[gpui::test]
+fn the_line_keeps_what_was_typed_for_up_and_down(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-history");
+    keys::press(cx, &workspace, "secondary-n escape");
+    keys::press(cx, &workspace, ": q enter : h e l p enter");
+    assert!(line(cx, &workspace).open, ":help opens the line again");
+    assert_eq!(
+        line(cx, &workspace).fits.len(),
+        cox::vim::ex::COMMANDS.len(),
+        "listing every command"
+    );
+
+    keys::press(cx, &workspace, "up");
+    assert_eq!(line(cx, &workspace).text, "help");
+    keys::press(cx, &workspace, "up");
+    assert_eq!(line(cx, &workspace).text, "q");
+    keys::press(cx, &workspace, "up");
+    assert_eq!(line(cx, &workspace).text, "q", "there is none older");
+    keys::press(cx, &workspace, "down down");
+    assert_eq!(line(cx, &workspace).text, "");
+
+    keys::press(cx, &workspace, "h up");
+    assert_eq!(line(cx, &workspace).text, "help", "of those that start so");
+    keys::press(cx, &workspace, "up");
+    assert_eq!(line(cx, &workspace).text, "help");
+    keys::press(cx, &workspace, "escape");
+}
+
+#[gpui::test]
+fn the_line_says_so_of_a_command_it_does_not_know(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-unknown");
+    keys::press(cx, &workspace, "secondary-n escape : f o o enter");
+    let shown = line(cx, &workspace);
+    assert!(!shown.open);
+    assert_eq!(shown.said.as_deref(), Some("Not a command: foo"));
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    keys::press(cx, &workspace, ":");
+    assert_eq!(line(cx, &workspace).said, None);
+}
+
+#[gpui::test]
+fn colon_chat_shows_the_chat_whose_name_fits(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "line-chat");
+    keys::press(cx, &workspace, "secondary-n escape");
+    keys::press(cx, &workspace, "secondary-n escape");
+    let names: Vec<String> = workspace.read_with(cx, |workspace, _| {
+        workspace
+            .chats(0)
+            .map(|chat| chat.name().to_owned())
+            .collect()
+    });
+    let shown_key = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| {
+            workspace.shown().map(cox::workspace::Chat::key)
+        })
+    };
+    let first = workspace.read_with(cx, |workspace, _| workspace.chats(0).next().unwrap().key());
+    keys::press(cx, &workspace, ":");
+    cx.simulate_input("chat ");
+    assert_eq!(line(cx, &workspace).fits.len(), names.len());
+    keys::press(cx, &workspace, "escape");
+    assert_ne!(shown_key(cx), Some(first));
+    keys::press(cx, &workspace, ":");
+    cx.simulate_input(&format!("ch {}", names[0]));
+    keys::press(cx, &workspace, "enter");
+    assert_eq!(shown_key(cx), Some(first));
+}
+
+#[gpui::test]
+fn off_there_is_no_line(cx: &mut TestAppContext) {
+    let (workspace, cx) = keys::open_window(cx, scratch("line-off"));
+    keys::press(cx, &workspace, "secondary-n escape :");
+    assert!(workspace.read_with(cx, |workspace, _| workspace.line().is_none()));
+    assert!(!in_part(cx, "CommandLine"));
+}
+
+/// A window that keeps the line at its foot over a tab of the stage, as
+/// the workspace does, for tests of a tab in a window of its own.
+struct Host {
+    child: gpui::AnyView,
+    line: Entity<cox::vim::line::Line>,
+}
+
+impl gpui::Render for Host {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use cox::vim::line::OpenLine;
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+        gpui::div()
+            .relative()
+            .size_full()
+            .on_action(cx.listener(|host, open: &OpenLine, window, cx| {
+                host.line.update(cx, |line, cx| {
+                    line.open(open.prompt, cox::vim::ex::Names::default(), window, cx);
+                });
+            }))
+            .child(self.child.clone())
+            .child(self.line.clone())
+    }
+}
+
+/// Opens `build`'s view in a window that hosts the line, with the
+/// keyboard, and Vim's keys on.
+fn hosted<V: gpui::Render + gpui::Focusable>(
+    cx: &mut TestAppContext,
+    build: impl FnOnce(&mut gpui::Context<V>) -> V + 'static,
+) -> (Entity<V>, Entity<Host>, &mut VisualTestContext) {
+    use gpui::AppContext as _;
+
+    cx.update(cox::vim::install);
+    cx.update(cox::ui::input::bind_keys);
+    let (host, cx) = cx.add_window_view(|window, cx| Host {
+        child: cx.new(build).into(),
+        line: cx.new(|cx| cox::vim::line::Line::new(window, cx)),
+    });
+    let child = host.read_with(cx, |host, _| host.child.clone().downcast::<V>().unwrap());
+    cx.update(|window, cx| window.focus(&child.focus_handle(cx)));
+    cx.run_until_parked();
+    (child, host, cx)
+}
+
+/// Types `text` in the line `/` or `?` opened, and runs it.
+fn search_for(cx: &mut VisualTestContext, mark: &str, text: &str) {
+    type_keys(cx, mark);
+    cx.simulate_input(text);
+    type_keys(cx, "enter");
+}
+
+#[gpui::test]
+fn slash_and_n_find_text_in_code(cx: &mut TestAppContext) {
+    let path = folder("search-code", &[]).join("numbered.rs");
+    let text = numbered(40);
+    let (code, host, cx) = hosted(cx, move |cx| Code::new(path, &text, None, None, cx));
+    let selected = |cx: &mut VisualTestContext| code.read_with(cx, |code, _| code.selected_text());
+
+    search_for(cx, "/", "line_3");
+    assert!(!host.read_with(cx, |host, cx| host.line.read(cx).is_open()));
+    assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
+    assert_eq!(cursor(&code, cx), Some(2));
+    assert_eq!(selected(cx), "line_3");
+    type_keys(cx, "n");
+    assert_eq!(cursor(&code, cx), Some(29));
+    type_keys(cx, "n n");
+    assert_eq!(cursor(&code, cx), Some(31));
+    type_keys(cx, "shift-n");
+    assert_eq!(cursor(&code, cx), Some(30));
+
+    search_for(cx, "?", "LINE_1");
+    assert_eq!(cursor(&code, cx), Some(30), "a capital finds its own case");
+    assert!(
+        cx.debug_bounds("code-notice").is_some(),
+        "saying it is not found"
+    );
+    search_for(cx, "?", "line_1");
+    assert_eq!(cursor(&code, cx), Some(18));
+    type_keys(cx, "n");
+    assert_eq!(cursor(&code, cx), Some(17), "n goes the search's way");
+    type_keys(cx, "shift-n");
+    assert_eq!(cursor(&code, cx), Some(18));
+
+    type_keys(cx, "/ up");
+    assert_eq!(
+        host.read_with(cx, |host, cx| host.line.read(cx).text(cx).to_owned()),
+        "line_1"
+    );
+    type_keys(cx, "escape");
+    assert_eq!(cursor(&code, cx), Some(18), "escape found nothing");
+}
+
+#[gpui::test]
+fn slash_and_n_find_text_in_a_document(cx: &mut TestAppContext) {
+    cx.update(cox::stage::document::bind_keys);
+    let path = folder("search-document", &[]).join("long.md");
+    let mut text = String::new();
+    for line in 1..=300 {
+        write!(text, "Line {line}.\n\n").unwrap();
+    }
+    let (document, _, cx) = hosted(cx, move |cx| Document::new(path, text, cx));
+    let top = |cx: &mut VisualTestContext| {
+        cx.debug_bounds("document-text")
+            .expect("the text is drawn")
+            .origin
+            .y
+    };
+    let selected =
+        |cx: &mut VisualTestContext| document.read_with(cx, |document, _| document.selected_text());
+    let start = top(cx);
+
+    search_for(cx, "/", "line 25");
+    assert_eq!(selected(cx), "Line 25");
+    let first = start - top(cx);
+    assert!(first > px(0.), "scrolled to it: {first:?}");
+    type_keys(cx, "n");
+    assert_eq!(selected(cx), "Line 25");
+    let second = start - top(cx);
+    assert!(second > first * 5., "on to Line 250: {second:?}");
+    type_keys(cx, "shift-n");
+    assert_eq!(start - top(cx), first);
+}
+
+#[gpui::test]
+fn slash_and_n_ask_the_page_to_find_the_text(cx: &mut TestAppContext) {
+    let (page, _, cx) = hosted(cx, |cx| FakePage {
+        focus: cx.focus_handle(),
+        asked: Vec::new(),
+    });
+    type_keys(cx, "n");
+    assert_eq!(
+        asked(&page, cx),
+        Vec::<String>::new(),
+        "nothing searched yet"
+    );
+    search_for(cx, "/", "hello world");
+    assert_eq!(asked(&page, cx), ["find hello world Forward"]);
+    type_keys(cx, "n shift-n");
+    assert_eq!(
+        asked(&page, cx),
+        ["find hello world Forward", "find hello world Backward"]
+    );
+    search_for(cx, "?", "");
+    assert_eq!(
+        asked(&page, cx),
+        ["find hello world Backward"],
+        "an empty line finds the last text again"
+    );
+    type_keys(cx, "n");
+    assert_eq!(asked(&page, cx), ["find hello world Backward"]);
+}
+
+impl gpui::Focusable for FakePage {
+    fn focus_handle(&self, _: &gpui::App) -> gpui::FocusHandle {
+        self.focus.clone()
+    }
 }

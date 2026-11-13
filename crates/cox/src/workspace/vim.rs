@@ -2,12 +2,17 @@
 //! keyboard moved among the rail, the stage and the chat, a selection
 //! moved along the rail or the list of chats, and the stage's tabs.
 
-use gpui::{Context, FocusHandle, Focusable as _, Window};
+use cox_core::goal::Goal;
+use cox_editor::fuzzy;
+use gpui::{Context, Entity, FocusHandle, Focusable as _, Window};
 
 use super::Workspace;
+use crate::daemon::wire::ToDaemon;
 use crate::stage::Tabs;
 use crate::vim::Region;
+use crate::vim::ex::{Does, Names};
 use crate::vim::keymap::{Act, Pick, Toward};
+use crate::vim::line::{Line, OpenLine, Run};
 
 /// A part of the window with no cursor of its own, where Vim's keys move
 /// a selection: the rail of projects, or the list of chats.
@@ -136,6 +141,127 @@ impl Workspace {
             ),
             Act::CloseTab => self.tabs(Tabs::Close, window, cx),
             Act::Menu => self.tabs(Tabs::Menu, window, cx),
+        }
+    }
+
+    /// The line at the window's foot, while Vim's keys are on.
+    #[must_use]
+    pub fn line(&self) -> Option<&Entity<Line>> {
+        self.line.as_ref()
+    }
+
+    /// Opens the line at the window's foot, with the names of the chats
+    /// of the project chosen and of the projects for a command to go on
+    /// to.
+    pub(super) fn open_line(
+        &mut self,
+        open: &OpenLine,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(line) = self.line.clone() else {
+            return;
+        };
+        let names = Names {
+            chats: self
+                .rows(Region::List)
+                .into_iter()
+                .map(|index| self.chats[index].name().to_owned())
+                .collect(),
+            projects: self
+                .rows(Region::Rail)
+                .into_iter()
+                .map(|index| self.projects[index].name().to_owned())
+                .collect(),
+            actions: cx
+                .all_action_names()
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+        };
+        line.update(cx, |line, cx| line.open(open.prompt, names, window, cx));
+    }
+
+    /// Carries out a command of the line at the window's foot.
+    pub(super) fn run(&mut self, run: &Run, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = self.chats.shown_index();
+        let args = run.args.as_str();
+        match run.does {
+            Does::Quit => self.tabs(Tabs::Close, window, cx),
+            Does::Reload => self.tabs(Tabs::Reload, window, cx),
+            Does::Back => self.tabs(Tabs::Back, window, cx),
+            Does::Forward => self.tabs(Tabs::Forward, window, cx),
+            Does::Open(follow) => self.tabs(
+                Tabs::Open {
+                    line: args.to_owned(),
+                    follow,
+                },
+                window,
+                cx,
+            ),
+            Does::Stop => {
+                if let Some(chat) = self.shown() {
+                    self.tell(ToDaemon::Stop { key: chat.key });
+                }
+            }
+            Does::New => {
+                let folder = self
+                    .projects
+                    .get(self.chosen)
+                    .map(|project| project.folder.clone());
+                self.open(folder, window, cx);
+            }
+            Does::Settings => self.open_settings(window, cx),
+            Does::Goal => match (shown, Goal::parse(args)) {
+                (Some(index), None) => self.edit_goal(index, window, cx),
+                (Some(index), goal) => {
+                    let key = self.chats[index].key;
+                    self.tell(ToDaemon::SetGoal { key, goal });
+                }
+                (None, _) => self.say("No chat is shown", cx),
+            },
+            Does::Sketch => match shown {
+                Some(index) => self.edit_sketch(index, window, cx),
+                None => self.say("No chat is shown", cx),
+            },
+            Does::Chat => match self.fitting(Region::List, args, |index, workspace| {
+                workspace.chats[index].name()
+            }) {
+                Some(index) => self.show(index, window, cx),
+                None => self.say(format!("No chat fits {args}"), cx),
+            },
+            Does::Project => match self.fitting(Region::Rail, args, |index, workspace| {
+                workspace.projects[index].name()
+            }) {
+                Some(index) => self.choose(index, window, cx),
+                None => self.say(format!("No project fits {args}"), cx),
+            },
+            Does::Help => {}
+        }
+    }
+
+    /// The row of `region` whose name, as `name` tells it, `args` fits
+    /// best.
+    fn fitting<'a>(
+        &'a self,
+        region: Region,
+        args: &str,
+        name: impl Fn(usize, &'a Self) -> &'a str,
+    ) -> Option<usize> {
+        let rows = self.rows(region);
+        let names: Vec<String> = rows
+            .iter()
+            .map(|index| name(*index, self).to_owned())
+            .collect();
+        let best = fuzzy::find(args, &names, 1).into_iter().next()?;
+        let place = names.iter().position(|name| name == best)?;
+        rows.get(place).copied()
+    }
+
+    /// Says `said` on the line at the window's foot.
+    fn say(&self, said: impl Into<String>, cx: &mut Context<Self>) {
+        if let Some(line) = &self.line {
+            line.update(cx, |line, cx| line.say(said, cx));
         }
     }
 

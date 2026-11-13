@@ -85,6 +85,8 @@ pub struct Page {
     editable: bool,
     /// The hints over the page, in hint mode.
     hinting: Option<hints::Hinting>,
+    /// What Vim's `/` looks for in the page, and what the page found.
+    finding: Option<vim::Finding>,
     _events: Task<()>,
     /// Checks now and then that the browser answered the last resize.
     _ticks: Task<()>,
@@ -135,6 +137,7 @@ impl Page {
                             page.editable_focus(editable, window, cx);
                         }
                         Event::Hints(hints) => page.hints_listed(hints, window, cx),
+                        Event::Found { count, active } => page.found(count, active),
                         Event::Favicon => page.favicon_changed(),
                         Event::Popup(url) => cx.emit(Opens::Tab(url)),
                         Event::FileLink(url) => cx.emit(Opens::File(url)),
@@ -185,6 +188,7 @@ impl Page {
             menu: None,
             editable: false,
             hinting: None,
+            finding: None,
             _events: task,
             _ticks: ticks,
             _submitted: submitted,
@@ -238,6 +242,9 @@ impl Page {
         let was = std::mem::replace(&mut self.navigation, self.browser.navigation());
         if was.url != self.navigation.url || was.loading != self.navigation.loading {
             self.refocus(window, cx);
+        }
+        if was.url != self.navigation.url {
+            self.finding = None;
         }
         let url = self.navigation.url.clone();
         let typing = self.address.read(cx).text() != self.address_shown;
@@ -320,6 +327,7 @@ impl Page {
                     )
                     .child(self.address.clone()),
             )
+            .children(self.finding.as_ref().map(vim::Finding::render))
     }
 
     /// A toolbar button that calls `action` on the browser when clicked,
@@ -636,6 +644,7 @@ impl Render for Page {
             .on_action(cx.listener(Self::go_to_address))
             .on_action(cx.listener(Self::leave))
             .on_action(cx.listener(Self::hint))
+            .on_action(cx.listener(Self::find))
             .on_action(cx.listener(Self::label))
             .when(!self.is_plugin(), |page| {
                 page.child(self.render_toolbar(cx))

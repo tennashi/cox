@@ -80,6 +80,8 @@ pub(super) struct Painted {
     cursor: Option<Bounds<Pixels>>,
     /// Under the text, within it.
     selection: Vec<Bounds<Pixels>>,
+    /// The matches of what Vim's `/` looked for, under the selection.
+    found: Vec<Bounds<Pixels>>,
     /// The name the server says something of, under the text.
     hovered: Option<Bounds<Pixels>>,
     /// The line under the name a click goes to the definition of, over
@@ -201,6 +203,7 @@ impl Text {
             });
         }
         (painted.hovered, painted.link) = code.names(&laid);
+        painted.found = code.matches_in_sight(&laid);
         self.code.update(cx, |code, _| {
             code.look.laid_out(laid, scroll, cursor);
             code.file.highlighted.extend(highlighted);
@@ -210,6 +213,21 @@ impl Text {
 }
 
 impl Code {
+    /// Where the matches in sight of what Vim's `/` looked for are drawn.
+    fn matches_in_sight(&self, laid: &Laid) -> Vec<Bounds<Pixels>> {
+        let Some(query) = &self.look.found else {
+            return Vec::new();
+        };
+        laid.rows
+            .iter()
+            .flat_map(|row| {
+                crate::vim::search::matches(query, &self.file.buffer.line(row.line))
+                    .into_iter()
+                    .filter_map(|range| laid.stretch(row.line, &range))
+            })
+            .collect()
+    }
+
     /// How far the text is scrolled, laid out as `laid`, within it, and
     /// the line of Vim's keys' cursor if they are on (`vim`).
     #[expect(
@@ -446,6 +464,9 @@ impl Element for Text {
             window.with_content_mask(Some(text), |window| {
                 if let Some(at) = painted.hovered {
                     window.paint_quad(fill(at, rgb(HOVERED)));
+                }
+                for at in &painted.found {
+                    window.paint_quad(fill(*at, rgb(ACCENT_GROUND)));
                 }
                 for at in &painted.selection {
                     window.paint_quad(fill(*at, rgb(SELECTION)));

@@ -31,6 +31,7 @@ use crate::ui::theme::{BORDER, DIM, FAILED};
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::Move;
+use crate::vim::search::Find;
 
 pub(crate) const KEY_CONTEXT: &str = "Document";
 
@@ -163,6 +164,21 @@ impl Document {
         let most = self.scroll.max_offset().height;
         let to = motion.scrolled(-offset.y, most, window.line_height(), height);
         self.scroll.set_offset(point(offset.x, -to));
+        cx.notify();
+    }
+
+    /// Selects the next match of what Vim's `/` or `n` looks for, and
+    /// scrolls it into sight, a third of the way down.
+    fn find_text(&mut self, find: &Find, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(at) = self.reading.find(&find.text, find.direction) else {
+            return;
+        };
+        let offset = self.scroll.offset();
+        let view = self.scroll.bounds();
+        let most = self.scroll.max_offset().height;
+        let down = at.y - view.origin.y - offset.y - view.size.height / 3.;
+        self.scroll
+            .set_offset(point(offset.x, -down.clamp(px(0.), most.max(px(0.)))));
         cx.notify();
     }
 
@@ -311,6 +327,7 @@ impl Render for Document {
             .on_action(cx.listener(Self::translate))
             .on_action(cx.listener(Self::add_to_chat))
             .on_action(cx.listener(Self::move_by_keys))
+            .on_action(cx.listener(Self::find_text))
             .relative()
             .size_full()
             .flex()

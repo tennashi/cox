@@ -4,6 +4,10 @@
     clippy::transmute_ptr_to_ptr,
     reason = "the cef wrap macros cast the handler reference CEF passes back"
 )]
+#![expect(
+    clippy::too_many_arguments,
+    reason = "the client's macro makes it of every handler it is given at once"
+)]
 
 use super::*;
 
@@ -185,7 +189,8 @@ fn create(new: NewBrowser) {
         StageLoadHandler::new(Arc::clone(&shared), events.clone()),
         StageDisplayHandler::new(Arc::clone(&shared), events.clone()),
         StageRequestHandler::new(events.clone(), serve),
-        StageContextMenuHandler::new(events),
+        StageContextMenuHandler::new(events.clone()),
+        StageFindHandler::new(events),
     );
     let settings = BrowserSettings {
         // CEF hands over at most this many pictures a second, whatever
@@ -260,6 +265,7 @@ wrap_client! {
         display: DisplayHandler,
         request: RequestHandler,
         context_menu: ContextMenuHandler,
+        find: FindHandler,
     }
 
     impl Client {
@@ -287,6 +293,10 @@ wrap_client! {
             Some(self.context_menu.clone())
         }
 
+        fn find_handler(&self) -> Option<FindHandler> {
+            Some(self.find.clone())
+        }
+
         /// A renderer of the page tells whether the keyboard is in
         /// something that takes text (see [`FocusReporter`]).
         fn on_process_message_received(
@@ -305,6 +315,34 @@ wrap_client! {
                 .is_some_and(|arguments| arguments.bool(0) == 1);
             let _ = self.events.send(Event::EditableFocus { editable });
             1
+        }
+    }
+}
+
+wrap_find_handler! {
+    struct StageFindHandler {
+        events: UnboundedSender<Event>,
+    }
+
+    impl FindHandler {
+        /// The page counted the matches of what [`Browser::find`] looks
+        /// for, and selected one.
+        fn on_find_result(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _identifier: c_int,
+            count: c_int,
+            _selection_rect: Option<&cef::Rect>,
+            active_match_ordinal: c_int,
+            final_update: c_int,
+        ) {
+            if final_update == 0 {
+                return;
+            }
+            let _ = self.events.send(Event::Found {
+                count: u32::try_from(count).unwrap_or(0),
+                active: u32::try_from(active_match_ordinal).unwrap_or(0),
+            });
         }
     }
 }

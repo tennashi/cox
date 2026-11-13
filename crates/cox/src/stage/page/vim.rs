@@ -4,13 +4,40 @@
 //! takes the label typed of a hint.
 
 use cox_browser::{Hint, How, Kind, Scroll};
-use gpui::{ClipboardItem, Context, Focusable as _, Window};
+use gpui::{ClipboardItem, Context, Focusable as _, Window, div, prelude::*, rgb};
 
 use super::hints::{Hinting, Shown, Typed};
 use super::{Opens, Page};
+use crate::stage::Tabs;
 use crate::stage::code::{Back, Forward};
+use crate::ui::theme::DIM;
 use crate::vim::keymap::{Follow, Motion};
+use crate::vim::search::{self, Direction, Find};
 use crate::vim::{self, Address, CopyAddress, FocusField, Label, Leave, Mode, Move, Reload};
+
+/// What Vim's `/` looks for in a page, and how many matches the page
+/// found of it, and which it selected, once it says.
+pub(super) struct Finding {
+    text: String,
+    found: Option<(u32, u32)>,
+}
+
+impl Finding {
+    /// Which match is selected, of how many, beside the address line.
+    pub(super) fn render(&self) -> impl IntoElement + use<> {
+        let said = match self.found {
+            None => String::new(),
+            Some((0, _)) => format!("{} not found", self.text),
+            Some((count, active)) => format!("{active}/{count}"),
+        };
+        div()
+            .debug_selector(|| "page-found".to_owned())
+            .flex_shrink_0()
+            .px_2()
+            .text_color(rgb(DIM))
+            .child(said)
+    }
+}
 
 impl Page {
     /// The mode the keys are in while the page has the keyboard: insert
@@ -80,6 +107,51 @@ impl Page {
             Motion::Top => Scroll::Top,
             Motion::Bottom => Scroll::Bottom,
         });
+    }
+
+    /// Finds the text Vim's `/` or `n` asks for: the match after the one
+    /// selected, when it is the same text, or else the first.
+    pub(super) fn find(&mut self, find: &Find, _: &mut Window, cx: &mut Context<Self>) {
+        let again = self
+            .finding
+            .as_ref()
+            .is_some_and(|finding| finding.text == find.text);
+        self.browser.find(
+            &find.text,
+            find.direction == Direction::Forward,
+            search::exact(&find.text),
+            again,
+        );
+        if !again {
+            self.finding = Some(Finding {
+                text: find.text.clone(),
+                found: None,
+            });
+        }
+        cx.notify();
+    }
+
+    /// The page counted the matches of what it was asked to find.
+    pub(super) fn found(&mut self, count: u32, active: u32) {
+        if let Some(finding) = &mut self.finding {
+            finding.found = Some((count, active));
+        }
+    }
+
+    /// Leaves the page for `url`, as Vim's `:open` asks.
+    pub(in crate::stage) fn load(&self, url: &str) {
+        self.browser.load(url);
+    }
+
+    /// Goes back or forward, or loads the page again, as Vim's `:back`,
+    /// `:forward` and `:reload` ask.
+    pub(in crate::stage) fn browse(&self, tabs: &Tabs) {
+        match tabs {
+            Tabs::Reload => self.browser.reload(),
+            Tabs::Back => self.browser.go_back(),
+            Tabs::Forward => self.browser.go_forward(),
+            _ => {}
+        }
     }
 
     pub(super) fn back(&mut self, _: &Back, _: &mut Window, _: &mut Context<Self>) {
