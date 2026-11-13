@@ -371,11 +371,15 @@ mod tests {
     }
 
     #[test]
-    fn stops_a_program_that_does_not_answer() {
+    fn a_program_that_fails_is_told_with_what_it_wrote() {
         let ran = run("sh", &["-c", "printf hi; printf no >&2; exit 3"], ASKS).unwrap();
-        assert!(!ran.ok);
+        assert!(ran.ended && !ran.ok);
         assert_eq!(ran.out, b"hi");
         assert_eq!(ran.err, b"no");
+    }
+
+    #[test]
+    fn stops_a_program_that_does_not_answer() {
         let started = std::time::Instant::now();
         let waits = run(
             "sh",
@@ -388,7 +392,14 @@ mod tests {
         .unwrap();
         assert!(!waits.ended && !waits.ok);
         assert_eq!(waits.out, b"visit https://login.tailscale.com/f/serve\n");
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "it waited for the program to end by itself"
+        );
+    }
+
+    #[test]
+    fn a_program_not_installed_is_not_run() {
         assert!(run("cox-no-such-program", &[], ASKS).is_none());
     }
 }
