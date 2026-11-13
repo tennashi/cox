@@ -493,6 +493,7 @@ fn log(folder: &Path, args: &[&str], most: usize) -> Vec<Commit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Folder;
 
     fn run(folder: &Path, args: &[&str]) {
         git(folder, args).unwrap();
@@ -500,11 +501,8 @@ mod tests {
 
     /// A folder of its own for a test, made a Git repository with a first
     /// commit.
-    fn repository(name: &str) -> PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("cox-commits-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+    fn repository() -> Folder {
+        let folder = Folder::new();
         run(&folder, &["init", "--quiet", "--initial-branch=main"]);
         write_and_commit(&folder, "a.txt", "a\n", "First");
         folder
@@ -531,7 +529,7 @@ mod tests {
 
     #[test]
     fn a_sketch_reads_its_commits_since_it_started_with_their_turns() {
-        let folder = repository("sketch");
+        let folder = repository();
         changes::start(&folder).unwrap();
         let from = head(&folder);
         let one = write_and_commit(&folder, "a.txt", "a\nb\n", "One");
@@ -577,7 +575,7 @@ mod tests {
 
     #[test]
     fn reads_what_a_commit_changed_and_what_is_not_committed() {
-        let folder = repository("diff");
+        let folder = repository();
         let one = write_and_commit(&folder, "a.txt", "a\nb\n", "One");
         std::fs::write(folder.join("a.txt"), "a\nc\n").unwrap();
         let diff = diff_of(&folder, &one).unwrap();
@@ -592,7 +590,7 @@ mod tests {
 
     #[test]
     fn a_merge_counts_what_it_changed_since_its_first_parent() {
-        let folder = repository("merge");
+        let folder = repository();
         run(&folder, &["checkout", "--quiet", "-b", "side"]);
         write_and_commit(&folder, "b.txt", "b\nc\n", "Side");
         run(&folder, &["checkout", "--quiet", "main"]);
@@ -621,9 +619,8 @@ mod tests {
 
     #[test]
     fn a_branch_reads_its_commits_since_it_left_another() {
-        let origin = repository("origin");
-        let folder = std::env::temp_dir().join(format!("cox-commits-{}-clone", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
+        let origin = repository();
+        let folder = Folder::new();
         run(
             &origin,
             &["clone", "--quiet", ".", folder.to_str().unwrap()],
@@ -646,7 +643,7 @@ mod tests {
 
     #[test]
     fn an_amended_commit_is_made_anew() {
-        let folder = repository("amend");
+        let folder = repository();
         let from = head(&folder);
         write_and_commit(&folder, "a.txt", "a\nb\n", "One");
         let before = head(&folder);
@@ -692,7 +689,7 @@ mod tests {
 
     #[test]
     fn an_amended_commit_has_what_it_was_and_what_amending_it_changed() {
-        let folder = repository("versions");
+        let folder = repository();
         changes::start(&folder).unwrap();
         let first = write_and_commit(&folder, "a.txt", "a\nb\n", "Greet");
         let turn = Turn {

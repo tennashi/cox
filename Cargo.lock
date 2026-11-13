@@ -1649,6 +1649,7 @@ dependencies = [
  "ropey",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tree-sitter",

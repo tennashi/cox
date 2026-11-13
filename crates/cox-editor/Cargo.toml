@@ -39,3 +39,4 @@ url = { version = "2.5.8", features = ["serde"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tempfile = "3.27.0"
