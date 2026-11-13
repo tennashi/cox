@@ -71,21 +71,25 @@ fn head(reader: &mut impl BufRead) -> String {
     first
 }
 
-/// What `cox --read-page <url>` answers, through the proxy `web`.
-fn read(web: &str, url: &str) -> Value {
+/// What `cox --read-page <url>` answers, through the proxy `web`, and
+/// the code it exits with.
+fn read(web: &str, url: &str) -> (Value, Option<i32>) {
     let output = Command::new(env!("CARGO_BIN_EXE_cox"))
         .args([cox::raw::page::OPTION, url])
         .env_clear()
         .env("HTTP_PROXY", web)
         .output()
         .unwrap();
-    serde_json::from_slice(&output.stdout).unwrap()
+    (
+        serde_json::from_slice(&output.stdout).unwrap(),
+        output.status.code(),
+    )
 }
 
 #[test]
-fn a_page_is_read_whole_and_nothing_of_the_machine() {
-    let web = web();
-    let read_page = read(&web, "http://rust.example/article");
+fn a_page_is_read_whole_without_what_goes_around_it() {
+    let (read_page, code) = read(&web(), "http://rust.example/article");
+    assert_eq!(code, Some(0), "{read_page}");
     let page = &read_page["page"];
     assert_eq!(page["url"], "http://rust.example/article", "{read_page}");
     assert_eq!(page["title"], "Announcing Rust 1.92.0");
@@ -95,15 +99,23 @@ fn a_page_is_read_whole_and_nothing_of_the_machine() {
         "{text}"
     );
     assert!(!text.contains("Home"), "{text}");
-    // Not even through a redirect.
-    let redirected = read(&web, "http://rust.example/to-here");
-    let error = redirected["error"].as_str().unwrap();
+}
+
+#[test]
+fn a_redirect_to_this_machine_is_not_read_and_fails() {
+    let (redirected, code) = read(&web(), "http://rust.example/to-here");
+    assert_eq!(code, Some(1), "{redirected}");
     assert_eq!(
-        error,
+        redirected["error"],
         "http://127.0.0.1:9/admin is not on the web, but on this machine or its network, \
          which Cox does not read"
     );
-    let missing = read(&web, "http://rust.example/none");
+}
+
+#[test]
+fn a_page_that_is_not_found_fails_saying_what_the_web_answered() {
+    let (missing, code) = read(&web(), "http://rust.example/none");
+    assert_eq!(code, Some(1), "{missing}");
     assert_eq!(
         missing["error"],
         "http://rust.example/none answered 404 Not Found"

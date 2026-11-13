@@ -416,59 +416,183 @@ async fn the_rail_chooses_the_project_whose_chats_the_tabs_show(cx: &mut TestApp
     assert_eq!(shown_name(cx), None);
 }
 
-#[gpui::test]
-async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
-    let home = scratch::folder("settings-home");
-    let between = scratch::folder("settings-between");
-    let other = scratch::folder("settings-other");
-    let (agents, workspace, cx) = open_window(cx, home.clone());
-    cx.simulate_keystrokes("secondary-n");
-    say(cx, &workspace, "before").await;
-
-    // The gear opens the settings, with the keyboard in the home's input.
+/// Opens the settings with the gear, which leaves the keyboard in the
+/// input of the home of Cox's own chats, and selects what it holds.
+fn open_home_setting(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+) -> Entity<cox::settings::view::SettingsView> {
     click(cx, "open-settings");
     let settings = workspace.read_with(cx, |workspace, _| {
         workspace.settings().expect("the settings are open").clone()
     });
-    let typed = |cx: &mut VisualTestContext| {
-        settings.read_with(cx, |settings, cx| {
-            settings.input().read(cx).text().to_owned()
-        })
-    };
-    assert_eq!(typed(cx), home.display().to_string());
-
-    // What is not a whole path is not set.
     cx.simulate_keystrokes("secondary-a");
+    settings
+}
+
+/// Where the agent of a new chat of Cox's own works, opened by keys
+/// with the settings closed.
+async fn new_chat_works_in(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    agents: &Agents,
+) -> Option<PathBuf> {
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, workspace, "where").await;
+    agents.borrow().last().expect("an agent").cwd()
+}
+
+#[gpui::test]
+fn the_settings_open_with_the_home_in_their_input(cx: &mut TestAppContext) {
+    let home = scratch::folder("settings-shown");
+    let (_agents, workspace, cx) = open_window(cx, home.clone());
+
+    let settings = open_home_setting(cx, &workspace);
+    let typed = settings.read_with(cx, |settings, cx| {
+        settings.input().read(cx).text().to_owned()
+    });
+    assert_eq!(typed, home.display().to_string());
+}
+
+#[gpui::test]
+async fn a_home_that_is_not_a_whole_path_is_refused(cx: &mut TestAppContext) {
+    let home = scratch::folder("settings-refused");
+    let (agents, workspace, cx) = open_window(cx, home.clone());
+
+    open_home_setting(cx, &workspace);
     cx.simulate_input("elsewhere");
-    cx.simulate_keystrokes("enter");
-    let kept = workspace.read_with(cx, |workspace, _| workspace.home().to_owned());
-    assert_eq!(kept, home);
+    cx.simulate_keystrokes("enter escape");
+    assert_eq!(new_chat_works_in(cx, &workspace, &agents).await, Some(home));
+}
 
-    cx.simulate_keystrokes("secondary-a");
-    cx.simulate_input(&between.display().to_string());
-    cx.simulate_keystrokes("enter");
-    let kept = workspace.read_with(cx, |workspace, _| workspace.home().to_owned());
-    assert_eq!(kept, between);
+#[gpui::test]
+fn enter_sets_the_home_for_the_runs_after(cx: &mut TestAppContext) {
+    let home = scratch::folder("settings-enter");
+    let other = scratch::folder("settings-enter-other");
+    let (_agents, workspace, cx) = open_window(cx, home);
 
-    // Escape closes them, keeping what was typed without Enter, and the
-    // next chat of Cox's own works there.
-    cx.simulate_keystrokes("secondary-a");
+    open_home_setting(cx, &workspace);
     cx.simulate_input(&other.display().to_string());
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    let open = workspace.read_with(cx, |workspace, _| workspace.settings().is_some());
-    assert!(!open);
-    let kept = workspace.read_with(cx, |workspace, _| workspace.home().to_owned());
-    assert_eq!(kept, other);
+    cx.simulate_keystrokes("enter");
     assert_eq!(
         cox::settings::Saved::read().home.as_deref(),
         Some(other.as_path()),
-        "the home lasts across runs"
+        "the settings the next run reads name it"
     );
+}
+
+#[gpui::test]
+fn escape_closes_the_settings_keeping_the_home_typed(cx: &mut TestAppContext) {
+    let home = scratch::folder("settings-escape");
+    let other = scratch::folder("settings-escape-other");
+    let (_agents, workspace, cx) = open_window(cx, home);
+
+    open_home_setting(cx, &workspace);
+    cx.simulate_input(&other.display().to_string());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        workspace.read_with(cx, |workspace, _| workspace.settings().is_none()),
+        "escape closes the settings"
+    );
+    assert_eq!(
+        cox::settings::Saved::read().home.as_deref(),
+        Some(other.as_path()),
+        "the settings the next run reads name it"
+    );
+}
+
+#[gpui::test]
+async fn the_next_chat_of_coxs_own_works_in_the_home_set(cx: &mut TestAppContext) {
+    let home = scratch::folder("settings-next");
+    let other = scratch::folder("settings-next-other");
+    let (agents, workspace, cx) = open_window(cx, home.clone());
     cx.simulate_keystrokes("secondary-n");
-    say(cx, &workspace, "after").await;
+    say(cx, &workspace, "before").await;
+
+    open_home_setting(cx, &workspace);
+    cx.simulate_input(&other.display().to_string());
+    cx.simulate_keystrokes("enter escape");
+    new_chat_works_in(cx, &workspace, &agents).await;
     let cwds: Vec<_> = agents.borrow().iter().map(|agent| agent.cwd()).collect();
-    assert_eq!(cwds, [Some(home.clone()), Some(other.clone())]);
+    assert_eq!(
+        cwds,
+        [Some(home), Some(other)],
+        "the chat open already works where it did"
+    );
+}
+
+/// Has the window `cx` shows follow `settings.json` and `agents.json` as
+/// the app does, telling `agents` of the agents `agents.json` lists, once
+/// it has looked at them as they are.
+fn follow_settings(cx: &mut VisualTestContext, agents: &Choices) {
+    let window = cx
+        .update(|window, _| window.window_handle().downcast::<Workspace>())
+        .expect("the window shows a workspace");
+    let agents = agents.clone();
+    cx.update(|_, cx| cox::settings::follow(window, agents, cx));
+    cx.run_until_parked();
+}
+
+/// Lets the time go by after which the files followed are looked at
+/// again.
+fn after_a_look(cx: &mut VisualTestContext) {
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn editing_settings_json_turns_vim_s_keys_on_in_the_open_window(cx: &mut TestAppContext) {
+    let (_, _workspace, cx) = open_window(cx, scratch::folder("follow-vim"));
+    follow_settings(cx, &Choices::new(Vec::new(), Vec::new(), Vec::new()));
+    cx.simulate_keystrokes("secondary-n");
+    assert!(
+        cx.debug_bounds("vim-status").is_none(),
+        "Vim's keys are off"
+    );
+
+    cox::settings::keep("vim", Some(true.into())).unwrap();
+    after_a_look(cx);
+    assert!(
+        cx.debug_bounds("vim-status").is_some(),
+        "the window's foot shows the mode"
+    );
+}
+
+#[gpui::test]
+async fn editing_settings_json_moves_where_the_next_chat_of_coxs_own_works(
+    cx: &mut TestAppContext,
+) {
+    let other = scratch::folder("follow-home-other");
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("follow-home"));
+    follow_settings(cx, &Choices::new(Vec::new(), Vec::new(), Vec::new()));
+
+    cox::settings::keep("home", Some(other.display().to_string().into())).unwrap();
+    after_a_look(cx);
+    assert_eq!(
+        new_chat_works_in(cx, &workspace, &agents).await,
+        Some(other)
+    );
+}
+
+#[gpui::test]
+fn editing_agents_json_lists_its_agents_with_the_one_settings_json_names_first(
+    cx: &mut TestAppContext,
+) {
+    let (_, _workspace, cx) = open_window(cx, scratch::folder("follow-agents"));
+    let agents = Choices::new(Vec::new(), Vec::new(), Vec::new());
+    follow_settings(cx, &agents);
+
+    std::fs::write(
+        scratch::data().join("agents.json"),
+        r#"[{"name": "Parrot", "command": ["parrot"]}, {"name": "Echo", "command": ["echo"]}]"#,
+    )
+    .unwrap();
+    cox::settings::keep("agent", Some("Echo".into())).unwrap();
+    after_a_look(cx);
+    let names: Vec<String> = agents.all().into_iter().map(|agent| agent.name).collect();
+    assert_eq!(names, ["Echo", "Parrot"]);
 }
 
 #[gpui::test]
@@ -779,33 +903,51 @@ async fn switching_keeps_each_chats_conversation_and_draft(cx: &mut TestAppConte
     assert_eq!(agents.borrow()[1].prompts(), Vec::<String>::new());
 }
 
-#[gpui::test]
-async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
-    let home = scratch::folder("stands");
-    let (_, workspace, cx) = open_window(cx, home.clone());
-    let describe = |cx: &mut VisualTestContext, chat: Option<u64>| {
-        cx.update(|window, cx| cox::inspect::describe(workspace.read(cx), chat, None, window, cx))
-    };
+/// How Cox stands, as `cox --inspect state [<chat>]` tells it.
+fn described(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    chat: Option<u64>,
+) -> String {
+    cx.update(|window, cx| cox::inspect::describe(workspace.read(cx), chat, None, window, cx))
+}
 
-    let told = describe(cx, None);
+/// Opens a chat of Cox's own where "first" was said, then a second one
+/// shown with "not sent yet" typed in its input.
+async fn first_said_and_second_typed(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+    cx.simulate_keystrokes("secondary-n");
+    say(cx, workspace, "first").await;
+    cx.simulate_keystrokes("secondary-n");
+    let view = shown(cx, workspace);
+    cx.simulate_input("not sent yet");
+    wait_until(cx, &view, |conversation| {
+        !conversation.settings().is_empty()
+    })
+    .await;
+}
+
+#[gpui::test]
+fn inspect_state_of_a_window_with_no_chat_says_none_is_shown(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch::folder("stands-none"));
+
+    let told = described(cx, &workspace, None);
     assert!(told.contains("The chats, as listed:\n  none\n"), "{told}");
     assert!(
         told.contains("the keyboard is in the window, which shows no chat"),
         "{told}"
     );
     assert!(told.ends_with("\nNo chat is shown.\n"), "{told}");
+}
 
-    cx.simulate_keystrokes("secondary-n");
-    say(cx, &workspace, "first").await;
-    cx.simulate_keystrokes("secondary-n");
-    let view = shown(cx, &workspace);
-    cx.simulate_input("not sent yet");
-    wait_until(cx, &view, |conversation| {
-        !conversation.settings().is_empty()
-    })
-    .await;
+#[gpui::test]
+async fn inspect_state_lists_the_chats_where_the_keyboard_is_and_the_chat_shown(
+    cx: &mut TestAppContext,
+) {
+    let home = scratch::folder("stands");
+    let (_, workspace, cx) = open_window(cx, home.clone());
+    first_said_and_second_typed(cx, &workspace).await;
 
-    let told = describe(cx, None);
+    let told = described(cx, &workspace, None);
     let listed = format!(
         "The chats, as listed:\n  Cox ({}), chosen\n    chat 1 \"first\": idle\n    chat 2 \"Chat 2\": idle, shown\n",
         home.display()
@@ -821,7 +963,14 @@ async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
         ),
         "{told}"
     );
-    let told = describe(cx, Some(1));
+}
+
+#[gpui::test]
+async fn inspect_state_of_a_chat_not_shown_tells_it_whole(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch::folder("stands-one"));
+    first_said_and_second_typed(cx, &workspace).await;
+
+    let told = described(cx, &workspace, Some(1));
     assert!(
         told.ends_with(
             "Chat 1 \"first\":\n  idle\n  Not shown: its input and stage are as they were left.\n  \
@@ -831,7 +980,14 @@ async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
         ),
         "{told}"
     );
-    assert!(describe(cx, Some(9)).ends_with("\nThere is no chat 9.\n"));
+}
+
+#[gpui::test]
+fn inspect_state_of_a_chat_that_is_not_there_says_so(cx: &mut TestAppContext) {
+    let (_, workspace, cx) = open_window(cx, scratch::folder("stands-missing"));
+
+    let told = described(cx, &workspace, Some(9));
+    assert!(told.ends_with("\nThere is no chat 9.\n"), "{told}");
 }
 
 /// The entries of the chat `view` shows.
@@ -1075,6 +1231,16 @@ async fn the_agent_asks_after_its_turn_ended_and_goes_on_once_answered(cx: &mut 
     );
 }
 
+/// Sets the goal of the chat `chat` names on the list to `goal`, from the
+/// menu of its row, as the human does, which leaves the keyboard in the
+/// chat's input.
+fn set_goal_from_the_menu(cx: &mut VisualTestContext, chat: &'static str, goal: &str) {
+    right_click(cx, chat);
+    click(cx, "set-goal");
+    cx.simulate_input(goal);
+    cx.simulate_keystrokes("enter");
+}
+
 #[gpui::test]
 async fn the_human_answers_the_agent_after_setting_a_goal_as_it_asks(cx: &mut TestAppContext) {
     let (_, workspace, cx) = open_window(cx, scratch::folder("asks-goal"));
@@ -1086,9 +1252,7 @@ async fn the_human_answers_the_agent_after_setting_a_goal_as_it_asks(cx: &mut Te
         conversation.state() == State::Asking
     })
     .await;
-    view.read_with(cx, |view, _| {
-        view.set_goal(Some(KeptGoal::Command("true".to_owned())));
-    });
+    set_goal_from_the_menu(cx, "chat-1", "$ true");
     wait_until(cx, &view, |conversation| {
         matches!(conversation.entries().last(), Some(Entry::Note(note)) if note.starts_with("Goal:"))
     })
@@ -1153,9 +1317,7 @@ async fn ask_as_the_goal_is_checked(
     agent: &FakeAgent,
     command: &str,
 ) {
-    view.read_with(cx, |view, _| {
-        view.set_goal(Some(KeptGoal::Command(command.to_owned())));
-    });
+    set_goal_from_the_menu(cx, "chat-1", &format!("$ {command}"));
     cx.simulate_input("background ask");
     cx.simulate_keystrokes("enter");
     wait_until(cx, view, |conversation| {
@@ -1326,9 +1488,20 @@ fn kept_chat(
     (store, kept)
 }
 
-/// The chat kept, at the top of the list: the first project's only one,
-/// after Cox's own, which has none.
-const FIRST_KEPT: usize = 0;
+/// Opens the card of the first project after Cox's own, as the human
+/// does, from the menu of its square on the rail.
+fn edit_the_kept_project(cx: &mut VisualTestContext) {
+    right_click(cx, "project-2");
+    click(cx, "edit-project");
+}
+
+/// Shows the chat kept, the only one of the first project after Cox's
+/// own, as the human does: chooses the project on the rail, then the chat
+/// on its list.
+fn show_the_kept_chat(cx: &mut VisualTestContext) {
+    click(cx, "project-2");
+    click(cx, "chat-1");
+}
 
 #[gpui::test]
 async fn a_closed_chat_goes_on_with_its_session_when_the_human_sends_to_it(
@@ -1342,9 +1515,7 @@ async fn a_closed_chat_goes_on_with_its_session_when_the_human_sends_to_it(
         store.clone(),
         Resumes::Resume,
     );
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
     assert_eq!(opened(cx, &workspace), [vec![], vec![false]]);
 
     say(cx, &workspace, "again").await;
@@ -1383,9 +1554,7 @@ fn a_chat_whose_folder_is_gone_does_not_start_again(cx: &mut TestAppContext) {
         store.clone(),
         Resumes::Resume,
     );
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
     let view = shown(cx, &workspace);
     // Its folder is not there, so its agent does not start again.
     let waiting = view.read_with(cx, |view, _| view.waiting());
@@ -1396,9 +1565,7 @@ fn a_chat_whose_folder_is_gone_does_not_start_again(cx: &mut TestAppContext) {
     assert!(agents.borrow().is_empty());
 
     // The card says so, and does not rename it.
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.open_project_card(1, window, cx);
-    });
+    edit_the_kept_project(cx);
     let card = workspace.read_with(cx, |workspace, _| {
         workspace.project_card().expect("the card is open").clone()
     });
@@ -1430,9 +1597,7 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
         Resumes::Resume,
     );
     let name = |cx: &mut VisualTestContext| {
-        workspace.update_in(cx, |workspace, window, cx| {
-            workspace.open_project_card(1, window, cx);
-        });
+        edit_the_kept_project(cx);
         let card = workspace.read_with(cx, |workspace, _| {
             workspace.project_card().expect("the card is open").clone()
         });
@@ -1482,9 +1647,7 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
     assert!(store_folder.join("directories").join("store").is_dir());
 
     // Its chat starts again there, told the conversation so far.
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
     say(cx, &workspace, "again").await;
     let agent = Arc::clone(&agents.borrow()[0]);
     assert_eq!(agent.cwd(), Some(store_folder));
@@ -1568,9 +1731,7 @@ async fn an_agent_proposes_the_projects_name_which_the_human_renames_it_to(
         store.clone(),
         Resumes::Resume,
     );
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
     say(cx, &workspace, "hello").await;
     let propose = |name: &str, why: Option<&str>| {
         let (answer, now) = tokio::sync::oneshot::channel();
@@ -1750,9 +1911,7 @@ async fn an_agent_proposes_what_the_project_is_which_the_next_chats_are_told(
         store.clone(),
         Resumes::Resume,
     );
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
     say(cx, &workspace, "hello").await;
     let tea = "A shop that sells tea.";
     let propose = |about: &str| {
@@ -1827,9 +1986,7 @@ async fn an_agent_proposes_an_icon_which_the_project_has_once_the_human_sets_it(
         store.clone(),
         Resumes::Resume,
     );
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
     say(cx, &workspace, "hello").await;
     let id = store.projects().unwrap()[0].id;
     let icon = cox::project_icon::path(id).unwrap();
@@ -1920,12 +2077,62 @@ fn propose_project(
     folder
 }
 
-#[gpui::test]
-async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
-    cx: &mut TestAppContext,
-) {
-    let home = repository("propose-project-home");
-    let store = kept_store("propose-project-kept");
+/// A chat of Cox's own where "hello" was said, which opened a sketch that
+/// made `index.html`, in a window that keeps its chats in `store`.
+struct Sketched {
+    home: PathBuf,
+    store: KeptStore,
+    agents: Agents,
+    asks: Asks,
+    workspace: Entity<Workspace>,
+    /// The folder of the sketch.
+    made: PathBuf,
+    /// The chat that opened the sketch.
+    first: u64,
+    /// The name the human's list shows the sketch by.
+    sketch: String,
+}
+
+impl Sketched {
+    /// Where a project named `name` is made.
+    fn project(&self, name: &str) -> PathBuf {
+        self.home.join("projects").join(name)
+    }
+
+    /// Has the first chat's agent propose the project `name`, from the
+    /// sketch named `sketch`, if given, and answers what it is told.
+    async fn propose(
+        &self,
+        cx: &mut VisualTestContext,
+        name: &str,
+        sketch: Option<&str>,
+    ) -> Result<PathBuf, String> {
+        let told = propose_project(&self.asks, 0, name, sketch);
+        settled(cx, &self.workspace);
+        told.await.unwrap()
+    }
+
+    /// Where the card of the project proposed `nth`, from the first, is
+    /// in the conversation shown.
+    fn card(&self, cx: &mut VisualTestContext, nth: usize) -> usize {
+        shown_entries(cx, &self.workspace)
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| matches!(entry, Entry::ProjectProposal { .. }))
+            .nth(nth)
+            .expect("the card is shown")
+            .0
+    }
+}
+
+/// Opens the window for the test named `name`, with a chat that opened a
+/// sketch, as [`Sketched`] says.
+async fn sketched<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+) -> (Sketched, &'a mut VisualTestContext) {
+    let home = repository(&format!("{name}-home"));
+    let store = kept_store(&format!("{name}-kept"));
     let (agents, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
     cx.simulate_keystrokes("secondary-n");
@@ -1937,76 +2144,123 @@ async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
         let first = chats.next().unwrap().key();
         (first, chats.next().unwrap().name().to_owned())
     });
+    let sketched = Sketched {
+        home,
+        store,
+        agents,
+        asks,
+        workspace,
+        made,
+        first,
+        sketch,
+    };
+    (sketched, cx)
+}
 
-    // A chat that is no sketch of the chat's is no sketch to start from,
-    // and the agent hears the names of those that are.
-    let refused = propose_project(&asks, 0, "shop", Some("hello"));
-    settled(cx, &workspace);
-    let refused = refused.await.unwrap();
-    assert!(refused.is_err_and(
-        |why| why.contains("is named \"hello\"") && why.contains(&format!("\"{sketch}\""))
-    ));
-    // The agent hears where the project is to be, and it shows on a card.
-    let projects = home.join("projects");
-    let market = propose_project(&asks, 0, "market", None);
-    settled(cx, &workspace);
-    assert_eq!(market.await.unwrap(), Ok(projects.join("market")));
-    // The sketch goes by the name the human's list shows.
-    let shop = propose_project(&asks, 0, "shop", Some(&sketch));
-    settled(cx, &workspace);
-    assert_eq!(shop.await.unwrap(), Ok(projects.join("shop")));
-    let shop = projects.join("shop");
-    let cards: Vec<(usize, Option<PathBuf>, Option<String>)> = shown_entries(cx, &workspace)
+#[gpui::test]
+async fn a_project_from_a_chat_that_is_no_sketch_is_refused_naming_the_sketches(
+    cx: &mut TestAppContext,
+) {
+    let (sketched, cx) = sketched(cx, "propose-no-sketch").await;
+
+    let refused = sketched.propose(cx, "shop", Some("hello")).await;
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|why| why.contains("is named \"hello\"")
+                && why.contains(&format!("\"{}\"", sketched.sketch))),
+        "{refused:?}"
+    );
+}
+
+#[gpui::test]
+async fn a_proposed_project_shows_on_a_card_and_the_agent_hears_where_it_is_to_be(
+    cx: &mut TestAppContext,
+) {
+    let (sketched, cx) = sketched(cx, "propose-card").await;
+
+    let market = sketched.propose(cx, "market", None).await;
+    assert_eq!(market, Ok(sketched.project("market")));
+    let shop = sketched.propose(cx, "shop", Some(&sketched.sketch)).await;
+    assert_eq!(shop, Ok(sketched.project("shop")));
+    let cards: Vec<(Option<PathBuf>, Option<String>)> = shown_entries(cx, &sketched.workspace)
         .into_iter()
-        .enumerate()
-        .filter_map(|(index, entry)| match entry {
+        .filter_map(|entry| match entry {
             Entry::ProjectProposal {
                 sketch,
                 sketch_name,
                 ..
-            } => Some((index, sketch, sketch_name)),
+            } => Some((sketch, sketch_name)),
             _ => None,
         })
         .collect();
-    assert_eq!(cards.len(), 2, "{cards:?}");
-    assert_eq!(cards[1].1.as_ref(), Some(&made));
-    assert_eq!(cards[1].2.as_ref(), Some(&sketch));
-    let (market, at) = (cards[0].0, cards[1].0);
+    assert_eq!(
+        cards,
+        [
+            (None, None),
+            (Some(sketched.made.clone()), Some(sketched.sketch.clone()))
+        ],
+        "the sketch goes by the name the human's list shows"
+    );
+}
 
-    // Dismiss lets one be; Make project makes the other, the sketch's
-    // files its directory, and the chat and its sketch move into it.
+#[gpui::test]
+async fn dismissing_a_proposed_project_makes_nothing(cx: &mut TestAppContext) {
+    let (sketched, cx) = sketched(cx, "propose-dismiss").await;
+    sketched.propose(cx, "market", None).await.unwrap();
+    let card = sketched.card(cx, 0);
+
     click(
         cx,
-        Box::leak(format!("dismiss-project-{market}").into_boxed_str()),
+        Box::leak(format!("dismiss-project-{card}").into_boxed_str()),
     );
-    settled(cx, &workspace);
-    assert!(!projects.join("market").exists());
-    click(cx, Box::leak(format!("make-project-{at}").into_boxed_str()));
-    settled(cx, &workspace);
-    // What the sketch made is kept apart, not the project's, and what it
-    // did is a source of the project's.
-    assert_moved(&made.join("index.html"), "<p>shop</p>\n", &shop);
-    let kept = store.projects().unwrap();
-    assert_eq!(kept.len(), 1);
-    assert_eq!(kept[0].folder, shop);
-    let chats = store.chats().unwrap();
-    assert_eq!(chats.len(), 2);
-    assert!(chats.iter().all(|chat| chat.project == Some(kept[0].id)));
-    workspace.read_with(cx, |workspace, _| {
-        assert_eq!(workspace.chats(0).count(), 0);
-        assert_eq!(workspace.chats(1).count(), 2);
-        assert_eq!(workspace.shown().map(Chat::key), Some(first));
-    });
-    let entries = shown_entries(cx, &workspace);
+    settled(cx, &sketched.workspace);
+    assert!(!sketched.project("market").exists());
+    assert_eq!(sketched.store.projects().unwrap(), []);
+    let entries = shown_entries(cx, &sketched.workspace);
     assert!(
         matches!(
-            &entries[market],
+            &entries[card],
             Entry::ProjectProposal {
                 answer: Some(Answer::Dismissed),
                 ..
             }
-        ) && matches!(
-            &entries[at],
+        ),
+        "{entries:?}"
+    );
+}
+
+#[gpui::test]
+async fn making_a_proposed_project_moves_the_chat_and_its_sketch_into_it(cx: &mut TestAppContext) {
+    let (sketched, cx) = sketched(cx, "propose-make").await;
+    sketched
+        .propose(cx, "shop", Some(&sketched.sketch))
+        .await
+        .unwrap();
+    let card = sketched.card(cx, 0);
+
+    click(
+        cx,
+        Box::leak(format!("make-project-{card}").into_boxed_str()),
+    );
+    settled(cx, &sketched.workspace);
+    let shop = sketched.project("shop");
+    assert_moved(&sketched.made.join("index.html"), "<p>shop</p>\n", &shop);
+    let kept = sketched.store.projects().unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].folder, shop);
+    let chats = sketched.store.chats().unwrap();
+    assert_eq!(chats.len(), 2);
+    assert!(chats.iter().all(|chat| chat.project == Some(kept[0].id)));
+    sketched.workspace.read_with(cx, |workspace, _| {
+        assert_eq!(workspace.chats(0).count(), 0);
+        assert_eq!(workspace.chats(1).count(), 2);
+        assert_eq!(workspace.shown().map(Chat::key), Some(sketched.first));
+    });
+    let entries = shown_entries(cx, &sketched.workspace);
+    assert!(
+        matches!(
+            &entries[card],
             Entry::ProjectProposal {
                 answer: Some(Answer::Set),
                 ..
@@ -2019,16 +2273,36 @@ async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
             if note.starts_with("The chat moved into the project shop"))),
         "{entries:?}"
     );
+}
 
-    // The next line starts its agent again in the project's folder, where
-    // it has a project already.
-    say(cx, &workspace, "go on").await;
-    assert_eq!(agents.borrow().last().unwrap().cwd(), Some(shop.clone()));
-    let last = asks.borrow().len() - 1;
-    let again = propose_project(&asks, last, "shop-2", None);
-    settled(cx, &workspace);
+#[gpui::test]
+async fn a_chat_moved_into_a_project_goes_on_in_its_folder_and_proposes_no_other(
+    cx: &mut TestAppContext,
+) {
+    let (sketched, cx) = sketched(cx, "propose-moved").await;
+    sketched.propose(cx, "shop", None).await.unwrap();
+    let card = sketched.card(cx, 0);
+    click(
+        cx,
+        Box::leak(format!("make-project-{card}").into_boxed_str()),
+    );
+    settled(cx, &sketched.workspace);
+
+    say(cx, &sketched.workspace, "go on").await;
+    assert_eq!(
+        sketched.agents.borrow().last().unwrap().cwd(),
+        Some(sketched.project("shop"))
+    );
+    let last = sketched.asks.borrow().len() - 1;
+    let again = propose_project(&sketched.asks, last, "shop-2", None);
+    settled(cx, &sketched.workspace);
     let again = again.await.unwrap();
-    assert!(again.is_err_and(|why| why.contains("in a project already")));
+    assert!(
+        again
+            .as_ref()
+            .is_err_and(|why| why.contains("in a project already")),
+        "{again:?}"
+    );
 }
 
 #[gpui::test]
@@ -2051,7 +2325,7 @@ async fn a_sketch_proposes_a_project_of_what_it_made_with_the_chat_it_was_opened
     let shop = propose_project(&asks, 1, "shop", None);
     settled(cx, &workspace);
     let shop = shop.await.unwrap().unwrap();
-    workspace.update_in(cx, |workspace, window, cx| workspace.show(1, window, cx));
+    click(cx, "chat-2");
     let at = shown_entries(cx, &workspace)
         .iter()
         .position(|entry| {
@@ -2168,9 +2442,7 @@ fn open_projects_card(cx: &mut TestAppContext) -> (ProjectsCard, &mut VisualTest
     let app = root.join("projects").join("untitled-1");
     let (store, _) = kept_chat(&app, None);
     let (_, workspace, cx) = open_window_resuming(cx, root.join("home"), store, Resumes::Resume);
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.open_project_card(1, window, cx);
-    });
+    edit_the_kept_project(cx);
     let input = workspace.read_with(cx, |workspace, cx| {
         let card = workspace.project_card().expect("the card is open");
         card.read(cx).directory_input().clone()
@@ -2292,9 +2564,7 @@ async fn what_an_agent_tells_of_a_session_it_loads_is_not_shown_again(cx: &mut T
     let (store, _) = kept_chat(&folder, Some("session-1"));
     let (agents, workspace, cx) =
         open_window_resuming(cx, scratch::folder("load-home"), store, Resumes::Load);
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
 
     say(cx, &workspace, "again").await;
 
@@ -2370,9 +2640,7 @@ async fn an_agent_that_cannot_resume_is_told_the_conversation_so_far(cx: &mut Te
         store.clone(),
         Resumes::Never,
     );
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
 
     say(cx, &workspace, "again").await;
 
@@ -2392,9 +2660,7 @@ async fn an_agent_that_refuses_to_resume_is_told_the_conversation_so_far(cx: &mu
     let (store, _) = kept_chat(&folder, Some("session-0"));
     let (agents, workspace, cx) =
         open_window_resuming(cx, scratch::folder("refuse-home"), store, Resumes::Refuse);
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
 
     say(cx, &workspace, "again").await;
 
@@ -2416,9 +2682,7 @@ async fn a_chat_kept_with_no_session_is_told_the_conversation_so_far(cx: &mut Te
         store,
         Resumes::Resume,
     );
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
 
     say(cx, &workspace, "again").await;
 
@@ -2428,17 +2692,24 @@ async fn a_chat_kept_with_no_session_is_told_the_conversation_so_far(cx: &mut Te
 }
 
 #[gpui::test]
-async fn a_new_chat_keeps_its_agents_session(cx: &mut TestAppContext) {
+async fn a_new_chat_goes_on_with_its_agents_session_once_cox_starts_again(
+    cx: &mut TestAppContext,
+    cx_again: &mut TestAppContext,
+) {
     let store = kept_store("chats-3");
-    let (_, workspace, cx) = open_window_keeping(cx, scratch::folder("session"), store.clone());
-    cx.simulate_keystrokes("secondary-n");
-    say(cx, &workspace, "hello").await;
+    let home = scratch::folder("session");
+    {
+        let (_, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
+        cx.simulate_keystrokes("secondary-n");
+        say(cx, &workspace, "hello").await;
+        cx.update(|window, _| window.remove_window());
+        cx.run_until_parked();
+    }
 
-    let chats = store.chats().unwrap();
-    assert_eq!(
-        store.session(chats[0].id).unwrap().as_deref(),
-        Some("session-1")
-    );
+    let (agents, workspace, cx) = open_window_keeping(cx_again, home, store);
+    click(cx, "chat-1");
+    say(cx, &workspace, "again").await;
+    assert_eq!(agents.borrow()[0].resumed(), ["session-1"]);
 }
 
 /// The fake agent's settings, set as `model` and `mode` say.
@@ -2485,9 +2756,7 @@ async fn a_closed_chat_sets_its_session_as_it_was_set(cx: &mut TestAppContext) {
         store.clone(),
         Resumes::Never,
     );
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.show(FIRST_KEPT, window, cx);
-    });
+    show_the_kept_chat(cx);
 
     // Closed, the chat is set as it was, and the human sets it anew, for
     // its agent to set once it starts again.
@@ -2707,18 +2976,17 @@ async fn a_turn_that_ends_unseen_marks_its_chat_until_it_is_shown(cx: &mut TestA
     settle_until(cx, |_| agent.did(&Event::Held)).await;
     agent.go_on();
     wait_for_turn(cx, &first).await;
-    let unread = |cx: &mut VisualTestContext| {
-        workspace.read_with(cx, |workspace, _| {
-            workspace.chats(0).map(Chat::is_unread).collect::<Vec<_>>()
-        })
-    };
-    assert_eq!(unread(cx), [true, false]);
+    // The marks the list draws, each a dot named after how its chat
+    // stands. What a frame drew stays among the bounds the test reads, so
+    // the test looks for a mark to come, not for one to go.
+    assert!(drawn(cx, "chat-1-unread"), "the list marks it unread");
+    assert!(drawn(cx, "chat-2-idle"), "and the chat shown idle");
 
     // A turn the human sees end leaves its chat read.
     say(cx, &workspace, "hello").await;
-    assert_eq!(unread(cx), [true, false]);
+    assert!(!drawn(cx, "chat-1-idle"), "the first is unread still");
     click(cx, "chat-1");
-    assert_eq!(unread(cx), [false, false]);
+    assert!(drawn(cx, "chat-1-idle"), "shown, it is read");
 }
 
 #[gpui::test]
@@ -2852,6 +3120,8 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
     );
 
     // A click on the notice shows the chat, whose turn then ends in sight.
+    // The system shows the notice, outside the window, and its click comes
+    // to the workspace as this.
     cx.update(|window, cx| {
         workspace.update(cx, |workspace, cx| workspace.reveal(first_key, window, cx));
     });
@@ -2888,6 +3158,7 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
     right_click(cx, "chat-1");
     click(cx, "archive-chat");
     settle_on(cx, &workspace).await;
+    // From a click on its notice, as above.
     cx.update(|window, cx| {
         workspace.update(cx, |workspace, cx| workspace.reveal(first_key, window, cx));
     });
@@ -3408,10 +3679,27 @@ fn keys(
     })
 }
 
-#[gpui::test]
-async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppContext) {
-    let home = scratch::folder("child-home");
-    let store = kept_store("child-kept");
+/// Two chats of Cox's own, "hello" and "second", the second shown, where
+/// the first one's agent opened a chat on "permission", a line that asks
+/// to edit a file, set up to keep to a context and to edit nothing.
+struct OpenedByAnAgent {
+    home: PathBuf,
+    store: KeptStore,
+    agents: Agents,
+    workspace: Entity<Workspace>,
+    setup: Setup,
+    /// The key of the chat whose agent opened it.
+    parent: u64,
+    /// What its agent was told of the chat it opened.
+    opened: cox::agent::mcp::OpenedChat,
+}
+
+async fn opened_by_an_agent<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+) -> (OpenedByAnAgent, &'a mut VisualTestContext) {
+    let home = scratch::folder(&format!("{name}-home"));
+    let store = kept_store(&format!("{name}-kept"));
     let (agents, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
     cx.simulate_keystrokes("secondary-n");
@@ -3419,9 +3707,6 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "second").await;
     let (parent, _) = keys(cx, &workspace, 0);
-
-    // The first chat's agent opens a chat, which keeps to a context and
-    // may edit nothing, on a line that asks to edit a file.
     let setup = Setup {
         context: Some("Change nothing.".to_owned()),
         policy: cox::agent::setup::Policy {
@@ -3443,34 +3728,67 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
         .unwrap();
     cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 3)
         .await;
-
-    // It goes under the chat that opened it, which stays shown, and
-    // works on the line, sent in the human's place, which names it as
-    // the first line of any chat does.
-    assert_eq!(
-        names(cx, &workspace),
-        listed(&[("Cox", &["hello", "permission", "second"])])
-    );
-    let (child, opened_by) = keys(cx, &workspace, 1);
-    assert_eq!(opened_by, Some(parent));
     let opened = opened.await.unwrap().unwrap();
-    assert_eq!((opened.number, opened.name.as_str()), (child, "Chat 3"));
+    let child = OpenedByAnAgent {
+        home,
+        store,
+        agents,
+        workspace,
+        setup,
+        parent,
+        opened,
+    };
+    (child, cx)
+}
+
+#[gpui::test]
+async fn a_chat_an_agent_opens_goes_under_its_chat_which_stays_shown(cx: &mut TestAppContext) {
+    let (child, cx) = opened_by_an_agent(cx, "child-under").await;
+
     assert_eq!(
-        shown_entries(cx, &workspace)[0],
+        names(cx, &child.workspace),
+        listed(&[("Cox", &["hello", "permission", "second"])]),
+        "named by its first line, as any chat is"
+    );
+    let (key, opened_by) = keys(cx, &child.workspace, 1);
+    assert_eq!(opened_by, Some(child.parent));
+    assert_eq!(
+        (child.opened.number, child.opened.name.as_str()),
+        (key, "Chat 3")
+    );
+    assert_eq!(
+        shown_entries(cx, &child.workspace)[0],
         Entry::Human("second".to_owned())
     );
-    let view = view_at(cx, &workspace, 1);
+}
+
+#[gpui::test]
+async fn a_chat_an_agent_opens_shows_its_context_and_opener_then_the_line_sent_for_the_human(
+    cx: &mut TestAppContext,
+) {
+    let (child, cx) = opened_by_an_agent(cx, "child-entries").await;
+
+    let view = view_at(cx, &child.workspace, 1);
     wait_for_turn(cx, &view).await;
-    let entries = entries(cx, &view);
     assert_eq!(
-        entries[..3],
+        entries(cx, &view)[..3],
         [
             Entry::Note("Context: Change nothing.".to_owned()),
             Entry::Note("Opened by: hello".to_owned()),
             Entry::Cox("permission".to_owned()),
         ]
     );
-    // Cox answered the request to edit, as the chat is set up.
+}
+
+#[gpui::test]
+async fn a_chat_an_agent_opens_answers_permission_requests_as_it_is_set_up(
+    cx: &mut TestAppContext,
+) {
+    let (child, cx) = opened_by_an_agent(cx, "child-permission").await;
+
+    let view = view_at(cx, &child.workspace, 1);
+    wait_for_turn(cx, &view).await;
+    let entries = entries(cx, &view);
     assert!(
         matches!(
             &entries[4],
@@ -3482,7 +3800,17 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
         ),
         "{entries:?}"
     );
-    let agent = Arc::clone(&agents.borrow()[2]);
+}
+
+#[gpui::test]
+async fn the_agent_of_a_chat_an_agent_opens_is_told_its_context_with_the_line(
+    cx: &mut TestAppContext,
+) {
+    let (child, cx) = opened_by_an_agent(cx, "child-told").await;
+
+    let view = view_at(cx, &child.workspace, 1);
+    wait_for_turn(cx, &view).await;
+    let agent = Arc::clone(&child.agents.borrow()[2]);
     assert_eq!(
         agent.prompt_blocks(),
         [[
@@ -3490,9 +3818,13 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
             "permission".to_owned()
         ]]
     );
-    // Which chat opened it, and how, is kept: Cox started again lists it
-    // under its parent, set up the same.
-    let again = start_again(cx, home.clone(), &store, &agents);
+}
+
+#[gpui::test]
+async fn a_chat_an_agent_opens_is_kept_under_its_chat_set_up_the_same(cx: &mut TestAppContext) {
+    let (child, cx) = opened_by_an_agent(cx, "child-kept").await;
+
+    let again = start_again(cx, child.home.clone(), &child.store, &child.agents);
     assert_eq!(
         names(cx, &again),
         listed(&[("Cox", &["hello", "permission", "second"])])
@@ -3500,11 +3832,10 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
     let (parent, _) = keys(cx, &again, 0);
     let (_, opened_by) = keys(cx, &again, 1);
     assert_eq!(opened_by, Some(parent));
-    let chats = store.chats().unwrap();
-    assert_eq!(chats[2].parent, Some(chats[0].id));
+    let chats = child.store.chats().unwrap();
     assert_eq!(
         Setup::from_json(chats[2].setup.as_deref().unwrap()).unwrap(),
-        setup
+        child.setup
     );
 }
 
@@ -3926,21 +4257,40 @@ fn own_ending(name: &str) -> workflow::Ending {
         .unwrap()
 }
 
-#[gpui::test]
-async fn a_sketch_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
-    let home = repository("sketch-rewrite-home");
-    let store = kept_store("sketch-rewrite-kept");
+/// A sketch of the project, which changed `main.rs`, ended as the human's
+/// own workflow says, with its ending "Rewrite in project", chosen from the
+/// menu of the right button.
+struct EndedAsTheHumansOwn {
+    home: PathBuf,
+    agents: Agents,
+    workspace: Entity<Workspace>,
+    /// The folder the sketch worked in.
+    folder: PathBuf,
+    /// What the sketch's agent said last.
+    summary: String,
+}
+
+impl EndedAsTheHumansOwn {
+    /// The name of the ref that keeps what the sketch changed.
+    fn kept(&self) -> String {
+        format!(
+            "refs/cox/discarded/{}",
+            self.folder.file_name().unwrap().to_string_lossy()
+        )
+    }
+}
+
+async fn end_as_the_human_s_own<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+) -> (EndedAsTheHumansOwn, &'a mut VisualTestContext) {
+    let home = repository(&format!("{name}-home"));
+    let store = kept_store(&format!("{name}-kept"));
     let (agents, asks, workspace, cx) =
-        open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
+        open_window_asking(cx, home.clone(), store, Resumes::Resume);
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     let folder = open_sketch(cx, &workspace, &asks, Sketch::Project, 2).await;
-
-    // An ending of the human's own keeps what the sketch of the project
-    // changed apart, and the chat the sketch was opened beside goes on
-    // toward the ending's goal, its agent told what the human says then,
-    // with where what the sketch changed is kept, and what the sketch's
-    // agent said last.
     let sketch = view_at(cx, &workspace, 1);
     wait_for_turn(cx, &sketch).await;
     let summary = entries(cx, &sketch)
@@ -3951,7 +4301,6 @@ async fn a_sketch_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
             _ => None,
         })
         .unwrap();
-    let then = "sketch/rewrite.md";
     // The workflow is one of the test's own, where this Cox keeps what
     // lasts, rather than the human's in their home.
     let workflow = scratch::data().join("workflow");
@@ -3960,88 +4309,148 @@ async fn a_sketch_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
         Some(serde_json::Value::String(workflow.display().to_string())),
     )
     .unwrap();
-    let then_file = cox::settings::workflow().join(then);
-    std::fs::create_dir_all(then_file.parent().unwrap()).unwrap();
-    std::fs::write(&then_file, "Rewrite what {kept} shows, from: {summary}\n").unwrap();
+    let then = workflow.join("sketch/rewrite.md");
+    std::fs::create_dir_all(then.parent().unwrap()).unwrap();
+    std::fs::write(&then, "Rewrite what {kept} shows, from: {summary}\n").unwrap();
+    std::fs::write(
+        workflow.join("sketch.json"),
+        r#"{"endings": [{"name": "Rewrite in project", "from": "project", "keep": "ref",
+            "then": "sketch/rewrite.md", "goal": "$ true"}]}"#,
+    )
+    .unwrap();
     std::fs::write(folder.join("main.rs"), "fn main() { sketch() }\n").unwrap();
-    let rewrite = workflow::Ending {
-        name: "Rewrite in project".to_owned(),
-        from: Some(Sketch::Project),
-        sum_up: None,
-        keep: true,
-        open: false,
-        then: Some(then.to_owned()),
-        goal: Some("$ true".to_owned()),
-    };
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.end_sketch_as(1, rewrite, window, cx);
-    });
+
+    right_click(cx, "chat-2");
+    click(cx, "sketch-ending-0");
     settled(cx, &workspace);
     wait_for_discarded(cx, &workspace, &folder).await;
     settle(cx).await;
-    let name = format!(
-        "refs/cox/discarded/{}",
-        folder.file_name().unwrap().to_string_lossy()
-    );
+    let ended = EndedAsTheHumansOwn {
+        home,
+        agents,
+        workspace,
+        folder,
+        summary,
+    };
+    (ended, cx)
+}
+
+#[gpui::test]
+async fn an_ending_of_the_human_s_own_keeps_what_the_sketch_changed_apart(cx: &mut TestAppContext) {
+    let (ended, cx) = end_as_the_human_s_own(cx, "sketch-own-kept").await;
+
     assert_eq!(
-        git(&home, &["show", &format!("{name}:main.rs")]),
+        git(&ended.home, &["show", &format!("{}:main.rs", ended.kept())]),
         "fn main() { sketch() }\n"
     );
     assert_eq!(
-        std::fs::read_to_string(home.join("main.rs")).unwrap(),
-        "fn main() {}\n"
+        std::fs::read_to_string(ended.home.join("main.rs")).unwrap(),
+        "fn main() {}\n",
+        "the project is as it was"
     );
+    let endings = ended
+        .workspace
+        .read_with(cx, |workspace, _| workspace.endings(1));
+    assert!(
+        endings.is_empty(),
+        "an ended sketch ends no more: {endings:?}"
+    );
+}
+
+#[gpui::test]
+async fn an_ending_of_the_human_s_own_shows_the_chat_beside_with_the_ending_s_goal(
+    cx: &mut TestAppContext,
+) {
+    let (ended, cx) = end_as_the_human_s_own(cx, "sketch-own-goal").await;
+
     assert_eq!(
-        goals(cx, &workspace, 0),
+        goals(cx, &ended.workspace, 0),
         [Some(KeptGoal::Command("true".to_owned())), None]
     );
-    // It is shown, for the human to go on there.
-    let first = shown(cx, &workspace);
-    let parent_view = view_at(cx, &workspace, 0);
-    assert_eq!(first, parent_view);
+    let first = shown(cx, &ended.workspace);
+    assert_eq!(first, view_at(cx, &ended.workspace, 0));
     let entries = entries(cx, &first);
     assert!(
         entries.iter().any(|entry| matches!(entry, Entry::Note(note)
             if note.contains("ended: The sketch is discarded"))),
         "{entries:?}"
     );
-    let told = format!("Rewrite what {name} shows, from: {summary}");
-    let rewriting = agents.clone();
-    let home_again = home.clone();
-    cx.condition(&workspace, move |_, _| {
-        let agent = &rewriting.borrow()[0];
-        agent.cwd().as_ref() == Some(&home_again)
-            && agent
-                .prompts()
-                .last()
-                .is_some_and(|prompt| prompt.contains(&told))
-    })
-    .await;
-    let endings = workspace.read_with(cx, |workspace, _| workspace.endings(1));
-    assert!(endings.is_empty(), "{endings:?}");
 }
 
 #[gpui::test]
-async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
-    let home = repository("sketch-end-home");
-    let store = kept_store("sketch-end-kept");
+async fn an_ending_of_the_human_s_own_tells_the_chat_beside_what_its_then_says(
+    cx: &mut TestAppContext,
+) {
+    let (ended, cx) = end_as_the_human_s_own(cx, "sketch-own-then").await;
+
+    let told = format!(
+        "Rewrite what {} shows, from: {}",
+        ended.kept(),
+        ended.summary
+    );
+    let agents = ended.agents.clone();
+    let home = ended.home.clone();
+    let (_waiting, timeout) = given_up();
+    tokio::select! {
+        () = cx.condition(&ended.workspace, move |_, _| {
+            let agent = &agents.borrow()[0];
+            agent.cwd().as_ref() == Some(&home)
+                && agent
+                    .prompts()
+                    .last()
+                    .is_some_and(|prompt| prompt.contains(&told))
+        }) => {}
+        _ = timeout => panic!("the chat beside was never told what the ending's then says"),
+    }
+}
+
+/// A chat of Cox's own where "hello" was said, which opened a sketch of
+/// the project, then a sketch from nothing, which made `made.txt`.
+struct TwoSketches {
+    home: PathBuf,
+    workspace: Entity<Workspace>,
+    /// What the sketch from nothing made.
+    made: PathBuf,
+}
+
+async fn two_sketches<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+) -> (TwoSketches, &'a mut VisualTestContext) {
+    let home = repository(&format!("{name}-home"));
+    let store = kept_store(&format!("{name}-kept"));
     let (_agents, asks, workspace, cx) =
-        open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
+        open_window_asking(cx, home.clone(), store, Resumes::Resume);
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     open_sketch(cx, &workspace, &asks, Sketch::Project, 2).await;
     let empty = open_sketch(cx, &workspace, &asks, Sketch::Empty, 3).await;
-    let ended = |cx: &mut VisualTestContext, index: usize| {
-        let view = view_at(cx, &workspace, index);
-        workspace.read_with(cx, |workspace, cx| {
-            let chat = workspace.chats(0).nth(index).unwrap();
-            let view = view.read(cx);
-            let last = view.conversation().entries().last().cloned();
-            (chat.is_open(), view.conversation().state(), last)
-        })
+    let made = empty.join("made.txt");
+    std::fs::write(&made, "made in the sketch\n").unwrap();
+    let sketches = TwoSketches {
+        home,
+        workspace,
+        made,
     };
+    (sketches, cx)
+}
+
+/// Discards the sketch from nothing of `sketches` from the menu of the
+/// right button, as Cox's own workflow offers, and waits until what it
+/// made is gone. Another test may make a sketch from nothing in a folder
+/// of the same name once this one is gone, so what goes is what this
+/// sketch made.
+async fn discard_from_the_menu(cx: &mut VisualTestContext, sketches: &TwoSketches) {
+    right_click(cx, "chat-3");
+    click(cx, "sketch-ending-1");
+    wait_for_discarded(cx, &sketches.workspace, &sketches.made).await;
+}
+
+#[gpui::test]
+async fn cox_s_own_workflow_opens_only_a_sketch_from_nothing_as_a_project(cx: &mut TestAppContext) {
+    let (sketches, cx) = two_sketches(cx, "sketch-own-endings").await;
     let names = |cx: &mut VisualTestContext, index: usize| {
-        workspace.read_with(cx, |workspace, _| {
+        sketches.workspace.read_with(cx, |workspace, _| {
             workspace
                 .endings(index)
                 .into_iter()
@@ -4049,90 +4458,108 @@ async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
                 .collect::<Vec<_>>()
         })
     };
-    // Cox's own workflow opens only a sketch from nothing as a project.
+
     assert_eq!(names(cx, 1), ["Discard sketch"]);
     assert_eq!(names(cx, 2), ["Open as project", "Discard sketch"]);
+}
 
-    // The sketch from nothing is discarded, its folder with it. Another
-    // test may make a sketch from nothing in a folder of the same name once
-    // this one is gone, so what goes is what this sketch made.
-    let made = empty.join("made.txt");
-    std::fs::write(&made, "made in the sketch\n").unwrap();
-    // The menu of the right button offers the ways it ends.
-    right_click(cx, "chat-3");
-    click(cx, "sketch-ending-1");
-    wait_for_discarded(cx, &workspace, &made).await;
-    let (open, state, last) = ended(cx, 2);
+#[gpui::test]
+async fn a_discarded_sketch_closes_summed_up_and_keeps_what_it_made_in_a_bundle(
+    cx: &mut TestAppContext,
+) {
+    let (sketches, cx) = two_sketches(cx, "sketch-discard").await;
+
+    discard_from_the_menu(cx, &sketches).await;
+    let view = view_at(cx, &sketches.workspace, 2);
+    let (open, state) = sketches.workspace.read_with(cx, |workspace, cx| {
+        let chat = workspace.chats(0).nth(2).unwrap();
+        (chat.is_open(), view.read(cx).conversation().state())
+    });
     assert!(!open);
     assert_eq!(state, State::Closed);
-    // Its agent summed it up first, asked in the human's place.
-    let entries = {
-        let view = view_at(cx, &workspace, 2);
-        self::entries(cx, &view)
-    };
+    let entries = entries(cx, &view);
     assert!(
         entries.iter().any(|entry| matches!(
             entry,
             Entry::Cox(line) if line.starts_with("The human discards this sketch")
         )),
-        "{entries:?}"
+        "its agent sums it up first, asked in the human's place: {entries:?}"
     );
-    // What it made is kept in a bundle, which makes it again.
-    let Some(Entry::Note(note)) = &last else {
-        panic!("{last:?}");
+    let Some(Entry::Note(note)) = entries.last() else {
+        panic!("{entries:?}");
     };
     assert_made_again(note, "made.txt", "made in the sketch\n");
-    // What it did is a source, of the human's for a sketch of Cox's own:
-    // how it ended, and all that was said in it, as its summing up.
-    let source = sketch_source(&home.join("raw"));
+}
+
+#[gpui::test]
+async fn a_discarded_sketch_is_a_source_of_the_human_s_saying_how_it_ended(
+    cx: &mut TestAppContext,
+) {
+    let (sketches, cx) = two_sketches(cx, "sketch-discard-source").await;
+
+    discard_from_the_menu(cx, &sketches).await;
+    let source = sketch_source(&sketches.home.join("raw"));
     assert!(source.contains("## How it ended\n\n"), "{source}");
     assert!(
         source.contains("[cox]\nThe human discards this sketch"),
         "{source}"
     );
+    let view = view_at(cx, &sketches.workspace, 2);
+    let entries = entries(cx, &view);
+    let Some(Entry::Note(note)) = entries.last() else {
+        panic!("{entries:?}");
+    };
     assert!(
         note.contains("What it did is kept as the source sketches/"),
         "{note}"
     );
+}
 
-    // Where the human goes on, the chat it was opened beside, they are
-    // asked whether to keep what the sketch found in the wiki, which its
-    // own agent, which found it, is then asked to, in the project.
+#[gpui::test]
+async fn the_chat_beside_a_discarded_sketch_asks_to_keep_what_it_found_in_the_wiki(
+    cx: &mut TestAppContext,
+) {
+    let (sketches, cx) = two_sketches(cx, "sketch-discard-wiki").await;
+    let workspace = sketches.workspace.clone();
+
+    discard_from_the_menu(cx, &sketches).await;
     let beside = shown(cx, &workspace);
     let sketch = view_at(cx, &workspace, 2);
     let sketch_kept =
         workspace.read_with(cx, |workspace, _| workspace.chats(0).nth(2).unwrap().kept());
-    let asked = self::entries(cx, &beside);
+    assert!(sketch_kept.is_some());
+    let asked = entries(cx, &beside);
     let at = asked.len() - 1;
     assert!(
         matches!(&asked[at], Entry::Keep { why, chat, kept: None }
             if why.starts_with("The sketch \"") && why.ends_with("\" ended.") && chat == &sketch_kept),
         "{asked:?}"
     );
-    assert!(sketch_kept.is_some());
     cx.run_until_parked();
     click(cx, Box::leak(format!("keep-in-wiki-{at}").into_boxed_str()));
     wait_for_turn(cx, &sketch).await;
     let save = workflow::WIKI_SAVE.say(&[]);
-    assert!(self::entries(cx, &sketch).contains(&Entry::Cox(save)));
+    assert!(
+        entries(cx, &sketch).contains(&Entry::Cox(save)),
+        "the sketch's own agent, which found it, is asked to keep it"
+    );
+}
 
-    // Another opens as a project of its own, in the projects of the home,
-    // its folder a directory of it named as it is, which the human goes
-    // on with, so it is no longer discarded.
-    let empty = open_sketch(cx, &workspace, &asks, Sketch::Empty, 4).await;
-    let made = empty.join("made.txt");
-    std::fs::write(&made, "made in the sketch\n").unwrap();
-    workspace.update_in(cx, |workspace, window, cx| {
-        workspace.end_sketch_as(3, own_ending("Open as project"), window, cx);
-        workspace.end_sketch_as(3, own_ending("Discard sketch"), window, cx);
+#[gpui::test]
+async fn a_sketch_from_nothing_opens_as_a_project_of_its_own_no_longer_discarded(
+    cx: &mut TestAppContext,
+) {
+    let (sketches, cx) = two_sketches(cx, "sketch-open").await;
+
+    right_click(cx, "chat-3");
+    click(cx, "sketch-ending-0");
+    // As a discard chosen from a menu drawn before would.
+    sketches.workspace.update_in(cx, |workspace, window, cx| {
+        workspace.end_sketch_as(2, own_ending("Discard sketch"), window, cx);
     });
-    settled(cx, &workspace);
-    // Another test may make a sketch from nothing in a folder of the same
-    // name once this one is gone, so what is gone is what this sketch made.
-    assert!(!made.exists());
-    let project = opened_as_project(cx, &workspace, &home);
-    // What it did is a source of the project it was opened as, which
-    // says where what it made is kept apart.
+    settled(cx, &sketches.workspace);
+    assert!(!sketches.made.exists());
+    let project = opened_as_project(cx, &sketches.workspace, &sketches.home, 2);
     let source = sketch_source(&project.join("raw"));
     assert!(
         source.contains("The sketch was opened as the project untitled-1"),
@@ -4170,7 +4597,7 @@ fn sketch_source(raw: &Path) -> String {
     std::fs::read_to_string(&sources[0]).unwrap()
 }
 
-/// The project the sketch at 3 was opened as, the first with nothing
+/// The project the sketch at `sketch` was opened as, the first with nothing
 /// set yet in the projects of `home`, after checking that the window
 /// lists it, that it starts with none of what the sketch made, and that
 /// the sketch says so.
@@ -4178,6 +4605,7 @@ fn opened_as_project(
     cx: &mut VisualTestContext,
     workspace: &Entity<Workspace>,
     home: &Path,
+    sketch: usize,
 ) -> PathBuf {
     let project = home.join("projects").join("untitled-1");
     let listed: Vec<PathBuf> = workspace.read_with(cx, |workspace, _| {
@@ -4188,7 +4616,7 @@ fn opened_as_project(
             .collect()
     });
     // What the sketch says of how it ended tells why, when it did not.
-    let sketch = view_at(cx, workspace, 3);
+    let sketch = view_at(cx, workspace, sketch);
     let said = self::entries(cx, &sketch);
     assert!(
         listed.contains(&project),

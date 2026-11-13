@@ -1,13 +1,12 @@
 //! An agent reaching its chat's tools through `cox --mcp`, as it starts
 //! the MCP server Cox hands it.
 
-#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
 mod scratch;
 #[expect(dead_code, reason = "these tests use only part of the waits")]
 mod waits;
 
 use std::io::{BufRead as _, BufReader, Lines, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, ToolServer, Whereabouts};
@@ -257,165 +256,83 @@ fn chat_in(cwd: &std::path::Path, project: &str, chat: &str) -> (Agent, ToolServ
     (agent, server)
 }
 
-#[test]
-fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
-    let data = scratch("wiki-data");
-    cox::storage::keep_in(&data);
-    // A page is read by the `cox` built, as the tools' server runs it.
-    cox::raw::page::read_with(PathBuf::from(env!("CARGO_BIN_EXE_cox")));
-    // The wiki is in the home the settings set.
-    let home = data.join("home");
-    std::fs::write(
-        data.join("settings.json"),
-        json!({ "home": home }).to_string(),
-    )
-    .unwrap();
-    let one = scratch("wiki-one");
-    let other = scratch("wiki-other");
-    let (mut writer, _one) = chat_in(&one, "one", "Fix scroll");
-    let (mut reader, _other) = chat_in(&other, "other", "Layout");
-
-    // A page says what it was made from.
-    writer.call(
-        2,
-        "wiki_write",
-        &json!({
-            "page": "gpui/scroll",
-            "text": "# Scrolling in GPUI\n\nA flex child needs `min_h_0` to scroll.\n",
-            "paths": ["src/view.rs"],
-        }),
-    );
-    let refused = writer.hear();
-    let refused = refused["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(refused.starts_with("no sources: "), "{refused}");
-    writer.call(
-        2,
-        "wiki_write",
-        &json!({
-            "page": "gpui/scroll",
-            "text": "# Scrolling in GPUI\n\nA flex child needs `min_h_0` to scroll.\n",
-            "paths": ["src/view.rs"],
-            "sources": ["gpui-news/nothing"],
-        }),
-    );
-    let refused = writer.hear();
-    let refused = refused["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(
-        refused.starts_with("gpui-news/nothing is no source kept"),
-        "{refused}"
-    );
-    assert!(!home.join("wiki/gpui/scroll.md").exists());
-    writer.call(
-        2,
-        "wiki_write",
-        &json!({
-            "page": "gpui/scroll",
-            "text": "# Scrolling in GPUI\n\nA flex child needs `min_h_0` to scroll.\n",
-            "paths": ["src/view.rs"],
-            "sources": ["chat 7"],
-        }),
-    );
-    let written = writer.hear();
-    assert_eq!(written["result"]["isError"], false, "{written}");
-    let page = home.join("wiki/gpui/scroll.md");
-    assert!(
-        written["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .starts_with(&format!("{} is written", page.display())),
-        "{written}"
-    );
-
-    reader.call(3, "wiki_search", &json!({ "query": "scroll min_h_0" }));
-    let found = reader.hear();
-    let found = found["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(found.contains("gpui/scroll: Scrolling in GPUI"), "{found}");
-    assert!(found.contains("`min_h_0`"), "{found}");
-
-    reader.call(4, "wiki_read", &json!({ "page": "gpui/scroll" }));
-    let read = reader.hear();
-    let read = read["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(read.starts_with("# Scrolling in GPUI\n"), "{read}");
-    assert!(
-        read.ends_with(" in one, chat \"Fix scroll\" (#7), from chat 7: src/view.rs\n"),
-        "{read}"
-    );
-    reader.call(5, "wiki_read", &json!({}));
-    let index = reader.hear();
-    let index = index["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(
-        index.contains("- [[gpui/scroll|Scrolling in GPUI]]: A flex child"),
-        "{index}"
-    );
-
-    a_project_keeps_its_own_wiki(&mut writer, &mut reader, &one, &home);
-    sources_are_kept_apart_from_the_wiki(&mut writer, &mut reader, &home);
-    a_project_keeps_its_own_sources(&mut writer, &mut reader, &one, &home);
-    drop((writer, reader));
+/// Two chats, each of a project of its own: the writer, chat 7 "Fix
+/// scroll" of the project "one", and the reader, of the project "other",
+/// with a home of the test's own, where the human's wiki and sources are.
+struct Wikis {
+    writer: Agent,
+    reader: Agent,
+    /// The folder of the writer's project.
+    one: PathBuf,
+    /// The home, which holds the human's wiki and sources.
+    home: PathBuf,
+    _servers: (ToolServer, ToolServer),
 }
 
-/// A page the writer keeps in its project's own wiki, in `one`, is not
-/// the reader's, nor in the human's wiki, in `home`.
-fn a_project_keeps_its_own_wiki(writer: &mut Agent, reader: &mut Agent, one: &Path, home: &Path) {
-    writer.call(
-        6,
-        "wiki_write",
-        &json!({
-            "page": "customers",
-            "text": "# Customers\n\nAcme scrolls a lot.\n",
-            "keep_in_project": true,
-            "sources": ["chat 7"],
-        }),
-    );
-    let written = writer.hear();
-    let written = written["result"]["content"][0]["text"].as_str().unwrap();
-    let customers = one.join("wiki/customers.md");
-    assert!(
-        written.starts_with(&format!(
-            "{} is written, in this project's wiki, used ",
-            customers.display()
-        )),
-        "{written}"
-    );
-    assert!(!home.join("wiki/customers.md").exists());
-    reader.call(7, "wiki_search", &json!({ "query": "scrolls" }));
-    let found = reader.hear();
-    let found = found["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(found.starts_with("No page of the wiki"), "{found}");
-    reader.call(8, "wiki_read", &json!({ "page": "customers" }));
-    assert_eq!(reader.hear()["result"]["isError"], true);
-    reader.call(9, "wiki_read", &json!({}));
-    let index = reader.hear();
-    let index = index["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(!index.contains("customers"), "{index}");
-    writer.call(10, "wiki_search", &json!({ "query": "scrolls" }));
-    let found = writer.hear();
-    let found = found["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(
-        found.contains("In this project's wiki:\n\ncustomers: Customers"),
-        "{found}"
-    );
-    // The project's page is read before the human's, unless the human's
-    // is asked for.
-    writer.call(11, "wiki_read", &json!({ "page": "customers" }));
-    let read = writer.hear();
-    let read = read["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(read.starts_with("# Customers\n"), "{read}");
-    writer.call(
-        12,
-        "wiki_read",
-        &json!({ "page": "customers", "wiki": "human" }),
-    );
-    assert_eq!(writer.hear()["result"]["isError"], true);
+impl Wikis {
+    fn open(name: &str) -> Self {
+        let data = scratch::data();
+        // A page is read by the `cox` built, as the tools' server runs it.
+        cox::raw::page::read_with(PathBuf::from(env!("CARGO_BIN_EXE_cox")));
+        let home = std::fs::canonicalize(&data).unwrap().join("home");
+        std::fs::write(
+            data.join("settings.json"),
+            json!({ "home": home }).to_string(),
+        )
+        .unwrap();
+        let one = scratch(&format!("{name}-one"));
+        let other = scratch(&format!("{name}-other"));
+        let (writer, writer_server) = chat_in(&one, "one", "Fix scroll");
+        let (reader, reader_server) = chat_in(&other, "other", "Layout");
+        Self {
+            writer,
+            reader,
+            one,
+            home,
+            _servers: (writer_server, reader_server),
+        }
+    }
 }
 
-/// What a chat reads is kept apart from the wiki, in the home's `raw`
-/// when the chat says it is for every project, for any chat to find
-/// again.
-fn sources_are_kept_apart_from_the_wiki(writer: &mut Agent, reader: &mut Agent, home: &Path) {
-    writer.call(
-        11,
-        "raw_keep",
+/// What the tool `name` answers `agent` called with `arguments`, in
+/// words, and whether it says it failed.
+fn told(agent: &mut Agent, name: &str, arguments: &Value) -> (String, bool) {
+    agent.call(2, name, arguments);
+    let answer = agent.hear();
+    let text = answer["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{answer}"))
+        .to_owned();
+    (text, answer["result"]["isError"] == true)
+}
+
+/// The page on scrolling in GPUI, made from `sources`.
+fn scroll_page(sources: &[&str]) -> Value {
+    json!({
+        "page": "gpui/scroll",
+        "text": "# Scrolling in GPUI\n\nA flex child needs `min_h_0` to scroll.\n",
+        "paths": ["src/view.rs"],
+        "sources": sources,
+    })
+}
+
+/// Keeps what `arguments` say as a source, as `agent`, and answers the
+/// name it is kept by, and what Cox said.
+fn keep_source(agent: &mut Agent, arguments: &Value) -> (String, String) {
+    let (kept, failed) = told(agent, "raw_keep", arguments);
+    assert!(!failed, "{kept}");
+    let name = kept
+        .strip_prefix("The source is kept as ")
+        .and_then(|rest| rest.split(", in ").next())
+        .unwrap_or_else(|| panic!("{kept}"))
+        .to_owned();
+    (name, kept)
+}
+
+/// The gpui docs, kept as a source of the human's, for every project.
+fn keep_the_gpui_docs(agent: &mut Agent) -> (String, String) {
+    keep_source(
+        agent,
         &json!({
             "topic": "gpui-news",
             "from": "https://docs.rs/gpui/latest/gpui/",
@@ -423,115 +340,269 @@ fn sources_are_kept_apart_from_the_wiki(writer: &mut Agent, reader: &mut Agent, 
             "text": "Overflow scrolls only inside a bounded height.\n",
             "keep_in_project": false,
         }),
+    )
+}
+
+#[test]
+fn a_wiki_page_from_no_source_is_not_written() {
+    let mut wikis = Wikis::open("wiki-no-source");
+    let mut page = scroll_page(&[]);
+    page.as_object_mut().unwrap().remove("sources");
+
+    let (refused, _) = told(&mut wikis.writer, "wiki_write", &page);
+    assert!(refused.starts_with("no sources: "), "{refused}");
+    assert!(!wikis.home.join("wiki/gpui/scroll.md").exists());
+}
+
+#[test]
+fn a_wiki_page_from_a_source_not_kept_is_not_written() {
+    let mut wikis = Wikis::open("wiki-not-kept");
+
+    let (refused, _) = told(
+        &mut wikis.writer,
+        "wiki_write",
+        &scroll_page(&["gpui-news/nothing"]),
     );
-    let kept = writer.hear();
-    let kept = kept["result"]["content"][0]["text"].as_str().unwrap();
-    let name = kept
-        .strip_prefix("The source is kept as ")
-        .and_then(|rest| rest.split(", in ").next())
-        .unwrap_or_else(|| panic!("{kept}"));
+    assert!(
+        refused.starts_with("gpui-news/nothing is no source kept"),
+        "{refused}"
+    );
+    assert!(!wikis.home.join("wiki/gpui/scroll.md").exists());
+}
+
+#[test]
+fn a_page_one_project_writes_in_the_human_s_wiki_is_found_from_another() {
+    let mut wikis = Wikis::open("wiki-found");
+
+    let (written, failed) = told(&mut wikis.writer, "wiki_write", &scroll_page(&["chat 7"]));
+    assert!(!failed, "{written}");
+    let page = wikis.home.join("wiki/gpui/scroll.md");
+    assert!(
+        written.starts_with(&format!("{} is written", page.display())),
+        "{written}"
+    );
+    let (found, _) = told(
+        &mut wikis.reader,
+        "wiki_search",
+        &json!({ "query": "scroll min_h_0" }),
+    );
+    assert!(found.contains("gpui/scroll: Scrolling in GPUI"), "{found}");
+    assert!(found.contains("`min_h_0`"), "{found}");
+    let (read, _) = told(
+        &mut wikis.reader,
+        "wiki_read",
+        &json!({ "page": "gpui/scroll" }),
+    );
+    assert!(read.starts_with("# Scrolling in GPUI\n"), "{read}");
+    assert!(
+        read.ends_with(" in one, chat \"Fix scroll\" (#7), from chat 7: src/view.rs\n"),
+        "it says where it was made, and from what: {read}"
+    );
+    let (index, _) = told(&mut wikis.reader, "wiki_read", &json!({}));
+    assert!(
+        index.contains("- [[gpui/scroll|Scrolling in GPUI]]: A flex child"),
+        "{index}"
+    );
+}
+
+/// The page on customers, kept in the project's own wiki.
+fn customers_page() -> Value {
+    json!({
+        "page": "customers",
+        "text": "# Customers\n\nAcme scrolls a lot.\n",
+        "keep_in_project": true,
+        "sources": ["chat 7"],
+    })
+}
+
+#[test]
+fn a_page_kept_in_a_project_s_wiki_is_found_by_its_chats_alone() {
+    let mut wikis = Wikis::open("wiki-project");
+
+    let (written, _) = told(&mut wikis.writer, "wiki_write", &customers_page());
+    let customers = wikis.one.join("wiki/customers.md");
+    assert!(
+        written.starts_with(&format!(
+            "{} is written, in this project's wiki, used ",
+            customers.display()
+        )),
+        "{written}"
+    );
+    assert!(!wikis.home.join("wiki/customers.md").exists());
+    let (found, _) = told(
+        &mut wikis.writer,
+        "wiki_search",
+        &json!({ "query": "scrolls" }),
+    );
+    assert!(
+        found.contains("In this project's wiki:\n\ncustomers: Customers"),
+        "{found}"
+    );
+    let (found, _) = told(
+        &mut wikis.reader,
+        "wiki_search",
+        &json!({ "query": "scrolls" }),
+    );
+    assert!(found.starts_with("No page of the wiki"), "{found}");
+    let (_, failed) = told(
+        &mut wikis.reader,
+        "wiki_read",
+        &json!({ "page": "customers" }),
+    );
+    assert!(failed, "another project's page is not read");
+    let (index, _) = told(&mut wikis.reader, "wiki_read", &json!({}));
+    assert!(!index.contains("customers"), "{index}");
+}
+
+#[test]
+fn a_project_s_page_is_read_before_the_human_s_unless_the_human_s_is_asked_for() {
+    let mut wikis = Wikis::open("wiki-first");
+    told(&mut wikis.writer, "wiki_write", &customers_page());
+
+    let (read, _) = told(
+        &mut wikis.writer,
+        "wiki_read",
+        &json!({ "page": "customers" }),
+    );
+    assert!(read.starts_with("# Customers\n"), "{read}");
+    let (_, failed) = told(
+        &mut wikis.writer,
+        "wiki_read",
+        &json!({ "page": "customers", "wiki": "human" }),
+    );
+    assert!(failed, "the human's wiki has no such page");
+}
+
+#[test]
+fn a_source_kept_for_every_project_is_found_by_another_and_not_in_the_wiki() {
+    let mut wikis = Wikis::open("raw-every");
+
+    let (name, kept) = keep_the_gpui_docs(&mut wikis.writer);
     assert!(
         name.starts_with("gpui-news/") && name.ends_with("-gpui-docs"),
         "{kept}"
     );
-    assert!(home.join(format!("raw/{name}.md")).is_file(), "{kept}");
-    reader.call(12, "wiki_search", &json!({ "query": "bounded height" }));
-    let found = reader.hear();
-    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        wikis.home.join(format!("raw/{name}.md")).is_file(),
+        "{kept}"
+    );
+    let (found, _) = told(
+        &mut wikis.reader,
+        "wiki_search",
+        &json!({ "query": "bounded height" }),
+    );
     assert!(found.starts_with("No page of the wiki"), "{found}");
-    reader.call(13, "raw_search", &json!({ "query": "bounded height" }));
-    let found = reader.hear();
-    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    let (found, _) = told(
+        &mut wikis.reader,
+        "raw_search",
+        &json!({ "query": "bounded height" }),
+    );
     assert!(found.contains(&format!("{name}: gpui docs")), "{found}");
-    reader.call(14, "raw_read", &json!({ "topic": "gpui-news" }));
-    let listed = reader.hear();
-    let listed = listed["result"]["content"][0]["text"].as_str().unwrap();
+    let (listed, _) = told(
+        &mut wikis.reader,
+        "raw_read",
+        &json!({ "topic": "gpui-news" }),
+    );
     assert!(listed.ends_with(&format!("first:\n{name}")), "{listed}");
-    reader.call(15, "raw_read", &json!({ "source": name }));
-    let read = reader.hear();
-    let read = read["result"]["content"][0]["text"].as_str().unwrap();
+}
+
+#[test]
+fn a_source_reads_as_the_source_s_saying_where_it_was_kept_from() {
+    let mut wikis = Wikis::open("raw-read");
+    let (name, _) = keep_the_gpui_docs(&mut wikis.writer);
+
+    let (read, _) = told(&mut wikis.reader, "raw_read", &json!({ "source": name }));
     assert!(
         read.contains("chat: \"Fix scroll\"\nchat_id: 7\nproject: \"one\"\n"),
         "{read}"
     );
-    // Marked as the source's, not the human's.
     assert!(
         read.starts_with(&format!(
             "What the source {name} says, lines 1 to 11 of 11,"
         )),
-        "{read}"
+        "marked as the source's, not the human's: {read}"
     );
     assert!(
         read.contains("# gpui docs\n\nOverflow scrolls only inside a bounded height.\n--- source "),
         "{read}"
     );
-    reader.call(16, "raw_read", &json!({ "source": name, "from_line": 9 }));
-    let read = reader.hear();
-    let read = read["result"]["content"][0]["text"].as_str().unwrap();
+}
+
+#[test]
+fn a_source_reads_from_the_line_asked_for() {
+    let mut wikis = Wikis::open("raw-from-line");
+    let (name, _) = keep_the_gpui_docs(&mut wikis.writer);
+
+    let (read, _) = told(
+        &mut wikis.reader,
+        "raw_read",
+        &json!({ "source": name, "from_line": 9 }),
+    );
     assert!(read.contains(", lines 9 to 11 of 11,"), "{read}");
     assert!(!read.contains("chat_id"), "{read}");
-    // Cox reads only a web page itself, and only of the web.
-    writer.call(
-        17,
+}
+
+#[test]
+fn cox_keeps_as_a_source_only_a_web_page_of_the_web_it_reads_itself() {
+    let mut wikis = Wikis::open("raw-web");
+
+    let (_, failed) = told(
+        &mut wikis.writer,
         "raw_keep",
         &json!({ "topic": "gpui-news", "from": "cargo doc --open" }),
     );
-    let refused = writer.hear();
-    assert_eq!(refused["result"]["isError"], true, "{refused}");
-    writer.call(
-        18,
+    assert!(failed, "no command is run for a source");
+    let (refused, _) = told(
+        &mut wikis.writer,
         "raw_keep",
         &json!({ "topic": "gpui-news", "from": "http://127.0.0.1:9/admin" }),
     );
-    let refused = writer.hear();
-    let refused = refused["result"]["content"][0]["text"].as_str().unwrap();
     assert!(refused.contains("not on the web"), "{refused}");
 }
 
-/// What a chat of a project reads is kept in the project's own `raw`,
-/// in `one`, unless it says otherwise: its chats find it, the project's
-/// before the human's, and the reader, of another project, does not.
-fn a_project_keeps_its_own_sources(
-    writer: &mut Agent,
-    reader: &mut Agent,
-    one: &Path,
-    home: &Path,
-) {
-    writer.call(
-        19,
-        "raw_keep",
+/// The Acme mock, kept as a source of the project of `agent`'s chat.
+fn keep_the_acme_mock(agent: &mut Agent) -> (String, String) {
+    keep_source(
+        agent,
         &json!({
             "topic": "sketches",
             "from": "chat 7",
             "title": "Acme mock",
             "text": "Acme wants a plain list, not cards.\n",
         }),
-    );
-    let kept = writer.hear();
-    let kept = kept["result"]["content"][0]["text"].as_str().unwrap();
-    let name = kept
-        .strip_prefix("The source is kept as ")
-        .and_then(|rest| rest.split(", in ").next())
-        .unwrap_or_else(|| panic!("{kept}"));
+    )
+}
+
+#[test]
+fn a_source_a_project_keeps_is_found_by_its_chats_first_and_not_another_s() {
+    let mut wikis = Wikis::open("raw-project");
+    keep_the_gpui_docs(&mut wikis.writer);
+
+    let (name, kept) = keep_the_acme_mock(&mut wikis.writer);
     assert!(kept.contains(", in this project's sources, in "), "{kept}");
-    assert!(one.join(format!("raw/{name}.md")).is_file(), "{kept}");
-    assert!(!home.join(format!("raw/{name}.md")).exists(), "{kept}");
-    reader.call(20, "raw_search", &json!({ "query": "plain list" }));
-    let found = reader.hear();
-    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(wikis.one.join(format!("raw/{name}.md")).is_file(), "{kept}");
+    assert!(
+        !wikis.home.join(format!("raw/{name}.md")).exists(),
+        "{kept}"
+    );
+    let (found, _) = told(
+        &mut wikis.reader,
+        "raw_search",
+        &json!({ "query": "plain list" }),
+    );
     assert!(found.starts_with("No source kept"), "{found}");
-    reader.call(21, "raw_read", &json!({ "source": name }));
-    assert_eq!(reader.hear()["result"]["isError"], true);
-    writer.call(22, "raw_search", &json!({ "query": "plain list" }));
-    let found = writer.hear();
-    let found = found["result"]["content"][0]["text"].as_str().unwrap();
+    let (_, failed) = told(&mut wikis.reader, "raw_read", &json!({ "source": name }));
+    assert!(failed, "another project's source is not read");
+    let (found, _) = told(
+        &mut wikis.writer,
+        "raw_search",
+        &json!({ "query": "plain list" }),
+    );
     assert!(
         found.contains(&format!("In this project's sources:\n\n{name}: Acme mock")),
         "{found}"
     );
-    writer.call(23, "raw_read", &json!({}));
-    let listed = writer.hear();
-    let listed = listed["result"]["content"][0]["text"].as_str().unwrap();
+    let (listed, _) = told(&mut wikis.writer, "raw_read", &json!({}));
     assert!(
         listed.contains(&format!(
             "In this project's sources, the last kept first:\n{name}"
@@ -540,25 +611,27 @@ fn a_project_keeps_its_own_sources(
     );
     assert!(
         listed.contains("In the human's sources, the last kept first:\ngpui-news/"),
-        "{listed}"
+        "the project's are listed before the human's: {listed}"
     );
-    writer.call(24, "raw_read", &json!({ "source": name }));
-    let read = writer.hear();
-    let read = read["result"]["content"][0]["text"].as_str().unwrap();
+    let (read, _) = told(&mut wikis.writer, "raw_read", &json!({ "source": name }));
     assert!(read.contains("Acme wants a plain list"), "{read}");
-    // A page made from it names it; the reader, of another project, has
-    // no such source to make one from.
+}
+
+#[test]
+fn a_page_made_from_a_project_s_source_names_it_and_another_project_cannot_make_it() {
+    let mut wikis = Wikis::open("raw-page");
+    let (name, _) = keep_the_acme_mock(&mut wikis.writer);
     let page = json!({
         "page": "acme",
         "text": "# Acme\n\nWants a plain list.\n",
         "keep_in_project": true,
         "sources": [name],
     });
-    reader.call(25, "wiki_write", &page);
-    assert_eq!(reader.hear()["result"]["isError"], true);
-    writer.call(26, "wiki_write", &page);
-    let written = writer.hear();
-    assert_eq!(written["result"]["isError"], false, "{written}");
-    let page = std::fs::read_to_string(one.join("wiki/acme.md")).unwrap();
+
+    let (_, failed) = told(&mut wikis.reader, "wiki_write", &page);
+    assert!(failed, "the reader has no such source to make it from");
+    let (written, failed) = told(&mut wikis.writer, "wiki_write", &page);
+    assert!(!failed, "{written}");
+    let page = std::fs::read_to_string(wikis.one.join("wiki/acme.md")).unwrap();
     assert!(page.contains(&format!(", from {name}\n")), "{page}");
 }
