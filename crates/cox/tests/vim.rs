@@ -1476,7 +1476,13 @@ fn a_page_s_field_takes_every_key_and_escape_leaves_it(cx: &mut TestAppContext) 
     assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
 
     cx.simulate_keystrokes("i cmd-c k escape");
-    assert_eq!(asked(&page, cx), ["key cmd-c", "key k", "leave"]);
+    // GPUI names the platform key Command on macOS and Super elsewhere.
+    let copy = if cfg!(target_os = "macos") {
+        "key cmd-c"
+    } else {
+        "key super-c"
+    };
+    assert_eq!(asked(&page, cx), [copy, "key k", "leave"]);
 }
 
 #[gpui::test]
