@@ -211,6 +211,12 @@ const NO_REGISTRY: &str = "http://127.0.0.1:9/registry.json";
 /// phone, and waits until it answers on its socket.
 fn daemon(folder: &Path, data: &Path) -> Daemon {
     set(data, r#"{"phone": false}"#);
+    answering(folder, data)
+}
+
+/// Starts `cox --daemon` keeping what lasts in `data`, set as it is, and
+/// waits until it answers on its socket.
+fn answering(folder: &Path, data: &Path) -> Daemon {
     let mut daemon = Daemon::start(folder, data, NO_REGISTRY);
     let socket = data.join("run/coxd.sock");
     waits::until("coxd answers on its socket", || {
@@ -257,6 +263,94 @@ fn the_daemon_ends_well_once_its_socket_is_taken_away() {
     std::fs::remove_file(data.join("run/coxd.sock")).unwrap();
     let (status, said) = daemon.ended();
     assert_eq!(status.code(), Some(0), "{said}");
+}
+
+/// A port for the phone's page that no one listens on, nor on the two
+/// after it, where coxd relays to the phone and serves the sketches'
+/// mocks, below the ports the system hands out, and apart from those
+/// another test of these was given.
+fn free_port() -> u16 {
+    static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    let mut given = GIVEN.lock().unwrap();
+    let start = 20_000 + u16::try_from(std::process::id() % 2_000).unwrap() * 10;
+    (start..40_000)
+        .step_by(3)
+        .find(|&port| {
+            given.iter().all(|other| other.abs_diff(port) > 2)
+                && (port..port + 3).all(|port| TcpListener::bind(("127.0.0.1", port)).is_ok())
+        })
+        .inspect(|&port| given.push(port))
+        .expect("a free port")
+}
+
+/// What the page coxd serves the phone on `port` answers a GET of `path`
+/// with `cookie`, if any, as a phone's browser asks.
+fn ask_the_page(port: u16, path: &str, cookie: Option<&str>) -> String {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(waits::GIVEN_UP)).unwrap();
+    let cookie = cookie
+        .map(|cookie| format!("Cookie: {cookie}\r\n"))
+        .unwrap_or_default();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n{cookie}\r\n"
+    )
+    .unwrap();
+    let mut answer = String::new();
+    std::io::Read::read_to_string(&mut stream, &mut answer).unwrap();
+    answer
+}
+
+/// A daemon serving the phone's page on a port of its own, not on the
+/// tailnet, and the link `cox --phone-link` prints for it.
+fn phone_page(folder: &Path, data: &Path) -> (Daemon, u16, String) {
+    let port = free_port();
+    set(
+        data,
+        &format!(r#"{{"phone": {{"port": {port}, "tailscale": false}}}}"#),
+    );
+    let printed = ran(folder, &["--data", data.to_str().unwrap(), "--phone-link"]);
+    assert_eq!(printed.status.code(), Some(0), "{}", stderr(&printed));
+    let link = stdout(&printed)
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix(&format!("http://127.0.0.1:{port}"))
+        })
+        .expect("the link")
+        .to_owned();
+    let daemon = answering(folder, data);
+    waits::until("coxd serves the phone's page", || {
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+    });
+    (daemon, port, link)
+}
+
+#[test]
+fn a_phone_that_opens_the_printed_link_is_paired_and_let_in_to_the_page() {
+    let folder = folder("pair");
+    let data = folder.join("data");
+    let (_daemon, port, link) = phone_page(&folder, &data);
+
+    let paired = ask_the_page(port, &link, None);
+    assert!(paired.starts_with("HTTP/1.1 303"), "{paired}");
+    let cookie = paired
+        .lines()
+        .find(|line| line.to_ascii_lowercase().starts_with("set-cookie:"))
+        .and_then(|line| line["set-cookie:".len()..].trim().split(';').next())
+        .unwrap_or_else(|| panic!("a cookie: {paired}"));
+    let page = ask_the_page(port, "/", Some(cookie));
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+}
+
+#[test]
+fn a_phone_that_is_not_paired_is_not_let_in_to_the_page() {
+    let folder = folder("unpaired");
+    let data = folder.join("data");
+    let (_daemon, port, _link) = phone_page(&folder, &data);
+
+    let page = ask_the_page(port, "/", None);
+    assert!(page.starts_with("HTTP/1.1 401"), "{page}");
 }
 
 /// A registry of agents, served on the machine, as `COX_REGISTRY` names
