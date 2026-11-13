@@ -526,18 +526,11 @@ fn named(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("cox-calls-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::canonicalize(directory).unwrap()
-    }
+    use crate::testing::TempDir;
 
     #[test]
     fn a_place_is_asked_of_once_and_told_once_learned() {
-        let root = scratch("told");
+        let root = TempDir::new();
         std::fs::create_dir_all(root.join("src")).unwrap();
         let main = root.join("src/main.rs");
         std::fs::write(&main, "fn main() {\n    run();\n}\n").unwrap();

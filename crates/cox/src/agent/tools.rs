@@ -95,16 +95,15 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn the_stage_is_the_devtools_server_through_the_relay() {
-        let bin = std::env::temp_dir().join(format!("cox-tools-{}", std::process::id()));
-        fs::create_dir_all(&bin).unwrap();
+        let bin = TempDir::new();
         fs::write(bin.join("npx"), "").unwrap();
-        let path = std::env::join_paths([bin.join("missing"), bin.clone()]).unwrap();
+        let path = std::env::join_paths([bin.join("missing"), bin.to_path_buf()]).unwrap();
 
         let server = stage(4321, Path::new("/work/app"), &path);
-        fs::remove_dir_all(&bin).unwrap();
 
         let server = server.expect("npx is on the path");
         assert_eq!(server.name, "stage");
@@ -126,10 +125,7 @@ mod tests {
 
     #[test]
     fn there_is_no_stage_without_npx() {
-        let missing = std::env::temp_dir().join("cox-tools-missing");
-        assert_eq!(
-            stage(4321, Path::new("/work/app"), missing.as_os_str()),
-            None
-        );
+        let empty = TempDir::new();
+        assert_eq!(stage(4321, Path::new("/work/app"), empty.as_os_str()), None);
     }
 }

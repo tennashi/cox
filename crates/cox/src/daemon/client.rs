@@ -186,6 +186,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::testing::TempDir;
 
     /// A coxd on `socket` that answers each window that comes, in turn,
     /// the line of `answers`, counting in `heard` the hellos it heard.
@@ -213,7 +214,8 @@ mod tests {
 
     #[test]
     fn a_window_waits_out_a_coxd_that_does_not_say_it_is_of_its_build() {
-        let socket = std::env::temp_dir().join(format!("cox-greet-{}.sock", std::process::id()));
+        let folder = TempDir::new();
+        let socket = folder.join("greet.sock");
         let heard = Arc::new(AtomicUsize::new(0));
         coxd(
             &socket,
@@ -239,6 +241,5 @@ mod tests {
             "the window comes again, past the coxd that welcomed it as any window, and the busy one"
         );
         assert_eq!(waited.load(Ordering::SeqCst), 1, "the human is told once");
-        let _ = std::fs::remove_file(&socket);
     }
 }

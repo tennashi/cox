@@ -696,17 +696,12 @@ mod tests {
 
     use super::*;
     use crate::agent::setup::{Asked, Decision};
-
-    fn scratch(name: &str) -> PathBuf {
-        let folder = std::env::temp_dir().join(format!("cox-sketch-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
-        folder.canonicalize().unwrap()
-    }
+    use crate::testing::TempDir;
+    use crate::testing::run_git as git;
 
     #[test]
     fn a_sketch_works_in_a_worktree_of_the_last_commit() {
-        let root = scratch("worktree");
+        let root = TempDir::new();
         let project = root.join("greet");
         std::fs::create_dir_all(project.join("app")).unwrap();
         let run = |args: &[&str]| git(&project, args).unwrap();
@@ -758,12 +753,11 @@ mod tests {
         // One in a folder of the repository goes with its whole worktree.
         discard(Sketch::Project, &sketch, "App", &sketches, true).unwrap();
         assert!(!sketches.join("greet-1").exists());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn a_sketch_finds_its_repository_again_once_told_it_moved() {
-        let root = scratch("moved");
+        let root = TempDir::new();
         let project = root.join("greet");
         std::fs::create_dir_all(project.join("app")).unwrap();
         let run = |args: &[&str]| git(&project, args).unwrap();
@@ -789,12 +783,11 @@ mod tests {
         repair(&moved.join("app"), std::slice::from_ref(&sketch));
         assert!(git(&sketch, &["status"]).is_ok());
         assert!(changes::read(&sketch).is_ok());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn a_sketch_from_nothing_works_in_an_empty_repository() {
-        let root = scratch("empty");
+        let root = TempDir::new();
         // The project need not be in a Git repository.
         let project = root.join("notes");
         std::fs::create_dir_all(&project).unwrap();
@@ -822,7 +815,6 @@ mod tests {
             make(Sketch::Empty, &project, &sketches).unwrap(),
             sketches.join("scratch-2")
         );
-        let _ = std::fs::remove_dir_all(root);
     }
 
     /// A repository at `project`, with `main.rs` committed.
@@ -839,7 +831,7 @@ mod tests {
 
     #[test]
     fn a_sketch_is_discarded_keeping_what_it_changed() {
-        let root = scratch("discard");
+        let root = TempDir::new();
         let project = root.join("greet");
         repository(&project);
         let bundles = root.join("sketches/discarded");
@@ -953,12 +945,11 @@ mod tests {
             std::fs::read_to_string(again.join("main.rs")).unwrap(),
             "fn main() {}\n"
         );
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn a_sketch_whose_repository_is_gone_leaves_the_one_around_it_be() {
-        let root = scratch("outer");
+        let root = TempDir::new();
         let outer = root.join("dotfiles");
         repository(&outer);
         let sketches = outer.join("cox/sketches");
@@ -981,7 +972,6 @@ mod tests {
         assert_eq!(git(&outer, &["for-each-ref"]).unwrap().lines().count(), 1);
         assert!(empty.join("notes.md").exists());
         assert!(!bundles.exists());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

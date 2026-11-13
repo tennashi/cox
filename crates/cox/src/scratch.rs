@@ -98,6 +98,7 @@ fn running(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn tells_the_folders_runs_of_cox_leave() {
@@ -112,8 +113,7 @@ mod tests {
 
     #[test]
     fn takes_away_only_what_runs_that_ended_left() {
-        let temp = std::env::temp_dir().join(format!("cox-scratch-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&temp);
+        let temp = TempDir::new();
         for name in ["cox-1", "cox-2", "cox-mine-1"] {
             fs::create_dir_all(temp.join(name).join("inside")).unwrap();
         }
@@ -136,7 +136,6 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(left, expected);
-        let _ = fs::remove_dir_all(&temp);
     }
 
     #[test]

@@ -580,6 +580,7 @@ fn run(text: &str, folder: &Path) -> Tried {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_reply_proposes_the_trigger_in_its_fenced_block() {
@@ -609,7 +610,7 @@ mod tests {
 
     #[test]
     fn a_shell_trigger_is_tried_in_its_folder() {
-        let folder = std::env::temp_dir();
+        let folder = TempDir::new();
         let passed = run("echo hi", &folder);
         assert_eq!(passed.state, CheckState::Passed);
         assert_eq!(passed.said.as_deref(), Some("hi\n\nit exited 0"));

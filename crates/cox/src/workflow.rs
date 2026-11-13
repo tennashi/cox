@@ -297,6 +297,7 @@ pub fn fill(text: &str, values: &[(&str, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_text_is_filled_in_once() {
@@ -333,8 +334,7 @@ mod tests {
 
     #[test]
     fn the_human_s_sketch_json_goes_ahead_of_cox_s() {
-        let folder = std::env::temp_dir().join(format!("cox-workflow-json-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
+        let folder = TempDir::new();
         std::fs::create_dir_all(folder.join("sketch")).unwrap();
         std::fs::write(
             folder.join("sketch.json"),
@@ -372,13 +372,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sketch_in(Some(&folder)), sketch_in(None));
-        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]
     fn the_human_s_text_goes_ahead_of_cox_s() {
-        let folder = std::env::temp_dir().join(format!("cox-workflow-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
+        let folder = TempDir::new();
         let values = [
             ("folder", "/t"),
             ("from", "nothing"),
@@ -408,6 +406,5 @@ mod tests {
         // An empty file says nothing of the human's.
         std::fs::write(folder.join("sketch/start.md"), "\n").unwrap();
         assert_eq!(SKETCH_START.say_in(Some(&folder), &values), own);
-        let _ = std::fs::remove_dir_all(&folder);
     }
 }

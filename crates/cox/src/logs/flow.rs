@@ -529,6 +529,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::testing::TempDir;
 
     /// A line as Cox keeps it, said at `at` seconds into the run.
     fn line(at: f64, target: &str, from: Option<&str>, message: &str, file: &str) -> String {
@@ -856,9 +857,7 @@ mod tests {
 
     #[test]
     fn reads_the_newest_run_that_names_the_call() {
-        let directory = std::env::temp_dir().join(format!("cox-flow-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(&directory).unwrap();
+        let directory = TempDir::new();
         fs::write(
             directory.join("20261101T100000Z-1.jsonl"),
             a_run().join("\n"),
@@ -870,7 +869,6 @@ mod tests {
         assert_eq!(flow.run, directory.join("20261101T100000Z-1.jsonl"));
         assert_eq!(flow.steps.len(), 7);
         assert!(read(&directory, "call-9").is_err());
-        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -269,17 +269,11 @@ fn told(request: &Request<Incoming>, port: u16) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let scratch = std::env::temp_dir().join(format!("cox-mocks-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&scratch);
-        std::fs::create_dir_all(&scratch).unwrap();
-        scratch.canonicalize().unwrap()
-    }
+    use crate::testing::TempDir;
 
     #[test]
     fn lists_the_pages_of_a_sketch_alone() {
-        let sketches = scratch("pages");
+        let sketches = TempDir::new();
         let sketch = sketches.join("scratch-1");
         for file in [
             "about.html",
@@ -315,7 +309,7 @@ mod tests {
 
     #[test]
     fn serves_only_what_is_in_a_sketch() {
-        let sketches = scratch("files");
+        let sketches = TempDir::new();
         let sketch = sketches.join("scratch-2");
         std::fs::create_dir_all(sketch.join(".git")).unwrap();
         std::fs::create_dir_all(sketch.join("app")).unwrap();

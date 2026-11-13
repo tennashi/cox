@@ -281,12 +281,13 @@ fn draw_svg(bytes: &[u8]) -> anyhow::Result<DynamicImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     /// A file in a folder of the test's own, named `name`, holding
     /// `bytes`.
-    fn file(name: &str, bytes: &[u8]) -> (tempfile_dir::Dir, PathBuf) {
-        let dir = tempfile_dir::Dir::new();
-        let path = dir.0.join(name);
+    fn file(name: &str, bytes: &[u8]) -> (TempDir, PathBuf) {
+        let dir = TempDir::new();
+        let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
         (dir, path)
     }
@@ -362,32 +363,5 @@ mod tests {
 
         assert!(make(&text).is_err());
         assert!(make(&svg).is_err());
-    }
-
-    /// A folder of a test's own, taken away after it.
-    mod tempfile_dir {
-        use std::path::PathBuf;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        pub struct Dir(pub PathBuf);
-
-        impl Dir {
-            pub fn new() -> Self {
-                static NEXT: AtomicUsize = AtomicUsize::new(0);
-                let path = std::env::temp_dir().join(format!(
-                    "cox-project-icon-{}-{}",
-                    std::process::id(),
-                    NEXT.fetch_add(1, Ordering::Relaxed)
-                ));
-                std::fs::create_dir_all(&path).unwrap();
-                Self(path)
-            }
-        }
-
-        impl Drop for Dir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
     }
 }

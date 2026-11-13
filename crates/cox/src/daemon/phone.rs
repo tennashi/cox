@@ -1501,6 +1501,7 @@ fn shows(content: &Content) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn serves_the_part_of_a_video_a_browser_asks_for() {
@@ -1532,8 +1533,7 @@ mod tests {
 
     #[test]
     fn keeps_the_secret_it_makes() {
-        let folder = std::env::temp_dir().join(format!("cox-phone-token-{}", std::process::id()));
-        std::fs::create_dir_all(&folder).unwrap();
+        let folder = TempDir::new();
         let file = folder.join("phone-token");
         let secret = token_at(&file).unwrap();
         assert_eq!(secret.len(), 64);
@@ -1543,13 +1543,11 @@ mod tests {
             std::os::unix::fs::PermissionsExt::mode(&mode) & 0o777,
             0o600
         );
-        std::fs::remove_dir_all(&folder).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn lets_in_no_phone_paired_before_the_human_unpairs_them() {
-        let folder = std::env::temp_dir().join(format!("cox-phone-unpair-{}", std::process::id()));
-        std::fs::create_dir_all(&folder).unwrap();
+        let folder = TempDir::new();
         let file = folder.join("phone-token");
         let mut pushes =
             Pushes::open_at(&folder.join("push-key"), folder.join("pushes.json")).unwrap();
@@ -1619,7 +1617,6 @@ mod tests {
                 "{kept} is the human's alone"
             );
         }
-        std::fs::remove_dir_all(&folder).unwrap();
     }
 
     /// What the page answers `request`, written whole on a connection
@@ -2053,8 +2050,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn tells_the_phone_coxd_key_and_keeps_where_to_push() {
-        let folder = std::env::temp_dir().join(format!("cox-phone-push-{}", std::process::id()));
-        std::fs::create_dir_all(&folder).unwrap();
+        let folder = TempDir::new();
         let pushes = Pushes::open_at(&folder.join("push-key"), folder.join("pushes.json")).unwrap();
         let key = pushes.public_key();
         let local = tokio::task::LocalSet::new();
@@ -2126,7 +2122,6 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(30), test)
             .await
             .expect("the page answers in time");
-        std::fs::remove_dir_all(&folder).unwrap();
     }
 
     #[test]
@@ -2224,9 +2219,13 @@ mod tests {
         );
         assert_eq!(ends(Sketch::Project)["endings"][0]["from"], "project");
         // A folder in no Git repository starts its sketches from nothing.
-        let project = std::env::temp_dir().join("cox-no-repository");
-        std::fs::create_dir_all(&project).ok();
-        let starts = told_sketching(Some(&Sketching::Starts { project }), &endings);
+        let project = TempDir::new();
+        let starts = told_sketching(
+            Some(&Sketching::Starts {
+                project: project.to_path_buf(),
+            }),
+            &endings,
+        );
         assert_eq!(starts, serde_json::json!({ "start": "empty" }));
         assert_eq!(told_sketching(None, &endings), serde_json::json!({}));
     }

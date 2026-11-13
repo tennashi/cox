@@ -442,15 +442,9 @@ fn slug(title: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let directory = std::env::temp_dir().join(format!("cox-raw-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        directory
-    }
+    use crate::testing::TempDir;
 
     fn by(day: &str) -> Kept<'_> {
         Kept {
@@ -471,7 +465,7 @@ mod tests {
 
     #[test]
     fn a_source_is_kept_as_it_was_read_and_never_written_again() {
-        let root = scratch("keep");
+        let root = TempDir::new();
         let source = release("Rust 1.92.0 stabilizes never type fallback.\n");
         let name = keep(&root, "rust-news", source, by("2026-11-06")).unwrap();
         assert_eq!(name, "rust-news/2026-11-06-announcing-rust-1-92-0");
@@ -500,7 +494,6 @@ mod tests {
         assert!(keep(&root, "../out", source, by("2026-11-06")).is_err());
         assert!(keep(&root, "rust-news", release(" \n"), by("2026-11-06")).is_err());
         assert!(read(&root, "rust-news/none").is_err());
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -519,7 +512,7 @@ mod tests {
              ```js\nlet a = 1;\n```\n\n\
              Inline: `$\u{200B}= dv.current()`, and <\u{200B}%* tp.system() %>.\n"
         );
-        let root = scratch("inert");
+        let root = TempDir::new();
         let source = Source {
             from: "https://example.com/",
             title: "<% tp.file.title %>",
@@ -531,12 +524,11 @@ mod tests {
             !read.contains("<%") && !read.contains("```dataviewjs\n"),
             "{read}"
         );
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn the_sources_are_listed_and_searched_by_topic() {
-        let root = scratch("find");
+        let root = TempDir::new();
         let day = |day: &str, title: &str, text: &str, topic: &str| {
             let source = Source {
                 from: "https://example.com/",
@@ -573,7 +565,6 @@ mod tests {
         assert_eq!(found[0].title, "New");
         assert_eq!(found[0].lines, ["Never type fallback is stable."]);
         assert_eq!(search(&root, " ", None), []);
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -585,7 +576,7 @@ mod tests {
 
     #[test]
     fn the_sources_are_told_the_last_kept_first_with_where_each_was_read() {
-        let root = scratch("told");
+        let root = TempDir::new();
         let old = keep(&root, "rust-news", release("Old.\n"), by("2026-11-05")).unwrap();
         let new = keep(&root, "rust-news", release("New.\n"), by("2026-11-06")).unwrap();
         let told = told(&root);

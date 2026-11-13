@@ -1378,6 +1378,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_line_runs_a_command_the_agent_named() {
@@ -1559,7 +1560,8 @@ mod tests {
 
     #[test]
     fn dropping_the_agent_ends_every_process_it_started() {
-        let file = std::env::temp_dir().join(format!("cox-agent-{}", std::process::id()));
+        let folder = TempDir::new();
+        let file = folder.join("pid");
         // Like `npx`, a launcher whose child does the work. This agent never
         // answers, so only stopping it ends it.
         let script = format!("sleep 60 & echo $! > {}; wait", file.display());
@@ -1581,7 +1583,6 @@ mod tests {
         assert!(running(pid));
 
         drop(agent);
-        let _ = std::fs::remove_file(&file);
         assert!(
             wait_until(|| !running(pid)),
             "the agent's child outlived it"
@@ -1672,7 +1673,8 @@ mod tests {
 
     #[test]
     fn the_agent_gets_none_of_coxs_files() {
-        let file = std::env::temp_dir().join(format!("cox-agent-files-{}", std::process::id()));
+        let folder = TempDir::new();
+        let file = folder.join("seen");
         // A descriptor that stays open across `exec`, like CEF's port.
         let open = std::fs::File::open("/dev/null").unwrap();
         // SAFETY: `open` is a valid descriptor; the copy is closed below.
@@ -1702,7 +1704,6 @@ mod tests {
         drop(agent);
         // SAFETY: `inherited` is open, and nothing else uses it.
         unsafe { libc::close(inherited) };
-        let _ = std::fs::remove_file(&file);
         assert_eq!(seen, "not\n");
     }
 }

@@ -1260,6 +1260,7 @@ fn tempfile_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{TempDir, run_git};
 
     fn parse(text: &str) -> Result<Trigger, String> {
         Trigger::parse("t", Path::new("t.md"), Scope::Global, text)
@@ -1278,8 +1279,7 @@ mod tests {
 
     #[test]
     fn the_triggers_tab_is_told_the_triggers_of_each_folder_and_changes_them() {
-        let root = std::env::temp_dir().join(format!("cox-told-triggers-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = TempDir::new();
         let project = root.join("project");
         let workflow = root.join("workflow");
         std::fs::create_dir_all(project.join(PROJECT_TRIGGERS)).unwrap();
@@ -1364,7 +1364,6 @@ mod tests {
         std::fs::write(&ci, "---\non: turn.end\nby: shell\n---\ncargo test --all\n").unwrap();
         assert_eq!(ci_told()["enabled"], false);
         assert_eq!(ci_told()["edited"], true);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The schedules of a workflow in `root`, and of a project: one that
@@ -1405,7 +1404,7 @@ mod tests {
 
     #[test]
     fn a_schedule_shows_where_its_chat_works() {
-        let root = std::env::temp_dir().join(format!("cox-told-schedules-{}", std::process::id()));
+        let root = TempDir::new();
         let (home, project, elsewhere, workflow) = schedules_in(&root);
         let mut schedules = crate::schedule::Ran::default();
         let now = jiff::civil::date(2026, 11, 3)
@@ -1480,12 +1479,11 @@ mod tests {
             tidy["schedule"]["next"],
             now.timestamp().as_second() + 2 * 3600
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn coxd_runs_each_schedule_where_it_works_once_turned_on_there() {
-        let root = std::env::temp_dir().join(format!("cox-run-schedules-{}", std::process::id()));
+        let root = TempDir::new();
         let (home, project, elsewhere, workflow) = schedules_in(&root);
         let arranged = root.join("triggers.json");
         Change::Switch {
@@ -1531,14 +1529,12 @@ mod tests {
                 ("triage".to_owned(), project.clone()),
             ]
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn the_human_turns_triggers_off_and_orders_them_in_a_folder() {
-        let kept = std::env::temp_dir()
-            .join(format!("cox-arranged-{}", std::process::id()))
-            .join("triggers.json");
+        let folder = TempDir::new();
+        let kept = folder.join("triggers.json");
         let work = Path::new("/work");
         assert_eq!(Arranged::read(Some(&kept), work), Arranged::default());
 
@@ -1570,7 +1566,6 @@ mod tests {
         // Arranged as at first, the folder is forgotten.
         Arranged::default().keep(Some(&kept), work).unwrap();
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "{}\n");
-        let _ = std::fs::remove_dir_all(kept.parent().unwrap());
     }
 
     fn human_s(name: &str) -> Trigger {
@@ -1599,8 +1594,7 @@ mod tests {
             [("ci".to_owned(), false), ("simplify".to_owned(), true)]
         );
 
-        let root = std::env::temp_dir().join(format!("cox-turned-on-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = TempDir::new();
         let (project, workflow) = (root.join("project"), root.join("workflow"));
         std::fs::create_dir_all(project.join(PROJECT_TRIGGERS)).unwrap();
         std::fs::create_dir_all(workflow.join(TRIGGERS)).unwrap();
@@ -1647,14 +1641,12 @@ mod tests {
         assert_eq!(in_project(), both(false, false));
         switch(&simplify, true, None);
         assert_eq!(in_project(), both(false, true));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_kept_file_cox_cannot_read_runs_none_of_a_project_s_own() {
-        let kept = std::env::temp_dir()
-            .join(format!("cox-arranged-torn-{}", std::process::id()))
-            .join("triggers.json");
+        let folder = TempDir::new();
+        let kept = folder.join("triggers.json");
         let work = Path::new("/work");
         Arranged {
             on: BTreeMap::from([(PathBuf::from("/t/ci.md"), named("ci").sum)]),
@@ -1669,15 +1661,13 @@ mod tests {
             running(&arranged, vec![named("ci"), human_s("simplify")]),
             [("ci".to_owned(), false), ("simplify".to_owned(), true)]
         );
-        let _ = std::fs::remove_dir_all(kept.parent().unwrap());
     }
 
     #[test]
     fn a_reader_of_the_kept_file_reads_it_whole_while_it_is_written() {
         use std::io::Read as _;
-        let kept = std::env::temp_dir()
-            .join(format!("cox-arranged-whole-{}", std::process::id()))
-            .join("triggers.json");
+        let folder = TempDir::new();
+        let kept = folder.join("triggers.json");
         let work = Path::new("/work");
         let off = |file: &str| Arranged {
             off: BTreeSet::from([PathBuf::from(file)]),
@@ -1691,7 +1681,6 @@ mod tests {
         let read: BTreeMap<PathBuf, Arranged> = serde_json::from_str(&text).unwrap();
         assert_eq!(read[work], off("/w/a.md"));
         assert_eq!(Arranged::read(Some(&kept), work), off("/w/b.md"));
-        let _ = std::fs::remove_dir_all(kept.parent().unwrap());
     }
 
     #[test]
@@ -1893,39 +1882,24 @@ mod tests {
 
     #[test]
     fn tells_what_changed_since_a_tree() {
-        let folder = std::env::temp_dir().join(format!("cox-trigger-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
-        let git = |args: &[&str]| {
-            assert!(
-                Command::new("git")
-                    .args(args)
-                    .current_dir(folder.as_path())
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-        };
-        git(&["init", "--quiet"]);
-        std::fs::write(folder.as_path().join("a.rs"), "fn a() {}").unwrap();
-        std::fs::write(folder.as_path().join(".gitignore"), "target/\n").unwrap();
-        let before = tree(folder.as_path()).unwrap();
-        std::fs::write(folder.as_path().join("b.rs"), "fn b() {}").unwrap();
-        std::fs::create_dir(folder.as_path().join("target")).unwrap();
-        std::fs::write(folder.as_path().join("target/x.rs"), "").unwrap();
-        let after = tree(folder.as_path()).unwrap();
+        let folder = TempDir::new();
+        run_git(&folder, &["init", "--quiet"]).unwrap();
+        std::fs::write(folder.path().join("a.rs"), "fn a() {}").unwrap();
+        std::fs::write(folder.path().join(".gitignore"), "target/\n").unwrap();
+        let before = tree(folder.path()).unwrap();
+        std::fs::write(folder.path().join("b.rs"), "fn b() {}").unwrap();
+        std::fs::create_dir(folder.path().join("target")).unwrap();
+        std::fs::write(folder.path().join("target/x.rs"), "").unwrap();
+        let after = tree(folder.path()).unwrap();
         assert_eq!(
-            changed_between(folder.as_path(), &before, &after).unwrap(),
+            changed_between(folder.path(), &before, &after).unwrap(),
             vec!["b.rs".to_owned()]
         );
         // The index is the folder's as it was.
-        let status = Command::new("git")
-            .args(["diff", "--cached", "--name-only"])
-            .current_dir(folder.as_path())
-            .output()
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&status.stdout), "");
-        assert_eq!(committed(folder.as_path()), None);
-        let _ = std::fs::remove_dir_all(&folder);
+        assert_eq!(
+            run_git(&folder, &["diff", "--cached", "--name-only"]).unwrap(),
+            ""
+        );
+        assert_eq!(committed(folder.path()), None);
     }
 }

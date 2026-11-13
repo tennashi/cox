@@ -233,18 +233,11 @@ fn file(path: &Path) -> Option<(PathBuf, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("cox-instructions-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
-        folder
-    }
+    use crate::testing::TempDir;
 
     #[test]
     fn the_human_s_instructions_go_ahead_of_the_project_s() {
-        let folder = scratch("read");
+        let folder = TempDir::new();
         let project = folder.join("project");
         let workflow = folder.join("workflow");
         std::fs::create_dir_all(&project).unwrap();
@@ -264,12 +257,11 @@ mod tests {
         assert!(prompts[0].ends_with("\n\nTry vague work in a sketch.\n"));
         assert!(prompts[1].contains(&project.join("COX.md").display().to_string()));
         assert!(prompts[1].ends_with("\n\nAnswer in Japanese.\n"));
-        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]
     fn a_human_with_no_instructions_gets_cox_s() {
-        let folder = scratch("none");
+        let folder = TempDir::new();
         let instructions = Instructions::read_with(&folder, Some(&folder.join("workflow")));
         assert_eq!(instructions.paths(), Vec::<PathBuf>::new());
         let prompts = instructions.prompts();
@@ -284,12 +276,11 @@ mod tests {
             instructions
         );
         assert_eq!(Instructions::read_with(&folder, None), instructions);
-        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]
     fn what_the_project_is_goes_ahead_of_the_instructions() {
-        let folder = scratch("about");
+        let folder = TempDir::new();
         std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
         let instructions = Instructions::read_with(&folder, None);
 
@@ -307,12 +298,11 @@ mod tests {
         // A project that says nothing of what it is adds nothing.
         assert_eq!(instructions.clone().about("tea", Some(" ")), instructions);
         assert_eq!(instructions.clone().about("tea", None), instructions);
-        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]
     fn the_projects_other_chats_go_last() {
-        let folder = scratch("chats");
+        let folder = TempDir::new();
         std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
         let instructions = Instructions::read_with(&folder, None);
         let chats = vec![
@@ -330,12 +320,11 @@ mod tests {
         );
         assert!(last.ends_with("\n\n- chat 3: \"Cart\", idle\n- chat 4: \"Checkout\", at work"));
         assert_eq!(instructions.clone().chats(&[]), instructions);
-        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]
     fn the_index_of_the_projects_wiki_goes_after_the_instructions() {
-        let folder = scratch("wiki");
+        let folder = TempDir::new();
         let instructions = Instructions::read_with(&folder, None);
         let root = folder.join("wiki");
         let index = "# Index\n\n- [[shipping|Shipping]]: Only in Japan.\n";
@@ -366,6 +355,5 @@ mod tests {
         let long = format!("- [[a|A]]: {}", "a".repeat(WIKI_INDEX_LENGTH));
         let cut = instructions.clone().wiki(&root, Some(&long)).prompts();
         assert!(cut.last().unwrap().ends_with("find it with wiki_search]"));
-        let _ = std::fs::remove_dir_all(&folder);
     }
 }

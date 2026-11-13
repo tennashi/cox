@@ -148,11 +148,11 @@ fn put_in(trash: &Path, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::put_in;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_folder_goes_to_the_trash_saying_where_it_was() {
-        let root = std::env::temp_dir().join(format!("cox-trash-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = TempDir::new();
         let trash = root.join("Trash");
         for _ in 0..2 {
             let folder = root.join("my shop");
@@ -171,6 +171,5 @@ mod tests {
         // One that is not there is not put there.
         assert!(put_in(&trash, &root.join("gone")).is_err());
         assert!(!trash.join("info/gone.trashinfo").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

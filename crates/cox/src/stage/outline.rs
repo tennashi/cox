@@ -638,6 +638,7 @@ mod tests {
     use cox_editor::lsp::Position;
 
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn tells_a_symbol_named_at_its_place() {
@@ -668,17 +669,9 @@ mod tests {
         assert!(!named(&symbol("(*Store).Add", 3, 16, 19)));
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("cox-outline-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::canonicalize(directory).unwrap()
-    }
-
     #[test]
     fn a_file_is_asked_of_once_and_told_once_learned() {
-        let root = scratch("told");
+        let root = TempDir::new();
         std::fs::create_dir_all(root.join("src")).unwrap();
         let main = root.join("src/main.rs");
         std::fs::write(&main, "fn main() {}\n").unwrap();

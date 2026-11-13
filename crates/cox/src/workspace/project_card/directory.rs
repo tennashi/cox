@@ -196,6 +196,7 @@ fn git(command: &mut Command) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{TempDir, run_git};
 
     #[test]
     fn a_repository_is_named_as_git_clone_names_its_folder() {
@@ -224,28 +225,17 @@ mod tests {
     /// A repository at `folder` with one commit, on `main`.
     fn origin(folder: &Path) {
         make(folder).unwrap();
-        run(folder, &["init", "--quiet", "--initial-branch=main"]).unwrap();
-        run(
+        run_git(folder, &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        run_git(
             folder,
-            &[
-                "-c",
-                "user.name=Cox",
-                "-c",
-                "user.email=cox@example.com",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                "first",
-            ],
+            &["commit", "--quiet", "--allow-empty", "-m", "first"],
         )
         .unwrap();
     }
 
     #[test]
     fn directories_are_made_cloned_made_repositories_and_linked() {
-        let root = std::env::temp_dir().join(format!("cox-directories-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = TempDir::new();
         let remote = root.join("origin");
         origin(&remote);
         let url = remote.to_str().unwrap();
@@ -283,7 +273,7 @@ mod tests {
         assert_eq!(listed(&project)[0].remote, None);
         assert_eq!(link(&app, url), Ok(Linked::CheckedOut("main".to_owned())));
         assert_eq!(listed(&project)[0].remote.as_deref(), Some(url));
-        assert!(run(&app, &["rev-parse", "--verify", "HEAD"]).is_ok());
+        assert!(run_git(&app, &["rev-parse", "--verify", "HEAD"]).is_ok());
         // One with commits of its own only gets the remote.
         let lib = folder_of(&project, "lib");
         origin(&lib);
@@ -304,6 +294,5 @@ mod tests {
         assert_eq!(rename(&project, "fresh", "fresher"), Ok(()));
         assert!(!fresh.exists());
         assert!(folder_of(&project, "fresher").join(".git").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

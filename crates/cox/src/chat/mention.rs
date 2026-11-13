@@ -122,6 +122,7 @@ fn starts_word(line: &str, at: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn the_path_typed_is_the_word_after_the_at() {
@@ -172,15 +173,13 @@ mod tests {
 
     #[test]
     fn the_files_are_those_in_the_folder() {
-        let folder = std::env::temp_dir().join(format!("cox-mention-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
+        let folder = TempDir::new();
         std::fs::create_dir_all(folder.join("src")).unwrap();
         std::fs::write(folder.join("src/main.rs"), "").unwrap();
         let files = files(
             "read @src/main.rs, then @src/main.rs again, and @src/gone.rs, @src",
             &folder,
         );
-        std::fs::remove_dir_all(&folder).unwrap();
         assert_eq!(files, [folder.join("src/main.rs")]);
     }
 }

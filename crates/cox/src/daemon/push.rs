@@ -453,19 +453,7 @@ mod tests {
     use ring::signature::{ECDSA_P256_SHA256_FIXED, UnparsedPublicKey as Verifying};
 
     use super::*;
-
-    fn folder() -> PathBuf {
-        let folder = std::env::temp_dir().join(format!(
-            "cox-push-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&folder).unwrap();
-        folder
-    }
+    use crate::testing::TempDir;
 
     /// A phone's keys, and its private key, to read what is pushed to it.
     fn phone(random: &SystemRandom) -> (EphemeralPrivateKey, Vec<u8>, [u8; 16]) {
@@ -512,7 +500,7 @@ mod tests {
 
     #[test]
     fn keeps_its_key_and_the_phones_and_signs_as_itself() {
-        let folder = folder();
+        let folder = TempDir::new();
         let mut pushes =
             Pushes::open_at(&folder.join("push-key"), folder.join("pushes.json")).unwrap();
         let random = SystemRandom::new();

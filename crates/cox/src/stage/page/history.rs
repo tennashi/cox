@@ -322,6 +322,7 @@ fn write_soon(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     const NOW: u64 = 1_800_000_000;
 
@@ -457,8 +458,7 @@ mod tests {
 
     #[test]
     fn the_history_is_written_and_read_back() {
-        let folder = std::env::temp_dir().join(format!("cox-history-{}", std::process::id()));
-        std::fs::create_dir_all(&folder).unwrap();
+        let folder = TempDir::new();
         let file = folder.join("history.json");
         assert_eq!(History::read(&file), History::default());
 
@@ -470,6 +470,5 @@ mod tests {
 
         std::fs::write(&file, "not json").unwrap();
         assert_eq!(History::read(&file), History::default());
-        std::fs::remove_dir_all(&folder).unwrap();
     }
 }

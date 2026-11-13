@@ -305,11 +305,11 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_server_works_in_the_directory_of_the_code_it_reads() {
-        let scratch = std::env::temp_dir().join(format!("cox-servers-root-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&scratch);
+        let scratch = TempDir::new();
         let project = scratch.join("projects").join("cox");
         let cox = project.join(DIRECTORIES).join("cox");
         let notes = project.join(DIRECTORIES).join("notes");
@@ -333,7 +333,6 @@ mod tests {
         // A file out of the project goes to its own outermost folder.
         let elsewhere = scratch.join("elsewhere");
         fs::create_dir_all(&elsewhere).unwrap();
-        assert_eq!(root(&elsewhere.join("main.rs")), scratch);
-        let _ = fs::remove_dir_all(&scratch);
+        assert_eq!(root(&elsewhere.join("main.rs")), scratch.path());
     }
 }

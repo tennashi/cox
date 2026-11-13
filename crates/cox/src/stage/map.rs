@@ -79,19 +79,11 @@ pub fn told(root: &Path, name: Option<&str>) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use cox_editor::map::MAPS_FOLDER;
 
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("cox-stage-map-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::canonicalize(directory).unwrap()
-    }
+    use crate::testing::TempDir;
 
     const A_MAP: &str = r#"{
       "tiers": [
@@ -109,7 +101,7 @@ mod tests {
 
     #[test]
     fn the_map_is_told_as_json_with_the_facts_laid_over() {
-        let root = scratch("told");
+        let root = TempDir::new();
         let json = told(&root, None);
         assert_eq!(json["file"], serde_json::Value::Null);
         assert_eq!(json["maps"], serde_json::json!([]));
@@ -142,7 +134,7 @@ mod tests {
 
     #[test]
     fn a_map_is_told_by_its_name_with_the_others() {
-        let root = scratch("named");
+        let root = TempDir::new();
         std::fs::create_dir_all(root.join(MAPS_FOLDER)).unwrap();
         std::fs::write(root.join(MAPS_FOLDER).join("map.json"), A_MAP).unwrap();
         std::fs::write(

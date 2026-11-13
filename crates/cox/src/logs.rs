@@ -196,15 +196,7 @@ mod tests {
 
     use super::*;
     use crate::agent::mcp::{self, Answered, Serves};
-
-    /// A directory of its own for a test.
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("cox-logs-{}-{name}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(&directory).unwrap();
-        directory
-    }
+    use crate::testing::TempDir;
 
     fn names(directory: &Path) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(directory)
@@ -217,7 +209,7 @@ mod tests {
 
     #[test]
     fn only_the_last_runs_are_kept() {
-        let directory = scratch("prune");
+        let directory = TempDir::new();
         for name in [
             "20261101T100000Z-3.jsonl",
             "20261101T090000Z-2.jsonl",
@@ -237,12 +229,11 @@ mod tests {
                 "notes.txt"
             ]
         );
-        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn a_run_gets_a_file_of_its_own() {
-        let directory = scratch("open").join("logs");
+        let directory = TempDir::new().join("logs");
 
         let (path, _) = open(&directory).unwrap();
 
@@ -257,13 +248,12 @@ mod tests {
 
     #[test]
     fn a_run_file_is_the_owners_only() {
-        let directory = scratch("mode");
+        let directory = TempDir::new();
 
         let (path, _) = open(&directory).unwrap();
 
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "{mode:o}");
-        fs::remove_dir_all(directory).unwrap();
     }
 
     /// A tool server whose every call answers a screenshot of `bytes`
@@ -293,7 +283,7 @@ mod tests {
 
     #[test]
     fn a_screenshot_over_the_tools_socket_is_kept_in_brief() {
-        let directory = scratch("wire");
+        let directory = TempDir::new();
         let socket = directory.join("mcp");
         let listener = mcp::listen(&socket).unwrap();
         let path = directory.join("run.jsonl");
@@ -335,12 +325,11 @@ mod tests {
         assert_eq!(answered["id"], 3);
         assert_eq!(answered["result"]["content"][0]["mimeType"], "image/png");
         assert!(kept.len() < 4096, "{} bytes kept", kept.len());
-        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn what_is_said_is_kept_as_json_with_its_spans() {
-        let directory = scratch("kept");
+        let directory = TempDir::new();
         let path = directory.join("run.jsonl");
         let file = File::create(&path).unwrap();
         let subscriber = tracing_subscriber::registry().with(kept(file));
@@ -360,6 +349,5 @@ mod tests {
         assert!(kept["timestamp"].is_string());
         assert_eq!(kept["filename"], file!());
         assert!(kept["line_number"].is_u64());
-        fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -69,6 +69,8 @@ pub mod scratch;
 pub mod settings;
 pub mod stage;
 pub mod storage;
+#[cfg(test)]
+mod testing;
 pub mod translate;
 pub mod trash;
 pub mod trigger;

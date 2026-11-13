@@ -1108,10 +1108,11 @@ fn label(text: &'static str) -> gpui::Div {
 #[cfg(test)]
 mod tests {
     use super::{Drawing, Standing, why_not_renamed};
+    use crate::testing::TempDir;
 
     #[test]
     fn a_project_whose_folder_is_not_there_keeps_its_name() {
-        let root = std::env::temp_dir().join(format!("cox-project-card-{}", std::process::id()));
+        let root = TempDir::new();
         std::fs::create_dir_all(root.join("app")).unwrap();
         std::fs::create_dir_all(root.join("taken")).unwrap();
         let standing = Standing {
@@ -1137,6 +1138,5 @@ mod tests {
             ..standing
         };
         assert!(why_not_renamed(&busy, "shop").is_some());
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

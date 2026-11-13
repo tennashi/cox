@@ -169,6 +169,7 @@ pub(crate) fn find(program: &str, path: Option<&std::ffi::OsStr>, here: &Path) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_program_is_found_on_the_path_or_where_its_path_says() {
@@ -185,7 +186,7 @@ mod tests {
 
     #[test]
     fn a_command_with_no_program_or_none_on_the_path_fails() {
-        let cwd = std::env::temp_dir();
+        let cwd = TempDir::new();
         assert!(matches!(
             check(vec!["A=1".to_owned()], &cwd),
             Checked::Failed(_)

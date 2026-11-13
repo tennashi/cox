@@ -3924,6 +3924,7 @@ fn showed_in_sketch(entries: &[Entry], kept: &Path, sources: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     /// No agents, for a daemon whose chats stay closed.
     struct NoAgents;
@@ -3950,9 +3951,10 @@ mod tests {
         let here = store.project(Path::new("/tmp/cox-here"), "Here").unwrap();
         let named = store.add_chat(Some(here), "Named").unwrap();
         let next = store.add_chat(Some(here), "Next").unwrap();
+        let home = TempDir::new();
         let start = || {
             Daemon::new(
-                std::env::temp_dir(),
+                home.to_path_buf(),
                 false,
                 Rc::clone(&store),
                 Rc::new(NoAgents),
@@ -4006,8 +4008,7 @@ mod tests {
 
     #[test]
     fn a_sketch_keeps_the_pictures_it_showed_beside_its_source() {
-        let scratch = std::env::temp_dir().join(format!("cox-showed-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&scratch);
+        let scratch = TempDir::new();
         let media = scratch.join("media-kept");
         std::fs::create_dir_all(&media).unwrap();
         let file = "shown.png";
@@ -4038,7 +4039,5 @@ mod tests {
             b"png"
         );
         assert_eq!(showed_in_sketch(&entries[..1], &media, &sources), "");
-
-        std::fs::remove_dir_all(&scratch).unwrap();
     }
 }

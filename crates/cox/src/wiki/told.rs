@@ -293,21 +293,20 @@ fn html_of(name: &str, body: &str, all: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use super::*;
+    use crate::testing::TempDir;
 
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("cox-wiki-told-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(directory.join("rust")).unwrap();
-        directory
+    /// A wiki of a test's own, with a folder of pages in it.
+    fn wiki() -> TempDir {
+        let wiki = TempDir::new();
+        fs::create_dir_all(wiki.join("rust")).unwrap();
+        wiki
     }
 
     #[test]
     fn the_pages_say_what_they_link_and_what_is_wrong_with_them() {
-        let root = scratch("marks");
+        let root = wiki();
         fs::write(
             root.join("gpui.md"),
             "# GPUI\n\nSee [[taffy]], [[errors|the errors]] and [[gone]].\n\n\
@@ -355,7 +354,7 @@ mod tests {
 
     #[test]
     fn a_page_is_read_in_the_humans_language_with_its_links_as_they_were() {
-        let root = scratch("translated");
+        let root = wiki();
         fs::write(root.join("gpui.md"), "# GPUI\n\nSee [[errors]].\n").unwrap();
         fs::write(root.join("rust/errors.md"), "# Errors\n").unwrap();
         let page = page_in(&root, "gpui", |body| {
@@ -385,7 +384,7 @@ mod tests {
 
     #[test]
     fn a_page_is_html_whose_links_open_pages_and_whose_own_html_is_text() {
-        let root = scratch("html");
+        let root = wiki();
         fs::write(
             root.join("gpui.md"),
             "---\ntags: [ui]\n---\n# GPUI\n\n[[errors|Errors]], [Taffy](taffy.md), [web](https://x.dev) \

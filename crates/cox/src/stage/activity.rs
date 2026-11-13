@@ -265,14 +265,7 @@ fn kept_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("cox-activity-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        directory
-    }
+    use crate::testing::TempDir;
 
     fn chat(key: u64, cwd: &Path, project: &Path, asking: bool, unread: bool) -> Chat {
         Chat {
@@ -288,7 +281,7 @@ mod tests {
 
     #[test]
     fn what_waits_is_of_the_folder_and_its_sketches() {
-        let root = scratch("waits");
+        let root = TempDir::new();
         let other = root.join("other");
         let sketch = root.join("sketch");
         let told = Told {
@@ -298,7 +291,7 @@ mod tests {
                 chat(3, &sketch, &root, false, true),
                 chat(4, &other, &other, true, false),
             ],
-            projects: vec![(root.clone(), "app".to_owned())],
+            projects: vec![(root.to_path_buf(), "app".to_owned())],
             home: root.join("home"),
         };
         let json = told_of(
@@ -337,7 +330,7 @@ mod tests {
 
     #[test]
     fn what_happened_there_comes_the_last_first() {
-        let root = scratch("happened");
+        let root = TempDir::new();
         // The human's wiki, apart from the project's own, in `root`.
         let wiki = root.join("human/wiki");
         std::fs::create_dir_all(&wiki).unwrap();
@@ -370,7 +363,7 @@ mod tests {
         crate::raw::keep(&raw, "news", source, kept(Some("app"))).unwrap();
         crate::raw::keep(&raw, "elsewhere", source, kept(Some("other"))).unwrap();
         let schedules = json!({
-            "folders": [{"folder": root, "name": null, "triggers": [
+            "folders": [{"folder": root.path(), "name": null, "triggers": [
                 {"name": "triage", "schedule": {"every": "Every 6 hours", "last": "2026-11-07 09:00"}},
                 {"name": "never", "schedule": {"every": "Daily 09:00", "last": null}},
                 {"name": "ci"},
@@ -381,7 +374,7 @@ mod tests {
             chats: Vec::new(),
             projects: vec![
                 (home.clone(), "~".to_owned()),
-                (root.clone(), "app".to_owned()),
+                (root.to_path_buf(), "app".to_owned()),
             ],
             home: home.clone(),
         };
@@ -415,7 +408,7 @@ mod tests {
         let schedules = json!({
             "folders": [
                 {"folder": home, "name": null, "triggers": []},
-                {"folder": root, "name": "app", "triggers": [
+                {"folder": root.path(), "name": "app", "triggers": [
                     {"name": "triage", "schedule": {"every": "Every 6 hours", "last": "2026-11-07 09:00"}},
                 ]},
             ],

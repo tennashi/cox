@@ -605,12 +605,12 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{Saved, SearchEngine, Translation, folder_of, keep_home_in, keep_in};
+    use crate::testing::TempDir;
 
     #[test]
     fn the_home_is_read_and_kept_beside_what_else_the_file_holds() {
-        let dir = std::env::temp_dir().join(format!("cox-settings-{}", std::process::id()));
+        let dir = TempDir::new();
         let file = dir.join("settings.json");
-        let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(Saved::read_from(&file), Saved::default());
 
         keep_home_in(&file, Path::new("/work/one")).unwrap();
@@ -634,15 +634,12 @@ mod tests {
             Saved::read_from(&file).home,
             Some(PathBuf::from("/work/two"))
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_setting_kept_leaves_the_others_as_they_were() {
-        let dir = std::env::temp_dir().join(format!("cox-settings-kept-{}", std::process::id()));
+        let dir = TempDir::new();
         let file = dir.join("settings.json");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             &file,
             r#"{"agent": "Claude", "wiki": "~/notes", "raw": "~/raw",
@@ -659,16 +656,12 @@ mod tests {
                 "phone": {"tailscale": false}, "translation": {"language": "Japanese"},
                 "home": "/work"})
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_settings_file_that_cannot_be_read_is_left_as_the_human_wrote_it() {
-        let dir =
-            std::env::temp_dir().join(format!("cox-settings-unreadable-{}", std::process::id()));
+        let dir = TempDir::new();
         let file = dir.join("settings.json");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         for written in [
             "{\"agent\": \"Claude\", \"wiki\": \"~/notes\",}\n",
             "[\"agent\", \"Claude\"]\n",
@@ -679,7 +672,6 @@ mod tests {
             let error = format!("{:#}", kept.unwrap_err());
             assert!(error.contains("settings.json"), "{error}");
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

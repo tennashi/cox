@@ -393,15 +393,7 @@ fn executable(_: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A folder of its own for each test.
-    fn scratch(name: &str) -> PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("cox-download-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&folder);
-        fs::create_dir_all(&folder).unwrap();
-        folder
-    }
+    use crate::testing::TempDir;
 
     /// A `.tar.gz` that holds `bin/agent`, a program.
     fn tar_gz(at: &Path) {
@@ -425,7 +417,7 @@ mod tests {
 
     #[test]
     fn unpacks_an_archive_it_has_checked() {
-        let scratch = scratch("unpack");
+        let scratch = TempDir::new();
         let archive = scratch.join("agent.tar.gz");
         tar_gz(&archive);
         check(&archive, &sha256_of(&archive).to_uppercase()).unwrap();
@@ -444,7 +436,6 @@ mod tests {
             let mode = fs::metadata(&program).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0o111);
         }
-        let _ = fs::remove_dir_all(&scratch);
     }
 
     /// Serves `body` over HTTP on a port of its own to as many as ask at
@@ -489,7 +480,7 @@ mod tests {
 
     #[test]
     fn two_starts_at_once_download_an_agent_once() {
-        let scratch = scratch("twice");
+        let scratch = TempDir::new();
         let archive = scratch.join("agent.tar.gz");
         tar_gz(&archive);
         let (release, held) = std::sync::mpsc::channel();
@@ -528,33 +519,30 @@ mod tests {
             fs::read_to_string(folder.join("bin/agent")).unwrap(),
             "#!/bin/sh\necho agent\n"
         );
-        let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]
     fn an_archive_of_another_sha256_is_refused() {
-        let scratch = scratch("refused");
+        let scratch = TempDir::new();
         let archive = scratch.join("agent.tar.gz");
         tar_gz(&archive);
         let error = check(&archive, &"0".repeat(64)).unwrap_err();
         assert!(error.to_string().contains("not 0000"), "{error}");
-        let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]
     fn a_program_downloaded_as_it_is_is_made_to_run() {
-        let scratch = scratch("program");
+        let scratch = TempDir::new();
         let downloaded = scratch.join("downloaded");
         fs::write(&downloaded, "#!/bin/sh\n").unwrap();
         let folder = scratch.join("sigit");
         unpack(&downloaded, "sigit-linux-amd64", &folder).unwrap();
         assert!(folder.join("sigit-linux-amd64").exists());
-        let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]
     fn a_gzipped_program_is_unzipped_and_made_to_run() {
-        let scratch = scratch("gz");
+        let scratch = TempDir::new();
         let downloaded = scratch.join("downloaded");
         let mut encoder = flate2::write::GzEncoder::new(
             File::create(&downloaded).unwrap(),
@@ -577,7 +565,6 @@ mod tests {
             let mode = fs::metadata(&program).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0o111);
         }
-        let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]
