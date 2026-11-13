@@ -193,11 +193,11 @@ pub fn printed(output: &str) -> Vec<(Option<String>, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn keeps_the_text_of_a_file_shown_as_it_was() {
-        let scratch = std::env::temp_dir().join(format!("cox-media-text-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&scratch);
+        let scratch = TempDir::new();
 
         let report = keep_text("# Report\n", true, Some(&scratch)).unwrap();
         let code = keep_text("fn main() {}\n", false, Some(&scratch)).unwrap();
@@ -220,9 +220,7 @@ mod tests {
 
     #[test]
     fn keeps_a_copy_named_after_what_it_holds() {
-        let scratch = std::env::temp_dir().join(format!("cox-media-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&scratch);
-        std::fs::create_dir_all(&scratch).unwrap();
+        let scratch = TempDir::new();
         let shot = scratch.join("shot.PNG");
         std::fs::write(&shot, b"not really a png").unwrap();
         let folder = scratch.join("kept");
@@ -247,9 +245,7 @@ mod tests {
 
     #[test]
     fn says_how_big_a_picture_is() {
-        let scratch = std::env::temp_dir().join(format!("cox-media-size-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&scratch);
-        std::fs::create_dir_all(&scratch).unwrap();
+        let scratch = TempDir::new();
         let shot = scratch.join("wide.png");
         image::RgbImage::new(64, 16).save(&shot).unwrap();
 

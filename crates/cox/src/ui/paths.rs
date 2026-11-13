@@ -5,7 +5,11 @@ use std::path::{Path, PathBuf};
 /// `path`, with the home directory as `~`.
 #[must_use]
 pub fn shortened(path: &Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    shortened_from(path, std::env::var_os("HOME").map(PathBuf::from).as_deref())
+}
+
+/// `path`, with `home`, the human's home directory, as `~`.
+fn shortened_from(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_owned)) {
         Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
         Some(rest) => format!("~/{}", rest.display()),
@@ -15,17 +19,20 @@ pub fn shortened(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
-    use super::shortened;
+    use super::shortened_from;
 
     #[test]
     fn paths_in_home_are_shortened() {
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-            return;
-        };
-        assert_eq!(shortened(&home), "~");
-        assert_eq!(shortened(&home.join("Cox")), "~/Cox");
-        assert_eq!(shortened(Path::new("/elsewhere")), "/elsewhere");
+        let home = Some(Path::new("/home/me"));
+        assert_eq!(shortened_from(Path::new("/home/me"), home), "~");
+        assert_eq!(shortened_from(Path::new("/home/me/Cox"), home), "~/Cox");
+        assert_eq!(shortened_from(Path::new("/home/meta"), home), "/home/meta");
+        assert_eq!(shortened_from(Path::new("/elsewhere"), home), "/elsewhere");
+        assert_eq!(
+            shortened_from(Path::new("/home/me/Cox"), None),
+            "/home/me/Cox"
+        );
     }
 }

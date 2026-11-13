@@ -221,6 +221,15 @@ impl Saved {
     }
 
     fn parse(bytes: &[u8]) -> anyhow::Result<Self> {
+        Self::parse_for(
+            bytes,
+            std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+        )
+    }
+
+    /// The settings `bytes` hold, for a human whose home directory is
+    /// `user`, which the folders they name from `~` are in.
+    fn parse_for(bytes: &[u8], user: Option<&Path>) -> anyhow::Result<Self> {
         let value: Value = serde_json::from_slice(bytes)?;
         let home = match value.get("home") {
             None | Some(Value::Null) => None,
@@ -231,12 +240,9 @@ impl Saved {
         // with one is said, and the rest of the file still counts.
         let folder = |key: &str| match value.get(key) {
             None | Some(Value::Null) => None,
-            Some(Value::String(folder)) => {
-                let user = std::env::var_os("HOME").map(PathBuf::from);
-                folder_of(folder, user.as_deref())
-                    .inspect_err(|why| tracing::error!("\"{key}\" names no folder: {why}"))
-                    .ok()
-            }
+            Some(Value::String(folder)) => folder_of(folder, user)
+                .inspect_err(|why| tracing::error!("\"{key}\" names no folder: {why}"))
+                .ok(),
             Some(_) => {
                 tracing::error!("\"{key}\" is not a path");
                 None
@@ -301,11 +307,14 @@ pub const DIRECTORIES: &str = "directories";
 /// path, which the agent needs.
 #[must_use]
 pub fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
-    let home = home.unwrap_or_else(|| {
-        std::env::var_os("HOME")
-            .map_or_else(std::env::temp_dir, PathBuf::from)
-            .join(HOME)
-    });
+    home_for_chats_of(home, std::env::var_os("HOME").map(PathBuf::from))
+}
+
+/// Where Cox's own chats work as [`home_for_chats`] says, for a human
+/// whose home directory is `user`, or, with none, in the system's
+/// temporary files.
+pub(crate) fn home_for_chats_of(home: Option<PathBuf>, user: Option<PathBuf>) -> PathBuf {
+    let home = home.unwrap_or_else(|| user.unwrap_or_else(std::env::temp_dir).join(HOME));
     std::path::absolute(&home).unwrap_or(home)
 }
 
@@ -605,12 +614,12 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{Saved, SearchEngine, Translation, folder_of, keep_home_in, keep_in};
+    use crate::testing::TempDir;
 
     #[test]
     fn the_home_is_read_and_kept_beside_what_else_the_file_holds() {
-        let dir = std::env::temp_dir().join(format!("cox-settings-{}", std::process::id()));
+        let dir = TempDir::new();
         let file = dir.join("settings.json");
-        let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(Saved::read_from(&file), Saved::default());
 
         keep_home_in(&file, Path::new("/work/one")).unwrap();
@@ -634,15 +643,12 @@ mod tests {
             Saved::read_from(&file).home,
             Some(PathBuf::from("/work/two"))
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_setting_kept_leaves_the_others_as_they_were() {
-        let dir = std::env::temp_dir().join(format!("cox-settings-kept-{}", std::process::id()));
+        let dir = TempDir::new();
         let file = dir.join("settings.json");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             &file,
             r#"{"agent": "Claude", "wiki": "~/notes", "raw": "~/raw",
@@ -659,16 +665,12 @@ mod tests {
                 "phone": {"tailscale": false}, "translation": {"language": "Japanese"},
                 "home": "/work"})
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_settings_file_that_cannot_be_read_is_left_as_the_human_wrote_it() {
-        let dir =
-            std::env::temp_dir().join(format!("cox-settings-unreadable-{}", std::process::id()));
+        let dir = TempDir::new();
         let file = dir.join("settings.json");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         for written in [
             "{\"agent\": \"Claude\", \"wiki\": \"~/notes\",}\n",
             "[\"agent\", \"Claude\"]\n",
@@ -679,7 +681,6 @@ mod tests {
             let error = format!("{:#}", kept.unwrap_err());
             assert!(error.contains("settings.json"), "{error}");
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -692,13 +693,9 @@ mod tests {
     fn the_workflow_is_a_folder_named_whole_or_from_the_home_directory() {
         let saved = Saved::parse(br#"{"workflow": "/srv/cox"}"#).unwrap();
         assert_eq!(saved.workflow, Some(PathBuf::from("/srv/cox")));
-        if let Some(user) = std::env::var_os("HOME") {
-            let saved = Saved::parse(br#"{"workflow": "~/dotfiles/cox"}"#).unwrap();
-            assert_eq!(
-                saved.workflow,
-                Some(PathBuf::from(user).join("dotfiles/cox"))
-            );
-        }
+        let user = Some(Path::new("/home/me"));
+        let saved = Saved::parse_for(br#"{"workflow": "~/dotfiles/cox"}"#, user).unwrap();
+        assert_eq!(saved.workflow, Some(PathBuf::from("/home/me/dotfiles/cox")));
         let saved = Saved::parse(br#"{"home": "/work", "workflow": "dotfiles"}"#).unwrap();
         assert_eq!(saved.home, Some(PathBuf::from("/work")));
         assert_eq!(saved.workflow, None);

@@ -777,6 +777,7 @@ fn rebuilt(body: &str, mut translated: impl FnMut(&str) -> Option<String>) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     const PAGE: &str = "# GPUI layout\n\nHow [[taffy]] lays out `div`s.\n\n\
         Underlined\n----------\n\n- one\n- two\n\n```rust\nlet x = 1;\n```\n\n\
@@ -900,13 +901,6 @@ mod tests {
         assert_eq!(told, ["こん", "こんにちは"]);
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("cox-translate-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&folder);
-        folder
-    }
-
     /// The page as `translator` translates it once it has all of it, or
     /// as it is when it fails.
     fn translated(translator: &Translator, body: &str, translation: &Translation) -> Translated {
@@ -922,8 +916,8 @@ mod tests {
 
     #[test]
     fn a_command_translates_the_page_a_block_at_a_time() {
-        let folder = scratch("command");
-        let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
+        let folder = TempDir::new();
+        let translator = Translator::start(folder.to_path_buf(), None, GIVES_UP_AFTER);
         let shouting = Translation {
             language: "Shouting".to_owned(),
             command: Some(vec![
@@ -950,19 +944,24 @@ mod tests {
         // Kept, it is not asked again: a block that changed is.
         let changed = translator.page("# Hello\n\nAnother.\n", &shouting);
         assert_eq!((changed.done, changed.of), (1, 2));
-        let _ = fs::remove_dir_all(&folder);
+        let changed = translated(&translator, "# Hello\n\nAnother.\n", &shouting);
+        assert_eq!((changed.done, changed.of), (2, 2));
     }
 
     #[test]
     fn a_command_that_fails_says_why_until_another_is_named() {
-        let folder = scratch("fails");
-        let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
+        let folder = TempDir::new();
+        let runs = folder.join("runs");
+        let translator = Translator::start(folder.to_path_buf(), None, GIVES_UP_AFTER);
         let failing = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
                 "sh".to_owned(),
                 "-c".to_owned(),
-                "echo no model >&2; exit 3".to_owned(),
+                format!(
+                    "echo ran >> '{}'; echo no model >&2; exit 3",
+                    runs.display()
+                ),
             ]),
             agent: None,
         };
@@ -972,23 +971,24 @@ mod tests {
         let error = page.error.unwrap();
         assert!(error.starts_with("sh failed"), "{error}");
         assert!(error.ends_with("no model"), "{error}");
-        // It is not tried again the same way, but another way is.
-        assert!(translator.shared.state().pending.is_empty());
         let _ = translator.page("Hello.\n", &failing);
-        assert!(translator.shared.state().pending.is_empty());
         let working = Translation {
             command: Some(vec!["cat".to_owned()]),
             ..failing
         };
         let page = translated(&translator, "Hello.\n", &working);
         assert_eq!((page.done, page.error), (1, None));
-        let _ = fs::remove_dir_all(&folder);
+        assert_eq!(
+            fs::read_to_string(&runs).unwrap(),
+            "ran\n",
+            "the failing command is not run again, though asked before the working one"
+        );
     }
 
     #[test]
     fn a_selection_is_translated_whole_and_kept() {
-        let folder = scratch("selection");
-        let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
+        let folder = TempDir::new();
+        let translator = Translator::start(folder.to_path_buf(), None, GIVES_UP_AFTER);
         let marked = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
@@ -1015,7 +1015,6 @@ mod tests {
                 "Japanese>English 縮める。\n\n二つ目。".to_owned()
             )))
         );
-        let _ = fs::remove_dir_all(&folder);
     }
 
     /// What `answer` comes to, or `None` when it has not come to anything
@@ -1028,8 +1027,8 @@ mod tests {
 
     #[test]
     fn a_command_that_does_not_finish_is_given_up_and_the_next_translates() {
-        let folder = scratch("gives-up");
-        let translator = Translator::start(folder.clone(), None, Duration::from_secs(1));
+        let folder = TempDir::new();
+        let translator = Translator::start(folder.to_path_buf(), None, Duration::from_secs(1));
         let stuck_with_a_child = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
@@ -1057,12 +1056,11 @@ mod tests {
             done_within(answer, Duration::from_secs(20)),
             Some(Ok("GROW.".to_owned()))
         );
-        let _ = fs::remove_dir_all(&folder);
     }
 
     #[test]
     fn an_agent_that_does_not_answer_is_given_up() {
-        let folder = scratch("agent-gives-up");
+        let folder = TempDir::new();
         let silent = Agents::new(
             vec![
                 "sh".to_owned(),
@@ -1072,7 +1070,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let translator = Translator::start(folder.clone(), Some(silent), Duration::from_secs(1));
+        let translator =
+            Translator::start(folder.to_path_buf(), Some(silent), Duration::from_secs(1));
         let asked = Translation {
             language: "Japanese".to_owned(),
             command: None,
@@ -1083,7 +1082,6 @@ mod tests {
             .expect("the translation is given up")
             .unwrap_err();
         assert!(error.starts_with("gave up"), "{error}");
-        let _ = fs::remove_dir_all(&folder);
     }
 
     /// What `answer` comes to once it is done.
@@ -1099,14 +1097,20 @@ mod tests {
 
     #[test]
     fn a_selection_is_told_as_far_as_it_has_arrived() {
-        let folder = scratch("arriving");
-        let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
+        let folder = TempDir::new();
+        let go_on = folder.join("go-on");
+        let translator = Translator::start(folder.to_path_buf(), None, GIVES_UP_AFTER);
         let slow = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
                 "sh".to_owned(),
                 "-c".to_owned(),
-                "cat >/dev/null; printf '縮'; sleep 0.3; printf 'める'".to_owned(),
+                format!(
+                    "cat >/dev/null; printf '縮'; i=0; \
+                     while [ ! -e '{}' ] && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; \
+                     printf 'める'",
+                    go_on.display()
+                ),
             ]),
             agent: None,
         };
@@ -1116,6 +1120,7 @@ mod tests {
             answer.blocking_recv(),
             Some(Arriving::SoFar("縮".to_owned()))
         );
+        fs::write(&go_on, "").unwrap();
         assert_eq!(
             answer.blocking_recv(),
             Some(Arriving::SoFar("縮める".to_owned()))
@@ -1124,6 +1129,5 @@ mod tests {
             answer.blocking_recv(),
             Some(Arriving::Done(Ok("縮める".to_owned())))
         );
-        let _ = fs::remove_dir_all(&folder);
     }
 }

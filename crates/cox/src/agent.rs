@@ -1378,6 +1378,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_line_runs_a_command_the_agent_named() {
@@ -1559,7 +1560,8 @@ mod tests {
 
     #[test]
     fn dropping_the_agent_ends_every_process_it_started() {
-        let file = std::env::temp_dir().join(format!("cox-agent-{}", std::process::id()));
+        let folder = TempDir::new();
+        let file = folder.join("pid");
         // Like `npx`, a launcher whose child does the work. This agent never
         // answers, so only stopping it ends it.
         let script = format!("sleep 60 & echo $! > {}; wait", file.display());
@@ -1581,26 +1583,42 @@ mod tests {
         assert!(running(pid));
 
         drop(agent);
-        let _ = std::fs::remove_file(&file);
         assert!(
             wait_until(|| !running(pid)),
             "the agent's child outlived it"
         );
     }
 
+    /// A way to reach an agent that says, on the channel it holds, whether
+    /// it was connected to, or dropped without.
+    struct Watched(std::sync::mpsc::Sender<&'static str>);
+
+    impl agent_client_protocol::ConnectTo<agent_client_protocol::Client> for Watched {
+        fn connect_to(
+            self,
+            _: impl agent_client_protocol::ConnectTo<agent_client_protocol::Agent>,
+        ) -> impl Future<Output = agent_client_protocol::Result<()>> + Send {
+            let _ = self.0.send("connected");
+            std::future::ready(Ok(()))
+        }
+    }
+
+    impl Drop for Watched {
+        fn drop(&mut self) {
+            let _ = self.0.send("dropped");
+        }
+    }
+
     #[test]
     fn dropping_an_agent_still_starting_does_not_wait_for_it() {
-        let file = std::env::temp_dir().join(format!("cox-agent-started-{}", std::process::id()));
-        let _ = std::fs::remove_file(&file);
-        let script = format!("echo started > {}", file.display());
         let (connecting, connects) = std::sync::mpsc::channel();
         let (finish, finished) = std::sync::mpsc::channel::<()>();
+        let (watched, _) = std::sync::mpsc::channel();
         let agent = spawn(
             move |_| {
                 let _ = connecting.send(());
-                let _ = finished.recv_timeout(Duration::from_secs(5));
-                let _ = connecting.send(());
-                cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script])
+                let _ = finished.recv();
+                Ok(Watched(watched))
             },
             std::env::temp_dir(),
             Vec::new(),
@@ -1611,19 +1629,52 @@ mod tests {
         );
         connects.recv().unwrap();
 
-        let stopping = Instant::now();
-        drop(agent);
-        let took = stopping.elapsed();
+        let (dropping, dropped) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            drop(agent);
+            let _ = dropping.send(());
+        });
+        let returned = dropped.recv_timeout(Duration::from_secs(10));
         drop(finish);
-        assert!(took < Duration::from_secs(1), "dropping it took {took:?}");
+        assert!(
+            returned.is_ok(),
+            "dropping it waited for the agent to finish starting"
+        );
+    }
+
+    #[test]
+    fn an_agent_dropped_while_starting_never_starts() {
+        let (connecting, connects) = std::sync::mpsc::channel();
+        let (finish, finished) = std::sync::mpsc::channel::<()>();
+        let (watched, told) = std::sync::mpsc::channel();
+        let agent = spawn(
+            move |_| {
+                let _ = connecting.send(());
+                let _ = finished.recv();
+                Ok(Watched(watched))
+            },
+            std::env::temp_dir(),
+            Vec::new(),
+            Start::New {
+                instructions: None,
+                setup: None,
+            },
+        );
         connects.recv().unwrap();
-        thread::sleep(Duration::from_millis(500));
-        assert!(!file.exists(), "the agent started after it was dropped");
+
+        drop(agent);
+        drop(finish);
+        assert_eq!(
+            told.recv_timeout(Duration::from_secs(10)),
+            Ok("dropped"),
+            "the agent started after it was dropped"
+        );
     }
 
     #[test]
     fn the_agent_gets_none_of_coxs_files() {
-        let file = std::env::temp_dir().join(format!("cox-agent-files-{}", std::process::id()));
+        let folder = TempDir::new();
+        let file = folder.join("seen");
         // A descriptor that stays open across `exec`, like CEF's port.
         let open = std::fs::File::open("/dev/null").unwrap();
         // SAFETY: `open` is a valid descriptor; the copy is closed below.
@@ -1653,7 +1704,6 @@ mod tests {
         drop(agent);
         // SAFETY: `inherited` is open, and nothing else uses it.
         unsafe { libc::close(inherited) };
-        let _ = std::fs::remove_file(&file);
         assert_eq!(seen, "not\n");
     }
 }

@@ -169,6 +169,7 @@ pub(crate) fn find(program: &str, path: Option<&std::ffi::OsStr>, here: &Path) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_program_is_found_on_the_path_or_where_its_path_says() {
@@ -180,12 +181,28 @@ mod tests {
         assert_eq!(find("sh", Some("/nowhere".as_ref()), cwd), None);
         assert_eq!(find("/bin/sh", None, cwd), Some(PathBuf::from("/bin/sh")));
         assert_eq!(find("bin/sh", None, cwd), Some(PathBuf::from("/bin/sh")));
-        assert_eq!(find("/etc/hostname", None, cwd), None);
+    }
+
+    #[test]
+    fn a_file_that_does_not_run_is_not_a_program() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let folder = TempDir::new();
+        let notes = folder.join("notes");
+        std::fs::write(&notes, "").unwrap();
+        std::fs::set_permissions(&notes, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::create_dir(folder.join("tools")).unwrap();
+        let path = folder.as_os_str();
+        assert_eq!(find("notes", Some(path), &folder), None);
+        assert_eq!(find("./notes", None, &folder), None);
+        assert_eq!(find("tools", Some(path), &folder), None);
+        std::fs::set_permissions(&notes, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(find("notes", Some(path), &folder), Some(notes.clone()));
+        assert_eq!(find("./notes", None, &folder), Some(folder.join("./notes")));
     }
 
     #[test]
     fn a_command_with_no_program_or_none_on_the_path_fails() {
-        let cwd = std::env::temp_dir();
+        let cwd = TempDir::new();
         assert!(matches!(
             check(vec!["A=1".to_owned()], &cwd),
             Checked::Failed(_)

@@ -128,13 +128,7 @@ fn stretches(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("cox-lines-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::testing::TempDir;
 
     /// The text of a line told, its stretches joined.
     fn text_of(line: &serde_json::Value) -> String {
@@ -147,7 +141,7 @@ mod tests {
 
     #[test]
     fn the_lines_around_one_are_told_within_the_project() {
-        let root = scratch("around");
+        let root = TempDir::new();
         let text = (1..=20)
             .map(|n| format!("fn f{n}() {{}}\n"))
             .collect::<Vec<_>>()
@@ -182,7 +176,7 @@ mod tests {
 
     #[test]
     fn the_lines_that_open_what_one_is_within_are_told() {
-        let root = scratch("within");
+        let root = TempDir::new();
         let body = (1..=20)
             .map(|n| format!("        let x{n} = {n};\n"))
             .collect::<Vec<_>>()
@@ -206,7 +200,7 @@ mod tests {
 
     #[test]
     fn a_file_in_no_language_is_told_plain() {
-        let root = scratch("plain");
+        let root = TempDir::new();
         std::fs::write(root.join("notes.txt"), "one\ntwo\n").unwrap();
         let json = told(&root, &root.join("notes.txt"), 2).unwrap();
         assert_eq!(json["from"], 1);

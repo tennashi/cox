@@ -441,13 +441,7 @@ fn cut(text: &str, length: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("cox-wiki-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        directory
-    }
+    use crate::testing::TempDir;
 
     fn used(project: &str, chat: &str, day: &str) -> Used {
         Used {
@@ -463,7 +457,7 @@ mod tests {
 
     #[test]
     fn a_page_says_where_it_was_used_as_cox_notes_it() {
-        let root = scratch("used");
+        let root = TempDir::new();
         let page = "# GPUI layout\n\nA flex child needs `min_h_0` to scroll.\n";
         write(
             &root,
@@ -497,12 +491,11 @@ mod tests {
              - 2026-11-05 in notes, chat \"Layout\" (#3), at 9955f39, from chat 3: src/view.rs\n\
              - 2026-11-05 in cox, chat \"Fix scroll\" (#3), at 9955f39, from chat 3: src/view.rs\n"
         );
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn the_index_lists_the_pages_unless_the_human_wrote_it() {
-        let root = scratch("index");
+        let root = TempDir::new();
         let day = "2026-11-05";
         write(
             &root,
@@ -528,12 +521,11 @@ mod tests {
         fs::write(root.join("index.md"), "# Mine\n").unwrap();
         write(&root, "more", "# More\n\nText.\n", &used("b", "c", day)).unwrap();
         assert_eq!(read(&root, INDEX).unwrap(), "# Mine\n");
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_search_finds_the_pages_with_every_word() {
-        let root = scratch("search");
+        let root = TempDir::new();
         let day = "2026-11-05";
         write(
             &root,
@@ -568,12 +560,11 @@ mod tests {
             .collect();
         assert_eq!(names, ["gpui"]);
         assert_eq!(search(&root, "  "), []);
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_page_keeps_its_properties_unless_new_ones_are_given() {
-        let root = scratch("properties");
+        let root = TempDir::new();
         let day = "2026-11-05";
         let page = "---\ntags: [billing]\n---\n\n# Billing\n\nAcme pays by the seat.\n";
         write(&root, "billing", page, &used("acme", "c", day)).unwrap();
@@ -598,7 +589,6 @@ mod tests {
         .unwrap();
         let text = read(&root, "billing").unwrap();
         assert!(text.starts_with("---\ntags: [money]\n---\n"), "{text}");
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

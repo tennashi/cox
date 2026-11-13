@@ -2312,12 +2312,12 @@ fn told(ran: &Ran) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::*;
     use crate::agent::mcp::{OpenedChat, Waited};
+    use crate::testing::{TempDir, run_git};
 
     /// What the agent gets from calling the tool `name` with `arguments`
     /// in `cwd`, for a call answered right away.
@@ -2335,34 +2335,61 @@ mod tests {
             .unwrap()
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let directory = std::env::temp_dir().join(format!("cox-mcp-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(&directory).unwrap();
-        fs::canonicalize(directory).unwrap()
-    }
-
     #[test]
     fn lists_the_tools() {
-        let listed = tools(None);
-        assert_eq!(listed[0]["name"], SHOW_MARKDOWN);
-        assert_eq!(listed[1]["name"], SHOW_FILE);
-        assert_eq!(listed[2]["name"], SHOW_CHANGES);
-        assert_eq!(listed[3]["name"], SHOW_MAP);
-        assert_eq!(listed[4]["name"], RUN_COMMAND);
-        assert_eq!(listed[5]["name"], OPEN_CHAT);
-        assert_eq!(listed[7]["name"], READ_CHAT);
-        assert_eq!(listed[8]["name"], SHOW_MEDIA);
-        assert_eq!(listed[10]["name"], PROPOSE_NAME);
-        assert_eq!(listed[11]["name"], PROPOSE_ABOUT);
-        assert_eq!(listed[12]["name"], PROPOSE_ICON);
-        assert_eq!(listed[13]["name"], PROPOSE_PROJECT);
-        assert_eq!(listed[14]["name"], START_SKETCH);
+        let names = |listed: Value| -> Vec<String> {
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let mut expected = vec![
+            "show_markdown",
+            "show_file",
+            "show_changes",
+            "show_map",
+            "run_command",
+            "open_chat",
+            "wait_chat",
+            "read_chat",
+            "show_media",
+            "propose_goal",
+            "propose_name",
+            "propose_about",
+            "propose_icon",
+            "propose_project",
+            "start_sketch",
+            "wiki_search",
+            "wiki_read",
+            "wiki_write",
+            "raw_keep",
+            "raw_search",
+            "raw_read",
+            "android_devices",
+            "android_look",
+            "android_tap",
+            "android_swipe",
+            "android_type",
+            "android_key",
+        ];
+        if cfg!(target_os = "macos") {
+            expected.extend([
+                "mac_windows",
+                "mac_window_look",
+                "mac_window_click",
+                "mac_window_type",
+                "mac_window_key",
+                "mac_window_scroll",
+            ]);
+        }
+        assert_eq!(names(tools(None)), expected);
     }
 
     #[test]
     fn shows_the_map_and_tells_what_is_there() {
-        let cwd = scratch("map");
+        let cwd = TempDir::new();
         fs::create_dir_all(cwd.join(map::MAPS_FOLDER)).unwrap();
         fs::create_dir_all(cwd.join("src")).unwrap();
         fs::write(cwd.join("src/main.rs"), "fn main() {}\n").unwrap();
@@ -2463,7 +2490,7 @@ mod tests {
 
     #[test]
     fn tells_how_to_write_the_map_when_the_project_has_none() {
-        let cwd = scratch("no-map");
+        let cwd = TempDir::new();
         let (sent, mut requests) = unbounded_channel();
 
         let shown = call_now(SHOW_MAP, &json!({}), &cwd, &sent);
@@ -2545,7 +2572,7 @@ mod tests {
 
     #[test]
     fn shows_a_file_from_the_working_directory() {
-        let cwd = scratch("show");
+        let cwd = TempDir::new();
         fs::write(cwd.join("plan.md"), "# Plan\n").unwrap();
         let (sent, mut requests) = unbounded_channel();
 
@@ -2559,7 +2586,6 @@ mod tests {
             }
             request => panic!("asked {request:?}"),
         }
-        fs::remove_dir_all(cwd).unwrap();
     }
     /// Calls `show_file` in `cwd` with `arguments`, and answers what it
     /// answers, with what the chat is asked.
@@ -2571,7 +2597,7 @@ mod tests {
 
     #[test]
     fn shows_a_file_at_the_lines_named() {
-        let cwd = scratch("show-file");
+        let cwd = TempDir::new();
         fs::write(cwd.join("main.rs"), "fn main() {\n}\n").unwrap();
 
         let (shown, asked) = show_file(
@@ -2607,12 +2633,11 @@ mod tests {
             ),
             "{asked:?}"
         );
-        fs::remove_dir_all(cwd).unwrap();
     }
 
     #[test]
     fn tells_the_agent_of_lines_that_are_not_there() {
-        let cwd = scratch("show-file-lines");
+        let cwd = TempDir::new();
         fs::write(cwd.join("main.rs"), "fn main() {}\n").unwrap();
         let fails = |arguments: Value| {
             let (shown, asked) = show_file(&cwd, &arguments);
@@ -2631,24 +2656,14 @@ mod tests {
             "first_line is to be a line number, from 1"
         );
         assert!(fails(json!({ "path": "gone.rs" })).starts_with("cannot read"));
-        fs::remove_dir_all(cwd).unwrap();
     }
 
     #[test]
     fn shows_what_changed_in_a_folder_and_tells_the_agent() {
-        let cwd = scratch("changes");
+        let cwd = TempDir::new();
         let sketch = cwd.join("sketch");
         fs::create_dir_all(&sketch).unwrap();
-        let git = |args: &[&str]| {
-            let ran = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&sketch)
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(ran.status.success(), "{ran:?}");
-        };
-        git(&["init", "--quiet"]);
+        run_git(&sketch, &["init", "--quiet"]).unwrap();
         changes::start(&sketch).unwrap();
         fs::write(sketch.join("hello.txt"), "Hello\nthere\n").unwrap();
         let (sent, mut requests) = unbounded_channel();
@@ -2667,14 +2682,8 @@ mod tests {
         }
 
         // A folder out of any repository has no changes to show.
-        let outside = scratch("no-changes");
-        if std::process::Command::new("git")
-            .arg("-C")
-            .arg(&outside)
-            .args(["rev-parse", "--git-dir"])
-            .output()
-            .is_ok_and(|ran| !ran.status.success())
-        {
+        let outside = TempDir::new();
+        if run_git(&outside, &["rev-parse", "--git-dir"]).is_err() {
             let shown = call_now(SHOW_CHANGES, &json!({}), &outside, &sent);
             assert_eq!(shown["isError"], true);
             assert!(requests.try_recv().is_err());
@@ -2682,17 +2691,11 @@ mod tests {
 
         // A project's folder shows what changed in its directories that
         // are repositories.
-        let project = scratch("project-changes");
+        let project = TempDir::new();
         let app = project.join("directories").join("app");
         fs::create_dir_all(&app).unwrap();
         fs::create_dir_all(project.join("directories").join("notes")).unwrap();
-        let ran = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&app)
-            .args(["init", "--quiet"])
-            .output()
-            .unwrap();
-        assert!(ran.status.success(), "{ran:?}");
+        run_git(&app, &["init", "--quiet"]).unwrap();
         fs::write(app.join("main.rs"), "fn main() {}\n").unwrap();
         let shown = call_now(SHOW_CHANGES, &json!({}), &project, &sent);
         assert_eq!(shown["isError"], false);
@@ -2703,14 +2706,14 @@ mod tests {
             "{told}"
         );
         match requests.try_recv() {
-            Ok(ToolRequest::ShowChanges { folder }) => assert_eq!(folder, project),
+            Ok(ToolRequest::ShowChanges { folder }) => assert_eq!(folder, project.path()),
             _ => panic!("the stage was not asked to show what changed"),
         }
     }
 
     #[test]
     fn tells_the_agent_of_a_file_it_cannot_read() {
-        let cwd = scratch("missing");
+        let cwd = TempDir::new();
         let (sent, mut requests) = unbounded_channel();
 
         let shown = call_now(SHOW_MARKDOWN, &json!({ "path": "missing.md" }), &cwd, &sent);
@@ -2719,7 +2722,6 @@ mod tests {
         let text = shown["content"][0]["text"].as_str().unwrap();
         assert!(text.starts_with("cannot read"), "{text}");
         assert!(requests.try_recv().is_err());
-        fs::remove_dir_all(cwd).unwrap();
     }
 
     /// Calls `run_command` with `arguments`, and answers the request the
@@ -3043,7 +3045,7 @@ mod tests {
 
     #[tokio::test]
     async fn proposes_an_icon_made_of_a_picture_and_tells_whether_there_is_one() {
-        let cwd = scratch("propose-icon");
+        let cwd = TempDir::new();
         fs::write(
             cwd.join("logo.svg"),
             r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -3068,7 +3070,7 @@ mod tests {
         });
         let propose = |arguments: Value| {
             let params = json!({ "name": PROPOSE_ICON, "arguments": arguments });
-            let (sent, chats, cwd) = (sent.clone(), chats.clone(), cwd.clone());
+            let (sent, chats, cwd) = (sent.clone(), chats.clone(), cwd.to_path_buf());
             async move { call(&params, &cwd, None, &sent, &chats).await.unwrap() }
         };
 

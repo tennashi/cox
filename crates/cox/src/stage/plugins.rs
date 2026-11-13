@@ -541,14 +541,7 @@ fn mime(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("cox-plugins-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        directory
-    }
+    use crate::testing::TempDir;
 
     #[test]
     fn addresses_split_into_host_and_path() {
@@ -562,7 +555,8 @@ mod tests {
 
     #[test]
     fn the_built_in_plugin_is_served_with_its_files() {
-        let plugins = Plugins::new(scratch("built-in"), Outlines::new().0, Calls::new().0);
+        let root = TempDir::new();
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
 
         let page = plugins.resource("cox://map/").unwrap();
         assert_eq!(page.mime, "text/html");
@@ -578,7 +572,8 @@ mod tests {
 
     #[test]
     fn only_a_plugin_has_the_triggers_tab_do_what_it_asks() {
-        let plugins = Plugins::new(scratch("asker"), Outlines::new().0, Calls::new().0);
+        let root = TempDir::new();
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
         let serve = plugins.serve();
         let body = |url: &str, asker| serve(url, asker).map(|resource| resource.body);
 
@@ -594,7 +589,7 @@ mod tests {
 
     #[test]
     fn the_map_is_told_as_json() {
-        let root = scratch("map");
+        let root = TempDir::new();
         let maps = root.join(cox_editor::map::MAPS_FOLDER);
         std::fs::create_dir_all(&maps).unwrap();
         std::fs::write(
@@ -603,7 +598,7 @@ mod tests {
                  "parts": { "one": { "name": "One", "holds": ["src"] } } }"#,
         )
         .unwrap();
-        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
 
         let answer = plugins.resource("cox://api/map").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
@@ -621,7 +616,7 @@ mod tests {
 
     #[test]
     fn the_schedules_of_the_folder_are_told_among_its_triggers() {
-        let root = scratch("schedules");
+        let root = TempDir::new();
         std::fs::create_dir_all(root.join(crate::trigger::PROJECT_TRIGGERS)).unwrap();
         std::fs::write(
             root.join(crate::trigger::PROJECT_TRIGGERS)
@@ -629,7 +624,7 @@ mod tests {
             "---\non: {schedule: {cron: \"0 */6 * * *\"}}\n---\n\nLook at what changed.\n",
         )
         .unwrap();
-        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
 
         let answer = plugins.resource("cox://api/triggers").unwrap();
         assert_eq!(answer.mime, "application/json");
@@ -642,14 +637,14 @@ mod tests {
 
     #[test]
     fn the_projects_sources_are_told_as_json() {
-        let root = scratch("project-raw");
+        let root = TempDir::new();
         std::fs::create_dir_all(root.join("raw/sketches")).unwrap();
         std::fs::write(
             root.join("raw/sketches/2026-11-10-mock.md"),
             "---\nsource: \"chat 3\"\nkept: 2026-11-10\n---\n\n# Mock\n\nWhat it tried.\n",
         )
         .unwrap();
-        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
 
         let answer = plugins.resource("cox://api/project-raw").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
@@ -669,10 +664,10 @@ mod tests {
 
     #[test]
     fn the_projects_wiki_is_told_as_json() {
-        let root = scratch("project-wiki");
+        let root = TempDir::new();
         std::fs::create_dir_all(root.join("wiki")).unwrap();
         std::fs::write(root.join("wiki/people.md"), "# People\n\nWho to ask.\n").unwrap();
-        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
 
         let answer = plugins.resource("cox://api/project-wiki").unwrap();
         let json: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
@@ -686,10 +681,10 @@ mod tests {
 
     #[test]
     fn a_file_is_told_as_json_within_the_project() {
-        let root = scratch("file");
+        let root = TempDir::new();
         std::fs::create_dir_all(root.join("my src")).unwrap();
         std::fs::write(root.join("my src/main.rs"), "fn main() {}\n").unwrap();
-        let plugins = Plugins::new(root.clone(), Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
         let url = format!("cox://api/file{}/my%20src/main.rs", root.display());
         let answer = plugins.resource(&url).unwrap();
         assert_eq!(answer.mime, "application/json");
@@ -728,13 +723,13 @@ mod tests {
 
     #[test]
     fn the_projects_plugins_are_listed_and_served_within_their_folders() {
-        let root = scratch("project");
+        let root = TempDir::new();
         let folder = root.join(PROJECT_PLUGINS).join("tour");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("index.html"), "<h1>Tour</h1>").unwrap();
         std::fs::write(folder.join("plugin.json"), r#"{"title": "A tour"}"#).unwrap();
         std::fs::write(root.join("secret.txt"), "no").unwrap();
-        let plugins = Plugins::new(root, Outlines::new().0, Calls::new().0);
+        let plugins = Plugins::new(root.to_path_buf(), Outlines::new().0, Calls::new().0);
 
         let listed = plugins.list();
         let names: Vec<&str> = listed.iter().map(|plugin| plugin.name.as_str()).collect();

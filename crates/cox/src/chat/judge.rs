@@ -365,6 +365,7 @@ mod tests {
 
     use super::*;
     use crate::agent::setup::{Asked, Decision};
+    use crate::testing::TempDir;
 
     #[test]
     fn the_verdict_is_the_replys_last_line() {
@@ -610,9 +611,7 @@ mod tests {
 
     #[test]
     fn the_projects_own_stance_replaces_the_default() {
-        let folder = std::env::temp_dir().join(format!("cox-judge-stance-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+        let folder = TempDir::new();
         assert_eq!(stance(&folder), STANCE);
 
         std::fs::write(folder.join(STANCE_FILE), " \n").unwrap();
@@ -631,7 +630,6 @@ mod tests {
         let context = setup.context.unwrap();
         assert!(context.starts_with("You review the change as a maintainer would.\n\n"));
         assert!(context.contains("`PASS`"), "{context}");
-        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]

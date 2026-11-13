@@ -160,6 +160,7 @@ pub fn file() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|&word| word.to_owned()).collect()
@@ -167,11 +168,8 @@ mod tests {
 
     #[test]
     fn the_listing_changes_keeping_what_the_screen_does_not_show() {
-        let folder =
-            std::env::temp_dir().join(format!("cox-servers-listing-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&folder);
+        let folder = TempDir::new();
         let file = folder.join("servers.json");
-        fs::create_dir_all(&folder).unwrap();
         assert_eq!(Listing::read_from(&file).unwrap(), Listing::default());
         fs::write(
             &file,
@@ -216,6 +214,5 @@ mod tests {
 
         fs::write(&file, r#"{"servers": []}"#).unwrap();
         assert!(Listing::read_from(&file).is_err());
-        let _ = fs::remove_dir_all(&folder);
     }
 }

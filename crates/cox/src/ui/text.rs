@@ -1199,87 +1199,84 @@ mod tests {
 
     use super::*;
 
-    fn piece(entry: usize, part: usize, text: &str) -> PaintedText {
+    /// A piece of entry `entry`, laid out with its top at `top`.
+    fn piece(entry: usize, part: usize, text: &str, top: f32) -> PaintedText {
         PaintedText {
             id: TextId { entry, part },
             text: SharedString::from(text.to_owned()),
             joined: "\n",
             layout: TextLayout::default(),
-            visible: Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
+            visible: Bounds::new(point(px(0.), px(top)), size(px(10.), px(10.))),
             links: Rc::new([]),
             current: true,
         }
     }
 
-    fn texts(painted: &Painted) -> Vec<(TextId, String, bool)> {
-        painted
-            .0
-            .borrow()
-            .iter()
-            .map(|text| (text.id, text.text.to_string(), text.current))
-            .collect()
+    fn id(entry: usize, part: usize) -> TextId {
+        TextId { entry, part }
+    }
+
+    /// What is copied from the start of `from` to the end of `to`.
+    fn copied(reading: &Reading, from: TextId, to: TextId) -> String {
+        reading.painted.copy(&Selection {
+            anchor: Spot {
+                text: from,
+                offset: 0,
+            },
+            head: Spot {
+                text: to,
+                offset: usize::MAX,
+            },
+        })
     }
 
     #[test]
     fn aged_pieces_stay_until_their_entry_is_laid_out_again() {
-        let painted = Painted::default();
+        let reading = Reading::default();
         for (entry, text) in [(0, "a"), (1, "b"), (2, "c")] {
-            painted.push(piece(entry, 0, text));
+            reading.painted.push(piece(entry, 0, text, 0.));
         }
-        painted.age(3);
+        reading.age(3);
         // The frame lays out entry 1 alone, now in two pieces.
-        painted.push(piece(1, 0, "b1"));
-        painted.push(piece(1, 1, "b2"));
-        let id = |entry, part| TextId { entry, part };
-        assert_eq!(
-            texts(&painted),
-            [
-                (id(0, 0), "a".to_owned(), false),
-                (id(1, 0), "b1".to_owned(), true),
-                (id(1, 1), "b2".to_owned(), true),
-                (id(2, 0), "c".to_owned(), false),
-            ]
-        );
-        // What is out of sight shows nowhere, but is copied.
-        assert!(!painted.0.borrow()[0].shows_at(point(px(0.), px(0.))));
-        let all = Selection {
-            anchor: Spot {
-                text: id(0, 0),
-                offset: 0,
-            },
-            head: Spot {
-                text: id(2, 0),
-                offset: 1,
-            },
-        };
-        assert_eq!(painted.copy(&all), "a\nb1\nb2\nc");
+        reading.painted.push(piece(1, 0, "b1", 20.));
+        reading.painted.push(piece(1, 1, "b2", 30.));
+
+        assert_eq!(copied(&reading, id(0, 0), id(2, 0)), "a\nb1\nb2\nc");
+        assert!(reading.laid_out(1), "the frame laid out entry 1");
+        assert!(!reading.laid_out(0) && !reading.laid_out(2));
+    }
+
+    #[test]
+    fn aged_pieces_show_nowhere() {
+        let reading = Reading::default();
+        reading.painted.push(piece(0, 0, "a", 0.));
+        reading.painted.push(piece(1, 0, "b", 20.));
+        reading.age(2);
+        reading.painted.push(piece(1, 0, "b", 20.));
+
+        assert!(!reading.is_on_text(point(px(5.), px(5.))), "where a was");
+        assert!(reading.is_on_text(point(px(5.), px(25.))), "where b is");
     }
 
     #[test]
     fn aging_forgets_the_entries_gone() {
-        let painted = Painted::default();
-        painted.push(piece(0, 0, "a"));
-        painted.push(piece(1, 0, "b"));
-        painted.age(1);
-        assert_eq!(texts(&painted).len(), 1);
+        let reading = Reading::default();
+        reading.painted.push(piece(0, 0, "a", 0.));
+        reading.painted.push(piece(1, 0, "b", 20.));
+        reading.age(1);
+        assert_eq!(copied(&reading, id(0, 0), id(1, 0)), "a");
     }
 
     #[test]
     fn clearing_forgets_every_piece() {
-        let painted = Painted::default();
-        painted.push(piece(0, 0, "a"));
-        painted.age(1);
-        painted.clear();
-        painted.push(piece(1, 0, "b"));
-        painted.push(piece(0, 0, "a"));
+        let reading = Reading::default();
+        reading.painted.push(piece(0, 0, "a", 0.));
+        reading.age(1);
+        reading.clear();
+        reading.painted.push(piece(1, 0, "b", 0.));
+        reading.painted.push(piece(0, 0, "a", 20.));
         // In the order laid out, as a view that does not age its text
         // has them.
-        assert_eq!(
-            texts(&painted)
-                .into_iter()
-                .map(|(_, text, _)| text)
-                .collect::<Vec<_>>(),
-            ["b", "a"]
-        );
+        assert_eq!(copied(&reading, id(0, 0), id(1, 0)), "b\na");
     }
 }

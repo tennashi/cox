@@ -295,6 +295,7 @@ pub fn last_turn(kept: Option<&Path>, folder: &Path) -> Option<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_card_writes_the_trigger_it_reads() {
@@ -362,8 +363,7 @@ mod tests {
 
     #[test]
     fn saving_a_card_writes_its_file_where_it_is_kept() {
-        let root = std::env::temp_dir().join(format!("cox-card-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = TempDir::new();
         let (project, workflow) = (root.join("app"), root.join("workflow"));
         let draft = Draft {
             name: "ci".to_owned(),
@@ -442,6 +442,5 @@ mod tests {
             last_turn(Some(&kept), &project),
             Some(Some("Done.".to_owned()))
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

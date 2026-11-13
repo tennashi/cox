@@ -357,6 +357,7 @@ fn outside_app(exe: &Path) -> Option<&Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     fn now(root: Option<PathBuf>, kept: Kept) -> PathBuf {
         root.unwrap().join(kept.place())
@@ -364,8 +365,7 @@ mod tests {
 
     #[test]
     fn a_file_kept_by_folder_names_where_the_folder_moved() {
-        let dir = std::env::temp_dir().join(format!("cox-moved-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let file = dir.join("triggers.json");
         fs::write(
             &file,
@@ -386,7 +386,6 @@ mod tests {
         // A file that is not there is left so.
         move_in(&dir.join("none.json"), moved).unwrap();
         assert!(!dir.join("none.json").exists());
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -393,15 +393,7 @@ fn executable(_: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A folder of its own for each test.
-    fn scratch(name: &str) -> PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("cox-download-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&folder);
-        fs::create_dir_all(&folder).unwrap();
-        folder
-    }
+    use crate::testing::TempDir;
 
     /// A `.tar.gz` that holds `bin/agent`, a program.
     fn tar_gz(at: &Path) {
@@ -425,7 +417,7 @@ mod tests {
 
     #[test]
     fn unpacks_an_archive_it_has_checked() {
-        let scratch = scratch("unpack");
+        let scratch = TempDir::new();
         let archive = scratch.join("agent.tar.gz");
         tar_gz(&archive);
         check(&archive, &sha256_of(&archive).to_uppercase()).unwrap();
@@ -444,23 +436,28 @@ mod tests {
             let mode = fs::metadata(&program).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0o111);
         }
-        let _ = fs::remove_dir_all(&scratch);
     }
 
-    /// Serves `body` over HTTP on a port of its own, slowly, to as many
-    /// as ask at once, counting how many asked.
-    fn serve_slowly(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    /// Serves `body` over HTTP on a port of its own to as many as ask at
+    /// once, holding each answer until `held` is dropped, counting how
+    /// many asked.
+    fn serve_held(
+        body: Vec<u8>,
+        held: std::sync::mpsc::Receiver<()>,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::io::{BufRead as _, BufReader};
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let url = format!("http://{}/agent.tar.gz", listener.local_addr().unwrap());
-        let asked = std::sync::Arc::new(AtomicUsize::new(0));
+        let asked = Arc::new(AtomicUsize::new(0));
         let counted = asked.clone();
-        let body = std::sync::Arc::new(body);
+        let body = Arc::new(body);
+        let held = Arc::new(Mutex::new(held));
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let mut stream = stream.unwrap();
-                let body = body.clone();
+                let (body, gate) = (body.clone(), held.clone());
                 counted.fetch_add(1, Ordering::SeqCst);
                 std::thread::spawn(move || {
                     let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -468,12 +465,12 @@ mod tests {
                     while reader.read_line(&mut line).unwrap() > 2 {
                         line.clear();
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(300));
-                    let head = format!(
+                    let _ = gate.lock().unwrap().recv();
+                    let status = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
                     );
-                    stream.write_all(head.as_bytes()).unwrap();
+                    stream.write_all(status.as_bytes()).unwrap();
                     stream.write_all(&body).unwrap();
                 });
             }
@@ -483,10 +480,11 @@ mod tests {
 
     #[test]
     fn two_starts_at_once_download_an_agent_once() {
-        let scratch = scratch("twice");
+        let scratch = TempDir::new();
         let archive = scratch.join("agent.tar.gz");
         tar_gz(&archive);
-        let (url, asked) = serve_slowly(fs::read(&archive).unwrap());
+        let (release, held) = std::sync::mpsc::channel();
+        let (url, asked) = serve_held(fs::read(&archive).unwrap(), held);
         let download = Download {
             version: "1.0.0".to_owned(),
             archive: url,
@@ -494,12 +492,23 @@ mod tests {
         };
         let folder = scratch.join("agent").join("1.0.0");
 
+        let (downloading, told) = std::sync::mpsc::channel();
         let starts: Vec<_> = (0..2)
             .map(|_| {
                 let (folder, download) = (folder.clone(), download.clone());
-                std::thread::spawn(move || installed_in(&folder, &download, &|_| {}))
+                let downloading = downloading.clone();
+                std::thread::spawn(move || {
+                    installed_in(&folder, &download, &|_| {
+                        let _ = downloading.send(());
+                    })
+                })
             })
             .collect();
+        for _ in 0..2 {
+            told.recv_timeout(std::time::Duration::from_secs(10))
+                .expect("both start downloading before either has the agent");
+        }
+        drop(release);
         for start in starts {
             start.join().unwrap().unwrap();
         }
@@ -510,33 +519,37 @@ mod tests {
             fs::read_to_string(folder.join("bin/agent")).unwrap(),
             "#!/bin/sh\necho agent\n"
         );
-        let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]
     fn an_archive_of_another_sha256_is_refused() {
-        let scratch = scratch("refused");
+        let scratch = TempDir::new();
         let archive = scratch.join("agent.tar.gz");
         tar_gz(&archive);
         let error = check(&archive, &"0".repeat(64)).unwrap_err();
         assert!(error.to_string().contains("not 0000"), "{error}");
-        let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]
     fn a_program_downloaded_as_it_is_is_made_to_run() {
-        let scratch = scratch("program");
+        let scratch = TempDir::new();
         let downloaded = scratch.join("downloaded");
         fs::write(&downloaded, "#!/bin/sh\n").unwrap();
         let folder = scratch.join("sigit");
         unpack(&downloaded, "sigit-linux-amd64", &folder).unwrap();
-        assert!(folder.join("sigit-linux-amd64").exists());
-        let _ = fs::remove_dir_all(&scratch);
+        let program = folder.join("sigit-linux-amd64");
+        assert_eq!(fs::read_to_string(&program).unwrap(), "#!/bin/sh\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(&program).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111);
+        }
     }
 
     #[test]
     fn a_gzipped_program_is_unzipped_and_made_to_run() {
-        let scratch = scratch("gz");
+        let scratch = TempDir::new();
         let downloaded = scratch.join("downloaded");
         let mut encoder = flate2::write::GzEncoder::new(
             File::create(&downloaded).unwrap(),
@@ -559,7 +572,6 @@ mod tests {
             let mode = fs::metadata(&program).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0o111);
         }
-        let _ = fs::remove_dir_all(&scratch);
     }
 
     #[test]

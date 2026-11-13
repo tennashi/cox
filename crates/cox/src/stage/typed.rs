@@ -90,6 +90,7 @@ pub(super) fn typed(line: &str, cwd: &Path, unmatched: Unmatched) -> Option<Type
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     fn url(url: &str) -> Typed {
         Typed::Web(Address::Url(url.to_owned()))
@@ -99,8 +100,8 @@ mod tests {
         Typed::Web(Address::Search(words.to_owned()))
     }
 
-    fn folder() -> PathBuf {
-        let folder = std::env::temp_dir().join(format!("cox-typed-{}", std::process::id()));
+    fn folder() -> TempDir {
+        let folder = TempDir::new();
         std::fs::create_dir_all(folder.join("src")).unwrap();
         std::fs::write(folder.join("src/main.rs"), "fn main() {}\n").unwrap();
         folder

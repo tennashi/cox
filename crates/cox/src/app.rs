@@ -676,13 +676,15 @@ mod tests {
 
     #[test]
     fn coxs_own_chats_work_in_cox_in_the_home_directory() {
-        let Some(home) = std::env::var_os("HOME") else {
-            return;
-        };
+        let user = || Some(PathBuf::from("/home/me"));
         assert_eq!(
-            crate::settings::home_for_chats(None),
-            PathBuf::from(home).join("cox")
+            crate::settings::home_for_chats_of(None, user()),
+            PathBuf::from("/home/me/cox")
         );
-        assert!(crate::settings::home_for_chats(Some("relative".into())).is_absolute());
+        assert_eq!(
+            crate::settings::home_for_chats_of(Some("/work".into()), user()),
+            PathBuf::from("/work")
+        );
+        assert!(crate::settings::home_for_chats_of(Some("relative".into()), user()).is_absolute());
     }
 }

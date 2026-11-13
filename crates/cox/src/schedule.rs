@@ -334,6 +334,7 @@ mod tests {
     use jiff::tz::TimeZone;
 
     use super::{Cron, Ran};
+    use crate::testing::TempDir;
 
     fn at(day: i8, hour: i8, minute: i8) -> Zoned {
         // 2026-11-02 is a Monday.
@@ -441,10 +442,8 @@ mod tests {
 
     #[test]
     fn when_each_schedule_ran_is_kept() {
-        let path = std::env::temp_dir()
-            .join(format!("cox-ran-{}", std::process::id()))
-            .join("schedules.json");
-        let _ = std::fs::remove_file(&path);
+        let folder = TempDir::new();
+        let path = folder.join("schedules.json");
         let mut kept = Ran::read(Some(path.clone()));
         assert_eq!(kept.last("rust-news"), None);
         kept.ran("rust-news", at(3, 9, 30).timestamp());
@@ -452,6 +451,5 @@ mod tests {
             Ran::read(Some(path.clone())).last("rust-news"),
             ran(3, 9, 30)
         );
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
