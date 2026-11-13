@@ -36,7 +36,7 @@ use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 
@@ -661,7 +661,7 @@ fn git_with(
     env: &[(&str, &OsStr)],
     input: Option<&[u8]>,
 ) -> Result<String, String> {
-    let mut child = Command::new("git")
+    let mut child = crate::git::command()
         .arg("-C")
         .arg(folder)
         .args(args)

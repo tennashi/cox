@@ -424,3 +424,185 @@ impl Element for Grid {
 pub(super) fn whole_cells(cells: f32) -> usize {
     cells.floor().max(0.) as usize
 }
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::term::cell::Cell;
+    use alacritty_terminal::vte::ansi::{Color, Rgb};
+
+    use super::*;
+
+    fn plain() -> Look {
+        Look {
+            color: rgb(FOREGROUND).into(),
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+            underline: false,
+            strikethrough: false,
+        }
+    }
+
+    fn run(line: usize, column: usize, text: &str, look: Look, open: bool) -> Run {
+        Run {
+            line,
+            column,
+            text: text.to_owned(),
+            look,
+            open,
+        }
+    }
+
+    fn texts(runs: &[Run]) -> Vec<&str> {
+        runs.iter().map(|run| run.text.as_str()).collect()
+    }
+
+    #[test]
+    fn cells_drawn_alike_one_after_another_are_one_run() {
+        let mut runs = Vec::new();
+
+        run(0, 0, "ab", plain(), true).add_to(&mut runs);
+        run(0, 2, "c", plain(), true).add_to(&mut runs);
+
+        assert_eq!(texts(&runs), ["abc"]);
+    }
+
+    #[test]
+    fn cells_drawn_otherwise_are_runs_of_their_own() {
+        let bold = Look {
+            weight: FontWeight::BOLD,
+            ..plain()
+        };
+        let mut runs = Vec::new();
+
+        run(0, 0, "a", plain(), true).add_to(&mut runs);
+        run(0, 1, "b", bold, true).add_to(&mut runs);
+
+        assert_eq!(texts(&runs), ["a", "b"]);
+    }
+
+    #[test]
+    fn a_run_does_not_go_on_past_a_gap_nor_onto_the_next_line() {
+        let mut runs = Vec::new();
+
+        run(0, 0, "a", plain(), true).add_to(&mut runs);
+        run(0, 2, "b", plain(), true).add_to(&mut runs);
+        run(1, 3, "c", plain(), true).add_to(&mut runs);
+
+        assert_eq!(texts(&runs), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn nothing_joins_a_run_closed_as_after_a_wide_character() {
+        let mut runs = Vec::new();
+
+        run(0, 0, "字", plain(), false).add_to(&mut runs);
+        run(0, 1, "a", plain(), true).add_to(&mut runs);
+
+        assert_eq!(texts(&runs), ["字", "a"]);
+    }
+
+    fn metrics() -> Metrics {
+        Metrics {
+            font: font(CODE_FONT),
+            font_size: px(FONT_SIZE),
+            cell: size(px(8.), px(17.)),
+        }
+    }
+
+    #[test]
+    fn as_many_whole_cells_fit_as_the_room_inside_the_padding_holds() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(80.)));
+
+        assert_eq!(
+            metrics().fitting(bounds),
+            Size {
+                columns: 11,
+                lines: 4
+            }
+        );
+    }
+
+    #[test]
+    fn a_grid_too_small_for_any_cell_still_has_two_columns_and_a_line() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(4.), px(4.)));
+
+        assert_eq!(
+            metrics().fitting(bounds),
+            Size {
+                columns: 2,
+                lines: 1
+            }
+        );
+    }
+
+    #[test]
+    fn a_line_scrolled_back_onto_the_screen_is_where_the_offset_puts_it() {
+        assert_eq!(on_screen(Line(-3), 5), Some(2));
+    }
+
+    #[test]
+    fn a_line_scrolled_off_the_screen_is_on_none_of_it() {
+        assert_eq!(on_screen(Line(-3), 0), None);
+    }
+
+    fn red_on_blue(flags: Flags) -> Cell {
+        Cell {
+            fg: Color::Spec(Rgb {
+                r: 0xff,
+                g: 0,
+                b: 0,
+            }),
+            bg: Color::Spec(Rgb {
+                r: 0,
+                g: 0,
+                b: 0xff,
+            }),
+            flags,
+            ..Cell::default()
+        }
+    }
+
+    const RED: u32 = 0xff_0000;
+    const BLUE: u32 = 0x00_00ff;
+
+    #[test]
+    fn a_cell_is_drawn_in_the_colors_the_program_gave_it() {
+        let (background, look) = look_of(&red_on_blue(Flags::empty()), &Colors::default());
+
+        assert_eq!(background, Some(rgb(BLUE).into()));
+        assert_eq!(look.color, Hsla::from(rgb(RED)));
+    }
+
+    #[test]
+    fn an_inverse_cell_swaps_its_colors() {
+        let (background, look) = look_of(&red_on_blue(Flags::INVERSE), &Colors::default());
+
+        assert_eq!(background, Some(rgb(RED).into()));
+        assert_eq!(look.color, Hsla::from(rgb(BLUE)));
+    }
+
+    #[test]
+    fn a_hidden_cell_has_its_text_in_its_background() {
+        let (_, look) = look_of(&red_on_blue(Flags::HIDDEN), &Colors::default());
+
+        assert_eq!(look.color, Hsla::from(rgb(BLUE)));
+    }
+
+    #[test]
+    fn a_cell_on_the_terminals_own_background_draws_none() {
+        let (background, _) = look_of(&Cell::default(), &Colors::default());
+
+        assert_eq!(background, None);
+    }
+
+    #[test]
+    fn a_bold_italic_underlined_struck_cell_is_drawn_so() {
+        let flags = Flags::BOLD | Flags::ITALIC | Flags::UNDERLINE | Flags::STRIKEOUT;
+
+        let (_, look) = look_of(&red_on_blue(flags), &Colors::default());
+
+        assert_eq!(look.weight, FontWeight::BOLD);
+        assert_eq!(look.style, FontStyle::Italic);
+        assert!(look.underline && look.strikethrough);
+    }
+}

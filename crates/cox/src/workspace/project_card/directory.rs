@@ -125,7 +125,7 @@ pub fn clone(url: &str, into: &Path) -> Result<(), String> {
     if let Some(parent) = into.parent() {
         make(parent)?;
     }
-    git(Command::new("git")
+    git(crate::git::command()
         .arg("clone")
         .arg("--")
         .arg(url)
@@ -170,7 +170,7 @@ pub fn link(folder: &Path, url: &str) -> Result<Linked, String> {
 /// Runs Git with `args` in `folder`, answering what it printed, or why
 /// it failed.
 fn run(folder: &Path, args: &[&str]) -> Result<String, String> {
-    git(Command::new("git").arg("-C").arg(folder).args(args))
+    git(crate::git::command().arg("-C").arg(folder).args(args))
 }
 
 /// Runs `command` of Git, asking nothing, and answers what it printed,
@@ -233,18 +233,31 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn directories_are_made_cloned_made_repositories_and_linked() {
+    /// A repository with one commit on `main`, and the folder of a project
+    /// beside it, in a folder of the test's own.
+    fn remote_and_project() -> (TempDir, String, PathBuf) {
         let root = TempDir::new();
         let remote = root.join("origin");
         origin(&remote);
-        let url = remote.to_str().unwrap();
+        let url = remote.to_str().unwrap().to_owned();
         let project = root.join("project");
-        // What else is in the project's folder is not a directory of it.
+        (root, url, project)
+    }
+
+    /// A Git repository with nothing in it yet, made at `folder`.
+    fn empty_repository(folder: &Path) {
+        make(folder).unwrap();
+        init(folder).unwrap();
+    }
+
+    #[test]
+    fn the_directories_made_and_cloned_are_listed_with_their_remotes() {
+        let (_root, url, project) = remote_and_project();
         make(&project.join("notes")).unwrap();
 
-        clone(url, &folder_of(&project, "origin")).unwrap();
+        clone(&url, &folder_of(&project, "origin")).unwrap();
         make(&folder_of(&project, "app")).unwrap();
+
         assert_eq!(
             listed(&project),
             [
@@ -256,43 +269,93 @@ mod tests {
                 Directory {
                     name: "origin".to_owned(),
                     git: true,
-                    remote: Some(url.to_owned())
+                    remote: Some(url)
                 },
-            ]
+            ],
+            "the folders out of the project's directories are not listed"
         );
-        // One that is not there fails, saying why.
+    }
+
+    #[test]
+    fn a_clone_of_a_repository_that_is_not_there_fails_saying_why() {
+        let (root, _url, project) = remote_and_project();
+
         let failed = clone(
             root.join("nowhere").to_str().unwrap(),
             &folder_of(&project, "nowhere"),
         );
-        assert!(failed.is_err_and(|why| !why.is_empty()));
 
-        // A repository with nothing in it takes the remote's branch.
+        assert!(failed.is_err_and(|why| !why.is_empty()));
+    }
+
+    #[test]
+    fn a_repository_with_nothing_in_it_takes_the_remotes_branch_when_linked() {
+        let (_root, url, project) = remote_and_project();
         let app = folder_of(&project, "app");
-        init(&app).unwrap();
+        empty_repository(&app);
         assert_eq!(listed(&project)[0].remote, None);
-        assert_eq!(link(&app, url), Ok(Linked::CheckedOut("main".to_owned())));
-        assert_eq!(listed(&project)[0].remote.as_deref(), Some(url));
+
+        assert_eq!(link(&app, &url), Ok(Linked::CheckedOut("main".to_owned())));
+
+        assert_eq!(listed(&project)[0].remote.as_deref(), Some(url.as_str()));
         assert!(run_git(&app, &["rev-parse", "--verify", "HEAD"]).is_ok());
-        // One with commits of its own only gets the remote.
+    }
+
+    #[test]
+    fn a_repository_with_commits_of_its_own_only_gets_the_remote_when_linked() {
+        let (_root, url, project) = remote_and_project();
         let lib = folder_of(&project, "lib");
         origin(&lib);
-        assert_eq!(link(&lib, url), Ok(Linked::Added));
-        // And an empty remote leaves an empty repository as it is.
+
+        assert_eq!(link(&lib, &url), Ok(Linked::Added));
+
+        assert_eq!(listed(&project)[0].remote.as_deref(), Some(url.as_str()));
+    }
+
+    #[test]
+    fn a_repository_linked_to_an_empty_remote_is_left_empty() {
+        let (root, _url, project) = remote_and_project();
         let empty = root.join("empty");
-        make(&empty).unwrap();
-        init(&empty).unwrap();
+        empty_repository(&empty);
         let fresh = folder_of(&project, "fresh");
-        make(&fresh).unwrap();
-        init(&fresh).unwrap();
+        empty_repository(&fresh);
+
         assert_eq!(link(&fresh, empty.to_str().unwrap()), Ok(Linked::Added));
 
-        // A directory is renamed, but not over another, nor out of the
-        // project's directories.
-        assert!(rename(&project, "fresh", "lib").is_err());
-        assert!(rename(&project, "fresh", "../out").is_err());
+        assert!(run_git(&fresh, &["rev-parse", "--verify", "HEAD"]).is_err());
+    }
+
+    #[test]
+    fn a_directory_is_renamed_with_what_it_holds() {
+        let (_root, _url, project) = remote_and_project();
+        let fresh = folder_of(&project, "fresh");
+        empty_repository(&fresh);
+
         assert_eq!(rename(&project, "fresh", "fresher"), Ok(()));
+
         assert!(!fresh.exists());
         assert!(folder_of(&project, "fresher").join(".git").exists());
+    }
+
+    #[test]
+    fn a_directory_is_not_renamed_over_another() {
+        let (_root, _url, project) = remote_and_project();
+        empty_repository(&folder_of(&project, "fresh"));
+        empty_repository(&folder_of(&project, "lib"));
+
+        assert!(rename(&project, "fresh", "lib").is_err());
+
+        assert!(folder_of(&project, "fresh").exists());
+    }
+
+    #[test]
+    fn a_directory_is_not_renamed_out_of_the_projects_directories() {
+        let (_root, _url, project) = remote_and_project();
+        empty_repository(&folder_of(&project, "fresh"));
+
+        assert!(rename(&project, "fresh", "../out").is_err());
+
+        assert!(folder_of(&project, "fresh").exists());
+        assert!(!project.join("out").exists());
     }
 }

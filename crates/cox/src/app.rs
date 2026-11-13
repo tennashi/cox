@@ -591,17 +591,28 @@ mod tests {
         );
     }
 
+    /// The settings the app starts with when given only an agent's
+    /// command.
+    fn not_asked() -> Settings {
+        match parse(&["node", "agent.mjs"]) {
+            Mode::App(settings) => settings,
+            mode => panic!("the app is not started: {mode:?}"),
+        }
+    }
+
     #[test]
-    fn the_stage_shows_activity_and_home_and_data_are_the_defaults_unless_asked() {
-        assert_eq!(
-            parse(&["node", "agent.mjs"]),
-            Mode::App(Settings {
-                stage: "cox://activity/".to_owned(),
-                home: None,
-                data: None,
-                command: vec!["node".to_owned(), "agent.mjs".to_owned()],
-            })
-        );
+    fn the_stage_shows_activity_unless_asked() {
+        assert_eq!(not_asked().stage, "cox://activity/");
+    }
+
+    #[test]
+    fn the_home_is_the_default_unless_asked() {
+        assert_eq!(not_asked().home, None);
+    }
+
+    #[test]
+    fn the_data_folder_is_the_default_unless_asked() {
+        assert_eq!(not_asked().data, None);
     }
 
     #[test]

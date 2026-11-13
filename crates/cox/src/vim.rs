@@ -987,36 +987,72 @@ mod tests {
     }
 
     #[test]
-    fn v_and_shift_v_go_to_visual_mode_and_an_edit_or_escape_leaves_it() {
+    fn v_goes_to_visual_mode_selecting_characters() {
         let mut vim = Vim::default();
+
         press(&mut vim, Region::Chat, "v");
+
         assert_eq!(vim.mode(), Mode::Visual(Selects::Characters));
         assert_eq!(vim.mode().label(), "Visual");
+    }
+
+    #[test]
+    fn shift_v_goes_to_visual_mode_selecting_lines() {
+        let mut vim = Vim::default();
+
+        press(&mut vim, Region::Chat, "shift-v");
+
+        assert_eq!(vim.mode(), Mode::Visual(Selects::Lines));
+        assert_eq!(vim.mode().label(), "Visual Line");
+    }
+
+    #[test]
+    fn visual_mode_moves_as_normal_mode_does() {
+        let mut vim = Vim::default();
+        press(&mut vim, Region::Chat, "v");
+
         assert_eq!(
             press(&mut vim, Region::Chat, "w 2 e"),
             [
                 Outcome::Do(Command::Edit(Edit::Move(Across::WordForward)), None),
                 Outcome::Taken,
                 Outcome::Do(Command::Edit(Edit::Move(Across::WordEnd)), Some(2)),
-            ],
-            "it moves as normal mode does"
+            ]
         );
-        press(&mut vim, Region::Chat, "shift-v");
-        assert_eq!(vim.mode().label(), "Visual Line");
-        press(&mut vim, Region::Chat, "d");
-        assert_eq!(vim.mode(), Mode::Normal, "d takes out what is selected");
-        press(&mut vim, Region::Chat, "v c");
-        assert_eq!(vim.mode(), Mode::Insert, "c goes on to type");
+        assert_eq!(vim.mode(), Mode::Visual(Selects::Characters));
+    }
 
+    #[test]
+    fn d_in_visual_mode_takes_out_what_is_selected_and_goes_back_to_normal() {
         let mut vim = Vim::default();
+        press(&mut vim, Region::Chat, "v");
+
+        press(&mut vim, Region::Chat, "d");
+
+        assert_eq!(vim.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn c_in_visual_mode_goes_on_to_type() {
+        let mut vim = Vim::default();
+        press(&mut vim, Region::Chat, "v");
+
+        press(&mut vim, Region::Chat, "c");
+
+        assert_eq!(vim.mode(), Mode::Insert);
+    }
+
+    #[test]
+    fn i_types_nothing_in_visual_mode_and_escape_leaves_it() {
+        let mut vim = Vim::default();
+
         assert_eq!(
             press(&mut vim, Region::Code, "v i escape"),
             [
                 Outcome::Do(Command::Send(Sent::VisualCharacters), None),
                 Outcome::Taken,
                 Outcome::Do(Command::Normal, None),
-            ],
-            "i types nothing in visual mode"
+            ]
         );
         assert_eq!(vim.mode(), Mode::Normal);
     }

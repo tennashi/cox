@@ -56,6 +56,7 @@ pub mod app;
 pub mod busy;
 pub mod chat;
 pub mod daemon;
+mod git;
 pub mod inspect;
 pub mod login;
 pub mod logs;

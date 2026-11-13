@@ -124,7 +124,7 @@ pub fn today() -> String {
 /// one with a commit.
 #[must_use]
 pub fn commit_of(folder: &Path) -> Option<String> {
-    let output = std::process::Command::new("git")
+    let output = crate::git::command()
         .args(["rev-parse", "--short", "HEAD"])
         .current_dir(folder)
         .stderr(std::process::Stdio::null())

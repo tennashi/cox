@@ -63,20 +63,13 @@ impl Drop for TempDir {
 /// committing as a test.
 #[must_use]
 pub fn git(folder: &Path) -> Command {
-    let mut git = Command::new("git");
+    let mut git = crate::git::command();
     git.arg("-C")
         .arg(folder)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_OBJECT_DIRECTORY");
+        .env("GIT_COMMITTER_EMAIL", "test@example.com");
     git
 }
 

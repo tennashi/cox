@@ -166,11 +166,16 @@ impl Running {
 /// Without that, a shell takes each byte of a Japanese character for a
 /// character of its own.
 fn environment() -> HashMap<String, String> {
+    environment_past(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+}
+
+/// What [`environment`] adds to an environment in which `set` tells
+/// which variables are set.
+fn environment_past(set: impl Fn(&str) -> bool) -> HashMap<String, String> {
     let mut environment = HashMap::from([
         ("TERM".to_owned(), "xterm-256color".to_owned()),
         ("COLORTERM".to_owned(), "truecolor".to_owned()),
     ]);
-    let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
     if !set("LC_ALL") && !set("LC_CTYPE") && !set("LANG") {
         let utf8 = if cfg!(target_os = "macos") {
             "UTF-8"
@@ -210,4 +215,37 @@ fn open_pty(size: WindowSize) -> std::io::Result<(OwnedFd, OwnedFd)> {
     let (controller, user) =
         unsafe { (OwnedFd::from_raw_fd(controller), OwnedFd::from_raw_fd(user)) };
     Ok((controller, user))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_program_is_told_it_runs_in_a_terminal_of_true_colors() {
+        let environment = environment_past(|_| true);
+
+        assert_eq!(environment["TERM"], "xterm-256color");
+        assert_eq!(environment["COLORTERM"], "truecolor");
+    }
+
+    #[test]
+    fn a_program_is_told_characters_are_utf_8_when_nothing_says_what_they_are() {
+        let environment = environment_past(|_| false);
+
+        assert!(
+            environment["LC_CTYPE"].ends_with("UTF-8"),
+            "{:?}",
+            environment.get("LC_CTYPE")
+        );
+    }
+
+    #[test]
+    fn a_program_keeps_the_locale_cox_was_given() {
+        for given in ["LC_ALL", "LC_CTYPE", "LANG"] {
+            let environment = environment_past(|name| name == given);
+
+            assert!(!environment.contains_key("LC_CTYPE"), "with {given} set");
+        }
+    }
 }

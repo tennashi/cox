@@ -2387,8 +2387,10 @@ mod tests {
         assert_eq!(names(tools(None)), expected);
     }
 
-    #[test]
-    fn shows_the_map_and_tells_what_is_there() {
+    /// A project with one map, `map`, of two tiers: the whole, and the
+    /// app, which holds a box of a file that is there and one of a file
+    /// that is gone.
+    fn project_with_a_map() -> TempDir {
         let cwd = TempDir::new();
         fs::create_dir_all(cwd.join(map::MAPS_FOLDER)).unwrap();
         fs::create_dir_all(cwd.join("src")).unwrap();
@@ -2410,9 +2412,29 @@ mod tests {
             }"#,
         )
         .unwrap();
+        cwd
+    }
+
+    /// [`project_with_a_map`] with a second map, `runtime`.
+    fn project_with_two_maps() -> TempDir {
+        let cwd = project_with_a_map();
+        fs::write(
+            cwd.join(map::MAPS_FOLDER).join("runtime.json"),
+            r#"{ "says": "Where it runs.",
+                 "tiers": [{ "id": "hosts", "name": "Hosts", "rows": [{ "parts": ["box"] }] }],
+                 "parts": { "box": { "name": "A box" } } }"#,
+        )
+        .unwrap();
+        cwd
+    }
+
+    #[test]
+    fn shows_the_map_at_its_top_tier_and_tells_what_is_there() {
+        let cwd = project_with_a_map();
         let (sent, mut requests) = unbounded_channel();
 
         let shown = call_now(SHOW_MAP, &json!({}), &cwd, &sent);
+
         assert_eq!(shown["isError"], false, "{shown}");
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert_eq!(
@@ -2428,8 +2450,15 @@ mod tests {
             }
             _ => panic!("the stage was not asked to show the map"),
         }
+    }
+
+    #[test]
+    fn shows_the_map_at_a_box_and_tells_it_is_stale() {
+        let cwd = project_with_a_map();
+        let (sent, mut requests) = unbounded_channel();
 
         let shown = call_now(SHOW_MAP, &json!({ "at": ["app", "gone"] }), &cwd, &sent);
+
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert_eq!(
             told,
@@ -2444,26 +2473,41 @@ mod tests {
             }
             _ => panic!("the stage was not asked to show the map"),
         }
+    }
+
+    #[test]
+    fn a_tier_the_map_has_not_is_an_error_naming_those_it_has() {
+        let cwd = project_with_a_map();
+        let (sent, mut requests) = unbounded_channel();
 
         let shown = call_now(SHOW_MAP, &json!({ "at": ["nowhere"] }), &cwd, &sent);
+
         assert_eq!(shown["isError"], true);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert_eq!(told, "the map has no tier `nowhere`; it has: whole, app");
+        assert!(requests.try_recv().is_err(), "the stage is asked nothing");
+    }
+
+    #[test]
+    fn a_box_the_tier_has_not_is_an_error_naming_those_it_has() {
+        let cwd = project_with_a_map();
+        let (sent, mut requests) = unbounded_channel();
+
         let shown = call_now(SHOW_MAP, &json!({ "at": ["app", "nope"] }), &cwd, &sent);
+
+        assert_eq!(shown["isError"], true);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert_eq!(told, "the tier `app` has no box `nope`; it has: main, gone");
-        assert!(requests.try_recv().is_err());
+        assert!(requests.try_recv().is_err(), "the stage is asked nothing");
+    }
 
-        // With another map, each names the other, and is shown by its
-        // name.
-        fs::write(
-            cwd.join(map::MAPS_FOLDER).join("runtime.json"),
-            r#"{ "says": "Where it runs.",
-                 "tiers": [{ "id": "hosts", "name": "Hosts", "rows": [{ "parts": ["box"] }] }],
-                 "parts": { "box": { "name": "A box" } } }"#,
-        )
-        .unwrap();
+    #[test]
+    fn a_map_is_shown_by_its_name_and_names_the_projects_other_maps() {
+        let cwd = project_with_two_maps();
+        let (sent, mut requests) = unbounded_channel();
+
         let shown = call_now(SHOW_MAP, &json!({ "map": "runtime" }), &cwd, &sent);
+
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert_eq!(
             told,
@@ -2478,14 +2522,31 @@ mod tests {
             }
             _ => panic!("the stage was not asked to show the map"),
         }
+    }
+
+    #[test]
+    fn of_two_maps_the_first_is_shown_unless_named_and_says_what_the_other_is() {
+        let cwd = project_with_two_maps();
+        let (sent, _requests) = unbounded_channel();
+
         let shown = call_now(SHOW_MAP, &json!({}), &cwd, &sent);
+
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert!(told.starts_with("The map `map` of the project"), "{told}");
         assert!(told.ends_with("\n`runtime`: Where it runs."), "{told}");
+    }
+
+    #[test]
+    fn a_map_the_project_has_not_is_an_error_naming_those_it_has() {
+        let cwd = project_with_two_maps();
+        let (sent, mut requests) = unbounded_channel();
+
         let shown = call_now(SHOW_MAP, &json!({ "map": "gone" }), &cwd, &sent);
+
         assert_eq!(shown["isError"], true);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert_eq!(told, "the project has no map `gone`; it has: map, runtime");
+        assert!(requests.try_recv().is_err(), "the stage is asked nothing");
     }
 
     #[test]
@@ -2669,6 +2730,7 @@ mod tests {
         let (sent, mut requests) = unbounded_channel();
 
         let shown = call_now(SHOW_CHANGES, &json!({ "folder": "sketch" }), &cwd, &sent);
+
         assert_eq!(shown["isError"], false);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert!(told.contains("since nothing"), "{told}");
@@ -2680,24 +2742,33 @@ mod tests {
             Ok(ToolRequest::ShowChanges { folder }) => assert_eq!(folder, sketch),
             _ => panic!("the stage was not asked to show what changed"),
         }
+    }
 
-        // A folder out of any repository has no changes to show.
-        let outside = TempDir::new();
-        if run_git(&outside, &["rev-parse", "--git-dir"]).is_err() {
-            let shown = call_now(SHOW_CHANGES, &json!({}), &outside, &sent);
-            assert_eq!(shown["isError"], true);
-            assert!(requests.try_recv().is_err());
-        }
+    #[test]
+    fn a_folder_out_of_any_repository_has_no_changes_to_show() {
+        let (sent, mut requests) = unbounded_channel();
 
-        // A project's folder shows what changed in its directories that
-        // are repositories.
+        let shown = call_now(SHOW_CHANGES, &json!({}), Path::new("/"), &sent);
+
+        assert_eq!(shown["isError"], true);
+        assert!(
+            requests.try_recv().is_err(),
+            "the stage is asked to show nothing"
+        );
+    }
+
+    #[test]
+    fn a_projects_folder_shows_what_changed_in_its_directories_that_are_repositories() {
         let project = TempDir::new();
         let app = project.join("directories").join("app");
         fs::create_dir_all(&app).unwrap();
         fs::create_dir_all(project.join("directories").join("notes")).unwrap();
         run_git(&app, &["init", "--quiet"]).unwrap();
         fs::write(app.join("main.rs"), "fn main() {}\n").unwrap();
+        let (sent, mut requests) = unbounded_channel();
+
         let shown = call_now(SHOW_CHANGES, &json!({}), &project, &sent);
+
         assert_eq!(shown["isError"], false);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert!(

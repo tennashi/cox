@@ -159,29 +159,64 @@ fn put_in(trash: &Path, path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use super::put_in;
     use crate::testing::TempDir;
 
+    /// A folder `my shop` with a folder in it, made in `root`.
+    fn shop(root: &Path) -> PathBuf {
+        let folder = root.join("my shop");
+        std::fs::create_dir_all(folder.join("directories")).unwrap();
+        folder
+    }
+
     #[test]
-    fn a_folder_goes_to_the_trash_saying_where_it_was() {
+    fn a_folder_put_in_the_trash_is_moved_there_whole() {
         let root = TempDir::new();
         let trash = root.join("Trash");
-        for _ in 0..2 {
-            let folder = root.join("my shop");
-            std::fs::create_dir_all(folder.join("directories")).unwrap();
-            put_in(&trash, &folder).unwrap();
-            assert!(!folder.exists());
-        }
+        let folder = shop(&root);
+
+        put_in(&trash, &folder).unwrap();
+
+        assert!(!folder.exists());
+        assert!(trash.join("files/my shop/directories").is_dir());
+    }
+
+    #[test]
+    fn a_folder_of_a_name_the_trash_has_already_is_numbered() {
+        let root = TempDir::new();
+        let trash = root.join("Trash");
+        put_in(&trash, &shop(&root)).unwrap();
+
+        put_in(&trash, &shop(&root)).unwrap();
+
         assert!(trash.join("files/my shop/directories").is_dir());
         assert!(trash.join("files/my shop 2/directories").is_dir());
-        let info = std::fs::read_to_string(trash.join("info/my shop 2.trashinfo")).unwrap();
+    }
+
+    #[test]
+    fn a_folder_in_the_trash_says_where_it_was() {
+        let root = TempDir::new();
+        let trash = root.join("Trash");
+
+        put_in(&trash, &shop(&root)).unwrap();
+
+        let info = std::fs::read_to_string(trash.join("info/my shop.trashinfo")).unwrap();
         let path = format!("Path={}/my%20shop\n", root.display());
         assert!(
             info.starts_with("[Trash Info]\n") && info.contains(&path),
             "{info}"
         );
-        // One that is not there is not put there.
+    }
+
+    #[test]
+    fn a_folder_that_is_not_there_is_not_put_in_the_trash() {
+        let root = TempDir::new();
+        let trash = root.join("Trash");
+
         assert!(put_in(&trash, &root.join("gone")).is_err());
+
         assert!(!trash.join("info/gone.trashinfo").exists());
     }
 }

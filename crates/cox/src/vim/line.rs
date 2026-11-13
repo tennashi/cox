@@ -488,3 +488,72 @@ impl Render for Line {
             )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use gpui::{TestAppContext, VisualTestContext};
+
+    use super::*;
+
+    /// A line in a window of its own.
+    fn line(cx: &mut TestAppContext) -> (Entity<Line>, &mut VisualTestContext) {
+        cx.add_window_view(Line::new)
+    }
+
+    /// Opens the line for `prompt`, types `text` and runs it.
+    fn run(line: &Entity<Line>, prompt: Prompt, text: &str, cx: &mut VisualTestContext) {
+        line.update_in(cx, |line, window, cx| {
+            line.open(prompt, Names::default(), window, cx);
+            line.input.update(cx, |input, cx| input.set_text(text, cx));
+        });
+        line.update_in(cx, |line, window, cx| line.accept(&Accept, window, cx));
+    }
+
+    /// Opens the line for `prompt`, and puts in it the line typed
+    /// before, `times` over, as Up does.
+    fn up(line: &Entity<Line>, prompt: Prompt, times: usize, cx: &mut VisualTestContext) -> String {
+        line.update_in(cx, |line, window, cx| {
+            line.open(prompt, Names::default(), window, cx);
+        });
+        for _ in 0..times {
+            line.update_in(cx, |line, window, cx| line.older(&Older, window, cx));
+        }
+        line.read_with(cx, |line, cx| line.text(cx).to_owned())
+    }
+
+    #[gpui::test]
+    fn a_line_run_again_is_kept_once_as_the_latest(cx: &mut TestAppContext) {
+        let (line, cx) = line(cx);
+        for typed in ["one", "two", "one"] {
+            run(&line, Prompt::Ex, typed, cx);
+        }
+
+        let older: Vec<String> = (1..=3)
+            .map(|times| up(&line, Prompt::Ex, times, cx))
+            .collect();
+
+        assert_eq!(older, ["one", "two", "two"]);
+    }
+
+    #[gpui::test]
+    fn what_was_searched_for_is_kept_apart_from_the_commands_run(cx: &mut TestAppContext) {
+        let (line, cx) = line(cx);
+        run(&line, Prompt::Ex, "command", cx);
+        run(&line, Prompt::Search(Direction::Forward), "found", cx);
+
+        assert_eq!(up(&line, Prompt::Ex, 1, cx), "command");
+        assert_eq!(
+            up(&line, Prompt::Search(Direction::Backward), 1, cx),
+            "found"
+        );
+    }
+
+    #[gpui::test]
+    fn an_empty_line_run_is_not_kept(cx: &mut TestAppContext) {
+        let (line, cx) = line(cx);
+        run(&line, Prompt::Ex, "command", cx);
+        run(&line, Prompt::Ex, "  ", cx);
+
+        assert_eq!(up(&line, Prompt::Ex, 1, cx), "command");
+    }
+}

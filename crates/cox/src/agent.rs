@@ -290,6 +290,17 @@ pub struct AgentThread {
     thread: Option<JoinHandle<()>>,
 }
 
+#[cfg(test)]
+impl AgentThread {
+    /// No thread, for an agent a test plays.
+    pub(crate) fn none() -> Self {
+        Self {
+            stop: None,
+            thread: None,
+        }
+    }
+}
+
 impl Drop for AgentThread {
     fn drop(&mut self) {
         drop(self.stop.take());
