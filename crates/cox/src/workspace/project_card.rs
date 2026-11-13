@@ -398,7 +398,6 @@ impl ProjectCard {
             }
         });
         window.focus(&input.focus_handle(cx));
-        crate::vim::typing(crate::vim::Region::ProjectCard, window, cx);
         self.editing = Some(Editing {
             name,
             gives,

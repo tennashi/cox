@@ -310,6 +310,12 @@ impl Region {
         }
     }
 
+    /// Whether the region is a screen of inputs, each to type in as the
+    /// keyboard comes to it, though the screen comes in normal mode.
+    const fn has_fields(self) -> bool {
+        matches!(self, Self::Settings | Self::ProjectCard)
+    }
+
     /// Whether the region is typed in whatever the mode, as a field of a
     /// page is: the page's address line, which Esc leaves.
     const fn has_no_mode(self) -> bool {
@@ -619,6 +625,25 @@ pub fn typing(region: Region, window: &mut Window, cx: &mut App) {
     if cx.has_global::<Vim>() && cx.global::<Vim>().mode != Mode::Insert {
         enter(Mode::Insert, cx);
         window.refresh();
+    }
+}
+
+/// The keyboard came to an input. A screen of settings, or a card, comes
+/// in normal mode, though the keyboard is in its input as it opens; an
+/// input the human goes to in it is to type in, so the keys go to insert
+/// mode, as a browser's Vim keys do in a page's field.
+pub fn came_to_field(window: &mut Window, cx: &mut App) {
+    let region = Region::of(&window.context_stack());
+    if !region.has_fields() {
+        return;
+    }
+    if cx
+        .try_global::<Vim>()
+        .is_some_and(|vim| vim.region == region)
+    {
+        typing(region, window, cx);
+    } else {
+        came(region, window, cx);
     }
 }
 

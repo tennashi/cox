@@ -2480,8 +2480,8 @@ fn control_w_stops_at_the_tree_of_files_as_at_a_window(cx: &mut TestAppContext) 
     assert!(in_part(cx, tree), "round, on to the tree");
 }
 
-/// A row's input the card opens, for a remote or a name, is to type in,
-/// so it opens in insert mode and Enter gives what was typed.
+/// The project card comes in normal mode, but an input opened on it, for
+/// a row's remote, types at once, and Enter gives what was typed.
 #[gpui::test]
 fn the_project_card_s_row_input_types_at_once_and_enter_links(cx: &mut TestAppContext) {
     let (workspace, cx) = open_window(cx, "card-link");
@@ -2527,7 +2527,11 @@ fn the_project_card_s_row_input_types_at_once_and_enter_links(cx: &mut TestAppCo
     let card = workspace.read_with(cx, |workspace, _| {
         workspace.project_card().expect("the card is open").clone()
     });
-    assert_eq!(shown_mode(cx), Some("Normal"));
+    assert_eq!(
+        shown_mode(cx),
+        Some("Normal"),
+        "the card comes in normal mode"
+    );
 
     let center = cx
         .debug_bounds("project-directory-action-0")
@@ -2545,4 +2549,28 @@ fn the_project_card_s_row_input_types_at_once_and_enter_links(cx: &mut TestAppCo
         "{said:?}"
     );
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// The settings come in normal mode, but an input of them clicked types,
+/// and Escape leaves it for normal mode before it closes them.
+#[gpui::test]
+fn an_input_of_the_settings_types_as_it_gets_the_keyboard(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "settings-input");
+    keys::press(cx, &workspace, "escape");
+    keys::press(cx, &workspace, "secondary-,");
+    assert_eq!(shown_mode(cx), Some("Normal"));
+
+    let at = cx
+        .debug_bounds("home-input")
+        .expect("the home's input is drawn")
+        .center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    settled(cx, &workspace);
+    assert_eq!(shown_mode(cx), Some("Insert"), "the input types");
+
+    keys::press(cx, &workspace, "escape");
+    assert_eq!(shown_mode(cx), Some("Normal"));
+    assert!(workspace.read_with(cx, |workspace, _| workspace.settings().is_some()));
+    keys::press(cx, &workspace, "escape");
+    assert!(workspace.read_with(cx, |workspace, _| workspace.settings().is_none()));
 }

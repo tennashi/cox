@@ -109,6 +109,7 @@ The keyboard comes into a region in its own mode:
 | The inputs of a goal, a sketch, a rename | Insert mode. |
 | A page's address line | Typed in always, as a field of the page is: it has no normal mode, and Esc puts the page's address back and gives the keyboard back to the page. |
 | The rail, the list of chats, the settings, a project's card, code, a document, the tree, changes | Normal mode. |
+| An input of the settings or of a project's card, gone to by a click, a hint, or a button that opens it, such as a directory's Link… | Insert mode, as a web page's field. |
 | A web page | Insert mode while a field of it has the keyboard, else normal mode. |
 | A terminal, an Android device | Normal mode, as Neovim's terminal: `i` or a click goes to insert mode, where every key goes to the program. A terminal just opened from the stage's + is in insert mode. Back from the line at the window's foot, the mode the line left. |
 
