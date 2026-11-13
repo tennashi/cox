@@ -2,6 +2,7 @@
 
 mod flaky;
 mod identity;
+mod lint_tests;
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -29,6 +30,9 @@ Tasks:
             macOS: make the certificate Cox is signed with, put it in the
             login keychain, and write it into <folder>, a new folder, to
             keep; or put one kept in <folder> in the login keychain
+    lint-tests
+            Check that no test sleeps or uses the shared temporary folder
+            without a comment saying why
     install
             Build Cox for release and install it apart from target/:
             ~/Applications/Cox.app on macOS, ~/.local/bin/cox on Linux,
@@ -50,6 +54,7 @@ fn main() -> anyhow::Result<()> {
         Some("ci") => ci(&sh),
         Some("flaky") => flaky::run(&env::args().skip(2).collect::<Vec<_>>()),
         Some("identity") => identity::run(&sh, &env::args().skip(2).collect::<Vec<_>>()),
+        Some("lint-tests") => lint_tests::run(&workspace_root()),
         Some("install") => install(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("run") => run(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("setup") => setup(&sh),
@@ -72,11 +77,19 @@ fn ci(sh: &Shell) -> anyhow::Result<()> {
         "cargo clippy --workspace --all-targets -- --deny warnings"
     )
     .run()?;
+    lint_tests::run(&workspace_root())?;
     cmd!(sh, "cargo test --workspace").run()?;
     cmd!(sh, "cargo deny check")
         .run()
         .context("cargo-deny failed; if it is not installed, run `cargo xtask setup`")?;
     Ok(())
+}
+
+/// The workspace's folder, which holds xtask's.
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 /// Installs each tool in `TOOLS`. Cargo skips a tool whose pinned version is

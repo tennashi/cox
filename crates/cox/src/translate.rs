@@ -910,6 +910,7 @@ mod tests {
             if page.done == page.of || page.error.is_some() || Instant::now() > until {
                 return page;
             }
+            // allow-sleep: polls the page until it is done or the deadline
             thread::sleep(Duration::from_millis(20));
         }
     }

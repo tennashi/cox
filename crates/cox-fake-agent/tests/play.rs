@@ -408,6 +408,7 @@ fn logging_in_in_a_terminal_logs_in_the_agent_of_the_scenario() {
 
     let path = agent.scenario();
     let _login = Removed(
+        // allow-temp-dir: where the fake agent keeps a login; the guard removes it
         std::env::temp_dir()
             .join("cox-fake-agent-logins")
             .join(path.to_string_lossy().replace('/', "%")),

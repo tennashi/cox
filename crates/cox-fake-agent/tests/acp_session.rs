@@ -829,6 +829,7 @@ impl Drop for Removed {
 async fn logging_in_in_a_terminal_runs_the_agents_command_with_the_ways_arguments() {
     let played = Played::new(&json!({ "authMethods": ways_to_log_in(), "turns": [] }));
     let _login = Removed(
+        // allow-temp-dir: where the fake agent keeps a login; the guard removes it
         std::env::temp_dir()
             .join("cox-fake-agent-logins")
             .join(played.scenario().to_string_lossy().replace('/', "%")),

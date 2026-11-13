@@ -1470,6 +1470,7 @@ fn kept_chat(
     // Named by the whole folder, under the scratch folder of its test, as
     // tests running at once keep projects of the same name.
     let name = folder
+        // allow-temp-dir: only read, to name the folder below it
         .strip_prefix(std::env::temp_dir())
         .unwrap_or(folder)
         .to_string_lossy()
