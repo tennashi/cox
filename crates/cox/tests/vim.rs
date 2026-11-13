@@ -2645,3 +2645,62 @@ fn normal_mode_edits_the_chat_s_input_as_vim_edits_a_line(cx: &mut TestAppContex
     keys::press(cx, &workspace, "$ f escape x");
     assert_eq!(typed(cx), "say hello theresay");
 }
+
+/// `/` finds text in the conversation, out of sight too: the entry is
+/// scrolled to and the match selected; `n` goes on to the next, round
+/// from the end to the start.
+#[gpui::test]
+fn slash_finds_in_the_conversation_and_n_goes_on(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "chat-search");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    // Pasted, as typing a long line lays the input out again each key.
+    let send = |cx: &mut VisualTestContext, line: &str| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(line.to_owned()));
+        keys::press(cx, &workspace, "secondary-v enter");
+        for _ in 0..500 {
+            if agent_state(cx, &view) == State::Idle {
+                break;
+            }
+            go_on(cx, &workspace);
+        }
+    };
+    send(cx, "the first needle");
+    let filler = "filler ".repeat(400);
+    for _ in 0..6 {
+        send(cx, &filler);
+    }
+    send(cx, "a second needle");
+    keys::press(cx, &workspace, "escape");
+    let down = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            -view.scroll().scroll_px_offset_for_scrollbar().y
+        })
+    };
+    let end = down(cx);
+    assert!(end > px(1000.), "the first needle is far out of sight");
+    let selected = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.selected_text());
+
+    keys::press(cx, &workspace, "/ n e e d l e enter");
+    assert_eq!(selected(cx), "needle");
+    let second = down(cx);
+    assert!(second > end - px(1000.), "the second needle, near the end");
+
+    // Each needle has the agent's echo of it after it.
+    keys::press(cx, &workspace, "n");
+    assert!(down(cx) > end - px(1000.), "the echo of the second");
+    keys::press(cx, &workspace, "n");
+    assert_eq!(selected(cx), "needle");
+    let first = down(cx);
+    assert!(
+        first < px(1000.),
+        "round to the first, near the start: {first:?}"
+    );
+
+    keys::press(cx, &workspace, "shift-n");
+    assert!(
+        down(cx) > end - px(1000.),
+        "N goes back round to the second"
+    );
+    assert_eq!(keys::shown_input(cx, &workspace), "", "nothing was typed");
+}
