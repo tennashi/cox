@@ -101,6 +101,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-x", Cut, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-v", Paste, Some(KEY_CONTEXT)),
+        // As in Vim's insert mode and a shell's line.
+        KeyBinding::new("ctrl-w", DeleteWordBackward, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-u", DeleteToHome, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-z", Undo, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-shift-z", Redo, Some(KEY_CONTEXT)),
         KeyBinding::new("enter", Submit, Some(KEY_CONTEXT)),

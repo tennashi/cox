@@ -2574,3 +2574,27 @@ fn an_input_of_the_settings_types_as_it_gets_the_keyboard(cx: &mut TestAppContex
     keys::press(cx, &workspace, "escape");
     assert!(workspace.read_with(cx, |workspace, _| workspace.settings().is_none()));
 }
+
+/// In insert mode Control-W takes out the word before the cursor and
+/// Control-U the line before it, as in Vim and a shell; in normal mode
+/// they are still the window's and the scroll's.
+#[gpui::test]
+fn control_w_and_control_u_take_out_what_is_typed_in_insert_mode(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "insert-ctrl");
+    keys::press(cx, &workspace, "secondary-n");
+    assert_eq!(shown_mode(cx), Some("Insert"));
+    cx.simulate_input("say hello world");
+    keys::press(cx, &workspace, "ctrl-w");
+    assert_eq!(keys::shown_input(cx, &workspace), "say hello ");
+    keys::press(cx, &workspace, "ctrl-u");
+    assert_eq!(keys::shown_input(cx, &workspace), "");
+    assert_eq!(shown_mode(cx), Some("Insert"));
+
+    cx.simulate_input("again");
+    keys::press(cx, &workspace, "escape ctrl-w");
+    assert!(
+        !held(cx).is_empty(),
+        "normal mode's Control-W waits for its window key"
+    );
+    assert_eq!(keys::shown_input(cx, &workspace), "again");
+}
