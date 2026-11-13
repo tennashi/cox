@@ -10,7 +10,10 @@
 //! An Android SDK whose `emulator/emulator` is this program, named by
 //! `ANDROID_HOME`, is one Cox finds as any other. `cox-fake-emulator
 //! --make-avd` writes the device it plays, `Fake_Phone`, in the AVDs'
-//! folder that `ANDROID_AVD_HOME` names, for Cox to list.
+//! folder that `ANDROID_AVD_HOME` names, for Cox to list. With
+//! `--still`, its clock stays at midnight and what Back, Home and
+//! Overview say stays up, so that its screen changes only as it is
+//! touched, for tests to see the same screen each time.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -64,6 +67,7 @@ fn main() -> std::process::ExitCode {
             .and_then(|at| args.get(at + 1))
     };
     let device = value("-avd").map_or(DEVICE, String::as_str).to_owned();
+    let still = args.iter().any(|arg| arg == "--still");
     let port = match value("-grpc").map(|port| port.parse::<u16>()) {
         Some(Ok(port)) => port,
         None => 8554,
@@ -76,7 +80,7 @@ fn main() -> std::process::ExitCode {
         .enable_all()
         .build()
         .expect("a runtime");
-    match runtime.block_on(serve(device, port)) {
+    match runtime.block_on(serve(device, port, still)) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("cox-fake-emulator: {error:#}");
@@ -109,7 +113,7 @@ fn make_avd() -> std::process::ExitCode {
     }
 }
 
-async fn serve(device: String, port: u16) -> anyhow::Result<()> {
+async fn serve(device: String, port: u16, still: bool) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let _written = running::write(
         &running::folders()[0],
@@ -123,12 +127,14 @@ async fn serve(device: String, port: u16) -> anyhow::Result<()> {
     println!("INFO    | {device} serves gRPC on 127.0.0.1:{port}");
     let (changed, _) = watch::channel(0_u64);
     let fake = Fake {
-        screen: Arc::new(Mutex::new(Screen::new())),
+        screen: Arc::new(Mutex::new(Screen::new(still))),
         changed: changed.clone(),
         shut: Arc::new(Notify::new()),
     };
     let shut = fake.shut.clone();
-    tokio::spawn(tick(changed));
+    if !still {
+        tokio::spawn(tick(changed));
+    }
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let serving = tokio::spawn(
@@ -340,10 +346,12 @@ struct Screen {
     /// past [`SLOP`] since.
     down: Option<(i32, i32, i32, bool)>,
     toast: Option<(&'static str, Instant)>,
+    /// Whether its clock stays at midnight, and toasts stay up.
+    still: bool,
 }
 
 impl Screen {
-    fn new() -> Self {
+    fn new(still: bool) -> Self {
         Self {
             rows: (1..=40).map(|row| format!("Row {row}")).collect(),
             scroll: 0,
@@ -352,6 +360,7 @@ impl Screen {
             finger: None,
             down: None,
             toast: None,
+            still,
         }
     }
 
@@ -463,7 +472,12 @@ impl Screen {
             canvas.text(32, top + 32, row, 4, INK);
         }
         canvas.rect(0, 0, WIDTH_I, STATUS_BAR, DARK);
-        canvas.text(20, 14, &clock(), 2, WHITE);
+        let clock = if self.still {
+            "00:00:00".to_owned()
+        } else {
+            clock()
+        };
+        canvas.text(20, 14, &clock, 2, WHITE);
         canvas.text(WIDTH_I - 20 - 8 * 2 * 8, 14, "cox fake", 2, FAINT);
         canvas.rect(0, STATUS_BAR, WIDTH_I, APP_BAR - STATUS_BAR, TEAL);
         canvas.text(24, STATUS_BAR + 24, DEVICE, 4, WHITE);
@@ -484,7 +498,7 @@ impl Screen {
         canvas.circle(third + third / 2, middle, 12, WHITE);
         canvas.rect(2 * third + third / 2 - 11, middle - 11, 22, 22, WHITE);
         if let Some((said, since)) = self.toast {
-            if since.elapsed() < TOAST {
+            if self.still || since.elapsed() < TOAST {
                 let width = i32::try_from(said.len()).unwrap_or(0) * 8 * 3 + 48;
                 let left = (WIDTH_I - width) / 2;
                 canvas.rect(left, NAV_BAR - 110, width, 56, DARK);
