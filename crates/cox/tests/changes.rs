@@ -1,9 +1,12 @@
 //! A human reading what changed in the project's files, to open a file
 //! where it changed.
 
+mod git;
+#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
+mod scratch;
+
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -11,38 +14,19 @@ use cox::stage::changes::{Changes, Chosen, Pick, Repository, ShowTurn};
 use cox::stage::tab::Shows as _;
 use cox_editor::changes::{Diff, Since};
 use cox_editor::commits::{self, Turn};
+use git::git;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
 /// A folder of its own for a test, made a Git repository with a commit of
 /// `a.txt`, saying `text`.
 fn repository(name: &str, text: &str) -> PathBuf {
-    let folder = std::env::temp_dir().join(format!("cox-changes-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&folder);
-    std::fs::create_dir_all(&folder).unwrap();
-    let folder = folder.canonicalize().unwrap();
+    let folder = scratch::made(&format!("changes-{name}"))
+        .canonicalize()
+        .unwrap();
     std::fs::write(folder.join("a.txt"), text).unwrap();
-    for args in [
-        &["init", "--quiet"][..],
-        &["add", "a.txt"],
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--quiet",
-            "-m",
-            "A",
-        ],
-    ] {
-        let ran = Command::new("git")
-            .arg("-C")
-            .arg(&folder)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(ran.status.success(), "{ran:?}");
-    }
+    git(&folder, &["init", "--quiet"]);
+    git(&folder, &["add", "a.txt"]);
+    git(&folder, &["commit", "--quiet", "-m", "A"]);
     folder
 }
 
@@ -139,7 +123,6 @@ fn shows_the_lines_that_changed_and_opens_a_file_there(cx: &mut TestAppContext) 
             (folder.join("a.txt"), Some(2)),
         ]
     );
-    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[gpui::test]
@@ -157,13 +140,11 @@ fn follows_what_changes_as_the_agent_works(cx: &mut TestAppContext) {
     cx.executor().advance_clock(Duration::from_secs(3));
     cx.run_until_parked();
     assert_eq!(shown(&changes, cx), [("a.txt".to_owned(), 1, 0)]);
-    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[gpui::test]
 fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut TestAppContext) {
-    let project = std::env::temp_dir().join(format!("cox-changes-project-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&project);
+    let project = scratch::folder("changes-project");
     let directories = project.join("directories");
     std::fs::create_dir_all(directories.join("notes")).unwrap();
     let project = project.canonicalize().unwrap();
@@ -221,61 +202,21 @@ fn shows_what_changed_in_each_repository_among_a_projects_directories(cx: &mut T
             .shown()
             .is_some_and(|shown| shown.name.as_deref() == Some("lib"))
     }));
-    std::fs::remove_dir_all(project).unwrap();
 }
 
 /// Commits all that changed in `folder`, as `message` says, and answers
 /// the commit's full name.
 fn commit(folder: &Path, message: &str) -> String {
-    for args in [
-        &["add", "--all"][..],
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--quiet",
-            "-m",
-            message,
-        ],
-    ] {
-        let ran = Command::new("git")
-            .arg("-C")
-            .arg(folder)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(ran.status.success(), "{ran:?}");
-    }
+    git(folder, &["add", "--all"]);
+    git(folder, &["commit", "--quiet", "-m", message]);
     commits::head(folder).unwrap()
 }
 
 /// Amends the last commit of the repository at `folder` with all its
 /// files, saying `message`, and gives the commit it is now.
 fn amend(folder: &Path, message: &str) -> String {
-    for args in [
-        &["add", "--all"][..],
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--quiet",
-            "--amend",
-            "-m",
-            message,
-        ],
-    ] {
-        let ran = Command::new("git")
-            .arg("-C")
-            .arg(folder)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(ran.status.success(), "{ran:?}");
-    }
+    git(folder, &["add", "--all"]);
+    git(folder, &["commit", "--quiet", "--amend", "-m", message]);
     commits::head(folder).unwrap()
 }
 
@@ -360,16 +301,13 @@ fn lists_the_commits_and_shows_what_one_changed_and_the_turn_it_was_made_in(
         shown_now(&changes, cx),
         [("a.txt".to_owned(), 2, 0), ("b.txt".to_owned(), 1, 0)]
     );
-    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[test]
 fn a_folder_with_no_repository_counts_none() {
-    let folder = std::env::temp_dir().join(format!("cox-changes-none-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&folder);
+    let folder = scratch::folder("changes-none");
     std::fs::create_dir_all(folder.join("directories/notes")).unwrap();
     assert!(cox::stage::changes::count(&folder).is_err());
-    std::fs::remove_dir_all(folder).unwrap();
 }
 
 #[gpui::test]
@@ -448,5 +386,4 @@ fn an_amended_commit_shows_what_it_was_and_what_amending_it_changed(cx: &mut Tes
         changes.read_with(cx, |changes, _| changes.shown_pick()),
         Pick::Commit(now)
     );
-    std::fs::remove_dir_all(folder).unwrap();
 }

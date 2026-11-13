@@ -483,7 +483,9 @@ impl Link {
 /// `store`, Cox's own chats working in `home`, given by
 /// `--home` when `home_given`, and its agents started by `spawns`, which
 /// it makes on its thread. It tells `window` what it does, and answers
-/// how to tell it what the human does, and to stop.
+/// how to tell it what the human does, and to stop. Its thread keeps
+/// what lasts, and trashes, where this thread was told to (see
+/// [`storage::keep_on_this_thread`]).
 ///
 /// # Panics
 ///
@@ -497,9 +499,13 @@ pub fn start(
 ) -> Running {
     let (to, from_window) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
+    let data = storage::kept_on_this_thread();
+    let trash = crate::trash::kept_on_this_thread();
     let thread = std::thread::Builder::new()
         .name("daemon".to_owned())
         .spawn(move || {
+            storage::keep_on_this_thread(data);
+            crate::trash::keep_on_this_thread(trash);
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()

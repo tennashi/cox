@@ -12,6 +12,7 @@
 //! where to keep it, with `--data`, keeps it there instead, as to run apart
 //! from what it kept before, or on what another kept.
 
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,12 @@ const BESIDE: &str = "cox-data";
 
 /// Where this Cox was told to keep what lasts, if it was.
 static DATA: OnceLock<PathBuf> = OnceLock::new();
+
+thread_local! {
+    /// Where what runs on this thread keeps what lasts, in place of
+    /// [`DATA`], when it was told.
+    static ON_THIS_THREAD: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
 
 /// What Cox keeps across its runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,10 +177,27 @@ pub fn keep_in(directory: &Path) {
     let _ = DATA.set(directory);
 }
 
+/// Keeps what lasts in `directory` for what runs on this thread, and on
+/// the thread of each daemon it starts, in place of where the process
+/// keeps it, or, with `None`, goes back to that. A test runs on a thread
+/// of its own, beside others in one process, each with its own.
+pub fn keep_on_this_thread(directory: Option<PathBuf>) {
+    ON_THIS_THREAD.with_borrow_mut(|kept| *kept = directory);
+}
+
+/// Where what runs on this thread was told to keep what lasts, if it was.
+#[must_use]
+pub fn kept_on_this_thread() -> Option<PathBuf> {
+    ON_THIS_THREAD.with_borrow(Clone::clone)
+}
+
 /// The folder this Cox keeps what lasts in, or `None` when it cannot
 /// tell where it runs from.
 #[must_use]
 pub fn root() -> Option<PathBuf> {
+    if let Some(data) = kept_on_this_thread() {
+        return Some(data);
+    }
     if let Some(data) = DATA.get() {
         return Some(data.clone());
     }

@@ -1,6 +1,10 @@
 //! A human finding a file of the project on the tree of its files, to
 //! read it, and the tree marking the file of the tab shown.
 
+mod git;
+#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
+mod scratch;
+
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -8,15 +12,14 @@ use std::time::Duration;
 
 use cox::stage::tree::{Chosen, Tree, Wrote};
 use cox_editor::changes::How;
+use git::git;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
 /// A folder of its own for a test, with the files `paths`, empty, by
 /// its real path, as the tree names its files: macOS's temporary folder
 /// is under a link.
 fn scratch(name: &str, paths: &[&str]) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!("cox-tree-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
+    let directory = scratch::made(&format!("tree-{name}"));
     for path in paths {
         let path = directory.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -124,7 +127,6 @@ fn opens_folders_and_chooses_files(cx: &mut TestAppContext) {
         Vec::<PathBuf>::new()
     );
     assert_eq!(shown(&tree, &root, cx), ["src", ".gitignore", "Cargo.toml"]);
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[gpui::test]
@@ -136,7 +138,6 @@ fn opens_with_the_folders_it_had_open(cx: &mut TestAppContext) {
         shown(&tree, &root, cx),
         ["src/code", "src/code/tree.rs", "README.md"]
     );
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[gpui::test]
@@ -172,7 +173,6 @@ fn opens_a_folder_with_the_folders_that_are_all_there_is_in_it(cx: &mut TestAppC
         tree.read_with(cx, |tree, _| tree.open()),
         [root.join("docs")]
     );
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[gpui::test]
@@ -204,7 +204,6 @@ fn keeps_the_folders_of_the_rows_at_the_top_there(cx: &mut TestAppContext) {
     assert_eq!(row.top(), tree.top() + gpui::px(4.));
     // Not the file that was under it.
     assert!(chosen.borrow().is_empty());
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[gpui::test]
@@ -223,7 +222,6 @@ fn follows_the_files_as_they_come_and_go(cx: &mut TestAppContext) {
     std::fs::remove_file(root.join("src/main.rs")).unwrap();
     look(cx);
     assert_eq!(shown(&tree, &root, cx), ["src", "src/lib.rs"]);
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[gpui::test]
@@ -263,19 +261,6 @@ fn marks_the_file_shown_with_the_folders_it_is_in_open(cx: &mut TestAppContext) 
         tree.read_with(cx, |tree, _| tree.open()),
         [root.join("src"), root.join("src/code")]
     );
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-/// Runs Git in `folder`, as a test's repository.
-fn git(folder: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(folder)
-        .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success());
 }
 
 #[gpui::test]
@@ -299,7 +284,6 @@ fn says_how_each_file_changed(cx: &mut TestAppContext) {
     std::fs::write(root.join("src/main.rs"), "").unwrap();
     look(cx);
     assert_eq!(hows(cx), [Some(How::Added), None, None]);
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[gpui::test]
@@ -335,5 +319,4 @@ fn marks_the_files_the_agents_wrote_until_they_are_committed(cx: &mut TestAppCon
     git(&root, &["commit", "--quiet", "--all", "-m", "Main"]);
     look(cx);
     assert_eq!(writers(cx), [Vec::<u64>::new(), vec![], vec![]]);
-    std::fs::remove_dir_all(root).unwrap();
 }

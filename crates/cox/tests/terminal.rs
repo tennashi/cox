@@ -1,8 +1,13 @@
 //! A terminal on a tab of the stage: the human types into it, and a
 //! command the agent runs there answers how it went.
 
+#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
+mod scratch;
+#[expect(dead_code, reason = "these tests use only part of the waits")]
+mod waits;
+
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use cox::agent::mcp::{Ended, Ran};
 use cox::stage::tab::Shows as _;
@@ -14,11 +19,7 @@ use gpui::{
 use tokio::sync::oneshot;
 
 fn scratch(name: &str) -> PathBuf {
-    let directory =
-        std::env::temp_dir().join(format!("cox-terminal-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::canonicalize(directory).unwrap()
+    std::fs::canonicalize(scratch::made(&format!("terminal-{name}"))).unwrap()
 }
 
 /// The agent's command, waited for.
@@ -42,15 +43,10 @@ fn run<'a>(
 
 /// Lets the terminal go on until `done` holds, which it must before long.
 fn wait_until(cx: &mut VisualTestContext, mut done: impl FnMut(&mut VisualTestContext) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
+    waits::until("what the terminal waited for", || {
         cx.run_until_parked();
-        if done(cx) {
-            return;
-        }
-        assert!(Instant::now() < deadline, "the terminal took too long");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+        done(cx)
+    });
 }
 
 /// How the command went, once it says.
@@ -85,7 +81,6 @@ fn a_command_answers_what_it_printed_and_how_it_ended(cx: &mut TestAppContext) {
         terminal.read_with(cx, |terminal, _| terminal.title()),
         "pwd; printf 'built\\n'; exit 3"
     );
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[gpui::test]
@@ -100,7 +95,6 @@ fn the_human_types_into_what_runs(cx: &mut TestAppContext) {
     // The terminal shows the line as typed, then as `head` printed it.
     assert_eq!(ran.output, "こんにちは\nこんにちは");
     assert_eq!(ran.ended, Ended::Exited(0));
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[gpui::test]
@@ -115,7 +109,6 @@ fn control_c_interrupts_what_runs(cx: &mut TestAppContext) {
         matches!(ended, Ended::Signal(2) | Ended::Exited(130)),
         "{ended:?}"
     );
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[gpui::test]
@@ -129,7 +122,6 @@ fn a_command_the_agent_stops_waiting_for_is_interrupted(cx: &mut TestAppContext)
         ended(cx, &terminal).is_some()
     });
     assert_ne!(ended(cx, &terminal), Some(Ended::Exited(0)));
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[gpui::test]
@@ -150,7 +142,6 @@ fn closing_the_tab_answers_what_the_command_printed_so_far(cx: &mut TestAppConte
             ended: Ended::Closed,
         }
     );
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[gpui::test]
@@ -195,11 +186,11 @@ fn copies_the_line_the_human_selects(cx: &mut TestAppContext) {
             .as_deref(),
         Some("first\n")
     );
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 /// Runs `command` in `cwd` with no tab, as coxd does while no window is
-/// there, on a runtime of its own.
+/// there, on a runtime of its own. When it is not waited for, the agent
+/// stops waiting once `command` made the file `started` in `cwd`.
 fn run_unseen(command: &str, cwd: &std::path::Path, waits: bool) -> Option<Ran> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -210,14 +201,16 @@ fn run_unseen(command: &str, cwd: &std::path::Path, waits: bool) -> Option<Ran> 
         // The agent stops waiting once the command runs, and the command
         // ends on the interrupt, before it would be hung up on.
         let ran = cox::stage::terminal::run_unseen(command.to_owned(), cwd, answer);
+        let started = cwd.join("started");
         let stops = async {
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            while !started.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
             drop(waiting);
         };
         runtime
             .block_on(async {
-                tokio::time::timeout(Duration::from_secs(4), async { tokio::join!(ran, stops) })
-                    .await
+                tokio::time::timeout(waits::GIVEN_UP, async { tokio::join!(ran, stops) }).await
             })
             .expect("the command ends as no one waits for it");
         return None;
@@ -245,14 +238,12 @@ fn a_command_no_window_shows_answers_as_one_on_a_tab() {
             ended: Ended::Exited(3),
         })
     );
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[test]
 fn a_command_no_window_shows_is_interrupted_once_no_one_waits() {
     let cwd = scratch("unseen-cancelled");
-    run_unseen("sleep 30", &cwd, false);
-    std::fs::remove_dir_all(cwd).unwrap();
+    run_unseen("touch started; sleep 30", &cwd, false);
 }
 
 /// A terminal tells when its program ends, for the stage to close a
@@ -281,5 +272,4 @@ fn a_terminal_tells_when_its_program_ends(cx: &mut TestAppContext) {
     cx.simulate_input("exit\n");
     wait_until(cx, |_| told.get());
     assert!(ended(cx, &terminal).is_some());
-    std::fs::remove_dir_all(cwd).unwrap();
 }

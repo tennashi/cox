@@ -1,5 +1,8 @@
 //! A human reading a Markdown file on a tab of the stage.
 
+#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
+mod scratch;
+
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -11,11 +14,7 @@ use cox::ui::LinkClicked;
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 
 fn scratch(name: &str) -> PathBuf {
-    let directory =
-        std::env::temp_dir().join(format!("cox-document-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
-    directory
+    scratch::made(&format!("document-{name}"))
 }
 
 /// Opens a tab showing `path`, which says `text`.
@@ -62,7 +61,6 @@ fn follows_the_file_as_it_changes(cx: &mut TestAppContext) {
         document.read_with(cx, |document, _| document.text().to_owned()),
         "# Plan\n\n- read the design\n"
     );
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -87,5 +85,4 @@ fn a_click_on_a_link_asks_to_open_it(cx: &mut TestAppContext) {
     cx.simulate_mouse_up(link, MouseButton::Left, Modifiers::none());
 
     assert_eq!(*clicked.borrow(), ["https://example.com/"]);
-    std::fs::remove_dir_all(directory).unwrap();
 }

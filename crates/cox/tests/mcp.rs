@@ -1,19 +1,20 @@
 //! An agent reaching its chat's tools through `cox --mcp`, as it starts
 //! the MCP server Cox hands it.
 
+#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
+mod scratch;
+#[expect(dead_code, reason = "these tests use only part of the waits")]
+mod waits;
+
 use std::io::{BufRead as _, BufReader, Lines, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::time::{Duration, Instant};
 
 use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest, ToolServer, Whereabouts};
 use serde_json::{Value, json};
 
 fn scratch(name: &str) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!("cox-bridge-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::canonicalize(directory).unwrap()
+    std::fs::canonicalize(scratch::made(&format!("bridge-{name}"))).unwrap()
 }
 
 /// The agent's end of the bridge to a chat's server.
@@ -98,12 +99,9 @@ fn the_agent_shows_a_file_on_its_chats_stage() {
 
     // The chat closes: the bridge ends, and the socket goes.
     drop(requests);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while agent.bridge.try_wait().unwrap().is_none() || socket.exists() {
-        assert!(Instant::now() < deadline, "the bridge outlived its chat");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    std::fs::remove_dir_all(cwd).unwrap();
+    waits::until("the bridge's end with its chat", || {
+        agent.bridge.try_wait().unwrap().is_some() && !socket.exists()
+    });
 }
 
 #[test]
@@ -151,13 +149,8 @@ fn the_agent_runs_a_command_on_its_chats_stage_and_can_cancel_it() {
         "jsonrpc": "2.0", "method": "notifications/cancelled",
         "params": { "requestId": 4, "reason": "the human stopped the turn" },
     }));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !answer.is_closed() {
-        assert!(Instant::now() < deadline, "the command was waited for");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    waits::until("the end of the wait for the command", || answer.is_closed());
     drop(agent);
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[test]
@@ -191,7 +184,6 @@ fn the_agent_gets_only_the_tools_its_setup_names() {
         ToolRequest::ShowMarkdown { .. }
     ));
     drop(agent);
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[test]
@@ -213,7 +205,6 @@ fn a_chat_in_a_project_gets_no_tool_to_make_one_of_it() {
     let refused = agent.hear();
     assert_eq!(refused["error"]["message"], "no tool propose_project");
     drop(agent);
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[test]
@@ -237,7 +228,6 @@ fn a_chat_in_no_project_gets_no_tool_to_name_its_project() {
     let refused = agent.hear();
     assert_eq!(refused["error"]["message"], "no tool propose_name");
     drop(agent);
-    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 /// Starts the server of a chat of the project `project`, in `cwd`, that
@@ -362,9 +352,6 @@ fn a_page_one_project_writes_in_the_wiki_is_found_from_another_unless_kept() {
     sources_are_kept_apart_from_the_wiki(&mut writer, &mut reader, &home);
     a_project_keeps_its_own_sources(&mut writer, &mut reader, &one, &home);
     drop((writer, reader));
-    for folder in [data, one, other] {
-        std::fs::remove_dir_all(folder).unwrap();
-    }
 }
 
 /// A page the writer keeps in its project's own wiki, in `one`, is not

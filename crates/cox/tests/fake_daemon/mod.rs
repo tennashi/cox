@@ -30,6 +30,8 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::fake_agent::{FakeAgent, LogsIn, Resumes};
+use super::scratch;
+use super::waits::{GIVEN_UP, given_up};
 
 /// What the test and the daemon's thread share.
 pub struct Shared<T>(Arc<Mutex<T>>);
@@ -107,6 +109,9 @@ pub struct Fakes {
     /// Whether the chats with no such terminal ask their stage, through
     /// the daemon and the window, to run commands, as Cox's chats do.
     pub staged_terminal: bool,
+    /// The commands the shell ran, as `terminal` says, once each ended
+    /// and the daemon was told how it went, in order.
+    pub ran: Shared<Vec<String>>,
 }
 
 impl Default for Fakes {
@@ -123,6 +128,7 @@ impl Default for Fakes {
             instructions: true,
             terminal: true,
             staged_terminal: false,
+            ran: Shared::default(),
         }
     }
 }
@@ -162,7 +168,7 @@ impl Spawns for FakeSpawns {
         // The chat's commands run in a shell here, or else go through the
         // daemon to the window, as on a terminal of the stage.
         let stage = if fakes.terminal {
-            spawned.tools = Some(fake_terminal());
+            spawned.tools = Some(fake_terminal(fakes.ran.clone()));
             None
         } else if fakes.staged_terminal {
             let (tools, stage) = tokio::sync::mpsc::unbounded_channel();
@@ -193,8 +199,9 @@ impl Spawns for FakeSpawns {
 }
 
 /// Runs the commands a chat asks its stage to run, as a terminal would,
-/// in a shell, and answers how each went. Dropping the sender ends it.
-pub fn fake_terminal() -> UnboundedSender<ToolRequest> {
+/// in a shell, answers how each went, and then notes it in `ran`.
+/// Dropping the sender ends it.
+pub fn fake_terminal(ran: Shared<Vec<String>>) -> UnboundedSender<ToolRequest> {
     let (asks, mut requests) = tokio::sync::mpsc::unbounded_channel();
     std::thread::spawn(move || {
         while let Some(request) = requests.blocking_recv() {
@@ -207,7 +214,7 @@ pub fn fake_terminal() -> UnboundedSender<ToolRequest> {
             else {
                 continue;
             };
-            let ran = std::process::Command::new("sh")
+            let went = std::process::Command::new("sh")
                 .args(["-c", &command])
                 .current_dir(cwd)
                 .output()
@@ -217,7 +224,8 @@ pub fn fake_terminal() -> UnboundedSender<ToolRequest> {
                     ended: output.status.code().map_or(Ended::Unknown, Ended::Exited),
                 })
                 .map_err(|error| error.to_string());
-            let _ = answer.send(ran);
+            let _ = answer.send(went);
+            ran.borrow_mut().push(command);
         }
     });
     asks
@@ -296,7 +304,7 @@ impl Stages for FakeStages {
     /// Runs the commands asked of a chat with no stage, as a terminal
     /// would, in a shell.
     fn unstaged(&self, request: ToolRequest) {
-        let _ = fake_terminal().send(request);
+        let _ = fake_terminal(Shared::default()).send(request);
     }
 }
 
@@ -306,14 +314,6 @@ impl Stages for FakeStages {
 pub enum Kept {
     Memory,
     At(PathBuf),
-}
-
-/// A store of its own at a path, for each test that keeps chats there.
-pub fn kept_at(name: &str) -> PathBuf {
-    let folder = std::env::temp_dir().join(format!("cox-store-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&folder);
-    std::fs::create_dir_all(&folder).unwrap();
-    folder.join("chats.sqlite")
 }
 
 /// The window's daemon, which stops with it.
@@ -363,6 +363,7 @@ fn open_bound(
     // waits for them in real time instead of only running GPUI's own
     // tasks.
     cx.executor().allow_parking();
+    scratch::data();
     let ticker = Ticker::start(cx.executor());
     let (workspace, cx) =
         cx.add_window_view(|window, cx| over_daemon(home, kept, fakes, stages, window, cx));
@@ -375,6 +376,15 @@ fn open_bound(
 /// open. GPUI's test dispatcher can miss a wake from another thread, as
 /// the daemon's, that comes as it goes to park, and would then park until
 /// something else woke it; a task spawned now and then wakes it again.
+///
+/// The race is in gpui 0.2.2's `BackgroundExecutor::block_internal`:
+/// once `TestDispatcher::tick` finds nothing to run, it stores its
+/// unparker with `set_unparker` and parks. A task dispatched from another
+/// thread between the two calls `unpark_last`, which finds no unparker,
+/// or an earlier one, so the runnable waits in the queue while the test
+/// thread sleeps. Only GPUI can close it, by storing the unparker before
+/// its last look at the queue; any wake of the test's own comes through
+/// the same `unpark_last`, so this ticking is what recovers.
 struct Ticker(Arc<std::sync::atomic::AtomicBool>);
 
 impl Ticker {
@@ -406,6 +416,7 @@ pub fn open_again(
     kept: Kept,
     fakes: Fakes,
 ) -> Entity<Workspace> {
+    scratch::data();
     let stages = FakeStages::default();
     cx.update(|window, cx| cx.new(|cx| over_daemon(home, kept, fakes, stages, window, cx)))
 }
@@ -449,30 +460,6 @@ fn over_daemon(
     )
 }
 
-/// How long a test waits for what it waits for before it fails, saying
-/// it never came. It only catches what hangs: a debug build lays out a
-/// long conversation slowly, which can take seconds on a slow machine,
-/// as CI's.
-pub const GIVEN_UP: Duration = Duration::from_secs(30);
-
-/// A wait that gives up after [`GIVEN_UP`]: what the receiver hears
-/// then, unless the sender is dropped first. A thread keeps the time,
-/// and ends as soon as the wait does, as a test waits many times, and
-/// macOS lets a process have only a few thousand threads.
-pub fn given_up() -> (
-    std::sync::mpsc::Sender<()>,
-    tokio::sync::oneshot::Receiver<()>,
-) {
-    let (waiting, ended) = std::sync::mpsc::channel();
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        if ended.recv_timeout(GIVEN_UP) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
-            let _ = timed_out.send(());
-        }
-    });
-    (waiting, timeout)
-}
-
 /// Waits until the daemon has done all the window told it, and the
 /// window has heard all the daemon said of it.
 pub async fn settle(cx: &mut VisualTestContext) {
@@ -484,11 +471,13 @@ pub async fn settle(cx: &mut VisualTestContext) {
 }
 
 /// Waits until the daemon of `workspace` has done all it was told, and
-/// `workspace` has heard all the daemon said of it, twice over, for
+/// `workspace` has heard all the daemon said of it, four times over, for
 /// what the workspace asks on hearing it, and what the daemon answers:
 /// as an agent that drives the stage, which the daemon starts once the
 /// window has the chat's view, has the daemon tell the chat's
-/// conversation and tabs, and gives the stage a relay.
+/// conversation and tabs, and gives the stage a relay. What the agents
+/// do on their own, in real time, it does not wait for: a test waits
+/// for that with [`settle_until`].
 pub async fn settle_on(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) {
     for _ in 0..4 {
         let settled = workspace.update(cx, |workspace, _| workspace.sync());
@@ -514,14 +503,18 @@ pub async fn settle_until(
     cx: &mut VisualTestContext,
     done: impl Fn(&mut VisualTestContext) -> bool,
 ) {
-    for _ in 0..500 {
+    let deadline = std::time::Instant::now() + GIVEN_UP;
+    loop {
         settle(cx).await;
         if done(cx) {
             return;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "what the test waited for never came"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("what the test waited for never came");
 }
 
 /// The view of the chat shown, once the daemon has settled.
