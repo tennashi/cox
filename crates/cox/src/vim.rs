@@ -573,6 +573,13 @@ pub fn mode(cx: &App) -> Option<Mode> {
     cx.try_global::<Vim>().map(Vim::mode)
 }
 
+/// Whether keys type in the input that has the keyboard: with Vim's keys
+/// off, or in insert or command mode. Else the input shows no caret.
+#[must_use]
+pub fn types(cx: &App) -> bool {
+    mode(cx).is_none_or(|mode| matches!(mode, Mode::Insert | Mode::Command))
+}
+
 /// What the line at the window's foot shows of Vim's keys, while they
 /// are on.
 #[must_use]

@@ -93,6 +93,30 @@ fn the_window_s_foot_shows_the_mode_as_the_keys_change_it(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn the_input_shows_its_caret_only_while_keys_type(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "caret");
+    keys::press(cx, &workspace, "secondary-n");
+    assert!(cx.update(|_, cx| cox::vim::types(cx)), "insert mode types");
+    keys::press(cx, &workspace, "escape");
+    assert!(
+        !cx.update(|_, cx| cox::vim::types(cx)),
+        "normal mode does not"
+    );
+    keys::press(cx, &workspace, ":");
+    assert!(cx.update(|_, cx| cox::vim::types(cx)), "the line types");
+    keys::press(cx, &workspace, "escape i");
+    assert!(
+        cx.update(|_, cx| cox::vim::types(cx)),
+        "i goes back to typing"
+    );
+    cx.update(|_, cx| cox::vim::turn(false, cx));
+    assert!(
+        cx.update(|_, cx| cox::vim::types(cx)),
+        "without Vim, keys type"
+    );
+}
+
+#[gpui::test]
 fn the_window_s_foot_shows_what_is_held_until_the_command_runs(cx: &mut TestAppContext) {
     let (workspace, cx) = open_window(cx, "held");
     keys::press(cx, &workspace, "secondary-n escape");
