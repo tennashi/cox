@@ -9,24 +9,28 @@
 //! prompt mentions "think", it first thinks [`THOUGHT`], and when it mentions
 //! "plan", it first sends a plan of two steps, the first under way. When it
 //! mentions "title", it first titles its session [`TITLE`], and when it
-//! mentions "slow", it waits a moment before anything. When the prompt
-//! mentions "background", it replies [`BACKGROUND_STARTED`] and ends the
-//! turn, and a moment later goes on by itself, with no prompt, as
-//! `claude-agent-acp` does once a task left running in the background
-//! ends: it asks permission to edit `x.txt` as above when the prompt
-//! mentions "ask" too, and replies [`BACKGROUND_FINISHED`]. When the
-//! prompt mentions "wait", it replies `waiting` and goes on until Cox cancels the
-//! turn, or steers a line into it, which it echoes, ending the turn. A turn cancelled, or whose permission request Cox answers as cancelled,
-//! ends as cancelled. Its sessions have two settings, [`MODEL`] and
-//! [`MODE`], which Cox sets as it asks, and when a prompt mentions
-//! "switch", the agent sets its mode to `plan` on its own. It goes on with a session it opened before as
-//! [`Resumes`] says, and asks Cox to log in as [`LogsIn`] says. It records what Cox asked of it and answered so tests can
-//! check what Cox did.
+//! mentions "slow", it waits before anything until the test lets it go on
+//! ([`FakeAgent::go_on`]). When the prompt mentions "background", it
+//! replies [`BACKGROUND_STARTED`] and ends the turn, and once the test lets
+//! it go on, goes on by itself, with no prompt, as `claude-agent-acp` does
+//! once a task left running in the background ends: it asks permission to
+//! edit `x.txt` as above when the prompt mentions "ask" too, and replies
+//! [`BACKGROUND_FINISHED`]. When the prompt mentions "wait", it replies
+//! `waiting` and goes on until Cox cancels the turn, or steers a line into
+//! it, which it echoes, ending the turn. A turn cancelled, or whose
+//! permission request Cox answers as cancelled, ends as cancelled. A
+//! prompt mentions a word when one of its words starts with it: "slowly"
+//! mentions "slow", and "task" does not mention "ask". Its sessions have
+//! two settings, [`MODEL`] and [`MODE`], which Cox sets as it asks, and
+//! when a prompt mentions "switch", the agent sets its mode to `plan` on
+//! its own. It goes on with a session it opened before as [`Resumes`]
+//! says, and asks Cox to log in as [`LogsIn`] says. It records what Cox
+//! asked of it and answered so tests can check what Cox did, and what it
+//! did itself, as [`Event`]s, for a test to wait for.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AuthenticateRequest,
@@ -47,7 +51,7 @@ use agent_client_protocol::{
     Agent, Channel, Client, ConnectionTo, Error, Responder, Result, UntypedMessage,
 };
 use cox::agent::instructions;
-use tokio::sync::Notify;
+use tokio::sync::{Semaphore, oneshot};
 
 /// How the agent goes on with a session it opened before.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -134,8 +138,27 @@ pub struct FakeAgent {
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Prompts>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
-    cancels: Arc<Cancels>,
+    turns: Arc<Turns>,
     settings: Arc<Mutex<Settings>>,
+}
+
+/// What the agent did, in order, for a test to wait for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// It took a prompt, saying this.
+    Prompted(String),
+    /// It waits at a turn for Cox to cancel it, or steer a line into it.
+    Waiting,
+    /// It waits for the test to let it go on.
+    Held,
+    /// It asked permission.
+    Asked,
+    /// It ended a turn, as it said.
+    Ended(StopReason),
+    /// It failed a turn, with an error.
+    Failed,
+    /// It went on by itself after a turn and is done.
+    WentOn,
 }
 
 /// What Cox sent the agent: the text blocks of each prompt, without how
@@ -229,16 +252,113 @@ fn switch(
     ))
 }
 
-/// The cancels Cox has sent, and the lines it steered into a turn that
-/// waits.
+/// How the agent's turns go: what they did, the cancels Cox has sent,
+/// the turn that runs, and the times the test let the agent go on.
+struct Turns {
+    events: Mutex<Vec<Event>>,
+    cancels: AtomicUsize,
+    running: Mutex<Option<Running>>,
+    /// A permit for each time the test let the agent go on.
+    gate: Semaphore,
+}
+
+/// The turn that runs: whether Cox cancelled it, and what wakes it while
+/// it waits to be cancelled or steered.
 #[derive(Default)]
-struct Cancels {
-    count: AtomicUsize,
-    /// Whether a turn waits, which takes a line steered into it.
-    waiting: std::sync::atomic::AtomicBool,
-    steered: Mutex<Vec<String>>,
-    /// Wakes the turn that waits to be cancelled, or steered.
-    wake: Notify,
+struct Running {
+    cancelled: bool,
+    waiting: Option<oneshot::Sender<Woken>>,
+}
+
+impl Default for Turns {
+    fn default() -> Self {
+        Self {
+            events: Mutex::default(),
+            cancels: AtomicUsize::default(),
+            running: Mutex::default(),
+            gate: Semaphore::new(0),
+        }
+    }
+}
+
+/// What ends a turn that waits.
+enum Woken {
+    Cancelled,
+    Steered(String),
+}
+
+impl Turns {
+    fn note(&self, event: Event) {
+        self.events.lock().unwrap().push(event);
+    }
+
+    /// Waits until the test lets the agent go on.
+    async fn held(&self) {
+        self.note(Event::Held);
+        self.gate
+            .acquire()
+            .await
+            .expect("the gate stays open")
+            .forget();
+    }
+
+    /// Starts a turn.
+    fn start(&self) {
+        *self.running.lock().unwrap() = Some(Running::default());
+    }
+
+    /// Ends the turn that runs, as `ended` says.
+    fn end(&self, ended: Event) {
+        *self.running.lock().unwrap() = None;
+        self.note(ended);
+    }
+
+    /// Waits, as a turn that is cancelled or steered, until Cox does one
+    /// of them, once `waits` has told Cox the turn waits: at once when
+    /// Cox cancelled the turn already.
+    async fn wait(&self, waits: impl FnOnce() -> Result<()>) -> Result<Woken> {
+        let (wake, woken) = oneshot::channel();
+        {
+            let mut running = self.running.lock().unwrap();
+            let running = running.get_or_insert_with(Running::default);
+            if running.cancelled {
+                return Ok(Woken::Cancelled);
+            }
+            running.waiting = Some(wake);
+        }
+        waits()?;
+        self.note(Event::Waiting);
+        Ok(woken.await.unwrap_or(Woken::Cancelled))
+    }
+
+    /// Cancels the turn that runs, if one does, waking it if it waits.
+    fn cancel(&self) {
+        self.cancels.fetch_add(1, Ordering::SeqCst);
+        if let Some(running) = self.running.lock().unwrap().as_mut() {
+            running.cancelled = true;
+            if let Some(waiting) = running.waiting.take() {
+                let _ = waiting.send(Woken::Cancelled);
+            }
+        }
+    }
+
+    /// Steers `line` into the turn that waits, if one does, answering
+    /// whether one did.
+    fn steer(&self, line: String) -> bool {
+        let waiting = self
+            .running
+            .lock()
+            .unwrap()
+            .as_mut()
+            .and_then(|running| running.waiting.take());
+        waiting.is_some_and(|waiting| waiting.send(Woken::Steered(line)).is_ok())
+    }
+}
+
+/// Whether `text` mentions `word`: one of its words starts with it.
+fn mentions(text: &str, word: &str) -> bool {
+    text.split(|letter: char| !letter.is_alphanumeric())
+        .any(|said| said.starts_with(word))
 }
 
 impl FakeAgent {
@@ -281,7 +401,7 @@ impl FakeAgent {
             Arc::clone(&self.mcp_servers),
             Arc::clone(&self.prompts),
             Arc::clone(&self.answers),
-            Arc::clone(&self.cancels),
+            Arc::clone(&self.turns),
             Arc::clone(&self.settings),
         ));
         cox_end
@@ -341,7 +461,24 @@ impl FakeAgent {
 
     /// How many times Cox has asked to cancel a turn.
     pub fn cancels(&self) -> usize {
-        self.cancels.count.load(Ordering::SeqCst)
+        self.turns.cancels.load(Ordering::SeqCst)
+    }
+
+    /// What the agent did, in order.
+    pub fn events(&self) -> Vec<Event> {
+        self.turns.events.lock().unwrap().clone()
+    }
+
+    /// Whether the agent did `event`.
+    pub fn did(&self, event: &Event) -> bool {
+        self.turns.events.lock().unwrap().contains(event)
+    }
+
+    /// Lets the agent go on, once, from where it waits for the test to,
+    /// now or the next time it does: a turn whose prompt mentions "slow",
+    /// before anything, or the work it left running in the background.
+    pub fn go_on(&self) {
+        self.turns.gate.add_permits(1);
     }
 }
 
@@ -363,21 +500,21 @@ impl Login {
 /// What the agent does on its way to the reply, as the prompt asks: it
 /// thinks, plans and runs tools.
 fn work(cx: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Result<()> {
-    if text.contains("title") {
+    if mentions(text, "title") {
         cx.send_notification(SessionNotification::new(
             session.clone(),
             SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(TITLE)),
         ))?;
     }
-    if text.contains("think") {
+    if mentions(text, "think") {
         think(cx, session)?;
     }
-    if text.contains("plan") {
+    if mentions(text, "plan") {
         plan(cx, session)?;
     }
-    if text.contains("tool") {
+    if mentions(text, "tool") {
         run_tool(cx, session, "call-2")?;
-        if text.contains("twice") {
+        if mentions(text, "twice") {
             run_tool(cx, session, "call-3")?;
         }
     }
@@ -402,11 +539,11 @@ async fn serve(
     mcp_servers: Arc<Mutex<Vec<McpServer>>>,
     prompts: Arc<Mutex<Prompts>>,
     answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
-    cancels: Arc<Cancels>,
+    turns: Arc<Turns>,
     settings: Arc<Mutex<Settings>>,
 ) -> Result<()> {
-    let waits = Arc::clone(&cancels);
-    let steers = Arc::clone(&cancels);
+    let prompted = Arc::clone(&turns);
+    let steers = Arc::clone(&turns);
     let loaded = Arc::clone(&asked_to_resume);
     let (on_initialize, on_authenticate, on_new, on_prompt_login) =
         (login.clone(), login.clone(), login.clone(), login);
@@ -511,6 +648,7 @@ async fn serve(
                     .into_iter()
                     .partition(|block| block.starts_with(instructions::COX_START));
                 let text = blocks.concat();
+                prompted.note(Event::Prompted(text.clone()));
                 let verdict = {
                     let mut prompts = prompts.lock().unwrap();
                     prompts.cox.extend(cox);
@@ -518,16 +656,32 @@ async fn serve(
                     judge(&prompts.sent)
                 };
                 let answers = Arc::clone(&answers);
-                let cancels = Arc::clone(&waits);
+                let turns = Arc::clone(&prompted);
+                turns.start();
                 let turn = cx.clone();
-                if text.contains("switch") {
+                if mentions(&text, "switch") {
                     switch(&cx, &request.session_id, &on_prompt)?;
                 }
                 // Asking permission waits for Cox's answer, which arrives
                 // through the loop that runs this handler, so wait elsewhere.
-                cx.spawn(take_turn(
-                    turn, request, responder, text, verdict, answers, cancels,
-                ))
+                cx.spawn(async move {
+                    let ended = take_turn(&turn, &request, &text, verdict, &answers, &turns).await;
+                    match ended {
+                        Ok(Ended::Turn(reason)) => {
+                            turns.end(Event::Ended(reason));
+                            responder.respond(PromptResponse::new(reason))
+                        }
+                        Ok(Ended::Failed(error)) | Err(error) => {
+                            turns.end(Event::Failed);
+                            responder.respond_with_error(error)
+                        }
+                        Ok(Ended::Background) => {
+                            turns.end(Event::Ended(StopReason::EndTurn));
+                            responder.respond(PromptResponse::new(StopReason::EndTurn))?;
+                            go_on(&turn, &request.session_id, &text, &answers, &turns).await
+                        }
+                    }
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -538,23 +692,20 @@ async fn serve(
                 if request.method != "_session/steering" {
                     return responder.respond_with_error(Error::method_not_found());
                 }
-                if !steers.waiting.load(Ordering::SeqCst) {
+                let prompt: Vec<ContentBlock> =
+                    serde_json::from_value(request.params["prompt"].clone()).unwrap_or_default();
+                if !steers.steer(texts_of(&prompt).concat()) {
                     return responder.respond(
                         serde_json::json!({ "outcome": "promptRequired", "reason": "noRunningTurn" }),
                     );
                 }
-                let prompt: Vec<ContentBlock> =
-                    serde_json::from_value(request.params["prompt"].clone()).unwrap_or_default();
-                steers.steered.lock().unwrap().push(texts_of(&prompt).concat());
-                steers.wake.notify_one();
                 responder.respond(serde_json::json!({ "outcome": "injected" }))
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_notification(
             async move |_: CancelNotification, _cx| {
-                cancels.count.fetch_add(1, Ordering::SeqCst);
-                cancels.wake.notify_one();
+                turns.cancel();
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
@@ -563,58 +714,63 @@ async fn serve(
         .await
 }
 
+/// How a turn ends: as it says, with an error, or once the agent left
+/// work running in the background, to go on with after.
+enum Ended {
+    Turn(StopReason),
+    Failed(Error),
+    Background,
+}
+
 /// Takes the turn that answers `request`, whose text is `text`, as the
-/// prompt asks, or says `verdict` when it asks to judge a goal, and
-/// answers it with `responder`.
+/// prompt asks, or says `verdict` when it asks to judge a goal.
 async fn take_turn(
-    turn: ConnectionTo<Client>,
-    request: PromptRequest,
-    responder: Responder<PromptResponse>,
-    text: String,
+    turn: &ConnectionTo<Client>,
+    request: &PromptRequest,
+    text: &str,
     verdict: Option<&'static str>,
-    answers: Arc<Mutex<Vec<RequestPermissionOutcome>>>,
-    cancels: Arc<Cancels>,
-) -> Result<()> {
+    answers: &Mutex<Vec<RequestPermissionOutcome>>,
+    turns: &Turns,
+) -> Result<Ended> {
+    let session = &request.session_id;
     if let Some(verdict) = verdict {
-        say(&turn, &request.session_id, verdict)?;
-        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+        say(turn, session, verdict)?;
+        return Ok(Ended::Turn(StopReason::EndTurn));
     }
-    if text.contains("fail") {
-        return responder.respond_with_error(Error::new(-32603, "the model is unavailable"));
+    if mentions(text, "fail") {
+        return Ok(Ended::Failed(Error::new(
+            -32603,
+            "the model is unavailable",
+        )));
     }
-    if text.contains("slow") {
-        tokio::time::sleep(SLOW).await;
+    if mentions(text, "slow") {
+        turns.held().await;
     }
-    work(&turn, &request.session_id, &text)?;
-    if text.contains("background") {
-        say(&turn, &request.session_id, BACKGROUND_STARTED)?;
-        responder.respond(PromptResponse::new(StopReason::EndTurn))?;
-        return go_on(&turn, &request.session_id, &text, &answers).await;
+    work(turn, session, text)?;
+    if mentions(text, "background") {
+        say(turn, session, BACKGROUND_STARTED)?;
+        return Ok(Ended::Background);
     }
-    if text.contains("wait") {
-        say(&turn, &request.session_id, "waiting")?;
-        cancels.waiting.store(true, Ordering::SeqCst);
-        cancels.wake.notified().await;
-        cancels.waiting.store(false, Ordering::SeqCst);
-        let steered = cancels.steered.lock().unwrap().pop();
-        let Some(steered) = steered else {
-            return responder.respond(PromptResponse::new(StopReason::Cancelled));
+    if mentions(text, "wait") {
+        let woken = turns.wait(|| say(turn, session, "waiting")).await?;
+        let Woken::Steered(steered) = woken else {
+            return Ok(Ended::Turn(StopReason::Cancelled));
         };
-        say(&turn, &request.session_id, &format!("echo: {steered}"))?;
-        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+        say(turn, session, &format!("echo: {steered}"))?;
+        return Ok(Ended::Turn(StopReason::EndTurn));
     }
-    if text.contains("permission") {
-        let answer = ask_permission(&turn, &request.session_id).await?;
+    if mentions(text, "permission") {
+        let answer = ask_permission(turn, session, turns).await?;
         answers.lock().unwrap().push(answer.clone());
         if answer == RequestPermissionOutcome::Cancelled {
-            return responder.respond(PromptResponse::new(StopReason::Cancelled));
+            return Ok(Ended::Turn(StopReason::Cancelled));
         }
-        finish(&turn, &request.session_id, "call-1")?;
+        finish(turn, session, "call-1")?;
     }
     for word in format!("echo: {text}").split_inclusive(' ') {
-        say(&turn, &request.session_id, word)?;
+        say(turn, session, word)?;
     }
-    responder.respond(PromptResponse::new(StopReason::EndTurn))
+    Ok(Ended::Turn(StopReason::EndTurn))
 }
 
 /// What the agent says it can do: go on with a session as `resumes` says.
@@ -654,11 +810,6 @@ fn texts_of(prompt: &[ContentBlock]) -> Vec<String> {
         .collect()
 }
 
-/// Sends a piece of the reply.
-/// What the agent thinks when the prompt mentions "think".
-/// How long the agent waits before it answers when asked to be slow.
-const SLOW: Duration = Duration::from_millis(300);
-
 /// What Cox asks the judge of a goal to end its reply with, which tells
 /// the agent it is asked to judge.
 const JUDGE_ASKS: &str = "PASS or FAIL";
@@ -669,25 +820,29 @@ pub const BACKGROUND_STARTED: &str = "started in the background";
 pub const BACKGROUND_FINISHED: &str = "finished in the background";
 
 /// Goes on by itself after the turn that answered `text` ended, with no
-/// prompt, as `claude-agent-acp` does once a task Claude Code left
-/// running in the background ends: asks permission first when `text`
-/// mentions "ask", and says it finished.
+/// prompt, once the test lets it, as `claude-agent-acp` does once a task
+/// Claude Code left running in the background ends: asks permission
+/// first when `text` mentions "ask", and says it finished.
 async fn go_on(
     cx: &ConnectionTo<Client>,
     session: &SessionId,
     text: &str,
     answers: &Mutex<Vec<RequestPermissionOutcome>>,
+    turns: &Turns,
 ) -> Result<()> {
-    tokio::time::sleep(SLOW).await;
-    if text.contains("ask") {
-        let answer = ask_permission(cx, session).await?;
+    turns.held().await;
+    if mentions(text, "ask") {
+        let answer = ask_permission(cx, session, turns).await?;
         answers.lock().unwrap().push(answer.clone());
         if answer == RequestPermissionOutcome::Cancelled {
+            turns.note(Event::WentOn);
             return Ok(());
         }
         finish(cx, session, "call-1")?;
     }
-    say(cx, session, BACKGROUND_FINISHED)
+    say(cx, session, BACKGROUND_FINISHED)?;
+    turns.note(Event::WentOn);
+    Ok(())
 }
 
 /// What the agent says when the last of `prompts` asks it to judge a
@@ -755,6 +910,7 @@ pub const LS_OUTPUT: &str = "x.txt\ny.txt";
 async fn ask_permission(
     cx: &ConnectionTo<Client>,
     session: &SessionId,
+    turns: &Turns,
 ) -> Result<RequestPermissionOutcome> {
     let change = || {
         vec![ToolCallContent::Diff(
@@ -783,7 +939,9 @@ async fn ask_permission(
             PermissionOption::new("reject", "Reject once", PermissionOptionKind::RejectOnce),
         ],
     );
-    let response = cx.send_request(request).block_task().await?;
+    let response = cx.send_request(request).block_task();
+    turns.note(Event::Asked);
+    let response = response.await?;
     Ok(response.outcome)
 }
 

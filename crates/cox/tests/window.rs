@@ -23,7 +23,7 @@ use cox::ui::input::{Blurred, LineInput};
 use cox::workspace::Workspace;
 use cox_acp::McpServer;
 use cox_core::diff::Line;
-use fake_agent::{FakeAgent, LogsIn};
+use fake_agent::{Event, FakeAgent, LogsIn};
 use fake_daemon::{FakeStages, Fakes, Kept, Opened, open_window, settle, settle_until, shown_view};
 use gpui::{
     Bounds, ClipboardItem, Entity, EntityInputHandler, Focusable, Modifiers, MouseButton,
@@ -519,6 +519,7 @@ async fn stops_a_turn_with_escape_and_sends_the_next_line(cx: &mut TestAppContex
 
     cx.simulate_input("wait");
     cx.simulate_keystrokes("enter");
+    settle_until(cx, |_| agent.did(&Event::Waiting)).await;
     cx.simulate_keystrokes("escape");
     wait_for(cx, &view, State::Idle).await;
     assert_eq!(agent.cancels(), 1);

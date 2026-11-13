@@ -109,6 +109,9 @@ pub struct Fakes {
     /// Whether the chats with no such terminal ask their stage, through
     /// the daemon and the window, to run commands, as Cox's chats do.
     pub staged_terminal: bool,
+    /// The commands the shell ran, as `terminal` says, once each ended
+    /// and the daemon was told how it went, in order.
+    pub ran: Shared<Vec<String>>,
 }
 
 impl Default for Fakes {
@@ -125,6 +128,7 @@ impl Default for Fakes {
             instructions: true,
             terminal: true,
             staged_terminal: false,
+            ran: Shared::default(),
         }
     }
 }
@@ -164,7 +168,7 @@ impl Spawns for FakeSpawns {
         // The chat's commands run in a shell here, or else go through the
         // daemon to the window, as on a terminal of the stage.
         let stage = if fakes.terminal {
-            spawned.tools = Some(fake_terminal());
+            spawned.tools = Some(fake_terminal(fakes.ran.clone()));
             None
         } else if fakes.staged_terminal {
             let (tools, stage) = tokio::sync::mpsc::unbounded_channel();
@@ -195,8 +199,9 @@ impl Spawns for FakeSpawns {
 }
 
 /// Runs the commands a chat asks its stage to run, as a terminal would,
-/// in a shell, and answers how each went. Dropping the sender ends it.
-pub fn fake_terminal() -> UnboundedSender<ToolRequest> {
+/// in a shell, answers how each went, and then notes it in `ran`.
+/// Dropping the sender ends it.
+pub fn fake_terminal(ran: Shared<Vec<String>>) -> UnboundedSender<ToolRequest> {
     let (asks, mut requests) = tokio::sync::mpsc::unbounded_channel();
     std::thread::spawn(move || {
         while let Some(request) = requests.blocking_recv() {
@@ -209,7 +214,7 @@ pub fn fake_terminal() -> UnboundedSender<ToolRequest> {
             else {
                 continue;
             };
-            let ran = std::process::Command::new("sh")
+            let went = std::process::Command::new("sh")
                 .args(["-c", &command])
                 .current_dir(cwd)
                 .output()
@@ -219,7 +224,8 @@ pub fn fake_terminal() -> UnboundedSender<ToolRequest> {
                     ended: output.status.code().map_or(Ended::Unknown, Ended::Exited),
                 })
                 .map_err(|error| error.to_string());
-            let _ = answer.send(ran);
+            let _ = answer.send(went);
+            ran.borrow_mut().push(command);
         }
     });
     asks
@@ -298,7 +304,7 @@ impl Stages for FakeStages {
     /// Runs the commands asked of a chat with no stage, as a terminal
     /// would, in a shell.
     fn unstaged(&self, request: ToolRequest) {
-        let _ = fake_terminal().send(request);
+        let _ = fake_terminal(Shared::default()).send(request);
     }
 }
 
@@ -456,11 +462,13 @@ pub async fn settle(cx: &mut VisualTestContext) {
 }
 
 /// Waits until the daemon of `workspace` has done all it was told, and
-/// `workspace` has heard all the daemon said of it, twice over, for
+/// `workspace` has heard all the daemon said of it, four times over, for
 /// what the workspace asks on hearing it, and what the daemon answers:
 /// as an agent that drives the stage, which the daemon starts once the
 /// window has the chat's view, has the daemon tell the chat's
-/// conversation and tabs, and gives the stage a relay.
+/// conversation and tabs, and gives the stage a relay. What the agents
+/// do on their own, in real time, it does not wait for: a test waits
+/// for that with [`settle_until`].
 pub async fn settle_on(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) {
     for _ in 0..4 {
         let settled = workspace.update(cx, |workspace, _| workspace.sync());

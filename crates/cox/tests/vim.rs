@@ -12,9 +12,8 @@ use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
 
-use cox::chat::conversation::State;
+use cox::chat::conversation::{Entry, State};
 use cox::chat::view::ChatView;
 use cox::stage::Tabs;
 use cox::stage::changes::Changes;
@@ -143,12 +142,37 @@ fn shown_view(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Enti
     })
 }
 
-/// Lets the daemon and the agent go on in real time for a while.
-fn go_on(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) {
-    for _ in 0..20 {
-        std::thread::sleep(Duration::from_millis(10));
-        settled(cx, workspace);
-    }
+/// Waits, settling the daemon again and again, until `done` holds.
+fn settle_until(cx: &mut VisualTestContext, done: impl Fn(&mut VisualTestContext) -> bool) {
+    let executor = cx.executor();
+    executor.block_test(fake_daemon::settle_until(cx, done));
+}
+
+/// Waits until the agent of the chat `view` has ended its turn with a
+/// reply.
+fn wait_for_reply(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
+    settle_until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            let conversation = view.conversation();
+            conversation.state() == State::Idle
+                && matches!(conversation.entries().last(), Some(Entry::Reply(_)))
+        })
+    });
+}
+
+/// Waits until the agent of the chat `view` waits in its turn, to be
+/// stopped, having said so.
+fn wait_for_waiting(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
+    settle_until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.conversation().entries().last() == Some(&Entry::Reply("waiting".to_owned()))
+        })
+    });
+}
+
+/// Waits until the turn of the chat `view` has stopped.
+fn wait_for_stop(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
+    settle_until(cx, |cx| agent_state(cx, view) == State::Idle);
 }
 
 fn agent_state(cx: &mut VisualTestContext, view: &Entity<ChatView>) -> State {
@@ -193,21 +217,20 @@ fn escape_never_stops_the_agent_and_control_c_in_normal_mode_does(cx: &mut TestA
     let view = shown_view(cx, &workspace);
     cx.simulate_input("wait");
     keys::press(cx, &workspace, "enter");
-    go_on(cx, &workspace);
+    wait_for_waiting(cx, &view);
     assert_eq!(agent_state(cx, &view), State::Busy);
 
+    // A stop is a state of the chat's at once, which the daemon has once
+    // the keys are pressed.
     keys::press(cx, &workspace, "escape");
-    go_on(cx, &workspace);
     assert_eq!(shown_mode(cx), Some("Normal"));
     assert_eq!(agent_state(cx, &view), State::Busy, "escape in insert mode");
 
     keys::press(cx, &workspace, "escape");
-    go_on(cx, &workspace);
     assert_eq!(agent_state(cx, &view), State::Busy, "escape in normal mode");
 
     keys::press(cx, &workspace, "ctrl-c");
-    go_on(cx, &workspace);
-    assert_eq!(agent_state(cx, &view), State::Idle);
+    wait_for_stop(cx, &view);
 }
 
 #[gpui::test]
@@ -220,17 +243,11 @@ fn a_count_in_normal_mode_answers_no_question_of_the_agent(cx: &mut TestAppConte
     let asked = |cx: &mut VisualTestContext| {
         view.read_with(cx, |view, _| view.conversation().options_asked())
     };
-    for _ in 0..500 {
-        if asked(cx) > 0 {
-            break;
-        }
-        go_on(cx, &workspace);
-    }
+    settle_until(cx, |cx| asked(cx) > 0);
     let options = asked(cx);
     assert!(options > 0, "the agent asks permission");
 
     keys::press(cx, &workspace, "escape 1");
-    go_on(cx, &workspace);
     assert_eq!(asked(cx), options);
     assert_eq!(agent_state(cx, &view), State::Asking);
 }
@@ -431,13 +448,10 @@ fn escape_closes_the_list_over_the_input(cx: &mut TestAppContext) {
     let view = shown_view(cx, &workspace);
     cx.simulate_input("hello");
     keys::press(cx, &workspace, "enter");
-    for _ in 0..500 {
-        let known = view.read_with(cx, |view, _| !view.conversation().commands().is_empty());
-        if known && agent_state(cx, &view) == State::Idle {
-            break;
-        }
-        go_on(cx, &workspace);
-    }
+    wait_for_reply(cx, &view);
+    settle_until(cx, |cx| {
+        view.read_with(cx, |view, _| !view.conversation().commands().is_empty())
+    });
 
     cx.simulate_input("/co");
     keys::press(cx, &workspace, "escape i enter");
@@ -446,12 +460,7 @@ fn escape_closes_the_list_over_the_input(cx: &mut TestAppContext) {
         "",
         "the line went as written"
     );
-    for _ in 0..500 {
-        if agent_state(cx, &view) == State::Idle {
-            break;
-        }
-        go_on(cx, &workspace);
-    }
+    wait_for_reply(cx, &view);
 
     cx.simulate_input("/co");
     keys::press(cx, &workspace, "enter");
@@ -853,12 +862,11 @@ fn off_the_keys_are_as_they_were(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("vim-status").is_none());
     cx.simulate_input("wait");
     keys::press(cx, &workspace, "enter");
-    go_on(cx, &workspace);
+    wait_for_waiting(cx, &view);
     assert_eq!(agent_state(cx, &view), State::Busy);
 
     keys::press(cx, &workspace, "escape");
-    go_on(cx, &workspace);
-    assert_eq!(agent_state(cx, &view), State::Idle);
+    wait_for_stop(cx, &view);
 
     keys::press(cx, &workspace, "ctrl-w h g t");
     assert!(!in_part(cx, "Rail"));
@@ -906,14 +914,13 @@ fn the_settings_turn_the_keys_on_and_off_at_once(cx: &mut TestAppContext) {
     let view = shown_view(cx, &workspace);
     cx.simulate_input("wait");
     keys::press(cx, &workspace, "enter");
-    go_on(cx, &workspace);
+    wait_for_waiting(cx, &view);
     assert_eq!(agent_state(cx, &view), State::Busy);
 
     choose_on_the_settings(cx, &workspace, "vim-on");
     assert_eq!(kept_vim(), Some(serde_json::Value::Bool(true)));
     assert_eq!(shown_mode(cx), Some("Normal"));
     keys::press(cx, &workspace, "i h i escape");
-    go_on(cx, &workspace);
     assert_eq!(keys::shown_input(cx, &workspace), "hi");
     assert_eq!(shown_mode(cx), Some("Normal"));
     assert_eq!(
@@ -929,12 +936,7 @@ fn the_settings_turn_the_keys_on_and_off_at_once(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "j");
     assert_eq!(keys::shown_input(cx, &workspace), "hji");
     keys::press(cx, &workspace, "escape");
-    go_on(cx, &workspace);
-    assert_eq!(
-        agent_state(cx, &view),
-        State::Idle,
-        "escape without Vim's keys"
-    );
+    wait_for_stop(cx, &view);
 }
 
 /// A folder of its own for a test, with the files `paths`, saying their
@@ -1455,12 +1457,7 @@ fn the_conversation_scrolls_from_the_input_in_normal_mode(cx: &mut TestAppContex
     let words = "word ".repeat(1500);
     cx.simulate_input(&words);
     keys::press(cx, &workspace, "enter");
-    for _ in 0..500 {
-        if agent_state(cx, &view) == State::Idle {
-            break;
-        }
-        go_on(cx, &workspace);
-    }
+    wait_for_reply(cx, &view);
     keys::press(cx, &workspace, "escape");
     let down = |cx: &mut VisualTestContext| {
         view.read_with(cx, |view, _| {
@@ -1746,12 +1743,11 @@ fn colon_stop_stops_the_agent(cx: &mut TestAppContext) {
     let view = shown_view(cx, &workspace);
     cx.simulate_input("wait");
     keys::press(cx, &workspace, "enter");
-    go_on(cx, &workspace);
+    wait_for_waiting(cx, &view);
     assert_eq!(agent_state(cx, &view), State::Busy);
 
     keys::press(cx, &workspace, "escape : s t o p enter");
-    go_on(cx, &workspace);
-    assert_eq!(agent_state(cx, &view), State::Idle);
+    wait_for_stop(cx, &view);
 }
 
 #[gpui::test]
@@ -2203,12 +2199,7 @@ fn f_in_the_chat_answers_the_agent_s_question_by_its_label(cx: &mut TestAppConte
     let asked = |cx: &mut VisualTestContext| {
         view.read_with(cx, |view, _| view.conversation().options_asked())
     };
-    for _ in 0..500 {
-        if asked(cx) > 0 {
-            break;
-        }
-        go_on(cx, &workspace);
-    }
+    settle_until(cx, |cx| asked(cx) > 0);
     assert!(asked(cx) > 0, "the agent asks permission");
 
     keys::press(cx, &workspace, "escape f");
@@ -2220,8 +2211,7 @@ fn f_in_the_chat_answers_the_agent_s_question_by_its_label(cx: &mut TestAppConte
     );
     let option = tag_over(cx, "option-1");
     type_label(cx, &workspace, &option);
-    go_on(cx, &workspace);
-    assert_eq!(asked(cx), 0, "the option was chosen");
+    settle_until(cx, |cx| asked(cx) == 0);
     assert_ne!(agent_state(cx, &view), State::Asking);
 }
 
@@ -2843,12 +2833,7 @@ fn slash_finds_in_the_conversation_and_n_goes_on(cx: &mut TestAppContext) {
     let send = |cx: &mut VisualTestContext, line: &str| {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(line.to_owned()));
         keys::press(cx, &workspace, "secondary-v enter");
-        for _ in 0..500 {
-            if agent_state(cx, &view) == State::Idle {
-                break;
-            }
-            go_on(cx, &workspace);
-        }
+        wait_for_reply(cx, &view);
     };
     send(cx, "the first needle");
     let filler = "filler ".repeat(400);
@@ -2900,12 +2885,7 @@ fn brackets_go_from_entry_to_entry_and_gy_copies_one(cx: &mut TestAppContext) {
     for line in ["alpha", "beta"] {
         cx.simulate_input(line);
         keys::press(cx, &workspace, "enter");
-        for _ in 0..500 {
-            if agent_state(cx, &view) == State::Idle {
-                break;
-            }
-            go_on(cx, &workspace);
-        }
+        wait_for_reply(cx, &view);
     }
     keys::press(cx, &workspace, "escape g g");
     let selected = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.selected_text());
@@ -3046,12 +3026,7 @@ fn converse(
     for line in lines {
         cx.simulate_input(line);
         keys::press(cx, workspace, "enter");
-        for _ in 0..500 {
-            if agent_state(cx, view) == State::Idle {
-                break;
-            }
-            go_on(cx, workspace);
-        }
+        wait_for_reply(cx, view);
     }
 }
 
@@ -3254,12 +3229,7 @@ fn the_conversation_s_cursor_keeps_in_sight(cx: &mut TestAppContext) {
     for _ in 0..4 {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(filler.clone()));
         keys::press(cx, &workspace, "secondary-v enter");
-        for _ in 0..500 {
-            if agent_state(cx, &view) == State::Idle {
-                break;
-            }
-            go_on(cx, &workspace);
-        }
+        wait_for_reply(cx, &view);
     }
     keys::press(cx, &workspace, "escape ctrl-w k g g");
     let down = |cx: &mut VisualTestContext| {

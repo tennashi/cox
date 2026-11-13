@@ -33,7 +33,9 @@ use cox_core::goal::Goal as KeptGoal;
 use cox_core::settings::{Choice, Setting};
 use cox_core::store::Named;
 use cox_core::store::Store;
-use fake_agent::{BACKGROUND_FINISHED, BACKGROUND_STARTED, FakeAgent, LogsIn, Resumes, TITLE};
+use fake_agent::{
+    BACKGROUND_FINISHED, BACKGROUND_STARTED, Event, FakeAgent, LogsIn, Resumes, TITLE,
+};
 use fake_daemon::{
     Agents, Asks, FIRST_AGENT, FakeStages, Fakes, Kept, Made, SECOND_AGENT, open_again, settle,
     settle_on, settle_until, settled,
@@ -999,12 +1001,13 @@ async fn a_line_sent_while_the_agent_works_goes_into_its_turn(cx: &mut TestAppCo
 
 #[gpui::test]
 async fn what_the_agent_says_after_its_turn_ended_shows_as_it_comes(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch::folder("went-on"));
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("went-on"));
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
 
     say(cx, &workspace, "background").await;
     // The human sends nothing more.
+    agents.borrow()[0].go_on();
     wait_until(cx, &view, |conversation| {
         conversation.entries().last() == Some(&Entry::Reply(BACKGROUND_FINISHED.to_owned()))
     })
@@ -1025,11 +1028,12 @@ async fn what_the_agent_says_after_its_turn_ended_shows_as_it_comes(cx: &mut Tes
 
 #[gpui::test]
 async fn the_agent_asks_after_its_turn_ended_and_goes_on_once_answered(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch::folder("went-on-asks"));
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("went-on-asks"));
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
 
     say(cx, &workspace, "background ask").await;
+    agents.borrow()[0].go_on();
     wait_until(cx, &view, |conversation| {
         conversation.state() == State::Asking
     })
@@ -1112,6 +1116,7 @@ async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestA
     let view = shown(cx, &workspace);
 
     say(cx, &workspace, "background ask").await;
+    agents.borrow()[0].go_on();
     wait_until(cx, &view, |conversation| {
         conversation.state() == State::Asking
     })
@@ -1137,12 +1142,13 @@ fn waiting_for(mark: &Path) -> String {
     )
 }
 
-/// Sets the goal of the chat `view` to pass once `command` does, and has
-/// the human send a line its agent goes on with after its turn ended,
-/// asking them, as `command` runs as the turn ended.
+/// Sets the goal of the chat `view`, whose agent is `agent`, to pass once
+/// `command` does, and has the human send a line the agent goes on with
+/// after its turn ended, asking them, as `command` runs as the turn ended.
 async fn ask_as_the_goal_is_checked(
     cx: &mut VisualTestContext,
     view: &Entity<ChatView>,
+    agent: &FakeAgent,
     command: &str,
 ) {
     view.read_with(cx, |view, _| {
@@ -1150,6 +1156,11 @@ async fn ask_as_the_goal_is_checked(
     });
     cx.simulate_input("background ask");
     cx.simulate_keystrokes("enter");
+    wait_until(cx, view, |conversation| {
+        conversation.state() == State::Checking
+    })
+    .await;
+    agent.go_on();
     wait_until(cx, view, |conversation| {
         conversation.state() == State::Asking
     })
@@ -1186,13 +1197,14 @@ async fn the_goal_checked_as_the_agent_asks_goes_on_once_the_human_answers(
     )
     .unwrap();
     turn_on(&home, &triggers.join("check.md"));
-    let (_, workspace, cx) = open_window(cx, home.clone());
+    let (agents, workspace, cx) = open_window(cx, home.clone());
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
     let mark = home.join("made");
     let command = waiting_for(&mark);
 
-    ask_as_the_goal_is_checked(cx, &view, &command).await;
+    let agent = Arc::clone(&agents.borrow()[0]);
+    ask_as_the_goal_is_checked(cx, &view, &agent, &command).await;
     click(cx, "option-1");
     wait_until(cx, &view, |conversation| {
         conversation.entries().last() == Some(&Entry::Reply(BACKGROUND_FINISHED.to_owned()))
@@ -1225,18 +1237,19 @@ async fn what_the_goals_command_answers_as_the_agent_asks_is_taken_once_answered
 ) {
     let home = scratch::folder("checks-held");
     std::fs::create_dir_all(&home).unwrap();
-    let (_, workspace, cx) = open_window(cx, home.clone());
+    let fakes = Fakes::default();
+    let (agents, ran) = (fakes.agents.clone(), fakes.ran.clone());
+    let (workspace, cx) = open_with(cx, home.clone(), Kept::Memory, fakes);
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
     let (mark, ended) = (home.join("made"), home.join("ended"));
     let command = format!("{} && touch '{}'", waiting_for(&mark), ended.display());
 
-    ask_as_the_goal_is_checked(cx, &view, &command).await;
+    let agent = Arc::clone(&agents.borrow()[0]);
+    ask_as_the_goal_is_checked(cx, &view, &agent, &command).await;
     // The command ends while the human is asked, and the daemon hears it.
     std::fs::write(&mark, "").unwrap();
-    settle_until(cx, |_| ended.exists()).await;
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    settle(cx).await;
+    settle_until(cx, |_| ran.borrow().contains(&command)).await;
     let state = view.read_with(cx, |view, _| view.conversation().state());
     assert_eq!(state, State::Asking);
     click(cx, "option-1");
@@ -1261,7 +1274,8 @@ async fn stopping_the_agent_that_asks_as_the_goal_is_checked_gives_the_check_up(
     let view = shown(cx, &workspace);
     let mark = home.join("made");
 
-    ask_as_the_goal_is_checked(cx, &view, &waiting_for(&mark)).await;
+    let agent = Arc::clone(&agents.borrow()[0]);
+    ask_as_the_goal_is_checked(cx, &view, &agent, &waiting_for(&mark)).await;
     click(cx, "stop");
     wait_for_turn(cx, &view).await;
     std::fs::write(&mark, "").unwrap();
@@ -2582,12 +2596,15 @@ async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppC
 
 #[gpui::test]
 async fn a_turn_that_ends_unseen_marks_its_chat_until_it_is_shown(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch::folder("unread"));
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("unread"));
     cx.simulate_keystrokes("secondary-n");
     let first = shown(cx, &workspace);
     cx.simulate_input("slowly");
     cx.simulate_keystrokes("enter");
     cx.simulate_keystrokes("secondary-n");
+    let agent = Arc::clone(&agents.borrow()[0]);
+    settle_until(cx, |_| agent.did(&Event::Held)).await;
+    agent.go_on();
     wait_for_turn(cx, &first).await;
     let unread = |cx: &mut VisualTestContext| {
         workspace.read_with(cx, |workspace, _| {
@@ -2691,7 +2708,7 @@ async fn wait_until(
 
 #[gpui::test]
 async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch::folder("notices"));
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("notices"));
     let recorded = Rc::new(Recorded::default());
     let notices = Rc::clone(&recorded);
     cx.update(|window, cx| {
@@ -2713,6 +2730,9 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
     cx.simulate_input("slow permission");
     cx.simulate_keystrokes("enter");
     cx.simulate_keystrokes("secondary-n");
+    let agent = Arc::clone(&agents.borrow()[0]);
+    settle_until(cx, |_| agent.did(&Event::Held)).await;
+    agent.go_on();
     wait_until(cx, &first, |conversation| {
         conversation.state() == State::Asking
     })
@@ -2743,6 +2763,16 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
     cx.simulate_input("slowly");
     cx.simulate_keystrokes("enter");
     cx.deactivate_window();
+    settle_until(cx, |_| {
+        agent
+            .events()
+            .iter()
+            .filter(|event| **event == Event::Held)
+            .count()
+            == 2
+    })
+    .await;
+    agent.go_on();
     wait_for_turn(cx, &first).await;
     assert_eq!(
         told(),
@@ -2777,7 +2807,7 @@ async fn the_triggers_of_a_permission_request_gather_before_the_human_is_told(
     )
     .unwrap();
     turn_on(&home, &triggers.join("touches.md"));
-    let (_, workspace, cx) = open_window(cx, home.clone());
+    let (agents, workspace, cx) = open_window(cx, home.clone());
     let recorded = Rc::new(Recorded::default());
     let notices = Rc::clone(&recorded);
     cx.update(|window, cx| {
@@ -2792,6 +2822,9 @@ async fn the_triggers_of_a_permission_request_gather_before_the_human_is_told(
     cx.simulate_input("slow permission");
     cx.simulate_keystrokes("enter");
     cx.simulate_keystrokes("secondary-n");
+    let agent = Arc::clone(&agents.borrow()[0]);
+    settle_until(cx, |_| agent.did(&Event::Held)).await;
+    agent.go_on();
 
     wait_until(cx, &first, |conversation| {
         conversation.state() == State::Asking && !conversation.gathering()
@@ -3712,6 +3745,8 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
     let sketch = shown(cx, &workspace);
     cx.simulate_input("slow");
     cx.simulate_keystrokes("enter");
+    let agent = Arc::clone(&agents.borrow()[1]);
+    settle_until(cx, |_| agent.did(&Event::Held)).await;
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.end_sketch_as(1, own_ending("Discard sketch"), window, cx);
     });
@@ -3725,6 +3760,7 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
         "{last:?}"
     );
     assert!(folder.exists());
+    agent.go_on();
     wait_for_discarded(cx, &workspace, &folder).await;
     let prompts = agents.borrow()[1].prompts();
     assert!(
@@ -3760,7 +3796,19 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
     let first = view_at(cx, &workspace, 0);
     assert_eq!(shown(cx, &workspace), first);
     workspace.update_in(cx, |workspace, window, cx| workspace.show(1, window, cx));
-    say(cx, &workspace, "go on").await;
+    let started = agents.borrow().len();
+    let sketch = shown(cx, &workspace);
+    cx.simulate_input("go on");
+    cx.simulate_keystrokes("enter");
+    // The agent started again is told the sketch's conversation, its slow
+    // line with it.
+    settle_until(cx, |_| {
+        let agents = agents.borrow();
+        agents.len() > started && agents.last().unwrap().did(&Event::Held)
+    })
+    .await;
+    agents.borrow().last().unwrap().go_on();
+    wait_for_turn(cx, &sketch).await;
     assert_eq!(agents.borrow().last().unwrap().cwd(), Some(home.clone()));
     let open = workspace.read_with(cx, |workspace, _| {
         workspace.chats(0).nth(1).unwrap().is_open()
@@ -4084,7 +4132,8 @@ async fn open_child(
 async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     let home = scratch::folder("wait-home");
     let store = kept_store("chats-11");
-    let (_, asks, workspace, cx) = open_window_asking(cx, home.clone(), store, Resumes::Resume);
+    let (agents, asks, workspace, cx) =
+        open_window_asking(cx, home.clone(), store, Resumes::Resume);
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     let ask = |request| asks.borrow()[0].send(request).unwrap();
@@ -4093,10 +4142,13 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     // Waiting for a chat at work answers once its turn ends.
     open_child(cx, &workspace, &asks, "slow hello", 2).await;
     let (slow, _) = keys(cx, &workspace, 1);
+    let agent = Arc::clone(&agents.borrow()[1]);
+    settle_until(cx, |_| agent.did(&Event::Held)).await;
     let (answer, mut waited) = tokio::sync::oneshot::channel();
     ask(ChatRequest::WaitChat { chat: slow, answer });
-    cx.run_until_parked();
+    settled(cx, &workspace);
     assert!(waited.try_recv().is_err(), "answered before the turn ended");
+    agent.go_on();
     let view = view_of(cx, 1);
     wait_for_turn(cx, &view).await;
     cx.run_until_parked();
