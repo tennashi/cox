@@ -56,7 +56,7 @@ actions!(
 );
 
 /// The key context of the settings screen.
-const KEY_CONTEXT: &str = "Settings";
+pub(crate) const KEY_CONTEXT: &str = "Settings";
 
 /// How wide the card is.
 const WIDTH: f32 = 680.;

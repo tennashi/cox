@@ -313,16 +313,39 @@ pub fn open_window(
     fakes: Fakes,
     stages: FakeStages,
 ) -> (Entity<Workspace>, &mut VisualTestContext) {
-    // The agents and the daemon run on threads of their own, so the test
-    // waits for them in real time instead of only running GPUI's own
-    // tasks.
-    cx.executor().allow_parking();
     cx.update(|cx| {
         cox::ui::input::bind_keys(cx);
         cox::chat::view::bind_keys(cx);
         cox::settings::view::bind_keys(cx);
         cox::workspace::bind_keys(cx);
     });
+    open_bound(cx, home, kept, fakes, stages)
+}
+
+/// Opens the window like [`open_window`], with every key Cox binds, as
+/// the app does: the stage's and its terminals' too.
+pub fn open_window_with_every_key(
+    cx: &mut TestAppContext,
+    home: PathBuf,
+    kept: Kept,
+    fakes: Fakes,
+    stages: FakeStages,
+) -> (Entity<Workspace>, &mut VisualTestContext) {
+    cx.update(cox::app::bind_keys);
+    open_bound(cx, home, kept, fakes, stages)
+}
+
+fn open_bound(
+    cx: &mut TestAppContext,
+    home: PathBuf,
+    kept: Kept,
+    fakes: Fakes,
+    stages: FakeStages,
+) -> (Entity<Workspace>, &mut VisualTestContext) {
+    // The agents and the daemon run on threads of their own, so the test
+    // waits for them in real time instead of only running GPUI's own
+    // tasks.
+    cx.executor().allow_parking();
     let ticker = Ticker::start(cx.executor());
     let (workspace, cx) =
         cx.add_window_view(|window, cx| over_daemon(home, kept, fakes, stages, window, cx));

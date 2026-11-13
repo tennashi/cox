@@ -71,7 +71,7 @@ use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED};
 use crate::ui::translation::Translate;
 
-const KEY_CONTEXT: &str = "Terminal";
+pub(crate) const KEY_CONTEXT: &str = "Terminal";
 
 /// How often a command the agent runs looks whether the agent still waits
 /// for it.
@@ -310,6 +310,12 @@ impl Terminal {
         self.window_size = size.window_size(cell);
         self.term.lock().resize(size);
         let _ = self.pty.send(Msg::Resize(self.window_size));
+    }
+
+    /// Keeps what the input method composes, and says whether it does.
+    fn compose(&mut self, text: Option<String>, cx: &mut Context<Self>) {
+        crate::ui::composing::note(cx.entity_id(), text.is_some(), cx);
+        self.composing = text;
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -633,7 +639,7 @@ impl EntityInputHandler for Terminal {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.composing = None;
+        self.compose(None, cx);
         cx.notify();
     }
 
@@ -646,7 +652,7 @@ impl EntityInputHandler for Terminal {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.composing = None;
+        self.compose(None, cx);
         if !text.is_empty() {
             self.type_in(text.as_bytes().to_vec(), cx);
         }
@@ -662,7 +668,7 @@ impl EntityInputHandler for Terminal {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.composing = (!new_text.is_empty()).then(|| new_text.to_owned());
+        self.compose((!new_text.is_empty()).then(|| new_text.to_owned()), cx);
         cx.notify();
     }
 

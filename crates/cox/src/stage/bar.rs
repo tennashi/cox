@@ -61,7 +61,7 @@ actions!(
 );
 
 /// The key context of the menu of the stage's +.
-pub(super) const MENU_CONTEXT: &str = "StageMenu";
+pub(crate) const MENU_CONTEXT: &str = "StageMenu";
 
 /// The menu of the stage's +, while it is open: the line at its top,
 /// where the human types a URL, a file or a command.

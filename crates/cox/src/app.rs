@@ -242,6 +242,9 @@ pub fn run(settings: Settings) -> ExitCode {
         .with_assets(Icons)
         .run(move |cx: &mut App| {
             bind_keys(cx);
+            if crate::settings::vim() {
+                crate::vim::install(cx);
+            }
             cx.set_global(Servers::default());
             cx.set_global(agents.clone());
             serve_browser(&cef, cx);
@@ -399,7 +402,7 @@ fn open_store() -> Store {
 }
 
 /// Binds the keys of every part of the window, and of quitting.
-fn bind_keys(cx: &mut App) {
+pub fn bind_keys(cx: &mut App) {
     crate::ui::input::bind_keys(cx);
     crate::ui::translation::bind_keys(cx);
     crate::chat::hand::bind_keys(cx);

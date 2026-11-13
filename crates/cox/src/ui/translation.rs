@@ -29,7 +29,7 @@ actions!(
 );
 
 /// The keys of the card.
-const KEY_CONTEXT: &str = "Translation";
+pub(crate) const KEY_CONTEXT: &str = "Translation";
 
 /// How wide the card is.
 const WIDTH: f32 = 380.;

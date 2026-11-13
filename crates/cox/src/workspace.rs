@@ -69,7 +69,7 @@ use crate::daemon::wire::{ChatRow, FromDaemon, Listing, ProjectRow, StageAsk, To
 use crate::notices::AppNotices;
 use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView, UnpairPhones};
 
-mod project_card;
+pub(crate) mod project_card;
 
 use crate::stage::changes::ShowTurn;
 use crate::stage::owners::ShowChat;
@@ -129,7 +129,7 @@ const BACKDROP: u32 = 0x0e0e_0fb8;
 const COX: &str = "Cox";
 
 /// The key context of the input that renames a chat.
-const RENAMING: &str = "Renaming";
+pub(crate) const RENAMING: &str = "Renaming";
 
 /// Why a command the agent asks to run does not run, in a chat with no
 /// stage.
@@ -1254,7 +1254,8 @@ impl Workspace {
 
     /// Opens a chat in the project of `folder`, or of Cox's own when there
     /// is none, and shows it.
-    pub fn open(&mut self, folder: Option<PathBuf>, _: &mut Window, _: &mut Context<Self>) {
+    pub fn open(&mut self, folder: Option<PathBuf>, _: &mut Window, cx: &mut Context<Self>) {
+        crate::vim::insert(cx);
         self.tell(ToDaemon::Open { folder });
     }
 
@@ -3145,6 +3146,10 @@ impl Render for Workspace {
         div()
             .track_focus(&self.focus_handle)
             .key_context("Workspace")
+            // GPUI still hands a key an interceptor stopped to the first key
+            // listener on the focus path. This empty one is first, so the
+            // conversation's, which answers the agent's options, never sees it.
+            .capture_key_down(|_, _, _| {})
             .on_action(cx.listener(|workspace, _: &NewChat, window, cx| {
                 workspace.open(None, window, cx);
             }))

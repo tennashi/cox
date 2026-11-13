@@ -16,6 +16,7 @@
 //! - [`screen`] captures what the screen shows of the window.
 
 pub mod button;
+pub mod composing;
 pub mod diagram;
 pub mod ellipsis;
 pub mod icons;

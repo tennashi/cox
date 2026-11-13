@@ -73,7 +73,7 @@
 pub mod activity;
 pub mod android;
 mod asked;
-mod bar;
+pub(crate) mod bar;
 pub mod calls;
 pub mod changes;
 pub mod code;

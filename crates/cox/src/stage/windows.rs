@@ -19,6 +19,8 @@ use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
 use crate::ui::theme::{ASKING, DIM, FAILED, FAINT, FOREGROUND};
 
+pub(crate) const KEY_CONTEXT: &str = "Windows";
+
 /// How often the tab reads the windows again, as apps open and close them.
 const READ_EVERY: Duration = Duration::from_secs(2);
 
@@ -174,6 +176,7 @@ impl Render for Windows {
             .id("mac-windows")
             .debug_selector(|| "mac-windows".to_owned())
             .track_focus(&self.focus_handle)
+            .key_context(KEY_CONTEXT)
             .overflow_y_scroll()
             .text_color(rgb(FOREGROUND))
             .child(heading("mac-windows-heading", TITLE, said, None));

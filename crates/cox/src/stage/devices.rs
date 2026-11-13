@@ -24,6 +24,8 @@ use crate::ui::button::{self, Kind};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, ASKING, DIM, FAILED, FAINT, FOREGROUND};
 
+pub(crate) const KEY_CONTEXT: &str = "Devices";
+
 /// How often the tab reads the devices again, as Android Studio makes or
 /// deletes them and emulators start and stop.
 const READ_EVERY: Duration = Duration::from_secs(2);
@@ -297,6 +299,7 @@ impl Render for Devices {
             .id("android-devices")
             .debug_selector(|| "android-devices".to_owned())
             .track_focus(&self.focus_handle)
+            .key_context(KEY_CONTEXT)
             .overflow_y_scroll()
             .text_color(rgb(FOREGROUND))
             .child(heading("android-heading", TITLE, said, Some(home)))

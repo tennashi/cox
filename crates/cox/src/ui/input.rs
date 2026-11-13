@@ -292,6 +292,7 @@ impl LineInput {
     /// Changes the text, or the selection, and draws it again.
     fn edit(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Draft)) {
         change(&mut self.draft);
+        crate::ui::composing::note(cx.entity_id(), self.draft.is_composing(), cx);
         cx.notify();
     }
 

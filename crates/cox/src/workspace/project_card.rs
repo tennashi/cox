@@ -43,7 +43,7 @@ actions!(
 );
 
 /// The key context of the card.
-const KEY_CONTEXT: &str = "ProjectCard";
+pub(crate) const KEY_CONTEXT: &str = "ProjectCard";
 
 /// How wide the card is.
 const WIDTH: f32 = 560.;

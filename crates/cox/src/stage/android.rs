@@ -32,6 +32,8 @@ use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
 use crate::ui::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
 
+pub(crate) const KEY_CONTEXT: &str = "Android";
+
 /// How far one click of a mouse's wheel turns it, as the emulator counts.
 const WHEEL_CLICK: f32 = 120.;
 
@@ -412,6 +414,7 @@ impl Render for Android {
                     .min_h_0()
                     .relative()
                     .track_focus(&self.focus_handle)
+                    .key_context(KEY_CONTEXT)
                     .on_key_down(cx.listener(Self::key_down))
                     .child(Display {
                         mirrored: cx.entity(),

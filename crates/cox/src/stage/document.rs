@@ -31,7 +31,7 @@ use crate::ui::theme::{BORDER, DIM, FAILED};
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
 
-const KEY_CONTEXT: &str = "Document";
+pub(crate) const KEY_CONTEXT: &str = "Document";
 
 /// How wide the text grows, at most.
 const TEXT_WIDTH: f32 = 760.;
