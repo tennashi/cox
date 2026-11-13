@@ -342,6 +342,68 @@ impl Reading {
         start
     }
 
+    /// The entry what is selected starts in, if something is.
+    #[must_use]
+    pub fn selected_entry(&self) -> Option<usize> {
+        self.selection
+            .map(|selection| selection.anchor.min(selection.head).text.entry)
+    }
+
+    /// Whether the last frame laid out text of entry `entry`.
+    #[must_use]
+    pub fn laid_out(&self, entry: usize) -> bool {
+        self.painted
+            .0
+            .borrow()
+            .iter()
+            .any(|text| text.id.entry == entry && text.current)
+    }
+
+    /// Selects the next match of `query` in entry `entry`, as the last
+    /// frame laid it out, as `direction` goes: from what is selected in
+    /// it, when `after` and something is, else from its start or its end.
+    /// Answers where the match starts as the frame drew it.
+    pub fn find_in(
+        &mut self,
+        entry: usize,
+        query: &str,
+        direction: Direction,
+        after: bool,
+    ) -> Option<Point<Pixels>> {
+        let texts = self.painted.0.borrow();
+        let pieces: Vec<&PaintedText> = texts
+            .iter()
+            .filter(|text| text.id.entry == entry && text.current)
+            .collect();
+        let from = self.selection.filter(|_| after).and_then(|selection| {
+            let start = selection.anchor.min(selection.head);
+            let at = pieces.iter().position(|text| text.id == start.text)?;
+            Some((at, start.offset))
+        });
+        let mut found = pieces.iter().enumerate().flat_map(|(at, text)| {
+            search::matches(query, &text.text)
+                .into_iter()
+                .map(move |range| (at, range))
+        });
+        let place = |(at, range): &(usize, Range<usize>)| (*at, range.start);
+        let (at, range) = match (direction, from) {
+            (Direction::Forward, Some(from)) => found.find(|found| place(found) > from),
+            (Direction::Forward, None) => found.next(),
+            (Direction::Backward, Some(from)) => found.rev().find(|found| place(found) < from),
+            (Direction::Backward, None) => found.next_back(),
+        }?;
+        let id = pieces[at].id;
+        let start = pieces[at].layout.position_for_index(range.start);
+        drop(pieces);
+        drop(texts);
+        let spot = |offset| Spot { text: id, offset };
+        self.selection = Some(Selection {
+            anchor: spot(range.start),
+            head: spot(range.end),
+        });
+        start
+    }
+
     /// The text selected.
     #[must_use]
     pub fn selected_text(&self) -> String {

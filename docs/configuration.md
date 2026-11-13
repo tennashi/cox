@@ -150,6 +150,7 @@ selected.
 | Normal | Ctrl-C | Stops the agent. |
 | Normal | Esc | Forgets a count typed. In the goal's, a sketch's or a rename's input, the settings or a project's card, it closes them as Esc does without Vim. |
 | Normal | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Scrolls the conversation a line, half its height, or to its ends. |
+| Normal | `/`, `?`, `n`, `N` | Finds text in the conversation forward or back, out of sight too, and again either way: scrolls to it and selects it. |
 | Normal | Ctrl-W `k` | Opens the list of the project's chats, with the keyboard in it. Ctrl-W `j` or Esc closes it. |
 
 **The rail and the list of chats.** `j` and `k` move the selection,

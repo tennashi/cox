@@ -73,6 +73,7 @@ use crate::vim::keymap::Motion;
 
 mod complete;
 mod entries;
+mod find;
 mod settings;
 
 use crate::vim::hints::Hinted as _;
@@ -203,6 +204,9 @@ pub struct ChatView {
     open_link: OpenLink,
     /// The conversation's text, and what the human selects of it.
     reading: Reading,
+    /// The search of Vim's `/` going through the conversation, while it
+    /// goes on.
+    finding: Option<find::Finding>,
     /// What the human opened and closed of the conversation.
     folds: Folds,
     /// Whether the human folded the card of the plan to its line.
@@ -261,6 +265,7 @@ impl ChatView {
             stage: None,
             open_link: Rc::new(|_, _, _| {}),
             reading: Reading::default(),
+            finding: None,
             folds: Folds::default(),
             plan_folded: false,
             goal_input: None,
@@ -1008,6 +1013,7 @@ impl ChatView {
             .on_action(cx.listener(Self::translate))
             .on_action(cx.listener(Self::add_to_chat))
             .on_action(cx.listener(Self::move_by_keys))
+            .on_action(cx.listener(Self::find_text))
             .capture_key_down(cx.listener(Self::choose_with_key))
             // The list over the input takes its keys first, while it is
             // open.
@@ -1070,7 +1076,8 @@ impl ChatView {
                                     cx.processor(|view, place, _, cx| view.render_place(place, cx)),
                                 )
                                 .size_full(),
-                            ),
+                            )
+                            .children(self.render_finding(cx)),
                     )
                     .child(region::mark({
                         let view = cx.weak_entity();

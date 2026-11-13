@@ -334,6 +334,7 @@ const HINTED: &[Region] = &[
 
 /// The parts Vim's `/` searches the text of.
 const SEARCHERS: &[Region] = &[
+    Region::Chat,
     Region::Page,
     Region::Code,
     Region::Document,
