@@ -35,7 +35,7 @@ use gpui::{
     Styled, Window, actions, div, px, rgb,
 };
 
-use theme::{BORDER, BORDER_STRONG, CARD_RADIUS, FOREGROUND, RAISED, SURFACE, UI_FONT};
+use theme::{ACCENT, BORDER, BORDER_STRONG, CARD_RADIUS, FOREGROUND, RAISED, SURFACE, UI_FONT};
 
 actions!(
     cox,
@@ -82,6 +82,19 @@ pub fn card() -> Div {
         .border_1()
         .border_color(rgb(BORDER))
         .rounded(px(CARD_RADIUS))
+}
+
+/// The ring over a part of the window, `radius` round, that says Vim's
+/// keys have it: the row selected on the rail or in the list of chats,
+/// or the stage's tab with the keyboard. Its parent is `relative`.
+#[must_use]
+pub fn picked(radius: f32) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .border_1()
+        .border_color(rgb(ACCENT))
+        .rounded(px(radius))
 }
 
 /// What the mouse resting on a button says of it.

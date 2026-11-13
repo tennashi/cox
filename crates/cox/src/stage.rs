@@ -131,7 +131,7 @@ use crate::stage::tree::{Chosen, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
 use crate::ui::Panel;
 use crate::ui::input::LineInput;
-use crate::ui::theme::BORDER;
+use crate::ui::theme::{BORDER, CARD_INNER_RADIUS};
 
 actions!(
     stage,
@@ -153,6 +153,19 @@ pub fn bind_keys(cx: &mut App) {
         bar::CloseMenu,
         Some(bar::MENU_CONTEXT),
     )]);
+}
+
+/// What Vim's keys ask of a stage's tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tabs {
+    /// The keyboard goes to the tab shown.
+    Focus,
+    /// Shows the tab this many along from the one shown, going round.
+    Along(isize),
+    /// Shows the tab of this number, from 1, if there is one.
+    Number(usize),
+    /// Closes the tab shown.
+    Close,
 }
 
 /// What keeps a stage's tabs as they change, each of a chat by its key.
@@ -793,6 +806,32 @@ impl Stage {
             .is_some_and(|tab| tab.content.focus_handle(cx).contains_focused(window, cx))
     }
 
+    /// Does what Vim's keys ask of the tabs. A tab shown has the keyboard
+    /// if the tab it took the place of had it.
+    pub fn by_keys(&mut self, tabs: Tabs, window: &mut Window, cx: &mut Context<Self>) {
+        let index = match tabs {
+            Tabs::Focus => return self.focus_shown(window, cx),
+            Tabs::Close => {
+                if let Some(index) = self.tabs.shown_index() {
+                    let _ = self.close_tab(index, window, cx);
+                }
+                return;
+            }
+            Tabs::Along(step) => self.tabs.along(step),
+            Tabs::Number(number) => number.checked_sub(1),
+        };
+        let had_focus = self.has_focus(window, cx);
+        if let Some(index) = index
+            && self.in_sight()
+            && self.tabs.show(index)
+        {
+            if had_focus {
+                self.focus_shown(window, cx);
+            }
+            self.changed(cx);
+        }
+    }
+
     fn focus_shown(&self, window: &mut Window, cx: &App) {
         if !self.in_sight() {
             return;
@@ -815,11 +854,12 @@ impl Stage {
 }
 
 impl Render for Stage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The tree of the project's files is beside the tab of a file,
         // unless it is folded.
         let beside =
             self.tabs.shown().is_some_and(|tab| tab.content.is_file()) && !tree::is_folded(cx);
+        let picked = crate::vim::mode(cx).is_some() && self.has_focus(window, cx);
         div()
             .size_full()
             .flex()
@@ -848,7 +888,11 @@ impl Render for Stage {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .children(self.tabs.shown().map(|tab| tab.content.view())),
+                            .children(self.tabs.shown().map(|tab| tab.content.view()))
+                            .when(picked, |tab| {
+                                tab.relative()
+                                    .child(crate::ui::picked(0.).rounded_br(px(CARD_INNER_RADIUS)))
+                            }),
                     ),
             )
     }

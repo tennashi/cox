@@ -15,13 +15,18 @@ pub fn open_window(
     cx: &mut TestAppContext,
     home: PathBuf,
 ) -> (Entity<Workspace>, &mut VisualTestContext) {
-    let (workspace, cx) = fake_daemon::open_window_with_every_key(
-        cx,
-        home,
-        Kept::Memory,
-        Fakes::default(),
-        FakeStages::default(),
-    );
+    open_window_on(cx, home, FakeStages::default())
+}
+
+/// Opens the window like [`open_window`], its chats' stages made by
+/// `stages`.
+pub fn open_window_on(
+    cx: &mut TestAppContext,
+    home: PathBuf,
+    stages: FakeStages,
+) -> (Entity<Workspace>, &mut VisualTestContext) {
+    let (workspace, cx) =
+        fake_daemon::open_window_with_every_key(cx, home, Kept::Memory, Fakes::default(), stages);
     settled(cx, &workspace);
     (workspace, cx)
 }

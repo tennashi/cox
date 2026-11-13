@@ -94,6 +94,7 @@ fn open_agent(
     let stages = FakeStages {
         opened: stage.then_some(opened),
         made: None,
+        keyed: None,
     };
     let (workspace, cx) = open_window(cx, std::env::temp_dir(), Kept::Memory, fakes, stages);
     cx.simulate_keystrokes("secondary-n");

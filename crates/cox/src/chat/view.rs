@@ -84,6 +84,9 @@ actions!(
         CancelGoal,
         /// Closes the input that starts a sketch, starting none.
         CancelSketch,
+        /// Closes the list over the input, as Escape does without Vim's
+        /// keys, if it is open.
+        CloseList,
     ]
 );
 
@@ -124,12 +127,16 @@ const PLAN_HEIGHT: f32 = 200.;
 /// it has not laid out yet, so that they are ready as it scrolls.
 const OVERDRAW: f32 = 400.;
 
-/// A chat's stage, as the window shows it: the view, and whether it is
-/// in sight.
+/// Does what Vim's keys ask of a stage's tabs.
+pub type ByKeys = Rc<dyn Fn(crate::stage::Tabs, &mut Window, &mut App)>;
+
+/// A chat's stage, as the window shows it: the view, whether it is in
+/// sight, and what does what Vim's keys ask of its tabs.
 #[derive(Clone)]
 pub struct StageView {
     pub view: AnyView,
     pub panel: Entity<Panel>,
+    pub by_keys: ByKeys,
 }
 
 /// How a chat stands in the list, as far as its view shows it.
@@ -989,6 +996,9 @@ impl ChatView {
                 if view.complete_close(window, cx) {
                     cx.stop_propagation();
                 }
+            }))
+            .on_action(cx.listener(|view, _: &CloseList, window, cx| {
+                view.complete_close(window, cx);
             }))
             .capture_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 let keystroke = &event.keystroke;
