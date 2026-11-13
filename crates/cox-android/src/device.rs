@@ -7,10 +7,11 @@
 //! hands it input and picks up the newest frame: [`Device`] is the tab's
 //! end of it.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
@@ -369,10 +370,47 @@ fn command(program: &Path) -> tokio::process::Command {
     command
 }
 
-/// A port no one listens on now, for the emulator to.
+/// The ports Cox hands the emulators it starts: below those the system
+/// hands out for connections, on macOS and on Linux, so that none is
+/// taken by one between Cox finding it free and the emulator listening on
+/// it.
+const PORTS: std::ops::Range<u16> = 20_000..30_000;
+
+/// The ports this process handed out, so that emulators it starts at once
+/// are not handed the same.
+static HANDED: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+
+/// A port no one listens on now, among [`PORTS`], for the emulator to:
+/// they are tried from one of the process's own, so that two processes
+/// starting emulators at once seldom try the same.
+///
+/// A port is tried by connecting to it, not by listening on it: on macOS
+/// a socket is made to close as a program starts only after it is made,
+/// so an emulator another thread starts in between could keep it, and
+/// with it the port, which the emulator it is handed to could then not
+/// listen on.
 fn free_port() -> anyhow::Result<u16> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-    Ok(listener.local_addr()?.port())
+    let mut handed = HANDED.lock().unwrap_or_else(PoisonError::into_inner);
+    let count = u32::from(PORTS.end - PORTS.start);
+    // Processes started one after another have ids next to each other,
+    // which this spreads across the ports.
+    let first = std::process::id().wrapping_mul(2_654_435_761) % count;
+    let port = (0..count)
+        .filter_map(|offset| u16::try_from((first + offset) % count).ok())
+        .map(|offset| PORTS.start + offset)
+        .find(|port| !handed.contains(port) && !listened_on(*port))
+        .ok_or_else(|| anyhow::anyhow!("no port is free for the emulator"))?;
+    handed.insert(port);
+    Ok(port)
+}
+
+/// Whether anything listens on `port` of this machine, or may: only a
+/// connection refused says nothing does.
+fn listened_on(port: u16) -> bool {
+    !matches!(
+        std::net::TcpStream::connect(("127.0.0.1", port)),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused
+    )
 }
 
 type Client =
@@ -613,6 +651,22 @@ fn said(printed: &Mutex<Vec<String>>, ended: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ports_handed_out_are_not_handed_again_and_none_is_the_systems() {
+        let ports: BTreeSet<u16> = (0..20).map(|_| free_port().unwrap()).collect();
+        assert_eq!(ports.len(), 20, "each port once");
+        assert!(ports.iter().all(|port| PORTS.contains(port)));
+    }
+
+    #[test]
+    fn a_port_is_listened_on_while_a_listener_has_it() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(listened_on(port));
+        drop(listener);
+        assert!(!listened_on(port));
+    }
 
     #[test]
     fn an_undrawn_display_comes_no_bigger_than_its_side() {
