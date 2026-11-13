@@ -111,12 +111,15 @@ fn make_avd() -> std::process::ExitCode {
 
 async fn serve(device: String, port: u16) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    let _written = running::write(&Running {
-        pid: i32::try_from(std::process::id())?,
-        device: device.clone(),
-        port,
-        token: None,
-    })?;
+    let _written = running::write(
+        &running::folders()[0],
+        &Running {
+            pid: i32::try_from(std::process::id())?,
+            device: device.clone(),
+            port,
+            token: None,
+        },
+    )?;
     println!("INFO    | {device} serves gRPC on 127.0.0.1:{port}");
     let (changed, _) = watch::channel(0_u64);
     let fake = Fake {
