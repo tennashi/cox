@@ -45,12 +45,70 @@ fn open_window<'a>(
     keys::open_window(cx, scratch(name))
 }
 
-/// The mode the chat's input shows, if it shows one. A GPUI debug
-/// selector only records where the label drew, not its text, so the text
-/// is read from the mode.
+/// A GPUI debug selector only records where the line drew, not its
+/// text, so the text is read from what the line draws it from.
+fn status(cx: &mut VisualTestContext) -> Option<cox::vim::Status> {
+    cx.debug_bounds("vim-status")?;
+    cx.update(|_, cx| cox::vim::status(cx))
+}
+
 fn shown_mode(cx: &mut VisualTestContext) -> Option<&'static str> {
-    cx.debug_bounds("vim-mode")?;
-    cx.update(|_, cx| cox::vim::mode(cx)).map(Mode::label)
+    status(cx).map(|status| status.mode.label())
+}
+
+fn held(cx: &mut VisualTestContext) -> String {
+    status(cx).expect("the status line is drawn").held
+}
+
+#[gpui::test]
+fn the_window_s_foot_shows_the_mode_as_the_keys_change_it(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "status");
+    keys::press(cx, &workspace, "secondary-n");
+    assert_eq!(shown_mode(cx), Some("INSERT"));
+    let foot = cx
+        .debug_bounds("vim-status")
+        .expect("the status line is drawn");
+    let window = cx.update(|window, _| window.viewport_size());
+    assert_eq!(foot.origin.x, px(0.));
+    assert_eq!(foot.size.width, window.width);
+    assert_eq!(foot.bottom(), window.height);
+    assert!(
+        cx.debug_bounds("vim-mode").is_none(),
+        "no mode beside the chat's input"
+    );
+
+    keys::press(cx, &workspace, "escape");
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    keys::press(cx, &workspace, "f");
+    assert_eq!(shown_mode(cx), Some("HINT"));
+    keys::press(cx, &workspace, "escape");
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+
+    keys::press(cx, &workspace, ":");
+    assert_eq!(shown_mode(cx), Some("COMMAND"));
+    let line = cx.debug_bounds("vim-line").expect("the line is drawn");
+    assert_eq!(line, foot, "the line takes the status line's place");
+    keys::press(cx, &workspace, "escape");
+    assert_eq!(shown_mode(cx), Some("NORMAL"));
+}
+
+#[gpui::test]
+fn the_window_s_foot_shows_what_is_held_until_the_command_runs(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "held");
+    keys::press(cx, &workspace, "secondary-n escape");
+    assert_eq!(held(cx), "");
+    keys::press(cx, &workspace, "3");
+    assert_eq!(held(cx), "3");
+    keys::press(cx, &workspace, "g");
+    assert_eq!(held(cx), "3g");
+    keys::press(cx, &workspace, "g");
+    assert_eq!(held(cx), "");
+    keys::press(cx, &workspace, "ctrl-w");
+    assert_eq!(held(cx), "ctrl-w");
+    keys::press(cx, &workspace, "l");
+    assert_eq!(held(cx), "");
+    keys::press(cx, &workspace, "1 2 escape");
+    assert_eq!(held(cx), "", "escape forgets the count");
 }
 
 fn shown_view(cx: &mut VisualTestContext, workspace: &Entity<Workspace>) -> Entity<ChatView> {
@@ -777,7 +835,7 @@ fn off_the_keys_are_as_they_were(cx: &mut TestAppContext) {
     let (workspace, cx) = keys::open_window(cx, scratch("off"));
     keys::press(cx, &workspace, "secondary-n");
     let view = shown_view(cx, &workspace);
-    assert_eq!(shown_mode(cx), None);
+    assert!(cx.debug_bounds("vim-status").is_none());
     cx.simulate_input("wait");
     keys::press(cx, &workspace, "enter");
     go_on(cx, &workspace);

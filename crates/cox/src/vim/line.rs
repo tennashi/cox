@@ -5,6 +5,9 @@
 //! Control-N and Control-P, go along the list, Up and Down through the
 //! lines typed before, Enter runs the line and Escape closes it.
 //!
+//! Closed, the line shows the mode and what is held toward a command, as
+//! Vim's `showmode` and `showcmd` do, while Vim's keys are on.
+//!
 //! What hosts the line, the window, opens it as [`OpenLine`] asks, and
 //! carries out the commands of the table as [`Run`] asks.
 
@@ -16,10 +19,11 @@ use gpui::{
 use super::ex::{self, Does, Ex, Fit, Names};
 use super::keymap::Prompt;
 use super::search::{Direction, Find, Search};
-use super::{Leave, Mode};
+use super::{Leave, Mode, Status};
 use crate::ui::input::{Blurred, LineInput};
 use crate::ui::theme::{
-    ACCENT, BORDER_STRONG, CODE_FONT, DIM, FAILED, FOREGROUND, RAISED, SELECTED, SURFACE,
+    ACCENT, ASKING, BORDER, BORDER_STRONG, CODE_FONT, DIM, FAILED, FOREGROUND, GROUND, LINK,
+    RAISED, SELECTED, SURFACE,
 };
 
 pub const KEY_CONTEXT: &str = "CommandLine";
@@ -27,6 +31,7 @@ pub const KEY_CONTEXT: &str = "CommandLine";
 /// How many rows of the list over the line show at once.
 const ROWS: usize = 10;
 const ROW_HEIGHT: f32 = 26.;
+const LINE_HEIGHT: f32 = 30.;
 
 /// Opens the line, for what `prompt` says.
 #[derive(Clone, Debug, PartialEq, Eq, Action)]
@@ -356,6 +361,10 @@ impl Line {
         Some(
             div()
                 .debug_selector(|| "vim-fits".to_owned())
+                .absolute()
+                .bottom(px(LINE_HEIGHT))
+                .left_0()
+                .right_0()
                 .py(px(4.))
                 .bg(rgb(RAISED))
                 .border_t_1()
@@ -365,33 +374,54 @@ impl Line {
                 .into_any_element(),
         )
     }
+
+    fn render_status(&self, status: Status) -> impl IntoElement + use<> {
+        let color = match status.mode {
+            Mode::Normal => DIM,
+            Mode::Insert => ACCENT,
+            Mode::Hint => ASKING,
+            Mode::Command => LINK,
+        };
+        div()
+            .debug_selector(|| "vim-status".to_owned())
+            .h(px(LINE_HEIGHT))
+            .px(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(16.))
+            .bg(rgb(GROUND))
+            .border_t_1()
+            .border_color(rgb(BORDER))
+            .font_family(CODE_FONT)
+            .text_size(px(12.))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(color))
+                    .child(format!("-- {} --", status.mode.label())),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(FAILED))
+                    .children(self.said.clone()),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(DIM))
+                    .child(status.held),
+            )
+    }
 }
 
 impl Render for Line {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let foot = div()
-            .absolute()
-            .bottom_0()
-            .left_0()
-            .right_0()
-            .flex()
-            .flex_col();
+        let foot = div().relative().flex_shrink_0();
         let Some(opened) = &self.opened else {
-            return foot.children(self.said.clone().map(|said| {
-                div()
-                    .debug_selector(|| "vim-said".to_owned())
-                    .h(px(30.))
-                    .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .bg(rgb(SURFACE))
-                    .border_t_1()
-                    .border_color(rgb(BORDER_STRONG))
-                    .font_family(CODE_FONT)
-                    .text_size(px(13.))
-                    .text_color(rgb(FAILED))
-                    .child(said)
-            }));
+            return foot.children(super::status(cx).map(|status| self.render_status(status)));
         };
         let mark = match opened.prompt {
             Prompt::Ex => ":",
@@ -410,7 +440,7 @@ impl Render for Line {
             .child(
                 div()
                     .debug_selector(|| "vim-line".to_owned())
-                    .h(px(30.))
+                    .h(px(LINE_HEIGHT))
                     .px(px(12.))
                     .flex()
                     .items_center()

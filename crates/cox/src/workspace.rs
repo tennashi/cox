@@ -2397,7 +2397,6 @@ impl Workspace {
                 } else {
                     "No chat here yet: the list above opens one."
                 })
-                .children(crate::vim::mode(cx).map(crate::chat::view::render_mode))
                 .into_any_element(),
         };
         card()
@@ -2825,8 +2824,6 @@ impl Workspace {
                     })),
             )
             .children(dots)
-            .child(div().flex_1())
-            .children(crate::vim::mode(cx).map(crate::chat::view::render_mode))
     }
 }
 
@@ -3245,31 +3242,38 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .flex()
+            .flex_col()
             .bg(rgb(GROUND))
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
             .text_size(px(14.))
             .child(
                 div()
-                    .relative()
-                    .h_full()
-                    .flex_shrink_0()
-                    .child(hints::part(Part::Rail))
-                    .child(self.render_rail(window, cx)),
-            )
-            // The stage, and the chat at its right, as cards on the ground
-            // the rail is on.
-            .child(
-                div()
                     .flex_1()
-                    .min_w_0()
-                    .h_full()
+                    .min_h_0()
                     .flex()
-                    .gap(px(GAP))
-                    .py(px(GAP))
-                    .pr(px(GAP))
-                    .child(stage)
-                    .child(chat),
+                    .child(
+                        div()
+                            .relative()
+                            .h_full()
+                            .flex_shrink_0()
+                            .child(hints::part(Part::Rail))
+                            .child(self.render_rail(window, cx)),
+                    )
+                    // The stage, and the chat at its right, as cards on the
+                    // ground the rail is on.
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .gap(px(GAP))
+                            .py(px(GAP))
+                            .pr(px(GAP))
+                            .child(stage)
+                            .child(chat),
+                    ),
             )
             .children(self.render_menu(cx))
             .children(self.render_project_menu(cx))

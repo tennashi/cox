@@ -89,13 +89,15 @@ Vimperator. Off, nothing changes. The settings card turns them on and
 off under **Vim's keys**, and so does editing the file. Either takes
 effect at once.
 
-**Modes.** The keys are in one of four modes, shown as `NORMAL`,
-`INSERT`, `HINT` or `COMMAND` beside the chat's input, or, while the
-chat's panel is folded or shows no chat, where the panel is. In normal
-mode keys do things; keys that would type type nothing, and digits make
-a count, as `3` of `3j`. In insert mode keys type. Hint mode picks what
-to click by its label, and command mode types in the line at
-the window's foot. Keys with Cmd work as without Vim. While an input
+**Modes.** The keys are in one of four modes, shown as `-- NORMAL --`,
+`-- INSERT --`, `-- HINT --` or `-- COMMAND --` at the left of a line
+across the window's foot, as Vim's `showmode`, wherever the keyboard
+is. At its right, as Vim's `showcmd`, are the count and the keys typed
+toward a command that is not yet whole, as `3g` of `3gt`. The line `:`
+and `/` open takes its place. In normal mode keys do things; keys that
+would type type nothing, and digits make a count, as `3` of `3j`. In
+insert mode keys type. Hint mode picks what to click by its label, and
+command mode types in the line at the window's foot. Keys with Cmd work as without Vim. While an input
 method composes, every key is its own.
 
 **Regions.** Where the keyboard is decides what the keys do: the rail
