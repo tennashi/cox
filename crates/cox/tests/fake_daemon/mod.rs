@@ -376,6 +376,15 @@ fn open_bound(
 /// open. GPUI's test dispatcher can miss a wake from another thread, as
 /// the daemon's, that comes as it goes to park, and would then park until
 /// something else woke it; a task spawned now and then wakes it again.
+///
+/// The race is in gpui 0.2.2's `BackgroundExecutor::block_internal`:
+/// once `TestDispatcher::tick` finds nothing to run, it stores its
+/// unparker with `set_unparker` and parks. A task dispatched from another
+/// thread between the two calls `unpark_last`, which finds no unparker,
+/// or an earlier one, so the runnable waits in the queue while the test
+/// thread sleeps. Only GPUI can close it, by storing the unparker before
+/// its last look at the queue; any wake of the test's own comes through
+/// the same `unpark_last`, so this ticking is what recovers.
 struct Ticker(Arc<std::sync::atomic::AtomicBool>);
 
 impl Ticker {
