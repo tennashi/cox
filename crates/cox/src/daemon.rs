@@ -3558,7 +3558,9 @@ impl Daemon {
             || format!("sketch \"{}\"", slot.name),
             |number| format!("chat {number}"),
         );
-        let showed = showed_in_sketch(&entries, &root.join(sketch::SOURCES));
+        let showed = storage::path(storage::Kept::Media).map_or_else(String::new, |kept| {
+            showed_in_sketch(&entries, &kept, &root.join(sketch::SOURCES))
+        });
         let text = format!(
             "## How it ended\n\n{ended}\n\n{showed}## What was said in it\n\nAs Cox kept it, \
              where [you] stands for the sketch's agent.\n\n{said}\n"
@@ -3888,14 +3890,11 @@ struct Renamed {
 }
 
 /// What the sketch of `entries` showed the human, as pictures and
-/// recordings, copied from where Cox keeps them into [`sketch::MEDIA`] in
-/// `sources`, the sources of the sketches, as its source tells them: a
-/// section of links to them, by their paths from the source, or nothing
-/// when it showed none.
-fn showed_in_sketch(entries: &[Entry], sources: &Path) -> String {
-    let Some(kept) = storage::path(storage::Kept::Media) else {
-        return String::new();
-    };
+/// recordings, copied from `kept`, where Cox keeps them, into
+/// [`sketch::MEDIA`] in `sources`, the sources of the sketches, as its
+/// source tells them: a section of links to them, by their paths from the
+/// source, or nothing when it showed none.
+fn showed_in_sketch(entries: &[Entry], kept: &Path, sources: &Path) -> String {
     let into = sources.join(sketch::MEDIA);
     let mut showed = String::new();
     for entry in entries {
@@ -4007,12 +4006,13 @@ mod tests {
 
     #[test]
     fn a_sketch_keeps_the_pictures_it_showed_beside_its_source() {
-        let media = storage::path(storage::Kept::Media).unwrap();
+        let scratch = std::env::temp_dir().join(format!("cox-showed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let media = scratch.join("media-kept");
         std::fs::create_dir_all(&media).unwrap();
-        let file = format!("shown-{}.png", std::process::id());
-        std::fs::write(media.join(&file), b"png").unwrap();
-        let sources = std::env::temp_dir().join(format!("cox-showed-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&sources);
+        let file = "shown.png";
+        std::fs::write(media.join(file), b"png").unwrap();
+        let sources = scratch.join("sources");
         let shown = |file: &str| Entry::Media {
             file: file.to_owned(),
             kind: cox_core::entry::MediaKind::Image,
@@ -4022,11 +4022,11 @@ mod tests {
         };
         let entries = [
             Entry::Human("Make the list".to_owned()),
-            shown(&file),
+            shown(file),
             shown("gone.png"),
         ];
 
-        let told = showed_in_sketch(&entries, &sources);
+        let told = showed_in_sketch(&entries, &media, &sources);
         assert!(told.starts_with("## What it showed\n\n"), "{told}");
         assert!(
             told.ends_with(&format!("![The list](media/{file})\n\n")),
@@ -4034,12 +4034,11 @@ mod tests {
         );
         assert!(!told.contains("gone.png"), "{told}");
         assert_eq!(
-            std::fs::read(sources.join("media").join(&file)).unwrap(),
+            std::fs::read(sources.join("media").join(file)).unwrap(),
             b"png"
         );
-        assert_eq!(showed_in_sketch(&entries[..1], &sources), "");
+        assert_eq!(showed_in_sketch(&entries[..1], &media, &sources), "");
 
-        std::fs::remove_file(media.join(&file)).unwrap();
-        std::fs::remove_dir_all(&sources).unwrap();
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 }
