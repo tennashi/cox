@@ -72,6 +72,8 @@ actions!(
         Paste,
         Submit,
         Newline,
+        Undo,
+        Redo,
     ]
 );
 
@@ -99,6 +101,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-x", Cut, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-c", Copy, Some(KEY_CONTEXT)),
         KeyBinding::new("secondary-v", Paste, Some(KEY_CONTEXT)),
+        KeyBinding::new("secondary-z", Undo, Some(KEY_CONTEXT)),
+        KeyBinding::new("secondary-shift-z", Redo, Some(KEY_CONTEXT)),
         KeyBinding::new("enter", Submit, Some(KEY_CONTEXT)),
         KeyBinding::new("shift-enter", Newline, Some(KEY_CONTEXT)),
     ]);
@@ -136,6 +140,7 @@ pub fn bind_keys(cx: &mut App) {
             KeyBinding::new("ctrl-end", TextEnd, Some(KEY_CONTEXT)),
             KeyBinding::new("ctrl-shift-home", SelectToTextStart, Some(KEY_CONTEXT)),
             KeyBinding::new("ctrl-shift-end", SelectToTextEnd, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-y", Redo, Some(KEY_CONTEXT)),
         ]);
     }
 }
@@ -537,6 +542,24 @@ impl LineInput {
         }
     }
 
+    /// Goes back to the text before the last edit; while the input method
+    /// composes, the keys are its own.
+    fn undo(&mut self, _: &Undo, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.draft.is_composing() {
+            self.edit(cx, |draft| {
+                draft.undo();
+            });
+        }
+    }
+
+    fn redo(&mut self, _: &Redo, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.draft.is_composing() {
+            self.edit(cx, |draft| {
+                draft.redo();
+            });
+        }
+    }
+
     fn paste(&mut self, _: &Paste, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let text = if self.wraps {
@@ -856,6 +879,8 @@ impl Render for LineInput {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))

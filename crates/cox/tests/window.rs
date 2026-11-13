@@ -282,6 +282,32 @@ fn cuts_copies_and_pastes_with_the_keyboard(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn undoes_and_redoes_with_the_keyboard(cx: &mut TestAppContext) {
+    let (_agent, view, cx) = open(cx);
+
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("space");
+    cx.simulate_input("world");
+    cx.simulate_keystrokes("backspace backspace");
+    assert_eq!(input_text(cx, &view), "hello wor");
+
+    cx.simulate_keystrokes("secondary-z");
+    assert_eq!(
+        input_text(cx, &view),
+        "hello world",
+        "the letters taken out come back"
+    );
+    cx.simulate_keystrokes("secondary-z");
+    assert_eq!(
+        input_text(cx, &view),
+        "",
+        "what was typed goes, as one edit"
+    );
+    cx.simulate_keystrokes("secondary-shift-z secondary-shift-z");
+    assert_eq!(input_text(cx, &view), "hello wor");
+}
+
+#[gpui::test]
 fn keeps_pasted_line_breaks(cx: &mut TestAppContext) {
     let (_agent, view, cx) = open(cx);
 

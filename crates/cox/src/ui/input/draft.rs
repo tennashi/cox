@@ -19,7 +19,44 @@ pub struct Draft {
     reversed: bool,
     /// Byte range the input method is composing.
     marked: Option<Range<usize>>,
+    history: History,
 }
+
+/// The text and its selection as they were before an edit, to go back to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Was {
+    text: String,
+    selected: Range<usize>,
+    reversed: bool,
+}
+
+/// The edits that can be undone and redone, each as what the text was
+/// before it, and the last edit, which one that goes on from it joins.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct History {
+    undone: Vec<Was>,
+    redone: Vec<Was>,
+    last: Option<Last>,
+}
+
+/// An edit that the next joins, if it is of the same kind and starts
+/// where it left the cursor: letters typed one after another, or taken
+/// out, are undone together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Last {
+    kind: Kind,
+    cursor: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Typing,
+    Deleting,
+    Other,
+}
+
+/// How many edits can be undone.
+const UNDOABLE: usize = 200;
 
 impl Draft {
     /// An empty text, with the cursor at its start.
@@ -73,12 +110,73 @@ impl Draft {
         self.marked.is_some()
     }
 
-    /// Puts `text` in place of everything, with the cursor at its end.
+    /// Puts `text` in place of everything, with the cursor at its end,
+    /// and nothing to undo.
     pub fn set_text(&mut self, text: &str) {
         self.text.clear();
         self.text.push_str(text);
         self.move_to(self.text.len());
         self.marked = None;
+        self.history = History::default();
+    }
+
+    /// Goes back to the text before the last edit, if there is one.
+    pub fn undo(&mut self) -> bool {
+        let Some(was) = self.history.undone.pop() else {
+            return false;
+        };
+        let now = self.was();
+        self.history.redone.push(now);
+        self.go_back_to(was);
+        true
+    }
+
+    /// Does again the last edit undone, if there is one.
+    pub fn redo(&mut self) -> bool {
+        let Some(was) = self.history.redone.pop() else {
+            return false;
+        };
+        let now = self.was();
+        self.history.undone.push(now);
+        self.go_back_to(was);
+        true
+    }
+
+    fn was(&self) -> Was {
+        Was {
+            text: self.text.clone(),
+            selected: self.selected.clone(),
+            reversed: self.reversed,
+        }
+    }
+
+    fn go_back_to(&mut self, was: Was) {
+        self.text = was.text;
+        self.selected = was.selected;
+        self.reversed = was.reversed;
+        self.marked = None;
+        self.history.last = None;
+    }
+
+    /// Keeps the text as it is before an edit of `kind`, unless the edit
+    /// goes on from the last, or from a composition, which is one edit
+    /// from its start.
+    fn note(&mut self, kind: Kind, range: &Range<usize>) {
+        if self.marked.is_some() {
+            return;
+        }
+        let goes_on = kind != Kind::Other
+            && self.history.last.is_some_and(|last| {
+                last.kind == kind && (range.start == last.cursor || range.end == last.cursor)
+            });
+        if !goes_on {
+            let was = self.was();
+            self.history.undone.push(was);
+            if self.history.undone.len() > UNDOABLE {
+                self.history.undone.remove(0);
+            }
+        }
+        self.history.redone.clear();
     }
 
     /// Puts the cursor at `offset`, with nothing selected.
@@ -255,9 +353,26 @@ impl Draft {
     /// with the cursor after it.
     pub fn commit(&mut self, range_utf16: Option<&Range<usize>>, text: &str) {
         let range = self.target_range(range_utf16);
+        let kind = if text.is_empty() {
+            Kind::Deleting
+        } else if range.is_empty() && text.chars().count() == 1 && text != "\n" {
+            Kind::Typing
+        } else {
+            Kind::Other
+        };
+        let changes = !(range.is_empty() && text.is_empty());
+        if changes {
+            self.note(kind, &range);
+        }
         let placed = self.replace(range, text);
         self.move_to(placed.end);
         self.marked = None;
+        if changes {
+            self.history.last = Some(Last {
+                kind,
+                cursor: placed.end,
+            });
+        }
     }
 
     /// Text the input method is still composing: `text` in place of
@@ -271,6 +386,9 @@ impl Draft {
         selected_utf16: Option<&Range<usize>>,
     ) {
         let range = self.target_range(range_utf16);
+        if !(range.is_empty() && text.is_empty()) {
+            self.note(Kind::Other, &range);
+        }
         let placed = self.replace(range, text);
         self.marked = (!text.is_empty()).then(|| placed.clone());
         self.selected = match selected_utf16 {
@@ -660,6 +778,67 @@ mod tests {
         assert!(draft.is_reversed());
         draft.select_spanning(&(4..7), &(4..7));
         assert_eq!(draft.selected_text(), "two");
+    }
+
+    #[test]
+    fn letters_typed_one_after_another_are_undone_together() {
+        let mut draft = Draft::new();
+        for c in ["h", "i"] {
+            draft.commit(None, c);
+        }
+        draft.move_to(0);
+        draft.commit(None, ">");
+        assert_eq!(draft.text(), ">hi");
+        assert!(draft.undo());
+        assert_eq!(draft.text(), "hi", "typing elsewhere is an edit of its own");
+        assert!(draft.undo());
+        assert_eq!(draft.text(), "");
+        assert!(!draft.undo());
+        assert!(draft.redo());
+        assert_eq!(draft.text(), "hi");
+        assert!(draft.redo());
+        assert_eq!(draft.text(), ">hi");
+        assert!(!draft.redo());
+    }
+
+    #[test]
+    fn taking_out_letters_one_after_another_is_undone_together() {
+        let mut draft = draft("abc");
+        draft.delete_backward();
+        draft.delete_backward();
+        assert_eq!(draft.text(), "a");
+        assert!(draft.undo());
+        assert_eq!((draft.text(), draft.cursor()), ("abc", 3));
+        assert!(!draft.undo(), "the text set is not undone");
+    }
+
+    #[test]
+    fn a_new_edit_forgets_what_was_undone() {
+        let mut draft = draft("abc");
+        draft.delete_backward();
+        assert!(draft.undo());
+        draft.commit(None, "!");
+        assert!(!draft.redo());
+    }
+
+    #[test]
+    fn a_paste_is_an_edit_of_its_own() {
+        let mut draft = Draft::new();
+        draft.commit(None, "a");
+        draft.commit(None, "pasted");
+        assert!(draft.undo());
+        assert_eq!(draft.text(), "a");
+    }
+
+    #[test]
+    fn a_composition_is_undone_whole() {
+        let mut draft = draft("x");
+        draft.compose(None, "k", None);
+        draft.compose(None, "か", None);
+        draft.commit(None, "火");
+        assert_eq!(draft.text(), "x火");
+        assert!(draft.undo());
+        assert_eq!(draft.text(), "x");
     }
 
     #[test]
