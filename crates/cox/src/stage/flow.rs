@@ -31,6 +31,7 @@ use crate::stage::heading::{INSET, body, card, heading, note};
 use crate::stage::tab::Shows;
 use crate::ui::markdown;
 use crate::ui::theme::{ACCENT, BORDER, CODE, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
+use crate::vim::hints::Hinted as _;
 
 pub(crate) const KEY_CONTEXT: &str = "Flow";
 
@@ -255,7 +256,7 @@ impl Flow {
             Some((path, line)) => row
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(HOVER)))
-                .on_click(cx.listener(move |_, _, _, cx| {
+                .on_hint_click(cx.listener(move |_, _, _, cx| {
                     cx.emit(Opened {
                         path: path.clone(),
                         line,

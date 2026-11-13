@@ -15,6 +15,7 @@ use crate::agents::{Agents, line};
 use crate::ui::button::INPUT_HEIGHT;
 use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
+use crate::vim::hints::Hinted as _;
 
 /// What translates.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,15 +282,16 @@ impl Render for TranslationSection {
                 "The default agent".to_owned(),
                 self.by == By::Agent(None),
             )
-            .on_click(cx.listener(|section, _, _, cx| section.choose(By::Agent(None), cx))),
+            .on_hint_click(cx.listener(|section, _, _, cx| section.choose(By::Agent(None), cx))),
         ];
         for name in self.agents(cx) {
             let chosen = self.by == By::Agent(Some(name.clone()));
             let by = By::Agent(Some(name.clone()));
-            chips
-                .push(chip(format!("translate-by-{name}"), name, chosen).on_click(
+            chips.push(
+                chip(format!("translate-by-{name}"), name, chosen).on_hint_click(
                     cx.listener(move |section, _, _, cx| section.choose(by.clone(), cx)),
-                ));
+                ),
+            );
         }
         chips.push(
             chip(
@@ -297,7 +299,7 @@ impl Render for TranslationSection {
                 "A command".to_owned(),
                 self.by == By::Command,
             )
-            .on_click(cx.listener(|section, _, window, cx| {
+            .on_hint_click(cx.listener(|section, _, window, cx| {
                 window.focus(&section.command.focus_handle(cx));
                 section.choose(By::Command, cx);
             })),

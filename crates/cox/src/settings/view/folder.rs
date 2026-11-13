@@ -18,6 +18,7 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND};
+use crate::vim::hints::Hinted as _;
 
 /// A folder of the settings, by its key in `settings.json`.
 pub struct FolderField {
@@ -238,7 +239,7 @@ impl Render for FolderField {
                             Kind::Plain,
                         )
                         .h(px(INPUT_HEIGHT))
-                        .on_click(cx.listener(|_, _, window, cx| Self::choose(window, cx))),
+                        .on_hint_click(cx.listener(|_, _, window, cx| Self::choose(window, cx))),
                     ),
             )
             .child(words.note(&told, color))

@@ -27,6 +27,7 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK};
 use crate::ui::tip;
+use crate::vim::hints::Hinted as _;
 
 /// The language servers Cox knows, as rows to change.
 pub struct ServersSection {
@@ -444,7 +445,7 @@ impl ServersSection {
                     "Turn on",
                     "Start it again for the code it knows",
                 )
-                .on_click(cx.listener(move |section, _, _, cx| section.turn_on(key, cx)))
+                .on_hint_click(cx.listener(move |section, _, _, cx| section.turn_on(key, cx)))
                 .into_any_element(),
             )
         } else if row.of_cox && matches!(row.named, Named::Given(Some(_))) {
@@ -454,7 +455,7 @@ impl ServersSection {
                     "Cox's",
                     "Run it as Cox does, in place of your command",
                 )
-                .on_click(cx.listener(move |section, _, _, cx| section.as_coxs(key, cx)))
+                .on_hint_click(cx.listener(move |section, _, _, cx| section.as_coxs(key, cx)))
                 .into_any_element(),
             )
         } else {
@@ -478,7 +479,7 @@ impl ServersSection {
                 } else {
                     "Take it out of servers.json"
                 }))
-                .on_click(cx.listener(move |section, _, _, cx| section.remove(key, cx)))
+                .on_hint_click(cx.listener(move |section, _, _, cx| section.remove(key, cx)))
         });
         let (found, color) = said(row);
         let told = row
@@ -645,7 +646,7 @@ impl Render for ServersSection {
                                 Kind::Plain,
                             )
                             .h(px(INPUT_HEIGHT))
-                            .on_click(
+                            .on_hint_click(
                                 cx.listener(|section, _, window, cx| section.add(window, cx)),
                             ),
                         )

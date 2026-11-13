@@ -31,6 +31,7 @@ use crate::ui::theme::{
     RAISED,
 };
 use crate::ui::tip;
+use crate::vim::hints::Hinted as _;
 
 /// The agents `agents.json` lists, as rows to change.
 pub struct AgentsSection {
@@ -436,7 +437,9 @@ impl AgentsSection {
             .when(!default, |mark| {
                 mark.cursor_pointer()
                     .hover(|style| style.border_color(rgb(DIM)))
-                    .on_click(cx.listener(move |section, _, _, cx| section.make_default(key, cx)))
+                    .on_hint_click(
+                        cx.listener(move |section, _, _, cx| section.make_default(key, cx)),
+                    )
             })
             .tooltip(tip(if default {
                 "A new chat talks to it when Cox opens with no agent command"
@@ -469,7 +472,7 @@ impl AgentsSection {
             test.text_color(rgb(DISABLED)).cursor_default()
         })
         .when(!testing, |test| {
-            test.on_click(cx.listener(move |section, _, _, cx| section.test(key, cx)))
+            test.on_hint_click(cx.listener(move |section, _, _, cx| section.test(key, cx)))
         });
         let remove = div()
             .id(("agent-remove", key))
@@ -484,7 +487,7 @@ impl AgentsSection {
             .hover(|style| style.bg(rgb(HOVER)))
             .child(icon(Icon::Close, 13., FAINT))
             .tooltip(tip("Take it out of agents.json"))
-            .on_click(cx.listener(move |section, _, _, cx| section.remove(key, cx)));
+            .on_hint_click(cx.listener(move |section, _, _, cx| section.remove(key, cx)));
         div()
             .flex()
             .flex_col()
@@ -556,7 +559,7 @@ impl AgentsSection {
                     "One of your own".to_owned(),
                     "Its name, and the command that runs it".to_owned(),
                 )
-                .on_click(cx.listener(|section, _, window, cx| section.add(None, window, cx))),
+                .on_hint_click(cx.listener(|section, _, window, cx| section.add(None, window, cx))),
             )
             .when(!listed.is_empty(), |list| {
                 list.child(
@@ -577,7 +580,7 @@ impl AgentsSection {
                     known.name.clone(),
                     said,
                 )
-                .on_click(cx.listener(move |section, _, window, cx| {
+                .on_hint_click(cx.listener(move |section, _, window, cx| {
                     section.add(Some(known.clone()), window, cx);
                 }))
             }))
@@ -662,7 +665,7 @@ impl Render for AgentsSection {
                                     Kind::Plain,
                                 )
                                 .h(px(INPUT_HEIGHT))
-                                .on_click(cx.listener(
+                                .on_hint_click(cx.listener(
                                     |section, _, _, cx| {
                                         section.adding = !section.adding;
                                         cx.notify();

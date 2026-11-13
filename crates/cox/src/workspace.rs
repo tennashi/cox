@@ -84,6 +84,7 @@ use crate::ui::theme::{
     GROUND, HOVER, LINK, RAISED, SELECTED, SURFACE, UI_FONT, chat_color,
 };
 use crate::ui::{card, tip};
+use crate::vim::hints::{self, Hinted as _, Part};
 use crate::workflow;
 pub use project_card::Gives;
 use project_card::{Drawing, ProjectCard, Rename, SetAbout, Standing, ToIcon};
@@ -2080,7 +2081,7 @@ impl Workspace {
                     .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
                     .tooltip(tip("New project"))
                     .child(icon(Icon::Plus, 16., FAINT))
-                    .on_click(cx.listener(|workspace, _, _, _| {
+                    .on_hint_click(cx.listener(|workspace, _, _, _| {
                         workspace.new_project();
                     })),
             )
@@ -2121,17 +2122,14 @@ impl Workspace {
                     button.tooltip(tip(format!("Archived projects ({count})")))
                 })
                 .child(icon(Icon::Inbox, 18., ink))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|workspace, event: &MouseDownEvent, _, cx| {
-                        workspace.archived_projects = match workspace.archived_projects {
-                            Some(_) => None,
-                            None => Some(event.position),
-                        };
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                ),
+                .on_hint_mouse_down(cx.listener(|workspace, event: &MouseDownEvent, _, cx| {
+                    workspace.archived_projects = match workspace.archived_projects {
+                        Some(_) => None,
+                        None => Some(event.position),
+                    };
+                    cx.stop_propagation();
+                    cx.notify();
+                })),
         )
     }
 
@@ -2150,7 +2148,7 @@ impl Workspace {
                         "{}\nBring it back to the rail",
                         shortened(&project.folder)
                     )))
-                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                    .on_hint_click(cx.listener(move |workspace, _, window, cx| {
                         workspace.archive_project(index, false, window, cx);
                     }))
             });
@@ -2197,7 +2195,7 @@ impl Workspace {
             .hover(|style| style.bg(rgb(HOVER)))
             .tooltip(tip(format!("Settings ({key})")))
             .child(icon(Icon::Settings, 18., ink))
-            .on_click(cx.listener(|workspace, _, window, cx| {
+            .on_hint_click(cx.listener(|workspace, _, window, cx| {
                 workspace.open_settings(window, cx);
             }))
     }
@@ -2210,6 +2208,8 @@ impl Workspace {
             deferred(
                 div()
                     .id("settings-backdrop")
+                    .child(hints::cover())
+                    .child(hints::part(Part::Settings))
                     .occlude()
                     .absolute()
                     .inset_0()
@@ -2238,6 +2238,8 @@ impl Workspace {
             deferred(
                 div()
                     .id("project-card-backdrop")
+                    .child(hints::cover())
+                    .child(hints::part(Part::ProjectCard))
                     .occlude()
                     .absolute()
                     .inset_0()
@@ -2306,7 +2308,7 @@ impl Workspace {
                     folder
                 }))
             })
-            .on_click(cx.listener(move |workspace, _, window, cx| {
+            .on_hint_click(cx.listener(move |workspace, _, window, cx| {
                 workspace.choose(index, window, cx);
             }))
             .when(!home, |button| {
@@ -2400,6 +2402,8 @@ impl Workspace {
         };
         card()
             .debug_selector(|| "chat-panel".to_owned())
+            .relative()
+            .child(hints::part(Part::Chat))
             .w(px(PANEL_WIDTH))
             .h_full()
             .flex_shrink_0()
@@ -2430,7 +2434,7 @@ impl Workspace {
                             .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
                             .tooltip(tip(format!("Fold the chat ({key})")))
                             .child("›")
-                            .on_click(cx.listener(|workspace, _, window, cx| {
+                            .on_hint_click(cx.listener(|workspace, _, window, cx| {
                                 workspace.fold(true, window, cx);
                             })),
                     ),
@@ -2482,7 +2486,7 @@ impl Workspace {
                     "Set goal…"
                 }))
                 .child("◎")
-                .on_click(cx.listener(move |workspace, _, window, cx| {
+                .on_hint_click(cx.listener(move |workspace, _, window, cx| {
                     workspace.edit_goal(index, window, cx);
                 })),
         )
@@ -2525,7 +2529,7 @@ impl Workspace {
             .cursor_pointer()
             .when(switching, |button| button.bg(rgb(SELECTED)))
             .hover(|style| style.bg(rgb(HOVER)))
-            .on_click(cx.listener(
+            .on_hint_click(cx.listener(
                 move |workspace, event: &ClickEvent, window, cx| match shown {
                     Some(index) if event.click_count() == 2 => {
                         workspace.rename(index, window, cx);
@@ -2615,6 +2619,8 @@ impl Workspace {
                 list.track_focus(&self.list.focus).key_context(LIST)
             })
             .debug_selector(|| "chats".to_owned())
+            .child(hints::cover())
+            .child(hints::part(Part::List))
             .occlude()
             .absolute()
             .top_0()
@@ -2648,7 +2654,7 @@ impl Workspace {
                     .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
                     .child(icon(Icon::Plus, 12., FAINT))
                     .child("New chat")
-                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                    .on_hint_click(cx.listener(move |workspace, _, window, cx| {
                         workspace.open(Some(folder.clone()), window, cx);
                     })),
             )
@@ -2682,7 +2688,7 @@ impl Workspace {
                     row.text_color(rgb(DIM)).hover(|style| style.bg(rgb(HOVER)))
                 }
             })
-            .on_click(cx.listener(move |workspace, _, window, cx| {
+            .on_hint_click(cx.listener(move |workspace, _, window, cx| {
                 workspace.show(index, window, cx);
             }))
             .on_mouse_down(
@@ -2774,7 +2780,7 @@ impl Workspace {
                     } else {
                         circle.border_1().border_color(rgb(color))
                     })
-                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                    .on_hint_click(cx.listener(move |workspace, _, window, cx| {
                         workspace.show(index, window, cx);
                     }))
             })
@@ -2787,6 +2793,8 @@ impl Workspace {
         card()
             .id("folded-chat")
             .debug_selector(|| "folded-chat".to_owned())
+            .relative()
+            .child(hints::part(Part::Chat))
             .w(px(FOLDED_WIDTH))
             .h_full()
             .flex_shrink_0()
@@ -2812,7 +2820,7 @@ impl Workspace {
                     .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
                     .tooltip(tip(format!("Show the chat ({key})")))
                     .child("‹")
-                    .on_click(cx.listener(|workspace, _, window, cx| {
+                    .on_hint_click(cx.listener(|workspace, _, window, cx| {
                         workspace.fold(false, window, cx);
                     })),
             )
@@ -2987,7 +2995,7 @@ impl Workspace {
             .hover(|style| style.bg(rgb(HOVER)).text_color(rgb(FOREGROUND)))
             .child(format!("Archived ({})", self.archived.len()))
             .child(if open { "▴" } else { "▾" })
-            .on_click(cx.listener(|workspace, _, window, cx| {
+            .on_hint_click(cx.listener(|workspace, _, window, cx| {
                 workspace.archived_open = !workspace.archived_open;
                 window.focus(&workspace.focus_handle(cx));
                 cx.notify();
@@ -3028,7 +3036,7 @@ impl Workspace {
                             .text_color(rgb(FAINT))
                             .child(self.projects[chat.project].name.clone()),
                     )
-                    .on_click(cx.listener(move |workspace, _, window, cx| {
+                    .on_hint_click(cx.listener(move |workspace, _, window, cx| {
                         workspace.archived_open = false;
                         workspace.unarchive(index, window, cx);
                     }))
@@ -3069,17 +3077,19 @@ impl Workspace {
                 workspace.project_menu = None;
                 cx.notify();
             }))
-            .child(item("edit-project", "Edit project…").on_click(cx.listener(
-                move |workspace, _, window, cx| workspace.open_project_card(index, window, cx),
-            )))
             .child(
-                item("archive-project", "Archive project").on_click(cx.listener(
+                item("edit-project", "Edit project…").on_hint_click(cx.listener(
+                    move |workspace, _, window, cx| workspace.open_project_card(index, window, cx),
+                )),
+            )
+            .child(
+                item("archive-project", "Archive project").on_hint_click(cx.listener(
                     move |workspace, _, window, cx| {
                         workspace.archive_project(index, true, window, cx);
                     },
                 )),
             )
-            .child(item("delete-project", delete).on_click(cx.listener(
+            .child(item("delete-project", delete).on_hint_click(cx.listener(
                 move |workspace, _, window, cx| {
                     workspace.delete_project(index, window, cx);
                 },
@@ -3105,42 +3115,46 @@ impl Workspace {
                 workspace.menu = None;
                 cx.notify();
             }))
-            .child(item("rename-chat", "Rename").on_click(
+            .child(item("rename-chat", "Rename").on_hint_click(
                 cx.listener(move |workspace, _, window, cx| workspace.rename(index, window, cx)),
             ))
-            .child(item("set-goal", "Set goal…").on_click(cx.listener(
+            .child(item("set-goal", "Set goal…").on_hint_click(cx.listener(
                 move |workspace, _, window, cx| {
                     workspace.edit_goal(index, window, cx);
                 },
             )))
             .when(has_goal, |menu| {
-                menu.child(item("clear-goal", "Clear goal").on_click(cx.listener(
+                menu.child(item("clear-goal", "Clear goal").on_hint_click(cx.listener(
                     move |workspace, _, window, cx| workspace.clear_goal(index, window, cx),
                 )))
             })
             .when(starts_sketch, |menu| {
-                menu.child(item("start-sketch", "Start sketch…").on_click(cx.listener(
-                    move |workspace, _, window, cx| workspace.edit_sketch(index, window, cx),
-                )))
+                menu.child(
+                    item("start-sketch", "Start sketch…").on_hint_click(cx.listener(
+                        move |workspace, _, window, cx| workspace.edit_sketch(index, window, cx),
+                    )),
+                )
             })
             .when(saves_to_wiki, |menu| {
-                menu.child(item("save-to-wiki", "Save to wiki").on_click(cx.listener(
-                    move |workspace, _, window, cx| workspace.save_to_wiki(index, window, cx),
-                )))
+                menu.child(
+                    item("save-to-wiki", "Save to wiki").on_hint_click(cx.listener(
+                        move |workspace, _, window, cx| workspace.save_to_wiki(index, window, cx),
+                    )),
+                )
             })
             .when(merges, |menu| {
-                menu.child(item("merge", "Merge").on_click(
+                menu.child(item("merge", "Merge").on_hint_click(
                     cx.listener(move |workspace, _, window, cx| workspace.merge(index, window, cx)),
                 ))
             })
             .children(endings.into_iter().enumerate().map(|(at, ending)| {
-                crate::ui::menu::item(("sketch-ending", at), ending.name.clone(), "").on_click(
+                crate::ui::menu::item(("sketch-ending", at), ending.name.clone(), "").on_hint_click(
                     cx.listener(move |workspace, _, window, cx| {
                         workspace.end_sketch_as(index, ending.clone(), window, cx);
                     }),
                 )
             }))
-            .child(item("archive-chat", "Archive").on_click(
+            .child(item("archive-chat", "Archive").on_hint_click(
                 cx.listener(move |workspace, _, window, cx| workspace.archive(index, window, cx)),
             ));
         Some(deferred(anchored().position(at).child(menu)).with_priority(2))
@@ -3172,6 +3186,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The parts mark again where they are drawn, for a region dragged.
         region::forget_marks();
+        hints::forget_marks(window);
         // The stage of the chat shown, or an empty card until it has one.
         let stage = card()
             .flex_1()
@@ -3234,7 +3249,14 @@ impl Render for Workspace {
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
             .text_size(px(14.))
-            .child(self.render_rail(window, cx))
+            .child(
+                div()
+                    .relative()
+                    .h_full()
+                    .flex_shrink_0()
+                    .child(hints::part(Part::Rail))
+                    .child(self.render_rail(window, cx)),
+            )
             // The stage, and the chat at its right, as cards on the ground
             // the rail is on.
             .child(
@@ -3260,6 +3282,7 @@ impl Render for Workspace {
                     .and_then(|shown| shown.0.clone()),
             )
             .child(self.line.clone())
+            .children(hints::overlay(window))
     }
 }
 

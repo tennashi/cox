@@ -75,6 +75,7 @@ mod complete;
 mod entries;
 mod settings;
 
+use crate::vim::hints::Hinted as _;
 use entries::{Folds, disclosure, progress, render_steps};
 
 actions!(
@@ -948,6 +949,7 @@ impl ChatView {
                 .text_size(px(12.))
                 // The conversation under the card hears none of the mouse.
                 .occlude()
+                .child(crate::vim::hints::cover())
                 .child(
                     div()
                         .id("plan-line")
@@ -958,7 +960,7 @@ impl ChatView {
                         .cursor_pointer()
                         .child(disclosure(Some(open)))
                         .child(format!("Plan {}", progress(steps)))
-                        .on_click(cx.listener(|view, _, _, cx| {
+                        .on_hint_click(cx.listener(|view, _, _, cx| {
                             view.plan_folded = !view.plan_folded;
                             cx.notify();
                         })),
@@ -1247,7 +1249,7 @@ impl ChatView {
             .children(self.attached.iter().enumerate().map(|(index, attachment)| {
                 let uri = attachment.uri.clone();
                 entries::attachment_chip(("attached", index).into(), attachment)
-                    .on_click(cx.listener(move |view, _, window, cx| {
+                    .on_hint_click(cx.listener(move |view, _, window, cx| {
                         if entries::opens(&uri) {
                             view.show_link(&uri, window, cx);
                         }
@@ -1262,7 +1264,7 @@ impl ChatView {
                             .cursor_pointer()
                             .hover(|style| style.text_color(rgb(FOREGROUND)))
                             .child("×")
-                            .on_click(cx.listener(move |view, _, _, cx| {
+                            .on_hint_click(cx.listener(move |view, _, _, cx| {
                                 cx.stop_propagation();
                                 if index < view.attached.len() {
                                     view.attached.remove(index);
@@ -1295,7 +1297,7 @@ impl ChatView {
             .cursor_pointer()
             .hover(|style| style.text_color(rgb(FOREGROUND)))
             .child(label)
-            .on_click(cx.listener(move |view, _, window, cx| start(view, window, cx)))
+            .on_hint_click(cx.listener(move |view, _, window, cx| start(view, window, cx)))
     }
 }
 
@@ -1331,7 +1333,7 @@ impl ChatView {
             .tooltip(tip("Stop (Escape)"))
             // A square, as a player's stop is.
             .child(div().size(px(10.)).rounded(px(2.)).bg(rgb(FOREGROUND)))
-            .on_click(cx.listener(|view, _, _, cx| view.stop(cx)))
+            .on_hint_click(cx.listener(|view, _, _, cx| view.stop(cx)))
     }
 
     /// The goal, above the conversation, while the chat has one: what it
@@ -1432,7 +1434,7 @@ impl ChatView {
                     .text_color(rgb(FAINT))
                     .cursor_pointer()
                     .hover(|style| style.text_color(rgb(FOREGROUND)))
-                    .on_click(cx.listener(|view, _, window, cx| view.flip_sketch(window, cx)))
+                    .on_hint_click(cx.listener(|view, _, window, cx| view.flip_sketch(window, cx)))
                     .into_any_element()
             }
         };

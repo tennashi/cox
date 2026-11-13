@@ -400,6 +400,7 @@ fn open_terminal<'a>(
     cx.update(|window, cx| {
         window.activate_window();
         window.focus(&terminal.focus_handle(cx));
+        cox::vim::typing(cox::vim::Region::Terminal, window, cx);
     });
     cx.run_until_parked();
     (terminal, waiting, cx)
@@ -456,13 +457,46 @@ fn a_terminal_takes_every_key_in_insert_mode_escape_too(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn turned_on_in_a_terminal_the_keys_start_in_insert_mode(cx: &mut TestAppContext) {
+fn turned_on_in_a_terminal_the_keys_start_in_normal_mode(cx: &mut TestAppContext) {
     let (_terminal, _waiting, cx) = open_terminal(cx, "terminal-turned-on", "head -n 1");
     cx.update(|window, cx| {
         cox::vim::switch(false, window, cx);
         cox::vim::switch(true, window, cx);
     });
-    assert_eq!(mode(cx), Some(Mode::Insert));
+    assert_eq!(mode(cx), Some(Mode::Normal));
+}
+
+#[gpui::test]
+fn a_terminal_come_to_by_keys_is_in_normal_mode_and_a_click_types(cx: &mut TestAppContext) {
+    let (terminal, _waiting, cx) = open_terminal(cx, "terminal-come-to", "head -n 1");
+    assert_eq!(
+        mode(cx),
+        Some(Mode::Insert),
+        "opened to type in, as the stage opens one"
+    );
+
+    cx.update(|window, cx| {
+        window.blur();
+        cox::vim::came(cox::vim::Region::Workspace, window, cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.focus(&terminal.focus_handle(cx)));
+    cx.run_until_parked();
+    assert_eq!(mode(cx), Some(Mode::Normal), "come to again, as by ctrl-w");
+
+    cx.simulate_keystrokes("ctrl-w");
+    assert_eq!(
+        mode(cx),
+        Some(Mode::Normal),
+        "ctrl-w is Vim's, not the shell's"
+    );
+
+    let at = cx
+        .debug_bounds("terminal")
+        .expect("the terminal is drawn")
+        .center();
+    cx.simulate_click(at, gpui::Modifiers::default());
+    assert_eq!(mode(cx), Some(Mode::Insert), "a click types");
 }
 
 #[gpui::test]
@@ -556,7 +590,12 @@ fn open_android(cx: &mut TestAppContext) -> (Entity<FakePage>, &mut VisualTestCo
         asked: Vec::new(),
         context: "Android",
     });
-    cx.update(|window, cx| window.focus(&android.read(cx).focus));
+    cx.update(|window, cx| {
+        window.focus(&android.read(cx).focus);
+        cox::vim::came(cox::vim::Region::Android, window, cx);
+    });
+    assert_eq!(mode(cx), Some(Mode::Normal), "come to by keys");
+    cx.update(|window, cx| cox::vim::typing(cox::vim::Region::Android, window, cx));
     cx.run_until_parked();
     (android, cx)
 }
@@ -689,12 +728,14 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
     assert!(in_part(cx, "Terminal"));
     assert_eq!(
         shown_mode(cx),
-        Some("INSERT"),
-        "as the terminal took the keyboard"
+        Some("NORMAL"),
+        "come to by keys, as Neovim's terminal"
     );
     let terminal = terminals.borrow().last().cloned().expect("a terminal");
     shows(cx, &terminal, "300");
 
+    keys::press(cx, &workspace, "i");
+    assert_eq!(shown_mode(cx), Some("INSERT"));
     keys::press(cx, &workspace, "e c h o enter");
     shows(cx, &terminal, "echo\necho");
     keys::press(cx, &workspace, "ctrl-\\ ctrl-n");
@@ -712,12 +753,8 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
         in_part(cx, "Terminal"),
         "the stage shows the terminal still"
     );
-    assert_eq!(
-        shown_mode(cx),
-        Some("INSERT"),
-        "coming back, as Vim's :startinsert"
-    );
-    keys::press(cx, &workspace, "ctrl-\\ ctrl-n : escape");
+    assert_eq!(shown_mode(cx), Some("NORMAL"), "coming back by keys");
+    keys::press(cx, &workspace, ": escape");
     assert!(in_part(cx, "Terminal"));
     assert_eq!(shown_mode(cx), Some("NORMAL"), "back from the line");
 
@@ -753,6 +790,10 @@ fn off_the_keys_are_as_they_were(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "ctrl-w h g t");
     assert!(!in_part(cx, "Rail"));
     assert_eq!(keys::shown_input(cx, &workspace), "hgt");
+
+    keys::press(cx, &workspace, "f shift-f");
+    assert_eq!(keys::shown_input(cx, &workspace), "hgtfF");
+    assert_eq!(tags(cx).len(), 0);
 }
 
 /// Opens the settings, clicks `chip` of Vim's keys, and closes them.
@@ -1362,7 +1403,7 @@ fn hint_mode_sends_the_labels_typed_to_the_page_until_escape(cx: &mut TestAppCon
     assert_eq!(asked(&page, cx), ["label s", "label j", "label k", "leave"]);
     assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
 
-    cx.simulate_keystrokes("shift-f");
+    cx.simulate_keystrokes("; t");
     assert_eq!(asked(&page, cx), ["hint NewTab"]);
     cx.update(|_, cx| cox::vim::enter(Mode::Normal, cx));
     cx.simulate_keystrokes("j");
@@ -1738,4 +1779,331 @@ impl gpui::Focusable for FakePage {
     fn focus_handle(&self, _: &gpui::App) -> gpui::FocusHandle {
         self.focus.clone()
     }
+}
+
+/// The hints' labels over the window, with what each is over, each
+/// drawn at the top left of what it is over.
+fn tags(cx: &mut VisualTestContext) -> Vec<(String, gpui::Bounds<gpui::Pixels>)> {
+    let shown = cx.update(|window, _| cox::vim::hints::shown_labels(window));
+    for (label, over) in &shown {
+        let selector: &'static str = Box::leak(format!("hint-{label}").into_boxed_str());
+        let drawn = cx.debug_bounds(selector).expect("the label is drawn");
+        assert_eq!(drawn.origin, over.origin, "{label}");
+    }
+    shown
+}
+
+/// The label over what `selector` finds, the innermost of those over it.
+fn tag_over(cx: &mut VisualTestContext, selector: &'static str) -> String {
+    let target = cx.debug_bounds(selector).expect("the target is drawn");
+    tags(cx)
+        .into_iter()
+        .filter(|(_, over)| target.contains(&over.center()) && over.contains(&target.center()))
+        .min_by(|(_, a), (_, b)| {
+            let area =
+                |size: gpui::Size<gpui::Pixels>| f32::from(size.width) * f32::from(size.height);
+            area(a.size).total_cmp(&area(b.size))
+        })
+        .map_or_else(|| panic!("no hint over {selector}"), |(label, _)| label)
+}
+
+fn type_label(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, label: &str) {
+    let keys: Vec<String> = label.chars().map(String::from).collect();
+    keys::press(cx, workspace, &keys.join(" "));
+}
+
+#[gpui::test]
+fn f_on_the_rail_hints_its_buttons_and_a_label_chooses_a_project(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "hints-rail");
+    keys::press(cx, &workspace, "secondary-n escape");
+    open_project(cx, &workspace, "hints-rail-a");
+    open_project(cx, &workspace, "hints-rail-b");
+    assert_eq!(chosen(cx, &workspace), 2);
+
+    keys::press(cx, &workspace, "ctrl-w h f");
+    assert_eq!(mode(cx), Some(Mode::Hint));
+    let shown = tags(cx);
+    let rail = cx.debug_bounds("project-1").expect("the rail is drawn");
+    assert!(
+        shown.iter().all(|(_, tag)| tag.origin.x < rail.right()),
+        "the rail's hints only: {shown:?}"
+    );
+    assert_eq!(shown.len(), 5, "three projects, new project, settings");
+    let first = tag_over(cx, "project-1");
+    type_label(cx, &workspace, &first);
+    assert_eq!(chosen(cx, &workspace), 0);
+    assert_eq!(tags(cx).len(), 0);
+    assert_ne!(mode(cx), Some(Mode::Hint));
+}
+
+#[gpui::test]
+fn f_in_the_chat_answers_the_agent_s_question_by_its_label(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "hints-ask");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    cx.simulate_input("permission");
+    keys::press(cx, &workspace, "enter");
+    let asked = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| view.conversation().options_asked())
+    };
+    for _ in 0..500 {
+        if asked(cx) > 0 {
+            break;
+        }
+        go_on(cx, &workspace);
+    }
+    assert!(asked(cx) > 0, "the agent asks permission");
+
+    keys::press(cx, &workspace, "escape f");
+    let panel = cx.debug_bounds("chat-panel").expect("the chat is drawn");
+    let shown = tags(cx);
+    assert!(
+        shown.iter().all(|(_, tag)| panel.contains(&tag.origin)),
+        "the chat's hints only: {shown:?}"
+    );
+    let option = tag_over(cx, "option-1");
+    type_label(cx, &workspace, &option);
+    go_on(cx, &workspace);
+    assert_eq!(asked(cx), 0, "the option was chosen");
+    assert_ne!(agent_state(cx, &view), State::Asking);
+}
+
+#[gpui::test]
+fn a_field_s_hint_gives_it_the_keyboard_in_insert_mode(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "hints-field");
+    keys::press(cx, &workspace, "secondary-n escape");
+    open_project(cx, &workspace, "hints-field-a");
+    keys::press(cx, &workspace, "ctrl-w h");
+    assert!(in_part(cx, "Rail"));
+
+    keys::press(cx, &workspace, "shift-f");
+    let input = cx.debug_bounds("input").expect("the input is drawn");
+    let field = tags(cx)
+        .into_iter()
+        .filter(|(_, over)| input.contains(&over.center()))
+        .min_by(|(_, a), (_, b)| {
+            (a.origin.y, a.origin.x)
+                .partial_cmp(&(b.origin.y, b.origin.x))
+                .unwrap()
+        })
+        .map(|(label, _)| label)
+        .expect("a hint over the input");
+    type_label(cx, &workspace, &field);
+    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert!(in_part(cx, "LineInput"));
+    keys::press(cx, &workspace, "h i");
+    assert_eq!(keys::shown_input(cx, &workspace), "hi");
+}
+
+#[gpui::test]
+fn shift_f_hints_the_whole_window_and_typing_narrows_them_until_escape(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "hints-window");
+    keys::press(cx, &workspace, "secondary-n escape");
+    for name in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"] {
+        open_project(cx, &workspace, &format!("hints-window-{name}"));
+    }
+    keys::press(cx, &workspace, "shift-f");
+    let all = tags(cx);
+    assert!(all.len() > 14, "two letters each: {}", all.len());
+    let rail = cx.debug_bounds("project-1").expect("the rail is drawn");
+    let panel = cx.debug_bounds("chat-panel").expect("the chat is drawn");
+    assert!(all.iter().any(|(_, tag)| tag.origin.x < rail.right()));
+    assert!(all.iter().any(|(_, tag)| panel.contains(&tag.origin)));
+
+    let first = all[0].0.chars().next().unwrap().to_string();
+    keys::press(cx, &workspace, &first);
+    let left = tags(cx);
+    assert!(!left.is_empty() && left.len() < all.len());
+    assert!(left.iter().all(|(label, _)| label.starts_with(&first)));
+    assert_eq!(mode(cx), Some(Mode::Hint));
+
+    keys::press(cx, &workspace, "escape");
+    assert_eq!(tags(cx).len(), 0);
+    assert_eq!(mode(cx), Some(Mode::Normal));
+    let chosen_before = chosen(cx, &workspace);
+    keys::press(cx, &workspace, "s");
+    assert_eq!(chosen(cx, &workspace), chosen_before, "s is no label now");
+}
+
+#[gpui::test]
+fn f_on_the_settings_flips_a_chip_in_sight(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "hints-settings");
+    keys::press(cx, &workspace, "secondary-n escape secondary-,");
+    assert!(in_part(cx, "Settings"));
+    keys::press(cx, &workspace, "f");
+    let settings = cx.debug_bounds("settings").expect("the settings are drawn");
+    let shown = tags(cx);
+    let off = cx.debug_bounds("vim-off").expect("the chip is laid out");
+    assert!(off.origin.y > settings.bottom(), "the chip is out of sight");
+    assert!(
+        shown.iter().all(|(_, over)| !off.contains(&over.center())),
+        "no hint for what is out of sight"
+    );
+    assert_ne!(shown.len(), 0);
+    assert!(
+        shown.iter().all(|(_, tag)| settings.contains(&tag.origin)),
+        "nothing under the settings: {shown:?}"
+    );
+    keys::press(cx, &workspace, "escape");
+
+    cx.simulate_event(ScrollWheelEvent {
+        position: settings.center(),
+        delta: ScrollDelta::Lines(gpui::point(0., -1000.)),
+        modifiers: gpui::Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    settled(cx, &workspace);
+    keys::press(cx, &workspace, "f");
+    let off = tag_over(cx, "vim-off");
+    type_label(cx, &workspace, &off);
+    assert_eq!(kept_vim(), None);
+    assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), None);
+}
+
+/// A window with a button of its own and a page, in the page's key
+/// context, which keeps what the window's hints ask of the page.
+struct HintedPage {
+    focus: gpui::FocusHandle,
+    listed: Rc<std::cell::Cell<bool>>,
+    asked: Rc<RefCell<Vec<String>>>,
+    answer: Rc<RefCell<Option<cox::vim::hints::Answer>>>,
+}
+
+/// The page of a [`HintedPage`], as the window's hints see it.
+struct PageHints {
+    page: gpui::WeakEntity<HintedPage>,
+    listed: Rc<std::cell::Cell<bool>>,
+    asked: Rc<RefCell<Vec<String>>>,
+    answer: Rc<RefCell<Option<cox::vim::hints::Answer>>>,
+}
+
+impl cox::vim::hints::Page for PageHints {
+    fn ask(&self, answer: cox::vim::hints::Answer, _: &mut gpui::App) {
+        self.asked.borrow_mut().push("ask".into());
+        self.listed.set(true);
+        *self.answer.borrow_mut() = Some(answer);
+    }
+
+    fn show(&self, labels: &[(u32, String)], cx: &mut gpui::App) {
+        if let Some(page) = self.page.upgrade() {
+            page.read(cx);
+        }
+        let shown: Vec<String> = labels
+            .iter()
+            .map(|(id, label)| format!("{id}={label}"))
+            .collect();
+        self.asked
+            .borrow_mut()
+            .push(format!("show {}", shown.join(" ")));
+    }
+
+    fn take(&self, id: u32, _: &mut gpui::Window, _: &mut gpui::App) {
+        let lost = if self.listed.get() {
+            ""
+        } else {
+            " after its hints were cleared"
+        };
+        self.asked.borrow_mut().push(format!("take {id}{lost}"));
+    }
+
+    fn clear(&self, _: &mut gpui::App) {
+        self.asked.borrow_mut().push("clear".into());
+        self.listed.set(false);
+    }
+}
+
+impl gpui::Render for HintedPage {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use cox::vim::hints::Hinted as _;
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+        cox::vim::hints::forget_marks(window);
+        let asked = self.asked.clone();
+        gpui::div()
+            .size_full()
+            .track_focus(&self.focus)
+            .key_context("Page")
+            .child(
+                gpui::div()
+                    .id("native")
+                    .debug_selector(|| "native".to_owned())
+                    .w(px(40.))
+                    .h(px(20.))
+                    .child("button")
+                    .on_hint_click(move |_, _, _| asked.borrow_mut().push("native".into())),
+            )
+            .child(cox::vim::hints::page(Rc::new(PageHints {
+                page: cx.entity().downgrade(),
+                listed: self.listed.clone(),
+                asked: self.asked.clone(),
+                answer: self.answer.clone(),
+            })))
+            .children(cox::vim::hints::overlay(window))
+    }
+}
+
+#[gpui::test]
+fn shift_f_labels_the_page_s_hints_and_the_window_s_in_one_sequence(cx: &mut TestAppContext) {
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let answer = Rc::new(RefCell::new(None));
+    let (page, cx) = cx.add_window_view(|_, cx| HintedPage {
+        focus: cx.focus_handle(),
+        listed: Rc::default(),
+        asked: asked.clone(),
+        answer: answer.clone(),
+    });
+    cx.update(|window, cx| window.focus(&page.read(cx).focus));
+    cx.run_until_parked();
+    let taken = |asked: &Rc<RefCell<Vec<String>>>| std::mem::take(&mut *asked.borrow_mut());
+
+    cx.simulate_keystrokes("shift-f");
+    assert_eq!(taken(&asked), ["ask"]);
+    assert_eq!(tags(cx).len(), 0, "no labels until the page answers");
+    let answered = answer.borrow_mut().take().expect("the page was asked");
+    page.update_in(cx, |_, window, cx| answered(vec![7, 9], window, cx));
+    cx.run_until_parked();
+    assert_eq!(taken(&asked), ["show 7=a 9=d"]);
+    assert_eq!(tag_over(cx, "native"), "s");
+
+    cx.simulate_keystrokes("d");
+    assert_eq!(taken(&asked), ["take 9", "clear"]);
+    assert_eq!(tags(cx).len(), 0);
+    assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
+
+    cx.simulate_keystrokes("shift-f");
+    let answered = answer.borrow_mut().take().expect("the page was asked");
+    cx.update(|window, cx| answered(vec![7], window, cx));
+    cx.run_until_parked();
+    taken(&asked);
+    cx.simulate_keystrokes("s");
+    assert_eq!(taken(&asked), ["native", "clear"]);
+
+    cx.simulate_keystrokes("shift-f");
+    let answered = answer.borrow_mut().take().expect("the page was asked");
+    cx.update(|window, cx| answered(Vec::new(), window, cx));
+    cx.run_until_parked();
+    taken(&asked);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(taken(&asked), ["clear"]);
+    assert_eq!(tags(cx).len(), 0);
+    assert_eq!(cx.update(|_, cx| cox::vim::mode(cx)), Some(Mode::Normal));
+}
+
+#[gpui::test]
+fn f_after_folding_the_chat_by_its_label_labels_the_folded_chat(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "hints-folded");
+    keys::press(cx, &workspace, "secondary-n escape f");
+    let fold = tag_over(cx, "fold-chat");
+    type_label(cx, &workspace, &fold);
+    assert!(workspace.read_with(cx, |workspace, _| workspace.is_folded()));
+
+    keys::press(cx, &workspace, "f");
+    let unfold = tag_over(cx, "unfold-chat");
+    type_label(cx, &workspace, &unfold);
+    assert!(!workspace.read_with(cx, |workspace, _| workspace.is_folded()));
 }

@@ -29,6 +29,7 @@ use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::button::{Kind, button};
 use crate::ui::theme::{BORDER, DIM, FAILED, FOREGROUND, RAISED};
+use crate::vim::hints::Hinted as _;
 
 pub(crate) const KEY_CONTEXT: &str = "MacWindow";
 
@@ -351,18 +352,18 @@ impl MacWindow {
             }))
             .children(pid.map(|pid| {
                 button("mac-window-front", "Bring to front")
-                    .on_click(move |_, _, _| cox_mac::bring_to_front(pid))
+                    .on_hint_click(move |_, _, _| cox_mac::bring_to_front(pid))
             }))
             .when(showing, |bar| {
                 bar.child(
                     button("mac-window-stop", "Stop")
-                        .on_click(cx.listener(|tab, _, _, cx| tab.stop(cx))),
+                        .on_hint_click(cx.listener(|tab, _, _, cx| tab.stop(cx))),
                 )
             })
             .when(!showing, |bar| {
                 bar.child(
                     button("mac-window-show", "Show")
-                        .on_click(cx.listener(|tab, _, _, cx| tab.find(cx))),
+                        .on_hint_click(cx.listener(|tab, _, _, cx| tab.find(cx))),
                 )
             })
     }

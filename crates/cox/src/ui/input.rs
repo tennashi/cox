@@ -871,6 +871,9 @@ impl Render for LineInput {
             .cursor_text()
             .w_full()
             .child(LineElement { input: cx.entity() })
+            .child(crate::vim::hints::spot(crate::vim::hints::Take::Field(
+                self.focus_handle.clone(),
+            )))
     }
 }
 

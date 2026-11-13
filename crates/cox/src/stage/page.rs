@@ -42,6 +42,7 @@ use crate::stage::pointer;
 use crate::stage::tab::Shows;
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{BORDER, BUTTON, DISABLED, SELECTED};
+use crate::vim::hints::Hinted as _;
 use cox_browser::pointer::{AgentPointer, Look};
 use cox_browser::relay::AgentInput;
 use cox_browser::{Browser, Caret, Event, Navigation, TargetId};
@@ -323,6 +324,7 @@ impl Page {
                         gpui::MouseButton::Left,
                         cx.listener(move |_, _, window, cx| {
                             window.focus(&address.focus_handle(cx));
+                            crate::vim::typing(crate::vim::Region::Address, window, cx);
                         }),
                     )
                     .child(self.address.clone()),
@@ -351,7 +353,7 @@ impl Page {
         button
             .cursor_pointer()
             .hover(|style| style.bg(rgb(BUTTON)))
-            .on_click(cx.listener(move |stage, _, _, _| action(&stage.browser)))
+            .on_hint_click(cx.listener(move |stage, _, _, _| action(&stage.browser)))
     }
 }
 
@@ -577,7 +579,7 @@ impl Page {
                 cx.notify();
             }))
             .child(
-                item("translate-selection", "Translate").on_click(cx.listener(
+                item("translate-selection", "Translate").on_hint_click(cx.listener(
                     move |page, _, window, cx| {
                         page.menu = None;
                         crate::ui::translation::show(&text, window, cx);
@@ -585,20 +587,22 @@ impl Page {
                     },
                 )),
             )
-            .child(item("add-to-chat", "Add to chat").on_click(cx.listener(
-                move |page, _, _, cx| {
-                    page.menu = None;
-                    crate::chat::hand::hand(handed.clone(), cx);
-                    cx.notify();
-                },
-            )))
             .child(
-                item("copy-selection", "Copy").on_click(cx.listener(move |page, _, _, cx| {
+                item("add-to-chat", "Add to chat").on_hint_click(cx.listener(
+                    move |page, _, _, cx| {
+                        page.menu = None;
+                        crate::chat::hand::hand(handed.clone(), cx);
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(item("copy-selection", "Copy").on_hint_click(cx.listener(
+                move |page, _, _, cx| {
                     page.menu = None;
                     cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
                     cx.notify();
-                })),
-            );
+                },
+            )));
         Some(deferred(anchored().position(at).child(menu)).with_priority(2))
     }
 }
@@ -665,6 +669,9 @@ impl Render for Page {
                         let page = cx.weak_entity();
                         move |whole, over, cx| Some(page.upgrade()?.read(cx).described(whole, over))
                     }))
+                    .child(crate::vim::hints::page(std::rc::Rc::new(vim::WindowHints(
+                        cx.weak_entity(),
+                    ))))
                     .children(
                         self.look
                             .as_ref()

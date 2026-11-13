@@ -20,6 +20,7 @@ use super::words::{Part, Words};
 use crate::daemon::phone::{Pairing, pairing};
 use crate::ui::button::{Kind, button};
 use crate::ui::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND};
+use crate::vim::hints::Hinted as _;
 
 /// How wide the code is drawn, its quiet edge too.
 const CODE_SIZE: f32 = 184.;
@@ -156,11 +157,11 @@ impl PhoneSection {
                             if self.copied { "Copied" } else { "Copy link" },
                             Kind::Plain,
                         )
-                        .on_click(cx.listener(|section, _, _, cx| section.copy(cx))),
+                        .on_hint_click(cx.listener(|section, _, _, cx| section.copy(cx))),
                     )
                     .child(
                         button("hide-pairing", "Hide", Kind::Quiet)
-                            .on_click(cx.listener(|section, _, _, cx| section.hide(cx))),
+                            .on_hint_click(cx.listener(|section, _, _, cx| section.hide(cx))),
                     )
                     .child(unpair_button(cx)),
             )
@@ -222,7 +223,7 @@ impl PhoneSection {
 /// The button that unpairs every phone.
 fn unpair_button(cx: &mut Context<PhoneSection>) -> impl IntoElement + use<> {
     button("unpair-phones", "Unpair every phone", Kind::Quiet)
-        .on_click(cx.listener(|section, _, _, cx| section.unpair(cx)))
+        .on_hint_click(cx.listener(|section, _, _, cx| section.unpair(cx)))
 }
 
 impl EventEmitter<UnpairPhones> for PhoneSection {}
@@ -279,7 +280,7 @@ impl Render for PhoneSection {
                         .gap_2()
                         .child(
                             button("show-pairing", "Show pairing code", Kind::Plain)
-                                .on_click(cx.listener(|section, _, _, cx| section.show(cx))),
+                                .on_hint_click(cx.listener(|section, _, _, cx| section.show(cx))),
                         )
                         .child(unpair_button(cx)),
                 )
@@ -295,7 +296,7 @@ impl Render for PhoneSection {
             Shown::Failed(why) => section.child(words.note(why, FAILED)).child(
                 div().flex().child(
                     button("show-pairing", "Try again", Kind::Plain)
-                        .on_click(cx.listener(|section, _, _, cx| section.show(cx))),
+                        .on_hint_click(cx.listener(|section, _, _, cx| section.show(cx))),
                 ),
             ),
             Shown::Code { pairing, code } => {

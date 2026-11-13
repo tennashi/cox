@@ -6,6 +6,7 @@ use gpui::{Context, IntoElement, anchored, deferred, prelude::*, px, rgb};
 
 use super::Code;
 use crate::ui::theme::{BORDER_STRONG, FOREGROUND, RAISED};
+use crate::vim::hints::Hinted as _;
 
 pub(super) const MENU: u32 = RAISED;
 pub(super) const MENU_BORDER: u32 = BORDER_STRONG;
@@ -37,7 +38,7 @@ impl Code {
                 cx.notify();
             }))
             .child(
-                item("go-to-definition", "Go to definition", click).on_click(cx.listener(
+                item("go-to-definition", "Go to definition", click).on_hint_click(cx.listener(
                     move |code, _, _, cx| {
                         code.menu = None;
                         code.go_to_definition(place, cx);
@@ -45,7 +46,7 @@ impl Code {
                 )),
             )
             .child(
-                item("find-references", "Find references", "").on_click(cx.listener(
+                item("find-references", "Find references", "").on_hint_click(cx.listener(
                     move |code, _, _, cx| {
                         code.menu = None;
                         code.find_references(place, cx);
@@ -54,7 +55,7 @@ impl Code {
             )
             .when(!selected.trim().is_empty(), |menu| {
                 menu.child(
-                    item("translate-selection", "Translate", translate).on_click(cx.listener(
+                    item("translate-selection", "Translate", translate).on_hint_click(cx.listener(
                         move |code, _, window, cx| {
                             code.menu = None;
                             crate::ui::translation::show(&selected, window, cx);
@@ -65,7 +66,7 @@ impl Code {
             })
             .when(!handed.text.trim().is_empty(), |menu| {
                 menu.child(
-                    item("add-to-chat", "Add to chat", crate::chat::hand::keys()).on_click(
+                    item("add-to-chat", "Add to chat", crate::chat::hand::keys()).on_hint_click(
                         cx.listener(move |code, _, _, cx| {
                             code.menu = None;
                             crate::chat::hand::hand(handed.clone(), cx);

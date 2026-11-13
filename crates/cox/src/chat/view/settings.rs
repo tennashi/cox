@@ -12,7 +12,7 @@
 //! runs.
 
 use gpui::{
-    AnchoredPositionMode, AnyElement, Context, ElementId, Focusable as _, FontWeight, MouseButton,
+    AnchoredPositionMode, AnyElement, Context, ElementId, Focusable as _, FontWeight,
     MouseDownEvent, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
 };
 
@@ -24,6 +24,7 @@ use crate::chat::conversation::State;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::menu::{ROW_HEIGHT, ROW_RADIUS};
 use crate::ui::theme::{BORDER, BUTTON, DIM, FAINT, FOREGROUND, SELECTED, SURFACE, chat_color};
+use crate::vim::hints::Hinted as _;
 
 /// How wide the list of a setting's choices is.
 const CHOICES_WIDTH: f32 = 260.;
@@ -102,21 +103,17 @@ impl ChatView {
                     .child(self.agent_name())
             }))
             .children(summary(settings))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, event: &MouseDownEvent, window, cx| {
-                    // The press that closed the list, on the pill, leaves
-                    // it closed.
-                    let closed = view.setting_closed_at.take() == Some(event.position);
-                    view.setting_open =
-                        (!closed && view.setting_open.is_none()).then_some(Menu::Rows);
-                    // The keyboard stays in the input, as the window would
-                    // take it otherwise.
-                    window.focus(&view.input.focus_handle(cx));
-                    window.prevent_default();
-                    cx.notify();
-                }),
-            );
+            .on_hint_mouse_down(cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                // The press that closed the list, on the pill, leaves
+                // it closed.
+                let closed = view.setting_closed_at.take() == Some(event.position);
+                view.setting_open = (!closed && view.setting_open.is_none()).then_some(Menu::Rows);
+                // The keyboard stays in the input, as the window would
+                // take it otherwise.
+                window.focus(&view.input.focus_handle(cx));
+                window.prevent_default();
+                cx.notify();
+            }));
         let list = open.map(|menu| match menu {
             Menu::Rows => {
                 let mut rows: Vec<AnyElement> = agent
@@ -226,18 +223,15 @@ impl ChatView {
                     .child(ellipsis(chosen_name(setting).to_owned())),
             )
             .child(div().text_color(rgb(DIM)).child("›"))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _, window, cx| {
-                    if enabled {
-                        view.setting_open = Some(menu);
-                    }
-                    window.focus(&view.input.focus_handle(cx));
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    cx.notify();
-                }),
-            )
+            .on_hint_mouse_down(cx.listener(move |view, _, window, cx| {
+                if enabled {
+                    view.setting_open = Some(menu);
+                }
+                window.focus(&view.input.focus_handle(cx));
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.notify();
+            }))
             .into_any_element()
     }
 
@@ -279,16 +273,13 @@ impl ChatView {
             .hover(|style| style.bg(rgb(SELECTED)))
             .child("‹")
             .child(setting.name.clone())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _, window, cx| {
-                    view.setting_open = Some(Menu::Rows);
-                    window.focus(&view.input.focus_handle(cx));
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    cx.notify();
-                }),
-            );
+            .on_hint_mouse_down(cx.listener(|view, _, window, cx| {
+                view.setting_open = Some(Menu::Rows);
+                window.focus(&view.input.focus_handle(cx));
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.notify();
+            }));
         let mut list = Self::render_list(vec![back.into_any_element()], cx);
         let mut group = None;
         for (index, choice) in setting.choices.iter().enumerate() {
@@ -339,7 +330,7 @@ impl ChatView {
                                     .child(description)
                             })),
                     )
-                    .on_click(cx.listener(move |view, _, window, cx| {
+                    .on_hint_click(cx.listener(move |view, _, window, cx| {
                         match menu {
                             Menu::Agent => view.choose_agent(&value, cx),
                             Menu::Setting(_) => view.set(&id, &value, cx),

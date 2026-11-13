@@ -31,6 +31,7 @@ use crate::ui::selection::{Piece, Selection, Spot, TextId};
 use crate::ui::theme::{
     BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE, CODE_FONT, DIM, LINK, RAISED, SELECTION,
 };
+use crate::vim::hints::Hinted as _;
 use crate::vim::search::{self, Direction};
 
 /// How far each list a block is in moves it right.
@@ -662,7 +663,7 @@ impl Writer {
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(BUTTON_HOVER)))
                     .child("Copy")
-                    .on_click(move |_, _, cx| {
+                    .on_hint_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
                     }),
             )

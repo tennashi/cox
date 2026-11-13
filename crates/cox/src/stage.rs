@@ -535,6 +535,7 @@ impl Stage {
         let changes = cx.observe(&terminal, |stage, _, cx| stage.changed(cx));
         self.push(TabContent::Terminal(terminal), changes, None, true, cx);
         self.focus_shown(window, cx);
+        crate::vim::typing(crate::vim::Region::Terminal, window, cx);
     }
 
     /// Shows the tab of the Android emulator's virtual devices, opening it
@@ -840,8 +841,10 @@ impl Stage {
                 }
                 return;
             }
-            Tabs::Along(step) => self.tabs.along(step),
-            Tabs::Number(number) => number.checked_sub(1),
+            Tabs::Along(step) => along(&self.rest(cx), self.tabs.shown_index(), step),
+            Tabs::Number(number) => number
+                .checked_sub(1)
+                .and_then(|at| self.rest(cx).get(at).copied()),
         };
         let had_focus = self.has_focus(window, cx);
         if let Some(index) = index
@@ -884,9 +887,11 @@ impl Render for Stage {
             self.tabs.shown().is_some_and(|tab| tab.content.is_file()) && !tree::is_folded(cx);
         let picked = crate::vim::mode(cx).is_some() && self.has_focus(window, cx);
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
+            .child(crate::vim::hints::part(crate::vim::hints::Part::Stage))
             .child(self.render_bar(cx))
             .child(
                 div()
@@ -918,5 +923,40 @@ impl Render for Stage {
                             }),
                     ),
             )
+    }
+}
+
+/// The index of the tab `step` along from the one `shown`, going round
+/// among `tabs`, the indexes of those the column beside the stage lists,
+/// leaving out the views the bar keeps. From a view, or none, a step
+/// forward goes to the first of them and one back to the last.
+fn along(tabs: &[usize], shown: Option<usize>, step: isize) -> Option<usize> {
+    let count = isize::try_from(tabs.len())
+        .ok()
+        .filter(|count| *count > 0)?;
+    let from = match shown.and_then(|shown| tabs.iter().position(|tab| *tab == shown)) {
+        Some(at) => isize::try_from(at).ok()?,
+        None if step > 0 => -1,
+        None => 0,
+    };
+    let at = usize::try_from((from + step).rem_euclid(count)).ok()?;
+    tabs.get(at).copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::along;
+
+    #[test]
+    fn tabs_go_round_the_column_and_leave_the_views_out() {
+        let tabs = [1, 3, 4];
+        assert_eq!(along(&tabs, Some(1), 1), Some(3));
+        assert_eq!(along(&tabs, Some(4), 1), Some(1));
+        assert_eq!(along(&tabs, Some(1), -1), Some(4));
+        assert_eq!(along(&tabs, Some(3), 2), Some(1));
+        assert_eq!(along(&tabs, Some(0), 1), Some(1));
+        assert_eq!(along(&tabs, Some(2), -1), Some(4));
+        assert_eq!(along(&tabs, None, 1), Some(1));
+        assert_eq!(along(&[], Some(0), 1), None);
     }
 }

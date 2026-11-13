@@ -1,8 +1,8 @@
 //! The keys as in Vim, which the human turns on and off as Cox runs, on
 //! the settings screen or in `settings.json` with `{"vim": true}`: a
 //! mode, normal or insert, in the chat and what opens over it to type
-//! in, and in a page, where hint mode picks what to click by its label,
-//! and the keys of each (see [`keymap`]).
+//! in, and in a page; hint mode, which picks what to click in the window
+//! by its label (see [`hints`]); and the keys of each (see [`keymap`]).
 //!
 //! The keys are read ahead of the window's own, in one place
 //! ([`turn`]), which takes those Vim's keys do and leaves the rest as
@@ -11,6 +11,7 @@
 //! input method composes, every key is its own.
 
 pub mod ex;
+pub mod hints;
 pub mod keymap;
 pub mod line;
 pub mod search;
@@ -20,7 +21,7 @@ use gpui::{
     Subscription, Window, actions, px,
 };
 
-use self::keymap::{Answer, Command, Follow, Keymap, Motion, Place, Sent};
+use self::keymap::{Answer, Command, Follow, Keymap, Motion, Place, Reach, Sent};
 use self::search::{Find, Search};
 
 /// Moves what the part of the window with the keyboard shows, or its
@@ -299,19 +300,20 @@ impl Region {
         }
     }
 
+    /// Whether the region is typed in whatever the mode, as a field of a
+    /// page is: the page's address line, which Esc leaves.
+    const fn has_no_mode(self) -> bool {
+        matches!(self, Self::Address)
+    }
+
     /// The mode the keys go to as the keyboard comes into the region, if
-    /// it has one: insert in what opens only to type a line in and in a
-    /// program, normal in a screen of settings, and where nothing is
-    /// typed. A page tells its own, by whether a field of it has the
-    /// keyboard.
+    /// it has one: insert in what opens only to type a line in, normal in
+    /// a screen of settings, where nothing is typed, and in a program, as
+    /// Neovim's terminal is, until the human types in it (see [`typing`]).
+    /// A page tells its own, by whether a field of it has the keyboard.
     const fn enters_in(self) -> Option<Mode> {
         match self {
-            Self::Goal
-            | Self::Sketch
-            | Self::Renaming
-            | Self::Address
-            | Self::Terminal
-            | Self::Android => Some(Mode::Insert),
+            Self::Goal | Self::Sketch | Self::Renaming | Self::Address => Some(Mode::Insert),
             Self::Command => Some(Mode::Command),
             Self::Settings
             | Self::ProjectCard
@@ -324,7 +326,9 @@ impl Region {
             | Self::Devices
             | Self::Flow
             | Self::Windows
-            | Self::MacWindow => Some(Mode::Normal),
+            | Self::MacWindow
+            | Self::Terminal
+            | Self::Android => Some(Mode::Normal),
             _ => None,
         }
     }
@@ -399,6 +403,9 @@ impl Vim {
 
     pub fn key(&mut self, keymap: &Keymap, region: Region, keystroke: &Keystroke) -> Outcome {
         self.arrive(region);
+        if region.has_no_mode() && self.mode != Mode::Insert {
+            self.mode = Mode::Insert;
+        }
         if !keymap.knows(region) {
             return Outcome::Pass;
         }
@@ -431,7 +438,7 @@ impl Vim {
                 match command {
                     Command::Normal => self.mode = Mode::Normal,
                     Command::Insert(_) => self.mode = Mode::Insert,
-                    Command::Hint(_) => self.mode = Mode::Hint,
+                    Command::Hint(_) | Command::Hints(_) => self.mode = Mode::Hint,
                     Command::Stop
                     | Command::Line(_)
                     | Command::Again(_)
@@ -557,6 +564,16 @@ pub fn came(region: Region, window: &mut Window, cx: &mut App) {
     }
 }
 
+/// Goes to insert mode in `region`, which the human means to type in, as
+/// by clicking a terminal or opening one, if Vim's keys are on.
+pub fn typing(region: Region, window: &mut Window, cx: &mut App) {
+    came(region, window, cx);
+    if cx.has_global::<Vim>() && cx.global::<Vim>().mode != Mode::Insert {
+        enter(Mode::Insert, cx);
+        window.refresh();
+    }
+}
+
 /// Tells Vim's keys each time `focus`, of the part in `region`, gets the
 /// keyboard, and now if it has it.
 pub fn follow_focus<T: 'static>(
@@ -603,7 +620,12 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     let vim = cx.global_mut::<Vim>();
     let was = vim.mode;
     let outcome = vim.key(&Keymap::VIM, region, &event.keystroke);
-    if vim.mode != was {
+    let mode = vim.mode;
+    if mode != was {
+        window.refresh();
+    }
+    if mode != Mode::Hint && hints::shown() {
+        hints::stop(cx);
         window.refresh();
     }
     match outcome {
@@ -615,6 +637,22 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         }
         Outcome::Do(Command::Hint(follow), _) => {
             window.dispatch_action(Box::new(Hint { follow }), cx);
+        }
+        Outcome::Do(Command::Hints(reach), _) => {
+            let part = match reach {
+                Reach::Part => hints::Part::of(region),
+                Reach::Window => None,
+            };
+            let reaches = reach == Reach::Window || part.is_some();
+            let started = reaches
+                && (hints::start(part, window, cx)
+                    || (part.is_some() && hints::start(None, window, cx)));
+            if !started {
+                enter(Mode::Normal, cx);
+            }
+        }
+        Outcome::Do(Command::Send(Sent::Label(key)), _) if hints::shown() => {
+            hints::typed(key, window, cx);
         }
         Outcome::Do(Command::Stop, _) => {
             window.dispatch_action(Box::new(crate::chat::view::Stop), cx);
@@ -663,7 +701,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
 mod tests {
     use gpui::{KeyContext, Keystroke, px};
 
-    use super::keymap::{Act, Command, Follow, Keymap, Motion, Pick, Place, Prompt, Sent};
+    use super::keymap::{Act, Command, Follow, Keymap, Motion, Pick, Place, Prompt, Reach, Sent};
     use super::{Mode, Move, Outcome, Region, Vim};
 
     fn press(vim: &mut Vim, region: Region, keys: &str) -> Vec<Outcome> {
@@ -779,6 +817,9 @@ mod tests {
     fn a_program_has_every_key_in_insert_mode_and_none_in_normal_mode() {
         for region in [Region::Terminal, Region::Android] {
             let mut vim = Vim::default();
+            vim.arrive(region);
+            assert_eq!(vim.mode(), Mode::Normal, "come to, {region:?}");
+            vim.mode = Mode::Insert;
             assert_eq!(
                 press(&mut vim, region, "j 1 escape ctrl-c ctrl-w g t :"),
                 [Outcome::Pass; 8],
@@ -823,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn back_from_the_line_a_program_is_in_normal_mode_and_else_in_insert_mode() {
+    fn back_from_the_line_a_program_is_in_normal_mode_and_a_line_s_input_in_insert_mode() {
         let mut vim = Vim::default();
         press(&mut vim, Region::Terminal, "ctrl-\\ ctrl-n :");
         vim.mode = Mode::Command;
@@ -832,7 +873,7 @@ mod tests {
         assert_eq!(vim.mode(), Mode::Normal);
         vim.arrive(Region::Chat);
         vim.arrive(Region::Terminal);
-        assert_eq!(vim.mode(), Mode::Insert);
+        assert_eq!(vim.mode(), Mode::Normal, "come to anew");
         press(&mut vim, Region::Command, "escape");
         vim.arrive(Region::Goal);
         assert_eq!(vim.mode(), Mode::Insert, "the line's command opened it");
@@ -950,6 +991,13 @@ mod tests {
             "the address line is typed in"
         );
         assert_eq!(vim.mode(), Mode::Insert);
+        vim.mode = Mode::Normal;
+        assert_eq!(
+            press(&mut vim, Region::Address, "i x"),
+            [Outcome::Pass; 2],
+            "the address line has no normal mode"
+        );
+        assert_eq!(vim.mode(), Mode::Insert);
     }
 
     #[test]
@@ -991,7 +1039,13 @@ mod tests {
             [Outcome::Do(Command::Normal, None)]
         );
         assert_eq!(vim.mode(), Mode::Normal);
-        press(&mut vim, Region::Page, "shift-f");
+        press(&mut vim, Region::Page, "; t");
+        assert_eq!(vim.mode(), Mode::Hint);
+        press(&mut vim, Region::Page, "escape");
+        assert_eq!(
+            press(&mut vim, Region::Rail, "shift-f"),
+            [Outcome::Do(Command::Hints(Reach::Window), None)]
+        );
         assert_eq!(vim.mode(), Mode::Hint);
         press(&mut vim, Region::Chat, "x");
         assert_eq!(vim.mode(), Mode::Normal);

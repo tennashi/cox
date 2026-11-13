@@ -20,6 +20,7 @@ use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::theme::{BORDER, BUTTON_HOVER, DIM, FAINT, FOREGROUND, HOVER, SELECTED, chat_color};
 use crate::ui::tip;
+use crate::vim::hints::Hinted as _;
 
 /// How wide the column is, unfolded and folded.
 const WIDTH: f32 = 200.;
@@ -120,7 +121,7 @@ impl Stage {
                         "Fold the tabs"
                     }))
                     .child(if folded { "›" } else { "‹" })
-                    .on_click(cx.listener(|_, _, _, cx| {
+                    .on_hint_click(cx.listener(|_, _, _, cx| {
                         let folded = !is_folded(cx);
                         cx.set_global(Folded(folded));
                         cx.refresh_windows();
@@ -169,7 +170,7 @@ impl Stage {
                 }
             })
             .when(others && !at_work, |row| row.opacity(0.5))
-            .on_click(cx.listener(move |stage, _, window, cx| stage.show(index, window, cx)))
+            .on_hint_click(cx.listener(move |stage, _, window, cx| stage.show(index, window, cx)))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |stage, event: &MouseDownEvent, _, cx| {
@@ -233,7 +234,7 @@ impl Stage {
             })
             .hover(|style| style.bg(rgb(BUTTON_HOVER)))
             .child(icon(Icon::Close, 10., FAINT))
-            .on_click(cx.listener(move |stage, _, window, cx| {
+            .on_hint_click(cx.listener(move |stage, _, window, cx| {
                 cx.stop_propagation();
                 let _ = stage.close_tab(index, window, cx);
             }))

@@ -7,6 +7,7 @@ use crate::stage::tree;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FOREGROUND};
+use crate::vim::hints::Hinted as _;
 
 impl Code {
     /// The bar above the code: the button that shows the project's files
@@ -61,11 +62,11 @@ impl Code {
                 |bar| {
                     bar.child(
                         button("code-back", "‹", self.history.has_back())
-                            .on_click(cx.listener(|code, _, _, cx| code.go_back(cx))),
+                            .on_hint_click(cx.listener(|code, _, _, cx| code.go_back(cx))),
                     )
                     .child(
                         button("code-forward", "›", self.history.has_forward())
-                            .on_click(cx.listener(|code, _, _, cx| code.go_forward(cx))),
+                            .on_hint_click(cx.listener(|code, _, _, cx| code.go_forward(cx))),
                     )
                 },
             )

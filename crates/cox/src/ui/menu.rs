@@ -18,6 +18,7 @@ pub const ROW_HEIGHT: f32 = 30.;
 pub fn menu() -> Div {
     div()
         .occlude()
+        .child(crate::vim::hints::cover())
         .p(px(6.))
         .flex()
         .flex_col()

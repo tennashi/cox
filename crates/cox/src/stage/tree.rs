@@ -44,6 +44,7 @@ use crate::ui::theme::{
     SURFACE, chat_color,
 };
 use crate::ui::tip;
+use crate::vim::hints::Hinted as _;
 use crate::vim::{Close, Move, Open};
 
 pub(crate) const KEY_CONTEXT: &str = "Tree";
@@ -117,7 +118,7 @@ fn fold_button(selector: &'static str, folded: bool) -> Stateful<Div> {
             "Show the files"
         }))
         .child(icon(Icon::Sidebar, 14., DIM))
-        .on_click(move |_, _, cx| fold(folded, cx))
+        .on_hint_click(move |_, _, cx| fold(folded, cx))
 }
 
 pub struct Tree {
@@ -605,7 +606,7 @@ impl Tree {
             )
             .children(self.writer_marks(entry))
             .children(self.change_mark(entry))
-            .on_click(cx.listener(move |tree, click: &ClickEvent, _, cx| {
+            .on_hint_click(cx.listener(move |tree, click: &ClickEvent, _, cx| {
                 if let At::Pinned { place, above, .. } = at {
                     tree.scroll_to_folder(place, above, cx);
                 } else if is_folder {
@@ -939,6 +940,7 @@ impl Render for Tree {
                                 .debug_selector(|| "pinned".to_owned())
                                 // Not the rows below, under it.
                                 .occlude()
+                                .child(crate::vim::hints::cover())
                                 .absolute()
                                 .top_0()
                                 .left_0()
