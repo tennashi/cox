@@ -19,7 +19,7 @@ pub mod search;
 
 use gpui::{
     Action, App, Context, FocusHandle, Global, KeyContext, Keystroke, KeystrokeEvent, Pixels,
-    Subscription, Window, actions, px,
+    ScrollHandle, Subscription, Window, actions, point, px,
 };
 
 use self::keymap::{Across, Answer, Command, Edit, Follow, Keymap, Motion, Place, Reach, Sent};
@@ -114,6 +114,16 @@ impl Move {
             Motion::Bottom => most,
         };
         to.clamp(px(0.), most.max(px(0.)))
+    }
+
+    /// Scrolls what `scroll` tracks, its lines `line` tall, as the motion
+    /// asks.
+    pub fn scroll(&self, scroll: &ScrollHandle, line: Pixels) {
+        let offset = scroll.offset();
+        let height = scroll.bounds().size.height;
+        let most = scroll.max_offset().height;
+        let to = self.scrolled(-offset.y, most, line, height);
+        scroll.set_offset(point(offset.x, -to));
     }
 }
 

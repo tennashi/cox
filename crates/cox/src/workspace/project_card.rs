@@ -20,7 +20,8 @@ use std::sync::Arc;
 use cox_core::store::ProjectId;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Image, KeyBinding,
-    MouseButton, SharedString, Subscription, Window, actions, div, img, prelude::*, px, rgb,
+    MouseButton, ScrollHandle, SharedString, Subscription, Window, actions, div, img, prelude::*,
+    px, rgb,
 };
 
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
@@ -33,6 +34,7 @@ use crate::ui::theme::{
     ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED,
 };
 use crate::ui::tip;
+use crate::vim::Move;
 use crate::vim::hints::Hinted as _;
 
 actions!(
@@ -181,6 +183,7 @@ pub struct ProjectCard {
     /// The directory of which the human gives its remote or its name, if
     /// they do.
     editing: Option<Editing>,
+    scroll: ScrollHandle,
     _submitted: [Subscription; 4],
 }
 
@@ -233,6 +236,7 @@ impl ProjectCard {
             directory,
             making: Making::Hint,
             editing: None,
+            scroll: ScrollHandle::new(),
             _submitted: [named, told, made, typed],
         }
     }
@@ -1065,9 +1069,18 @@ impl Render for ProjectCard {
             // A click on the card stays there, not closing it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(|_, _: &CloseProjectCard, _, cx| cx.emit(Dismissed)))
+            .on_action(cx.listener(|card, motion: &Move, window, cx| {
+                motion.scroll(&card.scroll, window.line_height());
+                cx.notify();
+            }))
             .child(self.render_header(cx))
             .child(
                 div()
+                    .id("project-card-body")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
                     .px(px(22.))
                     .pt(px(18.))
                     .pb(px(22.))

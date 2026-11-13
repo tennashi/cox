@@ -2739,3 +2739,79 @@ fn brackets_go_from_entry_to_entry_and_gy_copies_one(cx: &mut TestAppContext) {
     assert_eq!(copied.as_deref(), Some("beta"));
     assert_eq!(keys::shown_input(cx, &workspace), "", "nothing was typed");
 }
+
+/// In normal mode Vim's keys scroll the settings and a project's card as
+/// they scroll a document, and in an input of them in insert mode they
+/// type.
+#[gpui::test]
+fn the_settings_and_a_project_s_card_scroll_by_vim_s_keys(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "forms-scroll");
+    let folder = scratch("forms-scroll-project");
+    std::fs::create_dir_all(&folder).unwrap();
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open(Some(folder.clone()), window, cx);
+    });
+    settled(cx, &workspace);
+    keys::press(cx, &workspace, "escape");
+    cx.simulate_resize(gpui::size(px(900.), px(320.)));
+    settled(cx, &workspace);
+    let top = |cx: &mut VisualTestContext, selector: &'static str| {
+        cx.debug_bounds(selector)
+            .expect("the input is drawn")
+            .origin
+            .y
+    };
+
+    keys::press(cx, &workspace, "secondary-,");
+    assert_eq!(shown_mode(cx), Some("Normal"));
+    let start = top(cx, "home-input");
+    keys::press(cx, &workspace, "j");
+    let line = start - top(cx, "home-input");
+    assert!(line > px(0.), "{line:?}");
+    keys::press(cx, &workspace, "2 j");
+    assert_eq!(start - top(cx, "home-input"), line * 3.);
+    keys::press(cx, &workspace, "k");
+    assert_eq!(start - top(cx, "home-input"), line * 2.);
+    keys::press(cx, &workspace, "g g");
+    assert_eq!(top(cx, "home-input"), start);
+    keys::press(cx, &workspace, "ctrl-d");
+    let half = start - top(cx, "home-input");
+    assert!(half > line * 4., "{half:?}");
+    keys::press(cx, &workspace, "ctrl-u");
+    assert_eq!(top(cx, "home-input"), start);
+    keys::press(cx, &workspace, "shift-g");
+    assert!(start - top(cx, "home-input") > half, "scrolled to the end");
+    keys::press(cx, &workspace, "g g");
+
+    let at = cx
+        .debug_bounds("home-input")
+        .expect("the home's input is drawn")
+        .center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    settled(cx, &workspace);
+    assert_eq!(shown_mode(cx), Some("Insert"));
+    keys::press(cx, &workspace, "end j k");
+    let typed = workspace.read_with(cx, |workspace, cx| {
+        let settings = workspace.settings().expect("the settings are open");
+        settings.read(cx).input().read(cx).text().to_owned()
+    });
+    assert!(typed.ends_with("jk"), "{typed:?}");
+    assert_eq!(top(cx, "home-input"), start, "typing scrolls nothing");
+    keys::press(cx, &workspace, "escape escape escape");
+    assert!(workspace.read_with(cx, |workspace, _| workspace.settings().is_none()));
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        let project = workspace.chosen();
+        workspace.open_project_card(project, window, cx);
+    });
+    settled(cx, &workspace);
+    assert_eq!(shown_mode(cx), Some("Normal"));
+    let start = top(cx, "project-name-input");
+    keys::press(cx, &workspace, "j");
+    assert!(top(cx, "project-name-input") < start, "the card scrolls");
+    keys::press(cx, &workspace, "g g");
+    assert_eq!(top(cx, "project-name-input"), start);
+    keys::press(cx, &workspace, "shift-g");
+    assert!(top(cx, "project-name-input") < start, "to the end");
+    let _ = std::fs::remove_dir_all(&folder);
+}

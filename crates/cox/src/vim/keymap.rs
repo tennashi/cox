@@ -356,8 +356,8 @@ const LINE: &[Region] = &[Region::Command];
 const PICKERS: &[Region] = &[Region::Rail, Region::List];
 
 /// The parts Vim's keys scroll, or move a cursor or selection in: the
-/// conversation, from the chat's input, a page, and the stage's tabs
-/// that take no text.
+/// conversation, from the chat's input, a page, the stage's tabs that
+/// take no text, the settings and a project's card.
 const MOVERS: &[Region] = &[
     Region::Chat,
     Region::Page,
@@ -366,6 +366,8 @@ const MOVERS: &[Region] = &[
     Region::Tree,
     Region::Changes,
     Region::Terminal,
+    Region::Settings,
+    Region::ProjectCard,
 ];
 
 const PAGE: &[Region] = &[Region::Page];
@@ -710,7 +712,7 @@ mod tests {
     #[test]
     fn the_forms_keep_control_w_and_g_t() {
         for region in [Region::Goal, Region::Settings] {
-            for keys in [&["ctrl-w"][..], &["g"], &["ctrl-w", "h"], &["g", "t"]] {
+            for keys in [&["ctrl-w"][..], &["ctrl-w", "h"], &["g", "t"]] {
                 assert_eq!(
                     Keymap::VIM.answer(Mode::Normal, region, keys),
                     Answer::None,
@@ -718,6 +720,15 @@ mod tests {
                 );
             }
         }
+        assert_eq!(
+            Keymap::VIM.answer(Mode::Normal, Region::Goal, &["g"]),
+            Answer::None
+        );
+        assert_eq!(
+            Keymap::VIM.answer(Mode::Normal, Region::Settings, &["g"]),
+            Answer::Held,
+            "toward gg"
+        );
         assert!(Keymap::VIM.knows(Region::Code));
         assert!(Keymap::VIM.knows(Region::Workspace));
     }
