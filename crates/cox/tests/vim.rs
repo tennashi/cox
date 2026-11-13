@@ -3,7 +3,10 @@ mod fake_agent;
 #[expect(dead_code, reason = "these tests use only part of the fake daemon")]
 mod fake_daemon;
 mod fake_lsp;
+mod git;
 mod keys;
+mod scratch;
+mod waits;
 
 use std::cell::RefCell;
 use std::fmt::Write as _;
@@ -28,12 +31,7 @@ use gpui::{
 };
 
 use fake_daemon::{FakeStages, Keyed, settled};
-
-fn scratch(name: &str) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!("cox-vim-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    directory
-}
+use git::git;
 
 /// Opens the window with Vim's keys on, as the app does when the
 /// settings say so.
@@ -42,7 +40,7 @@ fn open_window<'a>(
     name: &str,
 ) -> (Entity<Workspace>, &'a mut VisualTestContext) {
     cx.update(|cx| cox::vim::turn(true, cx));
-    keys::open_window(cx, scratch(name))
+    keys::open_window(cx, scratch::folder(name))
 }
 
 /// A GPUI debug selector only records where the line drew, not its
@@ -296,7 +294,7 @@ fn in_part(cx: &mut VisualTestContext, context: &str) -> bool {
 /// Opens a chat in a folder of its own, a project of its own, and goes
 /// to normal mode.
 fn open_project(cx: &mut VisualTestContext, workspace: &Entity<Workspace>, name: &str) {
-    let folder = scratch(name);
+    let folder = scratch::folder(name);
     std::fs::create_dir_all(&folder).unwrap();
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.open(Some(folder), window, cx);
@@ -398,7 +396,7 @@ fn the_keys_of_the_stage_s_tabs_go_to_the_stage(cx: &mut TestAppContext) {
         ..FakeStages::default()
     };
     cx.update(|cx| cox::vim::turn(true, cx));
-    let (workspace, cx) = keys::open_window_on(cx, scratch("tabs"), stages);
+    let (workspace, cx) = keys::open_window_on(cx, scratch::folder("tabs"), stages);
     keys::press(cx, &workspace, "secondary-n escape");
 
     keys::press(
@@ -476,7 +474,7 @@ fn open_terminal<'a>(
 ) {
     cx.update(|cx| cox::vim::turn(true, cx));
     cx.update(cox::app::bind_keys);
-    let cwd = scratch(name);
+    let cwd = scratch::folder(name);
     std::fs::create_dir_all(&cwd).unwrap();
     let running = Running::start(Program::Command(command.to_owned()), &cwd).unwrap();
     let (answer, waiting) = tokio::sync::oneshot::channel();
@@ -495,31 +493,21 @@ fn ran(
     cx: &mut VisualTestContext,
     waiting: &mut tokio::sync::oneshot::Receiver<Result<cox::agent::mcp::Ran, String>>,
 ) -> String {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
+    let mut ran = None;
+    waits::until("the command's end", || {
         cx.run_until_parked();
-        if let Ok(ran) = waiting.try_recv() {
-            break ran.expect("the command started").output;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the command took too long"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+        ran = waiting.try_recv().ok();
+        ran.is_some()
+    });
+    ran.unwrap().expect("the command started").output
 }
 
 /// Waits until the terminal shows `text`.
 fn shows(cx: &mut VisualTestContext, terminal: &Entity<Terminal>, text: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !terminal.read_with(cx, |terminal, _| terminal.text().contains(text)) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no {text:?} in the terminal"
-        );
-        std::thread::sleep(Duration::from_millis(10));
+    waits::until(&format!("{text:?} in the terminal"), || {
         cx.run_until_parked();
-    }
+        terminal.read_with(cx, |terminal, _| terminal.text().contains(text))
+    });
 }
 
 fn mode(cx: &mut VisualTestContext) -> Option<Mode> {
@@ -624,7 +612,7 @@ fn normal_mode_scrolls_back_through_a_terminal(cx: &mut TestAppContext) {
 #[gpui::test]
 fn slash_finds_in_a_terminal_and_shift_v_y_copies_the_line(cx: &mut TestAppContext) {
     cx.update(cox::app::bind_keys);
-    let cwd = scratch("terminal-search");
+    let cwd = scratch::folder("terminal-search");
     std::fs::create_dir_all(&cwd).unwrap();
     let running = Running::start(
         Program::Command("for i in $(seq 1 200); do echo \"row $i end\"; done; cat".to_owned()),
@@ -795,7 +783,7 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
     cx.update(|cx| cox::vim::turn(true, cx));
     let (workspace, cx) = keys::open_window_on(
         cx,
-        scratch("session"),
+        scratch::folder("session"),
         FakeStages {
             built: Some(built),
             ..FakeStages::default()
@@ -859,7 +847,7 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn off_the_keys_are_as_they_were(cx: &mut TestAppContext) {
-    let (workspace, cx) = keys::open_window(cx, scratch("off"));
+    let (workspace, cx) = keys::open_window(cx, scratch::folder("off"));
     keys::press(cx, &workspace, "secondary-n");
     let view = shown_view(cx, &workspace);
     assert!(cx.debug_bounds("vim-status").is_none());
@@ -913,7 +901,7 @@ fn kept_vim() -> Option<serde_json::Value> {
 
 #[gpui::test]
 fn the_settings_turn_the_keys_on_and_off_at_once(cx: &mut TestAppContext) {
-    let (workspace, cx) = keys::open_window(cx, scratch("setting"));
+    let (workspace, cx) = keys::open_window(cx, scratch::folder("setting"));
     keys::press(cx, &workspace, "secondary-n");
     let view = shown_view(cx, &workspace);
     cx.simulate_input("wait");
@@ -952,7 +940,7 @@ fn the_settings_turn_the_keys_on_and_off_at_once(cx: &mut TestAppContext) {
 /// A folder of its own for a test, with the files `paths`, saying their
 /// names, by its real path, as the tabs name their files.
 fn folder(name: &str, paths: &[&str]) -> PathBuf {
-    let folder = scratch(name);
+    let folder = scratch::folder(name);
     std::fs::create_dir_all(&folder).unwrap();
     for path in paths {
         let path = folder.join(path);
@@ -1306,28 +1294,9 @@ fn the_tree_moves_a_selection_and_opens_and_closes_folders(cx: &mut TestAppConte
 
 /// Makes `folder` a Git repository with a commit of all it holds.
 fn commit_all(folder: &std::path::Path) {
-    for args in [
-        &["init", "--quiet"][..],
-        &["add", "."],
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--quiet",
-            "-m",
-            "A",
-        ],
-    ] {
-        let ran = std::process::Command::new("git")
-            .arg("-C")
-            .arg(folder)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(ran.status.success(), "{ran:?}");
-    }
+    git(folder, &["init", "--quiet"]);
+    git(folder, &["add", "."]);
+    git(folder, &["commit", "--quiet", "-m", "A"]);
 }
 
 /// A folder of its own for a test, a Git repository with a commit of
@@ -1359,7 +1328,7 @@ fn changes_move_from_file_to_file_and_open_one(cx: &mut TestAppContext) {
         )
         .detach();
     });
-    for _ in 0..500 {
+    waits::until("the three files changed", || {
         cx.run_until_parked();
         let files = changes.read_with(cx, |changes, _| {
             changes
@@ -1367,11 +1336,8 @@ fn changes_move_from_file_to_file_and_open_one(cx: &mut TestAppContext) {
                 .and_then(|read| read.as_ref().ok())
                 .map_or(0, |diff| diff.files.len())
         });
-        if files == 3 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+        files == 3
+    });
 
     type_keys(
         cx,
@@ -1423,7 +1389,7 @@ fn changes_go_from_stretch_to_stretch_and_open_one_there(cx: &mut TestAppContext
         .detach();
     });
     let mut stretches = Vec::new();
-    for _ in 0..500 {
+    waits::until("four stretches", || {
         cx.run_until_parked();
         stretches = changes.read_with(cx, |changes, _| {
             let Some(Ok(diff)) = changes.shown_diff() else {
@@ -1442,11 +1408,8 @@ fn changes_go_from_stretch_to_stretch_and_open_one_there(cx: &mut TestAppContext
             }
             stretches
         });
-        if stretches.len() == 4 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+        stretches.len() == 4
+    });
     assert_eq!(
         stretches.len(),
         4,
@@ -1545,18 +1508,10 @@ fn g_d_goes_to_the_definition_of_the_first_name_of_the_line(cx: &mut TestAppCont
         cx.add_window_view(|_, cx| Code::new(path, fake_lsp::MAIN, None, Some(server), cx));
     cx.update(|window, cx| window.focus(&code.focus_handle(cx)));
     let wait_until = |cx: &mut VisualTestContext, done: &dyn Fn(&mut VisualTestContext) -> bool| {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        loop {
+        waits::until("the server's answer", || {
             cx.run_until_parked();
-            if done(cx) {
-                return;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the server took too long"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+            done(cx)
+        });
     };
     wait_until(cx, &|cx| {
         ready.read_with(cx, |server, _| server.client().is_some())
@@ -1807,7 +1762,7 @@ fn colon_quit_and_the_rest_go_to_the_stage(cx: &mut TestAppContext) {
         ..FakeStages::default()
     };
     cx.update(|cx| cox::vim::turn(true, cx));
-    let (workspace, cx) = keys::open_window_on(cx, scratch("line-tabs"), stages);
+    let (workspace, cx) = keys::open_window_on(cx, scratch::folder("line-tabs"), stages);
     keys::press(cx, &workspace, "secondary-n escape");
 
     keys::press(
@@ -1868,7 +1823,7 @@ fn t_on_a_page_and_open_with_words_ask_the_stage_to_search(cx: &mut TestAppConte
     cx.update(|cx| cox::vim::turn(true, cx));
     let (workspace, cx) = keys::open_window_on(
         cx,
-        scratch("search"),
+        scratch::folder("search"),
         FakeStages {
             built: Some(built),
             ..FakeStages::default()
@@ -1970,7 +1925,7 @@ fn colon_chat_shows_the_chat_whose_name_fits(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn off_there_is_no_line(cx: &mut TestAppContext) {
-    let (workspace, cx) = keys::open_window(cx, scratch("line-off"));
+    let (workspace, cx) = keys::open_window(cx, scratch::folder("line-off"));
     keys::press(cx, &workspace, "secondary-n escape :");
     assert!(!line(cx, &workspace).open);
     assert!(!in_part(cx, "CommandLine"));
@@ -2620,7 +2575,7 @@ fn the_part_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
     cx.update(|cx| cox::vim::turn(true, cx));
     let (workspace, cx) = keys::open_window_on(
         cx,
-        scratch("keys-edge"),
+        scratch::folder("keys-edge"),
         FakeStages {
             built: Some(built),
             ..FakeStages::default()
@@ -2715,7 +2670,7 @@ fn control_w_stops_at_the_tree_of_files_as_at_a_window(cx: &mut TestAppContext) 
     cx.update(|cx| cox::vim::turn(true, cx));
     let (workspace, cx) = keys::open_window_on(
         cx,
-        scratch("tree-window-chats"),
+        scratch::folder("tree-window-chats"),
         FakeStages {
             built: Some(built),
             ..FakeStages::default()
@@ -2744,35 +2699,16 @@ fn control_w_stops_at_the_tree_of_files_as_at_a_window(cx: &mut TestAppContext) 
 #[gpui::test]
 fn the_project_card_s_row_input_types_at_once_and_enter_links(cx: &mut TestAppContext) {
     let (workspace, cx) = open_window(cx, "card-link");
-    let folder = scratch("card-link-project");
+    let folder = scratch::folder("card-link-project");
     let repository = folder.join("directories").join("app");
     std::fs::create_dir_all(&repository).unwrap();
-    let git = |args: &[&str]| {
-        assert!(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repository)
-                .args(args)
-                .output()
-                .unwrap()
-                .status
-                .success()
-        );
-    };
-    git(&["init", "-q"]);
+    git(&repository, &["init", "-q"]);
     // With a commit of its own, linking only names the remote, and
     // fetches nothing.
-    git(&[
-        "-c",
-        "user.name=Cox",
-        "-c",
-        "user.email=cox@example.com",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "first",
-    ]);
+    git(
+        &repository,
+        &["commit", "-q", "--allow-empty", "-m", "first"],
+    );
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.open(Some(folder.clone()), window, cx);
     });
@@ -2807,7 +2743,6 @@ fn the_project_card_s_row_input_types_at_once_and_enter_links(cx: &mut TestAppCo
         said.contains(&"Directory app (Git, remote https://example.com/app.git)".to_owned()),
         "{said:?}"
     );
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 /// The settings come in normal mode, but an input of them clicked types,
@@ -2996,7 +2931,7 @@ fn brackets_go_from_entry_to_entry_and_gy_copies_one(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_settings_and_a_project_s_card_scroll_by_vim_s_keys(cx: &mut TestAppContext) {
     let (workspace, cx) = open_window(cx, "forms-scroll");
-    let folder = scratch("forms-scroll-project");
+    let folder = scratch::folder("forms-scroll-project");
     std::fs::create_dir_all(&folder).unwrap();
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.open(Some(folder.clone()), window, cx);
@@ -3063,7 +2998,6 @@ fn the_settings_and_a_project_s_card_scroll_by_vim_s_keys(cx: &mut TestAppContex
     assert_eq!(top(cx, "project-name-input"), start);
     keys::press(cx, &workspace, "shift-g");
     assert!(top(cx, "project-name-input") < start, "to the end");
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 /// `v` and `V` select in the chat's input as in Vim's visual mode, which

@@ -6,13 +6,16 @@
 mod fake_agent;
 #[expect(dead_code, reason = "these tests use only part of the fake daemon")]
 mod fake_daemon;
+mod git;
+mod scratch;
+#[expect(dead_code, reason = "these tests use only part of the waits")]
+mod waits;
 
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{ChatRequest, Waited};
@@ -32,13 +35,15 @@ use cox_core::store::Named;
 use cox_core::store::Store;
 use fake_agent::{BACKGROUND_FINISHED, BACKGROUND_STARTED, FakeAgent, LogsIn, Resumes, TITLE};
 use fake_daemon::{
-    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, GIVEN_UP, Kept, Made, SECOND_AGENT, given_up,
-    kept_at, open_again, settle, settle_on, settle_until, settled,
+    Agents, Asks, FIRST_AGENT, FakeStages, Fakes, Kept, Made, SECOND_AGENT, open_again, settle,
+    settle_on, settle_until, settled,
 };
+use git::git;
 use gpui::{
     Entity, Focusable, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point,
     ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext, point,
 };
+use waits::{GIVEN_UP, given_up};
 
 /// Where a test keeps its chats, which it opens too, to keep chats there
 /// first, or to read what the daemon kept.
@@ -58,7 +63,7 @@ impl Deref for KeptStore {
 
 /// A store of its own for the test named `name`.
 fn kept_store(name: &str) -> KeptStore {
-    let path = kept_at(name);
+    let path = scratch::made(&format!("store-{name}")).join("chats.sqlite");
     let store = Rc::new(Store::open(&path).unwrap());
     KeptStore { path, store }
 }
@@ -159,13 +164,6 @@ fn open_window_logging_in(
     let agents = fakes.agents.clone();
     let (workspace, cx) = open_with(cx, home, Kept::Memory, fakes);
     (agents, workspace, cx)
-}
-
-/// A directory of its own for each test.
-fn scratch(name: &str) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!("cox-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    directory
 }
 
 /// Clicks what `selector` names, once the daemon has settled, so that it
@@ -292,8 +290,8 @@ async fn wait_for_turn(cx: &mut VisualTestContext, view: &Entity<ChatView>) {
 
 #[gpui::test]
 async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
-    let home = scratch("home");
-    let folder = scratch("folder");
+    let home = scratch::folder("home");
+    let folder = scratch::folder("folder");
     std::fs::create_dir_all(&folder).unwrap();
     let (agents, workspace, cx) = open_window(cx, home.clone());
 
@@ -335,14 +333,12 @@ async fn chats_in_a_project_work_in_its_folder(cx: &mut TestAppContext) {
         workspace.shown().map(|chat| chat.name().to_owned())
     });
     assert_eq!(shown.as_deref(), Some("Chat 2"));
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
 async fn the_chats_of_a_folder_share_its_stage(cx: &mut TestAppContext) {
-    let home = scratch("stage-home");
-    let folder = scratch("stage-folder");
+    let home = scratch::folder("stage-home");
+    let folder = scratch::folder("stage-folder");
     std::fs::create_dir_all(&folder).unwrap();
     let made = Made::default();
     let stages = FakeStages {
@@ -383,14 +379,12 @@ async fn the_chats_of_a_folder_share_its_stage(cx: &mut TestAppContext) {
             "{chat} has the folder's stage"
         );
     }
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
 async fn the_rail_chooses_the_project_whose_chats_the_tabs_show(cx: &mut TestAppContext) {
-    let home = scratch("rail-home");
-    let folder = scratch("rail-folder");
+    let home = scratch::folder("rail-home");
+    let folder = scratch::folder("rail-folder");
     std::fs::create_dir_all(&folder).unwrap();
     let (_agents, workspace, cx) = open_window(cx, home.clone());
     let shown_name = |cx: &mut VisualTestContext| {
@@ -418,15 +412,13 @@ async fn the_rail_chooses_the_project_whose_chats_the_tabs_show(cx: &mut TestApp
     workspace.update_in(cx, |workspace, window, cx| workspace.archive(2, window, cx));
     click(cx, "project-2");
     assert_eq!(shown_name(cx), None);
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
 async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
-    let home = scratch("settings-home");
-    let between = scratch("settings-between");
-    let other = scratch("settings-other");
+    let home = scratch::folder("settings-home");
+    let between = scratch::folder("settings-between");
+    let other = scratch::folder("settings-other");
     let (agents, workspace, cx) = open_window(cx, home.clone());
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "before").await;
@@ -475,14 +467,11 @@ async fn the_settings_set_where_coxs_own_chats_work(cx: &mut TestAppContext) {
     say(cx, &workspace, "after").await;
     let cwds: Vec<_> = agents.borrow().iter().map(|agent| agent.cwd()).collect();
     assert_eq!(cwds, [Some(home.clone()), Some(other.clone())]);
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&between);
-    let _ = std::fs::remove_dir_all(&other);
 }
 
 #[gpui::test]
 fn the_settings_name_the_search_engine(cx: &mut TestAppContext) {
-    let home = scratch("settings-search");
+    let home = scratch::folder("settings-search");
     let (_agents, workspace, cx) = open_window(cx, home.clone());
     let _ = cox::settings::keep("search", None);
 
@@ -552,12 +541,11 @@ fn the_settings_name_the_search_engine(cx: &mut TestAppContext) {
         None,
         "emptied, none is named"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[gpui::test]
 async fn the_settings_unpair_every_phone(cx: &mut TestAppContext) {
-    let home = scratch("unpair-home");
+    let home = scratch::folder("unpair-home");
     let (_agents, workspace, cx) = open_window(cx, home.clone());
     let file = cox::storage::path(cox::storage::Kept::PhoneToken).unwrap();
     let before = cox::daemon::phone::token().unwrap();
@@ -592,12 +580,11 @@ async fn the_settings_unpair_every_phone(cx: &mut TestAppContext) {
         std::os::unix::fs::PermissionsExt::mode(&mode) & 0o777,
         0o600
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[gpui::test]
 async fn a_new_project_is_made_in_the_projects_of_the_home(cx: &mut TestAppContext) {
-    let home = scratch("new-project-home");
+    let home = scratch::folder("new-project-home");
     let projects = home.join("projects");
     // A folder there that is no project's is not taken.
     std::fs::create_dir_all(projects.join("untitled-2")).unwrap();
@@ -625,12 +612,11 @@ async fn a_new_project_is_made_in_the_projects_of_the_home(cx: &mut TestAppConte
             ("untitled-3", &["two"]),
         ])
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[gpui::test]
 fn opening_the_home_as_a_folder_opens_a_chat_of_coxs_own(cx: &mut TestAppContext) {
-    let home = scratch("home-folder");
+    let home = scratch::folder("home-folder");
     let (_agents, workspace, cx) = open_window(cx, home.clone());
 
     workspace.update_in(cx, |workspace, window, cx| {
@@ -638,13 +624,12 @@ fn opening_the_home_as_a_folder_opens_a_chat_of_coxs_own(cx: &mut TestAppContext
     });
 
     assert_eq!(names(cx, &workspace), listed(&[("Cox", &["Chat 1"])]));
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[gpui::test]
 async fn the_agent_gets_the_projects_instructions_with_the_first_line(cx: &mut TestAppContext) {
-    let home = scratch("instructions-home");
-    let folder = scratch("instructions");
+    let home = scratch::folder("instructions-home");
+    let folder = scratch::folder("instructions");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
     let (agents, workspace, cx) = open_window(cx, home.clone());
@@ -686,14 +671,12 @@ async fn the_agent_gets_the_projects_instructions_with_the_first_line(cx: &mut T
     };
     assert!(note.starts_with("Instructions: "), "{note}");
     assert!(note.ends_with("COX.md"), "{note}");
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
 async fn a_command_goes_first_and_the_instructions_with_the_next_line(cx: &mut TestAppContext) {
-    let home = scratch("command-home");
-    let folder = scratch("command");
+    let home = scratch::folder("command-home");
+    let folder = scratch::folder("command");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
     let (agents, workspace, cx) = open_window(cx, home.clone());
@@ -724,14 +707,12 @@ async fn a_command_goes_first_and_the_instructions_with_the_next_line(cx: &mut T
             [instructions.prompts(), vec!["hello".to_owned()]].concat()
         ]
     );
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
 async fn the_files_a_line_points_to_go_with_it(cx: &mut TestAppContext) {
-    let home = scratch("mention-home");
-    let folder = scratch("mention");
+    let home = scratch::folder("mention-home");
+    let folder = scratch::folder("mention");
     std::fs::create_dir_all(folder.join("docs")).unwrap();
     std::fs::write(folder.join("docs/notes.md"), "# Notes\n").unwrap();
     std::fs::write(folder.join("a logo.png"), [0x89, b'P', b'N', b'G', 0xff]).unwrap();
@@ -758,13 +739,11 @@ async fn the_files_a_line_points_to_go_with_it(cx: &mut TestAppContext) {
             ),
         ]]
     );
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
 async fn switching_keeps_each_chats_conversation_and_draft(cx: &mut TestAppContext) {
-    let (agents, workspace, cx) = open_window(cx, scratch("switching"));
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("switching"));
 
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "first").await;
@@ -800,7 +779,7 @@ async fn switching_keeps_each_chats_conversation_and_draft(cx: &mut TestAppConte
 
 #[gpui::test]
 async fn how_cox_stands_is_told_in_words(cx: &mut TestAppContext) {
-    let home = scratch("stands");
+    let home = scratch::folder("stands");
     let (_, workspace, cx) = open_window(cx, home.clone());
     let describe = |cx: &mut VisualTestContext, chat: Option<u64>| {
         cx.update(|window, cx| cox::inspect::describe(workspace.read(cx), chat, None, window, cx))
@@ -888,7 +867,7 @@ fn a_closed_chat_is_there_to_read(cx: &mut TestAppContext) {
     for (number, entry) in said.iter().enumerate() {
         store.keep_entry(kept, number, entry).unwrap();
     }
-    let (agents, workspace, cx) = open_window_keeping(cx, scratch("closed"), store);
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch::folder("closed"), store);
     cx.simulate_keystrokes("secondary-n");
 
     click(cx, "chat-1");
@@ -912,8 +891,8 @@ fn a_closed_chat_is_there_to_read(cx: &mut TestAppContext) {
 
 #[gpui::test]
 async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) {
-    let home = scratch("again-home");
-    let folder = scratch("again-folder");
+    let home = scratch::folder("again-home");
+    let folder = scratch::folder("again-folder");
     std::fs::create_dir_all(&folder).unwrap();
     let store = kept_store("again-kept");
     let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
@@ -972,14 +951,11 @@ async fn chats_are_there_to_read_once_cox_starts_again(cx: &mut TestAppContext) 
         names(cx, &again),
         listed(&[("Cox", &["hello"]), (&name, &["permission", "Chat 2"])])
     );
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&folder);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 #[gpui::test]
 async fn stopping_with_the_button_leaves_the_keyboard_in_the_input(cx: &mut TestAppContext) {
-    let (agents, workspace, cx) = open_window(cx, scratch("stop"));
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("stop"));
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
 
@@ -996,7 +972,7 @@ async fn stopping_with_the_button_leaves_the_keyboard_in_the_input(cx: &mut Test
 
 #[gpui::test]
 async fn a_line_sent_while_the_agent_works_goes_into_its_turn(cx: &mut TestAppContext) {
-    let (agents, workspace, cx) = open_window(cx, scratch("steer"));
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("steer"));
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
 
@@ -1023,7 +999,7 @@ async fn a_line_sent_while_the_agent_works_goes_into_its_turn(cx: &mut TestAppCo
 
 #[gpui::test]
 async fn what_the_agent_says_after_its_turn_ended_shows_as_it_comes(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch("went-on"));
+    let (_, workspace, cx) = open_window(cx, scratch::folder("went-on"));
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
 
@@ -1049,7 +1025,7 @@ async fn what_the_agent_says_after_its_turn_ended_shows_as_it_comes(cx: &mut Tes
 
 #[gpui::test]
 async fn the_agent_asks_after_its_turn_ended_and_goes_on_once_answered(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch("went-on-asks"));
+    let (_, workspace, cx) = open_window(cx, scratch::folder("went-on-asks"));
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
 
@@ -1097,7 +1073,7 @@ async fn the_agent_asks_after_its_turn_ended_and_goes_on_once_answered(cx: &mut 
 
 #[gpui::test]
 async fn the_human_answers_the_agent_after_setting_a_goal_as_it_asks(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch("asks-goal"));
+    let (_, workspace, cx) = open_window(cx, scratch::folder("asks-goal"));
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
     cx.simulate_input("permission");
@@ -1131,7 +1107,7 @@ async fn the_human_answers_the_agent_after_setting_a_goal_as_it_asks(cx: &mut Te
 
 #[gpui::test]
 async fn the_human_stops_what_the_agent_asks_after_its_turn_ended(cx: &mut TestAppContext) {
-    let (agents, workspace, cx) = open_window(cx, scratch("went-on-stops"));
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("went-on-stops"));
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
 
@@ -1201,7 +1177,7 @@ fn chips(entries: &[Entry]) -> Vec<(String, CheckState)> {
 async fn the_goal_checked_as_the_agent_asks_goes_on_once_the_human_answers(
     cx: &mut TestAppContext,
 ) {
-    let home = scratch("checks-ask");
+    let home = scratch::folder("checks-ask");
     let triggers = home.join("triggers");
     std::fs::create_dir_all(&triggers).unwrap();
     std::fs::write(
@@ -1247,7 +1223,7 @@ async fn the_goal_checked_as_the_agent_asks_goes_on_once_the_human_answers(
 async fn what_the_goals_command_answers_as_the_agent_asks_is_taken_once_answered(
     cx: &mut TestAppContext,
 ) {
-    let home = scratch("checks-held");
+    let home = scratch::folder("checks-held");
     std::fs::create_dir_all(&home).unwrap();
     let (_, workspace, cx) = open_window(cx, home.clone());
     cx.simulate_keystrokes("secondary-n");
@@ -1278,7 +1254,7 @@ async fn what_the_goals_command_answers_as_the_agent_asks_is_taken_once_answered
 async fn stopping_the_agent_that_asks_as_the_goal_is_checked_gives_the_check_up(
     cx: &mut TestAppContext,
 ) {
-    let home = scratch("checks-stop");
+    let home = scratch::folder("checks-stop");
     std::fs::create_dir_all(&home).unwrap();
     let (agents, workspace, cx) = open_window(cx, home.clone());
     cx.simulate_keystrokes("secondary-n");
@@ -1340,10 +1316,14 @@ const FIRST_KEPT: usize = 0;
 async fn a_closed_chat_goes_on_with_its_session_when_the_human_sends_to_it(
     cx: &mut TestAppContext,
 ) {
-    let folder = scratch("resume");
+    let folder = scratch::folder("resume");
     let (store, kept) = kept_chat(&folder, Some("session-1"));
-    let (agents, workspace, cx) =
-        open_window_resuming(cx, scratch("resume-home"), store.clone(), Resumes::Resume);
+    let (agents, workspace, cx) = open_window_resuming(
+        cx,
+        scratch::folder("resume-home"),
+        store.clone(),
+        Resumes::Resume,
+    );
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.show(FIRST_KEPT, window, cx);
     });
@@ -1376,11 +1356,15 @@ async fn a_closed_chat_goes_on_with_its_session_when_the_human_sends_to_it(
 
 #[gpui::test]
 fn a_chat_whose_folder_is_gone_does_not_start_again(cx: &mut TestAppContext) {
-    let folder = scratch("gone-from");
+    let folder = scratch::folder("gone-from");
     let (store, _) = kept_chat(&folder, Some("session-1"));
-    std::fs::rename(&folder, scratch("gone-to")).unwrap();
-    let (agents, workspace, cx) =
-        open_window_resuming(cx, scratch("gone-home"), store.clone(), Resumes::Resume);
+    std::fs::rename(&folder, scratch::folder("gone-to")).unwrap();
+    let (agents, workspace, cx) = open_window_resuming(
+        cx,
+        scratch::folder("gone-home"),
+        store.clone(),
+        Resumes::Resume,
+    );
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.show(FIRST_KEPT, window, cx);
     });
@@ -1414,15 +1398,19 @@ fn a_chat_whose_folder_is_gone_does_not_start_again(cx: &mut TestAppContext) {
 
 #[gpui::test]
 async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
-    let projects = scratch("rename-projects");
+    let projects = scratch::folder("rename-projects");
     let app = projects.join("untitled-1");
     let (store, kept) = kept_chat(&app, Some("session-1"));
     std::fs::create_dir_all(projects.join("taken")).unwrap();
     // Its directory named as it follows its name, and the others stay.
     std::fs::create_dir_all(app.join("directories").join("untitled-1")).unwrap();
     std::fs::create_dir_all(app.join("directories").join("lib")).unwrap();
-    let (agents, workspace, cx) =
-        open_window_resuming(cx, scratch("rename-home"), store.clone(), Resumes::Resume);
+    let (agents, workspace, cx) = open_window_resuming(
+        cx,
+        scratch::folder("rename-home"),
+        store.clone(),
+        Resumes::Resume,
+    );
     let name = |cx: &mut VisualTestContext| {
         workspace.update_in(cx, |workspace, window, cx| {
             workspace.open_project_card(1, window, cx);
@@ -1483,14 +1471,12 @@ async fn renaming_a_project_renames_its_folder(cx: &mut TestAppContext) {
     let agent = Arc::clone(&agents.borrow()[0]);
     assert_eq!(agent.cwd(), Some(store_folder));
     assert_eq!(agent.resumed(), Vec::<String>::new());
-    let _ = std::fs::remove_dir_all(&projects);
 }
 
 #[gpui::test]
 fn a_project_is_archived_and_deleted_from_its_menu(cx: &mut TestAppContext) {
-    let root = scratch("project-away");
-    let trash = root.join("Trash");
-    cox::trash::keep_in(trash.clone());
+    let root = scratch::folder("project-away");
+    let trash = scratch::data().join("Trash");
     let app = root.join("projects").join("away-app");
     let (store, _) = kept_chat(&app, None);
     std::fs::write(app.join("notes.md"), "kept\n").unwrap();
@@ -1549,19 +1535,18 @@ fn a_project_is_archived_and_deleted_from_its_menu(cx: &mut TestAppContext) {
         assert_eq!(workspace.chosen(), 0);
         assert_eq!(workspace.chats(1).count(), 0);
     });
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[gpui::test]
 async fn an_agent_proposes_the_projects_name_which_the_human_renames_it_to(
     cx: &mut TestAppContext,
 ) {
-    let projects = scratch("propose-name-projects");
+    let projects = scratch::folder("propose-name-projects");
     let app = projects.join("untitled-1");
     let (store, _) = kept_chat(&app, Some("session-1"));
     let (_, asks, workspace, cx) = open_window_asking(
         cx,
-        scratch("propose-name-home"),
+        scratch::folder("propose-name-home"),
         store.clone(),
         Resumes::Resume,
     );
@@ -1622,12 +1607,11 @@ async fn an_agent_proposes_the_projects_name_which_the_human_renames_it_to(
     assert_eq!(store.projects().unwrap()[0].folder, renamed);
     assert!(renamed.is_dir() && !app.exists());
     assert_eq!(proposed(cx)[1].2, Some(Answer::Set));
-    let _ = std::fs::remove_dir_all(&projects);
 }
 
 #[gpui::test]
 async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
-    let home = scratch("propose-name-own");
+    let home = scratch::folder("propose-name-own");
     let (_, asks, workspace, cx) = open_window_asking(
         cx,
         home,
@@ -1659,7 +1643,7 @@ async fn a_chat_in_no_project_has_no_name_to_propose(cx: &mut TestAppContext) {
 
 #[gpui::test]
 async fn a_chat_is_told_the_index_of_the_projects_own_wiki(cx: &mut TestAppContext) {
-    let app = scratch("project-wiki");
+    let app = scratch::folder("project-wiki");
     let wiki = app.join("wiki");
     std::fs::create_dir_all(&wiki).unwrap();
     std::fs::write(wiki.join("shipping.md"), "# Shipping\n\nOnly in Japan.\n").unwrap();
@@ -1668,7 +1652,7 @@ async fn a_chat_is_told_the_index_of_the_projects_own_wiki(cx: &mut TestAppConte
         "# Index\n\n- [[shipping|Shipping]]: Only in Japan.\n",
     )
     .unwrap();
-    let (agents, workspace, cx) = open_window(cx, scratch("project-wiki-home"));
+    let (agents, workspace, cx) = open_window(cx, scratch::folder("project-wiki-home"));
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.open(Some(app.clone()), window, cx);
     });
@@ -1682,16 +1666,15 @@ async fn a_chat_is_told_the_index_of_the_projects_own_wiki(cx: &mut TestAppConte
         index.ends_with("- [[shipping|Shipping]]: Only in Japan."),
         "{index}"
     );
-    let _ = std::fs::remove_dir_all(&app);
 }
 
 #[gpui::test]
 async fn a_chat_is_told_the_projects_other_chats_and_reads_them(cx: &mut TestAppContext) {
-    let app = scratch("other-chats");
+    let app = scratch::folder("other-chats");
     let (store, kept) = kept_chat(&app, None);
     let (agents, asks, workspace, cx) = open_window_asking(
         cx,
-        scratch("other-chats-home"),
+        scratch::folder("other-chats-home"),
         store.clone(),
         Resumes::Resume,
     );
@@ -1735,18 +1718,17 @@ async fn a_chat_is_told_the_projects_other_chats_and_reads_them(cx: &mut TestApp
     let none = read(kept.number() + 100);
     settled(cx, &workspace);
     assert!(none.await.unwrap().is_err());
-    let _ = std::fs::remove_dir_all(&app);
 }
 
 #[gpui::test]
 async fn an_agent_proposes_what_the_project_is_which_the_next_chats_are_told(
     cx: &mut TestAppContext,
 ) {
-    let app = scratch("propose-about");
+    let app = scratch::folder("propose-about");
     let (store, _) = kept_chat(&app, Some("session-1"));
     let (agents, asks, workspace, cx) = open_window_asking(
         cx,
-        scratch("propose-about-home"),
+        scratch::folder("propose-about-home"),
         store.clone(),
         Resumes::Resume,
     );
@@ -1813,18 +1795,17 @@ async fn an_agent_proposes_what_the_project_is_which_the_next_chats_are_told(
     );
     assert!(told[0][0].ends_with(tea), "{told:?}");
     assert_eq!(told[0].last().map(String::as_str), Some("again"));
-    let _ = std::fs::remove_dir_all(&app);
 }
 
 #[gpui::test]
 async fn an_agent_proposes_an_icon_which_the_project_has_once_the_human_sets_it(
     cx: &mut TestAppContext,
 ) {
-    let app = scratch("propose-icon");
+    let app = scratch::folder("propose-icon");
     let (store, _) = kept_chat(&app, Some("session-1"));
     let (_agents, asks, workspace, cx) = open_window_asking(
         cx,
-        scratch("propose-icon-home"),
+        scratch::folder("propose-icon-home"),
         store.clone(),
         Resumes::Resume,
     );
@@ -1898,7 +1879,6 @@ async fn an_agent_proposes_an_icon_which_the_project_has_once_the_human_sets_it(
     let (kept, _) = cox::media::kept(&teal).unwrap();
     assert_eq!(std::fs::read(&icon).unwrap(), std::fs::read(kept).unwrap());
     let _ = std::fs::remove_file(&icon);
-    let _ = std::fs::remove_dir_all(&app);
 }
 
 /// Has the agent of the chat whose asks are at `from` propose the project
@@ -2031,8 +2011,6 @@ async fn an_agent_proposes_a_project_which_the_chat_moves_into_with_its_sketch(
     settled(cx, &workspace);
     let again = again.await.unwrap();
     assert!(again.is_err_and(|why| why.contains("in a project already")));
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 #[gpui::test]
@@ -2078,38 +2056,18 @@ async fn a_sketch_proposes_a_project_of_what_it_made_with_the_chat_it_was_opened
         assert_eq!(workspace.chats(0).count(), 0);
         assert_eq!(workspace.chats(1).count(), 2);
     });
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 /// Makes a Git repository at `folder` with one commit, on `main`.
 fn repository_with_a_commit(folder: &Path) {
-    let git = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .args(args)
-            .current_dir(folder)
-            .status()
-            .unwrap();
-        assert!(status.success());
-    };
     std::fs::create_dir_all(folder).unwrap();
-    git(&["init", "-q", "--initial-branch=main"]);
-    git(&[
-        "-c",
-        "user.name=Cox",
-        "-c",
-        "user.email=cox@example.com",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "first",
-    ]);
+    git(folder, &["init", "-q"]);
+    git(folder, &["commit", "-q", "--allow-empty", "-m", "first"]);
 }
 
 #[gpui::test]
 fn directories_are_made_cloned_and_linked_on_the_projects_card(cx: &mut TestAppContext) {
-    let root = scratch("directories");
+    let root = scratch::folder("directories");
     let origin = root.join("origin.git");
     repository_with_a_commit(&origin);
     let app = root.join("projects").join("untitled-1");
@@ -2212,15 +2170,14 @@ fn directories_are_made_cloned_and_linked_on_the_projects_card(cx: &mut TestAppC
             && said.contains(&"Under it: Renamed app to web.".to_owned()),
         "{said:?}"
     );
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[gpui::test]
 async fn what_an_agent_tells_of_a_session_it_loads_is_not_shown_again(cx: &mut TestAppContext) {
-    let folder = scratch("load");
+    let folder = scratch::folder("load");
     let (store, _) = kept_chat(&folder, Some("session-1"));
     let (agents, workspace, cx) =
-        open_window_resuming(cx, scratch("load-home"), store, Resumes::Load);
+        open_window_resuming(cx, scratch::folder("load-home"), store, Resumes::Load);
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.show(FIRST_KEPT, window, cx);
     });
@@ -2289,12 +2246,16 @@ fn assert_retold(
 
 #[gpui::test]
 async fn an_agent_that_cannot_resume_is_told_the_conversation_so_far(cx: &mut TestAppContext) {
-    let folder = scratch("retell");
+    let folder = scratch::folder("retell");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
     let (store, kept) = kept_chat(&folder, Some("session-0"));
-    let (agents, workspace, cx) =
-        open_window_resuming(cx, scratch("retell-home"), store.clone(), Resumes::Never);
+    let (agents, workspace, cx) = open_window_resuming(
+        cx,
+        scratch::folder("retell-home"),
+        store.clone(),
+        Resumes::Never,
+    );
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.show(FIRST_KEPT, window, cx);
     });
@@ -2307,17 +2268,16 @@ async fn an_agent_that_cannot_resume_is_told_the_conversation_so_far(cx: &mut Te
     assert_retold(cx, &workspace, &agent, &folder, true);
     // The new session is the one to go on with from now on.
     assert_eq!(store.session(kept).unwrap().as_deref(), Some("session-1"));
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
 async fn an_agent_that_refuses_to_resume_is_told_the_conversation_so_far(cx: &mut TestAppContext) {
-    let folder = scratch("refuse");
+    let folder = scratch::folder("refuse");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
     let (store, _) = kept_chat(&folder, Some("session-0"));
     let (agents, workspace, cx) =
-        open_window_resuming(cx, scratch("refuse-home"), store, Resumes::Refuse);
+        open_window_resuming(cx, scratch::folder("refuse-home"), store, Resumes::Refuse);
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.show(FIRST_KEPT, window, cx);
     });
@@ -2328,17 +2288,20 @@ async fn an_agent_that_refuses_to_resume_is_told_the_conversation_so_far(cx: &mu
     assert_eq!(agent.resumed(), ["session-0"]);
     assert_eq!(agent.sessions_opened(), 1);
     assert_retold(cx, &workspace, &agent, &folder, true);
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
 async fn a_chat_kept_with_no_session_is_told_the_conversation_so_far(cx: &mut TestAppContext) {
-    let folder = scratch("no-session");
+    let folder = scratch::folder("no-session");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("COX.md"), "Answer in Japanese.\n").unwrap();
     let (store, _) = kept_chat(&folder, None);
-    let (agents, workspace, cx) =
-        open_window_resuming(cx, scratch("no-session-home"), store, Resumes::Resume);
+    let (agents, workspace, cx) = open_window_resuming(
+        cx,
+        scratch::folder("no-session-home"),
+        store,
+        Resumes::Resume,
+    );
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.show(FIRST_KEPT, window, cx);
     });
@@ -2348,13 +2311,12 @@ async fn a_chat_kept_with_no_session_is_told_the_conversation_so_far(cx: &mut Te
     let agent = Arc::clone(&agents.borrow()[0]);
     assert_eq!(agent.resumed(), Vec::<String>::new());
     assert_retold(cx, &workspace, &agent, &folder, false);
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
 async fn a_new_chat_keeps_its_agents_session(cx: &mut TestAppContext) {
     let store = kept_store("chats-3");
-    let (_, workspace, cx) = open_window_keeping(cx, scratch("session"), store.clone());
+    let (_, workspace, cx) = open_window_keeping(cx, scratch::folder("session"), store.clone());
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
 
@@ -2398,13 +2360,17 @@ fn fake_settings(model: &str, mode: &str) -> Vec<Setting> {
 
 #[gpui::test]
 async fn a_closed_chat_sets_its_session_as_it_was_set(cx: &mut TestAppContext) {
-    let folder = scratch("settings");
+    let folder = scratch::folder("settings");
     let (store, kept) = kept_chat(&folder, Some("session-1"));
     store
         .keep_settings(kept, &fake_settings("small", "plan"))
         .unwrap();
-    let (agents, workspace, cx) =
-        open_window_resuming(cx, scratch("settings-home"), store.clone(), Resumes::Never);
+    let (agents, workspace, cx) = open_window_resuming(
+        cx,
+        scratch::folder("settings-home"),
+        store.clone(),
+        Resumes::Never,
+    );
     workspace.update_in(cx, |workspace, window, cx| {
         workspace.show(FIRST_KEPT, window, cx);
     });
@@ -2435,7 +2401,6 @@ async fn a_closed_chat_sets_its_session_as_it_was_set(cx: &mut TestAppContext) {
     let set = view.read_with(cx, |view, _| view.conversation().settings().to_vec());
     assert_eq!(set, fake_settings("large", "plan"));
     assert_eq!(store.settings(kept).unwrap(), set);
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[gpui::test]
@@ -2448,7 +2413,7 @@ async fn a_new_chat_starts_on_the_model_chosen_last(cx: &mut TestAppContext) {
     store
         .keep_choice(SECOND_AGENT, fake_agent::MODE, "plan")
         .unwrap();
-    let (agents, workspace, cx) = open_window_keeping(cx, scratch("chosen"), store.clone());
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch::folder("chosen"), store.clone());
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
 
@@ -2473,7 +2438,7 @@ async fn a_chat_switches_to_another_agent_which_goes_on_from_the_conversation(
     store
         .keep_choice(SECOND_AGENT, fake_agent::MODE, "plan")
         .unwrap();
-    let (agents, workspace, cx) = open_window_keeping(cx, scratch("switch"), store.clone());
+    let (agents, workspace, cx) = open_window_keeping(cx, scratch::folder("switch"), store.clone());
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
     let kept = store.chats().unwrap()[0].id;
@@ -2523,7 +2488,8 @@ async fn a_chat_switches_to_another_agent_which_goes_on_from_the_conversation(
 #[gpui::test]
 async fn a_chat_switched_before_anything_was_said_starts_anew(cx: &mut TestAppContext) {
     let store = kept_store("chats-6");
-    let (agents, workspace, cx) = open_window_keeping(cx, scratch("switch-new"), store.clone());
+    let (agents, workspace, cx) =
+        open_window_keeping(cx, scratch::folder("switch-new"), store.clone());
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
     cx.condition(&view, |view, _| !view.conversation().settings().is_empty())
@@ -2585,7 +2551,7 @@ fn right_click(cx: &mut VisualTestContext, selector: &'static str) {
 #[gpui::test]
 async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppContext) {
     let store = kept_store("chats-7");
-    let (_, workspace, cx) = open_window_keeping(cx, scratch("named"), store.clone());
+    let (_, workspace, cx) = open_window_keeping(cx, scratch::folder("named"), store.clone());
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "a title, please").await;
     assert_eq!(names(cx, &workspace), listed(&[("Cox", &[TITLE])]));
@@ -2616,7 +2582,7 @@ async fn a_chat_is_named_by_its_agent_until_the_human_names_it(cx: &mut TestAppC
 
 #[gpui::test]
 async fn a_turn_that_ends_unseen_marks_its_chat_until_it_is_shown(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch("unread"));
+    let (_, workspace, cx) = open_window(cx, scratch::folder("unread"));
     cx.simulate_keystrokes("secondary-n");
     let first = shown(cx, &workspace);
     cx.simulate_input("slowly");
@@ -2639,7 +2605,7 @@ async fn a_turn_that_ends_unseen_marks_its_chat_until_it_is_shown(cx: &mut TestA
 
 #[gpui::test]
 async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut TestAppContext) {
-    let home = scratch("archived");
+    let home = scratch::folder("archived");
     let store = kept_store("archived-kept");
     let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
     cx.simulate_keystrokes("secondary-n");
@@ -2685,8 +2651,6 @@ async fn an_archived_chat_leaves_the_list_until_it_is_brought_back(cx: &mut Test
     );
     assert_eq!(shown_name(cx, &workspace).as_deref(), Some("second"));
     assert!(!kept_names(&store)[1].2);
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 /// What Cox told the human through the app's [`Notices`].
@@ -2727,7 +2691,7 @@ async fn wait_until(
 
 #[gpui::test]
 async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch("notices"));
+    let (_, workspace, cx) = open_window(cx, scratch::folder("notices"));
     let recorded = Rc::new(Recorded::default());
     let notices = Rc::clone(&recorded);
     cx.update(|window, cx| {
@@ -2804,7 +2768,7 @@ async fn a_chat_tells_the_human_what_they_do_not_see(cx: &mut TestAppContext) {
 async fn the_triggers_of_a_permission_request_gather_before_the_human_is_told(
     cx: &mut TestAppContext,
 ) {
-    let home = scratch("gather");
+    let home = scratch::folder("gather");
     let triggers = home.join("triggers");
     std::fs::create_dir_all(&triggers).unwrap();
     std::fs::write(
@@ -2861,7 +2825,6 @@ async fn the_triggers_of_a_permission_request_gather_before_the_human_is_told(
         gathered[0].said.as_deref(),
         Some("Only x.txt changes\nNothing else.")
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// A command that fails the first time it runs, leaving a mark in
@@ -2890,7 +2853,7 @@ fn goals(
 
 #[gpui::test]
 async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppContext) {
-    let home = scratch("goal");
+    let home = scratch::folder("goal");
     std::fs::create_dir_all(&home).unwrap();
     let store = kept_store("chats-8");
     let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
@@ -2979,7 +2942,7 @@ async fn a_chat_with_a_goal_goes_on_until_its_command_passes(cx: &mut TestAppCon
 
 #[gpui::test]
 async fn a_trigger_of_the_folder_runs_as_a_turn_ends_until_it_passes(cx: &mut TestAppContext) {
-    let home = scratch("trigger");
+    let home = scratch::folder("trigger");
     let triggers = home.join("triggers");
     std::fs::create_dir_all(&triggers).unwrap();
     let command = passing_the_second_time(&home);
@@ -3028,7 +2991,7 @@ async fn a_trigger_of_the_folder_runs_as_a_turn_ends_until_it_passes(cx: &mut Te
 
 #[gpui::test]
 async fn a_trigger_of_the_project_runs_only_once_the_human_turns_it_on(cx: &mut TestAppContext) {
-    let home = scratch("trigger-turned-on");
+    let home = scratch::folder("trigger-turned-on");
     let triggers = home.join("triggers");
     std::fs::create_dir_all(&triggers).unwrap();
     let ran = home.join("ran");
@@ -3070,10 +3033,7 @@ async fn a_trigger_of_the_project_runs_only_once_the_human_turns_it_on(cx: &mut 
 /// Turns on the project's own trigger of `file` in `folder`, as its file
 /// is now, as the human does on the Triggers tab.
 fn turn_on(folder: &Path, file: &Path) {
-    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _turning = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    scratch::data();
     let trigger = cox::trigger::Trigger::read(file, cox::trigger::Scope::Project)
         .unwrap()
         .unwrap();
@@ -3089,7 +3049,7 @@ fn turn_on(folder: &Path, file: &Path) {
 
 #[gpui::test]
 async fn a_command_the_window_runs_answers_once_it_ends(cx: &mut TestAppContext) {
-    let home = scratch("window-runs");
+    let home = scratch::folder("window-runs");
     std::fs::create_dir_all(&home).unwrap();
     // The chat's commands go through the daemon to the window, which runs
     // them, as on a terminal of the stage, and answers how each ended.
@@ -3113,12 +3073,11 @@ async fn a_command_the_window_runs_answers_once_it_ends(cx: &mut TestAppContext)
         entries.contains(&Entry::Note(format!("Goal met: `{command}` passed."))),
         "{entries:?}"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[gpui::test]
 async fn a_goal_in_words_is_judged_by_an_agent_until_it_is_met(cx: &mut TestAppContext) {
-    let home = scratch("goal-words");
+    let home = scratch::folder("goal-words");
     std::fs::create_dir_all(&home).unwrap();
     let store = kept_store("chats-9");
     let (agents, workspace, cx) = open_window_keeping(cx, home.clone(), store.clone());
@@ -3186,14 +3145,14 @@ async fn a_goal_in_words_is_judged_by_an_agent_until_it_is_met(cx: &mut TestAppC
 
 #[gpui::test]
 async fn a_chats_goal_lasts_past_cox_starting_again(cx: &mut TestAppContext) {
-    let folder = scratch("goal-again");
+    let folder = scratch::folder("goal-again");
     std::fs::create_dir_all(&folder).unwrap();
     let (store, kept) = kept_chat(&folder, Some("session-1"));
     store
         .keep_goal(kept, Some(&KeptGoal::Command("true".to_owned())))
         .unwrap();
     let (agents, workspace, cx) =
-        open_window_keeping(cx, scratch("goal-again-home"), store.clone());
+        open_window_keeping(cx, scratch::folder("goal-again-home"), store.clone());
     assert_eq!(
         goals(cx, &workspace, 1),
         [Some(KeptGoal::Command("true".to_owned()))]
@@ -3227,7 +3186,7 @@ async fn a_chats_goal_lasts_past_cox_starting_again(cx: &mut TestAppContext) {
 
 #[gpui::test]
 async fn escape_stops_the_check_of_the_goal(cx: &mut TestAppContext) {
-    let (_, workspace, cx) = open_window(cx, scratch("goal-stop"));
+    let (_, workspace, cx) = open_window(cx, scratch::folder("goal-stop"));
     cx.simulate_keystrokes("secondary-n");
     let view = shown(cx, &workspace);
     view.read_with(cx, |view, _| {
@@ -3256,7 +3215,8 @@ async fn escape_stops_the_check_of_the_goal(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn the_human_sets_a_chats_goal_from_its_menu(cx: &mut TestAppContext) {
     let store = kept_store("chats-10");
-    let (agents, workspace, cx) = open_window_keeping(cx, scratch("goal-menu"), store.clone());
+    let (agents, workspace, cx) =
+        open_window_keeping(cx, scratch::folder("goal-menu"), store.clone());
     cx.simulate_keystrokes("secondary-n");
     assert!(!drawn(cx, "chat-1-goal"));
 
@@ -3316,7 +3276,7 @@ fn keys(
 
 #[gpui::test]
 async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppContext) {
-    let home = scratch("child-home");
+    let home = scratch::folder("child-home");
     let store = kept_store("child-kept");
     let (agents, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
@@ -3412,13 +3372,11 @@ async fn an_agent_opens_a_chat_under_its_own_set_up_as_it_says(cx: &mut TestAppC
         Setup::from_json(chats[2].setup.as_deref().unwrap()).unwrap(),
         setup
     );
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 #[gpui::test]
 async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppContext) {
-    let home = scratch("bounded-home");
+    let home = scratch::folder("bounded-home");
     let store = kept_store("bounded-kept");
     let (_, asks, workspace, cx) =
         open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
@@ -3456,36 +3414,20 @@ async fn a_chat_opened_by_a_chat_is_allowed_no_more_than_it(cx: &mut TestAppCont
         workspace.chats(0).nth(1).unwrap().setup().cloned().unwrap()
     });
     assert_eq!(setup.policy, Policy::default());
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 /// A Git repository at a scratch folder named after `name`, with
 /// `main.rs` committed, and someone to commit as.
 fn repository(name: &str) -> PathBuf {
-    let home = scratch(name);
-    std::fs::create_dir_all(&home).unwrap();
-    let git = |args: &[&str]| {
-        let done = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&home)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(done.status.success(), "{done:?}");
-    };
-    git(&["init", "-q"]);
-    git(&["config", "user.name", "t"]);
-    git(&["config", "user.email", "t@t"]);
+    let home = scratch::made(name);
+    git(&home, &["init", "-q"]);
+    git(&home, &["config", "user.name", "t"]);
+    git(&home, &["config", "user.email", "t@t"]);
     std::fs::write(home.join("main.rs"), "fn main() {}\n").unwrap();
-    git(&["add", "."]);
-    git(&["commit", "-q", "-m", "first"]);
+    git(&home, &["add", "."]);
+    git(&home, &["commit", "-q", "-m", "first"]);
     home
 }
-
-/// How many sketches were made again, which names the folder of each, as
-/// tests make sketches again at once.
-static MADE_AGAIN: AtomicUsize = AtomicUsize::new(0);
 
 /// Checks that the bundle the note `note` of a discarded sketch names makes
 /// the sketch again, with `file` holding `text`, and takes it away.
@@ -3494,21 +3436,14 @@ fn assert_made_again(note: &str, file: &str, text: &str) {
         .split_once("kept in ")
         .and_then(|(_, rest)| rest.split_once(", which"))
         .map_or_else(|| panic!("{note}"), |(bundle, _)| PathBuf::from(bundle));
-    let again = scratch(&format!(
-        "sketch-made-again-{}",
-        MADE_AGAIN.fetch_add(1, Ordering::Relaxed)
-    ));
-    let cloned = std::process::Command::new("git")
-        .arg("clone")
-        .arg("-q")
-        .arg(&bundle)
-        .arg(&again)
-        .status()
-        .unwrap();
-    assert!(cloned.success());
+    let again = scratch::folder("sketch-made-again");
+    let (bundle_path, again_path) = (bundle.display().to_string(), again.display().to_string());
+    git(
+        bundle.parent().unwrap(),
+        &["clone", "-q", &bundle_path, &again_path],
+    );
     assert_eq!(std::fs::read_to_string(again.join(file)).unwrap(), text);
     let _ = std::fs::remove_file(&bundle);
-    let _ = std::fs::remove_dir_all(&again);
 }
 
 /// Waits until `made`, made in a sketch the human discards, is gone with
@@ -3600,11 +3535,6 @@ async fn a_sketch_works_in_a_folder_apart_from_the_project(cx: &mut TestAppConte
     let empty = open_sketch(cx, &workspace, &asks, Sketch::Empty, 3).await;
     assert!(empty.join(".git").is_dir());
     assert!(!empty.join("main.rs").exists());
-
-    let _ = std::fs::remove_dir_all(&empty);
-    let _ = std::fs::remove_dir_all(&folder);
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 #[gpui::test]
@@ -3684,10 +3614,6 @@ async fn a_chat_opens_a_sketch_beside_it(cx: &mut TestAppContext) {
             .is_err_and(|error| error.contains("a sketch already")),
         "{again:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&folder);
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 #[gpui::test]
@@ -3750,10 +3676,6 @@ async fn the_human_starts_a_sketch_of_what_they_would_have_tried(cx: &mut TestAp
         workspace.edit_sketch(1, window, cx);
     });
     sketch.read_with(cx, |view, _| assert!(view.sketch_input().is_none()));
-
-    let _ = std::fs::remove_dir_all(&folder);
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 #[gpui::test]
@@ -3844,9 +3766,6 @@ async fn an_ended_sketch_goes_on_in_the_project(cx: &mut TestAppContext) {
         workspace.chats(0).nth(1).unwrap().is_open()
     });
     assert!(open);
-
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 /// The way to end a sketch of Cox's own workflow named `name`.
@@ -3883,16 +3802,16 @@ async fn a_sketch_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
             _ => None,
         })
         .unwrap();
-    let then = format!("sketch/rewrite-{}.md", std::process::id());
+    let then = "sketch/rewrite.md";
     // The workflow is one of the test's own, where this Cox keeps what
     // lasts, rather than the human's in their home.
-    let workflow = cox::storage::root().unwrap().join("workflow");
+    let workflow = scratch::data().join("workflow");
     cox::settings::keep(
         "workflow",
         Some(serde_json::Value::String(workflow.display().to_string())),
     )
     .unwrap();
-    let then_file = cox::settings::workflow().join(&then);
+    let then_file = cox::settings::workflow().join(then);
     std::fs::create_dir_all(then_file.parent().unwrap()).unwrap();
     std::fs::write(&then_file, "Rewrite what {kept} shows, from: {summary}\n").unwrap();
     std::fs::write(folder.join("main.rs"), "fn main() { sketch() }\n").unwrap();
@@ -3902,7 +3821,7 @@ async fn a_sketch_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
         sum_up: None,
         keep: true,
         open: false,
-        then: Some(then),
+        then: Some(then.to_owned()),
         goal: Some("$ true".to_owned()),
     };
     workspace.update_in(cx, |workspace, window, cx| {
@@ -3911,20 +3830,12 @@ async fn a_sketch_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
     settled(cx, &workspace);
     wait_for_discarded(cx, &workspace, &folder).await;
     settle(cx).await;
-    let _ = std::fs::remove_file(&then_file);
     let name = format!(
         "refs/cox/discarded/{}",
         folder.file_name().unwrap().to_string_lossy()
     );
-    let in_git = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&home)
-        .arg("show")
-        .arg(format!("{name}:main.rs"))
-        .output()
-        .unwrap();
     assert_eq!(
-        String::from_utf8_lossy(&in_git.stdout),
+        git(&home, &["show", &format!("{name}:main.rs")]),
         "fn main() { sketch() }\n"
     );
     assert_eq!(
@@ -3959,9 +3870,6 @@ async fn a_sketch_ends_in_a_way_of_the_human_s_own(cx: &mut TestAppContext) {
     .await;
     let endings = workspace.read_with(cx, |workspace, _| workspace.endings(1));
     assert!(endings.is_empty(), "{endings:?}");
-
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 #[gpui::test]
@@ -3972,7 +3880,7 @@ async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
         open_window_asking(cx, home.clone(), store.clone(), Resumes::Resume);
     cx.simulate_keystrokes("secondary-n");
     say(cx, &workspace, "hello").await;
-    let folder = open_sketch(cx, &workspace, &asks, Sketch::Project, 2).await;
+    open_sketch(cx, &workspace, &asks, Sketch::Project, 2).await;
     let empty = open_sketch(cx, &workspace, &asks, Sketch::Empty, 3).await;
     let ended = |cx: &mut VisualTestContext, index: usize| {
         let view = view_at(cx, &workspace, index);
@@ -4082,11 +3990,6 @@ async fn a_sketch_ends_as_cox_s_own_workflow_says(cx: &mut TestAppContext) {
         "{source}"
     );
     assert_made_again(&source, "made.txt", "made in the sketch\n");
-
-    let _ = std::fs::remove_dir_all(&project);
-    let _ = std::fs::remove_dir_all(&folder);
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(store.path.parent().unwrap());
 }
 
 /// Checks that `made`, a file a sketch made that said `text`, is gone
@@ -4179,7 +4082,7 @@ async fn open_child(
 
 #[gpui::test]
 async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
-    let home = scratch("wait-home");
+    let home = scratch::folder("wait-home");
     let store = kept_store("chats-11");
     let (_, asks, workspace, cx) = open_window_asking(cx, home.clone(), store, Resumes::Resume);
     cx.simulate_keystrokes("secondary-n");
@@ -4250,12 +4153,11 @@ async fn an_agent_waits_for_the_chat_it_opened(cx: &mut TestAppContext) {
     ask(ChatRequest::WaitChat { chat: 99, answer });
     cx.run_until_parked();
     assert_eq!(waited.await.unwrap(), Err("no chat 99".to_owned()));
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[gpui::test]
 async fn logs_in_in_a_terminal_and_sends_the_line_again(cx: &mut TestAppContext) {
-    let home = scratch("login-home");
+    let home = scratch::folder("login-home");
     std::fs::create_dir_all(&home).unwrap();
     let file = home.join("logged in");
     let (agents, workspace, cx) = open_window_logging_in(cx, home, LogsIn::AtPrompt(file.clone()));
@@ -4285,7 +4187,7 @@ async fn logs_in_in_a_terminal_and_sends_the_line_again(cx: &mut TestAppContext)
 
 #[gpui::test]
 async fn the_human_asks_a_chat_to_keep_what_it_learned_in_the_wiki(cx: &mut TestAppContext) {
-    let home = scratch("wiki-home");
+    let home = scratch::folder("wiki-home");
     let store = kept_store("wiki-kept");
     let (agents, asks, workspace, cx) =
         open_window_asking(cx, home, store.clone(), Resumes::Resume);
@@ -4318,12 +4220,12 @@ async fn the_human_asks_a_chat_to_keep_what_it_learned_in_the_wiki(cx: &mut Test
 
 #[gpui::test]
 async fn an_agent_waits_for_no_chat_of_another_project(cx: &mut TestAppContext) {
-    let app = scratch("wait-other-project");
+    let app = scratch::folder("wait-other-project");
     std::fs::create_dir_all(&app).unwrap();
     let store = kept_store("wait-other-project-kept");
     let (_, asks, workspace, cx) = open_window_asking(
         cx,
-        scratch("wait-other-project-home"),
+        scratch::folder("wait-other-project-home"),
         store,
         Resumes::Resume,
     );
@@ -4344,5 +4246,4 @@ async fn an_agent_waits_for_no_chat_of_another_project(cx: &mut TestAppContext) 
         .unwrap();
     cx.run_until_parked();
     assert_eq!(waited.await.unwrap(), Err(format!("no chat {other}")));
-    let _ = std::fs::remove_dir_all(&app);
 }

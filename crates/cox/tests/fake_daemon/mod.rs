@@ -30,6 +30,8 @@ use gpui::{
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::fake_agent::{FakeAgent, LogsIn, Resumes};
+use super::scratch;
+use super::waits::{GIVEN_UP, given_up};
 
 /// What the test and the daemon's thread share.
 pub struct Shared<T>(Arc<Mutex<T>>);
@@ -308,14 +310,6 @@ pub enum Kept {
     At(PathBuf),
 }
 
-/// A store of its own at a path, for each test that keeps chats there.
-pub fn kept_at(name: &str) -> PathBuf {
-    let folder = std::env::temp_dir().join(format!("cox-store-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&folder);
-    std::fs::create_dir_all(&folder).unwrap();
-    folder.join("chats.sqlite")
-}
-
 /// The window's daemon, which stops with it.
 pub struct Daemon(#[expect(dead_code, reason = "it is held to run")] Running);
 
@@ -363,6 +357,7 @@ fn open_bound(
     // waits for them in real time instead of only running GPUI's own
     // tasks.
     cx.executor().allow_parking();
+    scratch::data();
     let ticker = Ticker::start(cx.executor());
     let (workspace, cx) =
         cx.add_window_view(|window, cx| over_daemon(home, kept, fakes, stages, window, cx));
@@ -406,6 +401,7 @@ pub fn open_again(
     kept: Kept,
     fakes: Fakes,
 ) -> Entity<Workspace> {
+    scratch::data();
     let stages = FakeStages::default();
     cx.update(|window, cx| cx.new(|cx| over_daemon(home, kept, fakes, stages, window, cx)))
 }
@@ -449,30 +445,6 @@ fn over_daemon(
     )
 }
 
-/// How long a test waits for what it waits for before it fails, saying
-/// it never came. It only catches what hangs: a debug build lays out a
-/// long conversation slowly, which can take seconds on a slow machine,
-/// as CI's.
-pub const GIVEN_UP: Duration = Duration::from_secs(30);
-
-/// A wait that gives up after [`GIVEN_UP`]: what the receiver hears
-/// then, unless the sender is dropped first. A thread keeps the time,
-/// and ends as soon as the wait does, as a test waits many times, and
-/// macOS lets a process have only a few thousand threads.
-pub fn given_up() -> (
-    std::sync::mpsc::Sender<()>,
-    tokio::sync::oneshot::Receiver<()>,
-) {
-    let (waiting, ended) = std::sync::mpsc::channel();
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        if ended.recv_timeout(GIVEN_UP) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
-            let _ = timed_out.send(());
-        }
-    });
-    (waiting, timeout)
-}
-
 /// Waits until the daemon has done all the window told it, and the
 /// window has heard all the daemon said of it.
 pub async fn settle(cx: &mut VisualTestContext) {
@@ -514,14 +486,18 @@ pub async fn settle_until(
     cx: &mut VisualTestContext,
     done: impl Fn(&mut VisualTestContext) -> bool,
 ) {
-    for _ in 0..500 {
+    let deadline = std::time::Instant::now() + GIVEN_UP;
+    loop {
         settle(cx).await;
         if done(cx) {
             return;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "what the test waited for never came"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("what the test waited for never came");
 }
 
 /// The view of the chat shown, once the daemon has settled.

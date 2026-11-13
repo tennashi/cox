@@ -1,11 +1,15 @@
 //! coxd over its socket: a window reaches it, one at a time, hears what
 //! it says, and hears that it is gone once it stops.
 
+#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
+mod scratch;
+#[expect(dead_code, reason = "these tests use only part of the waits")]
+mod waits;
+
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 use cox::agent::Start;
 use cox::agents::Agents;
@@ -37,10 +41,7 @@ impl Spawns for NoAgents {
 
 /// A folder of the test's own.
 fn folder(name: &str) -> PathBuf {
-    let folder = std::env::temp_dir().join(format!("cox-coxd-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&folder);
-    std::fs::create_dir_all(&folder).unwrap();
-    folder
+    scratch::made(&format!("coxd-{name}"))
 }
 
 /// Runs coxd on `socket`, on a thread of its own, until it stops.
@@ -103,22 +104,13 @@ fn until_settled(connected: &mut Connected, id: u64) -> Vec<FromDaemon> {
     }
 }
 
-/// Waits until `done` holds, or fails after a while.
-fn wait(what: &str, mut done: impl FnMut() -> bool) {
-    let until = Instant::now() + Duration::from_secs(10);
-    while !done() {
-        assert!(Instant::now() < until, "{what}");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
 #[test]
 fn a_window_reaches_coxd_one_at_a_time_and_hears_when_it_stops() {
     let folder = folder("one");
     let socket = folder.join("run").join("coxd.sock");
     let home = folder.join("home");
     let coxd = run(&socket, &home);
-    wait("coxd listens", || socket.exists());
+    waits::until("coxd listens", || socket.exists());
 
     let gone = Arc::new(AtomicBool::new(false));
     let mut first = reach(&socket, &home, &gone).expect("the first window is welcome");
@@ -142,11 +134,11 @@ fn a_window_reaches_coxd_one_at_a_time_and_hears_when_it_stops() {
     // Once the first goes, coxd lets it go, and the next is welcome, and
     // is told of the chats again.
     drop(first);
-    wait("the first window hears it was let go", || {
+    waits::until("the first window hears it was let go", || {
         gone.load(Ordering::SeqCst)
     });
     let mut next = None;
-    wait("coxd lets the first window go", || {
+    waits::until("coxd lets the first window go", || {
         next = reach(&socket, &home, &other).ok();
         next.is_some()
     });
@@ -159,10 +151,9 @@ fn a_window_reaches_coxd_one_at_a_time_and_hears_when_it_stops() {
     // coxd stops once its socket is taken away, and the window hears so.
     std::fs::remove_file(&socket).unwrap();
     coxd.join().unwrap().expect("coxd stops as it should");
-    wait("the window hears coxd is gone", || {
+    waits::until("the window hears coxd is gone", || {
         other.load(Ordering::SeqCst)
     });
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 fn page(url: &str) -> KeptTab {
@@ -199,7 +190,7 @@ fn the_chats_of_a_folder_share_its_stage() {
         )
         .unwrap();
     let coxd = run_keeping(&socket, &home, Some(&path));
-    wait("coxd listens", || socket.exists());
+    waits::until("coxd listens", || socket.exists());
     let gone = Arc::new(AtomicBool::new(false));
     let mut window = reach(&socket, &home, &gone).expect("the window is welcome");
     let heard = until_settled(&mut window, 1);
@@ -253,7 +244,6 @@ fn the_chats_of_a_folder_share_its_stage() {
 
     std::fs::remove_file(&socket).unwrap();
     coxd.join().unwrap().unwrap();
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[test]
@@ -261,8 +251,8 @@ fn a_second_coxd_does_not_take_the_socket_of_one_that_runs() {
     let folder = folder("two");
     let socket = folder.join("coxd.sock");
     let coxd = run(&socket, &folder);
-    wait("coxd listens", || socket.exists());
-    wait("coxd answers", || {
+    waits::until("coxd listens", || socket.exists());
+    waits::until("coxd answers", || {
         std::os::unix::net::UnixStream::connect(&socket).is_ok()
     });
 
@@ -271,7 +261,6 @@ fn a_second_coxd_does_not_take_the_socket_of_one_that_runs() {
 
     std::fs::remove_file(&socket).unwrap();
     coxd.join().unwrap().unwrap();
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[test]

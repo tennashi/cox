@@ -3,17 +3,29 @@
 //! file: the Finder's Trash on macOS, and the trash of the freedesktop.org
 //! specification elsewhere, which the desktop's file managers share.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
-/// The trash a run keeps in place of the system's, as a test's.
-static KEPT_IN: OnceLock<PathBuf> = OnceLock::new();
+thread_local! {
+    /// The trash what runs on this thread puts things in, in place of
+    /// the system's, when it was told one.
+    static KEPT_IN: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
 
-/// Has this run put what it trashes in `trash`, laid out as the
-/// specification has it, in place of the system's trash, as a test that
-/// leaves the human's trash be; once set, it stays.
-pub fn keep_in(trash: PathBuf) {
-    let _ = KEPT_IN.set(trash);
+/// Has what runs on this thread, and on the thread of each daemon it
+/// starts, put what it trashes in `trash`, laid out as the specification
+/// has it, in place of the system's trash, or, with `None`, in the
+/// system's again: as a test that leaves the human's trash be, beside
+/// others in one process.
+pub fn keep_on_this_thread(trash: Option<PathBuf>) {
+    KEPT_IN.with_borrow_mut(|kept| *kept = trash);
+}
+
+/// The trash what runs on this thread was told to put things in, if it
+/// was.
+#[must_use]
+pub fn kept_on_this_thread() -> Option<PathBuf> {
+    KEPT_IN.with_borrow(Clone::clone)
 }
 
 /// Moves `path` to the trash.
@@ -22,8 +34,8 @@ pub fn keep_in(trash: PathBuf) {
 ///
 /// When it cannot, saying why, as when the trash is on another disk.
 pub fn put(path: &Path) -> Result<(), String> {
-    if let Some(trash) = KEPT_IN.get() {
-        return put_in(trash, path);
+    if let Some(trash) = kept_on_this_thread() {
+        return put_in(&trash, path);
     }
     #[cfg(target_os = "macos")]
     {

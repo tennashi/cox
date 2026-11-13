@@ -2,12 +2,16 @@
 //! agent shows it at, and asking the language server what the code means.
 
 mod fake_lsp;
+#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
+mod scratch;
+#[expect(dead_code, reason = "these tests use only part of the waits")]
+mod waits;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use cox::stage::code::{Back, Code, Forward};
 use cox::stage::servers::{LanguageServer, Servers};
@@ -20,10 +24,7 @@ use gpui::{
 };
 
 fn scratch(name: &str) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!("cox-code-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
-    directory
+    scratch::made(&format!("code-{name}"))
 }
 
 /// A file of `count` numbered lines.
@@ -88,7 +89,6 @@ fn opens_at_the_lines_it_is_shown_at(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(in_sight(&code, cx).contains(&9));
     assert_eq!(code.read_with(cx, |code, _| code.marked()), Some(lines));
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -118,7 +118,6 @@ fn scrolls_with_the_wheel_within_the_file(cx: &mut TestAppContext) {
     wheel(cx, -100_000.);
     // With the empty line after the last line break.
     assert_eq!(in_sight(&code, cx).end, 1_001);
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -143,7 +142,6 @@ fn follows_the_file_as_it_changes(cx: &mut TestAppContext) {
         code.read_with(cx, |code, _| code.text()),
         "fn main() {\n    run();\n}\n"
     );
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -170,7 +168,6 @@ fn colors_the_code_as_it_changes(cx: &mut TestAppContext) {
     std::fs::write(&path, "fn main() {}\n").unwrap();
     let (code, cx) = open(cx, path, "fn main() {}\n", None);
     assert_eq!(highlights(&code, cx, 0).first(), None);
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -223,7 +220,6 @@ fn selects_lines_to_copy(cx: &mut TestAppContext) {
             .as_deref(),
         Some("run_all")
     );
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 /// Opens a tab showing `main.rs` of the fake server's project in
@@ -250,15 +246,10 @@ fn open_project<'a>(
 
 /// Lets the server answer until `done` holds, which it must before long.
 fn wait_until(cx: &mut VisualTestContext, mut done: impl FnMut(&mut VisualTestContext) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
+    waits::until("the server's answer", || {
         cx.run_until_parked();
-        if done(cx) {
-            return;
-        }
-        assert!(Instant::now() < deadline, "the server took too long");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+        done(cx)
+    });
 }
 
 /// Where the tab draws `column` of `line`.
@@ -315,8 +306,6 @@ fn shares_a_projects_server_between_its_files(cx: &mut TestAppContext) {
         );
     });
     assert_eq!(started.load(Ordering::Relaxed), 2);
-    std::fs::remove_dir_all(directory).unwrap();
-    std::fs::remove_dir_all(elsewhere).unwrap();
 }
 
 #[gpui::test]
@@ -346,7 +335,6 @@ fn a_project_says_which_server_knows_a_language(cx: &mut TestAppContext) {
         assert_eq!(name("app.py", cx).as_deref(), Some("pylsp"));
         assert_eq!(name("main.rs", cx).as_deref(), Some("rust-analyzer"));
     });
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -379,7 +367,6 @@ fn shows_what_the_server_says_of_the_name_the_mouse_rests_on(cx: &mut TestAppCon
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert_eq!(hover(&code, cx), None);
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -419,7 +406,6 @@ fn vim_s_keys_move_the_cursor_onto_a_name_and_the_server_says_what_it_is(cx: &mu
     assert_eq!(hover(&code, cx), None, "it goes at once");
     keys(cx, "0 $");
     assert_eq!(place(cx), Some((1, 12)));
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -447,7 +433,6 @@ fn shift_k_says_what_the_name_is_at_once_and_gr_lists_where_it_is_used(cx: &mut 
     wait_until(cx, |cx| cx.debug_bounds("code-locations").is_some());
     assert!(cx.debug_bounds("code-place-1").is_some(), "in lib.rs");
     assert!(cx.debug_bounds("code-place-3").is_some(), "in main.rs");
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -469,7 +454,6 @@ fn goes_to_the_definition_and_back(cx: &mut TestAppContext) {
     assert_eq!(code.read_with(cx, |code, _| code.text()), fake_lsp::MAIN);
     cx.dispatch_action(Forward);
     assert_eq!(shown(&code, cx).0, "lib.rs");
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[gpui::test]
@@ -503,5 +487,4 @@ fn lists_where_a_name_is_used_to_go_to_each(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("code-locations").is_some());
     cx.dispatch_action(Back);
     assert_eq!(shown(&code, cx).0, "lib.rs");
-    std::fs::remove_dir_all(directory).unwrap();
 }

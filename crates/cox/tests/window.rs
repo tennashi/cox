@@ -4,10 +4,12 @@
 mod fake_agent;
 #[expect(dead_code, reason = "these tests use only part of the fake daemon")]
 mod fake_daemon;
+mod scratch;
+#[expect(dead_code, reason = "these tests use only part of the waits")]
+mod waits;
 
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
     McpServer as AcpMcpServer, McpServerStdio, RequestPermissionOutcome, SelectedPermissionOutcome,
@@ -27,6 +29,7 @@ use gpui::{
     Bounds, ClipboardItem, Entity, EntityInputHandler, Focusable, Modifiers, MouseButton,
     MouseDownEvent, MouseUpEvent, Pixels, TestAppContext, VisualTestContext, point, px,
 };
+use waits::given_up;
 
 /// Opens the window, talking to a fake agent, with the input focused.
 fn open(cx: &mut TestAppContext) -> (Arc<FakeAgent>, Entity<ChatView>, &mut VisualTestContext) {
@@ -73,9 +76,17 @@ fn open_talking_to(
     open_agent(cx, agent, Vec::new(), Opened::default(), None, false)
 }
 
+/// The home of the test's window, where Cox's own chats work: a folder
+/// of the test's own.
+fn home() -> std::path::PathBuf {
+    let home = scratch::data().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    home
+}
+
 /// Opens the window like [`open_with_stage`], on a chat of Cox's own,
-/// which works in the system's folder of temporary files, talking to
-/// `agent`, which gets no instructions and no terminal.
+/// which works in the test's [`home`], talking to `agent`, which gets no
+/// instructions and no terminal.
 fn open_agent(
     cx: &mut TestAppContext,
     agent: FakeAgent,
@@ -99,7 +110,7 @@ fn open_agent(
         keyed: None,
         built: None,
     };
-    let (workspace, cx) = open_window(cx, std::env::temp_dir(), Kept::Memory, fakes, stages);
+    let (workspace, cx) = open_window(cx, home(), Kept::Memory, fakes, stages);
     cx.simulate_keystrokes("secondary-n");
     let executor = cx.executor();
     let view = executor.block_test(shown_view(cx, &workspace));
@@ -112,14 +123,10 @@ fn open_agent(
 
 /// Waits until the conversation is in `state`. The agent side runs in real
 /// time, outside GPUI's clock, so a real timer ends the wait if it never
-/// comes.
+/// comes (see [`given_up`]).
 async fn wait_for(cx: &mut VisualTestContext, view: &Entity<ChatView>, state: State) {
     settle(cx).await;
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     tokio::select! {
         () = cx.condition(view, |view, _| view.conversation().state() == state) => {}
         _ = timeout => panic!("the conversation never became {state:?}"),
@@ -136,7 +143,7 @@ async fn sends_what_the_human_types_and_shows_the_reply(cx: &mut TestAppContext)
     wait_for(cx, &view, State::Idle).await;
 
     assert_eq!(agent.sessions_opened(), 1);
-    assert_eq!(agent.cwd(), Some(std::env::temp_dir()));
+    assert_eq!(agent.cwd(), Some(home()));
     assert_eq!(agent.prompts(), ["hello"]);
     view.read_with(cx, |view, _| {
         assert_eq!(
@@ -582,7 +589,7 @@ async fn stops_a_turn_that_asks_permission_with_the_stop_button(cx: &mut TestApp
 /// A file that is never there, so that the agent counts as logged in only
 /// once Cox logs in with its key.
 fn no_login_file() -> std::path::PathBuf {
-    std::env::temp_dir().join("cox-no-such-login")
+    scratch::folder("no-login").join("logged-in")
 }
 
 /// What the conversation shows of each time the agent asked to log in:
@@ -1214,11 +1221,7 @@ async fn wait_for_setting(
     id: &'static str,
     value: &'static str,
 ) {
-    let (timed_out, timeout) = tokio::sync::oneshot::channel();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(5));
-        let _ = timed_out.send(());
-    });
+    let (_waiting, timeout) = given_up();
     let set = cx.condition(view, move |view, _| {
         view.conversation()
             .settings()
