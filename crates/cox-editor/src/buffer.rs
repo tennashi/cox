@@ -271,7 +271,17 @@ mod tests {
         assert_eq!(buffer.line(0), "fn main() {");
         assert_eq!(buffer.line(1), "}");
         assert_eq!(buffer.line(2), "");
+    }
+
+    #[test]
+    fn a_line_past_the_end_is_empty() {
+        let buffer = Buffer::new("fn main() {}\n");
         assert_eq!(buffer.line(3), "");
+    }
+
+    #[test]
+    fn the_longest_line_is_counted_without_its_break() {
+        let buffer = Buffer::new("}\r\nfn main() {\r\n}\n");
         assert_eq!(buffer.longest_line(), "fn main() {".len());
     }
 
@@ -301,9 +311,14 @@ mod tests {
     }
 
     #[test]
-    fn works_out_what_changed() {
+    fn the_same_text_is_no_edit() {
         let mut buffer = Buffer::new("fn main() {\n    old();\n}\n");
         assert_eq!(buffer.set_text("fn main() {\n    old();\n}\n"), None);
+    }
+
+    #[test]
+    fn an_insertion_is_an_edit_at_its_place() {
+        let mut buffer = Buffer::new("fn main() {\n    old();\n}\n");
         let edit = buffer.set_text("fn main() {\n    new();\n    old();\n}\n");
         assert_eq!(buffer.text(), "fn main() {\n    new();\n    old();\n}\n");
         // From `old` on the second line, which `new();\n    ` goes before.
@@ -318,9 +333,15 @@ mod tests {
                 new_end_point: Point::new(2, 4),
             })
         );
+    }
+
+    #[test]
+    fn clearing_removes_all() {
+        let mut buffer = Buffer::new("fn main() {\n    new();\n    old();\n}\n");
         let edit = buffer.set_text("").unwrap();
         assert_eq!((edit.start, edit.old_end, edit.new_end), (0, 36, 0));
         assert_eq!(edit.old_end_point, Point::new(4, 0));
+        assert_eq!(buffer.text(), "");
     }
 
     #[test]
