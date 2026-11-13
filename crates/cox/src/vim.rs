@@ -180,10 +180,10 @@ impl Mode {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Normal => "NORMAL",
-            Self::Insert => "INSERT",
-            Self::Hint => "HINT",
-            Self::Command => "COMMAND",
+            Self::Normal => "Normal",
+            Self::Insert => "Insert",
+            Self::Hint => "Hint",
+            Self::Command => "Command",
         }
     }
 }
@@ -571,6 +571,13 @@ pub fn switch(on: bool, window: &mut Window, cx: &mut App) {
 #[must_use]
 pub fn mode(cx: &App) -> Option<Mode> {
     cx.try_global::<Vim>().map(Vim::mode)
+}
+
+/// Whether keys type in the input that has the keyboard: with Vim's keys
+/// off, or in insert or command mode. Else the input shows no caret.
+#[must_use]
+pub fn types(cx: &App) -> bool {
+    mode(cx).is_none_or(|mode| matches!(mode, Mode::Insert | Mode::Command))
 }
 
 /// What the line at the window's foot shows of Vim's keys, while they
@@ -1059,7 +1066,7 @@ mod tests {
             [Outcome::Do(Command::Hint(Follow::Here), None)]
         );
         assert_eq!(vim.mode(), Mode::Hint);
-        assert_eq!(Mode::Hint.label(), "HINT");
+        assert_eq!(Mode::Hint.label(), "Hint");
         let label = |key| Outcome::Do(Command::Send(Sent::Label(key)), None);
         assert_eq!(
             press(&mut vim, Region::Page, "j shift-k 1"),
@@ -1099,7 +1106,7 @@ mod tests {
             [Outcome::Pass; 4]
         );
         assert_eq!(vim.mode(), Mode::Command);
-        assert_eq!(Mode::Command.label(), "COMMAND");
+        assert_eq!(Mode::Command.label(), "Command");
         assert_eq!(
             press(&mut vim, Region::Command, "tab enter"),
             [

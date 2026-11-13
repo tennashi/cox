@@ -80,8 +80,9 @@ use crate::ui::icons::{Icon, app_icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
-    ACCENT, ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAINT, FOREGROUND, GAP,
-    GROUND, HOVER, LINK, RAISED, SELECTED, SURFACE, UI_FONT, chat_color,
+    ACCENT, ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, CARD_INNER_RADIUS, CARD_RADIUS, DIM,
+    DISABLED, FAINT, FOCUSED_EDGE, FOREGROUND, GAP, GROUND, HOVER, LINK, RAISED, SELECTED, SURFACE,
+    UI_FONT, chat_color,
 };
 use crate::ui::{card, tip};
 use crate::vim::hints::{self, Hinted as _, Part};
@@ -480,6 +481,10 @@ pub struct Workspace {
     list: vim::Picker,
     /// The line at the window's foot that Vim's `:` and `/` open.
     line: Entity<crate::vim::line::Line>,
+    /// What the stage's card and the chat's hold, for the edge of the one
+    /// with the keyboard.
+    stage_card: FocusHandle,
+    chat_card: FocusHandle,
     /// Show the chat of a stage's tab that the human asks a stage to.
     shows_chats: Vec<Subscription>,
     _from_daemon: Task<()>,
@@ -566,6 +571,8 @@ impl Workspace {
             rail: vim::Picker::new(cx),
             list: vim::Picker::new(cx),
             line: cx.new(|cx| crate::vim::line::Line::new(window, cx)),
+            stage_card: cx.focus_handle(),
+            chat_card: cx.focus_handle(),
             shows_chats: Vec::new(),
             _from_daemon: heard,
         }
@@ -2401,6 +2408,7 @@ impl Workspace {
         };
         card()
             .debug_selector(|| "chat-panel".to_owned())
+            .track_focus(&self.chat_card)
             .relative()
             .child(hints::part(Part::Chat))
             .w(px(PANEL_WIDTH))
@@ -2456,6 +2464,7 @@ impl Workspace {
                     .child(body)
                     .children(self.switching.then(|| self.render_list(window, cx))),
             )
+            .children(keys_edge(&self.chat_card, window, cx))
     }
 
     /// The button at the head of the panel that sets the goal of the chat
@@ -3179,13 +3188,28 @@ impl Focusable for Workspace {
     }
 }
 
-impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The parts mark again where they are drawn, for a region dragged.
-        region::forget_marks();
-        hints::forget_marks(window);
-        // The stage of the chat shown, or an empty card until it has one.
-        let stage = card()
+/// A lighter edge over the part `card` tracks, the rail, the stage's card
+/// or the chat's, while it holds the keyboard and Vim's keys, which move
+/// the keyboard between them, are on. It lies over what the part shows, a
+/// page's picture among it, inside a card's own edge.
+fn keys_edge(card: &FocusHandle, window: &Window, cx: &App) -> Option<Div> {
+    (crate::vim::mode(cx).is_some() && card.contains_focused(window, cx)).then(|| {
+        div()
+            .debug_selector(|| "keys-edge".to_owned())
+            .absolute()
+            .inset_0()
+            .rounded(px(CARD_INNER_RADIUS))
+            .border_1()
+            .border_color(rgb(FOCUSED_EDGE))
+    })
+}
+
+impl Workspace {
+    /// The stage of the chat shown, or an empty card until it has one.
+    fn render_stage(&self, window: &Window, cx: &App) -> Div {
+        card()
+            .track_focus(&self.stage_card)
+            .relative()
             .flex_1()
             .min_w_0()
             .h_full()
@@ -3194,7 +3218,17 @@ impl Render for Workspace {
                     .debug_selector(|| "stage-panel".to_owned())
                     .child(stage.view.clone()),
                 None => card,
-            });
+            })
+            .children(keys_edge(&self.stage_card, window, cx))
+    }
+}
+
+impl Render for Workspace {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The parts mark again where they are drawn, for a region dragged.
+        region::forget_marks();
+        hints::forget_marks(window);
+        let stage = self.render_stage(window, cx);
         let chat = if self.folded {
             self.render_folded(cx).into_any_element()
         } else {
@@ -3258,7 +3292,17 @@ impl Render for Workspace {
                             .h_full()
                             .flex_shrink_0()
                             .child(hints::part(Part::Rail))
-                            .child(self.render_rail(window, cx)),
+                            .child(self.render_rail(window, cx))
+                            .children(keys_edge(&self.rail.focus, window, cx).map(|edge| {
+                                // The rail is not a card: its edge is drawn
+                                // as far in as the cards are from the
+                                // window's edges.
+                                edge.top(px(GAP))
+                                    .bottom(px(GAP))
+                                    .left(px(GAP))
+                                    .right(px(GAP))
+                                    .rounded(px(CARD_RADIUS))
+                            })),
                     )
                     // The stage, and the chat at its right, as cards on the
                     // ground the rail is on.

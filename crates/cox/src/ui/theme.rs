@@ -50,6 +50,8 @@ pub const SELECTED: u32 = 0x2a_2a2f;
 pub const BORDER: u32 = 0x2c_2c31;
 /// The edge of what floats over the rest, such as a menu.
 pub const BORDER_STRONG: u32 = 0x36_363b;
+/// The edge of the card that has the keyboard.
+pub const FOCUSED_EDGE: u32 = 0x5a_5a61;
 
 /// Text.
 pub const FOREGROUND: u32 = 0xe4_e4e6;

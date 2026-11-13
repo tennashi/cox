@@ -228,11 +228,11 @@ impl Browser {
     }
 
     /// Draws each label over the hint of its id, of those listed last, in
-    /// place of what was drawn before.
-    pub fn show_hints(&self, labels: &[(u32, String)]) {
+    /// place of what was drawn before, styled by the CSS `look`.
+    pub fn show_hints(&self, labels: &[(u32, String)], look: &str) {
         evaluate(
             &self.shared,
-            format!("coxVim.show({})", json!(labels)),
+            format!("coxVim.show({}, {})", json!(labels), json!(look)),
             |_| {},
         );
     }

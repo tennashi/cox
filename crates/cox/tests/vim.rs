@@ -64,7 +64,7 @@ fn held(cx: &mut VisualTestContext) -> String {
 fn the_window_s_foot_shows_the_mode_as_the_keys_change_it(cx: &mut TestAppContext) {
     let (workspace, cx) = open_window(cx, "status");
     keys::press(cx, &workspace, "secondary-n");
-    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert_eq!(shown_mode(cx), Some("Insert"));
     let foot = cx
         .debug_bounds("vim-status")
         .expect("the status line is drawn");
@@ -78,18 +78,42 @@ fn the_window_s_foot_shows_the_mode_as_the_keys_change_it(cx: &mut TestAppContex
     );
 
     keys::press(cx, &workspace, "escape");
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
     keys::press(cx, &workspace, "f");
-    assert_eq!(shown_mode(cx), Some("HINT"));
+    assert_eq!(shown_mode(cx), Some("Hint"));
     keys::press(cx, &workspace, "escape");
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
 
     keys::press(cx, &workspace, ":");
-    assert_eq!(shown_mode(cx), Some("COMMAND"));
+    assert_eq!(shown_mode(cx), Some("Command"));
     let line = cx.debug_bounds("vim-line").expect("the line is drawn");
     assert_eq!(line, foot, "the line takes the status line's place");
     keys::press(cx, &workspace, "escape");
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
+}
+
+#[gpui::test]
+fn the_input_shows_its_caret_only_while_keys_type(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "caret");
+    keys::press(cx, &workspace, "secondary-n");
+    assert!(cx.update(|_, cx| cox::vim::types(cx)), "insert mode types");
+    keys::press(cx, &workspace, "escape");
+    assert!(
+        !cx.update(|_, cx| cox::vim::types(cx)),
+        "normal mode does not"
+    );
+    keys::press(cx, &workspace, ":");
+    assert!(cx.update(|_, cx| cox::vim::types(cx)), "the line types");
+    keys::press(cx, &workspace, "escape i");
+    assert!(
+        cx.update(|_, cx| cox::vim::types(cx)),
+        "i goes back to typing"
+    );
+    cx.update(|_, cx| cox::vim::turn(false, cx));
+    assert!(
+        cx.update(|_, cx| cox::vim::types(cx)),
+        "without Vim, keys type"
+    );
 }
 
 #[gpui::test]
@@ -139,11 +163,11 @@ fn a_new_chat_types_at_once_and_normal_mode_types_nothing(cx: &mut TestAppContex
 
     keys::press(cx, &workspace, "secondary-n h e l l o");
     assert_eq!(keys::shown_input(cx, &workspace), "hello");
-    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert_eq!(shown_mode(cx), Some("Insert"));
 
     keys::press(cx, &workspace, "escape j k 0 x space enter backspace");
     assert_eq!(keys::shown_input(cx, &workspace), "hello");
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
 }
 
 #[gpui::test]
@@ -159,7 +183,7 @@ fn i_a_and_their_capitals_type_where_vim_does(cx: &mut TestAppContext) {
     assert_eq!(keys::shown_input(cx, &workspace), "xhellozy");
     keys::press(cx, &workspace, "left i w");
     assert_eq!(keys::shown_input(cx, &workspace), "xhellowzy");
-    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert_eq!(shown_mode(cx), Some("Insert"));
 }
 
 #[gpui::test]
@@ -174,7 +198,7 @@ fn escape_never_stops_the_agent_and_control_c_in_normal_mode_does(cx: &mut TestA
 
     keys::press(cx, &workspace, "escape");
     go_on(cx, &workspace);
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
     assert_eq!(agent_state(cx, &view), State::Busy, "escape in insert mode");
 
     keys::press(cx, &workspace, "escape");
@@ -296,7 +320,7 @@ fn the_rail_chooses_a_project_and_opens_a_chat_in_it(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "g g enter");
     assert_eq!(chosen(cx, &workspace), 0);
     assert!(in_part(cx, "Conversation"));
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
 
     keys::press(cx, &workspace, "ctrl-w h j l");
     assert_eq!(chosen(cx, &workspace), 1);
@@ -311,7 +335,7 @@ fn the_rail_chooses_a_project_and_opens_a_chat_in_it(cx: &mut TestAppContext) {
     let chats = workspace.read_with(cx, |workspace, _| workspace.chats(1).count());
     assert_eq!(chats, 2);
     assert_eq!(chosen(cx, &workspace), 1);
-    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert_eq!(shown_mode(cx), Some("Insert"));
     keys::press(cx, &workspace, "h i");
     assert_eq!(keys::shown_input(cx, &workspace), "hi");
 }
@@ -331,7 +355,7 @@ fn control_w_goes_round_the_rail_and_the_chat(cx: &mut TestAppContext) {
     assert!(in_part(cx, "Conversation"));
     keys::press(cx, &workspace, "ctrl-w h ctrl-w l");
     assert!(in_part(cx, "Conversation"));
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
     assert_eq!(keys::shown_input(cx, &workspace), "");
 }
 
@@ -361,7 +385,7 @@ fn the_list_of_chats_shows_one_with_the_keys(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "ctrl-w k o");
     let chats = workspace.read_with(cx, |workspace, _| workspace.chats(0).count());
     assert_eq!(chats, 3);
-    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert_eq!(shown_mode(cx), Some("Insert"));
 }
 
 #[gpui::test]
@@ -778,7 +802,7 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
 
     keys::press(cx, &workspace, "secondary-n h i escape");
     assert_eq!(keys::shown_input(cx, &workspace), "hi");
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
 
     keys::press(cx, &workspace, "ctrl-w h");
     assert!(in_part(cx, "Page"));
@@ -786,35 +810,35 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
     assert!(in_part(cx, "Terminal"));
     assert_eq!(
         shown_mode(cx),
-        Some("NORMAL"),
+        Some("Normal"),
         "come to by keys, as Neovim's terminal"
     );
     let terminal = terminals.borrow().last().cloned().expect("a terminal");
     shows(cx, &terminal, "300");
 
     keys::press(cx, &workspace, "i");
-    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert_eq!(shown_mode(cx), Some("Insert"));
     keys::press(cx, &workspace, "e c h o enter");
     shows(cx, &terminal, "echo\necho");
     keys::press(cx, &workspace, "ctrl-\\ ctrl-n");
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
     keys::press(cx, &workspace, "g g");
     assert!(terminal.read_with(cx, |terminal, _| terminal.scrolled_back()) > 0);
 
     keys::press(cx, &workspace, "ctrl-w l");
     assert!(in_part(cx, "Conversation"));
     assert_eq!(keys::shown_input(cx, &workspace), "hi");
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
 
     keys::press(cx, &workspace, "ctrl-w h");
     assert!(
         in_part(cx, "Terminal"),
         "the stage shows the terminal still"
     );
-    assert_eq!(shown_mode(cx), Some("NORMAL"), "coming back by keys");
+    assert_eq!(shown_mode(cx), Some("Normal"), "coming back by keys");
     keys::press(cx, &workspace, ": escape");
     assert!(in_part(cx, "Terminal"));
-    assert_eq!(shown_mode(cx), Some("NORMAL"), "back from the line");
+    assert_eq!(shown_mode(cx), Some("Normal"), "back from the line");
 
     keys::press(cx, &workspace, ": q enter");
     assert!(in_part(cx, "Page"), "the terminal closed");
@@ -822,12 +846,12 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
     let chats = workspace.read_with(cx, |workspace, _| workspace.chats(0).count());
     assert_eq!(chats, 2);
     assert!(in_part(cx, "Conversation"));
-    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert_eq!(shown_mode(cx), Some("Insert"));
     assert_eq!(keys::shown_input(cx, &workspace), "");
 
     keys::press(cx, &workspace, "escape : g o a l enter");
     assert!(in_part(cx, "Goal"));
-    assert_eq!(shown_mode(cx), Some("INSERT"), "before a key is typed");
+    assert_eq!(shown_mode(cx), Some("Insert"), "before a key is typed");
 }
 
 #[gpui::test]
@@ -896,11 +920,11 @@ fn the_settings_turn_the_keys_on_and_off_at_once(cx: &mut TestAppContext) {
 
     choose_on_the_settings(cx, &workspace, "vim-on");
     assert_eq!(kept_vim(), Some(serde_json::Value::Bool(true)));
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
     keys::press(cx, &workspace, "i h i escape");
     go_on(cx, &workspace);
     assert_eq!(keys::shown_input(cx, &workspace), "hi");
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
     assert_eq!(
         agent_state(cx, &view),
         State::Busy,
@@ -1498,7 +1522,7 @@ fn colon_opens_the_line_whose_list_narrows_and_escape_closes_it(cx: &mut TestApp
     assert!(shown.open);
     assert_eq!(shown.fits.len(), cox::vim::ex::COMMANDS.len());
     assert!(in_part(cx, "CommandLine"));
-    assert_eq!(shown_mode(cx), Some("COMMAND"));
+    assert_eq!(shown_mode(cx), Some("Command"));
 
     keys::press(cx, &workspace, "s t");
     assert_eq!(line(cx, &workspace).fits[0], "stop");
@@ -1515,7 +1539,7 @@ fn colon_opens_the_line_whose_list_narrows_and_escape_closes_it(cx: &mut TestApp
     keys::press(cx, &workspace, "escape");
     assert!(!line(cx, &workspace).open);
     assert!(in_part(cx, "Conversation"));
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
     assert_eq!(keys::shown_input(cx, &workspace), "");
     let chats = workspace.read_with(cx, |workspace, _| workspace.chats(0).count());
     assert_eq!(chats, 1, "escape ran nothing");
@@ -1531,7 +1555,7 @@ fn enter_runs_new_settings_and_an_action_by_its_name(cx: &mut TestAppContext) {
 
     keys::press(cx, &workspace, ": n e w enter");
     assert_eq!(chats(cx), 2);
-    assert_eq!(shown_mode(cx), Some("INSERT"), "a new chat types at once");
+    assert_eq!(shown_mode(cx), Some("Insert"), "a new chat types at once");
 
     keys::press(cx, &workspace, "escape : s e t enter");
     assert!(in_part(cx, "Settings"));
@@ -1693,7 +1717,7 @@ fn the_line_says_so_of_a_command_it_does_not_know(cx: &mut TestAppContext) {
     let shown = line(cx, &workspace);
     assert!(!shown.open);
     assert_eq!(shown.said.as_deref(), Some("Not a command: foo"));
-    assert_eq!(shown_mode(cx), Some("NORMAL"));
+    assert_eq!(shown_mode(cx), Some("Normal"));
     keys::press(cx, &workspace, ":");
     assert_eq!(line(cx, &workspace).said, None);
 }
@@ -2006,7 +2030,7 @@ fn a_field_s_hint_gives_it_the_keyboard_in_insert_mode(cx: &mut TestAppContext) 
         .map(|(label, _)| label)
         .expect("a hint over the input");
     type_label(cx, &workspace, &field);
-    assert_eq!(shown_mode(cx), Some("INSERT"));
+    assert_eq!(shown_mode(cx), Some("Insert"));
     assert!(in_part(cx, "LineInput"));
     keys::press(cx, &workspace, "h i");
     assert_eq!(keys::shown_input(cx, &workspace), "hi");
@@ -2309,4 +2333,67 @@ fn the_address_line_s_list_takes_its_keys_with_vim_on(cx: &mut TestAppContext) {
             "https://github.com/zed-industries/zed".to_owned()
         )]
     );
+}
+
+#[gpui::test]
+fn the_part_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
+    use gpui::AppContext as _;
+
+    let built: fake_daemon::Built = Rc::new(move |_, _, cx| {
+        let page = cx.new(|cx| FakePage {
+            focus: cx.focus_handle(),
+            asked: Vec::new(),
+            context: "Page",
+        });
+        cox::chat::view::StageView {
+            view: page.clone().into(),
+            panel: cx.new(|_| cox::ui::Panel::default()),
+            by_keys: Rc::new(move |tabs, window, cx| {
+                if tabs == Tabs::Focus {
+                    window.focus(&page.read(cx).focus);
+                }
+            }),
+        }
+    });
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let (workspace, cx) = keys::open_window_on(
+        cx,
+        scratch("keys-edge"),
+        FakeStages {
+            built: Some(built),
+            ..FakeStages::default()
+        },
+    );
+    // GPUI keeps where a selector was drawn once it is no longer drawn, so
+    // the test reads which card the one edge was drawn in last.
+    let edge_in = |cx: &mut VisualTestContext| {
+        let edge = cx.debug_bounds("keys-edge")?;
+        let stage = cx.debug_bounds("stage-panel")?;
+        if edge.right() <= stage.left() {
+            return Some("rail");
+        }
+        ["stage-panel", "chat-panel"].into_iter().find(|card| {
+            cx.debug_bounds(card)
+                .is_some_and(|bounds| bounds.contains(&edge.center()))
+        })
+    };
+
+    keys::press(cx, &workspace, "secondary-n escape");
+    assert_eq!(
+        edge_in(cx),
+        Some("chat-panel"),
+        "the chat's input has the keyboard"
+    );
+    keys::press(cx, &workspace, "ctrl-w h");
+    assert!(in_part(cx, "Page"));
+    assert_eq!(
+        edge_in(cx),
+        Some("stage-panel"),
+        "ctrl-w h went to the stage"
+    );
+    keys::press(cx, &workspace, "ctrl-w l");
+    assert_eq!(edge_in(cx), Some("chat-panel"), "ctrl-w l came back");
+    keys::press(cx, &workspace, "ctrl-w w");
+    assert!(in_part(cx, "Rail"));
+    assert_eq!(edge_in(cx), Some("rail"), "ctrl-w w went to the rail");
 }

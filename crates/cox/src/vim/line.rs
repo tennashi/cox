@@ -13,7 +13,7 @@
 
 use gpui::{
     Action, AnyElement, App, Context, Entity, FocusHandle, Focusable as _, Subscription, Window,
-    actions, div, prelude::*, px, rgb,
+    actions, div, prelude::*, px, rgb, rgba,
 };
 
 use super::ex::{self, Does, Ex, Fit, Names};
@@ -21,17 +21,20 @@ use super::keymap::Prompt;
 use super::search::{Direction, Find, Search};
 use super::{Leave, Mode, Status};
 use crate::ui::input::{Blurred, LineInput};
+use crate::ui::menu;
 use crate::ui::theme::{
-    ACCENT, ASKING, BORDER, BORDER_STRONG, CODE_FONT, DIM, FAILED, FOREGROUND, GROUND, LINK,
-    RAISED, SELECTED, SURFACE,
+    ACCENT, ASKING, BORDER, BORDER_STRONG, FAILED, FAINT, GAP, LINK, SELECTED, SURFACE,
 };
 
 pub const KEY_CONTEXT: &str = "CommandLine";
 
 /// How many rows of the list over the line show at once.
 const ROWS: usize = 10;
-const ROW_HEIGHT: f32 = 26.;
 const LINE_HEIGHT: f32 = 30.;
+/// How tall the pill of the mode is.
+const PILL_HEIGHT: f32 = 20.;
+/// How wide the list over the line is.
+const FITS_WIDTH: f32 = 480.;
 
 /// Opens the line, for what `prompt` says.
 #[derive(Clone, Debug, PartialEq, Eq, Action)]
@@ -342,34 +345,31 @@ impl Line {
             .map(|(place, fit)| {
                 div()
                     .debug_selector(move || format!("vim-fit-{place}"))
-                    .h(px(ROW_HEIGHT))
-                    .px(px(12.))
+                    .h(px(menu::ROW_HEIGHT))
+                    .px(px(10.))
                     .flex()
                     .items_center()
-                    .gap(px(16.))
+                    .gap_4()
+                    .rounded(px(menu::ROW_RADIUS))
+                    .whitespace_nowrap()
                     .when(chosen == Some(place), |row| row.bg(rgb(SELECTED)))
+                    .child(div().w(px(120.)).flex_shrink_0().child(fit.shown.clone()))
                     .child(
                         div()
-                            .w(px(160.))
-                            .flex_shrink_0()
-                            .font_family(CODE_FONT)
-                            .text_color(rgb(FOREGROUND))
-                            .child(fit.shown.clone()),
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(rgb(FAINT))
+                            .child(fit.doc.clone()),
                     )
-                    .child(div().text_color(rgb(DIM)).child(fit.doc.clone()))
             });
         Some(
-            div()
+            menu::menu()
                 .debug_selector(|| "vim-fits".to_owned())
                 .absolute()
                 .bottom(px(LINE_HEIGHT))
-                .left_0()
-                .right_0()
-                .py(px(4.))
-                .bg(rgb(RAISED))
-                .border_t_1()
-                .border_color(rgb(BORDER_STRONG))
-                .text_size(px(13.))
+                .left(px(GAP))
+                .w(px(FITS_WIDTH))
                 .children(rows)
                 .into_any_element(),
         )
@@ -377,7 +377,7 @@ impl Line {
 
     fn render_status(&self, status: Status) -> impl IntoElement + use<> {
         let color = match status.mode {
-            Mode::Normal => DIM,
+            Mode::Normal => FAINT,
             Mode::Insert => ACCENT,
             Mode::Hint => ASKING,
             Mode::Command => LINK,
@@ -385,20 +385,36 @@ impl Line {
         div()
             .debug_selector(|| "vim-status".to_owned())
             .h(px(LINE_HEIGHT))
-            .px(px(12.))
+            .px(px(GAP))
             .flex()
             .items_center()
-            .gap(px(16.))
-            .bg(rgb(GROUND))
-            .border_t_1()
-            .border_color(rgb(BORDER))
-            .font_family(CODE_FONT)
+            .gap(px(12.))
             .text_size(px(12.))
             .child(
+                // The mode, as a pill with a dot in its color, as the chat's
+                // agent is shown over its input.
                 div()
                     .flex_shrink_0()
-                    .text_color(rgb(color))
-                    .child(format!("-- {} --", status.mode.label())),
+                    .h(px(PILL_HEIGHT))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(SURFACE))
+                    .child(
+                        div()
+                            .size(px(9.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(rgba(color << 8 | 0x1e))
+                            .child(div().size(px(5.)).rounded_full().bg(rgb(color))),
+                    )
+                    .child(status.mode.label()),
             )
             .child(
                 div()
@@ -411,7 +427,7 @@ impl Line {
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_color(rgb(DIM))
+                    .text_color(rgb(FAINT))
                     .child(status.held),
             )
     }
@@ -441,17 +457,25 @@ impl Render for Line {
                 div()
                     .debug_selector(|| "vim-line".to_owned())
                     .h(px(LINE_HEIGHT))
-                    .px(px(12.))
+                    .px(px(GAP))
                     .flex()
                     .items_center()
-                    .gap(px(4.))
-                    .bg(rgb(SURFACE))
-                    .border_t_1()
-                    .border_color(rgb(BORDER_STRONG))
-                    .font_family(CODE_FONT)
-                    .text_size(px(13.))
-                    .child(div().text_color(rgb(ACCENT)).child(mark))
-                    .child(div().flex_1().min_w_0().child(self.input.clone())),
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(PILL_HEIGHT + 4.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(rgb(BORDER_STRONG))
+                            .bg(rgb(SURFACE))
+                            .text_size(px(13.))
+                            .child(div().text_color(rgb(FAINT)).child(mark))
+                            .child(div().flex_1().min_w_0().child(self.input.clone())),
+                    ),
             )
     }
 }

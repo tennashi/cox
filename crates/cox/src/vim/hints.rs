@@ -17,6 +17,7 @@ use gpui::{
 };
 
 use super::Region;
+use crate::ui::theme::{ASKING, GROUND, UI_FONT};
 
 /// The letters labels are made of, those under the fingers first.
 const LETTERS: &[char] = &[
@@ -535,7 +536,14 @@ pub fn overlay(window: &Window) -> Option<AnyElement> {
     )
 }
 
-/// A label, as the pages draw theirs, at the top left of what it is over.
+/// How tall a label is, how big its letters, and how far they sit from
+/// its ends: here and on the pages alike.
+const LABEL_HEIGHT: f32 = 16.;
+const LABEL_TEXT: f32 = 11.;
+const LABEL_PAD: f32 = 5.;
+
+/// A label, at the top left of what it is over, drawn as the first button
+/// of a card that asks the human is: it too waits for them to pick it.
 fn tag(label: &str, over: Bounds<Pixels>) -> AnyElement {
     let selector = format!("hint-{label}");
     div()
@@ -543,18 +551,30 @@ fn tag(label: &str, over: Bounds<Pixels>) -> AnyElement {
         .absolute()
         .left(over.origin.x)
         .top(over.origin.y)
-        .px(px(2.))
-        .border_1()
-        .border_color(rgb(0x00aa_8800))
-        .rounded(px(2.))
-        .bg(rgb(0x00ff_dd00))
-        .text_color(rgb(0x0000_0000))
-        .font_family(crate::ui::theme::CODE_FONT)
-        .font_weight(gpui::FontWeight::BOLD)
-        .text_size(px(11.))
-        .line_height(px(13.))
-        .child(label.to_uppercase())
+        .h(px(LABEL_HEIGHT))
+        .px(px(LABEL_PAD))
+        .flex()
+        .items_center()
+        .rounded_full()
+        .shadow_sm()
+        .bg(rgb(ASKING))
+        .text_color(rgb(GROUND))
+        .font_family(UI_FONT)
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_size(px(LABEL_TEXT))
+        .line_height(px(LABEL_HEIGHT))
+        .child(label.to_owned())
         .into_any_element()
+}
+
+/// The style of a label on a page, in CSS, as [`tag`] draws one here.
+#[must_use]
+pub fn page_look() -> String {
+    format!(
+        "height:{LABEL_HEIGHT}px;padding:0 {LABEL_PAD}px;border-radius:{LABEL_HEIGHT}px;\
+         box-shadow:0 1px 2px rgba(0,0,0,.35);background:#{ASKING:06x};color:#{GROUND:06x};\
+         font:600 {LABEL_TEXT}px/{LABEL_HEIGHT}px system-ui,-apple-system,sans-serif"
+    )
 }
 
 #[cfg(test)]

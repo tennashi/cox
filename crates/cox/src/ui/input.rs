@@ -1260,6 +1260,7 @@ impl Element for LineElement {
                 placeholder.paint(prepainted.origin, window, cx);
             }
             if focus_handle.is_focused(window)
+                && crate::vim::types(cx)
                 && let Some(cursor) = prepainted.cursor.take()
             {
                 window.paint_quad(cursor);
