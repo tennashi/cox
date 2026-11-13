@@ -128,7 +128,7 @@ use crate::stage::terminal::{Program, Running, Terminal};
 use crate::stage::tree::{Chosen, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
 use crate::ui::Panel;
-use crate::ui::theme::{BORDER, CARD_INNER_RADIUS};
+use crate::ui::theme::BORDER;
 
 actions!(
     stage,
@@ -878,12 +878,11 @@ impl Stage {
 }
 
 impl Render for Stage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The tree of the project's files is beside the tab of a file,
         // unless it is folded.
         let beside =
             self.tabs.shown().is_some_and(|tab| tab.content.is_file()) && !tree::is_folded(cx);
-        let picked = crate::vim::mode(cx).is_some() && self.has_focus(window, cx);
         div()
             .relative()
             .size_full()
@@ -914,11 +913,7 @@ impl Render for Stage {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .children(self.tabs.shown().map(|tab| tab.content.view()))
-                            .when(picked, |tab| {
-                                tab.relative()
-                                    .child(crate::ui::picked(0.).rounded_br(px(CARD_INNER_RADIUS)))
-                            }),
+                            .children(self.tabs.shown().map(|tab| tab.content.view())),
                     ),
             )
     }

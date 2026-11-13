@@ -80,9 +80,9 @@ use crate::ui::icons::{Icon, app_icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::paths::shortened;
 use crate::ui::theme::{
-    ACCENT, ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, CARD_INNER_RADIUS, DIM, DISABLED, FAINT,
-    FOCUSED_EDGE, FOREGROUND, GAP, GROUND, HOVER, LINK, RAISED, SELECTED, SURFACE, UI_FONT,
-    chat_color,
+    ACCENT, ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, CARD_INNER_RADIUS, CARD_RADIUS, DIM,
+    DISABLED, FAINT, FOCUSED_EDGE, FOREGROUND, GAP, GROUND, HOVER, LINK, RAISED, SELECTED, SURFACE,
+    UI_FONT, chat_color,
 };
 use crate::ui::{card, tip};
 use crate::vim::hints::{self, Hinted as _, Part};
@@ -3188,10 +3188,10 @@ impl Focusable for Workspace {
     }
 }
 
-/// A lighter edge over the card `card` tracks, while it holds the keyboard
-/// and Vim's keys, which move the keyboard between the cards, are on. It
-/// lies over what the card shows, a page's picture among it, inside the
-/// card's own edge.
+/// A lighter edge over the part `card` tracks, the rail, the stage's card
+/// or the chat's, while it holds the keyboard and Vim's keys, which move
+/// the keyboard between them, are on. It lies over what the part shows, a
+/// page's picture among it, inside a card's own edge.
 fn keys_edge(card: &FocusHandle, window: &Window, cx: &App) -> Option<Div> {
     (crate::vim::mode(cx).is_some() && card.contains_focused(window, cx)).then(|| {
         div()
@@ -3292,7 +3292,17 @@ impl Render for Workspace {
                             .h_full()
                             .flex_shrink_0()
                             .child(hints::part(Part::Rail))
-                            .child(self.render_rail(window, cx)),
+                            .child(self.render_rail(window, cx))
+                            .children(keys_edge(&self.rail.focus, window, cx).map(|edge| {
+                                // The rail is not a card: its edge is drawn
+                                // as far in as the cards are from the
+                                // window's edges.
+                                edge.top(px(GAP))
+                                    .bottom(px(GAP))
+                                    .left(px(GAP))
+                                    .right(px(GAP))
+                                    .rounded(px(CARD_RADIUS))
+                            })),
                     )
                     // The stage, and the chat at its right, as cards on the
                     // ground the rail is on.

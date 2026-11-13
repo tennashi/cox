@@ -2336,7 +2336,7 @@ fn the_address_line_s_list_takes_its_keys_with_vim_on(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_card_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
+fn the_part_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
     use gpui::AppContext as _;
 
     let built: fake_daemon::Built = Rc::new(move |_, _, cx| {
@@ -2367,10 +2367,14 @@ fn the_card_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
     // GPUI keeps where a selector was drawn once it is no longer drawn, so
     // the test reads which card the one edge was drawn in last.
     let edge_in = |cx: &mut VisualTestContext| {
-        let edge = cx.debug_bounds("keys-edge")?.center();
+        let edge = cx.debug_bounds("keys-edge")?;
+        let stage = cx.debug_bounds("stage-panel")?;
+        if edge.right() <= stage.left() {
+            return Some("rail");
+        }
         ["stage-panel", "chat-panel"].into_iter().find(|card| {
             cx.debug_bounds(card)
-                .is_some_and(|bounds| bounds.contains(&edge))
+                .is_some_and(|bounds| bounds.contains(&edge.center()))
         })
     };
 
@@ -2389,4 +2393,7 @@ fn the_card_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
     );
     keys::press(cx, &workspace, "ctrl-w l");
     assert_eq!(edge_in(cx), Some("chat-panel"), "ctrl-w l came back");
+    keys::press(cx, &workspace, "ctrl-w w");
+    assert!(in_part(cx, "Rail"));
+    assert_eq!(edge_in(cx), Some("rail"), "ctrl-w w went to the rail");
 }

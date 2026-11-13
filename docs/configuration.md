@@ -130,8 +130,9 @@ clicked, or, if it is an input, gets the keyboard in insert mode. Esc
 takes the hints away. What is scrolled out of sight, or under the
 settings, a project's card or a menu, has no hint.
 
-A ring shows where the keyboard is: round the stage's tab, or round the
-row selected on the rail or in the list.
+A lighter edge shows which part has the keyboard: the rail, the stage
+or the chat. On the rail and in the list of chats, a ring marks the row
+selected.
 
 **The chat.**
 
