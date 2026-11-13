@@ -13,8 +13,10 @@ use gpui::{
 };
 
 use super::file::Spans;
-use super::{Code, Laid, PADDING, Place, Row};
-use crate::ui::theme::{ACCENT_GROUND, CODE_FONT, DISABLED, FOREGROUND, LINK, SELECTION};
+use super::{Code, Follow, Laid, PADDING, Place, Row};
+use crate::ui::theme::{
+    ACCENT, ACCENT_GROUND, CODE_FONT, DISABLED, FOREGROUND, HOVER, LINK, SELECTION,
+};
 
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.4;
@@ -73,6 +75,9 @@ pub(super) struct Text {
 pub(super) struct Painted {
     /// The marked lines', under everything.
     marked: Vec<Bounds<Pixels>>,
+    /// The line of the cursor Vim's keys move, under the text, with a bar
+    /// beside its number.
+    cursor: Option<Bounds<Pixels>>,
     /// Under the text, within it.
     selection: Vec<Bounds<Pixels>>,
     /// The name the server says something of, under the text.
@@ -128,17 +133,8 @@ impl Text {
             cell_width,
             rows: Vec::new(),
         };
-        // Once the tab knows its size, the lines it is shown at come into
-        // sight, and the scroll stays within the text.
-        let mut scroll = code.look.scroll;
-        if let Some(line) = code.look.reveal {
-            scroll.y = line_height * line as f32 - text_bounds.size.height * REVEAL_AT;
-        }
-        let most = code.most_scroll(&laid);
-        let scroll = point(
-            scroll.x.clamp(px(0.), most.x),
-            scroll.y.clamp(px(0.), most.y),
-        );
+        let vim = crate::vim::mode(cx).is_some();
+        let (scroll, cursor) = code.scroll_and_cursor(&laid, vim);
         let top = text_bounds.origin.y + px(PADDING) - scroll.y;
         let left = text_bounds.origin.x + px(PADDING) - scroll.x;
         let first = ((scroll.y - px(PADDING)).max(px(0.)) / line_height) as usize;
@@ -157,6 +153,13 @@ impl Text {
             line_height,
             ..Painted::default()
         };
+        painted.cursor = cursor.map(|line| {
+            let y = top + line_height * line as f32;
+            Bounds::new(
+                point(bounds.origin.x, y),
+                size(bounds.size.width, line_height),
+            )
+        });
         for line in first..after.min(lines) {
             let y = top + line_height * line as f32;
             let shown = Shown::of(&code.file.buffer.line(line));
@@ -177,7 +180,11 @@ impl Text {
                     .push(Bounds::new(point(left + from, y), size(width, line_height)));
             }
             let number = (line + 1).to_string();
-            let color = if is_marked { FOREGROUND } else { NUMBER };
+            let color = if is_marked || cursor == Some(line) {
+                FOREGROUND
+            } else {
+                NUMBER
+            };
             let number = shape(
                 &number,
                 &[run(number.len(), (color, PLAIN.1, PLAIN.2))],
@@ -195,13 +202,83 @@ impl Text {
         }
         (painted.hovered, painted.link) = code.names(&laid);
         self.code.update(cx, |code, _| {
-            code.look.reveal = None;
-            code.look.scroll = scroll;
-            code.look.laid = Some(laid);
+            code.look.laid_out(laid, scroll, cursor);
             code.file.highlighted.extend(highlighted);
         });
         painted
     }
+}
+
+impl Code {
+    /// How far the text is scrolled, laid out as `laid`, within it, and
+    /// the line of Vim's keys' cursor if they are on (`vim`).
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "line counts are far below what f32 keeps exactly"
+    )]
+    fn scroll_and_cursor(&self, laid: &Laid, vim: bool) -> (Point<Pixels>, Option<usize>) {
+        let (line_height, height) = (laid.line_height, laid.text.size.height);
+        let mut scroll = self.look.scroll;
+        if let Some(line) = self.look.reveal {
+            scroll.y = line_height * line as f32 - height * REVEAL_AT;
+        }
+        let cursor = self.look.reveal.or(self.look.cursor).filter(|_| vim);
+        if self.look.follow == Follow::Cursor
+            && let Some(line) = cursor
+        {
+            scroll.y = scrolled_to(line, scroll.y, line_height, height);
+        }
+        let most = self.most_scroll(laid);
+        let scroll = point(
+            scroll.x.clamp(px(0.), most.x),
+            scroll.y.clamp(px(0.), most.y),
+        );
+        let lines = self.file.buffer.lines();
+        let cursor = vim.then(|| kept_in_sight(cursor, scroll.y, line_height, height, lines));
+        (scroll, cursor)
+    }
+}
+
+/// How far the text scrolls down from `scroll` for `line`, `line_height`
+/// tall, to be in sight of `height`.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "line counts are far below what f32 keeps exactly"
+)]
+fn scrolled_to(line: usize, scroll: Pixels, line_height: Pixels, height: Pixels) -> Pixels {
+    let top = line_height * line as f32;
+    let bottom = top + line_height + px(PADDING * 2.);
+    if top < scroll {
+        top
+    } else if bottom > scroll + height {
+        bottom - height
+    } else {
+        scroll
+    }
+}
+
+/// `cursor`, or else the first line, kept among the lines wholly in
+/// sight of `height`, of `lines` `line_height` tall, scrolled `scroll`
+/// down.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the lines in sight are counted from a scroll that is not negative"
+)]
+fn kept_in_sight(
+    cursor: Option<usize>,
+    scroll: Pixels,
+    line_height: Pixels,
+    height: Pixels,
+    lines: usize,
+) -> usize {
+    let first = ((scroll - px(PADDING)) / line_height).ceil().max(0.) as usize;
+    let last = ((scroll - px(PADDING) + height) / line_height).floor() as usize;
+    let last = last
+        .saturating_sub(1)
+        .min(lines.saturating_sub(1))
+        .max(first);
+    cursor.map_or(first, |line| line.clamp(first, last))
 }
 
 /// The font the code is drawn in, its size, how wide a character of it
@@ -350,8 +427,15 @@ impl Element for Text {
             code.update(cx, |code, cx| code.link(event.modifiers.secondary(), cx));
         });
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            if let Some(line) = painted.cursor {
+                window.paint_quad(fill(line, rgb(HOVER)));
+            }
             for at in &painted.marked {
                 window.paint_quad(fill(*at, rgb(ACCENT_GROUND)));
+            }
+            if let Some(line) = painted.cursor {
+                let bar = Bounds::new(line.origin, size(px(2.), line.size.height));
+                window.paint_quad(fill(bar, rgb(ACCENT)));
             }
             for (origin, number) in &painted.numbers {
                 number.paint(*origin, line_height, window, cx).ok();

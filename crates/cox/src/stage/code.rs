@@ -67,6 +67,8 @@ use crate::stage::tab::{self, Shows, ShowsFile};
 use crate::ui::paths::shortened;
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
+use crate::vim::keymap::Motion;
+use crate::vim::{Definition, Move, Visual};
 
 actions!(
     code,
@@ -160,6 +162,61 @@ struct Look {
     selecting: bool,
     /// How the last frame laid the text out.
     laid: Option<Laid>,
+    /// The line, from 0, of the cursor Vim's keys move, once drawn with
+    /// them on.
+    cursor: Option<usize>,
+    /// The line whole lines are selected from to the cursor's, while
+    /// they are (`V`).
+    visual: Option<usize>,
+    /// Which of the cursor and the scroll the next frame keeps to.
+    follow: Follow,
+}
+
+/// What the next frame keeps to, of the cursor of Vim's keys and the
+/// scroll, which it brings the other in sight of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Follow {
+    /// The cursor moved by the keys: the text scrolls to it.
+    Cursor,
+    /// The text scrolled: the cursor moves into sight.
+    #[default]
+    Scroll,
+}
+
+impl Look {
+    /// Puts the cursor on `line`, and the selection of whole lines with
+    /// it, while they are selected.
+    fn put_cursor(&mut self, line: usize) {
+        self.cursor = Some(line);
+        if let Some(from) = self.visual {
+            self.selection = Some((
+                Place::new(from.min(line), 0),
+                Place::new(from.max(line) + 1, 0),
+            ));
+        }
+    }
+
+    /// Keeps how a frame laid the text out, as `laid`, scrolled `scroll`,
+    /// with the cursor of Vim's keys on `cursor`, if they are on.
+    fn laid_out(&mut self, laid: Laid, scroll: Point<Pixels>, cursor: Option<usize>) {
+        if let Some(line) = cursor {
+            self.put_cursor(line);
+        }
+        self.follow = Follow::Scroll;
+        self.reveal = None;
+        self.scroll = scroll;
+        self.laid = Some(laid);
+    }
+
+    /// Stops selecting whole lines, with the selection: answers whether
+    /// they were.
+    fn end_visual(&mut self) -> bool {
+        let was = self.visual.take().is_some();
+        if was {
+            self.selection = None;
+        }
+        was
+    }
 }
 
 /// Where the tab was: the file, what it marked and selected there, and
@@ -286,6 +343,13 @@ impl Code {
         }
     }
 
+    /// The line, from 0, of the cursor Vim's keys move, once drawn with
+    /// them on.
+    #[must_use]
+    pub fn cursor(&self) -> Option<usize> {
+        self.look.cursor
+    }
+
     /// What the server says of the name the mouse rests on, as Markdown,
     /// while it shows.
     #[must_use]
@@ -339,6 +403,7 @@ impl Code {
         if self.file.set_text(text) {
             // What was selected may be gone.
             self.look.selection = None;
+            self.look.visual = None;
             self.look.selecting = false;
             self.parse(cx);
             // What the server said of the text before may not hold.
@@ -497,6 +562,7 @@ impl Code {
         self.look.selection = visit.selection;
         self.look.scroll = visit.scroll;
         self.look.reveal = None;
+        self.look.visual = None;
         self.hover = None;
         self.notice = None;
         cx.notify();
@@ -534,7 +600,7 @@ impl Code {
     }
 
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        if self.menu.take().is_none() && self.hover.take().is_none() {
+        if !self.look.end_visual() && self.menu.take().is_none() && self.hover.take().is_none() {
             self.locations = None;
         }
         cx.notify();
@@ -667,6 +733,10 @@ impl Code {
         let Some(place) = self.place_at(event.position) else {
             return;
         };
+        self.look.visual = None;
+        if self.look.cursor.is_some() {
+            self.look.cursor = Some(place.line);
+        }
         let line = self.file.buffer.line(place.line);
         self.look.selection = Some(match event.click_count {
             1 => (place, place),
@@ -840,10 +910,34 @@ impl Code {
         })
     }
 
+    /// The line of the cursor Vim's keys move, with the file it is
+    /// from, as it goes to the agent when handed to the chat.
+    fn cursor_attachment(&self) -> Option<Attachment> {
+        let line = self.look.cursor?;
+        let lines = Lines {
+            first: line + 1,
+            last: line + 1,
+        };
+        let text = self.file.buffer.line(line).into_owned();
+        Some(crate::chat::hand::of_file(
+            &self.file.path,
+            Some(lines),
+            text,
+        ))
+    }
+
     /// Hands the text selected in the code to the chat shown, or with
-    /// nothing selected leaves the keys to what holds the part.
+    /// nothing selected the line of the cursor Vim's keys move, or else
+    /// leaves the keys to what holds the part.
     fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
-        if !crate::chat::hand::hand(self.selected_attachment(), cx) {
+        let attachment = match self.look.selection {
+            None => self.cursor_attachment(),
+            Some(_) => Some(self.selected_attachment()),
+        };
+        if attachment.is_some_and(|attachment| crate::chat::hand::hand(attachment, cx)) {
+            self.look.end_visual();
+            cx.notify();
+        } else {
             cx.propagate();
         }
     }
@@ -853,7 +947,93 @@ impl Code {
         if !text.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+        if self.look.end_visual() {
+            cx.notify();
+        }
     }
+
+    /// How many lines half the text in sight is, as last laid out.
+    fn half_page(&self) -> usize {
+        self.look.laid.as_ref().map_or(1, |laid| {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a count of lines in sight, not below 0"
+            )]
+            let half =
+                (f32::from(laid.text.size.height) / f32::from(laid.line_height) / 2.) as usize;
+            half.max(1)
+        })
+    }
+
+    /// Moves the cursor as Vim's keys ask, and scrolls with it.
+    fn move_by_keys(&mut self, motion: &Move, _: &mut Window, cx: &mut Context<Self>) {
+        let last = self.file.buffer.lines().saturating_sub(1);
+        let at = self.look.cursor.unwrap_or_else(|| self.in_sight().start);
+        let line = motion.moved(at, self.half_page(), last);
+        if matches!(motion.motion, Motion::HalfDown | Motion::HalfUp)
+            && let Some(laid) = &self.look.laid
+        {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "line counts are far below what f32 keeps exactly"
+            )]
+            let by = laid.line_height * (line as f32 - at as f32);
+            self.look.scroll.y = (self.look.scroll.y + by).max(px(0.));
+        }
+        self.hover = None;
+        self.menu = None;
+        self.look.put_cursor(line);
+        self.look.follow = Follow::Cursor;
+        cx.notify();
+    }
+
+    /// Starts selecting whole lines from the cursor's, or stops (`V`).
+    fn visual(&mut self, _: &Visual, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.look.end_visual() {
+            let line = self.look.cursor.unwrap_or_else(|| self.in_sight().start);
+            self.look.visual = Some(line);
+            self.look.put_cursor(line);
+        }
+        cx.notify();
+    }
+
+    /// Goes to where the first name of the cursor's line is defined.
+    fn definition(&mut self, _: &Definition, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(line) = self.look.cursor else {
+            return;
+        };
+        let text = self.file.buffer.line(line);
+        if let Some(column) = first_name(&text, &self.file.highlights(line)) {
+            self.look.end_visual();
+            self.go_to_definition(Place::new(line, column), cx);
+        }
+    }
+}
+
+/// Where the first name of `line` starts, of the words the syntax says,
+/// as `highlights`, are no keyword, comment, string or literal.
+fn first_name(line: &str, highlights: &[(Range<usize>, Highlight)]) -> Option<usize> {
+    let mut column = 0;
+    while column < line.len() {
+        let word = word_around(line, column);
+        let named = line[word.clone()].starts_with(|c: char| c.is_alphabetic() || c == '_');
+        let plain = !highlights.iter().any(|(range, highlight)| {
+            range.contains(&word.start)
+                && matches!(
+                    highlight,
+                    Highlight::Keyword
+                        | Highlight::Comment
+                        | Highlight::String
+                        | Highlight::Literal
+                )
+        });
+        if named && plain {
+            return Some(word.start);
+        }
+        column = word.end.max(column + 1);
+    }
+    None
 }
 
 impl Follows for Code {
@@ -956,6 +1136,9 @@ impl Render for Code {
             .on_action(cx.listener(Self::back))
             .on_action(cx.listener(Self::forward))
             .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(Self::move_by_keys))
+            .on_action(cx.listener(Self::visual))
+            .on_action(cx.listener(Self::definition))
             .child(self.render_bar(cx))
             .child(
                 div()
@@ -995,5 +1178,22 @@ impl Render for Code {
                     .children(self.render_menu(cx)),
             )
             .children(self.render_locations(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cox_editor::language::Highlight;
+
+    use super::first_name;
+
+    #[test]
+    fn the_first_name_of_a_line_is_no_keyword_or_literal() {
+        let keyword = [(0..3, Highlight::Keyword)];
+        assert_eq!(first_name("let line_3 = 3;", &keyword), Some(4));
+        assert_eq!(first_name("    main();", &[]), Some(4));
+        assert_eq!(first_name("42 + x", &[]), Some(5));
+        assert_eq!(first_name("// note", &[(0..7, Highlight::Comment)]), None);
+        assert_eq!(first_name("", &[]), None);
     }
 }

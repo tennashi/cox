@@ -10,9 +10,113 @@
 
 pub mod keymap;
 
-use gpui::{App, Global, KeyContext, Keystroke, KeystrokeEvent, Window};
+use gpui::{
+    Action, App, Global, KeyContext, Keystroke, KeystrokeEvent, Pixels, Window, actions, px,
+};
 
-use self::keymap::{Answer, Command, Keymap, Place};
+use self::keymap::{Answer, Command, Keymap, Motion, Place, Sent};
+
+/// Moves what the part of the window with the keyboard shows, or its
+/// cursor, as Vim's keys ask: an action each part that moves so handles
+/// as it can, and the rest leave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = vim, no_json)]
+pub struct Move {
+    pub motion: Motion,
+    /// The count typed before the keys, as `3` of `3j`.
+    pub count: Option<u32>,
+}
+
+impl Move {
+    /// How many times the motion goes: the count, or once.
+    #[must_use]
+    pub fn times(&self) -> usize {
+        self.count
+            .map_or(1, |count| usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    /// The line, from 0, the count says, as `12` of `12G`, if typed.
+    #[must_use]
+    pub fn line(&self) -> Option<usize> {
+        self.count.map(|_| self.times().saturating_sub(1))
+    }
+
+    /// Where a cursor or selection at `at` goes, among lines or rows up to
+    /// `last`, `half` of them in half the part.
+    #[must_use]
+    pub fn moved(&self, at: usize, half: usize, last: usize) -> usize {
+        let times = self.times();
+        let half = half.max(1).saturating_mul(times);
+        match self.motion {
+            Motion::Down => at.saturating_add(times),
+            Motion::Up => at.saturating_sub(times),
+            Motion::HalfDown => at.saturating_add(half),
+            Motion::HalfUp => at.saturating_sub(half),
+            Motion::Top => self.line().unwrap_or(0),
+            Motion::Bottom => self.line().unwrap_or(last),
+        }
+        .min(last)
+    }
+
+    /// How far down a part with no cursor is scrolled once it moves: from
+    /// `at`, as far as `most`, its lines `line` tall, `height` in sight.
+    #[must_use]
+    pub fn scrolled(&self, at: Pixels, most: Pixels, line: Pixels, height: Pixels) -> Pixels {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a count a human types is far below what f32 keeps exactly"
+        )]
+        let times = self.times().min(1 << 20) as f32;
+        let to = match self.motion {
+            Motion::Down => at + line * times,
+            Motion::Up => at - line * times,
+            Motion::HalfDown => at + height / 2. * times,
+            Motion::HalfUp => at - height / 2. * times,
+            Motion::Top => px(0.),
+            Motion::Bottom => most,
+        };
+        to.clamp(px(0.), most.max(px(0.)))
+    }
+}
+
+actions!(
+    vim,
+    [
+        /// Starts selecting whole lines, from the cursor's, or stops.
+        Visual,
+        /// Goes to where the first name of the cursor's line is defined.
+        Definition,
+        /// Opens what is selected.
+        Open,
+        /// Closes the folder selected, or selects the folder it is in.
+        Close,
+    ]
+);
+
+impl Sent {
+    /// The action the part with the keyboard does it with.
+    fn action(self) -> Box<dyn Action> {
+        match self {
+            Self::Copy => Box::new(crate::ui::Copy),
+            Self::AddToChat => Box::new(crate::chat::hand::AddToChat),
+            Self::Back => Box::new(crate::stage::code::Back),
+            Self::Forward => Box::new(crate::stage::code::Forward),
+            Self::Visual => Box::new(Visual),
+            Self::Definition => Box::new(Definition),
+            Self::Open => Box::new(Open),
+            Self::Close => Box::new(Close),
+        }
+    }
+
+    /// How many times `count` does it: back and forward go as far as the
+    /// count, the rest are done once.
+    fn times(self, count: Option<u32>) -> u32 {
+        match self {
+            Self::Back | Self::Forward => count.unwrap_or(1),
+            _ => 1,
+        }
+    }
+}
 
 /// How the keys work: as Vim's normal mode, where they do things, or as
 /// its insert mode, where they type.
@@ -220,7 +324,11 @@ impl Vim {
                 match command {
                     Command::Normal => self.mode = Mode::Normal,
                     Command::Insert(_) => self.mode = Mode::Insert,
-                    Command::Stop | Command::Reset | Command::Window(_) => {}
+                    Command::Stop
+                    | Command::Reset
+                    | Command::Window(_)
+                    | Command::Move(_)
+                    | Command::Send(_) => {}
                 }
                 Outcome::Do(command, count)
             }
@@ -317,6 +425,14 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
                 });
             }
         }
+        Outcome::Do(Command::Move(motion), count) => {
+            window.dispatch_action(Box::new(Move { motion, count }), cx);
+        }
+        Outcome::Do(Command::Send(sent), count) => {
+            for _ in 0..sent.times(count) {
+                window.dispatch_action(sent.action(), cx);
+            }
+        }
         Outcome::Do(Command::Insert(place), _) => {
             use crate::ui::input::{End, Home, Right};
             match place {
@@ -332,10 +448,10 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{KeyContext, Keystroke};
+    use gpui::{KeyContext, Keystroke, px};
 
-    use super::keymap::{Act, Command, Keymap, Pick, Place};
-    use super::{Mode, Outcome, Region, Vim};
+    use super::keymap::{Act, Command, Keymap, Motion, Pick, Place, Sent};
+    use super::{Mode, Move, Outcome, Region, Vim};
 
     fn press(vim: &mut Vim, region: Region, keys: &str) -> Vec<Outcome> {
         keys.split(' ')
@@ -372,7 +488,7 @@ mod tests {
     fn normal_mode_types_nothing_and_leaves_the_window_s_other_keys() {
         let mut vim = Vim::default();
         assert_eq!(
-            press(&mut vim, Region::Chat, "j shift-k space enter backspace"),
+            press(&mut vim, Region::Chat, "x shift-k space enter backspace"),
             [Outcome::Taken; 5]
         );
         assert_eq!(
@@ -474,6 +590,65 @@ mod tests {
             [Outcome::Do(Command::Window(Act::Pick(Pick::Down)), None)]
         );
         assert_eq!(vim.count(), None);
+    }
+
+    #[test]
+    fn a_count_goes_with_a_motion_and_back() {
+        let mut vim = Vim::default();
+        assert_eq!(
+            press(&mut vim, Region::Code, "1 2 shift-g"),
+            [
+                Outcome::Taken,
+                Outcome::Taken,
+                Outcome::Do(Command::Move(Motion::Bottom), Some(12))
+            ]
+        );
+        assert_eq!(
+            press(&mut vim, Region::Code, "2 ctrl-o"),
+            [
+                Outcome::Taken,
+                Outcome::Do(Command::Send(Sent::Back), Some(2))
+            ]
+        );
+        assert_eq!(Sent::Back.times(Some(2)), 2);
+        assert_eq!(Sent::Copy.times(Some(2)), 1);
+    }
+
+    #[test]
+    fn a_motion_scrolls_within_the_part() {
+        let scrolled = |motion, count, at| {
+            Move { motion, count }.scrolled(px(at), px(1000.), px(20.), px(300.))
+        };
+        assert_eq!(scrolled(Motion::Down, Some(3), 100.), px(160.));
+        assert_eq!(scrolled(Motion::Up, None, 10.), px(0.));
+        assert_eq!(scrolled(Motion::HalfDown, Some(2), 0.), px(300.));
+        assert_eq!(scrolled(Motion::HalfUp, None, 500.), px(350.));
+        assert_eq!(scrolled(Motion::Bottom, None, 0.), px(1000.));
+        assert_eq!(scrolled(Motion::Top, Some(4), 500.), px(0.));
+        assert_eq!(scrolled(Motion::Down, Some(u32::MAX), 0.), px(1000.));
+        assert_eq!(
+            Move {
+                motion: Motion::Bottom,
+                count: Some(12)
+            }
+            .line(),
+            Some(11)
+        );
+        assert_eq!(
+            Move {
+                motion: Motion::Top,
+                count: None
+            }
+            .line(),
+            None
+        );
+        let moved = |motion, count, at| Move { motion, count }.moved(at, 5, 20);
+        assert_eq!(moved(Motion::Down, Some(3), 4), 7);
+        assert_eq!(moved(Motion::Up, Some(9), 4), 0);
+        assert_eq!(moved(Motion::HalfDown, Some(2), 4), 14);
+        assert_eq!(moved(Motion::HalfDown, Some(9), 4), 20);
+        assert_eq!(moved(Motion::Top, Some(3), 9), 2);
+        assert_eq!(moved(Motion::Bottom, None, 9), 20);
     }
 
     #[test]

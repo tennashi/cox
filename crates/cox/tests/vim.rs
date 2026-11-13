@@ -2,18 +2,29 @@
 mod fake_agent;
 #[expect(dead_code, reason = "these tests use only part of the fake daemon")]
 mod fake_daemon;
+mod fake_lsp;
 mod keys;
 
+use std::cell::RefCell;
+use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use cox::chat::conversation::State;
 use cox::chat::view::ChatView;
 use cox::stage::Tabs;
+use cox::stage::changes::Changes;
+use cox::stage::code::Code;
+use cox::stage::document::Document;
 use cox::stage::terminal::{Program, Running, Terminal};
+use cox::stage::tree::{Chosen, Tree};
 use cox::vim::Mode;
 use cox::workspace::Workspace;
-use gpui::{Entity, EntityInputHandler as _, Focusable as _, TestAppContext, VisualTestContext};
+use gpui::{
+    Entity, EntityInputHandler as _, Focusable as _, ScrollDelta, ScrollWheelEvent, TestAppContext,
+    TouchPhase, VisualTestContext, px,
+};
 
 use fake_daemon::{FakeStages, Keyed, settled};
 
@@ -439,4 +450,420 @@ fn off_the_keys_are_as_they_were(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "ctrl-w h g t");
     assert!(!in_part(cx, "Rail"));
     assert_eq!(keys::shown_input(cx, &workspace), "hgt");
+}
+
+/// A folder of its own for a test, with the files `paths`, saying their
+/// names, by its real path, as the tabs name their files.
+fn folder(name: &str, paths: &[&str]) -> PathBuf {
+    let folder = scratch(name);
+    std::fs::create_dir_all(&folder).unwrap();
+    for path in paths {
+        let path = folder.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("{}\n", path.display())).unwrap();
+    }
+    folder.canonicalize().unwrap()
+}
+
+/// A file of `count` numbered lines.
+fn numbered(count: usize) -> String {
+    let mut text = String::new();
+    for line in 1..=count {
+        writeln!(text, "let line_{line} = {line};").unwrap();
+    }
+    text
+}
+
+/// Opens a tab of code, with the keyboard, showing `path`, which says
+/// `text`, with Vim's keys on if `vim`.
+fn open_code<'a>(
+    cx: &'a mut TestAppContext,
+    path: PathBuf,
+    text: &str,
+    vim: bool,
+) -> (Entity<Code>, &'a mut VisualTestContext) {
+    if vim {
+        cx.update(cox::vim::install);
+    }
+    cx.update(cox::stage::code::bind_keys);
+    cx.update(cox::chat::hand::bind_keys);
+    let text = text.to_owned();
+    let (code, cx) = cx.add_window_view(|_, cx| Code::new(path, &text, None, None, cx));
+    cx.update(|window, cx| window.focus(&code.focus_handle(cx)));
+    cx.run_until_parked();
+    (code, cx)
+}
+
+fn cursor(code: &Entity<Code>, cx: &mut VisualTestContext) -> Option<usize> {
+    code.read_with(cx, |code, _| code.cursor())
+}
+
+fn type_keys(cx: &mut VisualTestContext, keys: &str) {
+    for key in keys.split(' ') {
+        cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn code_has_a_cursor_that_moves_by_lines_halves_and_counts(cx: &mut TestAppContext) {
+    let path = folder("code-cursor", &[]).join("long.rs");
+    let (code, cx) = open_code(cx, path, &numbered(200), true);
+    assert_eq!(cursor(&code, cx), Some(0));
+
+    type_keys(cx, "3 j");
+    assert_eq!(cursor(&code, cx), Some(3));
+    type_keys(cx, "k");
+    assert_eq!(cursor(&code, cx), Some(2));
+    type_keys(cx, "1 2 shift-g");
+    assert_eq!(cursor(&code, cx), Some(11));
+    type_keys(cx, "shift-g");
+    let last = cursor(&code, cx).unwrap();
+    assert!(last >= 199, "{last}");
+    assert!(
+        code.read_with(cx, |code, _| code.in_sight())
+            .contains(&last)
+    );
+    type_keys(cx, "g g");
+    assert_eq!(cursor(&code, cx), Some(0));
+    assert_eq!(code.read_with(cx, |code, _| code.in_sight()).start, 0);
+
+    type_keys(cx, "ctrl-d");
+    let half = cursor(&code, cx).unwrap();
+    assert!(half > 3, "{half}");
+    assert!(code.read_with(cx, |code, _| code.in_sight()).start > 0);
+    type_keys(cx, "2 ctrl-d");
+    assert_eq!(cursor(&code, cx), Some(half * 3));
+    type_keys(cx, "3 ctrl-u");
+    assert_eq!(cursor(&code, cx), Some(0));
+
+    type_keys(cx, "5 0 j");
+    let bounds = cx.debug_bounds("code").expect("the code is drawn");
+    cx.simulate_event(ScrollWheelEvent {
+        position: bounds.center(),
+        delta: ScrollDelta::Lines(gpui::point(0., -40.)),
+        modifiers: gpui::Modifiers::none(),
+        touch_phase: TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let sight = code.read_with(cx, |code, _| code.in_sight());
+    let at = cursor(&code, cx).unwrap();
+    assert!(at > 50 && sight.contains(&at), "{at} {sight:?}");
+}
+
+#[gpui::test]
+fn code_selects_whole_lines_and_copies_them(cx: &mut TestAppContext) {
+    let path = folder("code-visual", &[]).join("long.rs");
+    let (code, cx) = open_code(cx, path, &numbered(20), true);
+
+    type_keys(cx, "3 j shift-v 2 j k j");
+    let selected = code.read_with(cx, |code, _| code.selected_text());
+    assert_eq!(
+        selected,
+        "let line_4 = 4;\nlet line_5 = 5;\nlet line_6 = 6;\n"
+    );
+    type_keys(cx, "y");
+    let copied = cx
+        .update(|_, cx| cx.read_from_clipboard())
+        .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some(selected.as_str()));
+    assert_eq!(code.read_with(cx, |code, _| code.selected_text()), "");
+
+    type_keys(cx, "shift-v 2 k escape");
+    assert_eq!(code.read_with(cx, |code, _| code.selected_text()), "");
+    assert_eq!(cursor(&code, cx), Some(3));
+}
+
+#[gpui::test]
+fn code_hands_the_lines_selected_or_the_cursor_s_to_the_chat(cx: &mut TestAppContext) {
+    let path = folder("code-hand", &[]).join("long.rs");
+    let (code, cx) = open_code(cx, path, &numbered(20), true);
+
+    type_keys(cx, "j shift-v j g a");
+    let handed = cx.update(|_, cx| cox::chat::hand::take(cx));
+    assert_eq!(handed.len(), 1);
+    assert_eq!(handed[0].label, "long.rs:2-3");
+    assert_eq!(handed[0].text, "let line_2 = 2;\nlet line_3 = 3;\n");
+    assert_eq!(code.read_with(cx, |code, _| code.selected_text()), "");
+
+    type_keys(cx, "4 j g a");
+    let handed = cx.update(|_, cx| cox::chat::hand::take(cx));
+    assert_eq!(handed.len(), 1);
+    assert_eq!(handed[0].label, "long.rs:7");
+    assert_eq!(handed[0].text, "let line_7 = 7;");
+}
+
+#[gpui::test]
+fn code_goes_back_and_forward_with_control_o_and_control_i(cx: &mut TestAppContext) {
+    let folder = folder("code-back", &["a.rs", "b.rs", "c.rs"]);
+    let (code, cx) = open_code(cx, folder.join("a.rs"), "a\n", true);
+    for name in ["b.rs", "c.rs"] {
+        code.update(cx, |code, cx| code.go_to_file(&folder.join(name), cx));
+    }
+    let shown = |cx: &mut VisualTestContext| {
+        code.read_with(cx, |code, _| code.path().file_name().unwrap().to_owned())
+    };
+
+    type_keys(cx, "2 ctrl-o");
+    assert_eq!(shown(cx), "a.rs");
+    type_keys(cx, "ctrl-i");
+    assert_eq!(shown(cx), "b.rs");
+}
+
+#[gpui::test]
+fn off_code_has_no_cursor_and_its_keys_are_as_they_were(cx: &mut TestAppContext) {
+    let path = folder("code-off", &[]).join("long.rs");
+    let (code, cx) = open_code(cx, path, &numbered(200), false);
+
+    type_keys(cx, "3 j shift-g ctrl-d shift-v y g a");
+    assert_eq!(cursor(&code, cx), None);
+    assert_eq!(code.read_with(cx, |code, _| code.in_sight()).start, 0);
+    assert_eq!(code.read_with(cx, |code, _| code.selected_text()), "");
+    assert_eq!(cx.update(|_, cx| cox::chat::hand::take(cx)).len(), 0);
+}
+
+#[gpui::test]
+fn a_document_scrolls_by_lines_halves_and_to_its_ends(cx: &mut TestAppContext) {
+    cx.update(cox::vim::install);
+    cx.update(cox::stage::document::bind_keys);
+    let path = folder("document", &[]).join("long.md");
+    let mut text = String::new();
+    for line in 1..=300 {
+        write!(text, "Line {line}.\n\n").unwrap();
+    }
+    let (document, cx) = cx.add_window_view(|_, cx| Document::new(path, text, cx));
+    cx.update(|window, cx| window.focus(&document.focus_handle(cx)));
+    cx.run_until_parked();
+    let top = |cx: &mut VisualTestContext| {
+        cx.debug_bounds("document-text")
+            .expect("the text is drawn")
+            .origin
+            .y
+    };
+    let start = top(cx);
+
+    type_keys(cx, "j");
+    let line = start - top(cx);
+    assert!(line > px(0.), "{line:?}");
+    type_keys(cx, "3 j");
+    assert_eq!(start - top(cx), line * 4.);
+    type_keys(cx, "2 k");
+    assert_eq!(start - top(cx), line * 2.);
+    type_keys(cx, "g g");
+    assert_eq!(top(cx), start);
+    type_keys(cx, "ctrl-d");
+    let half = start - top(cx);
+    assert!(half > line * 4., "{half:?}");
+    type_keys(cx, "ctrl-u");
+    assert_eq!(top(cx), start);
+    type_keys(cx, "shift-g");
+    let bottom = start - top(cx);
+    assert!(bottom > half * 10., "{bottom:?}");
+    type_keys(cx, "j");
+    assert_eq!(start - top(cx), bottom);
+}
+
+#[gpui::test]
+fn the_tree_moves_a_selection_and_opens_and_closes_folders(cx: &mut TestAppContext) {
+    cx.update(cox::vim::install);
+    let root = folder("tree", &["a/one.rs", "a/two.rs", "b.rs", "c.rs"]);
+    let open = root.clone();
+    let (tree, cx) = cx.add_window_view(|_, cx| Tree::new(open, Vec::new(), cx));
+    let chosen = Rc::new(RefCell::new(Vec::new()));
+    let heard = Rc::clone(&chosen);
+    cx.update(|window, cx| {
+        window.focus(&tree.focus_handle(cx));
+        cx.subscribe(&tree, move |_, chosen: &Chosen, _| {
+            heard.borrow_mut().push(chosen.path.clone());
+        })
+        .detach();
+    });
+    cx.run_until_parked();
+    let rows = |cx: &mut VisualTestContext| tree.read_with(cx, |tree, _| tree.shown().len());
+    assert_eq!(rows(cx), 3);
+
+    type_keys(cx, "l");
+    assert_eq!(rows(cx), 5, "the first row, a folder, opens");
+    type_keys(cx, "l l");
+    assert_eq!(*chosen.borrow(), [root.join("a/one.rs")]);
+    type_keys(cx, "j h");
+    assert_eq!(rows(cx), 5, "a file goes to its folder");
+    type_keys(cx, "h");
+    assert_eq!(rows(cx), 3, "the folder closes");
+    type_keys(cx, "shift-g enter");
+    type_keys(cx, "2 k j enter");
+    type_keys(cx, "g g 2 j l");
+    type_keys(cx, "2 g g enter");
+    assert_eq!(
+        *chosen.borrow(),
+        [
+            root.join("a/one.rs"),
+            root.join("c.rs"),
+            root.join("b.rs"),
+            root.join("c.rs"),
+            root.join("b.rs"),
+        ]
+    );
+}
+
+/// A folder of its own for a test, a Git repository with a commit of
+/// `paths`, each saying its name, which then change.
+fn changed(name: &str, paths: &[&str]) -> PathBuf {
+    let folder = folder(name, paths);
+    for args in [
+        &["init", "--quiet"][..],
+        &["add", "."],
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--quiet",
+            "-m",
+            "A",
+        ],
+    ] {
+        let ran = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&folder)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(ran.status.success(), "{ran:?}");
+    }
+    for path in paths {
+        std::fs::write(folder.join(path), "changed\n").unwrap();
+    }
+    folder
+}
+
+#[gpui::test]
+fn changes_move_from_file_to_file_and_open_one(cx: &mut TestAppContext) {
+    cx.update(cox::vim::install);
+    let root = changed("changes", &["a.txt", "b.txt", "c.txt"]);
+    let (folder, cwd) = (root.clone(), root.clone());
+    let (changes, cx) = cx.add_window_view(|_, cx| Changes::new(folder, &cwd, cx));
+    let chosen = Rc::new(RefCell::new(Vec::new()));
+    let heard = Rc::clone(&chosen);
+    cx.update(|window, cx| {
+        window.focus(&changes.focus_handle(cx));
+        cx.subscribe(
+            &changes,
+            move |_, chosen: &cox::stage::changes::Chosen, _| {
+                heard.borrow_mut().push(chosen.path.clone());
+            },
+        )
+        .detach();
+    });
+    for _ in 0..500 {
+        cx.run_until_parked();
+        let files = changes.read_with(cx, |changes, _| {
+            changes
+                .shown_diff()
+                .and_then(|read| read.as_ref().ok())
+                .map_or(0, |diff| diff.files.len())
+        });
+        if files == 3 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    type_keys(
+        cx,
+        "enter j enter 5 j enter 2 k enter g g enter 2 shift-g enter",
+    );
+    assert_eq!(
+        *chosen.borrow(),
+        ["a.txt", "c.txt", "a.txt", "a.txt", "b.txt"].map(|name| root.join(name))
+    );
+}
+
+#[gpui::test]
+fn the_conversation_scrolls_from_the_input_in_normal_mode(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "conversation");
+    keys::press(cx, &workspace, "secondary-n");
+    let view = shown_view(cx, &workspace);
+    let words = "word ".repeat(1500);
+    cx.simulate_input(&words);
+    keys::press(cx, &workspace, "enter");
+    for _ in 0..500 {
+        if agent_state(cx, &view) == State::Idle {
+            break;
+        }
+        go_on(cx, &workspace);
+    }
+    keys::press(cx, &workspace, "escape");
+    let down = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            -view.scroll().scroll_px_offset_for_scrollbar().y
+        })
+    };
+    let end = down(cx);
+    assert!(end > px(0.), "the conversation is taller than the window");
+
+    keys::press(cx, &workspace, "g g");
+    assert_eq!(down(cx), px(0.));
+    keys::press(cx, &workspace, "j");
+    let line = down(cx);
+    assert!(line > px(0.));
+    keys::press(cx, &workspace, "3 j");
+    assert_eq!(down(cx), line * 4.);
+    keys::press(cx, &workspace, "k");
+    assert_eq!(down(cx), line * 3.);
+    keys::press(cx, &workspace, "ctrl-d");
+    let half = down(cx) - line * 3.;
+    assert!(half > line * 3., "{half:?}");
+    keys::press(cx, &workspace, "ctrl-u");
+    assert_eq!(down(cx), line * 3.);
+    keys::press(cx, &workspace, "shift-g");
+    assert_eq!(down(cx), end);
+    assert_eq!(keys::shown_input(cx, &workspace), "");
+
+    keys::press(cx, &workspace, "shift-a o k");
+    assert_eq!(keys::shown_input(cx, &workspace), "ok");
+}
+
+#[gpui::test]
+fn g_d_goes_to_the_definition_of_the_first_name_of_the_line(cx: &mut TestAppContext) {
+    cx.update(cox::vim::install);
+    cx.update(cox::stage::code::bind_keys);
+    let directory = folder("definition", &[]);
+    fake_lsp::write_project(&directory);
+    let servers = cox::stage::servers::Servers::new(fake_lsp::start(std::sync::Arc::default()));
+    let path = directory.join("main.rs");
+    let server = cx
+        .update(|cx| servers.of(&directory, &path, cx))
+        .expect("the editor knows Rust's server");
+    let ready = server.clone();
+    let (code, cx) =
+        cx.add_window_view(|_, cx| Code::new(path, fake_lsp::MAIN, None, Some(server), cx));
+    cx.update(|window, cx| window.focus(&code.focus_handle(cx)));
+    let wait_until = |cx: &mut VisualTestContext, done: &dyn Fn(&mut VisualTestContext) -> bool| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the server took too long"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    wait_until(cx, &|cx| {
+        ready.read_with(cx, |server, _| server.client().is_some())
+    });
+    let shown = |cx: &mut VisualTestContext| {
+        code.read_with(cx, |code, _| code.path().file_name().unwrap().to_owned())
+    };
+
+    type_keys(cx, "j g d");
+    wait_until(cx, &|cx| shown(cx) == "lib.rs");
+    assert_eq!(code.read_with(cx, |code, _| code.selected_text()), "helper");
+    type_keys(cx, "ctrl-o");
+    assert_eq!(shown(cx), "main.rs");
 }

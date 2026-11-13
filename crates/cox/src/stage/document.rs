@@ -14,7 +14,7 @@ use cox_core::entry::Attachment;
 use cox_core::tabs::{KeptTab, Lines};
 use gpui::{
     App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, Task, Window, div,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, Task, Window, div, point,
     prelude::*, px, rgb,
 };
 
@@ -30,6 +30,7 @@ use crate::ui::text::Reading;
 use crate::ui::theme::{BORDER, DIM, FAILED};
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
+use crate::vim::Move;
 
 pub(crate) const KEY_CONTEXT: &str = "Document";
 
@@ -153,6 +154,16 @@ impl Document {
     /// agent when handed to the chat.
     fn selected_attachment(&self) -> Attachment {
         crate::chat::hand::of_file(&self.path, None, self.selected_text())
+    }
+
+    /// Scrolls as Vim's keys ask.
+    fn move_by_keys(&mut self, motion: &Move, window: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.scroll.offset();
+        let height = self.scroll.bounds().size.height;
+        let most = self.scroll.max_offset().height;
+        let to = motion.scrolled(-offset.y, most, window.line_height(), height);
+        self.scroll.set_offset(point(offset.x, -to));
+        cx.notify();
     }
 
     /// Hands the text selected to the chat shown, or with nothing
@@ -299,6 +310,7 @@ impl Render for Document {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::translate))
             .on_action(cx.listener(Self::add_to_chat))
+            .on_action(cx.listener(Self::move_by_keys))
             .relative()
             .size_full()
             .flex()

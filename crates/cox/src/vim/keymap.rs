@@ -25,6 +25,42 @@ pub enum Command {
     Reset,
     /// What the window does, with the count typed before.
     Window(Act),
+    /// Moves what the part with the keyboard shows, or its cursor, with
+    /// the count typed before (see [`super::Move`]).
+    Move(Motion),
+    /// What the part with the keyboard does, as an action of its own.
+    Send(Sent),
+}
+
+/// Where Vim's keys move what a part of the window shows, or its cursor
+/// or selection, if it has one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Motion {
+    /// A line down, or the count's (`j`).
+    Down,
+    /// A line up, or the count's (`k`).
+    Up,
+    /// Half the part's height down, or the count's halves (`ctrl-d`).
+    HalfDown,
+    /// Half the part's height up, or the count's halves (`ctrl-u`).
+    HalfUp,
+    /// To the top, or to the count's line (`gg`).
+    Top,
+    /// To the bottom, or to the count's line (`G`).
+    Bottom,
+}
+
+/// The actions of the parts of the window Vim's keys send.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sent {
+    Copy,
+    AddToChat,
+    Back,
+    Forward,
+    Visual,
+    Definition,
+    Open,
+    Close,
 }
 
 /// What the window does for Vim's keys: where the keyboard goes, and
@@ -132,8 +168,31 @@ const PARTS: &[Region] = &[
 /// The parts with a selection to move: the rail and the list of chats.
 const PICKERS: &[Region] = &[Region::Rail, Region::List];
 
+/// The parts Vim's keys scroll, or move a cursor or selection in: the
+/// conversation, from the chat's input, and the stage's tabs that take
+/// no text.
+const MOVERS: &[Region] = &[
+    Region::Chat,
+    Region::Code,
+    Region::Document,
+    Region::Tree,
+    Region::Changes,
+];
+
+const CODE: &[Region] = &[Region::Code];
+const TREE: &[Region] = &[Region::Tree];
+const CHANGES: &[Region] = &[Region::Changes];
+
 const fn act(regions: &'static [Region], keys: &'static [&'static str], act: Act) -> Binding {
     bind(Mode::Normal, regions, keys, Command::Window(act))
+}
+
+const fn go(regions: &'static [Region], keys: &'static [&'static str], motion: Motion) -> Binding {
+    bind(Mode::Normal, regions, keys, Command::Move(motion))
+}
+
+const fn send(regions: &'static [Region], keys: &'static [&'static str], sent: Sent) -> Binding {
+    bind(Mode::Normal, regions, keys, Command::Send(sent))
 }
 
 const fn bind(
@@ -185,6 +244,22 @@ impl Keymap {
         act(PICKERS, &["enter"], Act::Open),
         act(PICKERS, &["l"], Act::Open),
         act(PICKERS, &["o"], Act::New),
+        go(MOVERS, &["j"], Motion::Down),
+        go(MOVERS, &["k"], Motion::Up),
+        go(MOVERS, &["ctrl-d"], Motion::HalfDown),
+        go(MOVERS, &["ctrl-u"], Motion::HalfUp),
+        go(MOVERS, &["g", "g"], Motion::Top),
+        go(MOVERS, &["shift-g"], Motion::Bottom),
+        send(CODE, &["shift-v"], Sent::Visual),
+        send(CODE, &["y"], Sent::Copy),
+        send(CODE, &["g", "a"], Sent::AddToChat),
+        send(CODE, &["g", "d"], Sent::Definition),
+        send(CODE, &["ctrl-o"], Sent::Back),
+        send(CODE, &["ctrl-i"], Sent::Forward),
+        send(TREE, &["l"], Sent::Open),
+        send(TREE, &["enter"], Sent::Open),
+        send(TREE, &["h"], Sent::Close),
+        send(CHANGES, &["enter"], Sent::Open),
     ]);
 
     /// Whether any binding is in `region`.
@@ -216,7 +291,9 @@ impl Keymap {
 
 #[cfg(test)]
 mod tests {
-    use super::{Act, Answer, Command, Keymap, Mode, Pick, Place, Region, Toward, bind};
+    use super::{
+        Act, Answer, Command, Keymap, Mode, Motion, Pick, Place, Region, Sent, Toward, bind,
+    };
 
     #[test]
     fn escape_in_insert_mode_goes_to_normal_wherever_there_is_a_mode() {
@@ -350,6 +427,76 @@ mod tests {
         }
         assert_eq!(
             Keymap::VIM.answer(Mode::Normal, Region::Chat, &["j"]),
+            Answer::Act(Command::Move(Motion::Down))
+        );
+    }
+
+    #[test]
+    fn the_conversation_and_the_quiet_tabs_move_with_j_k_and_the_rest() {
+        let moves = [
+            (&["j"][..], Motion::Down),
+            (&["k"], Motion::Up),
+            (&["ctrl-d"], Motion::HalfDown),
+            (&["ctrl-u"], Motion::HalfUp),
+            (&["g", "g"], Motion::Top),
+            (&["shift-g"], Motion::Bottom),
+        ];
+        for region in [
+            Region::Chat,
+            Region::Code,
+            Region::Document,
+            Region::Tree,
+            Region::Changes,
+        ] {
+            for (keys, motion) in moves {
+                assert_eq!(
+                    Keymap::VIM.answer(Mode::Normal, region, keys),
+                    Answer::Act(Command::Move(motion)),
+                    "{region:?} {keys:?}"
+                );
+                assert_eq!(
+                    Keymap::VIM.answer(Mode::Insert, region, keys),
+                    Answer::None,
+                    "{region:?} {keys:?}"
+                );
+            }
+        }
+        for region in [Region::Terminal, Region::Page, Region::Goal] {
+            assert_eq!(
+                Keymap::VIM.answer(Mode::Normal, region, &["j"]),
+                Answer::None
+            );
+        }
+    }
+
+    #[test]
+    fn code_selects_lines_copies_and_hands_them_and_goes_back_and_forth() {
+        let answer = |keys: &[&str]| Keymap::VIM.answer(Mode::Normal, Region::Code, keys);
+        let sent = |sent| Answer::Act(Command::Send(sent));
+        assert_eq!(answer(&["shift-v"]), sent(Sent::Visual));
+        assert_eq!(answer(&["y"]), sent(Sent::Copy));
+        assert_eq!(answer(&["g", "a"]), sent(Sent::AddToChat));
+        assert_eq!(answer(&["g", "d"]), sent(Sent::Definition));
+        assert_eq!(answer(&["ctrl-o"]), sent(Sent::Back));
+        assert_eq!(answer(&["ctrl-i"]), sent(Sent::Forward));
+        assert_eq!(
+            Keymap::VIM.answer(Mode::Normal, Region::Document, &["y"]),
+            Answer::None
+        );
+    }
+
+    #[test]
+    fn the_tree_opens_and_closes_and_changes_open() {
+        let tree = |keys: &[&str]| Keymap::VIM.answer(Mode::Normal, Region::Tree, keys);
+        assert_eq!(tree(&["l"]), Answer::Act(Command::Send(Sent::Open)));
+        assert_eq!(tree(&["enter"]), Answer::Act(Command::Send(Sent::Open)));
+        assert_eq!(tree(&["h"]), Answer::Act(Command::Send(Sent::Close)));
+        assert_eq!(
+            Keymap::VIM.answer(Mode::Normal, Region::Changes, &["enter"]),
+            Answer::Act(Command::Send(Sent::Open))
+        );
+        assert_eq!(
+            Keymap::VIM.answer(Mode::Normal, Region::Changes, &["h"]),
             Answer::None
         );
     }
