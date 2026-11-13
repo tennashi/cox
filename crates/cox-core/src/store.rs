@@ -1099,11 +1099,9 @@ mod tests {
     use crate::entry::{Content, Step, StepState, ToolCallResult};
     use crate::tabs::KeptTab;
 
-    fn scratch(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("cox-store-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        directory
+    /// A folder of its own for a test, removed once dropped.
+    fn scratch() -> tempfile::TempDir {
+        tempfile::TempDir::new().unwrap()
     }
 
     #[test]
@@ -1621,83 +1619,158 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_database_from_an_earlier_cox_is_upgraded() {
-        let directory = scratch("earlier");
-        let path = directory.join("chats.sqlite");
-        std::fs::create_dir_all(&directory).unwrap();
-        {
-            // The tables as the first Cox to keep chats made them.
-            let connection = Connection::open(&path).unwrap();
-            connection
-                .execute_batch(
-                    "CREATE TABLE projects (
-                        id INTEGER PRIMARY KEY,
-                        folder TEXT NOT NULL UNIQUE,
-                        name TEXT NOT NULL
-                    );
-                    CREATE TABLE chats (
-                        id INTEGER PRIMARY KEY,
-                        project INTEGER REFERENCES projects (id),
-                        name TEXT NOT NULL,
-                        created INTEGER NOT NULL,
-                        tabs TEXT
-                    );
-                    CREATE TABLE entries (
-                        chat INTEGER NOT NULL REFERENCES chats (id),
-                        number INTEGER NOT NULL,
-                        at INTEGER NOT NULL,
-                        entry TEXT NOT NULL,
-                        PRIMARY KEY (chat, number)
-                    ) WITHOUT ROWID;
-                    INSERT INTO chats (name, created) VALUES ('Chat 1', 0);
-                    PRAGMA user_version = 1;",
-                )
-                .unwrap();
+    /// The tables as the first Cox to keep chats made them, at version 1.
+    const FIRST_TABLES: &str = "
+        CREATE TABLE projects (
+            id INTEGER PRIMARY KEY,
+            folder TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL
+        );
+        CREATE TABLE chats (
+            id INTEGER PRIMARY KEY,
+            project INTEGER REFERENCES projects (id),
+            name TEXT NOT NULL,
+            created INTEGER NOT NULL,
+            tabs TEXT
+        );
+        CREATE TABLE entries (
+            chat INTEGER NOT NULL REFERENCES chats (id),
+            number INTEGER NOT NULL,
+            at INTEGER NOT NULL,
+            entry TEXT NOT NULL,
+            PRIMARY KEY (chat, number)
+        ) WITHOUT ROWID;";
+
+    /// Makes the database at `path` as the Cox of `version` left it, with
+    /// the project `/src/cox` and a chat in it.
+    fn database_of_version(path: &Path, version: usize) {
+        let connection = Connection::open(path).unwrap();
+        connection.execute_batch(FIRST_TABLES).unwrap();
+        for upgrade in &UPGRADES[..version - 1] {
+            connection.execute_batch(upgrade).unwrap();
         }
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO projects (folder, name) VALUES ('/src/cox', 'cox');
+                 INSERT INTO chats (project, name, created) VALUES (1, 'Chat 1', 0);
+                 PRAGMA user_version = {version};"
+            ))
+            .unwrap();
+    }
+
+    /// Each table of the database at `path`, with its columns and the
+    /// tables they refer to, as `SQLite` describes them.
+    fn tables(path: &Path) -> Vec<(String, Vec<String>)> {
+        let connection = Connection::open(path).unwrap();
+        let names: Vec<String> = connection
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        names
+            .into_iter()
+            .map(|name| {
+                let described = |pragma: &str| -> Vec<String> {
+                    let mut statement = connection
+                        .prepare(&format!("SELECT * FROM pragma_{pragma}('{name}')"))
+                        .unwrap();
+                    let width = statement.column_count();
+                    statement
+                        .query_map([], |row| {
+                            (0..width)
+                                .map(|at| row.get::<_, rusqlite::types::Value>(at))
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .unwrap()
+                        .map(|row| format!("{pragma} {:?}", row.unwrap()))
+                        .collect()
+                };
+                let mut columns = described("table_info");
+                columns.extend(described("foreign_key_list"));
+                (name, columns)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_database_of_every_earlier_version_is_upgraded_to_the_tables_of_a_new_one() {
+        let directory = scratch();
+        let new = directory.path().join("new.sqlite");
+        drop(Store::open(&new).unwrap());
+        let version = usize::try_from(VERSION).unwrap();
+
+        for earlier in 1..version {
+            let path = directory.path().join(format!("{earlier}.sqlite"));
+            database_of_version(&path, earlier);
+            drop(Store::open(&path).unwrap());
+            assert_eq!(
+                tables(&path),
+                tables(&new),
+                "the tables of version {earlier}, upgraded"
+            );
+        }
+    }
+
+    #[test]
+    fn the_projects_and_chats_of_an_earlier_cox_are_kept_through_the_upgrade() {
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        database_of_version(&path, 1);
 
         let store = Store::open(&path).unwrap();
+        let projects = store.projects().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].folder, Path::new("/src/cox"));
+        assert!(!projects[0].archived);
         let chats = store.chats().unwrap();
         assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].name, "Chat 1");
+        assert_eq!(chats[0].project, Some(projects[0].id));
         assert_eq!(chats[0].named, Named::Numbered);
         assert!(!chats[0].archived);
         assert_eq!(chats[0].goal, None);
         assert_eq!(chats[0].parent, None);
-        assert_eq!(chats[0].setup, None);
-        assert_eq!(store.session(chats[0].id).unwrap(), None);
-        store.keep_session(chats[0].id, "session-1").unwrap();
-        store
-            .keep_goal(chats[0].id, Some(&Goal::Command("make".to_owned())))
-            .unwrap();
-        drop(store);
+    }
+
+    #[test]
+    fn a_database_upgraded_opens_again_as_it_is() {
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
+        database_of_version(&path, 1);
+        drop(Store::open(&path).unwrap());
+
+        let again = Store::open(&path);
+
+        assert!(again.is_ok(), "{:#}", again.err().unwrap());
+        assert_eq!(again.unwrap().chats().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_write_waits_for_another_cox_writing_the_same_database() {
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
         let store = Store::open(&path).unwrap();
-        assert_eq!(
-            store.session(chats[0].id).unwrap().as_deref(),
-            Some("session-1")
-        );
-        assert_eq!(
-            store.chats().unwrap()[0].goal,
-            Some(Goal::Command("make".to_owned()))
-        );
-        let child = store
-            .add_chat_under(chats[0].id, None, "Chat 2", Some("{}"))
-            .unwrap();
-        let kept = &store.chats().unwrap()[1];
-        assert_eq!((kept.id, kept.parent), (child, Some(chats[0].id)));
-        assert_eq!(kept.setup.as_deref(), Some("{}"));
-        assert_eq!(store.settings(child).unwrap(), []);
-        assert_eq!(store.agent(child).unwrap(), None);
-        store.keep_choice("claude", "model", "small").unwrap();
-        assert_eq!(store.choices("claude").unwrap().len(), 1);
-        // The stage each chat kept of its own is gone.
-        assert!(store.connection.prepare("SELECT tabs FROM chats").is_err());
-        std::fs::remove_dir_all(&directory).unwrap();
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        // The other Cox holds its write well under the time a write waits.
+        let finishing = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            other.execute_batch("COMMIT").unwrap();
+        });
+
+        let kept = store.project(Path::new("/src/cox"), "cox");
+
+        finishing.join().unwrap();
+        assert!(kept.is_ok(), "{kept:?}");
+        assert_eq!(store.projects().unwrap().len(), 1);
     }
 
     #[test]
     fn what_is_kept_lasts_past_closing_the_database() {
-        let directory = scratch("lasts");
-        let path = directory.join("kept").join("chats.sqlite");
+        let directory = scratch();
+        let path = directory.path().join("kept").join("chats.sqlite");
         {
             let store = Store::open(&path).unwrap();
             let project = store.project(Path::new("/src/cox"), "cox").unwrap();
@@ -1721,13 +1794,12 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
-        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
     fn a_database_from_a_newer_cox_is_refused() {
-        let directory = scratch("newer");
-        let path = directory.join("chats.sqlite");
+        let directory = scratch();
+        let path = directory.path().join("chats.sqlite");
         drop(Store::open(&path).unwrap());
         Connection::open(&path)
             .unwrap()
@@ -1736,6 +1808,5 @@ mod tests {
 
         let error = Store::open(&path).err().expect("the database is refused");
         assert!(format!("{error:#}").contains("newer Cox"), "{error:#}");
-        std::fs::remove_dir_all(&directory).unwrap();
     }
 }
