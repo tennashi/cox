@@ -9147,6 +9147,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "resvg",
+ "roxmltree",
  "serde_json",
  "xshell",
 ]
