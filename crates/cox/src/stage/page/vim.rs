@@ -222,7 +222,8 @@ impl Page {
             return;
         };
         if let Some(shown) = Shown::new(follow, hints) {
-            self.browser.show_hints(&shown.labels());
+            self.browser
+                .show_hints(&shown.labels(), &crate::vim::hints::page_look());
             self.hinting = Some(Hinting::Shown(shown));
         } else {
             self.hinting = None;
@@ -256,7 +257,9 @@ impl Page {
             return;
         };
         match shown.typed(label.key) {
-            Typed::Narrowed(labels) => self.browser.show_hints(&labels),
+            Typed::Narrowed(labels) => self
+                .browser
+                .show_hints(&labels, &crate::vim::hints::page_look()),
             Typed::Chosen(hint, follow) => {
                 self.stop_hinting();
                 Self::enter(Mode::Normal, window, cx);
@@ -291,7 +294,9 @@ impl hints::Page for WindowHints {
 
     fn show(&self, labels: &[(u32, String)], cx: &mut App) {
         if let Some(page) = self.0.upgrade() {
-            page.read(cx).browser.show_hints(labels);
+            page.read(cx)
+                .browser
+                .show_hints(labels, &crate::vim::hints::page_look());
         }
     }
 

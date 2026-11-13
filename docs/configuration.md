@@ -89,10 +89,9 @@ Vimperator. Off, nothing changes. The settings card turns them on and
 off under **Vim's keys**, and so does editing the file. Either takes
 effect at once.
 
-**Modes.** The keys are in one of four modes, shown as `-- NORMAL --`,
-`-- INSERT --`, `-- HINT --` or `-- COMMAND --` at the left of a line
-across the window's foot, as Vim's `showmode`, wherever the keyboard
-is. At its right, as Vim's `showcmd`, are the count and the keys typed
+**Modes.** The keys are in one of four modes, Normal, Insert, Hint or
+Command, shown in a pill at the left of the window's foot, as Vim's
+`showmode`, wherever the keyboard is. At its right, as Vim's `showcmd`, are the count and the keys typed
 toward a command that is not yet whole, as `3g` of `3gt`. The line `:`
 and `/` open takes its place. In normal mode keys do things; keys that
 would type type nothing, and digits make a count, as `3` of `3j`. In

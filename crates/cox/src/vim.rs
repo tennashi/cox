@@ -180,10 +180,10 @@ impl Mode {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Normal => "NORMAL",
-            Self::Insert => "INSERT",
-            Self::Hint => "HINT",
-            Self::Command => "COMMAND",
+            Self::Normal => "Normal",
+            Self::Insert => "Insert",
+            Self::Hint => "Hint",
+            Self::Command => "Command",
         }
     }
 }
@@ -1059,7 +1059,7 @@ mod tests {
             [Outcome::Do(Command::Hint(Follow::Here), None)]
         );
         assert_eq!(vim.mode(), Mode::Hint);
-        assert_eq!(Mode::Hint.label(), "HINT");
+        assert_eq!(Mode::Hint.label(), "Hint");
         let label = |key| Outcome::Do(Command::Send(Sent::Label(key)), None);
         assert_eq!(
             press(&mut vim, Region::Page, "j shift-k 1"),
@@ -1099,7 +1099,7 @@ mod tests {
             [Outcome::Pass; 4]
         );
         assert_eq!(vim.mode(), Mode::Command);
-        assert_eq!(Mode::Command.label(), "COMMAND");
+        assert_eq!(Mode::Command.label(), "Command");
         assert_eq!(
             press(&mut vim, Region::Command, "tab enter"),
             [

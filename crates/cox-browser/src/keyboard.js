@@ -98,7 +98,7 @@ globalThis.coxVim ??= (() => {
         };
       });
     },
-    show(labels) {
+    show(labels, look) {
       this.clear();
       const host = document.createElement('div');
       host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647';
@@ -110,8 +110,7 @@ globalThis.coxVim ??= (() => {
         const tag = document.createElement('span');
         tag.textContent = label;
         tag.style.cssText = `position:fixed;left:${Math.max(0, rect.x)}px;top:${Math.max(0, rect.y)}px;`
-          + 'background:#fd0;color:#000;font:bold 11px/1.2 monospace;padding:0 2px;'
-          + 'border:1px solid #a80;border-radius:2px;text-transform:uppercase';
+          + `box-sizing:border-box;${look}`;
         shadow.appendChild(tag);
       }
       document.documentElement.appendChild(host);
