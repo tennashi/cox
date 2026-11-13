@@ -87,6 +87,35 @@ pub struct Again {
     pub setup: Option<Setup>,
 }
 
+/// Where a chat finds the human's triggers and keeps how they are
+/// arranged and ran: this Cox's places, or, for a test, a folder of its
+/// own.
+enum Places {
+    Cox,
+    #[cfg(test)]
+    In(PathBuf),
+}
+
+impl Places {
+    /// The folder of the human's workflow, with its triggers.
+    fn workflow(&self) -> PathBuf {
+        match self {
+            Self::Cox => crate::settings::workflow(),
+            #[cfg(test)]
+            Self::In(root) => root.join("workflow"),
+        }
+    }
+
+    /// Where `kept` is kept, if Cox can tell.
+    fn kept(&self, kept: crate::storage::Kept) -> Option<PathBuf> {
+        match self {
+            Self::Cox => crate::storage::path(kept),
+            #[cfg(test)]
+            Self::In(root) => Some(root.join(kept.place())),
+        }
+    }
+}
+
 /// The agent a chat talks to, while it runs.
 struct Running {
     commands: UnboundedSender<Command>,
@@ -167,6 +196,8 @@ pub struct Chat {
     /// What the window was last told, but the entries, to tell it only
     /// what changed.
     told: Option<Patch>,
+    /// Where the chat finds the triggers and keeps how they ran.
+    places: Places,
     /// Where the turn that runs started, while one runs: the folder the
     /// chat works in, and the last commit of each of its repositories then,
     /// to tell the commits the agent makes in the turn.
@@ -226,7 +257,16 @@ impl Chat {
             unsent: Vec::new(),
             told: None,
             turn_heads: None,
+            places: Places::Cox,
         }
+    }
+
+    /// The chat, finding the human's triggers and keeping how they ran in
+    /// `root`, not in this Cox's places.
+    #[cfg(test)]
+    fn keeping_in(mut self, root: &Path) -> Self {
+        self.places = Places::In(root.to_owned());
+        self
     }
 
     /// The conversation of a new chat whose agent gets the instructions
@@ -405,11 +445,11 @@ impl Chat {
     /// as `in_sketch` says, on what changed since each last ran, when it
     /// says which files, as the conversation runs them.
     fn due_on(&mut self, cwd: &Path, on: &On, in_sketch: bool) -> Vec<Due> {
-        let (triggers, unread) = trigger::of(cwd, &crate::settings::workflow());
+        let (triggers, unread) = trigger::of(cwd, &self.places.workflow());
         for why in unread {
             tracing::error!("a trigger does not run: {why}");
         }
-        let kept = crate::storage::path(crate::storage::Kept::Triggers);
+        let kept = self.places.kept(crate::storage::Kept::Triggers);
         let triggers: Vec<Trigger> = Arranged::read(kept.as_deref(), cwd)
             .apply(triggers)
             .into_iter()
@@ -855,7 +895,7 @@ impl Chat {
         };
         // For the human to try a trigger on, from its card.
         let said = self.conversation.turn_told().map(str::to_owned);
-        let last = crate::storage::path(crate::storage::Kept::LastTurns);
+        let last = self.places.kept(crate::storage::Kept::LastTurns);
         if let Err(error) = trigger::card::keep_last_turn(last.as_deref(), &cwd, said.as_deref()) {
             tracing::error!("the turn is not kept to try triggers on: {error}");
         }
@@ -1200,7 +1240,7 @@ impl Chat {
             at: jiff::Timestamp::now().as_second(),
             said: check.said.clone(),
         };
-        let kept = crate::storage::path(crate::storage::Kept::TriggerRuns);
+        let kept = self.places.kept(crate::storage::Kept::TriggerRuns);
         if let Err(error) = ran.keep(kept.as_deref(), cwd, &file) {
             tracing::error!("how the trigger ran is not kept: {error}");
         }
@@ -1706,7 +1746,15 @@ fn folder_note(folder: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
     use super::*;
+    use crate::agent::AgentThread;
+    use crate::chat::conversation::CheckState;
+    use crate::testing::TempDir;
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|&word| word.to_owned()).collect()
@@ -1738,5 +1786,748 @@ mod tests {
         };
         let command = words(&["agent", "A=b c"]);
         assert_eq!(login_command(&command, &terminal), "agent 'A=b c'");
+    }
+
+    /// Runs `test` as the daemon runs its chats, on a `LocalSet`.
+    fn on_daemon(test: impl Future<Output = ()>) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        tokio::task::LocalSet::new().block_on(&runtime, test);
+    }
+
+    /// An agent the test plays: what it is sent, what it tells, and what
+    /// its tools ask of the stage.
+    struct Played {
+        commands: UnboundedReceiver<Command>,
+        events: UnboundedSender<AgentEvent>,
+        stage: UnboundedReceiver<ToolRequest>,
+    }
+
+    impl Played {
+        /// The texts of the prompts the agent was sent since last asked.
+        fn prompts(&mut self) -> Vec<String> {
+            std::iter::from_fn(|| self.commands.try_recv().ok())
+                .filter_map(|command| match command {
+                    Command::Prompt(prompt) => Some(prompt.text),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// The command the stage was asked to run in a terminal, and where
+        /// to answer how it ran, if it was asked.
+        fn ran(&mut self) -> Option<(String, oneshot::Sender<Result<Ran, String>>)> {
+            match self.stage.try_recv().ok()? {
+                ToolRequest::RunCommand {
+                    command, answer, ..
+                } => Some((command, answer)),
+                _ => None,
+            }
+        }
+    }
+
+    /// An agent working in `cwd` that the test plays.
+    fn played(cwd: &Path) -> (Agent, Played) {
+        let (commands, commands_got) = unbounded_channel();
+        let (events_sent, events) = unbounded_channel();
+        let (tools, stage) = unbounded_channel();
+        let agent = Agent {
+            commands,
+            events,
+            instructions: Vec::new(),
+            setup: None,
+            cwd: cwd.to_owned(),
+            tools: Some(tools),
+            chat_requests: None,
+            thread: AgentThread::none(),
+        };
+        let played = Played {
+            commands: commands_got,
+            events: events_sent,
+            stage,
+        };
+        (agent, played)
+    }
+
+    /// A chat as the daemon holds it, kept, whose agent and whose
+    /// triggers' agents the test plays, working in a folder of its own,
+    /// with the human's workflow and Cox's state in another.
+    struct Talk {
+        chat: Chat,
+        generation: u64,
+        agent: Played,
+        /// The agents of the triggers, in the order they were started.
+        started: Rc<RefCell<Vec<Played>>>,
+        internal: UnboundedReceiver<Internal>,
+        places: TempDir,
+        cwd: TempDir,
+    }
+
+    impl Talk {
+        /// A chat whose agent has started; it goes on with a session as
+        /// `again` says, once closed.
+        fn new(again: Option<Again>) -> Self {
+            let mut talk = Self::starting(again);
+            let (agent, played) = played(&talk.cwd);
+            talk.chat.attach(agent, talk.generation, Vec::new());
+            talk.agent = played;
+            talk
+        }
+
+        /// A chat whose agent is on its way to start.
+        fn starting(again: Option<Again>) -> Self {
+            let places = TempDir::new();
+            let cwd = TempDir::new();
+            std::fs::create_dir_all(places.join("workflow").join(trigger::TRIGGERS)).unwrap();
+            let (internal_sent, internal) = unbounded_channel();
+            let started: Rc<RefCell<Vec<Played>>> = Rc::default();
+            let starts: Starts = {
+                let started = started.clone();
+                Rc::new(move |cwd: PathBuf, _| {
+                    let (agent, played) = played(&cwd);
+                    started.borrow_mut().push(played);
+                    agent
+                })
+            };
+            let store = cox_core::store::Store::open(&places.join("cox.db")).unwrap();
+            let id = store.add_chat(None, "Talk").unwrap();
+            let record = Record::new(Rc::new(store), id);
+            let mut chat = Chat::new(
+                1,
+                Conversation::new(),
+                Some(record),
+                again,
+                Some(starts),
+                None,
+                internal_sent,
+            )
+            .keeping_in(&places);
+            let generation = chat.next_generation();
+            let (_, agent) = played(&cwd);
+            Self {
+                chat,
+                generation,
+                agent,
+                started,
+                internal,
+                places,
+                cwd,
+            }
+        }
+
+        /// Gives the human a trigger named `name` in their workflow, its
+        /// file saying `text`.
+        fn trigger(&self, name: &str, text: &str) -> PathBuf {
+            let file = self
+                .places
+                .join("workflow")
+                .join(trigger::TRIGGERS)
+                .join(format!("{name}.md"));
+            std::fs::write(&file, text).unwrap();
+            file
+        }
+
+        fn hear(&mut self, event: AgentEvent) {
+            self.chat.hear(self.generation, event, false);
+        }
+
+        /// The human sends `line`, and the agent ends its turn.
+        fn take_a_turn(&mut self, line: &str) {
+            assert!(self.chat.submit(line, Vec::new()), "the line goes");
+            self.hear(AgentEvent::TurnEnded(StopReason::EndTurn));
+        }
+
+        /// What a task of the chat told the daemon next.
+        async fn told(&mut self) -> Internal {
+            self.internal.recv().await.unwrap()
+        }
+
+        fn state(&self) -> State {
+            self.chat.conversation().state()
+        }
+    }
+
+    const SHELL_AT_TURN_END: &str = "---\non: turn.end\nby: shell\n---\ncargo test\n";
+
+    fn exited(code: i32, output: &str) -> Ran {
+        Ran {
+            output: output.to_owned(),
+            ended: Ended::Exited(code),
+        }
+    }
+
+    #[test]
+    fn a_line_the_human_sends_goes_to_the_agent() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+
+            assert!(talk.chat.submit("hello", Vec::new()));
+
+            assert_eq!(talk.agent.prompts(), ["hello"]);
+            assert_eq!(talk.state(), State::Busy);
+        });
+    }
+
+    #[test]
+    fn a_line_sent_while_a_turn_runs_does_not_go() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.chat.submit("hello", Vec::new());
+
+            assert!(!talk.chat.submit("again", Vec::new()));
+
+            assert_eq!(talk.agent.prompts(), ["hello"]);
+        });
+    }
+
+    #[test]
+    fn a_line_sent_while_the_agent_starts_goes_once_it_has() {
+        on_daemon(async {
+            let mut talk = Talk::starting(None);
+            assert!(talk.chat.submit("hello", Vec::new()));
+            let (agent, mut played) = played(&talk.cwd);
+
+            talk.chat.attach(agent, talk.generation, Vec::new());
+
+            assert_eq!(played.prompts(), ["hello"]);
+        });
+    }
+
+    #[test]
+    fn an_agent_started_for_a_generation_since_passed_is_not_talked_to() {
+        on_daemon(async {
+            let mut talk = Talk::starting(None);
+            let stale = talk.generation;
+            talk.generation = talk.chat.next_generation();
+            let (agent, mut played) = played(&talk.cwd);
+
+            talk.chat.attach(agent, stale, Vec::new());
+            talk.chat.submit("hello", Vec::new());
+
+            assert_eq!(played.prompts(), Vec::<String>::new());
+            assert!(talk.chat.is_open(), "the chat waits on its new agent");
+        });
+    }
+
+    #[test]
+    fn a_turn_ended_lets_the_human_send_again() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+
+            talk.take_a_turn("hello");
+
+            assert_eq!(talk.state(), State::Idle);
+            assert!(talk.chat.submit("and then", Vec::new()));
+        });
+    }
+
+    #[test]
+    fn what_an_agent_stopped_since_tells_is_let_be() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.chat.submit("hello", Vec::new());
+
+            talk.chat.hear(
+                talk.generation - 1,
+                AgentEvent::TurnEnded(StopReason::EndTurn),
+                false,
+            );
+
+            assert_eq!(talk.state(), State::Busy);
+        });
+    }
+
+    #[test]
+    fn the_agent_closing_closes_the_chat() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+
+            talk.hear(AgentEvent::Closed(Some("gone".to_owned())));
+
+            assert!(!talk.chat.is_open());
+            assert_eq!(talk.state(), State::Closed);
+        });
+    }
+
+    /// What starts a chat working in `cwd` again, with no session yet.
+    fn again(cwd: &Path) -> Again {
+        Again {
+            cwd: cwd.to_owned(),
+            session: None,
+            setup: None,
+        }
+    }
+
+    #[test]
+    fn an_open_chat_is_not_started_again() {
+        on_daemon(async {
+            let cwd = TempDir::new();
+            let mut talk = Talk::new(Some(again(&cwd)));
+
+            assert!(talk.chat.take_again().is_none());
+        });
+    }
+
+    #[test]
+    fn a_closed_chat_is_started_again_and_goes_on() {
+        on_daemon(async {
+            let cwd = TempDir::new();
+            let mut talk = Talk::new(Some(again(&cwd)));
+            talk.hear(AgentEvent::Closed(None));
+
+            let taken = talk.chat.take_again();
+
+            assert_eq!(taken.map(|again| again.cwd), Some(cwd.to_path_buf()));
+            assert_eq!(talk.state(), State::Idle, "a line sent waits for the agent");
+        });
+    }
+
+    #[test]
+    fn a_closed_chat_whose_agent_is_on_its_way_is_not_started_again() {
+        on_daemon(async {
+            let cwd = TempDir::new();
+            let mut talk = Talk::new(Some(again(&cwd)));
+            talk.hear(AgentEvent::Closed(None));
+
+            talk.chat.next_generation();
+
+            assert!(talk.chat.take_again().is_none());
+        });
+    }
+
+    #[test]
+    fn a_closed_chat_starts_again_with_the_session_its_agent_opened() {
+        on_daemon(async {
+            let cwd = TempDir::new();
+            let mut talk = Talk::new(Some(again(&cwd)));
+            talk.hear(AgentEvent::Opened {
+                id: "session-1".to_owned(),
+                how: crate::agent::Opened::New,
+                steers: false,
+            });
+            talk.hear(AgentEvent::Closed(None));
+
+            let taken = talk.chat.take_again().unwrap();
+
+            assert_eq!(taken.session.as_deref(), Some("session-1"));
+        });
+    }
+
+    #[test]
+    fn a_chat_closed_for_good_is_not_started_again() {
+        on_daemon(async {
+            let cwd = TempDir::new();
+            let mut talk = Talk::new(Some(again(&cwd)));
+
+            talk.chat.close("The sketch ended.".to_owned());
+
+            assert_eq!(talk.state(), State::Closed);
+            assert!(talk.chat.take_again().is_none());
+        });
+    }
+
+    #[test]
+    fn a_turn_ended_runs_the_triggers_due_in_a_terminal_where_the_chat_works() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("test", SHELL_AT_TURN_END);
+
+            talk.take_a_turn("hello");
+
+            let (command, _) = talk.agent.ran().expect("the trigger runs");
+            assert_eq!(command, "cargo test");
+            assert_eq!(talk.state(), State::Checking);
+        });
+    }
+
+    #[test]
+    fn a_trigger_turned_off_where_the_chat_works_does_not_run() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            let file = talk.trigger("test", SHELL_AT_TURN_END);
+            trigger::Change::Switch {
+                folder: talk.cwd.to_path_buf(),
+                file,
+                on: false,
+                sum: None,
+            }
+            .make(Some(
+                &talk.places.join(crate::storage::Kept::Triggers.place()),
+            ))
+            .unwrap();
+
+            talk.take_a_turn("hello");
+
+            assert!(talk.agent.ran().is_none());
+            assert_eq!(talk.state(), State::Idle);
+        });
+    }
+
+    #[test]
+    fn a_trigger_that_fails_has_the_agent_act_on_what_it_printed() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("test", SHELL_AT_TURN_END);
+            talk.take_a_turn("hello");
+            talk.agent.prompts();
+            let (_, answer) = talk.agent.ran().unwrap();
+
+            answer.send(Ok(exited(1, "1 test FAILED"))).unwrap();
+            let Internal::Checked {
+                generation, ran, ..
+            } = talk.told().await
+            else {
+                panic!("the daemon is not told the trigger ran");
+            };
+            talk.chat.heard_check(generation, ran);
+
+            let prompts = talk.agent.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            assert!(prompts[0].contains("1 test FAILED"), "{prompts:?}");
+            assert_eq!(talk.state(), State::Busy);
+        });
+    }
+
+    #[test]
+    fn a_trigger_that_passes_leaves_the_chat_to_the_human() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("test", SHELL_AT_TURN_END);
+            talk.take_a_turn("hello");
+            talk.agent.prompts();
+            let (_, answer) = talk.agent.ran().unwrap();
+
+            answer.send(Ok(exited(0, "ok"))).unwrap();
+            let Internal::Checked {
+                generation, ran, ..
+            } = talk.told().await
+            else {
+                panic!("the daemon is not told the trigger ran");
+            };
+            talk.chat.heard_check(generation, ran);
+
+            assert_eq!(talk.agent.prompts(), Vec::<String>::new());
+            assert_eq!(talk.state(), State::Idle);
+        });
+    }
+
+    #[test]
+    fn how_a_trigger_ran_is_kept_for_the_triggers_tab() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            let file = talk.trigger("test", SHELL_AT_TURN_END);
+            talk.take_a_turn("hello");
+            let (_, answer) = talk.agent.ran().unwrap();
+
+            answer.send(Ok(exited(0, "ok"))).unwrap();
+            let Internal::Checked {
+                generation, ran, ..
+            } = talk.told().await
+            else {
+                panic!("the daemon is not told the trigger ran");
+            };
+            talk.chat.heard_check(generation, ran);
+
+            let runs = talk.places.join(crate::storage::Kept::TriggerRuns.place());
+            let kept = trigger::Ran::read(Some(&runs), &talk.cwd);
+            assert_eq!(
+                kept.get(&file).map(|ran| ran.state),
+                Some(CheckState::Passed)
+            );
+        });
+    }
+
+    #[test]
+    fn a_turn_ended_with_a_goal_runs_the_goals_command() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.chat
+                .set_goal(Some(goal::Goal::Command("make check".to_owned())));
+
+            talk.take_a_turn("hello");
+
+            let (command, _) = talk.agent.ran().expect("the goal's command runs");
+            assert_eq!(command, "make check");
+        });
+    }
+
+    #[test]
+    fn a_goal_not_met_has_the_agent_go_on() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.chat
+                .set_goal(Some(goal::Goal::Command("make check".to_owned())));
+            talk.take_a_turn("hello");
+            talk.agent.prompts();
+            let (_, answer) = talk.agent.ran().unwrap();
+
+            answer.send(Ok(exited(2, "check failed"))).unwrap();
+            let Internal::Checked {
+                generation, ran, ..
+            } = talk.told().await
+            else {
+                panic!("the daemon is not told the goal's command ran");
+            };
+            talk.chat.heard_check(generation, ran);
+
+            assert_eq!(talk.agent.prompts().len(), 1, "the agent goes on");
+            assert_eq!(talk.state(), State::Busy);
+        });
+    }
+
+    #[test]
+    fn a_goal_met_leaves_the_chat_to_the_human() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.chat
+                .set_goal(Some(goal::Goal::Command("make check".to_owned())));
+            talk.take_a_turn("hello");
+            talk.agent.prompts();
+            let (_, answer) = talk.agent.ran().unwrap();
+
+            answer.send(Ok(exited(0, ""))).unwrap();
+            let Internal::Checked {
+                generation, ran, ..
+            } = talk.told().await
+            else {
+                panic!("the daemon is not told the goal's command ran");
+            };
+            talk.chat.heard_check(generation, ran);
+
+            assert_eq!(talk.agent.prompts(), Vec::<String>::new());
+            assert_eq!(talk.state(), State::Idle);
+        });
+    }
+
+    #[test]
+    fn a_chat_runs_the_triggers_of_its_opening_once_its_agent_has_started() {
+        on_daemon(async {
+            let mut talk = Talk::starting(None);
+            talk.trigger("hello", "---\non: chat.open\nby: shell\n---\necho hi\n");
+            talk.chat.opened(false);
+            let (agent, mut played) = played(&talk.cwd);
+            assert!(played.ran().is_none());
+
+            talk.chat.attach(agent, talk.generation, Vec::new());
+
+            let (command, _) = played.ran().expect("the opening's trigger runs");
+            assert_eq!(command, "echo hi");
+        });
+    }
+
+    #[test]
+    fn a_chat_whose_agent_does_not_run_runs_no_triggers() {
+        on_daemon(async {
+            let mut talk = Talk::starting(None);
+            talk.trigger("hello", "---\non: chat.open\nby: shell\n---\necho hi\n");
+            let before = talk.chat.conversation().entries().len();
+
+            talk.chat
+                .fire(&On::ChatOpen, "The chat opened.".to_owned(), false);
+
+            assert_eq!(talk.chat.conversation().entries().len(), before);
+        });
+    }
+
+    const NEW_AT_TURN_END: &str = "---\non: turn.end\nby: new\n---\nReview the change.\n";
+
+    #[test]
+    fn a_trigger_by_a_new_agent_is_asked_of_the_turn() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("review", NEW_AT_TURN_END);
+
+            talk.take_a_turn("hello");
+
+            let mut started = talk.started.borrow_mut();
+            assert_eq!(started.len(), 1, "the trigger's agent starts");
+            assert_eq!(started[0].prompts().len(), 1, "it is asked once");
+        });
+    }
+
+    /// Plays the agent of the trigger started first saying `reply`, and
+    /// hands the chat what the daemon is told of it.
+    async fn trigger_says(talk: &mut Talk, reply: &str) {
+        {
+            let started = talk.started.borrow();
+            let events = &started[0].events;
+            events
+                .send(AgentEvent::ReplyText(reply.to_owned()))
+                .unwrap();
+            events
+                .send(AgentEvent::TurnEnded(StopReason::EndTurn))
+                .unwrap();
+        }
+        let Internal::Trigger {
+            generation,
+            file,
+            heard,
+            ..
+        } = talk.told().await
+        else {
+            panic!("the daemon is not told what the trigger's agent said");
+        };
+        talk.chat.heard_trigger(generation, &file, heard);
+    }
+
+    #[test]
+    fn a_trigger_whose_agent_finds_something_has_the_chats_agent_act_on_it() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("review", NEW_AT_TURN_END);
+            talk.take_a_turn("hello");
+            talk.agent.prompts();
+
+            trigger_says(&mut talk, "FAIL: the greeting is rude").await;
+
+            let prompts = talk.agent.prompts();
+            assert_eq!(prompts.len(), 1, "{prompts:?}");
+            assert!(prompts[0].contains("the greeting is rude"), "{prompts:?}");
+        });
+    }
+
+    #[test]
+    fn a_trigger_whose_agent_finds_nothing_leaves_the_chat_to_the_human() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("review", NEW_AT_TURN_END);
+            talk.take_a_turn("hello");
+            talk.agent.prompts();
+
+            trigger_says(&mut talk, "PASS").await;
+
+            assert_eq!(talk.agent.prompts(), Vec::<String>::new());
+            assert_eq!(talk.state(), State::Idle);
+        });
+    }
+
+    #[test]
+    fn what_the_agent_of_a_trigger_says_for_an_agent_stopped_since_is_let_be() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            let file = talk.trigger("review", NEW_AT_TURN_END);
+            talk.take_a_turn("hello");
+            talk.agent.prompts();
+
+            talk.chat.heard_trigger(
+                talk.generation - 1,
+                &file,
+                Heard::Judged(Ok("FAIL: rude".to_owned())),
+            );
+
+            assert_eq!(talk.agent.prompts(), Vec::<String>::new());
+            assert_eq!(talk.state(), State::Checking, "the trigger still runs");
+        });
+    }
+
+    const GATHERS: &str = "---\non: permission.asked\nby: shell\n---\ngit status\n";
+
+    fn asks_permission() -> AgentEvent {
+        AgentEvent::PermissionRequest {
+            id: "call-1".to_owned(),
+            title: Some("rm -rf target".to_owned()),
+            content: None,
+            options: vec!["Allow".to_owned(), "Reject".to_owned()],
+        }
+    }
+
+    /// The states of what gathers for the permission request the agent
+    /// waits on, as the human sees them.
+    fn gathered(talk: &Talk) -> Vec<(CheckState, Option<String>)> {
+        talk.chat
+            .conversation()
+            .entries()
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::Permission { gathered, .. } => Some(
+                    gathered
+                        .iter()
+                        .map(|check| (check.state, check.said.clone()))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_permission_request_has_the_triggers_that_gather_run() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("status", GATHERS);
+            talk.chat.submit("clean up", Vec::new());
+
+            talk.hear(asks_permission());
+
+            let (command, _) = talk.agent.ran().expect("the trigger that gathers runs");
+            assert_eq!(command, "git status");
+            assert!(talk.chat.conversation().gathering());
+        });
+    }
+
+    #[test]
+    fn what_a_trigger_that_gathers_printed_is_shown_with_the_request() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("status", GATHERS);
+            talk.chat.submit("clean up", Vec::new());
+            talk.hear(asks_permission());
+            let (_, answer) = talk.agent.ran().unwrap();
+
+            answer.send(Ok(exited(0, "nothing to commit"))).unwrap();
+            let Internal::Gathered {
+                generation,
+                file,
+                gathered: what,
+                ..
+            } = talk.told().await
+            else {
+                panic!("the daemon is not told what was gathered");
+            };
+            talk.chat.heard_gathered(generation, &file, what);
+
+            assert!(!talk.chat.conversation().gathering());
+            let shown = gathered(&talk);
+            assert_eq!(shown.len(), 1);
+            assert!(
+                shown[0]
+                    .1
+                    .as_deref()
+                    .is_some_and(|said| said.contains("nothing to commit")),
+                "{shown:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn the_human_is_asked_without_what_has_not_come_once_the_time_is_up() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("status", GATHERS);
+            talk.chat.submit("clean up", Vec::new());
+            talk.hear(asks_permission());
+
+            talk.chat.gathered_enough(talk.generation);
+
+            assert!(!talk.chat.conversation().gathering());
+            assert_eq!(talk.state(), State::Asking, "the human is asked");
+        });
+    }
+
+    #[test]
+    fn the_time_up_for_an_agent_stopped_since_is_let_be() {
+        on_daemon(async {
+            let mut talk = Talk::new(None);
+            talk.trigger("status", GATHERS);
+            talk.chat.submit("clean up", Vec::new());
+            talk.hear(asks_permission());
+
+            talk.chat.gathered_enough(talk.generation - 1);
+
+            assert!(talk.chat.conversation().gathering());
+        });
     }
 }
