@@ -4040,4 +4040,195 @@ mod tests {
         );
         assert_eq!(showed_in_sketch(&entries[..1], &media, &sources), "");
     }
+
+    /// A daemon of `store`, whose home is `home` and whose chats stay
+    /// closed, and what it tells the window.
+    fn daemon_of(store: &Rc<Store>, home: &Path) -> (Daemon, UnboundedReceiver<FromDaemon>) {
+        let mut daemon = Daemon::new(
+            home.to_path_buf(),
+            false,
+            Rc::clone(store),
+            Rc::new(NoAgents),
+            unbounded_channel().0,
+        );
+        let (window, told) = unbounded_channel();
+        daemon.window = Some(window);
+        (daemon, told)
+    }
+
+    /// The key the daemon lists the chat kept as `kept` by.
+    fn key_of(daemon: &mut Daemon, kept: ChatId) -> u64 {
+        let (answer, key) = oneshot::channel();
+        daemon.hear(Internal::Key {
+            number: kept.number(),
+            answer,
+        });
+        key.blocking_recv().unwrap().unwrap()
+    }
+
+    /// A store with a project in `folder` and one chat of it, `Chat`.
+    fn one_chat(folder: &Path) -> (Rc<Store>, ChatId) {
+        let store = Rc::new(Store::in_memory().unwrap());
+        let project = store.project(folder, "Project").unwrap();
+        let chat = store.add_chat(Some(project), "Chat").unwrap();
+        (store, chat)
+    }
+
+    fn kept_chat(store: &Store, chat: ChatId) -> cox_core::store::KeptChat {
+        store
+            .chats()
+            .unwrap()
+            .into_iter()
+            .find(|kept| kept.id == chat)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_chat_the_human_renames_is_kept_by_that_name() {
+        let home = TempDir::new();
+        let (store, chat) = one_chat(&home);
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+
+        daemon.act(ToDaemon::Rename {
+            key,
+            name: "Renamed".to_owned(),
+        });
+
+        assert_eq!(kept_chat(&store, chat).name, "Renamed");
+    }
+
+    #[test]
+    fn a_chat_put_away_is_kept_archived() {
+        let home = TempDir::new();
+        let (store, chat) = one_chat(&home);
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+
+        daemon.act(ToDaemon::Archive {
+            key,
+            archived: true,
+        });
+
+        assert!(kept_chat(&store, chat).archived);
+    }
+
+    #[test]
+    fn a_chat_brought_back_from_the_archive_is_kept_listed() {
+        let home = TempDir::new();
+        let (store, chat) = one_chat(&home);
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+        daemon.act(ToDaemon::Archive {
+            key,
+            archived: true,
+        });
+
+        daemon.act(ToDaemon::Archive {
+            key,
+            archived: false,
+        });
+
+        assert!(!kept_chat(&store, chat).archived);
+    }
+
+    #[test]
+    fn no_chat_opens_in_a_project_whose_folder_is_gone() {
+        let home = TempDir::new();
+        let gone = home.join("gone");
+        let (store, _) = one_chat(&gone);
+        let (mut daemon, _told) = daemon_of(&store, &home);
+
+        daemon.act(ToDaemon::NewChat { folder: Some(gone) });
+
+        assert_eq!(store.chats().unwrap().len(), 1, "no chat is kept");
+    }
+
+    #[test]
+    fn the_window_is_told_the_tabs_a_folders_stage_had_as_they_were_kept() {
+        let home = TempDir::new();
+        let (store, chat) = one_chat(&home);
+        let (mut daemon, mut told) = daemon_of(&store, &home);
+        let key = key_of(&mut daemon, chat);
+        let tabs = KeptTabs {
+            tabs: vec![KeptTab::Terminal {
+                title: "zsh".to_owned(),
+            }],
+            shown: 0,
+            owners: vec![Some(key)],
+        };
+        daemon.act(ToDaemon::Tabs {
+            folder: home.to_path_buf(),
+            tabs: tabs.clone(),
+        });
+
+        daemon.act(ToDaemon::StageOf {
+            folder: home.to_path_buf(),
+        });
+
+        match told.try_recv() {
+            Ok(FromDaemon::StageOf {
+                folder,
+                tabs: Some(kept),
+            }) => {
+                assert_eq!(folder, home.path());
+                assert_eq!(kept, tabs);
+            }
+            _ => panic!("the window is not told the stage's tabs"),
+        }
+    }
+
+    #[test]
+    fn only_a_chat_that_works_in_its_project_merges_what_it_made() {
+        let in_folder = Setup {
+            folder: Some(PathBuf::from("/elsewhere")),
+            ..Setup::default()
+        };
+        let in_sketch = Setup {
+            sketch: Some(Sketch::Empty),
+            ..Setup::default()
+        };
+
+        assert!(merges(None));
+        assert!(merges(Some(&Setup::default())));
+        assert!(!merges(Some(&in_folder)));
+        assert!(!merges(Some(&in_sketch)));
+    }
+
+    #[test]
+    fn a_chat_works_while_a_turn_runs_asks_stops_or_checks() {
+        let working: Vec<_> = [
+            State::Idle,
+            State::Busy,
+            State::Asking,
+            State::Stopping,
+            State::Checking,
+            State::Closed,
+        ]
+        .into_iter()
+        .filter(|&state| working(state))
+        .collect();
+
+        assert_eq!(
+            working,
+            [State::Busy, State::Asking, State::Stopping, State::Checking]
+        );
+    }
+
+    #[test]
+    fn a_chat_asking_the_human_is_not_at_work() {
+        let at_work: Vec<_> = [
+            State::Idle,
+            State::Busy,
+            State::Asking,
+            State::Stopping,
+            State::Checking,
+            State::Closed,
+        ]
+        .into_iter()
+        .filter(|&state| at_work(state))
+        .collect();
+
+        assert_eq!(at_work, [State::Busy, State::Stopping, State::Checking]);
+    }
 }
