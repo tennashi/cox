@@ -140,6 +140,7 @@ selected.
 | Mode | Key | Does |
 | --- | --- | --- |
 | Insert | Esc | Goes to normal mode, and closes the list of commands or files over the input. It does not stop the agent. |
+| Insert | Ctrl-W, Ctrl-U | Takes out the word before the cursor, or the line before it, as in Vim and a shell. In any input. |
 | Normal | `i`, `a`, `I`, `A` | Goes to insert mode at the cursor, after it, at the start of the line, or at its end. |
 | Normal | Ctrl-C | Stops the agent. |
 | Normal | Esc | Forgets a count typed. In the goal's, a sketch's or a rename's input, the settings or a project's card, it closes them as Esc does without Vim. |
