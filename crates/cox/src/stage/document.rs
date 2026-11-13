@@ -159,11 +159,7 @@ impl Document {
 
     /// Scrolls as Vim's keys ask.
     fn move_by_keys(&mut self, motion: &Move, window: &mut Window, cx: &mut Context<Self>) {
-        let offset = self.scroll.offset();
-        let height = self.scroll.bounds().size.height;
-        let most = self.scroll.max_offset().height;
-        let to = motion.scrolled(-offset.y, most, window.line_height(), height);
-        self.scroll.set_offset(point(offset.x, -to));
+        motion.scroll(&self.scroll, window.line_height());
         cx.notify();
     }
 

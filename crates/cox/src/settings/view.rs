@@ -32,7 +32,8 @@ use std::path::PathBuf;
 
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
-    MouseButton, PathPromptOptions, Subscription, Window, actions, div, prelude::*, px, rgb,
+    MouseButton, PathPromptOptions, ScrollHandle, Subscription, Window, actions, div, prelude::*,
+    px, rgb,
 };
 
 use self::agents::AgentsSection;
@@ -53,6 +54,7 @@ use crate::ui::theme::{
     LINK,
 };
 use crate::ui::{Copy, card};
+use crate::vim::Move;
 use crate::vim::hints::Hinted as _;
 
 actions!(
@@ -117,6 +119,7 @@ pub struct SettingsView {
     words: Words,
     /// What has the keyboard while the human selects the words.
     focus: FocusHandle,
+    scroll: ScrollHandle,
     _subscriptions: [Subscription; 3],
 }
 
@@ -177,6 +180,7 @@ impl SettingsView {
             phone,
             words,
             focus: cx.focus_handle(),
+            scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -420,6 +424,7 @@ impl Render for SettingsView {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(&self.scroll)
                 .px(px(22.))
                 .pt(px(18.))
                 .pb(px(22.))
@@ -442,6 +447,10 @@ impl Render for SettingsView {
             // A click on the card stays there, not closing it.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(|_, _: &CloseSettings, _, cx| cx.emit(Dismissed)))
+            .on_action(cx.listener(|view, motion: &Move, window, cx| {
+                motion.scroll(&view.scroll, window.line_height());
+                cx.notify();
+            }))
             .child(Self::render_header(cx))
             .child(
                 body.child(words.heading("HOME"))
