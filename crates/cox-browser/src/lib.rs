@@ -848,9 +848,8 @@ impl Browser {
         }
     }
 
-    /// Final text: a typed character, or a composition the input method
-    /// committed. A single character goes in as a key event, so the page
-    /// sees `keypress` as it would in a browser.
+    /// Text typed with no composition. A single character goes in as a
+    /// key event, so the page sees `keypress` as it would in a browser.
     pub fn commit(&self, text: &str) {
         let Some(host) = self.host_stirred() else {
             return;
@@ -861,6 +860,16 @@ impl Browser {
                 host.send_key_event(Some(&key_event(KeyKind::Char, text, 0, unit)));
             }
             _ => host.ime_commit_text(Some(&CefString::from(text)), Some(&NO_RANGE), 0),
+        }
+    }
+
+    /// What the input method composed, committed: it takes the
+    /// composition's place and ends it, even one character long, which an
+    /// input method such as macSKK commits one at a time. As a key, the
+    /// character would go in beside the composition and leave it open.
+    pub fn commit_composition(&self, text: &str) {
+        if let Some(host) = self.host_stirred() {
+            host.ime_commit_text(Some(&CefString::from(text)), Some(&NO_RANGE), 0);
         }
     }
 
