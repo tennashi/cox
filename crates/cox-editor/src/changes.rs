@@ -507,12 +507,20 @@ fn starts(stretch: &str) -> Option<(usize, usize)> {
 }
 
 /// Runs Git in `folder` with `args`, and answers what it printed, or what
-/// it said went wrong.
+/// it said went wrong. Git asks of the repository `folder` is in, even
+/// when Cox runs where the environment names another, as in a Git hook.
 pub(crate) fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(folder)
-        .args(args)
+    let mut command = Command::new("git");
+    command.arg("-C").arg(folder).args(args);
+    for variable in REPOSITORY_VARIABLES {
+        command.env_remove(variable);
+    }
+    // Tests make their repositories as Git does with no one's settings.
+    #[cfg(test)]
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    let output = command
         .output()
         .map_err(|error| format!("cannot run git: {error}"))?;
     if output.status.success() {
@@ -522,17 +530,27 @@ pub(crate) fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// The variables that name a repository, its index or its objects, by
+/// which Git would ask of another repository than the folder's.
+const REPOSITORY_VARIABLES: [&str; 7] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Folder;
 
     /// A folder of its own for a test, made a Git repository with a
     /// commit of the files `files`, saying what they say.
-    fn repository(name: &str, files: &[(&str, &str)]) -> PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("cox-changes-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&folder);
-        std::fs::create_dir_all(&folder).unwrap();
+    fn repository(files: &[(&str, &str)]) -> Folder {
+        let folder = Folder::new();
         git(&folder, &["init", "--quiet"]).unwrap();
         for (path, text) in files {
             std::fs::write(folder.join(path), text).unwrap();
@@ -563,10 +581,7 @@ mod tests {
 
     #[test]
     fn tells_how_each_file_changed_without_reading_the_lines() {
-        let folder = repository(
-            "hows",
-            &[("a.txt", "one\n"), ("b.txt", "two\n"), ("c.txt", "three\n")],
-        );
+        let folder = repository(&[("a.txt", "one\n"), ("b.txt", "two\n"), ("c.txt", "three\n")]);
         std::fs::write(folder.join("a.txt"), "1\n").unwrap();
         std::fs::remove_file(folder.join("b.txt")).unwrap();
         git(&folder, &["mv", "c.txt", "moved.txt"]).unwrap();
@@ -583,12 +598,11 @@ mod tests {
                 (top.join("new.txt"), How::Added),
             ]
         );
-        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
     fn reads_the_lines_changed_since_the_last_commit() {
-        let folder = repository("changed", &[("a.txt", "one\ntwo\nthree\n")]);
+        let folder = repository(&[("a.txt", "one\ntwo\nthree\n")]);
         std::fs::write(folder.join("a.txt"), "one\n2\nthree\n").unwrap();
         let diff = read(&folder).unwrap();
         assert!(matches!(diff.since, Since::Head(_)));
@@ -616,7 +630,7 @@ mod tests {
 
     #[test]
     fn a_file_git_does_not_track_is_new() {
-        let folder = repository("new", &[("a.txt", "a\n")]);
+        let folder = repository(&[("a.txt", "a\n")]);
         std::fs::write(folder.join("b.txt"), "first\nsecond\n").unwrap();
         std::fs::write(folder.join(".gitignore"), "ignored\n").unwrap();
         std::fs::write(folder.join("ignored"), "not shown\n").unwrap();
@@ -633,13 +647,10 @@ mod tests {
 
     #[test]
     fn a_file_removed_or_moved_says_so() {
-        let folder = repository(
-            "moved",
-            &[
-                ("gone.txt", "bye\n"),
-                ("old.txt", "the same\nlines\nhere\n"),
-            ],
-        );
+        let folder = repository(&[
+            ("gone.txt", "bye\n"),
+            ("old.txt", "the same\nlines\nhere\n"),
+        ]);
         std::fs::remove_file(folder.join("gone.txt")).unwrap();
         git(&folder, &["mv", "old.txt", "new.txt"]).unwrap();
         let diff = read(&folder).unwrap();
@@ -665,7 +676,7 @@ mod tests {
 
     #[test]
     fn a_sketch_counts_what_it_committed_since_it_started() {
-        let folder = repository("sketch", &[("a.txt", "a\n")]);
+        let folder = repository(&[("a.txt", "a\n")]);
         start(&folder).unwrap();
         std::fs::write(folder.join("a.txt"), "b\n").unwrap();
         commit_all(&folder);
@@ -680,7 +691,7 @@ mod tests {
 
     #[test]
     fn a_sketch_from_nothing_counts_all_it_made() {
-        let folder = repository("nothing", &[]);
+        let folder = repository(&[]);
         start(&folder).unwrap();
         std::fs::write(folder.join("a.txt"), "a\n").unwrap();
         commit_all(&folder);
@@ -695,8 +706,7 @@ mod tests {
 
     #[test]
     fn a_folder_out_of_git_is_no_repository() {
-        let folder = std::env::temp_dir().join(format!("cox-changes-{}-none", std::process::id()));
-        std::fs::create_dir_all(&folder).unwrap();
+        let folder = Folder::new();
         // The temporary folder may be in a repository, on some machines.
         if git(&folder, &["rev-parse", "--show-toplevel"]).is_err() {
             assert!(read(&folder).is_err());
