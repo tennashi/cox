@@ -257,6 +257,7 @@ mod tests {
     #[test]
     fn the_folders_end_with_the_systems_temporary_files() {
         let folders = folders_from(env(&[]));
+        // allow-temp-dir: the folder is only named, as the system's is, not made
         assert_eq!(folders, [std::env::temp_dir().join("avd/running")]);
     }
 
@@ -268,6 +269,7 @@ mod tests {
             folders,
             [
                 PathBuf::from("/home/Library/Caches/TemporaryItems/avd/running"),
+                // allow-temp-dir: the folder is only named, as the system's is, not made
                 std::env::temp_dir().join("avd/running"),
             ]
         );
@@ -281,6 +283,7 @@ mod tests {
             folders,
             [
                 PathBuf::from("/run/user/1/avd/running"),
+                // allow-temp-dir: the folder is only named, as the system's is, not made
                 std::env::temp_dir().join("avd/running"),
             ]
         );

@@ -204,6 +204,7 @@ fn run_unseen(command: &str, cwd: &std::path::Path, waits: bool) -> Option<Ran> 
         let started = cwd.join("started");
         let stops = async {
             while !started.exists() {
+                // allow-sleep: polls for the file the command writes as it starts
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             drop(waiting);

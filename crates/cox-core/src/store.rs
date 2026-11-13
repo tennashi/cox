@@ -1756,6 +1756,7 @@ mod tests {
         other.execute_batch("BEGIN IMMEDIATE").unwrap();
         // The other Cox holds its write well under the time a write waits.
         let finishing = std::thread::spawn(move || {
+            // allow-sleep: the other Cox holds its write a while, under the time a write waits
             std::thread::sleep(Duration::from_millis(200));
             other.execute_batch("COMMIT").unwrap();
         });

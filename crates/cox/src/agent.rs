@@ -1564,6 +1564,7 @@ mod tests {
             if Instant::now() > deadline {
                 return false;
             }
+            // allow-sleep: polls the condition until the deadline above
             thread::sleep(Duration::from_millis(20));
         }
         true
@@ -1578,6 +1579,7 @@ mod tests {
         let script = format!("sleep 60 & echo $! > {}; wait", file.display());
         let agent = spawn(
             move |_| cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            // allow-temp-dir: only the agent's working folder, which nothing writes in
             std::env::temp_dir(),
             Vec::new(),
             Start::New {
@@ -1631,6 +1633,7 @@ mod tests {
                 let _ = finished.recv();
                 Ok(Watched(watched))
             },
+            // allow-temp-dir: only the agent's working folder, which nothing writes in
             std::env::temp_dir(),
             Vec::new(),
             Start::New {
@@ -1664,6 +1667,7 @@ mod tests {
                 let _ = finished.recv();
                 Ok(Watched(watched))
             },
+            // allow-temp-dir: only the agent's working folder, which nothing writes in
             std::env::temp_dir(),
             Vec::new(),
             Start::New {
@@ -1700,6 +1704,7 @@ mod tests {
         );
         let agent = spawn(
             move |_| cox_acp::launch(["sh".to_owned(), "-c".to_owned(), script]),
+            // allow-temp-dir: only the agent's working folder, which nothing writes in
             std::env::temp_dir(),
             Vec::new(),
             Start::New {

@@ -99,6 +99,7 @@ done"#;
                 .iter()
                 .any(|said| said.target == cox_acp::STDERR)
             {
+                // allow-sleep: polls the log for the agent's line, under the test's deadline
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Ok(())
