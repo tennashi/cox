@@ -1110,33 +1110,75 @@ mod tests {
     use super::{Drawing, Standing, why_not_renamed};
     use crate::testing::TempDir;
 
-    #[test]
-    fn a_project_whose_folder_is_not_there_keeps_its_name() {
-        let root = TempDir::new();
+    /// A project in `root/app`, idle, beside a folder named `taken`.
+    fn app_in(root: &TempDir) -> Standing {
         std::fs::create_dir_all(root.join("app")).unwrap();
         std::fs::create_dir_all(root.join("taken")).unwrap();
-        let standing = Standing {
+        Standing {
             folder: root.join("app"),
             missing: false,
             at_work: false,
             icon: None,
             drawing: Drawing::Unable,
             about: None,
-        };
-        assert_eq!(why_not_renamed(&standing, "shop"), None);
-        assert_eq!(why_not_renamed(&standing, "app"), None);
-        assert!(why_not_renamed(&standing, "taken").is_some());
-        assert!(why_not_renamed(&standing, "a/b").is_some());
+        }
+    }
+
+    #[test]
+    fn a_project_is_renamed_a_free_name_or_its_own() {
+        let root = TempDir::new();
+        let app = app_in(&root);
+        assert_eq!(why_not_renamed(&app, "shop"), None);
+        assert_eq!(why_not_renamed(&app, "app"), None);
+    }
+
+    #[test]
+    fn a_project_is_not_renamed_after_a_folder_already_there() {
+        let root = TempDir::new();
+        assert_eq!(
+            why_not_renamed(&app_in(&root), "taken"),
+            Some("There is a folder of that name there already.")
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_no_folder_s_is_refused() {
+        let root = TempDir::new();
+        let app = app_in(&root);
+        assert_eq!(why_not_renamed(&app, ""), Some("A project needs a name."));
+        for name in ["a/b", "a\\b", ".hidden", "..", "."] {
+            assert_eq!(
+                why_not_renamed(&app, name),
+                Some("The name is its folder's: no / in it, nor a . first."),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_project_whose_folder_is_not_there_keeps_its_name() {
+        let root = TempDir::new();
         let gone = Standing {
             folder: root.join("gone"),
             missing: true,
-            ..standing.clone()
+            ..app_in(&root)
         };
-        assert!(why_not_renamed(&gone, "shop").is_some());
+        assert_eq!(
+            why_not_renamed(&gone, "shop"),
+            Some("The project's folder is not there.")
+        );
+    }
+
+    #[test]
+    fn a_project_at_work_keeps_its_name() {
+        let root = TempDir::new();
         let busy = Standing {
             at_work: true,
-            ..standing
+            ..app_in(&root)
         };
-        assert!(why_not_renamed(&busy, "shop").is_some());
+        assert_eq!(
+            why_not_renamed(&busy, "shop"),
+            Some("A chat of the project is at work: rename it once the turn ends.")
+        );
     }
 }
