@@ -2669,6 +2669,7 @@ mod tests {
         let (sent, mut requests) = unbounded_channel();
 
         let shown = call_now(SHOW_CHANGES, &json!({ "folder": "sketch" }), &cwd, &sent);
+
         assert_eq!(shown["isError"], false);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert!(told.contains("since nothing"), "{told}");
@@ -2680,24 +2681,33 @@ mod tests {
             Ok(ToolRequest::ShowChanges { folder }) => assert_eq!(folder, sketch),
             _ => panic!("the stage was not asked to show what changed"),
         }
+    }
 
-        // A folder out of any repository has no changes to show.
-        let outside = TempDir::new();
-        if run_git(&outside, &["rev-parse", "--git-dir"]).is_err() {
-            let shown = call_now(SHOW_CHANGES, &json!({}), &outside, &sent);
-            assert_eq!(shown["isError"], true);
-            assert!(requests.try_recv().is_err());
-        }
+    #[test]
+    fn a_folder_out_of_any_repository_has_no_changes_to_show() {
+        let (sent, mut requests) = unbounded_channel();
 
-        // A project's folder shows what changed in its directories that
-        // are repositories.
+        let shown = call_now(SHOW_CHANGES, &json!({}), Path::new("/"), &sent);
+
+        assert_eq!(shown["isError"], true);
+        assert!(
+            requests.try_recv().is_err(),
+            "the stage is asked to show nothing"
+        );
+    }
+
+    #[test]
+    fn a_projects_folder_shows_what_changed_in_its_directories_that_are_repositories() {
         let project = TempDir::new();
         let app = project.join("directories").join("app");
         fs::create_dir_all(&app).unwrap();
         fs::create_dir_all(project.join("directories").join("notes")).unwrap();
         run_git(&app, &["init", "--quiet"]).unwrap();
         fs::write(app.join("main.rs"), "fn main() {}\n").unwrap();
+        let (sent, mut requests) = unbounded_channel();
+
         let shown = call_now(SHOW_CHANGES, &json!({}), &project, &sent);
+
         assert_eq!(shown["isError"], false);
         let told = shown["content"][0]["text"].as_str().unwrap();
         assert!(
