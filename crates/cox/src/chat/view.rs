@@ -133,13 +133,19 @@ const OVERDRAW: f32 = 400.;
 /// Does what Vim's keys ask of a stage's tabs.
 pub type ByKeys = Rc<dyn Fn(crate::stage::Tabs, &mut Window, &mut App)>;
 
+/// Whether a stage shows the tree of the project's files beside the tab
+/// shown, which `ctrl-w` then stops at, as at a window of its own.
+pub type ShowsFiles = Rc<dyn Fn(&App) -> bool>;
+
 /// A chat's stage, as the window shows it: the view, whether it is in
-/// sight, and what does what Vim's keys ask of its tabs.
+/// sight, what does what Vim's keys ask of its tabs, and whether it
+/// shows the tree of files.
 #[derive(Clone)]
 pub struct StageView {
     pub view: AnyView,
     pub panel: Entity<Panel>,
     pub by_keys: ByKeys,
+    pub shows_files: ShowsFiles,
 }
 
 /// How a chat stands in the list, as far as its view shows it.

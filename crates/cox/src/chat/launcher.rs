@@ -230,12 +230,14 @@ impl Stages for CefStages {
             opens.update(cx, |stage, cx| stage.open(url, window, cx));
         });
         let keyed = stage.clone();
+        let read = stage.clone();
         let view = StageView {
             view: stage.into(),
             panel,
             by_keys: Rc::new(move |tabs, window, cx| {
                 keyed.update(cx, |stage, cx| stage.by_keys(tabs, window, cx));
             }),
+            shows_files: Rc::new(move |cx| read.read(cx).shows_files(cx)),
         };
         Some((view, open_link))
     }

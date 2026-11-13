@@ -282,6 +282,7 @@ impl Stages for FakeStages {
             view: cx.new(|_| FakeStage).into(),
             panel: cx.new(|_| Panel::default()),
             by_keys: Rc::new(move |tabs, _, _| keyed.borrow_mut().push(tabs)),
+            shows_files: Rc::new(|_| false),
         };
         let open_link: OpenLink =
             Rc::new(move |url, _, _| opened.borrow_mut().push(url.to_owned()));

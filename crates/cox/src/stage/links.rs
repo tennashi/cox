@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use cox_core::tabs::Lines;
-use gpui::{Context, EventEmitter, Subscription, Window, prelude::*};
+use gpui::{Context, EventEmitter, Focusable as _, Subscription, Window, prelude::*};
 
 use crate::stage::Stage;
 use crate::stage::changes::{self, Changes, ShowTurn};
@@ -185,6 +185,7 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let from_files = self.files.focus_handle(cx).contains_focused(window, cx);
         let shown = self
             .tabs
             .shown_index()
@@ -199,6 +200,10 @@ impl Stage {
                     self.focus_shown(window, cx);
                 }
             }
+        }
+        // As NERDTree's `o` does, the keyboard goes on to the file chosen.
+        if from_files {
+            self.focus_shown(window, cx);
         }
     }
 
