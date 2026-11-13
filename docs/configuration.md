@@ -135,13 +135,18 @@ A lighter edge shows which part has the keyboard: the rail, the stage
 or the chat. On the rail and in the list of chats, a ring marks the row
 selected.
 
-**The chat.**
+**The chat.** Its input's keys work the same in the goal's, a sketch's and a rename's input, and in those of the settings and a project's card.
 
 | Mode | Key | Does |
 | --- | --- | --- |
-| Insert | Esc | Goes to normal mode, and closes the list of commands or files over the input. It does not stop the agent. |
+| Insert | Esc | Goes to normal mode, the cursor on the character before it, as Vim's, and closes the list of commands or files over the input. It does not stop the agent. |
 | Insert | Ctrl-W, Ctrl-U | Takes out the word before the cursor, or the line before it, as in Vim and a shell. In any input. |
 | Normal | `i`, `a`, `I`, `A` | Goes to insert mode at the cursor, after it, at the start of the line, or at its end. |
+| Normal | `h`, `l`, `w`, `b`, `e`, `0`, `^`, `$` | Moves the input's cursor, which is on a character, by characters and words, and to the line's start, first character and end. |
+| Normal | `x`, `X`, `d` and a motion, `dd`, `D` | Takes out the character, the one before, what the motion goes over, whole lines, or to the line's end. `diw` and `daw` take out the word, without or with its spaces. |
+| Normal | `s`, `S`, `c` and a motion, `cc`, `C` | Takes out the same, and goes to insert mode in its place. `cw` changes the word, not the spaces after it. |
+| Normal | `y` and a motion, `yy`, `Y`, `p`, `P` | Copies what the motion goes over, or whole lines, and puts what was copied after the cursor or before it; whole lines under or over its line. What is taken out or copied goes on the clipboard. |
+| Normal | `u`, Ctrl-R | Undoes the last edit, and does it again. |
 | Normal | Ctrl-C | Stops the agent. |
 | Normal | Esc | Forgets a count typed. In the goal's, a sketch's or a rename's input, the settings or a project's card, it closes them as Esc does without Vim. |
 | Normal | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Scrolls the conversation a line, half its height, or to its ends. |

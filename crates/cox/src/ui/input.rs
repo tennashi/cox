@@ -30,11 +30,11 @@ use gpui::{
     GlobalElementId, InspectorElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, Subscription,
     TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill,
-    point, prelude::*, px, relative, rgb, size,
+    point, prelude::*, px, relative, rgb, rgba, size,
 };
 
 use self::draft::{Draft, one_line, unix_line_breaks};
-use crate::ui::theme::{FAINT, FOREGROUND, SELECTION};
+use crate::ui::theme::{ACCENT, FAINT, FOREGROUND, SELECTION};
 use crate::ui::translation::Translate;
 
 actions!(
@@ -74,6 +74,7 @@ actions!(
         Newline,
         Undo,
         Redo,
+        Settle,
     ]
 );
 
@@ -545,6 +546,40 @@ impl LineInput {
         }
     }
 
+    /// Insert mode is left: the cursor goes onto the character before it,
+    /// as Vim's does.
+    fn settle(&mut self, _: &Settle, _window: &mut Window, cx: &mut Context<Self>) {
+        self.edit(cx, Draft::leave_insert);
+    }
+
+    /// Does what Vim's normal mode asks of the text, keeping what it takes
+    /// out or yanks on the clipboard, and putting from it. An input of one
+    /// line puts whole lines as one.
+    fn edit_text(
+        &mut self,
+        action: &crate::vim::EditText,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let kept = matches!(action.edit, crate::vim::keymap::Edit::Put { .. })
+            .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
+            .flatten()
+            .map(|kept| {
+                if self.wraps {
+                    unix_line_breaks(&kept)
+                } else {
+                    one_line(kept.strip_suffix('\n').unwrap_or(&kept))
+                }
+            });
+        let mut taken = None;
+        self.edit(cx, |draft| {
+            taken = draft.edit_normal(action.edit, action.times(), kept.as_deref());
+        });
+        if let Some(taken) = taken.filter(|taken| !taken.is_empty()) {
+            cx.write_to_clipboard(ClipboardItem::new_string(taken));
+        }
+    }
+
     /// Goes back to the text before the last edit; while the input method
     /// composes, the keys are its own.
     fn undo(&mut self, _: &Undo, _window: &mut Window, cx: &mut Context<Self>) {
@@ -882,6 +917,8 @@ impl Render for LineInput {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::settle))
+            .on_action(cx.listener(Self::edit_text))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::newline))
@@ -1143,6 +1180,8 @@ struct Prepainted {
     origin: Point<Pixels>,
     selection: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
+    /// The cursor of Vim's normal mode, on the character, under the text.
+    block: Option<PaintQuad>,
     /// The placeholder, shaped, while the input is empty.
     placeholder: Option<Layout>,
 }
@@ -1219,6 +1258,12 @@ impl Element for LineElement {
         let wraps = input.wraps;
         let selected = input.draft.selected().clone();
         let cursor = input.draft.cursor();
+        // Where the character the cursor is on ends, if it is on one.
+        let on_end = input.draft.text()[cursor..]
+            .chars()
+            .next()
+            .filter(|&c| c != '\n')
+            .map(|c| cursor + c.len_utf8());
         let scroll = input.scroll;
         let placeholder =
             (input.draft.text().is_empty() && !input.placeholder.is_empty()).then(|| {
@@ -1268,11 +1313,22 @@ impl Element for LineElement {
             Bounds::new(origin + at, size(CURSOR_WIDTH, layout.line_height)),
             rgb(FOREGROUND),
         );
+        // As wide as the character it is on, or as half a line is high
+        // where there is none, at the end of a line.
+        let width = on_end
+            .map(|end| layout.position(end))
+            .filter(|end| end.y == at.y && end.x > at.x)
+            .map_or(layout.line_height / 2., |end| end.x - at.x);
+        let block = fill(
+            Bounds::new(origin + at, size(width, layout.line_height)),
+            rgba((ACCENT << 8) | 0x88),
+        );
         Prepainted {
             layout: Some(layout),
             origin,
             selection,
             cursor: Some(cursor),
+            block: Some(block),
             placeholder,
         }
     }
@@ -1299,11 +1355,18 @@ impl Element for LineElement {
             for selection in prepainted.selection.drain(..) {
                 window.paint_quad(selection);
             }
+            let focused = focus_handle.is_focused(window);
+            if focused
+                && crate::vim::mode(cx) == Some(crate::vim::Mode::Normal)
+                && let Some(block) = prepainted.block.take()
+            {
+                window.paint_quad(block);
+            }
             layout.paint(prepainted.origin, window, cx);
             if let Some(placeholder) = prepainted.placeholder.take() {
                 placeholder.paint(prepainted.origin, window, cx);
             }
-            if focus_handle.is_focused(window)
+            if focused
                 && crate::vim::types(cx)
                 && let Some(cursor) = prepainted.cursor.take()
             {

@@ -29,7 +29,7 @@
 //!   says of a name, and [`locations`] the places it found.
 
 mod bar;
-mod cursor;
+
 mod file;
 mod hover;
 mod locations;
@@ -48,12 +48,12 @@ use cox_editor::line::Shown;
 use cox_editor::lsp::{Client, Encoding, OpenFile, Position};
 use cox_editor::syntax::Syntax;
 
-use self::cursor::Cursor;
 use self::file::File;
 use self::text::Text;
 /// How code is drawn, by what its syntax says it is, as a tab of code
 /// draws it: for another tab that shows code, as "Changes" does.
 pub(crate) use self::text::style as syntax_style;
+use crate::vim::cursor::{self, Cursor};
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
     KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
