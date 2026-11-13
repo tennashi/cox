@@ -477,9 +477,8 @@ pub struct Workspace {
     /// The rail, and the list of chats, as Vim's keys select along them.
     rail: vim::Picker,
     list: vim::Picker,
-    /// The line at the window's foot that Vim's `:` and `/` open, while
-    /// Vim's keys are on.
-    line: Option<Entity<crate::vim::line::Line>>,
+    /// The line at the window's foot that Vim's `:` and `/` open.
+    line: Entity<crate::vim::line::Line>,
     /// Show the chat of a stage's tab that the human asks a stage to.
     shows_chats: Vec<Subscription>,
     _from_daemon: Task<()>,
@@ -565,9 +564,7 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             rail: vim::Picker::new(cx),
             list: vim::Picker::new(cx),
-            line: crate::vim::mode(cx)
-                .is_some()
-                .then(|| cx.new(|cx| crate::vim::line::Line::new(window, cx))),
+            line: cx.new(|cx| crate::vim::line::Line::new(window, cx)),
             shows_chats: Vec::new(),
             _from_daemon: heard,
         }
@@ -3262,7 +3259,7 @@ impl Render for Workspace {
                 cx.try_global::<crate::ui::translation::Shown>()
                     .and_then(|shown| shown.0.clone()),
             )
-            .children(self.line.clone())
+            .child(self.line.clone())
     }
 }
 

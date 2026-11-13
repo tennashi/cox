@@ -242,9 +242,7 @@ pub fn run(settings: Settings) -> ExitCode {
         .with_assets(Icons)
         .run(move |cx: &mut App| {
             bind_keys(cx);
-            if crate::settings::vim() {
-                crate::vim::install(cx);
-            }
+            crate::vim::turn(crate::settings::vim(), cx);
             cx.set_global(Servers::default());
             cx.set_global(agents.clone());
             serve_browser(&cef, cx);
