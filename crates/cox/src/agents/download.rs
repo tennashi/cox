@@ -537,7 +537,14 @@ mod tests {
         fs::write(&downloaded, "#!/bin/sh\n").unwrap();
         let folder = scratch.join("sigit");
         unpack(&downloaded, "sigit-linux-amd64", &folder).unwrap();
-        assert!(folder.join("sigit-linux-amd64").exists());
+        let program = folder.join("sigit-linux-amd64");
+        assert_eq!(fs::read_to_string(&program).unwrap(), "#!/bin/sh\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(&program).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111);
+        }
     }
 
     #[test]
