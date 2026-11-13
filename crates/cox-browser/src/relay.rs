@@ -756,6 +756,7 @@ fn relayed(message: &Message) -> bool {
 mod tests {
     use std::time::Duration;
 
+    use futures_util::FutureExt as _;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
@@ -872,8 +873,8 @@ mod tests {
     }
 
     /// The agent asks for a tab, which the stage opens; the agent hears of
-    /// the new tab, which the browser told of while it was opening, and
-    /// works on its page. Then it closes the tab, but not the last.
+    /// the new tab, which the browser tells of around the time it opens,
+    /// and works on its page. Then it closes the tab, but not the last.
     #[tokio::test]
     async fn the_agent_opens_and_closes_tabs_on_the_stage() {
         let (mut agent, mut relay, _named) = connect().await;
@@ -897,7 +898,6 @@ mod tests {
         // The fake browser echoes this back as if it told of the new tab.
         let created = r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"NEW-TAB","type":"tab"}}}"#;
         agent.send(Message::text(created)).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
         let (_new_named, new) = watch::channel(Some("NEW".to_owned()));
         opening.is(new.clone());
         answer.send(Some(new)).unwrap();
@@ -1014,6 +1014,76 @@ mod tests {
             ask(&mut agent, r#"{"id":2,"method":"Target.attachToTarget","params":{"targetId":"OTHER","flatten":true}}"#, 1).await,
             json(&[r#"{"id":2,"error":{"code":-32000,"message":"No target with given id found"}}"#])
         );
+    }
+
+    /// A browser's connection, and what makes it say each message.
+    fn browser_saying() -> (
+        UnboundedSender<Message>,
+        impl Stream<Item = Result<Message, tungstenite::Error>> + Unpin,
+    ) {
+        let (said, heard) = unbounded_channel();
+        let heard = futures_util::stream::unfold(heard, |mut heard| async move {
+            heard.recv().await.map(|message| (Ok(message), heard))
+        });
+        (said, Box::pin(heard))
+    }
+
+    /// Polls `hearing` until it waits, and returns what it delivered.
+    fn delivered_now(
+        hearing: &mut (impl Future<Output = anyhow::Result<()>> + Unpin),
+        delivered: &mut UnboundedReceiver<Message>,
+    ) -> Vec<String> {
+        assert!(
+            hearing.now_or_never().is_none(),
+            "the browser is still open"
+        );
+        let mut texts = Vec::new();
+        while let Ok(message) = delivered.try_recv() {
+            texts.push(message.into_text().unwrap().to_string());
+        }
+        texts
+    }
+
+    #[test]
+    fn what_the_browser_says_while_a_page_opens_is_held_until_the_relay_knows_the_page() {
+        let (said, browser) = browser_saying();
+        let known = watch::Sender::new(Known {
+            opening: 1,
+            ..Known::default()
+        });
+        let (deliver, mut delivered) = unbounded_channel();
+        let mut hearing =
+            std::pin::pin!(hear_browser(browser, known.subscribe(), |message| deliver
+                .send(message)
+                .unwrap(),));
+
+        said.send(Message::text("created")).unwrap();
+        said.send(Message::text("attached")).unwrap();
+        assert_eq!(
+            delivered_now(&mut hearing, &mut delivered),
+            Vec::<String>::new()
+        );
+
+        known.send_modify(|known| known.opening = 0);
+        said.send(Message::text("loaded")).unwrap();
+        assert_eq!(
+            delivered_now(&mut hearing, &mut delivered),
+            ["created", "attached", "loaded"]
+        );
+    }
+
+    #[test]
+    fn what_the_browser_says_while_no_page_opens_goes_on_at_once() {
+        let (said, browser) = browser_saying();
+        let known = watch::Sender::new(Known::default());
+        let (deliver, mut delivered) = unbounded_channel();
+        let mut hearing =
+            std::pin::pin!(hear_browser(browser, known.subscribe(), |message| deliver
+                .send(message)
+                .unwrap(),));
+
+        said.send(Message::text("loaded")).unwrap();
+        assert_eq!(delivered_now(&mut hearing, &mut delivered), ["loaded"]);
     }
 
     #[tokio::test]
