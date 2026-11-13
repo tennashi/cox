@@ -759,11 +759,19 @@ impl gpui::Render for Tabbed {
     }
 }
 
-#[gpui::test]
-fn a_whole_session_by_keys(cx: &mut TestAppContext) {
+/// The terminals of the stages, as they are made.
+type Terminals = Rc<RefCell<Vec<Entity<Terminal>>>>;
+
+/// Opens the window with Vim's keys on, each chat's stage showing a page
+/// and a terminal that printed 1 to 300, and a chat of "hi" typed in
+/// normal mode: the terminals as the stages made them.
+fn open_session<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+) -> (Terminals, Entity<Workspace>, &'a mut VisualTestContext) {
     use gpui::AppContext as _;
 
-    let terminals: Rc<RefCell<Vec<Entity<Terminal>>>> = Rc::default();
+    let terminals: Terminals = Rc::default();
     let made = Rc::clone(&terminals);
     let built: fake_daemon::Built = Rc::new(move |cwd, _, cx| {
         let page = cx.new(|cx| FakePage {
@@ -792,7 +800,7 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
     cx.update(|cx| cox::vim::turn(true, cx));
     let (workspace, cx) = keys::open_window_on(
         cx,
-        scratch::folder("session"),
+        scratch::folder(name),
         FakeStages {
             built: Some(built),
             ..FakeStages::default()
@@ -803,18 +811,53 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "secondary-n h i escape");
     assert_eq!(keys::shown_input(cx, &workspace), "hi");
     assert_eq!(shown_mode(cx), Some("Normal"));
+    (terminals, workspace, cx)
+}
+
+/// Goes from the chat to the stage's terminal by keys, once it printed
+/// all.
+fn to_the_terminal(
+    cx: &mut VisualTestContext,
+    workspace: &Entity<Workspace>,
+    terminals: &Terminals,
+) -> Entity<Terminal> {
+    keys::press(cx, workspace, "ctrl-w h g t");
+    assert!(in_part(cx, "Terminal"));
+    let terminal = terminals.borrow().last().cloned().expect("a terminal");
+    shows(cx, &terminal, "300");
+    terminal
+}
+
+#[gpui::test]
+fn control_w_moves_between_the_chat_and_its_stage_keeping_the_draft(cx: &mut TestAppContext) {
+    let (_terminals, workspace, cx) = open_session(cx, "session-control-w");
 
     keys::press(cx, &workspace, "ctrl-w h");
     assert!(in_part(cx, "Page"));
-    keys::press(cx, &workspace, "g t");
+    assert_eq!(shown_mode(cx), Some("Normal"));
+    keys::press(cx, &workspace, "ctrl-w l");
+    assert!(in_part(cx, "Conversation"));
+    assert_eq!(keys::shown_input(cx, &workspace), "hi");
+    assert_eq!(shown_mode(cx), Some("Normal"));
+}
+
+#[gpui::test]
+fn g_t_comes_to_the_stage_s_terminal_in_normal_mode(cx: &mut TestAppContext) {
+    let (_terminals, workspace, cx) = open_session(cx, "session-g-t");
+
+    keys::press(cx, &workspace, "ctrl-w h g t");
     assert!(in_part(cx, "Terminal"));
     assert_eq!(
         shown_mode(cx),
         Some("Normal"),
         "come to by keys, as Neovim's terminal"
     );
-    let terminal = terminals.borrow().last().cloned().expect("a terminal");
-    shows(cx, &terminal, "300");
+}
+
+#[gpui::test]
+fn i_types_into_the_stage_s_terminal_until_control_backslash_control_n(cx: &mut TestAppContext) {
+    let (terminals, workspace, cx) = open_session(cx, "session-insert");
+    let terminal = to_the_terminal(cx, &workspace, &terminals);
 
     keys::press(cx, &workspace, "i");
     assert_eq!(shown_mode(cx), Some("Insert"));
@@ -822,34 +865,69 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
     shows(cx, &terminal, "echo\necho");
     keys::press(cx, &workspace, "ctrl-\\ ctrl-n");
     assert_eq!(shown_mode(cx), Some("Normal"));
+    assert!(in_part(cx, "Terminal"));
+}
+
+#[gpui::test]
+fn g_g_scrolls_the_stage_s_terminal_back(cx: &mut TestAppContext) {
+    let (terminals, workspace, cx) = open_session(cx, "session-g-g");
+    let terminal = to_the_terminal(cx, &workspace, &terminals);
+
     keys::press(cx, &workspace, "g g");
     assert!(terminal.read_with(cx, |terminal, _| terminal.scrolled_back()) > 0);
+}
+
+#[gpui::test]
+fn coming_back_to_the_stage_by_keys_finds_its_terminal_in_normal_mode(cx: &mut TestAppContext) {
+    let (terminals, workspace, cx) = open_session(cx, "session-back");
+    to_the_terminal(cx, &workspace, &terminals);
 
     keys::press(cx, &workspace, "ctrl-w l");
     assert!(in_part(cx, "Conversation"));
-    assert_eq!(keys::shown_input(cx, &workspace), "hi");
-    assert_eq!(shown_mode(cx), Some("Normal"));
-
     keys::press(cx, &workspace, "ctrl-w h");
     assert!(
         in_part(cx, "Terminal"),
         "the stage shows the terminal still"
     );
     assert_eq!(shown_mode(cx), Some("Normal"), "coming back by keys");
+}
+
+#[gpui::test]
+fn escape_on_the_command_line_leaves_the_keyboard_where_it_was(cx: &mut TestAppContext) {
+    let (terminals, workspace, cx) = open_session(cx, "session-colon-escape");
+    to_the_terminal(cx, &workspace, &terminals);
+
     keys::press(cx, &workspace, ": escape");
     assert!(in_part(cx, "Terminal"));
     assert_eq!(shown_mode(cx), Some("Normal"), "back from the line");
+}
+
+#[gpui::test]
+fn colon_q_closes_the_stage_s_tab_the_keyboard_is_in(cx: &mut TestAppContext) {
+    let (terminals, workspace, cx) = open_session(cx, "session-colon-q");
+    to_the_terminal(cx, &workspace, &terminals);
 
     keys::press(cx, &workspace, ": q enter");
     assert!(in_part(cx, "Page"), "the terminal closed");
+}
+
+#[gpui::test]
+fn colon_new_opens_a_chat_with_the_keyboard_in_its_input_in_insert(cx: &mut TestAppContext) {
+    let (_terminals, workspace, cx) = open_session(cx, "session-colon-new");
+
     keys::press(cx, &workspace, ": n e w enter");
     let chats = workspace.read_with(cx, |workspace, _| workspace.chats(0).count());
     assert_eq!(chats, 2);
     assert!(in_part(cx, "Conversation"));
     assert_eq!(shown_mode(cx), Some("Insert"));
     assert_eq!(keys::shown_input(cx, &workspace), "");
+}
 
-    keys::press(cx, &workspace, "escape : g o a l enter");
+#[gpui::test]
+fn colon_goal_opens_the_goal_input_in_insert(cx: &mut TestAppContext) {
+    let (_terminals, workspace, cx) = open_session(cx, "session-colon-goal");
+
+    keys::press(cx, &workspace, ": g o a l enter");
     assert!(in_part(cx, "Goal"));
     assert_eq!(shown_mode(cx), Some("Insert"), "before a key is typed");
 }
@@ -1351,10 +1429,47 @@ fn changes_move_from_file_to_file_and_open_one(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
-fn changes_go_from_stretch_to_stretch_and_open_one_there(cx: &mut TestAppContext) {
+/// A file opened from the changes, at a line, if at one.
+type Opened = (PathBuf, Option<usize>);
+
+/// What the changes of three files show, a.rs changed in two stretches,
+/// at lines 10 and 70, b.rs in one, at line 40, and c.rs in one, with
+/// the keyboard in them.
+struct Stretches {
+    root: PathBuf,
+    /// The file and line each Enter opened, in turn.
+    chosen: Rc<RefCell<Vec<Opened>>>,
+    /// The row of each stretch, in turn.
+    rows: Vec<usize>,
+}
+
+impl Stretches {
+    /// Where the row of the stretch `nth` is drawn, from the top of the
+    /// window.
+    fn top(&self, nth: usize, cx: &mut VisualTestContext) -> gpui::Pixels {
+        let row = self.rows[nth];
+        let selector = Box::leak(format!("changed-line-{row}").into_boxed_str());
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("row {row} in sight"))
+            .top()
+    }
+
+    /// The file and line the last Enter opened.
+    fn opened(&self) -> Opened {
+        self.chosen
+            .borrow()
+            .last()
+            .cloned()
+            .expect("one was opened")
+    }
+}
+
+fn open_stretches<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+) -> (Stretches, &'a mut VisualTestContext) {
     cx.update(|cx| cox::vim::turn(true, cx));
-    let root = folder("changes-stretches", &[]);
+    let root = folder(name, &[]);
     for name in ["a.rs", "b.rs", "c.rs"] {
         std::fs::write(root.join(name), numbered(100)).unwrap();
     }
@@ -1417,36 +1532,67 @@ fn changes_go_from_stretch_to_stretch_and_open_one_there(cx: &mut TestAppContext
         4,
         "two stretches in a.rs, one in b.rs and c.rs"
     );
-    let top = |row: usize, cx: &mut VisualTestContext| {
-        let selector = Box::leak(format!("changed-line-{row}").into_boxed_str());
-        cx.debug_bounds(selector)
-            .unwrap_or_else(|| panic!("row {row} in sight"))
-            .top()
+    assert_eq!(
+        stretches.len(),
+        4,
+        "two stretches in a.rs, one in b.rs and c.rs"
+    );
+    let stretches = Stretches {
+        root,
+        chosen,
+        rows: stretches,
     };
+    (stretches, cx)
+}
+
+#[gpui::test]
+fn right_bracket_c_scrolls_the_next_stretch_to_the_top_and_enter_opens_it_there(
+    cx: &mut TestAppContext,
+) {
+    let (stretches, cx) = open_stretches(cx, "stretch-next");
     let height = cx.update(|window, _| window.viewport_size().height);
-    let first = top(stretches[0], cx);
+    let first = stretches.top(0, cx);
 
     type_keys(cx, "] c enter");
-    let list_top = top(stretches[0], cx);
-    assert!(list_top < first, "the first stretch scrolls up to the top");
-    assert!(list_top < height / 4.);
+    let top = stretches.top(0, cx);
+    assert!(top < first, "the first stretch scrolls up to the top");
+    assert!(top < height / 4.);
+    assert_eq!(stretches.opened(), (stretches.root.join("a.rs"), Some(10)));
+}
+
+#[gpui::test]
+fn a_count_takes_right_bracket_c_that_many_stretches_on(cx: &mut TestAppContext) {
+    let (stretches, cx) = open_stretches(cx, "stretch-count");
+    type_keys(cx, "] c");
+    let top = stretches.top(0, cx);
+
     type_keys(cx, "2 ] c enter");
-    assert_eq!(top(stretches[2], cx), list_top);
+    assert_eq!(stretches.top(2, cx), top);
+    assert_eq!(stretches.opened(), (stretches.root.join("b.rs"), Some(40)));
+}
+
+#[gpui::test]
+fn left_bracket_c_goes_back_a_stretch(cx: &mut TestAppContext) {
+    let (stretches, cx) = open_stretches(cx, "stretch-back");
+    type_keys(cx, "] c");
+    let top = stretches.top(0, cx);
+    type_keys(cx, "2 ] c");
+
     type_keys(cx, "[ c enter");
-    assert_eq!(top(stretches[1], cx), list_top);
+    assert_eq!(stretches.top(1, cx), top);
+    assert_eq!(stretches.opened(), (stretches.root.join("a.rs"), Some(70)));
+}
+
+#[gpui::test]
+fn left_bracket_c_with_a_count_past_the_first_stretch_stops_there(cx: &mut TestAppContext) {
+    let (stretches, cx) = open_stretches(cx, "stretch-first");
+    type_keys(cx, "] c");
+    let top = stretches.top(0, cx);
+    type_keys(cx, "2 ] c");
+
     type_keys(cx, "5 [ c enter");
-    assert_eq!(top(stretches[0], cx), list_top);
-    type_keys(cx, "j enter");
-    assert_eq!(
-        *chosen.borrow(),
-        [
-            (root.join("a.rs"), Some(10)),
-            (root.join("b.rs"), Some(40)),
-            (root.join("a.rs"), Some(70)),
-            (root.join("a.rs"), Some(10)),
-            (root.join("b.rs"), None),
-        ]
-    );
+    assert_eq!(stretches.top(0, cx), top);
+    assert_eq!(stretches.opened(), (stretches.root.join("a.rs"), Some(10)));
 }
 
 #[gpui::test]
@@ -1920,7 +2066,7 @@ fn colon_chat_shows_the_chat_whose_name_fits(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn off_there_is_no_line(cx: &mut TestAppContext) {
+fn with_vim_off_colon_opens_no_command_line(cx: &mut TestAppContext) {
     let (workspace, cx) = keys::open_window(cx, scratch::folder("line-off"));
     keys::press(cx, &workspace, "secondary-n escape :");
     assert!(!line(cx, &workspace).open);
