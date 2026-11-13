@@ -68,7 +68,7 @@ async fn what_goes_between_cox_and_the_agent_is_said_in_its_span() {
     // first request, and goes.
     let script = r#"echo starting >&2
 read request
-id=$(printf '%s' "$request" | sed 's/.*"id":\([0-9]*\).*/\1/')
+id=$(printf '%s' "$request" | sed 's/.*"id":\("[^"]*"\).*/\1/')
 echo '{"jsonrpc":"2.0","id":'"$id"',"result":{"protocolVersion":1,"agentCapabilities":{}}}'
 sleep 1"#;
 
