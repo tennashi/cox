@@ -787,6 +787,7 @@ fn a_whole_session_by_keys(cx: &mut TestAppContext) {
             by_keys: Rc::new(move |tabs, window, cx| {
                 stage.update(cx, |stage, cx| stage.by_keys(&tabs, window, cx));
             }),
+            shows_files: Rc::new(|_| false),
         }
     });
     cx.update(|cx| cox::vim::turn(true, cx));
@@ -1645,6 +1646,7 @@ fn t_on_a_page_and_open_with_words_ask_the_stage_to_search(cx: &mut TestAppConte
                 }
                 asked.borrow_mut().push(tabs);
             }),
+            shows_files: Rc::new(|_| false),
         }
     });
     cx.update(|cx| cox::vim::turn(true, cx));
@@ -2353,6 +2355,7 @@ fn the_part_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
                     window.focus(&page.read(cx).focus);
                 }
             }),
+            shows_files: Rc::new(|_| false),
         }
     });
     cx.update(|cx| cox::vim::turn(true, cx));
@@ -2396,4 +2399,83 @@ fn the_part_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
     keys::press(cx, &workspace, "ctrl-w w");
     assert!(in_part(cx, "Rail"));
     assert_eq!(edge_in(cx), Some("rail"), "ctrl-w w went to the rail");
+}
+
+/// A stand-in for the stage on the tab of a file, with the tree of files
+/// beside it.
+struct FilesBeside {
+    tree: Entity<Tree>,
+    page: Entity<FakePage>,
+}
+
+impl gpui::Render for FilesBeside {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement as _, Styled as _};
+
+        gpui::div()
+            .size_full()
+            .flex()
+            .child(
+                gpui::div()
+                    .w(gpui::px(200.))
+                    .h_full()
+                    .child(self.tree.clone()),
+            )
+            .child(gpui::div().flex_1().h_full().child(self.page.clone()))
+    }
+}
+
+#[gpui::test]
+fn control_w_stops_at_the_tree_of_files_as_at_a_window(cx: &mut TestAppContext) {
+    use gpui::AppContext as _;
+
+    let root = folder("tree-window", &["a.rs"]);
+    let built: fake_daemon::Built = Rc::new(move |_, _, cx| {
+        let tree = cx.new(|cx| Tree::new(root.clone(), Vec::new(), cx));
+        let page = cx.new(|cx| FakePage {
+            focus: cx.focus_handle(),
+            asked: Vec::new(),
+            context: "Page",
+        });
+        let (to_tree, to_page) = (tree.clone(), page.clone());
+        cox::chat::view::StageView {
+            view: cx.new(|_| FilesBeside { tree, page }).into(),
+            panel: cx.new(|_| cox::ui::Panel::default()),
+            by_keys: Rc::new(move |tabs, window, cx| match tabs {
+                Tabs::Focus => window.focus(&to_page.read(cx).focus),
+                Tabs::FocusFiles => window.focus(&to_tree.focus_handle(cx)),
+                _ => {}
+            }),
+            shows_files: Rc::new(|_| true),
+        }
+    });
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let (workspace, cx) = keys::open_window_on(
+        cx,
+        scratch("tree-window-chats"),
+        FakeStages {
+            built: Some(built),
+            ..FakeStages::default()
+        },
+    );
+    let tree = "Tree";
+
+    keys::press(cx, &workspace, "secondary-n escape ctrl-w h");
+    assert!(in_part(cx, "Page"), "from the chat, the file's tab");
+    keys::press(cx, &workspace, "ctrl-w h");
+    assert!(in_part(cx, tree), "then the tree, left of it");
+    keys::press(cx, &workspace, "ctrl-w h");
+    assert!(in_part(cx, "Rail"), "then the rail");
+    keys::press(cx, &workspace, "ctrl-w l");
+    assert!(in_part(cx, tree), "back to the tree");
+    keys::press(cx, &workspace, "ctrl-w l");
+    assert!(in_part(cx, "Page"), "and the file");
+    keys::press(cx, &workspace, "ctrl-w w ctrl-w w");
+    assert!(in_part(cx, "Rail"), "round, past the chat to the rail");
+    keys::press(cx, &workspace, "ctrl-w w");
+    assert!(in_part(cx, tree), "round, on to the tree");
 }

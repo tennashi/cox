@@ -105,7 +105,10 @@ use std::path::PathBuf;
 
 use cox_core::list::List;
 use cox_core::tabs::{KeptTab, KeptTabs};
-use gpui::{App, Context, Entity, Subscription, Task, Window, actions, div, prelude::*, px, rgb};
+use gpui::{
+    App, Context, Entity, Focusable as _, Subscription, Task, Window, actions, div, prelude::*, px,
+    rgb,
+};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::agent::mcp::ToolRequest;
@@ -157,6 +160,9 @@ pub fn bind_keys(cx: &mut App) {
 pub enum Tabs {
     /// The keyboard goes to the tab shown.
     Focus,
+    /// The keyboard goes to the tree of the project's files, if it is
+    /// beside the tab shown.
+    FocusFiles,
     /// Shows the tab this many along from the one shown, going round.
     Along(isize),
     /// Shows the tab of this number, from 1, if there is one.
@@ -826,6 +832,12 @@ impl Stage {
     pub fn by_keys(&mut self, tabs: Tabs, window: &mut Window, cx: &mut Context<Self>) {
         let index = match tabs {
             Tabs::Focus => return self.focus_shown(window, cx),
+            Tabs::FocusFiles => {
+                if self.in_sight() && self.shows_files(cx) {
+                    window.focus(&self.files.focus_handle(cx));
+                }
+                return;
+            }
             Tabs::Close => {
                 if let Some(index) = self.tabs.shown_index() {
                     let _ = self.close_tab(index, window, cx);
@@ -857,6 +869,12 @@ impl Stage {
         }
     }
 
+    /// Whether the tree of the project's files is beside the tab shown:
+    /// with the tab of a file, unless the tree is folded.
+    pub fn shows_files(&self, cx: &App) -> bool {
+        self.tabs.shown().is_some_and(|tab| tab.content.is_file()) && !tree::is_folded(cx)
+    }
+
     fn focus_shown(&self, window: &mut Window, cx: &App) {
         if !self.in_sight() {
             return;
@@ -879,10 +897,7 @@ impl Stage {
 
 impl Render for Stage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The tree of the project's files is beside the tab of a file,
-        // unless it is folded.
-        let beside =
-            self.tabs.shown().is_some_and(|tab| tab.content.is_file()) && !tree::is_folded(cx);
+        let beside = self.shows_files(cx);
         div()
             .relative()
             .size_full()

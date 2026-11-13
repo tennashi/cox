@@ -51,10 +51,12 @@ fn moved(at: usize, pick: Pick, count: usize, rows: usize) -> usize {
 }
 
 /// The parts of the window `ctrl-w` moves the keyboard among, from left
-/// to right as the window draws them.
+/// to right as the window draws them, as Vim's windows, all at one level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Part {
     Rail,
+    /// The tree of the project's files, beside the tab of a file.
+    Tree,
     Stage,
     Chat,
     /// The list of chats, over the chat.
@@ -66,6 +68,7 @@ impl Part {
         match region {
             Region::Rail => Self::Rail,
             Region::List => Self::List,
+            Region::Tree => Self::Tree,
             Region::Workspace | Region::Chat => Self::Chat,
             _ => Self::Stage,
         }
@@ -99,10 +102,12 @@ impl Workspace {
         let times = count.map_or(1, |count| usize::try_from(count).unwrap_or(usize::MAX));
         match act {
             Act::Go(toward) => {
-                let parts: &[Part] = if self.centered().is_some() {
-                    &[Part::Rail, Part::Stage, Part::Chat]
-                } else {
-                    &[Part::Rail, Part::Chat]
+                let parts: &[Part] = match self.centered() {
+                    Some(stage) if (stage.shows_files)(cx) => {
+                        &[Part::Rail, Part::Tree, Part::Stage, Part::Chat]
+                    }
+                    Some(_) => &[Part::Rail, Part::Stage, Part::Chat],
+                    None => &[Part::Rail, Part::Chat],
                 };
                 if let Some(part) = Part::of(region).toward(toward, parts) {
                     self.go(part, window, cx);
@@ -328,6 +333,10 @@ impl Workspace {
                 self.switching = false;
                 window.focus(&self.rail.focus);
             }
+            Part::Tree => {
+                self.switching = false;
+                self.tabs(Tabs::FocusFiles, window, cx);
+            }
             Part::Stage => {
                 self.switching = false;
                 self.tabs(Tabs::Focus, window, cx);
@@ -381,10 +390,6 @@ mod tests {
         );
         assert_eq!(from(Region::Rail).toward(Toward::Left, ALL), None);
         assert_eq!(
-            from(Region::Tree).toward(Toward::Right, ALL),
-            Some(Part::Chat)
-        );
-        assert_eq!(
             from(Region::List).toward(Toward::Left, ALL),
             Some(Part::Stage)
         );
@@ -402,6 +407,23 @@ mod tests {
             Some(Part::Chat)
         );
         assert_eq!(from(Region::Rail).toward(Toward::Up, ALL), None);
+        let files = &[Part::Rail, Part::Tree, Part::Stage, Part::Chat];
+        assert_eq!(
+            from(Region::Rail).toward(Toward::Right, files),
+            Some(Part::Tree)
+        );
+        assert_eq!(
+            from(Region::Tree).toward(Toward::Right, files),
+            Some(Part::Stage)
+        );
+        assert_eq!(
+            from(Region::Code).toward(Toward::Left, files),
+            Some(Part::Tree)
+        );
+        assert_eq!(
+            from(Region::Tree).toward(Toward::Left, files),
+            Some(Part::Rail)
+        );
         let no_stage = &[Part::Rail, Part::Chat];
         assert_eq!(
             from(Region::Rail).toward(Toward::Right, no_stage),

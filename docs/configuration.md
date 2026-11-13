@@ -117,7 +117,7 @@ over the chat:
 
 | Key | Does |
 | --- | --- |
-| Ctrl-W `h`, Ctrl-W `l` | Moves the keyboard to the part at the left or the right: the rail, the stage, the chat. |
+| Ctrl-W `h`, Ctrl-W `l` | Moves the keyboard to the part at the left or the right: the rail, the tree of files when it is beside a file, the stage, the chat. |
 | Ctrl-W `w` | Moves the keyboard to the next part, round from the chat to the rail. |
 | `gt`, `gT` | Shows the stage's next tab, or the one before, among those listed beside the stage: the views on its bar, as the map or Knowledge, are left out. `3gt` shows its third tab, `3gT` the tab three before. |
 | Ctrl-W `c` | Closes the tab the stage shows. |
@@ -158,7 +158,7 @@ keyboard in its input. `o` opens a new chat in the project selected.
 | Code, a document, a page, a terminal | `/`, `?`, `n`, `N` | Finds text forward or back, as typed, in any case unless it has a capital, and again either way. |
 | Code | `V`, `y` | Selects whole lines from the cursor's, and copies them. |
 | Code | `ga`, `gd`, Ctrl-O, Ctrl-I | Hands the lines to the chat, goes to the definition, goes back, goes forward. |
-| The tree | `l` or Enter, `h` | Opens what is selected, or closes its folder. |
+| The tree | `l` or Enter, `h` | Opens what is selected, or closes its folder. A file opened goes on with the keyboard. |
 | Changes | Enter | Opens the file selected. |
 | A page | `f`, `;t` | Draws hints over the page; typing a label clicks it, or with `;t` opens the link on a tab of its own. Esc takes the hints away. |
 | A page | `H`, `L`, `r`, `o`, `t` | Goes back, forward, loads again, takes the keyboard to the address, opens the stage's + menu. In the menu `t` opens, words that are no address, file or path are searched for on a new tab with the [`search`](#settingsjson) engine, and `!command` runs the command in a terminal; the menu says what Enter does. |
