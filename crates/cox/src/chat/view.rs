@@ -34,6 +34,7 @@
 //! each as it is set, and a click on it opens a list of them, from which
 //! each opens its choices (see [`settings`]).
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -61,7 +62,9 @@ use crate::daemon::wire::ToDaemon;
 use crate::stage::Stage;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{self, LineInput, Submitted};
+use crate::ui::selection::Spot;
 use crate::ui::text::Reading;
+use crate::ui::text::cursor::Step;
 use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND,
     OFFERING_EDGE, RAISED, UI_FONT,
@@ -69,7 +72,7 @@ use crate::ui::theme::{
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, Panel, tip};
 
-use crate::vim::keymap::Motion;
+use crate::vim::keymap::{Across, Motion, Place, Selects};
 
 mod complete;
 mod entries;
@@ -96,6 +99,10 @@ actions!(
 );
 
 pub(crate) const KEY_CONTEXT: &str = "Conversation";
+
+/// The key context of the conversation, while it has the keyboard, for
+/// Vim's keys to move a cursor through it.
+pub(crate) const READING: &str = "ChatReading";
 
 /// The key context of the input that sets the chat's goal.
 pub(crate) const GOAL: &str = "Goal";
@@ -170,6 +177,18 @@ pub struct Row {
     pub setup: Option<crate::agent::setup::Setup>,
 }
 
+/// Where the frame after the next puts the cursor of Vim's keys in the
+/// conversation, once the conversation scrolled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Settle {
+    /// Where it is, if it shows, or else on the nearest row that does.
+    IntoSight,
+    /// On the first row in sight (`gg`).
+    First,
+    /// On the last row in sight (`G`).
+    Last,
+}
+
 pub struct ChatView {
     /// What the chat goes by to the daemon.
     key: u64,
@@ -205,6 +224,15 @@ pub struct ChatView {
     open_link: OpenLink,
     /// The conversation's text, and what the human selects of it.
     reading: Reading,
+    /// The conversation, as it has the keyboard, for Vim's keys to move a
+    /// cursor through it.
+    reading_focus: FocusHandle,
+    /// Where the next frame puts the cursor, once the conversation
+    /// scrolled.
+    settle: Option<Settle>,
+    /// Whether the human scrolled the conversation with the mouse since
+    /// the last frame.
+    wheeled: Rc<Cell<bool>>,
     /// The search of Vim's `/` going through the conversation, while it
     /// goes on.
     finding: Option<find::Finding>,
@@ -251,12 +279,18 @@ impl ChatView {
             view.submit(&input, cx);
         });
         let completion = complete::Completion::new(&input, cx);
+        let list = ListState::new(0, ListAlignment::Top, px(OVERDRAW));
+        let wheeled = Rc::new(Cell::new(false));
+        list.set_scroll_handler({
+            let wheeled = Rc::clone(&wheeled);
+            move |_, _, _| wheeled.set(true)
+        });
         Self {
             key,
             link,
             conversation: Conversation::closed(Vec::new()),
             row,
-            list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
+            list,
             places: Vec::new(),
             to_end: true,
             to_entry: None,
@@ -266,6 +300,9 @@ impl ChatView {
             stage: None,
             open_link: Rc::new(|_, _, _| {}),
             reading: Reading::default(),
+            reading_focus: cx.focus_handle(),
+            settle: None,
+            wheeled,
             finding: None,
             folds: Folds::default(),
             plan_folded: false,
@@ -340,6 +377,9 @@ impl ChatView {
     fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
         if !crate::chat::hand::hand(self.selected_attachment(), cx) {
             cx.propagate();
+        }
+        if self.reading.end_visual(false) {
+            cx.notify();
         }
     }
 
@@ -750,6 +790,237 @@ impl ChatView {
         if !text.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+        if self.reading.end_visual(false) {
+            cx.notify();
+        }
+    }
+
+    /// Gives the keyboard to the conversation, for Vim's keys to move a
+    /// cursor through it: on the start of what is selected, or of the
+    /// first row in sight, if it was nowhere yet.
+    pub fn read_by_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.reading_focus);
+        let view = self.list.viewport_bounds();
+        self.reading.place_cursor(view.top(), view.bottom());
+        self.settle = Some(Settle::IntoSight);
+        crate::vim::came(crate::vim::Region::Reading, window, cx);
+        cx.notify();
+    }
+
+    /// Whether the conversation has the keyboard, for Vim's keys.
+    #[must_use]
+    pub fn reads_by_keys(&self, window: &Window) -> bool {
+        self.reading_focus.is_focused(window)
+    }
+
+    /// Where the cursor of Vim's keys is in the conversation, once they
+    /// came to it.
+    #[must_use]
+    pub fn reading_cursor(&self) -> Option<Spot> {
+        self.reading.cursor()
+    }
+
+    /// Moves the cursor of Vim's keys in the conversation as `step` says,
+    /// `times` over, and scrolls its row into sight.
+    fn step(&mut self, step: Step, times: usize, cx: &mut Context<Self>) {
+        if let Some((top, bottom)) = self.reading.move_cursor(step, times) {
+            let view = self.list.viewport_bounds();
+            if top < view.top() {
+                self.list.scroll_by(top - view.top());
+            } else if bottom > view.bottom() {
+                self.list.scroll_by(bottom - view.bottom());
+            }
+        }
+        cx.notify();
+    }
+
+    /// Moves the cursor, or scrolls the conversation, as Vim's keys ask
+    /// while it has the keyboard: `j` and `k` move the cursor a row, and
+    /// the rest scroll as from the input, the cursor going to what shows.
+    fn read_by_motion(
+        &mut self,
+        motion: &crate::vim::Move,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let times = motion.times();
+        match motion.motion {
+            Motion::Down => self.step(Step::Down, times, cx),
+            Motion::Up => self.step(Step::Up, times, cx),
+            Motion::HalfDown | Motion::HalfUp => {
+                self.settle = Some(Settle::IntoSight);
+                self.move_by_keys(motion, window, cx);
+            }
+            Motion::Top => {
+                self.settle = Some(Settle::First);
+                self.move_by_keys(motion, window, cx);
+            }
+            Motion::Bottom => {
+                self.settle = Some(Settle::Last);
+                self.move_by_keys(motion, window, cx);
+            }
+        }
+    }
+
+    /// Moves the cursor along the conversation's text, as Vim's keys ask
+    /// while it has the keyboard.
+    fn read_across(
+        &mut self,
+        across: &crate::vim::MoveAcross,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let step = match across.across {
+            Across::Left => Step::Left,
+            Across::Right => Step::Right,
+            Across::WordForward => Step::WordForward,
+            Across::WordBack => Step::WordBack,
+            Across::WordEnd => Step::WordEnd,
+            Across::LineStart => Step::RowStart,
+            Across::FirstNonBlank => Step::FirstNonBlank,
+            Across::LineEnd => Step::RowEnd,
+            Across::Bracket | Across::ParagraphForward | Across::ParagraphBack => return,
+        };
+        let times = across
+            .count
+            .map_or(1, |count| usize::try_from(count).unwrap_or(usize::MAX));
+        self.step(step, times, cx);
+    }
+
+    /// Starts selecting as `selects` says, from the cursor, or stops.
+    fn read_visually(&mut self, selects: Selects, cx: &mut Context<Self>) {
+        self.reading.visual(selects);
+        cx.notify();
+    }
+
+    /// Gives the keyboard back to the input, to type in it, as `place`
+    /// says.
+    fn type_in_input(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.input.focus_handle(cx));
+        match place {
+            Place::Cursor => {}
+            Place::After => window.dispatch_action(Box::new(input::Right), cx),
+            Place::LineStart => window.dispatch_action(Box::new(input::Home), cx),
+            Place::LineEnd => window.dispatch_action(Box::new(input::End), cx),
+        }
+        cx.notify();
+    }
+
+    /// The conversation's entries, which the human reads, selects with
+    /// the mouse, and moves a cursor through with Vim's keys.
+    fn render_reading(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .id("conversation")
+            .track_focus(&self.reading_focus)
+            .map(|conversation| Self::read_by_keys_on(conversation, cx))
+            .size_full()
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::offer_selection))
+            .on_mouse_move(cx.listener(Self::mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|view, _, _, _| view.reading.stop()),
+            )
+            .child(
+                list(
+                    self.list.clone(),
+                    cx.processor(|view, place, _, cx| view.render_place(place, cx)),
+                )
+                .size_full(),
+            )
+            .children(self.render_finding(cx))
+            .children(self.render_settling(window, cx))
+    }
+
+    /// Draws the cursor of Vim's keys in the conversation while it has
+    /// the keyboard. Visual mode is left with the keyboard; what it
+    /// selected stays.
+    fn follow_reading(&mut self, window: &Window, cx: &App) {
+        let reads = crate::vim::mode(cx).is_some() && self.reads_by_keys(window);
+        self.reading.show_cursor(reads);
+        if !reads {
+            self.reading.end_visual(true);
+        }
+    }
+
+    /// Takes Vim's keys that move the cursor through the conversation and
+    /// select with it on `element`, the conversation, while it has the
+    /// keyboard.
+    fn read_by_keys_on(
+        element: gpui::Stateful<gpui::Div>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        element
+            .key_context(READING)
+            .on_action(cx.listener(Self::read_by_motion))
+            .on_action(cx.listener(Self::read_across))
+            .on_action(
+                cx.listener(|view, typing: &crate::vim::TypeInInput, window, cx| {
+                    view.type_in_input(typing.place, window, cx);
+                }),
+            )
+            .on_action(cx.listener(|view, _: &crate::vim::Visual, _, cx| {
+                view.read_visually(Selects::Lines, cx);
+            }))
+            .on_action(
+                cx.listener(|view, _: &crate::vim::VisualCharacters, _, cx| {
+                    view.read_visually(Selects::Characters, cx);
+                }),
+            )
+            .on_action(cx.listener(|view, _: &crate::vim::LeaveVisual, _, cx| {
+                if view.reading.end_visual(false) {
+                    cx.notify();
+                }
+            }))
+    }
+
+    /// Puts the cursor where the scroll left it room, once the frame laid
+    /// the conversation out: on the first or last row in sight after `gg`
+    /// and `G`, or into sight after the human scrolled.
+    fn settle_cursor(&mut self, cx: &mut Context<Self>) {
+        let settle = self
+            .settle
+            .take()
+            .or_else(|| self.wheeled.take().then_some(Settle::IntoSight));
+        let view = self.list.viewport_bounds();
+        let moved = match settle {
+            None => false,
+            Some(Settle::IntoSight) => self.reading.cursor_into_sight(view.top(), view.bottom()),
+            Some(Settle::First) => {
+                self.reading
+                    .cursor_to_end_in_sight(view.top(), view.bottom(), false)
+            }
+            Some(Settle::Last) => {
+                self.reading
+                    .cursor_to_end_in_sight(view.top(), view.bottom(), true)
+            }
+        };
+        if moved {
+            cx.notify();
+        }
+    }
+
+    /// What puts the cursor once the conversation is painted, while it is
+    /// to: right after the frame, which cannot ask for another.
+    fn render_settling(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let settles = self.settle.is_some() || self.wheeled.get();
+        if !settles || !self.reads_by_keys(window) {
+            return None;
+        }
+        let view = cx.entity();
+        Some(gpui::canvas(
+            |_, _, _| {},
+            move |_, (), window, cx| {
+                window.defer(cx, move |_, cx| {
+                    view.update(cx, ChatView::settle_cursor);
+                });
+            },
+        ))
     }
 
     /// Shows the translation of the text selected, or with nothing
@@ -990,7 +1261,7 @@ impl ChatView {
         )
     }
 
-    fn render_conversation(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_conversation(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let running = matches!(
             self.conversation.state(),
             State::Busy | State::Asking | State::Checking
@@ -998,6 +1269,7 @@ impl ChatView {
         // The frame lays the text in sight out again, and keeps what the
         // frames before laid out of the rest, for a selection to copy.
         self.reading.age(self.conversation.entries().len());
+        self.follow_reading(window, cx);
         self.lay_out_places();
         // What the chat waits for shows in the input, while it is empty.
         let placeholder = self.waiting().unwrap_or_else(|| "Reply".to_owned());
@@ -1059,27 +1331,7 @@ impl ChatView {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(
-                        div()
-                            .id("conversation")
-                            .size_full()
-                            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-                            .on_mouse_down(MouseButton::Right, cx.listener(Self::offer_selection))
-                            .on_mouse_move(cx.listener(Self::mouse_move))
-                            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
-                            .on_mouse_up_out(
-                                MouseButton::Left,
-                                cx.listener(|view, _, _, _| view.reading.stop()),
-                            )
-                            .child(
-                                list(
-                                    self.list.clone(),
-                                    cx.processor(|view, place, _, cx| view.render_place(place, cx)),
-                                )
-                                .size_full(),
-                            )
-                            .children(self.render_finding(cx)),
-                    )
+                    .child(self.render_reading(window, cx))
                     .child(region::mark({
                         let view = cx.weak_entity();
                         move |_, over, cx| Some(view.upgrade()?.read(cx).described(over))
@@ -1493,7 +1745,7 @@ impl ChatView {
 }
 
 impl Render for ChatView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
@@ -1501,6 +1753,11 @@ impl Render for ChatView {
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
             .text_size(px(14.))
-            .child(div().flex_1().min_h_0().child(self.render_conversation(cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.render_conversation(window, cx)),
+            )
     }
 }

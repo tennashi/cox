@@ -359,6 +359,7 @@ const PARTS: &[Region] = &[
     Region::Rail,
     Region::List,
     Region::Chat,
+    Region::Reading,
     Region::Page,
     Region::Code,
     Region::Document,
@@ -379,6 +380,7 @@ const HINTERS: &[Region] = &[
     Region::Rail,
     Region::List,
     Region::Chat,
+    Region::Reading,
     Region::Code,
     Region::Document,
     Region::Tree,
@@ -399,6 +401,7 @@ const HINTED: &[Region] = &[
     Region::Rail,
     Region::List,
     Region::Chat,
+    Region::Reading,
     Region::Page,
     Region::Code,
     Region::Document,
@@ -417,6 +420,7 @@ const HINTED: &[Region] = &[
 /// The parts Vim's `/` searches the text of.
 const SEARCHERS: &[Region] = &[
     Region::Chat,
+    Region::Reading,
     Region::Page,
     Region::Code,
     Region::Document,
@@ -434,10 +438,11 @@ const LINE: &[Region] = &[Region::Command];
 const PICKERS: &[Region] = &[Region::Rail, Region::List];
 
 /// The parts Vim's keys scroll, or move a cursor or selection in: the
-/// conversation, from the chat's input, a page, the stage's tabs that
+/// conversation, from the chat's input too, a page, the stage's tabs that
 /// take no text, the settings and a project's card.
 const MOVERS: &[Region] = &[
     Region::Chat,
+    Region::Reading,
     Region::Page,
     Region::Code,
     Region::Document,
@@ -448,6 +453,10 @@ const MOVERS: &[Region] = &[
     Region::ProjectCard,
 ];
 
+/// The chat: its input, and its conversation.
+const CHAT: &[Region] = &[Region::Chat, Region::Reading];
+/// The conversation, with the keyboard.
+const READING: &[Region] = &[Region::Reading];
 const PAGE: &[Region] = &[Region::Page];
 const ADDRESS: &[Region] = &[Region::Address];
 const CODE: &[Region] = &[Region::Code];
@@ -505,9 +514,16 @@ const fn bind(
 impl Keymap {
     pub const VIM: Self = Self(&[
         bind(Mode::Insert, FORMS, &["escape"], Command::Normal),
-        bind(Mode::Normal, &[Region::Chat], &["escape"], Command::Reset),
+        bind(Mode::Normal, CHAT, &["escape"], Command::Reset),
         bind(Mode::Normal, &[Region::Chat], &["ctrl-c"], Command::Stop),
         bind(Mode::Normal, FORMS, &["i"], Command::Insert(Place::Cursor)),
+        bind(
+            Mode::Normal,
+            READING,
+            &["i"],
+            Command::Insert(Place::Cursor),
+        ),
+        bind(Mode::Normal, READING, &["a"], Command::Insert(Place::After)),
         bind(Mode::Normal, LINES, &["a"], Command::Insert(Place::After)),
         bind(
             Mode::Normal,
@@ -579,8 +595,12 @@ impl Keymap {
         act(PARTS, &["ctrl-w", "c"], Act::CloseTab),
         act(PARTS, &["g", "t"], Act::NextTab),
         act(PARTS, &["g", "shift-t"], Act::PreviousTab),
-        act(&[Region::Chat], &["ctrl-w", "k"], Act::Go(Toward::Up)),
-        act(&[Region::List], &["ctrl-w", "j"], Act::Go(Toward::Down)),
+        act(CHAT, &["ctrl-w", "k"], Act::Go(Toward::Up)),
+        act(
+            &[Region::List, Region::Reading],
+            &["ctrl-w", "j"],
+            Act::Go(Toward::Down),
+        ),
         act(&[Region::List], &["escape"], Act::Go(Toward::Down)),
         act(PICKERS, &["j"], Act::Pick(Pick::Down)),
         act(PICKERS, &["k"], Act::Pick(Pick::Up)),
@@ -606,9 +626,24 @@ impl Keymap {
         across(CODE, &["%"], Across::Bracket),
         across(CODE, &["}"], Across::ParagraphForward),
         across(CODE, &["{"], Across::ParagraphBack),
-        send(&[Region::Chat], &["]", "]"], Sent::NextEntry),
-        send(&[Region::Chat], &["[", "["], Sent::PreviousEntry),
-        send(&[Region::Chat], &["g", "y"], Sent::Copy),
+        across(READING, &["h"], Across::Left),
+        across(READING, &["l"], Across::Right),
+        across(READING, &["w"], Across::WordForward),
+        across(READING, &["b"], Across::WordBack),
+        across(READING, &["e"], Across::WordEnd),
+        across(READING, &["0"], Across::LineStart),
+        across(READING, &["^"], Across::FirstNonBlank),
+        across(READING, &["$"], Across::LineEnd),
+        send(CHAT, &["]", "]"], Sent::NextEntry),
+        send(CHAT, &["[", "["], Sent::PreviousEntry),
+        send(CHAT, &["g", "y"], Sent::Copy),
+        send(READING, &["shift-v"], Sent::Visual),
+        send(READING, &["v"], Sent::VisualCharacters),
+        visual(READING, &["shift-v"], Command::Send(Sent::Visual)),
+        visual(READING, &["v"], Command::Send(Sent::VisualCharacters)),
+        visual(READING, &["y"], Command::Send(Sent::Copy)),
+        visual(READING, &["g", "a"], Command::Send(Sent::AddToChat)),
+        visual(READING, &["escape"], Command::Normal),
         send(CODE, &["shift-v"], Sent::Visual),
         send(CODE, &["v"], Sent::VisualCharacters),
         visual(CODE, &["shift-v"], Command::Send(Sent::Visual)),
@@ -1175,6 +1210,66 @@ mod tests {
             Keymap::VIM.answer(Mode::Normal, Region::Tree, &["w"]),
             Answer::None,
             "only code has a cursor in a line"
+        );
+    }
+
+    #[test]
+    fn the_conversation_moves_its_cursor_selects_and_goes_back_to_the_input() {
+        let answer = |mode, keys: &[&str]| Keymap::VIM.answer(mode, Region::Reading, keys);
+        for (key, across) in [
+            ("h", Across::Left),
+            ("l", Across::Right),
+            ("w", Across::WordForward),
+            ("b", Across::WordBack),
+            ("e", Across::WordEnd),
+            ("0", Across::LineStart),
+            ("^", Across::FirstNonBlank),
+            ("$", Across::LineEnd),
+        ] {
+            assert_eq!(
+                answer(Mode::Normal, &[key]),
+                Answer::Act(Command::Across(across)),
+                "{key}"
+            );
+        }
+        assert_eq!(
+            answer(Mode::Normal, &["j"]),
+            Answer::Act(Command::Move(Motion::Down))
+        );
+        assert_eq!(
+            answer(Mode::Normal, &["ctrl-w", "k"]),
+            Answer::Act(Command::Window(Act::Go(Toward::Up)))
+        );
+        assert_eq!(
+            answer(Mode::Normal, &["ctrl-w", "j"]),
+            Answer::Act(Command::Window(Act::Go(Toward::Down)))
+        );
+        assert_eq!(
+            answer(Mode::Normal, &["a"]),
+            Answer::Act(Command::Insert(Place::After))
+        );
+        assert_eq!(
+            answer(Mode::Normal, &["escape"]),
+            Answer::Act(Command::Reset)
+        );
+        assert_eq!(
+            answer(Mode::Normal, &["v"]),
+            Answer::Act(Command::Send(Sent::VisualCharacters))
+        );
+        let visual = Mode::Visual(super::Selects::Lines);
+        assert_eq!(
+            answer(visual, &["y"]),
+            Answer::Act(Command::Send(Sent::Copy))
+        );
+        assert_eq!(
+            answer(visual, &["e"]),
+            Answer::Act(Command::Across(Across::WordEnd)),
+            "motions grow what is selected"
+        );
+        assert_eq!(
+            answer(Mode::Normal, &["x"]),
+            Answer::None,
+            "the conversation's text is not edited"
         );
     }
 

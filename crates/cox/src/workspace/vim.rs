@@ -58,7 +58,10 @@ enum Part {
     /// The tree of the project's files, beside the tab of a file.
     Tree,
     Stage,
+    /// The chat's input.
     Chat,
+    /// The chat's conversation, over its input.
+    Reading,
     /// The list of chats, over the chat.
     List,
 }
@@ -69,22 +72,32 @@ impl Part {
             Region::Rail => Self::Rail,
             Region::List => Self::List,
             Region::Tree => Self::Tree,
+            Region::Reading => Self::Reading,
             Region::Workspace | Region::Chat => Self::Chat,
             _ => Self::Stage,
         }
     }
 
     /// The part `toward` goes to from this one, of `parts`, left to
-    /// right, if it goes to one.
+    /// right, if it goes to one: up from the chat's input to its
+    /// conversation and on to the list of chats, and down back.
     fn toward(self, toward: Toward, parts: &[Self]) -> Option<Self> {
-        let column = if self == Self::List { Self::Chat } else { self };
+        let column = if matches!(self, Self::List | Self::Reading) {
+            Self::Chat
+        } else {
+            self
+        };
         let at = parts.iter().position(|part| *part == column)?;
         match toward {
             Toward::Left => at.checked_sub(1).map(|at| parts[at]),
             Toward::Right => parts.get(at + 1).copied(),
             Toward::Round => Some(parts[(at + 1) % parts.len()]),
-            Toward::Up => (self == Self::Chat).then_some(Self::List),
-            Toward::Down => (self == Self::List).then_some(Self::Chat),
+            Toward::Up => match self {
+                Self::Chat => Some(Self::Reading),
+                Self::Reading => Some(Self::List),
+                _ => None,
+            },
+            Toward::Down => matches!(self, Self::List | Self::Reading).then_some(Self::Chat),
         }
     }
 }
@@ -346,6 +359,14 @@ impl Workspace {
                 self.folded = false;
                 window.focus(&self.focus_handle(cx));
             }
+            Part::Reading => {
+                let Some(view) = self.shown().and_then(super::Chat::view).cloned() else {
+                    return self.go(Part::List, window, cx);
+                };
+                self.switching = false;
+                self.folded = false;
+                view.update(cx, |view, cx| view.read_by_keys(window, cx));
+            }
             Part::List => {
                 let shown = self.chats.shown_index();
                 self.list.at = self
@@ -400,11 +421,28 @@ mod tests {
         );
         assert_eq!(
             from(Region::Workspace).toward(Toward::Up, ALL),
+            Some(Part::Reading)
+        );
+        assert_eq!(
+            from(Region::Reading).toward(Toward::Up, ALL),
             Some(Part::List)
         );
         assert_eq!(
             from(Region::List).toward(Toward::Down, ALL),
             Some(Part::Chat)
+        );
+        assert_eq!(
+            from(Region::Reading).toward(Toward::Down, ALL),
+            Some(Part::Chat)
+        );
+        assert_eq!(
+            from(Region::Reading).toward(Toward::Left, ALL),
+            Some(Part::Stage),
+            "the conversation is the chat's, left and right"
+        );
+        assert_eq!(
+            from(Region::Reading).toward(Toward::Round, ALL),
+            Some(Part::Rail)
         );
         assert_eq!(from(Region::Rail).toward(Toward::Up, ALL), None);
         let files = &[Part::Rail, Part::Tree, Part::Stage, Part::Chat];

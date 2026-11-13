@@ -25,14 +25,20 @@ use gpui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+pub mod cursor;
+
 use crate::ui::diagram;
 use crate::ui::markdown::{self, Block, Kind};
 use crate::ui::selection::{Piece, Selection, Spot, TextId};
 use crate::ui::theme::{
-    BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE, CODE_FONT, DIM, LINK, RAISED, SELECTION,
+    ACCENT, BORDER, BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE, CODE_FONT, DIM, LINK, RAISED,
+    SELECTION,
 };
 use crate::vim::hints::Hinted as _;
+use crate::vim::keymap::Selects;
 use crate::vim::search::{self, Direction};
+
+use self::cursor::{Cursor, Laid, Step};
 
 /// How far each list a block is in moves it right.
 const INDENT: f32 = 20.;
@@ -192,6 +198,33 @@ impl Painted {
         link_at(&text.layout, &text.links, position)
     }
 
+    /// The rows of the pieces this frame laid out, as the cursor goes
+    /// through them.
+    fn laid(&self) -> Laid {
+        let texts = self.0.borrow();
+        Laid::new(
+            texts
+                .iter()
+                .filter(|text| text.current)
+                .map(|text| cursor::Piece {
+                    id: text.id,
+                    text: &text.text,
+                    rows: rows(&text.text, &text.layout),
+                }),
+        )
+    }
+
+    /// What visual mode selects from `anchor` to `head`.
+    fn visual(&self, anchor: Spot, head: Spot, selects: Selects) -> Selection {
+        let texts = self.0.borrow();
+        cursor::visual(anchor, head, selects, |id| {
+            texts
+                .iter()
+                .find(|text| text.id == id)
+                .map(|text| text.text.as_ref())
+        })
+    }
+
     /// What `selection` selects of the text.
     #[must_use]
     pub fn copy(&self, selection: &Selection) -> String {
@@ -205,13 +238,21 @@ impl Painted {
 }
 
 /// A view's text as the human reads it: as the last frame laid it out,
-/// what they selected of it, and whether they are selecting still.
+/// what they selected of it, and whether they are selecting still, and
+/// where the cursor of Vim's keys is in it.
 #[derive(Default)]
 pub struct Reading {
     painted: Painted,
     selection: Option<Selection>,
     /// Whether a mouse button went down on the text and is still held.
     selecting: bool,
+    /// The cursor of Vim's keys, once they came to the text.
+    cursor: Option<Cursor>,
+    /// Whether the next frame draws the cursor: while the text has the
+    /// keyboard.
+    shows_cursor: bool,
+    /// Where visual mode started, and what it selects, while it does.
+    visual: Option<(Spot, Selects)>,
 }
 
 impl Reading {
@@ -239,16 +280,157 @@ impl Reading {
         }
     }
 
-    /// Writes entry `entry` of the text, showing what of it is selected.
+    /// Writes entry `entry` of the text, showing what of it is selected,
+    /// and the cursor, while it shows.
     #[must_use]
     pub fn writer(&self, entry: usize) -> Writer {
-        Writer::new(&self.painted, self.selection, entry)
+        let mut writer = Writer::new(&self.painted, self.selection, entry);
+        writer.cursor = self
+            .cursor
+            .filter(|_| self.shows_cursor)
+            .map(|cursor| cursor.spot);
+        writer
+    }
+
+    /// Where the cursor of Vim's keys is, once they came to the text.
+    #[must_use]
+    pub fn cursor(&self) -> Option<Spot> {
+        self.cursor.map(|cursor| cursor.spot)
+    }
+
+    /// Whether the frames draw the cursor, from the next.
+    pub fn show_cursor(&mut self, shows: bool) {
+        self.shows_cursor = shows;
+    }
+
+    /// Puts the cursor, if it is nowhere yet, on the start of what is
+    /// selected, or else of the first row in sight, from `top` to
+    /// `bottom`: answers whether it moved.
+    pub fn place_cursor(&mut self, top: Pixels, bottom: Pixels) -> bool {
+        if self.cursor.is_some() {
+            return false;
+        }
+        let spot = self
+            .selection
+            .map(|selection| selection.anchor.min(selection.head))
+            .or_else(|| {
+                self.painted
+                    .laid()
+                    .end_in_sight(f32::from(top), f32::from(bottom), false)
+            });
+        self.cursor = spot.map(Cursor::at);
+        self.cursor.is_some()
+    }
+
+    /// Moves the cursor as `step` says, `times` over, through the text
+    /// the last frame laid out, and answers the top and bottom of the row
+    /// it is on then.
+    pub fn move_cursor(&mut self, step: Step, times: usize) -> Option<(Pixels, Pixels)> {
+        let laid = self.painted.laid();
+        let cursor = laid.moved(self.cursor?, step, times)?;
+        self.put_cursor(cursor);
+        laid.row_of(cursor.spot)
+            .map(|(top, bottom)| (px(top), px(bottom)))
+    }
+
+    /// Puts the cursor at `cursor`, and grows what visual mode selects to
+    /// it.
+    fn put_cursor(&mut self, cursor: Cursor) {
+        self.cursor = Some(cursor);
+        if let Some((anchor, selects)) = self.visual {
+            self.selection = Some(self.painted.visual(anchor, cursor.spot, selects));
+        }
+    }
+
+    /// Moves the cursor, where it does not show between `top` and
+    /// `bottom`, to the nearest row that does: answers whether it moved.
+    pub fn cursor_into_sight(&mut self, top: Pixels, bottom: Pixels) -> bool {
+        let Some(cursor) = self.cursor else {
+            return false;
+        };
+        let moved = self
+            .painted
+            .laid()
+            .into_sight(cursor, f32::from(top), f32::from(bottom))
+            .filter(|moved| *moved != cursor);
+        if let Some(moved) = moved {
+            self.put_cursor(moved);
+        }
+        moved.is_some()
+    }
+
+    /// Moves the cursor to the start of the first row that shows between
+    /// `top` and `bottom`, or of the last, as `last` says: answers whether
+    /// it moved.
+    pub fn cursor_to_end_in_sight(&mut self, top: Pixels, bottom: Pixels, last: bool) -> bool {
+        let spot = self
+            .painted
+            .laid()
+            .end_in_sight(f32::from(top), f32::from(bottom), last);
+        match spot {
+            Some(spot) if self.cursor() != Some(spot) => {
+                self.put_cursor(Cursor::at(spot));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Moves the cursor to the start of what is selected, as a search
+    /// selected it.
+    pub fn cursor_to_selection(&mut self) {
+        if let Some(selection) = self.selection {
+            self.put_cursor(Cursor::at(selection.anchor.min(selection.head)));
+        }
+    }
+
+    /// Starts selecting as `selects` says from the cursor, or selects so
+    /// from where visual mode started, or stops if it selects so already.
+    pub fn visual(&mut self, selects: Selects) {
+        let Some(cursor) = self.cursor else {
+            return;
+        };
+        self.visual = match self.visual {
+            Some((_, was)) if was == selects => None,
+            Some((anchor, _)) => Some((anchor, selects)),
+            None => Some((cursor.spot, selects)),
+        };
+        if self.visual.is_some() {
+            self.put_cursor(cursor);
+        } else {
+            self.selection = None;
+        }
+    }
+
+    /// Whether visual mode selects.
+    #[must_use]
+    pub fn in_visual(&self) -> bool {
+        self.visual.is_some()
+    }
+
+    /// Visual mode ends: what it selected is let go of, or kept, as
+    /// `keep` says, and the cursor goes to its start, as after Vim's `y`.
+    /// Answers whether it selected.
+    pub fn end_visual(&mut self, keep: bool) -> bool {
+        if self.visual.take().is_none() {
+            return false;
+        }
+        let selection = if keep {
+            self.selection
+        } else {
+            self.selection.take()
+        };
+        if let Some(selection) = selection {
+            self.cursor = Some(Cursor::at(selection.anchor.min(selection.head)));
+        }
+        true
     }
 
     /// A button went down: start selecting there, a word or a whole piece
     /// of text at a time on a double or triple click, or with Shift, move
     /// the end of what is selected there.
     pub fn press(&mut self, event: &MouseDownEvent) {
+        self.visual = None;
         let spot = self.painted.spot_at(event.position);
         self.selection = spot.map(|spot| match event.click_count {
             1 => match self.selection {
@@ -525,6 +707,71 @@ fn link_at(
         .map(|(_, url)| url.clone())
 }
 
+/// The rows `text` was laid out in by `layout`, as the cursor goes
+/// through them, in the window's points.
+fn rows(text: &str, layout: &TextLayout) -> Vec<cursor::Row> {
+    let left = layout.bounds().left();
+    let height = layout.line_height();
+    let mut rows = Vec::new();
+    let mut start = 0;
+    for line in text.split('\n') {
+        let (Some(wrapped), Some(origin)) = (
+            layout.line_layout_for_index(start),
+            layout.position_for_index(start),
+        ) else {
+            break;
+        };
+        // Where each character starts along the line unwrapped, by its
+        // glyph, or the glyph before for one drawn with it.
+        let glyphs: Vec<(usize, Pixels)> = wrapped
+            .runs()
+            .iter()
+            .flat_map(|run| {
+                run.glyphs
+                    .iter()
+                    .map(|glyph| (glyph.index, glyph.position.x))
+            })
+            .collect();
+        let x_of = |index: usize| {
+            if index >= line.len() {
+                return wrapped.unwrapped_layout.width;
+            }
+            let at = glyphs.partition_point(|(glyph, _)| *glyph <= index);
+            at.checked_sub(1).map_or(px(0.), |at| glyphs[at].1)
+        };
+        let wraps = wrapped
+            .wrap_boundaries()
+            .iter()
+            .map(|boundary| wrapped.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index);
+        let mut row_start = 0;
+        for (row, row_end) in wraps.chain([line.len()]).enumerate() {
+            #[expect(clippy::cast_precision_loss, reason = "a piece has few rows")]
+            let top = origin.y + height * row as f32;
+            let from = x_of(row_start);
+            let places = if row_start == row_end {
+                vec![(start + row_start, f32::from(left))]
+            } else {
+                line[row_start..row_end]
+                    .char_indices()
+                    .map(|(at, _)| {
+                        let index = row_start + at;
+                        (start + index, f32::from(left + x_of(index) - from))
+                    })
+                    .collect()
+            };
+            rows.push(cursor::Row {
+                top: f32::from(top),
+                bottom: f32::from(top + height),
+                end: f32::from(left + x_of(row_end) - from),
+                places,
+            });
+            row_start = row_end;
+        }
+        start += line.len() + 1;
+    }
+    rows
+}
+
 /// A piece of text the human can select, and whose links they can click.
 pub struct SelectableText {
     id: TextId,
@@ -533,6 +780,8 @@ pub struct SelectableText {
     links: Rc<[(Range<usize>, SharedString)]>,
     styled: StyledText,
     painted: Painted,
+    /// Where in it the cursor of Vim's keys is drawn, if it is in it.
+    cursor: Option<usize>,
 }
 
 impl Element for SelectableText {
@@ -590,6 +839,28 @@ impl Element for SelectableText {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if let Some(offset) = self.cursor {
+            let layout = self.styled.layout();
+            let piece = cursor::Piece {
+                id: self.id,
+                text: &self.text,
+                rows: rows(&self.text, layout),
+            };
+            let spot = Spot {
+                text: self.id,
+                offset,
+            };
+            let none = f32::from(layout.line_height()) / 2.;
+            if let Some(block) = Laid::new([piece]).block(spot, none) {
+                window.paint_quad(gpui::fill(
+                    Bounds::from_corners(
+                        gpui::point(px(block.x), px(block.top)),
+                        gpui::point(px(block.x + block.width), px(block.bottom)),
+                    ),
+                    gpui::rgba((ACCENT << 8) | 0x88),
+                ));
+            }
+        }
         self.styled.paint(
             id,
             inspector_id,
@@ -646,6 +917,8 @@ impl IntoElement for SelectableText {
 pub struct Writer {
     painted: Painted,
     selection: Option<Selection>,
+    /// Where the cursor of Vim's keys is drawn, if it is.
+    cursor: Option<Spot>,
     entry: usize,
     part: usize,
 }
@@ -657,6 +930,7 @@ impl Writer {
         Self {
             painted: painted.clone(),
             selection,
+            cursor: None,
             entry,
             part: 0,
         }
@@ -690,6 +964,10 @@ impl Writer {
             joined,
             links,
             painted: self.painted.clone(),
+            cursor: self
+                .cursor
+                .filter(|cursor| cursor.text == id)
+                .map(|cursor| cursor.offset),
         }
     }
 

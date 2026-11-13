@@ -108,7 +108,7 @@ The keyboard comes into a region in its own mode:
 | The chat's input | As it was: a new chat in insert mode. |
 | The inputs of a goal, a sketch, a rename | Insert mode. |
 | A page's address line | Typed in always, as a field of the page is: it has no normal mode, and Esc puts the page's address back and gives the keyboard back to the page. |
-| The rail, the list of chats, the settings, a project's card, code, a document, the tree, changes | Normal mode. |
+| The rail, the list of chats, the chat's conversation, the settings, a project's card, code, a document, the tree, changes | Normal mode. |
 | An input of the settings or of a project's card, gone to by a click, a hint, or a button that opens it, such as a directory's Link… | Insert mode, as a web page's field. |
 | A web page | Insert mode while a field of it has the keyboard, else normal mode. |
 | A terminal, an Android device | Normal mode, as Neovim's terminal: `i` or a click goes to insert mode, where every key goes to the program. A terminal just opened from the stage's + is in insert mode. Back from the line at the window's foot, the mode the line left. |
@@ -118,7 +118,7 @@ over the chat:
 
 | Key | Does |
 | --- | --- |
-| Ctrl-W `h`, Ctrl-W `l` | Moves the keyboard to the part at the left or the right: the rail, the tree of files when it is beside a file, the stage, the chat. |
+| Ctrl-W `h`, Ctrl-W `l` | Moves the keyboard to the part at the left or the right: the rail, the tree of files when it is beside a file, the stage, the chat. The chat's conversation is part of the chat. |
 | Ctrl-W `w` | Moves the keyboard to the next part, round from the chat to the rail. |
 | `gt`, `gT` | Shows the stage's next tab, or the one before, among those listed beside the stage: the views on its bar, as the map or Knowledge, are left out. `3gt` shows its third tab, `3gT` the tab three before. |
 | Ctrl-W `c` | Closes the tab the stage shows. |
@@ -154,7 +154,27 @@ selected.
 | Normal | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | In the settings or a project's card, scrolls them the same. |
 | Normal | `/`, `?`, `n`, `N` | Finds text in the conversation forward or back, out of sight too, and again either way: scrolls to it and selects it. |
 | Normal | `]]`, `[[`, `gy` | Selects the conversation's next entry, or the one before, from the first in sight, scrolling to it; copies what is selected of the conversation. |
+| Normal | Ctrl-W `k` | Moves the keyboard up to the conversation, as to a window of its own (see below). |
+
+**The conversation.** Ctrl-W `k` from the chat's input gives the
+keyboard to the conversation, in normal mode, with a cursor on the
+start of what is selected, or else of the first row in sight. The
+cursor stays where it was when the keyboard comes back. It goes
+through the text as the conversation draws it, a row being a line as
+it wraps.
+
+| Mode | Key | Does |
+| --- | --- | --- |
+| Normal | `h`, `l` | Moves the cursor a character left or right along the line. |
+| Normal | `w`, `b`, `e` | Moves it by words, on from one piece of text, as a paragraph or a code block, to the next. |
+| Normal | `0`, `^`, `$` | Moves it to the start, the first character that is no space, or the end of its row. |
+| Normal | `j`, `k` | Moves it a row down or up, keeping to where along the row it was, on into the next entry. |
+| Normal | Ctrl-D, Ctrl-U, `gg`, `G` | Scrolls as from the input; the cursor goes to the row nearest it in sight, the first after `gg`, the last after `G`. A cursor the mouse scrolls out of sight comes back into it the same way. |
+| Normal | `/`, `?`, `n`, `N`, `]]`, `[[`, `gy` | As from the input; the cursor goes to the start of what they select. |
+| Normal | `v`, `V` | Goes to visual mode, which selects characters from the cursor's, or whole pieces of text, as a paragraph or a code block. Motions grow it, `y` copies it, `ga` hands it to the chat, `v` and `V` switch or stop, and Esc lets it go. |
+| Normal | Ctrl-W `j`, `i`, `a` | Gives the keyboard back to the input, in normal mode, or in insert mode at its cursor or after it. |
 | Normal | Ctrl-W `k` | Opens the list of the project's chats, with the keyboard in it. Ctrl-W `j` or Esc closes it. |
+| Normal | Esc | Forgets a count typed. It does not stop the agent. |
 
 **The rail and the list of chats.** `j` and `k` move the selection,
 `3j` three rows, `gg` to the first and `G` to the last. Enter or `l`

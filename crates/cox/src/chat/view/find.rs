@@ -158,6 +158,7 @@ impl ChatView {
                 Looked::Whole => self.reading.select_entry(entry),
             };
             if let Some(at) = found {
+                self.reading.cursor_to_selection();
                 let view = self.list.viewport_bounds();
                 self.list
                     .scroll_by(at.y - view.origin.y - view.size.height / 3.);
