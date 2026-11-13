@@ -14,12 +14,13 @@ use cox_core::entry::Attachment;
 use cox_core::tabs::{KeptTab, Lines};
 use gpui::{
     App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, Task, Window, div, point,
-    prelude::*, px, rgb,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, Task, Window, div,
+    point, prelude::*, px, rgb,
 };
 
 use crate::chat::hand::AddToChat;
 use crate::chat::region::{self, Described};
+use crate::chat::view::{NextEntry, PreviousEntry};
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::tab::{Shows, ShowsFile, TabContent};
 use crate::stage::tree;
@@ -31,7 +32,7 @@ use crate::ui::theme::{BORDER, DIM, FAILED};
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::Move;
-use crate::vim::search::Find;
+use crate::vim::search::{Direction, Find};
 
 pub(crate) const KEY_CONTEXT: &str = "Document";
 
@@ -164,9 +165,30 @@ impl Document {
     }
 
     /// Selects the next match of what Vim's `/` or `n` looks for, and
-    /// scrolls it into sight, a third of the way down.
+    /// scrolls it into sight.
     fn find_text(&mut self, find: &Find, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(at) = self.reading.find(&find.text, find.direction) else {
+        let found = self.reading.find(&find.text, find.direction);
+        self.bring_into_sight(found, cx);
+    }
+
+    /// Selects the next block of the document (`]]`), or with nothing
+    /// selected the first in sight, and scrolls it into sight.
+    fn next_block(&mut self, _: &NextEntry, _: &mut Window, cx: &mut Context<Self>) {
+        let found = self.reading.select_piece(Direction::Forward);
+        self.bring_into_sight(found, cx);
+    }
+
+    /// Selects the block before (`[[`), or with nothing selected the
+    /// first in sight, and scrolls it into sight.
+    fn previous_block(&mut self, _: &PreviousEntry, _: &mut Window, cx: &mut Context<Self>) {
+        let found = self.reading.select_piece(Direction::Backward);
+        self.bring_into_sight(found, cx);
+    }
+
+    /// Scrolls `at`, where the text selected starts, a third of the way
+    /// down, if something was selected.
+    fn bring_into_sight(&mut self, at: Option<Point<Pixels>>, cx: &mut Context<Self>) {
+        let Some(at) = at else {
             return;
         };
         let offset = self.scroll.offset();
@@ -324,6 +346,8 @@ impl Render for Document {
             .on_action(cx.listener(Self::add_to_chat))
             .on_action(cx.listener(Self::move_by_keys))
             .on_action(cx.listener(Self::find_text))
+            .on_action(cx.listener(Self::next_block))
+            .on_action(cx.listener(Self::previous_block))
             .relative()
             .size_full()
             .flex()

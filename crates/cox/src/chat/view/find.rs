@@ -16,9 +16,10 @@ use crate::vim::search::{self, Direction, Find};
 actions!(
     chat,
     [
-        /// Selects the next entry of the conversation (`]]`).
+        /// Selects the next entry of the conversation (`]]`), or block of
+        /// a document.
         NextEntry,
-        /// Selects the entry before (`[[`).
+        /// Selects the entry, or block, before (`[[`).
         PreviousEntry,
     ]
 );

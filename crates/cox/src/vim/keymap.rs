@@ -182,9 +182,10 @@ pub enum Sent {
     Older,
     /// Puts the line typed after in it (`down`).
     Newer,
-    /// Selects the next entry of the conversation (`]]`).
+    /// Selects the next entry of the conversation, or block of a
+    /// document (`]]`).
     NextEntry,
-    /// Selects the entry before (`[[`).
+    /// Selects the entry or block before (`[[`).
     PreviousEntry,
 }
 
@@ -373,6 +374,7 @@ const MOVERS: &[Region] = &[
 const PAGE: &[Region] = &[Region::Page];
 const ADDRESS: &[Region] = &[Region::Address];
 const CODE: &[Region] = &[Region::Code];
+const DOCUMENT: &[Region] = &[Region::Document];
 const TREE: &[Region] = &[Region::Tree];
 const CHANGES: &[Region] = &[Region::Changes];
 const TERMINAL: &[Region] = &[Region::Terminal];
@@ -518,6 +520,10 @@ impl Keymap {
         send(CODE, &["shift-v"], Sent::Visual),
         send(CODE, &["y"], Sent::Copy),
         send(CODE, &["g", "a"], Sent::AddToChat),
+        send(DOCUMENT, &["]", "]"], Sent::NextEntry),
+        send(DOCUMENT, &["[", "["], Sent::PreviousEntry),
+        send(DOCUMENT, &["y"], Sent::Copy),
+        send(DOCUMENT, &["g", "a"], Sent::AddToChat),
         send(CODE, &["g", "d"], Sent::Definition),
         send(CODE, &["ctrl-o"], Sent::Back),
         send(CODE, &["ctrl-i"], Sent::Forward),
@@ -995,10 +1001,16 @@ mod tests {
         assert_eq!(answer(&["g", "d"]), sent(Sent::Definition));
         assert_eq!(answer(&["ctrl-o"]), sent(Sent::Back));
         assert_eq!(answer(&["ctrl-i"]), sent(Sent::Forward));
-        assert_eq!(
-            Keymap::VIM.answer(Mode::Normal, Region::Document, &["y"]),
-            Answer::None
-        );
+    }
+
+    #[test]
+    fn a_document_goes_from_block_to_block_copies_and_hands_them() {
+        let answer = |keys: &[&str]| Keymap::VIM.answer(Mode::Normal, Region::Document, keys);
+        let sent = |sent| Answer::Act(Command::Send(sent));
+        assert_eq!(answer(&["]", "]"]), sent(Sent::NextEntry));
+        assert_eq!(answer(&["[", "["]), sent(Sent::PreviousEntry));
+        assert_eq!(answer(&["y"]), sent(Sent::Copy));
+        assert_eq!(answer(&["g", "a"]), sent(Sent::AddToChat));
     }
 
     #[test]

@@ -169,6 +169,7 @@ keyboard in its input. `o` opens a new chat in the project selected.
 | Code | `h`, `l`, `w`, `b`, `e`, `0`, `^`, `$` | Moves the cursor by characters and words, and to the line's start, first character and end. `j` and `k` keep the character it goes to. Resting on a name, the cursor shows what the language server says of it, as the mouse does. |
 | Code | `V`, `y` | Selects whole lines from the cursor's, and copies them. |
 | Code | `ga`, `gd`, Ctrl-O, Ctrl-I | Hands the lines to the chat, goes to the definition of the name under the cursor, or of its line's first name, goes back, goes forward. |
+| A document | `]]`, `[[`, `y`, `ga` | Selects the next block, a paragraph, heading, list item, code block or table cell, or the one before, from the first in sight, scrolling to it; copies what is selected, or hands it to the chat. |
 | The tree | `l` or Enter, `h` | Opens what is selected, or closes its folder. A file opened goes on with the keyboard. |
 | Changes | Enter | Opens the file selected. |
 | A page | `f`, `;t` | Draws hints over the page; typing a label clicks it, or with `;t` opens the link on a tab of its own. Esc takes the hints away. |
