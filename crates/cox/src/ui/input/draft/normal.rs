@@ -8,7 +8,16 @@ use cox_editor::buffer::Point as Place;
 
 use super::{Draft, Kind};
 use crate::vim::cursor::{self, Cursor};
-use crate::vim::keymap::{Across, Edit, Span};
+use crate::vim::keymap::{Across, Edit, Selects, Span};
+
+/// What visual mode selects: from `anchor`, where it started, to `head`,
+/// the cursor, both on characters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Selecting {
+    anchor: usize,
+    head: usize,
+    selects: Selects,
+}
 
 impl Draft {
     /// Does `edit`, `times` times, and answers what it took out or kept,
@@ -16,6 +25,39 @@ impl Draft {
     /// puts.
     pub fn edit_normal(&mut self, edit: Edit, times: usize, kept: Option<&str>) -> Option<String> {
         self.marked = None;
+        if let Some(selecting) = self.visual {
+            match edit {
+                Edit::Move(across) => {
+                    self.move_to(selecting.head);
+                    let head = self.moved(across, times);
+                    self.select(Selecting { head, ..selecting });
+                    return None;
+                }
+                Edit::Visual(selects) if selects == selecting.selects => {
+                    self.end_visual();
+                    return None;
+                }
+                Edit::Visual(selects) => {
+                    self.select(Selecting {
+                        selects,
+                        ..selecting
+                    });
+                    return None;
+                }
+                Edit::Delete(Span::Selection)
+                | Edit::Change(Span::Selection)
+                | Edit::Yank(Span::Selection) => return self.edit_selection(edit, selecting),
+                _ => self.end_visual(),
+            }
+        } else if let Edit::Visual(selects) = edit {
+            let at = self.cursor();
+            self.select(Selecting {
+                anchor: at,
+                head: at,
+                selects,
+            });
+            return None;
+        }
         let taken = match edit {
             Edit::Move(across) => {
                 let to = self.moved(across, times);
@@ -47,6 +89,7 @@ impl Draft {
                 }
                 None
             }
+            Edit::Visual(_) => None,
             Edit::Undo => {
                 (0..times).take_while(|_| self.undo()).for_each(drop);
                 None
@@ -58,6 +101,68 @@ impl Draft {
         };
         self.settle();
         taken
+    }
+
+    /// Lets go of what visual mode selects, leaving the cursor where it
+    /// went.
+    pub fn end_visual(&mut self) {
+        if let Some(selecting) = self.visual.take() {
+            self.move_to(selecting.head);
+            self.settle();
+        }
+    }
+
+    /// Selects as `selecting` says, as the input shows a selection.
+    fn select(&mut self, selecting: Selecting) {
+        let range = self.selected_by(selecting);
+        self.visual = Some(selecting);
+        self.selected = range;
+        self.reversed = selecting.head < selecting.anchor;
+    }
+
+    /// What `selecting` covers: the characters from one end through the
+    /// other, or the whole lines they are on.
+    fn selected_by(&self, selecting: Selecting) -> Range<usize> {
+        let (from, to) = (
+            selecting.anchor.min(selecting.head),
+            selecting.anchor.max(selecting.head),
+        );
+        match selecting.selects {
+            Selects::Characters => self.through(from, to),
+            Selects::Lines => {
+                let first = self.line_range(self.place_of(from).line).start;
+                first..self.line_range(self.place_of(to).line).end
+            }
+        }
+    }
+
+    /// Takes out, changes or keeps what visual mode selects, which it
+    /// then leaves: whole lines as `dd`, `cc` and `yy` take them.
+    fn edit_selection(&mut self, edit: Edit, selecting: Selecting) -> Option<String> {
+        self.visual = None;
+        let range = self.selected_by(selecting);
+        if selecting.selects == Selects::Lines {
+            let lines = self.place_of(range.end).line - self.place_of(range.start).line + 1;
+            self.move_to(range.start);
+            let span = Span::Line;
+            let edit = match edit {
+                Edit::Delete(_) => Edit::Delete(span),
+                Edit::Change(_) => Edit::Change(span),
+                _ => Edit::Yank(span),
+            };
+            return self.edit_normal(edit, lines, None);
+        }
+        let taken = match edit {
+            Edit::Yank(_) => {
+                self.move_to(range.start);
+                self.text[range].to_owned()
+            }
+            _ => self.take(range),
+        };
+        if !matches!(edit, Edit::Change(_)) {
+            self.settle();
+        }
+        Some(taken)
     }
 
     /// Leaves insert mode: the cursor goes onto the character before it,
@@ -133,6 +238,7 @@ impl Draft {
         let place = self.place_of(cursor);
         let line = self.line_range(place.line);
         match span {
+            Span::Selection => cursor..cursor,
             Span::Line => {
                 let last = (place.line + times - 1).min(self.line_count() - 1);
                 line.start..self.line_range(last).end
@@ -419,6 +525,45 @@ mod tests {
         let kept = draft.edit_normal(Edit::Yank(Span::Line), 1, None);
         assert_eq!(kept.as_deref(), Some("one\n"));
         assert_eq!(draft.cursor(), 1, "yy leaves the cursor");
+    }
+
+    #[test]
+    fn v_selects_characters_through_the_cursor_and_d_takes_them_out() {
+        let mut draft = at("say hello world", 4);
+        draft.edit_normal(Edit::Visual(Selects::Characters), 1, None);
+        draft.edit_normal(Edit::Move(Across::WordEnd), 1, None);
+        assert_eq!(draft.selected_text(), "hello");
+        let taken = draft.edit_normal(Edit::Delete(Span::Selection), 1, None);
+        assert_eq!(taken.as_deref(), Some("hello"));
+        assert_eq!(after(&draft), ("say  world", 4));
+
+        let mut draft = at("say hello", 6);
+        draft.edit_normal(Edit::Visual(Selects::Characters), 1, None);
+        draft.edit_normal(Edit::Move(Across::WordBack), 1, None);
+        assert_eq!(draft.selected_text(), "hel", "back from the cursor, it in");
+        draft.edit_normal(Edit::Visual(Selects::Characters), 1, None);
+        assert_eq!(
+            (draft.selected_text(), draft.cursor()),
+            ("", 4),
+            "v again stops"
+        );
+    }
+
+    #[test]
+    fn shift_v_selects_whole_lines_and_c_and_y_take_them_as_lines() {
+        let mut draft = at("one\ntwo\nthree", 5);
+        draft.edit_normal(Edit::Visual(Selects::Lines), 1, None);
+        assert_eq!(draft.selected_text(), "two");
+        let kept = draft.edit_normal(Edit::Yank(Span::Selection), 1, None);
+        assert_eq!(kept.as_deref(), Some("two\n"));
+        assert_eq!(draft.selected_text(), "", "y leaves visual mode");
+
+        let mut draft = at("one\ntwo\nthree", 1);
+        draft.edit_normal(Edit::Visual(Selects::Characters), 1, None);
+        draft.edit_normal(Edit::Visual(Selects::Lines), 1, None);
+        draft.edit_normal(Edit::Move(Across::LineEnd), 2, None);
+        draft.edit_normal(Edit::Delete(Span::Selection), 1, None);
+        assert_eq!(draft.text(), "three", "v switches to V, and the lines go");
     }
 
     #[test]

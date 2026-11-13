@@ -1077,9 +1077,12 @@ fn code_selects_characters_from_the_cursor_and_copies_them(cx: &mut TestAppConte
     let (code, cx) = open_code(cx, path, &numbered(20), true);
     let selected = |cx: &mut VisualTestContext| code.read_with(cx, |code, _| code.selected_text());
 
+    let mode = |cx: &mut VisualTestContext| cx.update(|_, cx| cox::vim::mode(cx).map(Mode::label));
     type_keys(cx, "w v e");
     assert_eq!(selected(cx), "line_1");
+    assert_eq!(mode(cx), Some("Visual"));
     type_keys(cx, "y");
+    assert_eq!(mode(cx), Some("Normal"), "y leaves visual mode");
     let copied = cx
         .update(|_, cx| cx.read_from_clipboard())
         .and_then(|item| item.text());
@@ -1090,10 +1093,12 @@ fn code_selects_characters_from_the_cursor_and_copies_them(cx: &mut TestAppConte
     assert_eq!(selected(cx), "line_1 = 1;\nlet l");
     type_keys(cx, "shift-v");
     assert_eq!(selected(cx), "let line_1 = 1;\nlet line_2 = 2;\n");
+    assert_eq!(mode(cx), Some("Visual Line"));
     type_keys(cx, "v k b");
     assert_eq!(selected(cx), "let l", "back before the start");
     type_keys(cx, "escape");
     assert_eq!(selected(cx), "");
+    assert_eq!(mode(cx), Some("Normal"));
 }
 
 #[gpui::test]
@@ -3059,4 +3064,39 @@ fn the_settings_and_a_project_s_card_scroll_by_vim_s_keys(cx: &mut TestAppContex
     keys::press(cx, &workspace, "shift-g");
     assert!(top(cx, "project-name-input") < start, "to the end");
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// `v` and `V` select in the chat's input as in Vim's visual mode, which
+/// the window's foot shows: motions grow it, `d`, `c` and `y` take it, and
+/// Escape lets it go.
+#[gpui::test]
+fn v_and_shift_v_select_in_the_chat_s_input_in_visual_mode(cx: &mut TestAppContext) {
+    let (workspace, cx) = open_window(cx, "chat-visual");
+    keys::press(cx, &workspace, "secondary-n");
+    cx.simulate_input("say hello world");
+    keys::press(cx, &workspace, "escape 0 v e");
+    assert_eq!(shown_mode(cx), Some("Visual"));
+    keys::press(cx, &workspace, "d");
+    assert_eq!(keys::shown_input(cx, &workspace), " hello world");
+    assert_eq!(shown_mode(cx), Some("Normal"));
+
+    keys::press(cx, &workspace, "w v e c");
+    assert_eq!(shown_mode(cx), Some("Insert"));
+    cx.simulate_input("there");
+    keys::press(cx, &workspace, "escape");
+    assert_eq!(keys::shown_input(cx, &workspace), " there world");
+
+    keys::press(cx, &workspace, "shift-v");
+    assert_eq!(shown_mode(cx), Some("Visual Line"));
+    keys::press(cx, &workspace, "y");
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some(" there world\n"));
+
+    keys::press(cx, &workspace, "v $ escape x");
+    assert_eq!(shown_mode(cx), Some("Normal"));
+    assert_eq!(
+        keys::shown_input(cx, &workspace),
+        " there worl",
+        "Escape let go, leaving the cursor where it went"
+    );
 }

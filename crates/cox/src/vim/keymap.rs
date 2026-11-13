@@ -69,11 +69,25 @@ pub enum Edit {
     },
     Undo,
     Redo,
+    /// Starts selecting as visual mode does from the cursor, or switches
+    /// to selecting so, or stops when it selects so already (`v`, `V`).
+    Visual(Selects),
+}
+
+/// What visual mode selects from where it started to the cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Selects {
+    /// The characters between, both ends in (`v`).
+    Characters,
+    /// The whole lines between (`V`).
+    Lines,
 }
 
 /// What an edit of normal mode covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Span {
+    /// What visual mode selects.
+    Selection,
     /// From the cursor to where the motion takes it.
     To(Across),
     /// Its whole lines, from the cursor's (`dd`).
@@ -82,6 +96,34 @@ pub enum Span {
     InnerWord,
     /// The word with the spaces after it, or else before it (`aw`).
     AWord,
+}
+
+impl Command {
+    /// Whether it only moves the cursor, or what shows, or finds: what
+    /// visual mode takes of normal mode's keys, to grow what it selects.
+    #[must_use]
+    pub const fn moves(self) -> bool {
+        matches!(
+            self,
+            Self::Move(_)
+                | Self::Across(_)
+                | Self::Edit(Edit::Move(_))
+                | Self::Again(_)
+                | Self::Line(Prompt::Search(_))
+                | Self::Send(Sent::FindWord(_) | Sent::ScrollTo(_))
+        )
+    }
+
+    /// What visual mode it starts, or switches to, if it does.
+    #[must_use]
+    pub const fn selects(self) -> Option<Selects> {
+        match self {
+            Self::Edit(Edit::Visual(selects)) => Some(selects),
+            Self::Send(Sent::VisualCharacters) => Some(Selects::Characters),
+            Self::Send(Sent::Visual) => Some(Selects::Lines),
+            _ => None,
+        }
+    }
 }
 
 /// What the line at the window's foot is opened for.
@@ -430,6 +472,18 @@ const fn edit(keys: &'static [&'static str], edit: Edit) -> Binding {
     bind(Mode::Normal, FORMS, keys, Command::Edit(edit))
 }
 
+/// The mode the bindings of visual mode are kept under, whichever it
+/// selects: [`Keymap::answer`] looks them up for both.
+const VISUAL: Mode = Mode::Visual(Selects::Characters);
+
+const fn visual(
+    regions: &'static [Region],
+    keys: &'static [&'static str],
+    command: Command,
+) -> Binding {
+    bind(VISUAL, regions, keys, command)
+}
+
 const fn send(regions: &'static [Region], keys: &'static [&'static str], sent: Sent) -> Binding {
     bind(Mode::Normal, regions, keys, Command::Send(sent))
 }
@@ -557,6 +611,29 @@ impl Keymap {
         send(&[Region::Chat], &["g", "y"], Sent::Copy),
         send(CODE, &["shift-v"], Sent::Visual),
         send(CODE, &["v"], Sent::VisualCharacters),
+        visual(CODE, &["shift-v"], Command::Send(Sent::Visual)),
+        visual(CODE, &["v"], Command::Send(Sent::VisualCharacters)),
+        visual(CODE, &["y"], Command::Send(Sent::Copy)),
+        visual(CODE, &["g", "a"], Command::Send(Sent::AddToChat)),
+        visual(CODE, &["escape"], Command::Normal),
+        edit(&["v"], Edit::Visual(Selects::Characters)),
+        edit(&["shift-v"], Edit::Visual(Selects::Lines)),
+        visual(
+            FORMS,
+            &["v"],
+            Command::Edit(Edit::Visual(Selects::Characters)),
+        ),
+        visual(
+            FORMS,
+            &["shift-v"],
+            Command::Edit(Edit::Visual(Selects::Lines)),
+        ),
+        visual(FORMS, &["d"], Command::Edit(Edit::Delete(Span::Selection))),
+        visual(FORMS, &["x"], Command::Edit(Edit::Delete(Span::Selection))),
+        visual(FORMS, &["c"], Command::Edit(Edit::Change(Span::Selection))),
+        visual(FORMS, &["s"], Command::Edit(Edit::Change(Span::Selection))),
+        visual(FORMS, &["y"], Command::Edit(Edit::Yank(Span::Selection))),
+        visual(FORMS, &["escape"], Command::Normal),
         send(CODE, &["g", "r"], Sent::References),
         send(CODE, &["shift-k"], Sent::LookUp),
         send(CODE, &["*"], Sent::FindWord(Direction::Forward)),
@@ -692,6 +769,21 @@ impl Keymap {
     /// `mode` in `region`.
     #[must_use]
     pub fn answer(&self, mode: Mode, region: Region, keys: &[&str]) -> Answer {
+        if !matches!(mode, Mode::Visual(_)) {
+            return self.answer_in(mode, region, keys);
+        }
+        // Visual mode has keys of its own, and moves as normal mode does.
+        match self.answer_in(VISUAL, region, keys) {
+            Answer::None => match self.answer_in(Mode::Normal, region, keys) {
+                Answer::Act(command) if command.moves() => Answer::Act(command),
+                Answer::Held => Answer::Held,
+                Answer::Act(_) | Answer::None => Answer::None,
+            },
+            answer => answer,
+        }
+    }
+
+    fn answer_in(&self, mode: Mode, region: Region, keys: &[&str]) -> Answer {
         let bindings = self
             .0
             .iter()

@@ -1366,6 +1366,11 @@ impl Render for Code {
             .on_action(cx.listener(Self::move_across))
             .on_action(cx.listener(Self::visual_lines))
             .on_action(cx.listener(Self::visual_characters))
+            .on_action(cx.listener(|code, _: &crate::vim::LeaveVisual, _, cx| {
+                if code.look.end_visual() {
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(Self::definition))
             .on_action(cx.listener(Self::references))
             .on_action(cx.listener(Self::look_up_name))

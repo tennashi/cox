@@ -23,7 +23,7 @@ use gpui::{
 };
 
 use self::keymap::{
-    Across, Answer, Command, Edit, Follow, Keymap, Motion, Place, Reach, Sent, Sight,
+    Across, Answer, Command, Edit, Follow, Keymap, Motion, Place, Reach, Selects, Sent, Sight,
 };
 use self::search::{Direction, Find, Search};
 
@@ -164,6 +164,8 @@ actions!(
     [
         /// Starts selecting whole lines, from the cursor's, or stops.
         Visual,
+        /// Visual mode is left: what it selected is let go of.
+        LeaveVisual,
         /// Starts selecting characters, from the cursor's, or stops.
         VisualCharacters,
         /// Goes to where the first name of the cursor's line is defined.
@@ -249,6 +251,9 @@ pub enum Mode {
     Insert,
     Hint,
     Command,
+    /// Selecting from where it started to the cursor, which moves as in
+    /// normal mode, for an edit or a copy of what is selected.
+    Visual(Selects),
 }
 
 impl Mode {
@@ -260,7 +265,14 @@ impl Mode {
             Self::Insert => "Insert",
             Self::Hint => "Hint",
             Self::Command => "Command",
+            Self::Visual(Selects::Characters) => "Visual",
+            Self::Visual(Selects::Lines) => "Visual Line",
         }
+    }
+
+    /// Whether keys do things rather than type: normal and visual mode.
+    const fn acts(self) -> bool {
+        matches!(self, Self::Normal | Self::Visual(_))
     }
 }
 
@@ -382,6 +394,21 @@ impl Region {
         matches!(self, Self::Settings | Self::ProjectCard)
     }
 
+    /// Whether `v` and `V` select there in visual mode: in code, and in
+    /// an input. A terminal's `V` only makes its selection whole lines.
+    const fn has_visual_mode(self) -> bool {
+        matches!(
+            self,
+            Self::Code
+                | Self::Chat
+                | Self::Goal
+                | Self::Sketch
+                | Self::Renaming
+                | Self::Settings
+                | Self::ProjectCard
+        )
+    }
+
     /// Whether the region is typed in whatever the mode, as a field of a
     /// page is: the page's address line, which Esc leaves.
     const fn has_no_mode(self) -> bool {
@@ -498,7 +525,7 @@ impl Vim {
         }
         self.region = region;
         self.reset();
-        if matches!(self.mode, Mode::Hint | Mode::Command) {
+        if matches!(self.mode, Mode::Hint | Mode::Command | Mode::Visual(_)) {
             self.mode = Mode::Normal;
         }
         if let Some(mode) = region.enters_in().filter(|_| !back) {
@@ -524,7 +551,7 @@ impl Vim {
                 Outcome::Do(Command::Send(Sent::Label(key)), None)
             });
         }
-        if self.mode == Mode::Normal && self.held.is_empty() {
+        if self.mode.acts() && self.held.is_empty() {
             if key == "escape" && self.count.is_some() {
                 self.reset();
                 return Outcome::Taken;
@@ -540,6 +567,15 @@ impl Vim {
             Answer::Act(command) => {
                 let count = self.count;
                 self.reset();
+                if let Some(visual) = command.selects().filter(|_| region.has_visual_mode()) {
+                    self.mode = if self.mode == Mode::Visual(visual) {
+                        Mode::Normal
+                    } else {
+                        Mode::Visual(visual)
+                    };
+                    return Outcome::Do(command, count);
+                }
+                let selecting = matches!(self.mode, Mode::Visual(_));
                 match command {
                     Command::Normal => self.mode = Mode::Normal,
                     Command::Insert(_) | Command::Edit(Edit::Change(_)) => {
@@ -554,7 +590,13 @@ impl Vim {
                     | Command::Move(_)
                     | Command::Across(_)
                     | Command::Edit(_)
-                    | Command::Send(_) => {}
+                    | Command::Send(_) => {
+                        // What is selected is edited or copied, and
+                        // visual mode is left.
+                        if selecting && !command.moves() {
+                            self.mode = Mode::Normal;
+                        }
+                    }
                 }
                 Outcome::Do(command, count)
             }
@@ -568,7 +610,7 @@ impl Vim {
                 let taken = if region.runs_a_program() {
                     self.mode == Mode::Normal && region.program_gets(keystroke)
                 } else {
-                    dropped || (self.mode == Mode::Normal && edits_text(keystroke))
+                    dropped || (self.mode.acts() && edits_text(keystroke))
                 };
                 if taken { Outcome::Taken } else { Outcome::Pass }
             }
@@ -762,6 +804,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     let vim = cx.global_mut::<Vim>();
     let was = vim.status();
     let typed = vim.mode == Mode::Insert;
+    let selecting = matches!(vim.mode, Mode::Visual(_));
     let outcome = vim.key(&Keymap::VIM, region, &event.keystroke);
     let mode = vim.mode;
     if vim.status() != was {
@@ -774,6 +817,9 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     match outcome {
         Outcome::Pass => return,
         Outcome::Taken | Outcome::Do(Command::Reset, _) => {}
+        Outcome::Do(Command::Normal, _) if selecting => {
+            window.dispatch_action(Box::new(LeaveVisual), cx);
+        }
         Outcome::Do(Command::Normal, _) => {
             if typed {
                 window.dispatch_action(Box::new(crate::ui::input::Settle), cx);
@@ -855,7 +901,8 @@ mod tests {
     use gpui::{KeyContext, Keystroke, px};
 
     use super::keymap::{
-        Across, Act, Command, Edit, Follow, Keymap, Motion, Pick, Place, Prompt, Reach, Sent,
+        Across, Act, Command, Edit, Follow, Keymap, Motion, Pick, Place, Prompt, Reach, Selects,
+        Sent,
     };
     use super::{Mode, Move, Outcome, Region, Vim};
 
@@ -918,6 +965,41 @@ mod tests {
         assert_eq!(
             press(&mut vim, Region::Chat, "escape"),
             [Outcome::Do(Command::Normal, None)]
+        );
+        assert_eq!(vim.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn v_and_shift_v_go_to_visual_mode_and_an_edit_or_escape_leaves_it() {
+        let mut vim = Vim::default();
+        press(&mut vim, Region::Chat, "v");
+        assert_eq!(vim.mode(), Mode::Visual(Selects::Characters));
+        assert_eq!(vim.mode().label(), "Visual");
+        assert_eq!(
+            press(&mut vim, Region::Chat, "w 2 e"),
+            [
+                Outcome::Do(Command::Edit(Edit::Move(Across::WordForward)), None),
+                Outcome::Taken,
+                Outcome::Do(Command::Edit(Edit::Move(Across::WordEnd)), Some(2)),
+            ],
+            "it moves as normal mode does"
+        );
+        press(&mut vim, Region::Chat, "shift-v");
+        assert_eq!(vim.mode().label(), "Visual Line");
+        press(&mut vim, Region::Chat, "d");
+        assert_eq!(vim.mode(), Mode::Normal, "d takes out what is selected");
+        press(&mut vim, Region::Chat, "v c");
+        assert_eq!(vim.mode(), Mode::Insert, "c goes on to type");
+
+        let mut vim = Vim::default();
+        assert_eq!(
+            press(&mut vim, Region::Code, "v i escape"),
+            [
+                Outcome::Do(Command::Send(Sent::VisualCharacters), None),
+                Outcome::Taken,
+                Outcome::Do(Command::Normal, None),
+            ],
+            "i types nothing in visual mode"
         );
         assert_eq!(vim.mode(), Mode::Normal);
     }
