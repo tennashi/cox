@@ -139,7 +139,18 @@ mod tests {
     }
 
     #[test]
-    fn this_process_runs() {
+    fn a_pid_runs_only_while_its_process_lives() {
         assert!(running(std::process::id()));
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        assert!(running(child.id()), "a child that sleeps runs");
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(
+            !running(child.id()),
+            "a child that ended and was waited for"
+        );
     }
 }
