@@ -2334,3 +2334,59 @@ fn the_address_line_s_list_takes_its_keys_with_vim_on(cx: &mut TestAppContext) {
         )]
     );
 }
+
+#[gpui::test]
+fn the_card_with_the_keyboard_has_a_lighter_edge(cx: &mut TestAppContext) {
+    use gpui::AppContext as _;
+
+    let built: fake_daemon::Built = Rc::new(move |_, _, cx| {
+        let page = cx.new(|cx| FakePage {
+            focus: cx.focus_handle(),
+            asked: Vec::new(),
+            context: "Page",
+        });
+        cox::chat::view::StageView {
+            view: page.clone().into(),
+            panel: cx.new(|_| cox::ui::Panel::default()),
+            by_keys: Rc::new(move |tabs, window, cx| {
+                if tabs == Tabs::Focus {
+                    window.focus(&page.read(cx).focus);
+                }
+            }),
+        }
+    });
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let (workspace, cx) = keys::open_window_on(
+        cx,
+        scratch("keys-edge"),
+        FakeStages {
+            built: Some(built),
+            ..FakeStages::default()
+        },
+    );
+    // GPUI keeps where a selector was drawn once it is no longer drawn, so
+    // the test reads which card the one edge was drawn in last.
+    let edge_in = |cx: &mut VisualTestContext| {
+        let edge = cx.debug_bounds("keys-edge")?.center();
+        ["stage-panel", "chat-panel"].into_iter().find(|card| {
+            cx.debug_bounds(card)
+                .is_some_and(|bounds| bounds.contains(&edge))
+        })
+    };
+
+    keys::press(cx, &workspace, "secondary-n escape");
+    assert_eq!(
+        edge_in(cx),
+        Some("chat-panel"),
+        "the chat's input has the keyboard"
+    );
+    keys::press(cx, &workspace, "ctrl-w h");
+    assert!(in_part(cx, "Page"));
+    assert_eq!(
+        edge_in(cx),
+        Some("stage-panel"),
+        "ctrl-w h went to the stage"
+    );
+    keys::press(cx, &workspace, "ctrl-w l");
+    assert_eq!(edge_in(cx), Some("chat-panel"), "ctrl-w l came back");
+}
