@@ -170,6 +170,8 @@ pub struct LineInput {
     /// What tells the input the keyboard left it, once it is drawn in a
     /// window, which it has to be to get the keyboard at all.
     left: Option<Subscription>,
+    /// What tells Vim's keys the keyboard came to the input.
+    came: Option<Subscription>,
 }
 
 /// What a drag selects by: characters, after a click; words, after a
@@ -198,6 +200,7 @@ impl LineInput {
             scroll: Point::default(),
             placeholder: SharedString::default(),
             left: None,
+            came: None,
         }
     }
 
@@ -558,7 +561,11 @@ impl LineInput {
 
     /// A click puts the cursor there, or with Shift, selects up to there; a
     /// double click selects the word there, and a triple click the line.
-    fn mouse_down(&mut self, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    /// It is to type, though the input had the keyboard already.
+    fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_handle.is_focused(window) {
+            crate::vim::came_to_field(window, cx);
+        }
         let drag = match event.click_count {
             0 | 1 => {
                 let offset = self.offset_at(event.position);
@@ -835,6 +842,15 @@ impl Render for LineInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.left.is_none() {
             self.left = Some(cx.on_blur(&self.focus_handle, window, |_, _, cx| cx.emit(Blurred)));
+        }
+        if self.came.is_none() {
+            let came = |_: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                crate::vim::came_to_field(window, cx);
+            };
+            if self.focus_handle.is_focused(window) {
+                cx.defer_in(window, came);
+            }
+            self.came = Some(cx.on_focus(&self.focus_handle, window, came));
         }
         div()
             .key_context(KEY_CONTEXT)
