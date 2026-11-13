@@ -50,8 +50,9 @@ pub enum Does {
     Stop,
     /// Opens a new chat in the project chosen.
     New,
-    /// Opens a URL or a file, sorted as the stage's + sorts what is typed
-    /// there: in the page shown, or on a tab of its own.
+    /// Opens a URL or a file, or searches for other words, sorted as the
+    /// menu Vim's `t` opens sorts what is typed there: in the page shown,
+    /// or on a tab of its own.
     Open(Follow),
     Settings,
     /// Sets the goal of the chat shown, or with nothing after it opens the
@@ -157,21 +158,21 @@ pub const COMMANDS: &[Entry] = &[
         1,
         Takes::Place,
         Does::Open(Follow::Here),
-        "Open a URL in the page shown, or a file",
+        "Open a URL or search in the page shown, or a file",
     ),
     entry(
         "edit",
         1,
         Takes::Place,
         Does::Open(Follow::Here),
-        "Open a file, or a URL in the page shown",
+        "Open a file, or a URL or search in the page shown",
     ),
     entry(
         "tabopen",
         1,
         Takes::Place,
         Does::Open(Follow::NewTab),
-        "Open a URL or a file on a tab of its own",
+        "Open a URL, a file or a search on a tab of its own",
     ),
     entry(
         "settings",

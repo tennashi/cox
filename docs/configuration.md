@@ -57,7 +57,8 @@ Every key is optional. Paths may be absolute or start with `~`.
     "command": ["plamo-translate", "--from", "{from}", "--to", "{to}"]
   },
   "phone": {"port": 7421, "tailscale": true},
-  "vim": true
+  "vim": true,
+  "search": "https://duckduckgo.com/?q=%s"
 }
 ```
 
@@ -75,9 +76,10 @@ Every key is optional. Paths may be absolute or start with `~`.
 | `phone.port` | The port of the page for the phone. The relay, which passes the pages served on the Mac's own address on to the phone, listens on the next port, and the sketches' mocks are served on the one after. | `7421` |
 | `phone.tailscale` | `false` stops `coxd` from running `tailscale serve` for the page and the pages the relay passes on. | `true` |
 | `vim` | `true` makes the keys work as in Vim. See [Vim's keys](#vims-keys). | `false` |
+| `search` | The search engine: the address of its results, from `http://` or `https://`, with `%s` where the words go. Cox searches with it for the words typed after Vim's `t`, `:open` or `:tabopen`. One without `%s` is not used. | `https://www.google.com/search?q=%s` |
 
 The settings card (Cmd-, or Ctrl-,) sets `agent`, `home`, `workflow`,
-`wiki`, `translation` and `vim` for you, and leaves the rest of the file
+`wiki`, `translation`, `vim` and `search` for you, and leaves the rest of the file
 as it is. `coxd` reads `phone` only when it starts.
 
 ### Vim's keys
@@ -157,7 +159,7 @@ keyboard in its input. `o` opens a new chat in the project selected.
 | The tree | `l` or Enter, `h` | Opens what is selected, or closes its folder. |
 | Changes | Enter | Opens the file selected. |
 | A page | `f`, `;t` | Draws hints over the page; typing a label clicks it, or with `;t` opens the link on a tab of its own. Esc takes the hints away. |
-| A page | `H`, `L`, `r`, `o`, `t` | Goes back, forward, loads again, takes the keyboard to the address, opens the stage's + menu. |
+| A page | `H`, `L`, `r`, `o`, `t` | Goes back, forward, loads again, takes the keyboard to the address, opens the stage's + menu. In the menu `t` opens, words that are no address, file or path are searched for on a new tab with the [`search`](#settingsjson) engine, and `!command` runs the command in a terminal; the menu says what Enter does. |
 | A page | `gi`, `yy`, `i` | Gives the keyboard to the first field, copies the address, goes to insert mode. Esc in a field goes back to normal mode. |
 | A terminal | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Scrolls back through what scrolled off, and to the end. |
 | A terminal | `V`, `y` | Makes what `/` found, or what the mouse selected, whole lines, and copies what is selected. |
@@ -180,8 +182,8 @@ what was typed before, Enter runs it and Esc closes it.
 | `:q[uit]` | Closes the tab the stage shows. |
 | `:st[op]` | Stops the agent's turn in the chat shown. |
 | `:new` | Opens a new chat in the project. |
-| `:o[pen]`, `:e[dit]` | Opens a URL in the page shown, or a file. |
-| `:t[abopen]` | Opens a URL or a file on a tab of its own. |
+| `:o[pen]`, `:e[dit]` | Opens a URL in the page shown, or a file. Other words are searched for in the page shown, and `!command` runs the command in a terminal. |
+| `:t[abopen]` | Opens a URL or a file on a tab of its own, or searches for other words there. |
 | `:set[tings]` | Opens the settings. |
 | `:go[al]` | Sets the goal of the chat shown, or with nothing after it opens its input. |
 | `:sk[etch]` | Starts a sketch of the chat shown. |

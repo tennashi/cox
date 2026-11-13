@@ -166,11 +166,13 @@ pub enum Tabs {
     Number(usize),
     /// Closes the tab shown.
     Close,
-    /// Opens the menu of the stage's +, with the keyboard in its line.
+    /// Opens the menu of the stage's +, with the keyboard in its line,
+    /// where words that are no URL, file or path are searched for.
     Menu,
-    /// Opens what the line says, a URL or a file, sorted as the menu of
-    /// the stage's + sorts it: a URL in the page shown when `follow` says
-    /// here, and else on a tab of its own.
+    /// Opens what the line says, sorted as the menu [`Tabs::Menu`] opens
+    /// sorts it: a URL, or a search for its words, in the page shown when
+    /// `follow` says here, and else on a tab of its own; a file; or a
+    /// command after `!` in a terminal.
     Open {
         line: String,
         follow: crate::vim::keymap::Follow,
@@ -833,7 +835,7 @@ impl Stage {
                 }
                 return;
             }
-            Tabs::Menu => return self.open_menu(window, cx),
+            Tabs::Menu => return self.open_menu(typed::Unmatched::Search, window, cx),
             Tabs::Open { line, follow } => return self.open_line(&line, follow, window, cx),
             Tabs::Reload | Tabs::Back | Tabs::Forward => {
                 if let Some(page) = self.tabs.shown().and_then(|tab| tab.content.page()) {

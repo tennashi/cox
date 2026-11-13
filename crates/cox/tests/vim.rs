@@ -1542,6 +1542,65 @@ fn colon_quit_and_the_rest_go_to_the_stage(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn t_on_a_page_and_open_with_words_ask_the_stage_to_search(cx: &mut TestAppContext) {
+    use gpui::AppContext as _;
+
+    let keyed = Keyed::default();
+    let asked = keyed.clone();
+    let built: fake_daemon::Built = Rc::new(move |_, _, cx| {
+        let page = cx.new(|cx| FakePage {
+            focus: cx.focus_handle(),
+            asked: Vec::new(),
+            context: "Page",
+        });
+        let asked = asked.clone();
+        cox::chat::view::StageView {
+            view: page.clone().into(),
+            panel: cx.new(|_| cox::ui::Panel::default()),
+            by_keys: Rc::new(move |tabs, window, cx| {
+                if tabs == Tabs::Focus {
+                    window.focus(&page.read(cx).focus);
+                }
+                asked.borrow_mut().push(tabs);
+            }),
+        }
+    });
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let (workspace, cx) = keys::open_window_on(
+        cx,
+        scratch("search"),
+        FakeStages {
+            built: Some(built),
+            ..FakeStages::default()
+        },
+    );
+    keys::press(cx, &workspace, "secondary-n escape ctrl-w h");
+    assert!(in_part(cx, "Page"));
+    keys::press(cx, &workspace, "t");
+    keys::press(cx, &workspace, ":");
+    cx.simulate_input("tabopen rust gpui");
+    keys::press(cx, &workspace, "enter :");
+    cx.simulate_input("open 検索 する");
+    keys::press(cx, &workspace, "enter :");
+    cx.simulate_input("open !echo hi");
+    keys::press(cx, &workspace, "enter");
+    let open = |line: &str, follow| Tabs::Open {
+        line: line.to_owned(),
+        follow,
+    };
+    assert_eq!(
+        *keyed.borrow(),
+        [
+            Tabs::Focus,
+            Tabs::Menu,
+            open("rust gpui", Follow::NewTab),
+            open("検索 する", Follow::Here),
+            open("!echo hi", Follow::Here),
+        ]
+    );
+}
+
+#[gpui::test]
 fn the_line_keeps_what_was_typed_for_up_and_down(cx: &mut TestAppContext) {
     let (workspace, cx) = open_window(cx, "line-history");
     keys::press(cx, &workspace, "secondary-n escape");

@@ -16,7 +16,9 @@
 //! chat talks to when the command line names none, by its name in
 //! `agents.json`, as `{"agent": "Claude"}` (see [`agent`]), which
 //! the human writes in it themselves, and whether the keys work as in
-//! Vim, as `{"vim": true}` (see [`crate::vim`]).
+//! Vim, as `{"vim": true}` (see [`crate::vim`]), and the engine the
+//! words typed in the stage's + menu are searched with, as `{"search":
+//! "https://duckduckgo.com/?q=%s"}` (see [`SearchEngine`]).
 //!
 //! Cox reads the file again as it changes, as when the human edits it
 //! while Cox runs (see [`follow`]).
@@ -65,6 +67,72 @@ pub struct Saved {
     pub agent: Option<String>,
     /// Whether the keys work as in Vim, which the human turns on.
     pub vim: bool,
+    /// Where the words typed after Vim's `t`, `:open` or `:tabopen` that
+    /// are no URL, file or path are searched for, if the human named an
+    /// engine.
+    pub search: Option<SearchEngine>,
+}
+
+/// A search engine, as the address of its results with `%s` where the
+/// words go, as `settings.json` says it: `{"search":
+/// "https://duckduckgo.com/?q=%s"}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchEngine(String);
+
+impl Default for SearchEngine {
+    fn default() -> Self {
+        Self(DEFAULT_SEARCH.to_owned())
+    }
+}
+
+/// The engine searched when the settings name none.
+pub const DEFAULT_SEARCH: &str = "https://www.google.com/search?q=%s";
+
+impl SearchEngine {
+    /// The engine `text` names.
+    ///
+    /// # Errors
+    ///
+    /// What is wrong with `text`, for the human to read.
+    pub fn of(text: &str) -> Result<Self, &'static str> {
+        let text = text.trim();
+        if !text.contains("%s") {
+            return Err("Put %s where the words go.");
+        }
+        let url = url::Url::parse(&text.replace("%s", "words"))
+            .map_err(|_| "Give the whole address, from https://.")?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err("Give the whole address, from https://.");
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    /// The address of the results for `words`, put where `%s` is, encoded
+    /// as a form encodes them.
+    #[must_use]
+    pub fn url(&self, words: &str) -> String {
+        let words: String = url::form_urlencoded::byte_serialize(words.trim().as_bytes()).collect();
+        self.0.replace("%s", &words)
+    }
+
+    /// The engine's host, without `www.`, as `google.com`.
+    #[must_use]
+    pub fn host(&self) -> String {
+        url::Url::parse(&self.0.replace("%s", "words"))
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .map(|host| {
+                host.strip_prefix("www.")
+                    .map_or_else(|| host.clone(), str::to_owned)
+            })
+            .unwrap_or_default()
+    }
+
+    /// The address, with `%s` where the words go.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// How the human reads the wiki, which the agents write in English, and
@@ -199,6 +267,16 @@ impl Saved {
                 false
             }
         };
+        let search = match value.get("search") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(search)) => SearchEngine::of(search)
+                .inspect_err(|why| tracing::error!("\"search\" names no engine: {why}"))
+                .ok(),
+            Some(_) => {
+                tracing::error!("\"search\" is not the address of an engine");
+                None
+            }
+        };
         Ok(Self {
             home,
             workflow,
@@ -207,6 +285,7 @@ impl Saved {
             translation,
             agent,
             vim,
+            search,
         })
     }
 }
@@ -293,6 +372,13 @@ pub fn agent() -> Option<String> {
 #[must_use]
 pub fn vim() -> bool {
     Saved::read().vim
+}
+
+/// The engine the words typed after Vim's `t`, `:open` or `:tabopen` are
+/// searched with: the one `settings.json` names, or else Google.
+#[must_use]
+pub fn search() -> SearchEngine {
+    Saved::read().search.unwrap_or_default()
 }
 
 /// A folder the human keeps their own in, which `settings.json` names,
@@ -518,7 +604,7 @@ pub fn folder_of(text: &str, user: Option<&Path>) -> Result<PathBuf, &'static st
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Saved, Translation, folder_of, keep_home_in, keep_in};
+    use super::{Saved, SearchEngine, Translation, folder_of, keep_home_in, keep_in};
 
     #[test]
     fn the_home_is_read_and_kept_beside_what_else_the_file_holds() {
@@ -707,5 +793,54 @@ mod tests {
         assert!(folder_of("~other/Work", Some(user)).is_err());
         assert!(folder_of("", Some(user)).is_err());
         assert!(folder_of("~/Work", None).is_err());
+    }
+
+    #[test]
+    fn the_search_engine_is_google_unless_the_file_names_a_good_one() {
+        assert_eq!(Saved::parse(b"{}").unwrap().search, None);
+        assert_eq!(
+            super::SearchEngine::default().url("a"),
+            "https://www.google.com/search?q=a"
+        );
+        let saved = Saved::parse(br#"{"search": "https://duckduckgo.com/?q=%s"}"#).unwrap();
+        assert_eq!(
+            saved.search.map(|engine| engine.url("rust")),
+            Some("https://duckduckgo.com/?q=rust".to_owned())
+        );
+        for wrong in [
+            br#"{"home": "/work", "search": "https://duckduckgo.com/"}"#.as_slice(),
+            br#"{"home": "/work", "search": "ftp://example.com/?q=%s"}"#,
+            br#"{"home": "/work", "search": "duckduckgo.com/?q=%s"}"#,
+            br#"{"home": "/work", "search": 3}"#,
+        ] {
+            let saved = Saved::parse(wrong).unwrap();
+            assert_eq!(saved.search, None);
+            assert_eq!(saved.home, Some(PathBuf::from("/work")));
+        }
+    }
+
+    #[test]
+    fn the_words_searched_are_encoded() {
+        let engine = SearchEngine::of(" https://www.google.com/search?q=%s ").unwrap();
+        assert_eq!(
+            engine.url("rust & gpui"),
+            "https://www.google.com/search?q=rust+%26+gpui"
+        );
+        assert_eq!(
+            engine.url("検索"),
+            "https://www.google.com/search?q=%E6%A4%9C%E7%B4%A2"
+        );
+        assert_eq!(
+            engine.url("a=b?c#d/e%"),
+            "https://www.google.com/search?q=a%3Db%3Fc%23d%2Fe%25"
+        );
+        assert_eq!(engine.host(), "google.com");
+        assert_eq!(
+            SearchEngine::of("http://localhost:8080/s/%s")
+                .unwrap()
+                .host(),
+            "localhost"
+        );
+        assert!(SearchEngine::of("javascript:alert(%s)").is_err());
     }
 }
