@@ -218,6 +218,10 @@ pub enum Sent {
     NextEntry,
     /// Selects the entry or block before (`[[`).
     PreviousEntry,
+    /// Selects the next stretch of changed lines (`]c`).
+    NextStretch,
+    /// Selects the stretch of changed lines before (`[c`).
+    PreviousStretch,
 }
 
 /// What the window does for Vim's keys: where the keyboard goes, and
@@ -573,6 +577,8 @@ impl Keymap {
         send(TREE, &["enter"], Sent::Open),
         send(TREE, &["h"], Sent::Close),
         send(CHANGES, &["enter"], Sent::Open),
+        send(CHANGES, &["]", "c"], Sent::NextStretch),
+        send(CHANGES, &["[", "c"], Sent::PreviousStretch),
         bind(
             Mode::Insert,
             PROGRAMS,
