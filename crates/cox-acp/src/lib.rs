@@ -15,9 +15,7 @@
 //! carries out in a terminal, running the agent's own command for it.
 
 use std::collections::{BTreeMap, HashMap};
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand,
@@ -37,8 +35,8 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
 use agent_client_protocol::{
-    AcpAgent, Agent, Client, ConnectTo, ConnectionTo, ErrorCode, LineDirection, Responder,
-    UntypedMessage,
+    AcpAgent, Agent, Client, ConnectTo, ConnectionTo, ErrorCode, LineDirection,
+    RequestCancellationHandle, Responder, UntypedMessage,
 };
 use anyhow::Context;
 use base64::Engine as _;
@@ -203,7 +201,9 @@ pub async fn connect<T>(
                 settings,
                 login_methods,
                 takes,
+                updates: updates.clone(),
                 received,
+                turns: 0,
                 tool_calls: HashMap::new(),
             };
             outcome = Some(talk(session).await);
@@ -484,8 +484,9 @@ fn settings(options: Vec<SessionConfigOption>) -> Vec<Setting> {
         .collect()
 }
 
-/// What the connection hands to the session: an update ready to show, or
-/// news of a tool call, which the session gathers until the call ends.
+/// What the connection hands to the session, in the order the agent sent
+/// it: an update ready to show, news of a tool call, which the session
+/// gathers until the call ends, or the answer to a turn's prompt.
 enum Received {
     Update(Update),
     ToolCall {
@@ -495,6 +496,12 @@ enum Received {
         locations: Option<Vec<PathBuf>>,
         content: Option<Vec<ToolCallContent>>,
         status: Option<ToolCallStatus>,
+    },
+    /// The agent answered the prompt of the session's turn `turn`, its
+    /// turns counted from 1.
+    Answered {
+        turn: u64,
+        answer: agent_client_protocol::Result<PromptResponse>,
     },
 }
 
@@ -681,7 +688,12 @@ pub struct Session {
     settings: Vec<Setting>,
     login_methods: Vec<LoginMethod>,
     takes: Takes,
+    /// Where the answer to each prompt goes, after what the agent sent
+    /// before it.
+    updates: UnboundedSender<Received>,
     received: UnboundedReceiver<Received>,
+    /// How many turns the session has started.
+    turns: u64,
     /// What is known of each tool call that has not ended yet.
     tool_calls: HashMap<ToolCallId, Known>,
 }
@@ -780,14 +792,26 @@ impl Session {
     pub fn send(&mut self, blocks: impl IntoIterator<Item = Block>) -> Turn<'_> {
         let prompt = PromptRequest::new(self.id.clone(), content(blocks, self.takes));
         self.tool_calls.clear();
+        self.turns += 1;
+        let turn = self.turns;
+        let sent = self.cx.send_request(prompt);
+        let cancellation = sent.cancellation_handle();
+        let updates = self.updates.clone();
+        // Taken in order, the answer comes after the updates the agent sent
+        // before it, and before those it sends after, of no turn.
+        let unsent = sent.on_receiving_result(move |answer| {
+            deliver(&updates, Received::Answered { turn, answer });
+            std::future::ready(Ok(()))
+        });
         Turn {
             cx: &self.cx,
             session: &self.id,
             takes: self.takes,
             received: &mut self.received,
             tool_calls: &mut self.tool_calls,
-            response: Box::pin(self.cx.send_request(prompt).block_task()),
-            answer: None,
+            number: turn,
+            cancellation,
+            answer: unsent.err().map(Err),
         }
     }
 }
@@ -920,9 +944,22 @@ pub struct Turn<'s> {
     takes: Takes,
     received: &'s mut UnboundedReceiver<Received>,
     tool_calls: &'s mut HashMap<ToolCallId, Known>,
-    response: Pin<Box<dyn Future<Output = agent_client_protocol::Result<PromptResponse>> + Send>>,
+    /// Which of the session's turns it is.
+    number: u64,
+    /// Asks the agent to drop the prompt, when the turn is dropped before
+    /// it ends.
+    cancellation: RequestCancellationHandle,
     /// The agent's answer to the prompt, once it has arrived.
     answer: Option<agent_client_protocol::Result<PromptResponse>>,
+}
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        if self.answer.is_none() {
+            // Once the agent has answered, this asks nothing.
+            let _ = self.cancellation.cancel();
+        }
+    }
 }
 
 impl Turn<'_> {
@@ -944,19 +981,19 @@ impl Turn<'_> {
                     .flatten()
                     .map(Update::ToolCall);
             }
-            // The agent sends a turn's updates before answering the prompt,
-            // and they are delivered in that order, so take every waiting
-            // update before looking at the answer.
-            let received = tokio::select! {
-                biased;
-                Some(received) = self.received.recv() => received,
-                answer = &mut self.response => {
-                    self.answer = Some(answer);
-                    continue;
-                }
+            let Some(received) = self.received.recv().await else {
+                // The session holds a sender, so the channel stays open.
+                unreachable!("the session's updates are open while it is");
             };
-            if let Some(update) = follow(self.tool_calls, received) {
-                return Some(update);
+            match received {
+                Received::Answered { turn, answer } if turn == self.number => {
+                    self.answer = Some(answer);
+                }
+                received => {
+                    if let Some(update) = follow(self.tool_calls, received) {
+                        return Some(update);
+                    }
+                }
             }
         }
     }
@@ -1051,6 +1088,8 @@ fn follow(tool_calls: &mut HashMap<ToolCallId, Known>, received: Received) -> Op
             Some(Update::PermissionRequest(request))
         }
         Received::Update(update) => Some(update),
+        // A turn dropped before it ended gets its answer no more.
+        Received::Answered { .. } => None,
         Received::ToolCall {
             id,
             title,
@@ -1505,10 +1544,10 @@ mod tests {
 
     #[test]
     fn a_picture_goes_whole_to_an_agent_that_takes_images() {
-        let path = std::env::temp_dir().join(format!("cox-acp-picture-{}.png", std::process::id()));
+        let folder = tempfile::TempDir::new().unwrap();
+        let path = folder.path().join("picture.png");
         std::fs::write(&path, b"png").unwrap();
         let block = picture_block(&path, true);
-        std::fs::remove_file(&path).unwrap();
         let ContentBlock::Image(image) = block else {
             panic!("an image: {block:?}");
         };
