@@ -412,8 +412,11 @@ impl EntityInputHandler for Page {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.composing = None;
-        self.browser.commit(text);
+        if self.composing.take().is_some() {
+            self.browser.commit_composition(text);
+        } else {
+            self.browser.commit(text);
+        }
         cx.notify();
     }
 
