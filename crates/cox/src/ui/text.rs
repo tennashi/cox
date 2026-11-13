@@ -328,7 +328,7 @@ impl Reading {
             ),
         };
         let pieces: Vec<&str> = texts.iter().map(|text| text.text.as_ref()).collect();
-        let (at, range) = search::next(&pieces, from, query, direction)?;
+        let (at, range) = search::next(&pieces, from, query, false, direction)?;
         let text = &texts[at];
         let spot = |offset| Spot {
             text: text.id,

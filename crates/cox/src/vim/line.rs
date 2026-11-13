@@ -229,22 +229,30 @@ impl Line {
     /// Finds `text` as `direction` goes, or the last text searched for
     /// when it is empty, as Vim does.
     fn search(text: String, direction: Direction, window: &mut Window, cx: &mut App) {
-        let text = if text.is_empty() {
+        let (text, word) = if text.is_empty() {
             match super::last_search(cx) {
-                Some(last) => last.text.clone(),
+                Some(last) => (last.text.clone(), last.word),
                 None => return,
             }
         } else {
-            text
+            (text, false)
         };
         super::searched(
             Search {
                 text: text.clone(),
                 direction,
+                word,
             },
             cx,
         );
-        window.dispatch_action(Box::new(Find { text, direction }), cx);
+        window.dispatch_action(
+            Box::new(Find {
+                text,
+                direction,
+                word,
+            }),
+            cx,
+        );
     }
 
     /// Carries out the command `line` names: one of the table, or else a

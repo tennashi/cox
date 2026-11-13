@@ -150,6 +150,24 @@ pub enum Across {
     FirstNonBlank,
     /// To the line's end, the count's lines down less one (`$`).
     LineEnd,
+    /// To the bracket that matches the one under the cursor, or the next
+    /// on its line (`%`).
+    Bracket,
+    /// To the next empty line, or the count's (`}`).
+    ParagraphForward,
+    /// To the empty line before, or the count's (`{`).
+    ParagraphBack,
+}
+
+/// Where in the part's height the cursor's line is scrolled to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sight {
+    /// To the top (`zt`).
+    Top,
+    /// To the middle (`zz`).
+    Middle,
+    /// To the bottom (`zb`).
+    Bottom,
 }
 
 /// The actions of the parts of the window Vim's keys send.
@@ -160,7 +178,20 @@ pub enum Sent {
     Back,
     Forward,
     Visual,
+    /// Selects characters from the cursor's (`v`).
+    VisualCharacters,
     Definition,
+    /// Lists where the name under the cursor is used (`gr`).
+    References,
+    /// Shows at once what the language server says of the name under the
+    /// cursor (`K`).
+    LookUp,
+    /// Finds the whole word under the cursor, as `direction` goes (`*`,
+    /// `#`).
+    FindWord(Direction),
+    /// Scrolls the cursor's line to where in the part it says (`zt`, `zz`,
+    /// `zb`).
+    ScrollTo(Sight),
     Open,
     Close,
     Reload,
@@ -514,10 +545,21 @@ impl Keymap {
         across(CODE, &["0"], Across::LineStart),
         across(CODE, &["^"], Across::FirstNonBlank),
         across(CODE, &["$"], Across::LineEnd),
+        across(CODE, &["%"], Across::Bracket),
+        across(CODE, &["}"], Across::ParagraphForward),
+        across(CODE, &["{"], Across::ParagraphBack),
         send(&[Region::Chat], &["]", "]"], Sent::NextEntry),
         send(&[Region::Chat], &["[", "["], Sent::PreviousEntry),
         send(&[Region::Chat], &["g", "y"], Sent::Copy),
         send(CODE, &["shift-v"], Sent::Visual),
+        send(CODE, &["v"], Sent::VisualCharacters),
+        send(CODE, &["g", "r"], Sent::References),
+        send(CODE, &["shift-k"], Sent::LookUp),
+        send(CODE, &["*"], Sent::FindWord(Direction::Forward)),
+        send(CODE, &["#"], Sent::FindWord(Direction::Backward)),
+        send(CODE, &["z", "t"], Sent::ScrollTo(Sight::Top)),
+        send(CODE, &["z", "z"], Sent::ScrollTo(Sight::Middle)),
+        send(CODE, &["z", "b"], Sent::ScrollTo(Sight::Bottom)),
         send(CODE, &["y"], Sent::Copy),
         send(CODE, &["g", "a"], Sent::AddToChat),
         send(DOCUMENT, &["]", "]"], Sent::NextEntry),
@@ -1025,6 +1067,9 @@ mod tests {
             ("0", Across::LineStart),
             ("^", Across::FirstNonBlank),
             ("$", Across::LineEnd),
+            ("%", Across::Bracket),
+            ("}", Across::ParagraphForward),
+            ("{", Across::ParagraphBack),
         ] {
             assert_eq!(code(key), Answer::Act(Command::Across(across)), "{key}");
         }
