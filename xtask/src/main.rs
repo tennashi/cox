@@ -1,5 +1,6 @@
 //! Development tasks for the Cox workspace, run as `cargo xtask <task>`.
 
+mod flaky;
 mod identity;
 
 use std::path::{Path, PathBuf};
@@ -20,6 +21,10 @@ Tasks:
             Build Cox and assemble Cox.app, the macOS app bundle, next to
             the executables under target/
     ci      Run every check that CI runs: format, lint, test and dependencies
+    flaky [<runs>] [-- <cargo test args>...]
+            Run the tests <runs> times, 10 unless given, with the cargo
+            test args, --workspace unless given, and tell which tests
+            failed in how many runs
     identity new <folder> | identity import <folder>
             macOS: make the certificate Cox is signed with, put it in the
             login keychain, and write it into <folder>, a new folder, to
@@ -43,6 +48,7 @@ fn main() -> anyhow::Result<()> {
     match env::args().nth(1).as_deref() {
         Some("bundle") => bundle(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("ci") => ci(&sh),
+        Some("flaky") => flaky::run(&env::args().skip(2).collect::<Vec<_>>()),
         Some("identity") => identity::run(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("install") => install(&sh, &env::args().skip(2).collect::<Vec<_>>()),
         Some("run") => run(&sh, &env::args().skip(2).collect::<Vec<_>>()),
