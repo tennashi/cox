@@ -45,14 +45,14 @@ fn a_device_starts_shows_takes_a_tap_and_stops() {
     let program = PathBuf::from(env!("CARGO_BIN_EXE_cox-fake-emulator"));
     let name = format!("Test_{}", std::process::id());
     let (device, mut events) = Device::open(Some(program), &name, Boot::default());
-    assert_eq!(next(&mut events), Event::Status(Status::Starting));
-    assert_eq!(next(&mut events), Event::Status(Status::Showing));
-    assert!(running::of(&name).is_some(), "its file says it runs");
-
     device.send(Input::Size {
         width: 270,
         height: 600,
     });
+    assert_eq!(next(&mut events), Event::Status(Status::Starting));
+    assert_eq!(next(&mut events), Event::Status(Status::Showing));
+    assert!(running::of(&name).is_some(), "its file says it runs");
+
     let before = next_frame(&device, &mut events);
     // A tap on the second row chooses it.
     device.send(Input::Touch {

@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tonic::Request;
 use tonic::metadata::MetadataValue;
@@ -240,12 +241,25 @@ impl Worker {
             }
         };
         self.status(Status::Showing);
+        // What the tab sent as the emulator started is taken first, so
+        // that the first frames come at the size it asked for last.
         let mut size = None;
+        loop {
+            match from_tab.try_recv() {
+                Ok(Input::Size { width, height }) => {
+                    size = resized(size, width, height).or(size);
+                }
+                Ok(input) => send(&mut client, input, display).await,
+                Err(TryRecvError::Empty) => break,
+                // The tab closed: the device stops as it drops.
+                Err(TryRecvError::Disconnected) => return Ok(()),
+            }
+        }
         // Until the tab asks for pictures of its size, as while it is not
         // drawn, the display comes at a size of its own, for an agent to
         // see it by.
-        let (width, height) = fitted(display, UNDRAWN_SIDE);
-        let mut frames = Some(stream(&mut client, width, height).await?);
+        let (width, height) = size.unwrap_or_else(|| fitted(display, UNDRAWN_SIDE));
+        let mut frames = stream(&mut client, width, height).await?;
         loop {
             tokio::select! {
                 input = from_tab.recv() => {
@@ -254,16 +268,16 @@ impl Worker {
                         return Ok(());
                     };
                     if let Input::Size { width, height } = input {
-                        if size != Some((width, height)) && width > 0 && height > 0 {
-                            size = Some((width, height));
-                            frames = Some(stream(&mut client, width, height).await?);
+                        if let Some(new) = resized(size, width, height) {
+                            size = Some(new);
+                            frames = stream(&mut client, new.0, new.1).await?;
                         }
                     } else {
                         send(&mut client, input, display).await;
                     }
                 }
-                image = next(frames.as_mut()) => {
-                    match image {
+                image = frames.message() => {
+                    match image.transpose() {
                         Some(image) => self.show(image?),
                         None => anyhow::bail!("the emulator stopped sending its display"),
                     }
@@ -446,13 +460,10 @@ async fn stream(
     Ok(client.stream_screenshot(format).await?.into_inner())
 }
 
-async fn next(
-    frames: Option<&mut tonic::Streaming<crate::proto::Image>>,
-) -> Option<Result<crate::proto::Image, tonic::Status>> {
-    match frames {
-        Some(frames) => frames.message().await.transpose(),
-        None => std::future::pending().await,
-    }
+/// The size the tab asks for, `width` by `height`, if it is not `size`,
+/// which the frames come at now, and has pixels.
+fn resized(size: Option<(u32, u32)>, width: u32, height: u32) -> Option<(u32, u32)> {
+    (size != Some((width, height)) && width > 0 && height > 0).then_some((width, height))
 }
 
 /// Sends `input` to the emulator, whose display is `display` pixels: what
