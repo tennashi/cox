@@ -1051,6 +1051,10 @@ mod tests {
             [Outcome::Do(Command::Normal, None), Outcome::Pass]
         );
         assert_eq!(press(&mut vim, Region::Settings, "escape"), [Outcome::Pass]);
+        assert_eq!(
+            press(&mut vim, Region::ProjectCard, "escape"),
+            [Outcome::Pass]
+        );
     }
 
     #[test]

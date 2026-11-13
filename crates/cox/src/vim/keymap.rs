@@ -853,20 +853,6 @@ mod tests {
     }
 
     #[test]
-    fn escape_in_normal_mode_does_nothing_in_the_chat_and_is_the_forms_own_elsewhere() {
-        assert_eq!(
-            Keymap::VIM.answer(Mode::Normal, Region::Chat, &["escape"]),
-            Answer::Act(Command::Reset)
-        );
-        for region in [Region::Goal, Region::Settings, Region::ProjectCard] {
-            assert_eq!(
-                Keymap::VIM.answer(Mode::Normal, region, &["escape"]),
-                Answer::None
-            );
-        }
-    }
-
-    #[test]
     fn the_keys_into_insert_mode_put_the_cursor_where_vim_does() {
         let answer = |keys| Keymap::VIM.answer(Mode::Normal, Region::Chat, &[keys]);
         assert_eq!(answer("i"), Answer::Act(Command::Insert(Place::Cursor)));
