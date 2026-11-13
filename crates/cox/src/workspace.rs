@@ -1764,6 +1764,7 @@ impl Workspace {
             workspace.end_renaming(true, window, cx);
         });
         window.focus(&input.focus_handle(cx));
+        crate::vim::came(crate::vim::Region::Renaming, window, cx);
         self.menu = None;
         self.renaming = Some((index, input, submitted));
         cx.notify();
@@ -1796,6 +1797,7 @@ impl Workspace {
         self.show(index, window, cx);
         if let Some(view) = self.chats.get(index).and_then(Chat::view) {
             view.update(cx, |view, cx| view.edit_goal(window, cx));
+            crate::vim::came(crate::vim::Region::Goal, window, cx);
         }
     }
 
@@ -1813,6 +1815,7 @@ impl Workspace {
         let from = sketch::from_at_first(&self.projects[chat.project].folder);
         if let Some(view) = chat.view() {
             view.update(cx, |view, cx| view.edit_sketch(from, window, cx));
+            crate::vim::came(crate::vim::Region::Sketch, window, cx);
         }
     }
 
@@ -2388,11 +2391,14 @@ impl Workspace {
                 .justify_center()
                 .p(px(GAP * 2.))
                 .text_color(rgb(FAINT))
+                .flex_col()
+                .gap(px(GAP))
                 .child(if self.chats(self.chosen).next().is_some() {
                     "Choose a chat from the list above."
                 } else {
                     "No chat here yet: the list above opens one."
                 })
+                .children(crate::vim::mode(cx).map(crate::chat::view::render_mode))
                 .into_any_element(),
         };
         card()
@@ -2814,6 +2820,8 @@ impl Workspace {
                     })),
             )
             .children(dots)
+            .child(div().flex_1())
+            .children(crate::vim::mode(cx).map(crate::chat::view::render_mode))
     }
 }
 

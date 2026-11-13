@@ -197,8 +197,7 @@ const FORMS: &[Region] = &[
 const LINES: &[Region] = &[Region::Chat, Region::Goal, Region::Sketch, Region::Renaming];
 
 /// The parts of the window `ctrl-w` and the stage's tabs' keys work in:
-/// all but the inputs, screens and menus that open over them, and the
-/// tabs that take every key, a terminal's and an Android device's.
+/// all but the inputs, screens and menus that open over them.
 const PARTS: &[Region] = &[
     Region::Workspace,
     Region::Rail,
@@ -213,10 +212,21 @@ const PARTS: &[Region] = &[
     Region::Flow,
     Region::Windows,
     Region::MacWindow,
+    Region::Terminal,
+    Region::Android,
 ];
 
 /// The parts Vim's `/` searches the text of.
-const SEARCHERS: &[Region] = &[Region::Page, Region::Code, Region::Document];
+const SEARCHERS: &[Region] = &[
+    Region::Page,
+    Region::Code,
+    Region::Document,
+    Region::Terminal,
+];
+
+/// The tabs that run a program, which gets every key in insert mode, as
+/// in Neovim's terminal mode: a terminal's, and an Android device's.
+const PROGRAMS: &[Region] = &[Region::Terminal, Region::Android];
 
 /// The line at the window's foot.
 const LINE: &[Region] = &[Region::Command];
@@ -234,6 +244,7 @@ const MOVERS: &[Region] = &[
     Region::Document,
     Region::Tree,
     Region::Changes,
+    Region::Terminal,
 ];
 
 const PAGE: &[Region] = &[Region::Page];
@@ -241,6 +252,7 @@ const ADDRESS: &[Region] = &[Region::Address];
 const CODE: &[Region] = &[Region::Code];
 const TREE: &[Region] = &[Region::Tree];
 const CHANGES: &[Region] = &[Region::Changes];
+const TERMINAL: &[Region] = &[Region::Terminal];
 
 const fn act(regions: &'static [Region], keys: &'static [&'static str], act: Act) -> Binding {
     bind(Mode::Normal, regions, keys, Command::Window(act))
@@ -319,6 +331,32 @@ impl Keymap {
         send(TREE, &["enter"], Sent::Open),
         send(TREE, &["h"], Sent::Close),
         send(CHANGES, &["enter"], Sent::Open),
+        bind(
+            Mode::Insert,
+            PROGRAMS,
+            &["ctrl-\\", "ctrl-n"],
+            Command::Normal,
+        ),
+        bind(
+            Mode::Normal,
+            PROGRAMS,
+            &["ctrl-\\", "ctrl-n"],
+            Command::Normal,
+        ),
+        bind(
+            Mode::Normal,
+            PROGRAMS,
+            &["i"],
+            Command::Insert(Place::Cursor),
+        ),
+        bind(
+            Mode::Normal,
+            TERMINAL,
+            &["a"],
+            Command::Insert(Place::Cursor),
+        ),
+        send(TERMINAL, &["shift-v"], Sent::Visual),
+        send(TERMINAL, &["y"], Sent::Copy),
         bind(Mode::Normal, PAGE, &["i"], Command::Insert(Place::Cursor)),
         bind(Mode::Insert, PAGE, &["escape"], Command::Normal),
         bind(Mode::Hint, PAGE, &["escape"], Command::Normal),
@@ -471,13 +509,8 @@ mod tests {
     }
 
     #[test]
-    fn the_tabs_that_take_every_key_keep_them() {
-        for region in [
-            Region::Terminal,
-            Region::Android,
-            Region::Goal,
-            Region::Settings,
-        ] {
+    fn the_forms_keep_control_w_and_g_t() {
+        for region in [Region::Goal, Region::Settings] {
             for keys in [&["ctrl-w"][..], &["g"], &["ctrl-w", "h"], &["g", "t"]] {
                 assert_eq!(
                     Keymap::VIM.answer(Mode::Normal, region, keys),
@@ -486,11 +519,61 @@ mod tests {
                 );
             }
         }
-        for region in [Region::Terminal, Region::Android] {
-            assert!(!Keymap::VIM.knows(region), "{region:?}");
-        }
         assert!(Keymap::VIM.knows(Region::Code));
         assert!(Keymap::VIM.knows(Region::Workspace));
+    }
+
+    #[test]
+    fn a_program_leaves_insert_mode_with_control_backslash_control_n_only() {
+        for region in [Region::Terminal, Region::Android] {
+            let answer = |mode, keys: &[&str]| Keymap::VIM.answer(mode, region, keys);
+            assert_eq!(answer(Mode::Insert, &["ctrl-\\"]), Answer::Held);
+            assert_eq!(
+                answer(Mode::Insert, &["ctrl-\\", "ctrl-n"]),
+                Answer::Act(Command::Normal)
+            );
+            for keys in [&["escape"][..], &["ctrl-w"], &["g"], &[":"], &["i"]] {
+                assert_eq!(answer(Mode::Insert, keys), Answer::None, "{keys:?}");
+            }
+            assert_eq!(
+                answer(Mode::Normal, &["i"]),
+                Answer::Act(Command::Insert(Place::Cursor))
+            );
+            assert_eq!(
+                answer(Mode::Normal, &["ctrl-w", "l"]),
+                Answer::Act(Command::Window(Act::Go(Toward::Right)))
+            );
+            assert_eq!(
+                answer(Mode::Normal, &["g", "t"]),
+                Answer::Act(Command::Window(Act::NextTab))
+            );
+            assert_eq!(
+                answer(Mode::Normal, &[":"]),
+                Answer::Act(Command::Line(Prompt::Ex))
+            );
+        }
+        let terminal = |keys: &[&str]| Keymap::VIM.answer(Mode::Normal, Region::Terminal, keys);
+        assert_eq!(
+            terminal(&["a"]),
+            Answer::Act(Command::Insert(Place::Cursor))
+        );
+        assert_eq!(
+            terminal(&["g", "g"]),
+            Answer::Act(Command::Move(Motion::Top))
+        );
+        assert_eq!(
+            terminal(&["shift-v"]),
+            Answer::Act(Command::Send(Sent::Visual))
+        );
+        assert_eq!(terminal(&["y"]), Answer::Act(Command::Send(Sent::Copy)));
+        assert_eq!(
+            terminal(&["/"]),
+            Answer::Act(Command::Line(Prompt::Search(Direction::Forward)))
+        );
+        let android = |keys: &[&str]| Keymap::VIM.answer(Mode::Normal, Region::Android, keys);
+        for keys in [&["a"][..], &["j"], &["g", "g"], &["y"], &["/"]] {
+            assert_eq!(android(keys), Answer::None, "{keys:?}");
+        }
     }
 
     #[test]
@@ -593,7 +676,7 @@ mod tests {
                 );
             }
         }
-        for region in [Region::Terminal, Region::Goal] {
+        for region in [Region::Android, Region::Goal] {
             assert_eq!(
                 Keymap::VIM.answer(Mode::Normal, region, &["j"]),
                 Answer::None
@@ -710,7 +793,7 @@ mod tests {
         }
         for (mode, region) in [
             (Mode::Insert, Region::Chat),
-            (Mode::Normal, Region::Terminal),
+            (Mode::Insert, Region::Terminal),
             (Mode::Normal, Region::Goal),
         ] {
             assert_eq!(Keymap::VIM.answer(mode, region, &[":"]), Answer::None);

@@ -40,17 +40,19 @@ use std::time::Duration;
 use alacritty_terminal::event::{Event, WindowSize};
 use alacritty_terminal::event_loop::{EventLoopSender, Msg};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Boundary, Direction as Way};
 use alacritty_terminal::index::{Column, Line, Point as Cell, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::{Term, TermMode};
 use cox_core::entry::Attachment;
 use cox_core::tabs::KeptTab;
 use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, IntoElement,
     KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollDelta, ScrollWheelEvent, Task, UTF16Selection, Window, div, point, prelude::*, px,
-    rgb, size,
+    Point, ScrollDelta, ScrollWheelEvent, Subscription, Task, UTF16Selection, Window, div, point,
+    prelude::*, px, rgb, size,
 };
 use tokio::sync::oneshot;
 
@@ -70,6 +72,9 @@ use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED};
 use crate::ui::translation::Translate;
+use crate::vim::keymap::Motion;
+use crate::vim::search::{Direction, Find};
+use crate::vim::{Move, Region, Visual};
 
 pub(crate) const KEY_CONTEXT: &str = "Terminal";
 
@@ -143,6 +148,8 @@ pub struct Terminal {
     /// Lines of a wheel scroll not scrolled yet.
     scrolling: f32,
     focus_handle: FocusHandle,
+    /// Tells Vim's keys when the tab gets the keyboard, once drawn.
+    focused: Option<Subscription>,
     /// The program's end of the pseudoterminal, held open while the tab
     /// lasts.
     _held: OwnedFd,
@@ -201,6 +208,7 @@ impl Terminal {
             composing: None,
             scrolling: 0.,
             focus_handle: cx.focus_handle(),
+            focused: None,
             _held: held,
             _events: heard,
             _watch: watch,
@@ -229,6 +237,12 @@ impl Terminal {
     #[must_use]
     pub fn selected_text(&self) -> Option<String> {
         self.term.lock().selection_to_string()
+    }
+
+    /// How many lines back through what scrolled off the terminal shows.
+    #[must_use]
+    pub fn scrolled_back(&self) -> usize {
+        self.term.lock().grid().display_offset()
     }
 
     /// What the terminal tells of itself.
@@ -511,6 +525,81 @@ impl Terminal {
         cx.notify();
     }
 
+    /// Scrolls back through what scrolled off, or forward, as Vim's keys
+    /// ask in normal mode.
+    fn move_by_keys(&mut self, motion: &Move, _: &mut Window, cx: &mut Context<Self>) {
+        let times = i32::try_from(motion.times()).unwrap_or(i32::MAX);
+        let mut term = self.term.lock();
+        let half = i32::try_from(term.screen_lines() / 2).unwrap_or(1);
+        term.scroll_display(match motion.motion {
+            Motion::Down => Scroll::Delta(times.saturating_neg()),
+            Motion::Up => Scroll::Delta(times),
+            Motion::HalfDown => Scroll::Delta(half.saturating_mul(times).saturating_neg()),
+            Motion::HalfUp => Scroll::Delta(half.saturating_mul(times)),
+            Motion::Top => Scroll::Top,
+            Motion::Bottom => Scroll::Bottom,
+        });
+        drop(term);
+        cx.notify();
+    }
+
+    /// Selects the next match of the text Vim's `/` or `n` asks for, and
+    /// scrolls to it: after the match selected, or else from the top of
+    /// what shows, or before it, from the bottom, going round.
+    fn find(&mut self, find: &Find, _: &mut Window, cx: &mut Context<Self>) {
+        let Ok(mut regex) = RegexSearch::new(&literal(&find.text)) else {
+            return;
+        };
+        let mut term = self.term.lock();
+        let selected = term
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.to_range(&term));
+        let top = -i32::try_from(term.grid().display_offset()).unwrap_or(0);
+        let bottom = top + i32::try_from(term.screen_lines()).unwrap_or(1) - 1;
+        let (origin, way, side) = match find.direction {
+            Direction::Forward => (
+                selected.map_or(Cell::new(Line(top), Column(0)), |range| {
+                    range.end.add(&*term, Boundary::None, 1)
+                }),
+                Way::Right,
+                Side::Left,
+            ),
+            Direction::Backward => (
+                selected.map_or(Cell::new(Line(bottom), term.last_column()), |range| {
+                    range.start.sub(&*term, Boundary::None, 1)
+                }),
+                Way::Left,
+                Side::Right,
+            ),
+        };
+        if let Some(found) = term.search_next(&mut regex, origin, way, side, None) {
+            let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
+            selection.update(*found.end(), Side::Right);
+            term.selection = Some(selection);
+            term.scroll_to_point(*found.start());
+        }
+        drop(term);
+        cx.notify();
+    }
+
+    /// Makes the selection whole lines, for Vim's `V`.
+    fn select_lines(&mut self, _: &Visual, _: &mut Window, cx: &mut Context<Self>) {
+        let mut term = self.term.lock();
+        let Some(range) = term
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.to_range(&term))
+        else {
+            return;
+        };
+        let mut lines = Selection::new(SelectionType::Lines, range.start, Side::Left);
+        lines.update(range.end, Side::Right);
+        term.selection = Some(lines);
+        drop(term);
+        cx.notify();
+    }
+
     fn render_bar(&self) -> impl IntoElement {
         let (what, state) = match &self.program {
             Program::Command(command) => {
@@ -553,6 +642,18 @@ impl Terminal {
                     .child(state)
             }))
     }
+}
+
+/// A pattern that matches `text` as it is typed.
+fn literal(text: &str) -> String {
+    let mut pattern = String::with_capacity(text.len());
+    for letter in text.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(letter) {
+            pattern.push('\\');
+        }
+        pattern.push(letter);
+    }
+    pattern
 }
 
 #[expect(
@@ -709,7 +810,15 @@ impl EntityInputHandler for Terminal {
 }
 
 impl Render for Terminal {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.focused.is_none() {
+            self.focused = Some(crate::vim::follow_focus(
+                Region::Terminal,
+                &self.focus_handle,
+                window,
+                cx,
+            ));
+        }
         div()
             .size_full()
             .flex()
@@ -729,6 +838,9 @@ impl Render for Terminal {
                     .on_action(cx.listener(Self::translate))
                     .on_action(cx.listener(Self::add_to_chat))
                     .on_action(cx.listener(Self::paste))
+                    .on_action(cx.listener(Self::move_by_keys))
+                    .on_action(cx.listener(Self::find))
+                    .on_action(cx.listener(Self::select_lines))
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
                     .on_mouse_down(
                         MouseButton::Right,

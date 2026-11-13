@@ -242,16 +242,20 @@ pub type Made = Rc<std::cell::RefCell<Vec<(PathBuf, Option<KeptTabs<u64>>)>>>;
 /// What Vim's keys asked of the stages' tabs, in order.
 pub type Keyed = Rc<std::cell::RefCell<Vec<Tabs>>>;
 
+/// Makes a stage of a test's own for a folder.
+pub type Built = Rc<dyn Fn(PathBuf, &mut Window, &mut App) -> StageView>;
+
 /// Makes the chats' stages: none, or, when `opened`, `made` or `keyed`
 /// is given, a stand-in for each, which notes in `opened` the links the
 /// human opens, in `made` the stages made, and in `keyed` what Vim's keys
-/// ask of their tabs. The commands asked of a chat with none run in a
-/// shell.
+/// ask of their tabs, or else, when `built`, the stage it builds. The
+/// commands asked of a chat with none run in a shell.
 #[derive(Default)]
 pub struct FakeStages {
     pub opened: Option<Opened>,
     pub made: Option<Made>,
     pub keyed: Option<Keyed>,
+    pub built: Option<Built>,
 }
 
 impl Stages for FakeStages {
@@ -259,9 +263,13 @@ impl Stages for FakeStages {
         &self,
         cwd: PathBuf,
         tabs: Option<KeptTabs<u64>>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) -> Option<(StageView, OpenLink)> {
+        if let Some(built) = &self.built {
+            let open_link: OpenLink = Rc::new(|_, _, _| {});
+            return Some((built(cwd, window, cx), open_link));
+        }
         if self.opened.is_none() && self.made.is_none() && self.keyed.is_none() {
             return None;
         }
