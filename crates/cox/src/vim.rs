@@ -220,14 +220,19 @@ impl Sent {
             Self::Newer => Box::new(line::Newer),
             Self::NextEntry => Box::new(crate::chat::view::NextEntry),
             Self::PreviousEntry => Box::new(crate::chat::view::PreviousEntry),
+            Self::NextStretch => Box::new(crate::stage::changes::NextStretch),
+            Self::PreviousStretch => Box::new(crate::stage::changes::PreviousStretch),
         }
     }
 
-    /// How many times `count` does it: back and forward go as far as the
-    /// count, the rest are done once.
+    /// How many times `count` does it: back and forward, and from stretch
+    /// to stretch of changes, go as far as the count; the rest are done
+    /// once.
     fn times(self, count: Option<u32>) -> u32 {
         match self {
-            Self::Back | Self::Forward => count.unwrap_or(1),
+            Self::Back | Self::Forward | Self::NextStretch | Self::PreviousStretch => {
+                count.unwrap_or(1)
+            }
             _ => 1,
         }
     }

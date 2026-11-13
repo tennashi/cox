@@ -47,7 +47,7 @@ use cox_editor::words;
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
     Hsla, ListAlignment, ListOffset, ListState, Pixels, ScrollWheelEvent, SharedString, StyledText,
-    Task, TextRun, Window, div, font, list, prelude::*, px, rgb,
+    Task, TextRun, Window, actions, div, font, list, prelude::*, px, rgb,
 };
 
 use crate::settings::DIRECTORIES;
@@ -66,6 +66,16 @@ use crate::vim::keymap::Motion;
 use crate::vim::{Move, Open};
 
 pub(crate) const KEY_CONTEXT: &str = "Changes";
+
+actions!(
+    changes,
+    [
+        /// Selects the next stretch of changed lines, across files (`]c`).
+        NextStretch,
+        /// Selects the stretch before (`[c`).
+        PreviousStretch,
+    ]
+);
 
 /// How often the tab looks at what changed.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
@@ -257,9 +267,10 @@ pub struct Changes {
     /// The rows of the tab, of the repository it shows: each file's,
     /// followed by its lines'.
     rows: Vec<Row>,
-    /// The index of the file Vim's keys selected, of the repository
-    /// shown, once they moved to one.
-    selected: Option<usize>,
+    /// What Vim's keys selected, of the repository shown, once they moved
+    /// to something: a file's row, or the row that starts a stretch of
+    /// its lines.
+    selected: Option<Row>,
     list: ListState,
     /// How far the lines of each file shown are scrolled across, by its
     /// path.
@@ -281,10 +292,19 @@ struct Choice(Option<String>);
 
 /// A row of the tab: the file at an index of the repository shown, or a
 /// line of it.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Row {
     File(usize),
     Line(usize, usize),
+}
+
+impl Row {
+    /// The index of the file it is, or is a line of.
+    fn file(self) -> usize {
+        match self {
+            Self::File(file) | Self::Line(file, _) => file,
+        }
+    }
 }
 
 impl EventEmitter<Chosen> for Changes {}
@@ -509,6 +529,13 @@ impl Changes {
                 item_ix: top.item_ix.min(self.rows.len() - 1),
                 offset_in_item: top.offset_in_item,
             });
+        } else if !stay {
+            // Rows spliced into an empty list land above its scroll top,
+            // which would leave it at their end.
+            self.list.scroll_to(ListOffset {
+                item_ix: 0,
+                offset_in_item: px(0.),
+            });
         }
     }
 
@@ -550,7 +577,9 @@ impl Changes {
         let Some(Ok(diff)) = self.shown_diff() else {
             return;
         };
-        let file = &diff.files[index];
+        let Some(file) = diff.files.get(index) else {
+            return;
+        };
         if file.how != How::Removed {
             cx.emit(Chosen {
                 path: diff.top.join(&file.path),
@@ -580,26 +609,80 @@ impl Changes {
         }
         let index = match (self.selected, motion.motion) {
             (None, Motion::Down | Motion::Up) => 0,
-            (at, _) => motion.moved(at.unwrap_or(0), 1, last),
+            (at, _) => motion.moved(at.map_or(0, Row::file), 1, last),
         };
-        self.selected = Some(index);
-        if let Some(row) = self
-            .rows
-            .iter()
-            .position(|row| matches!(row, Row::File(file) if *file == index))
-        {
+        self.select(Row::File(index), cx);
+    }
+
+    /// Selects the next stretch of changed lines as Vim's keys ask, after
+    /// what is selected, or with nothing selected the first in sight.
+    fn next_stretch(&mut self, _: &NextStretch, _: &mut Window, cx: &mut Context<Self>) {
+        let after = self
+            .selected_at()
+            .map_or(self.list.logical_scroll_top().item_ix, |at| at + 1);
+        let found = self.stretches().find(|&at| at >= after);
+        if let Some(at) = found {
+            self.select(self.rows[at], cx);
+        }
+    }
+
+    /// Selects the stretch of changed lines before what is selected, or
+    /// with nothing selected the last above those in sight.
+    fn previous_stretch(&mut self, _: &PreviousStretch, _: &mut Window, cx: &mut Context<Self>) {
+        let before = self
+            .selected_at()
+            .unwrap_or(self.list.logical_scroll_top().item_ix);
+        let found = self.stretches().rfind(|&at| at < before);
+        if let Some(at) = found {
+            self.select(self.rows[at], cx);
+        }
+    }
+
+    /// Where the row selected is among the tab's rows, if one is.
+    fn selected_at(&self) -> Option<usize> {
+        let selected = self.selected?;
+        self.rows.iter().position(|row| *row == selected)
+    }
+
+    /// Where the rows that start a stretch of changed lines are among the
+    /// tab's rows.
+    fn stretches(&self) -> impl DoubleEndedIterator<Item = usize> + '_ {
+        let diff = self.shown_diff().and_then(|read| read.as_ref().ok());
+        self.rows.iter().enumerate().filter_map(move |(at, row)| {
+            let Row::Line(file, line) = *row else {
+                return None;
+            };
+            let kind = diff?.files.get(file)?.lines.get(line)?.kind;
+            (kind == Kind::Stretch).then_some(at)
+        })
+    }
+
+    /// Selects `row`, scrolling it to the top of the tab.
+    fn select(&mut self, row: Row, cx: &mut Context<Self>) {
+        self.selected = Some(row);
+        if let Some(at) = self.selected_at() {
             self.list.scroll_to(ListOffset {
-                item_ix: row,
+                item_ix: at,
                 offset_in_item: px(0.),
             });
         }
         cx.notify();
     }
 
-    /// Opens the file selected, as a click on it does.
+    /// Opens the file selected, as a click on it does, or the file of the
+    /// stretch selected at its first changed line.
     fn open_selected(&mut self, _: &Open, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(index) = self.selected {
-            self.choose(index, None, cx);
+        match self.selected {
+            Some(Row::File(index)) => self.choose(index, None, cx),
+            Some(Row::Line(index, line)) => {
+                let at = self
+                    .shown_diff()
+                    .and_then(|read| read.as_ref().ok())
+                    .and_then(|diff| diff.files.get(index))
+                    .and_then(|file| first_changed(file.lines.get(line..)?));
+                self.choose(index, at, cx);
+            }
+            None => {}
         }
     }
 
@@ -953,12 +1036,7 @@ impl Changes {
     }
 
     /// The row at `row` of the tab.
-    fn render_row(
-        &self,
-        row: usize,
-        selected: Option<usize>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_row(&self, row: usize, selected: Option<Row>, cx: &mut Context<Self>) -> AnyElement {
         let Some(&listed) = self.rows.get(row) else {
             return div().into_any_element();
         };
@@ -975,7 +1053,7 @@ impl Changes {
         let (inner, at) = match line {
             None => {
                 let head = file_row(row, file);
-                let head = if selected == Some(index) {
+                let head = if selected == Some(listed) {
                     head.bg(rgb(SELECTED))
                 } else {
                     head
@@ -992,6 +1070,13 @@ impl Changes {
                 let shown = &file.lines[line];
                 let in_sight = self.in_sight.clone();
                 let drawn = line_row(row, shown, first, last, look, across, in_sight);
+                let drawn = if selected == Some(listed) {
+                    // Tall enough to see even where the stretch starts the
+                    // file and says nothing.
+                    drawn.h(px(STRETCH_HEIGHT)).bg(rgb(SELECTED))
+                } else {
+                    drawn
+                };
                 (drawn, Some(shown.at))
             }
         };
@@ -1291,6 +1376,17 @@ pub(crate) fn counts(added: usize, removed: usize) -> impl IntoElement {
         .when(removed > 0, |counts| {
             counts.child(div().text_color(rgb(FAILED)).child(format!("−{removed}")))
         })
+}
+
+/// The line of the file as it is to open the stretch that starts `lines`
+/// at: where it first changes, or where it starts.
+fn first_changed(lines: &[Line]) -> Option<usize> {
+    let (start, rest) = lines.split_first()?;
+    let changed = rest
+        .iter()
+        .take_while(|line| line.kind != Kind::Stretch)
+        .find(|line| line.kind != Kind::Same);
+    Some(changed.unwrap_or(start).at)
 }
 
 /// The rows of `diff`: each file's, then its lines'.
@@ -1757,6 +1853,8 @@ impl Render for Changes {
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(Self::move_by_keys))
             .on_action(cx.listener(Self::open_selected))
+            .on_action(cx.listener(Self::next_stretch))
+            .on_action(cx.listener(Self::previous_stretch))
             .text_color(rgb(FOREGROUND))
             .font_family(UI_FONT)
             .text_size(px(13.))

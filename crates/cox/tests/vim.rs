@@ -1299,10 +1299,8 @@ fn the_tree_moves_a_selection_and_opens_and_closes_folders(cx: &mut TestAppConte
     );
 }
 
-/// A folder of its own for a test, a Git repository with a commit of
-/// `paths`, each saying its name, which then change.
-fn changed(name: &str, paths: &[&str]) -> PathBuf {
-    let folder = folder(name, paths);
+/// Makes `folder` a Git repository with a commit of all it holds.
+fn commit_all(folder: &std::path::Path) {
     for args in [
         &["init", "--quiet"][..],
         &["add", "."],
@@ -1319,12 +1317,19 @@ fn changed(name: &str, paths: &[&str]) -> PathBuf {
     ] {
         let ran = std::process::Command::new("git")
             .arg("-C")
-            .arg(&folder)
+            .arg(folder)
             .args(args)
             .output()
             .unwrap();
         assert!(ran.status.success(), "{ran:?}");
     }
+}
+
+/// A folder of its own for a test, a Git repository with a commit of
+/// `paths`, each saying its name, which then change.
+fn changed(name: &str, paths: &[&str]) -> PathBuf {
+    let folder = folder(name, paths);
+    commit_all(&folder);
     for path in paths {
         std::fs::write(folder.join(path), "changed\n").unwrap();
     }
@@ -1370,6 +1375,107 @@ fn changes_move_from_file_to_file_and_open_one(cx: &mut TestAppContext) {
     assert_eq!(
         *chosen.borrow(),
         ["a.txt", "c.txt", "a.txt", "a.txt", "b.txt"].map(|name| root.join(name))
+    );
+}
+
+#[gpui::test]
+fn changes_go_from_stretch_to_stretch_and_open_one_there(cx: &mut TestAppContext) {
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let root = folder("changes-stretches", &[]);
+    for name in ["a.rs", "b.rs", "c.rs"] {
+        std::fs::write(root.join(name), numbered(100)).unwrap();
+    }
+    commit_all(&root);
+    let rewrite = |name: &str, changes: fn(usize) -> bool| {
+        let text: String = (1..=100)
+            .map(|line| {
+                if changes(line) {
+                    format!("let changed_{line} = 0;\n")
+                } else {
+                    format!("let line_{line} = {line};\n")
+                }
+            })
+            .collect();
+        std::fs::write(root.join(name), text).unwrap();
+    };
+    rewrite("a.rs", |line| {
+        (10..30).contains(&line) || (70..90).contains(&line)
+    });
+    rewrite("b.rs", |line| (40..60).contains(&line));
+    rewrite("c.rs", |_| true);
+    let (folder, cwd) = (root.clone(), root.clone());
+    let (changes, cx) = cx.add_window_view(|_, cx| Changes::new(folder, &cwd, cx));
+    let chosen = Rc::new(RefCell::new(Vec::new()));
+    let heard = Rc::clone(&chosen);
+    cx.update(|window, cx| {
+        window.focus(&changes.focus_handle(cx));
+        cx.subscribe(
+            &changes,
+            move |_, chosen: &cox::stage::changes::Chosen, _| {
+                heard.borrow_mut().push((chosen.path.clone(), chosen.line));
+            },
+        )
+        .detach();
+    });
+    let mut stretches = Vec::new();
+    for _ in 0..500 {
+        cx.run_until_parked();
+        stretches = changes.read_with(cx, |changes, _| {
+            let Some(Ok(diff)) = changes.shown_diff() else {
+                return Vec::new();
+            };
+            let mut row = 0;
+            let mut stretches = Vec::new();
+            for file in &diff.files {
+                row += 1;
+                for line in &file.lines {
+                    if line.kind == cox_editor::changes::Kind::Stretch {
+                        stretches.push(row);
+                    }
+                    row += 1;
+                }
+            }
+            stretches
+        });
+        if stretches.len() == 4 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        stretches.len(),
+        4,
+        "two stretches in a.rs, one in b.rs and c.rs"
+    );
+    let top = |row: usize, cx: &mut VisualTestContext| {
+        let selector = Box::leak(format!("changed-line-{row}").into_boxed_str());
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("row {row} in sight"))
+            .top()
+    };
+    let height = cx.update(|window, _| window.viewport_size().height);
+    let first = top(stretches[0], cx);
+
+    type_keys(cx, "] c enter");
+    let list_top = top(stretches[0], cx);
+    assert!(list_top < first, "the first stretch scrolls up to the top");
+    assert!(list_top < height / 4.);
+    type_keys(cx, "2 ] c enter");
+    assert_eq!(top(stretches[2], cx), list_top);
+    type_keys(cx, "[ c enter");
+    assert_eq!(top(stretches[1], cx), list_top);
+    type_keys(cx, "5 [ c enter");
+    assert_eq!(top(stretches[0], cx), list_top);
+    type_keys(cx, "j enter");
+    assert_eq!(
+        *chosen.borrow(),
+        [
+            (root.join("a.rs"), Some(10)),
+            (root.join("b.rs"), Some(40)),
+            (root.join("a.rs"), Some(70)),
+            (root.join("a.rs"), Some(10)),
+            (root.join("b.rs"), None),
+        ]
     );
 }
 

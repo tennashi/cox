@@ -174,7 +174,7 @@ keyboard in its input. `o` opens a new chat in the project selected.
 | Code | `ga`, `gd`, `gr`, `K`, Ctrl-O, Ctrl-I | Hands the selection or the cursor's line to the chat, goes to the definition of the name under the cursor, or of its line's first name, lists where it is used, shows at once what the language server says of it, goes back, goes forward. |
 | A document | `]]`, `[[`, `y`, `ga` | Selects the next block, a paragraph, heading, list item, code block or table cell, or the one before, from the first in sight, scrolling to it; copies what is selected, or hands it to the chat. |
 | The tree | `l` or Enter, `h` | Opens what is selected, or closes its folder. A file opened goes on with the keyboard. |
-| Changes | Enter | Opens the file selected. |
+| Changes | `]c`, `[c`, Enter | Selects the next stretch of changed lines, across files, or the one before, with a count that many, and scrolls it to the top. Enter opens the file selected, or the file of the stretch selected at its first changed line. |
 | A page | `f`, `;t` | Draws hints over the page; typing a label clicks it, or with `;t` opens the link on a tab of its own. Esc takes the hints away. |
 | A page | `H`, `L`, `r`, `o`, `t` | Goes back, forward, loads again, takes the keyboard to the address, opens the stage's + menu. In the menu `t` opens, words that are no address, file or path are searched for on a new tab with the [`search`](#settingsjson) engine, and `!command` runs the command in a terminal; the menu says what Enter does. |
 | A page | `gi`, `yy`, `i` | Gives the keyboard to the first field, copies the address, goes to insert mode. Esc in a field goes back to normal mode. |
