@@ -188,7 +188,8 @@ insert mode sends every key to the program, Esc, Ctrl-W and `:` too, so
 Vim, a pager or the shell inside works; an Android device gets Esc as
 Back. Ctrl-\ Ctrl-N goes to normal mode, where the keys go nowhere but
 to the table above. Ctrl-\ then any other key sends that key, so
-Ctrl-\ Ctrl-\ sends Ctrl-\. Typing in a terminal shows its end again.
+Ctrl-\ Ctrl-\ sends Ctrl-\. Typing in a terminal shows its end again. When the program ends, a shell's tab closes, the stage's last tab
+excepted, and a command's stays to be read; the keys go to normal mode.
 
 **The line at the window's foot.** `:` opens it for a command, `/` and
 `?` for text to find. Tab and Shift-Tab, or Ctrl-N and Ctrl-P, go along

@@ -138,7 +138,10 @@ impl Stage {
             }
         };
         let terminal = cx.new(|cx| Terminal::new(running, Some(answer), cx));
-        let changes = cx.observe(&terminal, |stage, _, cx| stage.changed(cx));
+        let changes = gpui::Subscription::join(
+            cx.observe(&terminal, |stage, _, cx| stage.changed(cx)),
+            Self::follow_exit(&terminal, window, cx),
+        );
         let ended = self
             .tabs
             .iter()
