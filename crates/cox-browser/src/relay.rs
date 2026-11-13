@@ -785,21 +785,31 @@ mod tests {
 
     /// Sends `request` as the agent, and returns the next `answers`
     /// messages the agent hears.
-    async fn ask(agent: &mut Agent, request: &str, answers: usize) -> Vec<String> {
+    async fn ask(agent: &mut Agent, request: &str, answers: usize) -> Vec<Value> {
         agent.send(Message::text(request)).await.unwrap();
         hear(agent, answers).await
     }
 
-    /// The next `answers` messages the agent hears.
-    async fn hear(agent: &mut Agent, answers: usize) -> Vec<String> {
+    /// The next `answers` messages the agent hears, as JSON.
+    async fn hear(agent: &mut Agent, answers: usize) -> Vec<Value> {
         let mut heard = Vec::new();
         for _ in 0..answers {
             let message = tokio::time::timeout(Duration::from_secs(5), agent.next())
                 .await
                 .expect("the relay answers");
-            heard.push(message.unwrap().unwrap().into_text().unwrap().to_string());
+            let text = message.unwrap().unwrap().into_text().unwrap();
+            heard.push(serde_json::from_str(text.as_str()).unwrap());
         }
         heard
+    }
+
+    /// The messages `texts` as JSON values, which compare by what they
+    /// say rather than by the order of their keys.
+    fn json(texts: &[&str]) -> Vec<Value> {
+        texts
+            .iter()
+            .map(|text| serde_json::from_str(text).unwrap())
+            .collect()
     }
 
     /// Takes what the relay tells the stage next, of the agent's work.
@@ -826,28 +836,28 @@ mod tests {
                 2
             )
             .await,
-            [
+            json(&[
                 r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"PAGE","type":"page"}}}"#,
                 r#"{"id":0,"result":{}}"#,
-            ]
+            ])
         );
         assert_eq!(
             ask(&mut agent, r#"{"id":1,"method":"Target.attachToTarget","params":{"targetId":"OTHER","flatten":true}}"#, 1).await,
-            [r#"{"id":1,"error":{"code":-32000,"message":"No target with given id found"}}"#]
+            json(&[r#"{"id":1,"error":{"code":-32000,"message":"No target with given id found"}}"#])
         );
         assert_eq!(
             ask(&mut agent, r#"{"id":2,"method":"Target.attachToTarget","params":{"targetId":"PAGE","flatten":true}}"#, 2).await,
-            [
+            json(&[
                 r#"{"method":"Target.attachedToTarget","params":{"sessionId":"s-PAGE","targetInfo":{"targetId":"PAGE","type":"page"},"waitingForDebugger":false}}"#,
                 r#"{"id":2,"result":{"sessionId":"s-PAGE"}}"#,
-            ]
+            ])
         );
         for message in [
             r#"{"id":3,"sessionId":"s-PAGE","method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":10,"y":20}}"#,
             r#"{"id":4,"sessionId":"s-PAGE","method":"Input.insertText","params":{"text":"Rust"}}"#,
             r#"{"id":5,"sessionId":"s-PAGE","method":"Page.reload","params":{}}"#,
         ] {
-            assert_eq!(ask(&mut agent, message, 1).await, [message]);
+            assert_eq!(ask(&mut agent, message, 1).await, json(&[message]));
         }
         let page = Some("PAGE".to_owned());
         assert_eq!(
@@ -891,20 +901,23 @@ mod tests {
         let (_new_named, new) = watch::channel(Some("NEW".to_owned()));
         opening.is(new.clone());
         answer.send(Some(new)).unwrap();
-        // In either order.
-        let mut heard = hear(&mut agent, 2).await;
-        heard.sort();
-        assert_eq!(heard, [r#"{"id":1,"result":{"targetId":"NEW"}}"#, created]);
+        let heard = hear(&mut agent, 2).await;
+        assert!(
+            json(&[r#"{"id":1,"result":{"targetId":"NEW"}}"#, created])
+                .iter()
+                .all(|message| heard.contains(message)),
+            "the agent hears of the new tab and of its page, in either order: {heard:?}"
+        );
 
         assert_eq!(
             ask(&mut agent, r#"{"id":2,"method":"Target.attachToTarget","params":{"targetId":"NEW","flatten":true}}"#, 2).await,
-            [
+            json(&[
                 r#"{"method":"Target.attachedToTarget","params":{"sessionId":"s-NEW","targetInfo":{"targetId":"NEW","type":"page"},"waitingForDebugger":false}}"#,
                 r#"{"id":2,"result":{"sessionId":"s-NEW"}}"#,
-            ]
+            ])
         );
         let click = r#"{"id":3,"sessionId":"s-NEW","method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2}}"#;
-        assert_eq!(ask(&mut agent, click, 1).await, [click]);
+        assert_eq!(ask(&mut agent, click, 1).await, json(&[click]));
         assert_eq!(
             worked(&mut relay).await,
             (
@@ -938,10 +951,10 @@ mod tests {
         }
         assert_eq!(
             hear(&mut agent, 2).await,
-            [
+            json(&[
                 r#"{"id":4,"result":{"success":true}}"#,
                 r#"{"id":5,"error":{"code":-32000,"message":"The stage keeps its last tab open"}}"#,
-            ]
+            ])
         );
     }
 
@@ -959,10 +972,10 @@ mod tests {
                 2
             )
             .await,
-            [
+            json(&[
                 r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"PAGE","type":"page"}}}"#,
                 r#"{"id":0,"result":{}}"#,
-            ]
+            ])
         );
         assert_eq!(
             ask(
@@ -971,35 +984,35 @@ mod tests {
                 2
             )
             .await,
-            [
+            json(&[
                 r#"{"method":"Target.attachedToTarget","params":{"sessionId":"s-TAB","targetInfo":{"targetId":"TAB","type":"tab"},"waitingForDebugger":false}}"#,
                 r#"{"id":1,"result":{}}"#,
-            ]
+            ])
         );
 
         let (_other_named, other) = watch::channel(Some("OTHER".to_owned()));
         relay.pages.hand(other);
         assert_eq!(
             hear(&mut agent, 3).await,
-            [
+            json(&[
                 r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"OTHER-TAB","type":"tab"}}}"#,
                 r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"OTHER","type":"page"}}}"#,
                 r#"{"method":"Target.attachedToTarget","params":{"sessionId":"s-OTHER-TAB","targetInfo":{"targetId":"OTHER-TAB","type":"tab"},"waitingForDebugger":false}}"#,
-            ]
+            ])
         );
 
         relay.pages.forget("OTHER");
         assert_eq!(
             hear(&mut agent, 3).await,
-            [
+            json(&[
                 r#"{"method":"Target.detachedFromTarget","params":{"sessionId":"s-OTHER-TAB"}}"#,
                 r#"{"method":"Target.targetDestroyed","params":{"targetId":"OTHER"}}"#,
                 r#"{"method":"Target.targetDestroyed","params":{"targetId":"OTHER-TAB"}}"#,
-            ]
+            ])
         );
         assert_eq!(
             ask(&mut agent, r#"{"id":2,"method":"Target.attachToTarget","params":{"targetId":"OTHER","flatten":true}}"#, 1).await,
-            [r#"{"id":2,"error":{"code":-32000,"message":"No target with given id found"}}"#]
+            json(&[r#"{"id":2,"error":{"code":-32000,"message":"No target with given id found"}}"#])
         );
     }
 

@@ -518,24 +518,47 @@ mod tests {
         scope
     }
 
-    /// What the agent is told, of what `said` says.
-    fn to_agent(said: &[Said]) -> Vec<&str> {
-        said.iter()
-            .filter_map(|said| match said {
-                Said::ToAgent(text) => Some(text.as_str()),
-                Said::ToBrowser(_) => None,
-            })
+    /// The messages `texts` as JSON values, which compare by what they
+    /// say rather than by the order of their keys.
+    fn json<T: AsRef<str>>(texts: &[T]) -> Vec<Value> {
+        texts
+            .iter()
+            .map(|text| serde_json::from_str(text.as_ref()).unwrap())
             .collect()
     }
 
+    /// What the agent is told, of what `said` says.
+    fn to_agent(said: &[Said]) -> Vec<Value> {
+        json(
+            &said
+                .iter()
+                .filter_map(|said| match said {
+                    Said::ToAgent(text) => Some(text.as_str()),
+                    Said::ToBrowser(_) => None,
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
     /// What the browser is asked, of what `said` says.
-    fn to_browser(said: &[Said]) -> Vec<&str> {
-        said.iter()
-            .filter_map(|said| match said {
-                Said::ToBrowser(text) => Some(text.as_str()),
-                Said::ToAgent(_) => None,
-            })
-            .collect()
+    fn to_browser(said: &[Said]) -> Vec<Value> {
+        json(
+            &said
+                .iter()
+                .filter_map(|said| match said {
+                    Said::ToBrowser(text) => Some(text.as_str()),
+                    Said::ToAgent(_) => None,
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// The answer the agent is given in place of `request`, as JSON.
+    fn refusal(request: Request) -> Value {
+        let Request::Refuse(answer) = request else {
+            panic!("the request is refused, not {request:?}");
+        };
+        serde_json::from_str(&answer).unwrap()
     }
 
     fn request(scope: &mut Scope, request: &str) -> Request {
@@ -613,14 +636,14 @@ mod tests {
         );
         let mut id = 9;
         assert_eq!(
-            let_go("T2", true, || {
+            json(&let_go("T2", true, || {
                 id += 1;
                 id
-            }),
-            [
+            })),
+            json(&[
                 r#"{"id":10,"sessionId":"T2","method":"Runtime.runIfWaitingForDebugger"}"#,
                 r#"{"id":11,"method":"Target.detachFromTarget","params":{"sessionId":"T2"}}"#,
-            ]
+            ])
         );
     }
 
@@ -637,8 +660,10 @@ mod tests {
             panic!("the list is cut down");
         };
         assert_eq!(
-            listing,
-            r#"{"id":7,"result":{"targetInfos":[{"targetId":"PAGE","type":"page"},{"targetId":"B","type":"browser"}]}}"#
+            json(&[listing]),
+            json(&[
+                r#"{"id":7,"result":{"targetInfos":[{"targetId":"PAGE","type":"page"},{"targetId":"B","type":"browser"}]}}"#
+            ])
         );
         // Other answers go through as they are.
         assert_eq!(scope.reply(r#"{"id":8,"result":{}}"#), Reply::Pass);
@@ -671,14 +696,13 @@ mod tests {
             Request::Pass
         );
         assert_eq!(
-            request(
+            vec![refusal(request(
                 &mut scope,
                 r#"{"id":7,"method":"Target.attachToTarget","params":{"targetId":"OTHER"}}"#
-            ),
-            Request::Refuse(
+            ))],
+            json(&[
                 r#"{"id":7,"error":{"code":-32000,"message":"No target with given id found"}}"#
-                    .to_owned()
-            )
+            ])
         );
     }
 
@@ -766,8 +790,8 @@ mod tests {
         // page staying where it is.
         assert_eq!(request(&mut scope, read), Request::Pass);
         assert_eq!(
-            request(&mut scope, front),
-            Request::Refuse(r#"{"id":6,"result":{},"sessionId":"P1"}"#.to_owned())
+            vec![refusal(request(&mut scope, front))],
+            json(&[r#"{"id":6,"result":{},"sessionId":"P1"}"#])
         );
 
         // Once that chat's turn ends, the page is the agent's to act on.
@@ -895,16 +919,16 @@ mod tests {
         );
         assert_eq!(
             to_agent(&said),
-            [
+            json(&[
                 r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"OTHER-TAB","type":"tab","url":"https://a.example/"}}}"#,
                 r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"OTHER","type":"page","url":"https://a.example/"}}}"#,
-            ]
+            ])
         );
         assert_eq!(
             to_browser(&said),
-            [
+            json(&[
                 r#"{"id":9,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}}"#
-            ]
+            ])
         );
         // The browser attaches the agent to the tab again, which it sees
         // now, and to the page within it.
@@ -943,18 +967,18 @@ mod tests {
         });
         assert_eq!(
             to_agent(&said),
-            [
+            json(&[
                 r#"{"method":"Target.detachedFromTarget","params":{"sessionId":"F1"},"sessionId":"P1"}"#,
                 r#"{"method":"Target.detachedFromTarget","params":{"sessionId":"P1"},"sessionId":"T1"}"#,
                 r#"{"method":"Target.detachedFromTarget","params":{"sessionId":"T1"}}"#,
                 r#"{"method":"Target.targetDestroyed","params":{"targetId":"FRAME"}}"#,
                 r#"{"method":"Target.targetDestroyed","params":{"targetId":"PAGE"}}"#,
                 r#"{"method":"Target.targetDestroyed","params":{"targetId":"TAB"}}"#,
-            ]
+            ])
         );
         assert_eq!(
             to_browser(&said),
-            [r#"{"id":1,"method":"Target.detachFromTarget","params":{"sessionId":"T1"}}"#]
+            json(&[r#"{"id":1,"method":"Target.detachFromTarget","params":{"sessionId":"T1"}}"#])
         );
         // What the browser says of the page from now on, the agent does
         // not hear, and what it asks of it is refused.
