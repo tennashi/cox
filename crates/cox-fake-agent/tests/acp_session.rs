@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cox_acp::{
@@ -14,42 +14,9 @@ use cox_acp::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-/// The fake agent's executable, built once for all the tests here, in a
-/// folder of its own, so that the build does not wait on the one running
-/// the tests.
+/// The fake agent's executable, which cargo builds for these tests.
 fn fake_agent() -> &'static Path {
-    static BUILT: OnceLock<PathBuf> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let output = Command::new(cargo)
-            .args([
-                "build",
-                "--message-format=json",
-                "--package",
-                "cox-fake-agent",
-            ])
-            .arg("--manifest-path")
-            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml"))
-            .arg("--target-dir")
-            .arg(Path::new(env!("CARGO_TARGET_TMPDIR")).join("cox-fake-agent"))
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "cox-fake-agent builds: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .find_map(|message| {
-                (message["reason"] == "compiler-artifact"
-                    && message["target"]["name"] == "cox-fake-agent")
-                    .then(|| message["executable"].as_str().map(PathBuf::from))
-                    .flatten()
-            })
-            .expect("cargo names the fake agent's executable")
-    })
+    Path::new(env!("CARGO_BIN_EXE_cox-fake-agent"))
 }
 
 /// A scenario written to a folder of its own, which the session works in.

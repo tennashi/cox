@@ -1673,9 +1673,12 @@ dependencies = [
 name = "cox-fake-agent"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "cox-acp",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
