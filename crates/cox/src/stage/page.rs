@@ -6,6 +6,8 @@
 //!   it to the page.
 //! - [`address`] is the address line, and sorts what is typed there
 //!   into an address or words to search for.
+//! - [`history`] is the pages the stage visited, which the address line
+//!   offers.
 //! - [`keys`] sends the keys to the page, but for the browser's own
 //!   shortcuts.
 //! - [`vim`] is what Vim's keys do in the page, and [`hints`] the labels
@@ -20,6 +22,7 @@
 
 pub mod address;
 mod hints;
+pub mod history;
 mod keys;
 mod picture;
 mod vim;
@@ -245,8 +248,23 @@ impl Page {
             self.finding = None;
         }
         let url = self.navigation.url.clone();
+        self.remember(&was, cx);
         self.address
             .update(cx, |address, cx| address.navigated(&url, window, cx));
+    }
+
+    /// Puts the page in the history once it loaded, or moved within
+    /// itself, and has its title follow it there.
+    fn remember(&self, was: &Navigation, cx: &mut App) {
+        let now = &self.navigation;
+        if now.loading || now.failed {
+            return;
+        }
+        if was.loading || was.url != now.url {
+            history::visited(&now.url, &now.title, cx);
+        } else if was.title != now.title {
+            history::titled(&now.url, &now.title, cx);
+        }
     }
 
     /// Opens `url`, and gives the page the keyboard.

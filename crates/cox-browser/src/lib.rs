@@ -146,12 +146,20 @@ pub enum Event {
 /// Where the browser is in its history, as the toolbar shows it, and what
 /// the page is called, as its tab shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a page that failed goes on loading the page that says why, and each way \
+              back or forward is open or not, as CEF says them"
+)]
 pub struct Navigation {
     /// The address of the page being shown, or being loaded.
     pub url: String,
     /// The page's title, empty until it has one.
     pub title: String,
     pub loading: bool,
+    /// Whether the page failed to load, as when its server cannot be
+    /// reached, since loading last started.
+    pub failed: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
 }

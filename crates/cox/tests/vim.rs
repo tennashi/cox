@@ -2176,6 +2176,9 @@ fn escape_in_the_address_line_puts_the_page_s_address_back(cx: &mut TestAppConte
     cx.update(cox::ui::input::bind_keys);
     cx.update(cox::stage::page::address::bind_keys);
     cx.update(|cx| cox::vim::turn(true, cx));
+    cx.update(|cx| {
+        cox::stage::page::history::keep(cox::stage::page::history::History::default(), None, cx);
+    });
     let (line, cx) = cx.add_window_view(|_, cx| AddressLine::new("https://example.com/", cx));
     let asked = Rc::new(RefCell::new(Vec::new()));
     let keep = Rc::clone(&asked);
@@ -2201,4 +2204,51 @@ fn escape_in_the_address_line_puts_the_page_s_address_back(cx: &mut TestAppConte
     );
     assert_eq!(*asked.borrow(), [Asked::Back]);
     assert_eq!(mode(cx), Some(Mode::Normal));
+}
+
+/// With Vim's keys on, the address line keeps Up, Down, Control-N and
+/// Control-P for the list of pages it offers, and Enter opens the one
+/// chosen.
+#[gpui::test]
+fn the_address_line_s_list_takes_its_keys_with_vim_on(cx: &mut TestAppContext) {
+    use cox::stage::page::address::{AddressLine, Asked, Row};
+    use cox::stage::page::history::{self, History};
+
+    cx.update(cox::ui::input::bind_keys);
+    cx.update(cox::stage::page::address::bind_keys);
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let now = history::now();
+    let mut visited = History::default();
+    visited.visit("https://github.com/", "GitHub", now);
+    visited.visit("https://github.com/", "GitHub", now);
+    visited.visit("https://github.com/zed-industries/zed", "Zed", now);
+    visited.visit("https://docs.rs/gpui", "gpui on GitHub", now);
+    cx.update(|cx| history::keep(visited, None, cx));
+    let (line, cx) = cx.add_window_view(|_, cx| AddressLine::new("https://example.com/", cx));
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let keep = Rc::clone(&asked);
+    cx.update(|_, cx| {
+        cx.subscribe(&line, move |_, asked: &Asked, _| {
+            keep.borrow_mut().push(asked.clone());
+        })
+        .detach();
+    });
+    cx.update(|window, cx| line.update(cx, |line, cx| line.focus(window, cx)));
+    cx.run_until_parked();
+    cx.simulate_input("gi");
+    let chosen = |cx: &mut VisualTestContext| cx.update(|_, cx| line.read(cx).chosen());
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen(cx), Row::Page(0));
+    cx.simulate_keystrokes("down down");
+    assert_eq!(chosen(cx), Row::Line);
+    cx.simulate_keystrokes("up ctrl-p");
+    assert_eq!(chosen(cx), Row::Page(0));
+    assert_eq!(mode(cx), Some(Mode::Insert));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        *asked.borrow(),
+        [Asked::Go(
+            "https://github.com/zed-industries/zed".to_owned()
+        )]
+    );
 }

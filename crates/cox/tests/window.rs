@@ -15,7 +15,8 @@ use agent_client_protocol::schema::v1::{
 use cox::agent::setup::{Policy, Setup};
 use cox::chat::conversation::{Content, Entry, State, ToolCallResult};
 use cox::chat::view::ChatView;
-use cox::stage::page::address::{AddressLine, Asked};
+use cox::stage::page::address::{AddressLine, Asked, Row};
+use cox::stage::page::history::{self, History};
 use cox::ui::input::{Blurred, LineInput};
 use cox::workspace::Workspace;
 use cox_acp::McpServer;
@@ -1281,8 +1282,22 @@ fn address_line(
     Rc<std::cell::RefCell<Vec<Asked>>>,
     &mut VisualTestContext,
 ) {
+    address_line_over(cx, History::default())
+}
+
+/// The address line, as [`address_line`] makes it, over `history`, the
+/// pages visited.
+fn address_line_over(
+    cx: &mut TestAppContext,
+    history: History,
+) -> (
+    Entity<AddressLine>,
+    Rc<std::cell::RefCell<Vec<Asked>>>,
+    &mut VisualTestContext,
+) {
     cx.update(cox::ui::input::bind_keys);
     cx.update(cox::stage::page::address::bind_keys);
+    cx.update(|cx| cox::stage::page::history::keep(history, None, cx));
     let (line, cx) = cx.add_window_view(|_, cx| AddressLine::new("https://example.com/", cx));
     let asked: Rc<std::cell::RefCell<Vec<Asked>>> = Rc::default();
     let keep = Rc::clone(&asked);
@@ -1381,4 +1396,158 @@ fn the_address_line_shows_where_the_page_went_unless_it_is_typed_in(cx: &mut Tes
     cx.run_until_parked();
     navigated(cx, "https://example.com/last");
     assert_eq!(address_text(cx, &line), "https://example.com/last");
+}
+
+/// Pages visited: GitHub's home twice, Zed's repository on it once, and
+/// gpui's docs, titled with a word GitHub's address starts with.
+fn visited() -> History {
+    let now = history::now();
+    let mut history = History::default();
+    history.visit("https://github.com/", "GitHub", now);
+    history.visit("https://github.com/", "GitHub", now);
+    history.visit("https://github.com/zed-industries/zed", "Zed", now);
+    history.visit("https://docs.rs/gpui", "gpui on GitHub", now);
+    history
+}
+
+fn offered(cx: &mut VisualTestContext, line: &Entity<AddressLine>) -> Vec<String> {
+    cx.update(|window, cx| line.read(cx).offered(window, cx))
+}
+
+fn typing_in(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<AddressLine>,
+    Rc<std::cell::RefCell<Vec<Asked>>>,
+    &mut VisualTestContext,
+) {
+    let (line, asked, cx) = address_line_over(cx, visited());
+    cx.update(|window, cx| line.update(cx, |line, cx| line.focus(window, cx)));
+    cx.run_until_parked();
+    (line, asked, cx)
+}
+
+/// Typed at the end of the line, the start of an address visited is
+/// filled in, and the list under the line offers the other pages that fit
+/// after what Enter does; Up, Down, Control-N and Control-P choose the
+/// row Enter opens.
+#[gpui::test]
+fn the_address_line_offers_the_pages_visited_that_fit(cx: &mut TestAppContext) {
+    let (line, asked, cx) = typing_in(cx);
+    cx.simulate_input("gi");
+    assert_eq!(address_text(cx, &line), "github.com/");
+    assert_eq!(
+        address_said(cx, &line).as_deref(),
+        Some("Go to https://github.com/")
+    );
+    assert_eq!(
+        offered(cx, &line),
+        [
+            "https://github.com/zed-industries/zed",
+            "https://docs.rs/gpui"
+        ]
+    );
+    assert!(cx.debug_bounds("address-page-1").is_some());
+
+    let chosen = |cx: &mut VisualTestContext| cx.update(|_, cx| line.read(cx).chosen());
+    cx.simulate_keystrokes("down");
+    assert_eq!(chosen(cx), Row::Page(0));
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen(cx), Row::Page(1));
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen(cx), Row::Line, "round to the first");
+    cx.simulate_keystrokes("up");
+    assert_eq!(chosen(cx), Row::Page(1), "round to the last");
+    cx.simulate_keystrokes("ctrl-p");
+    assert_eq!(chosen(cx), Row::Page(0));
+    assert_eq!(address_text(cx, &line), "github.com/");
+
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        *asked.borrow(),
+        [Asked::Go(
+            "https://github.com/zed-industries/zed".to_owned()
+        )]
+    );
+}
+
+/// What is filled in is selected: typing goes on over it, Backspace takes
+/// it out and it stays out, Right or End keeps it, and Enter opens the
+/// page it was filled in from.
+#[gpui::test]
+fn the_address_filled_in_gives_way_to_typing(cx: &mut TestAppContext) {
+    let (line, asked, cx) = typing_in(cx);
+    cx.simulate_input("gi");
+    assert_eq!(address_text(cx, &line), "github.com/");
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(address_text(cx, &line), "gi");
+    assert_eq!(
+        address_said(cx, &line).as_deref(),
+        Some("Search google.com for gi")
+    );
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(address_text(cx, &line), "g");
+
+    cx.simulate_input("it");
+    assert_eq!(address_text(cx, &line), "github.com/");
+    cx.simulate_input("x");
+    assert_eq!(
+        address_text(cx, &line),
+        "gitx",
+        "typed over what was filled in"
+    );
+    assert_eq!(offered(cx, &line), Vec::<String>::new());
+
+    for _ in 0..4 {
+        cx.simulate_keystrokes("backspace");
+    }
+    cx.simulate_input("github.com/z");
+    assert_eq!(address_text(cx, &line), "github.com/zed-industries/zed");
+    cx.simulate_keystrokes("left");
+    cx.simulate_input("!");
+    assert_eq!(
+        address_text(cx, &line),
+        "github.com/z!ed-industries/zed",
+        "Left goes to the start of what was filled in"
+    );
+
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input("do");
+    assert_eq!(address_text(cx, &line), "docs.rs/gpui");
+    cx.simulate_keystrokes("end");
+    cx.simulate_input("x");
+    assert_eq!(address_text(cx, &line), "docs.rs/gpuix", "End keeps it");
+
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input("gi");
+    cx.simulate_keystrokes("right enter");
+    assert_eq!(
+        *asked.borrow(),
+        [Asked::Go("https://github.com/".to_owned())]
+    );
+}
+
+/// Escape, with the list open, puts the page's address back and closes
+/// the list; a click on a row opens its page.
+#[gpui::test]
+fn escape_closes_the_offer_and_a_click_opens_a_page(cx: &mut TestAppContext) {
+    let (line, asked, cx) = typing_in(cx);
+    cx.simulate_input("gi");
+    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(address_text(cx, &line), "https://example.com/");
+    assert_eq!(offered(cx, &line), Vec::<String>::new());
+    assert_eq!(address_said(cx, &line), None);
+    assert_eq!(*asked.borrow(), [Asked::Back]);
+
+    cx.update(|window, cx| line.update(cx, |line, cx| line.focus(window, cx)));
+    cx.run_until_parked();
+    cx.simulate_input("gi");
+    assert_eq!(cx.update(|_, cx| line.read(cx).chosen()), Row::Line);
+    cx.run_until_parked();
+    click_on(cx, "address-page-1");
+    assert_eq!(
+        *asked.borrow(),
+        [Asked::Back, Asked::Go("https://docs.rs/gpui".to_owned())]
+    );
 }

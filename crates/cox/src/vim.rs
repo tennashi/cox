@@ -997,6 +997,11 @@ mod tests {
             [Outcome::Pass; 2],
             "the address line has no normal mode"
         );
+        assert_eq!(
+            press(&mut vim, Region::Address, "ctrl-n ctrl-p up down enter"),
+            [Outcome::Pass; 5],
+            "the address line's list takes its keys"
+        );
         assert_eq!(vim.mode(), Mode::Insert);
     }
 

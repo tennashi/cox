@@ -1,29 +1,46 @@
 //! The page's address line, as a browser's: what is typed in it is an
-//! address to go to or words to search for (see [`Address`]), and while
-//! the human types, a line under it says which. It gets the keyboard with
-//! its whole text selected, so that typing replaces it, and Escape puts
-//! the page's address back and gives the keyboard back to the page.
+//! address to go to or words to search for (see [`Address`]). While the
+//! human types, a list under it says which, first, then offers the pages
+//! visited that fit (see [`super::history`]); Up and Down, or Control-N
+//! and Control-P, choose a row for Enter, and a click opens one. Typed at
+//! the end of the line, the start of a page's address is filled in to
+//! its end, selected, so that typing goes on over it, Backspace takes it
+//! out, and Right or End keeps it. The line gets the keyboard with its
+//! whole text selected, so that typing replaces it, and Escape puts the
+//! page's address back, closing the list, and gives the keyboard back to
+//! the page.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
-    Subscription, Window, actions, deferred, div, prelude::*, px, relative, rgb,
+    App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton,
+    Stateful, Subscription, Window, actions, deferred, div, prelude::*, px, relative, rgb,
 };
 
 use super::ADDRESS;
+use super::history::{self, Visited};
 use crate::daemon::phone::relay::on_the_mac;
 use crate::settings::SearchEngine;
-use crate::ui::input::{LineInput, Submitted};
-use crate::ui::theme::{BORDER, FAINT, SELECTED, SURFACE};
+use crate::ui::ellipsis::ellipsis;
+use crate::ui::input::{self, LineInput, Submitted};
+use crate::ui::theme::{BORDER_STRONG, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
+use crate::vim::hints::Hinted as _;
 use crate::vim::{self, Leave, Region};
 
-actions!(address, [Revert]);
+actions!(address, [Revert, Next, Previous]);
 
-/// Binds Escape in the address line. Call once when the app starts.
+/// Binds Escape, Control-N and Control-P in the address line. Call once
+/// when the app starts.
 pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", Revert, Some(ADDRESS))]);
+    cx.bind_keys([
+        KeyBinding::new("escape", Revert, Some(ADDRESS)),
+        KeyBinding::new("ctrl-n", Next, Some(ADDRESS)),
+        KeyBinding::new("ctrl-p", Previous, Some(ADDRESS)),
+    ]);
 }
+
+/// The most pages visited the list under the line offers.
+const OFFERED: usize = 6;
 
 /// What a line typed in a browser's address line asks for, as Chrome
 /// sorts it.
@@ -220,7 +237,59 @@ pub struct AddressLine {
     /// have the keyboard, which that click brings with the whole text
     /// selected.
     clicked_from_elsewhere: bool,
+    offer: Offer,
     _submitted: Subscription,
+    _typed: Subscription,
+}
+
+/// What the list under the line offers for what is typed, and what is
+/// filled in after it.
+#[derive(Default)]
+struct Offer {
+    /// The line as last seen, to tell when it changes.
+    seen: String,
+    /// What of the line was typed, without what was filled in after it,
+    /// to tell typing on from taking back.
+    typed: String,
+    /// What was filled in, which Enter opens while the line is so.
+    filled: Option<Filled>,
+    /// The pages visited that fit what is typed, the best first.
+    pages: Vec<Visited>,
+    chosen: Row,
+}
+
+/// The line as it was filled in, from the page at `url`.
+struct Filled {
+    line: String,
+    url: String,
+}
+
+/// A row of the list under the line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Row {
+    /// What Enter does with what is typed.
+    #[default]
+    Line,
+    /// The page at this place among those offered, from 0.
+    Page(usize),
+}
+
+impl Row {
+    /// The row at `place` from the top of the list.
+    const fn at(place: usize) -> Self {
+        match place.checked_sub(1) {
+            Some(page) => Self::Page(page),
+            None => Self::Line,
+        }
+    }
+
+    /// The row's place from the top of the list.
+    const fn place(self) -> usize {
+        match self {
+            Self::Line => 0,
+            Self::Page(page) => page + 1,
+        }
+    }
 }
 
 impl EventEmitter<Asked> for AddressLine {}
@@ -231,12 +300,18 @@ impl AddressLine {
         let input = cx.new(LineInput::new);
         input.update(cx, |input, cx| input.set_text(url, cx));
         let submitted = cx.subscribe(&input, |line, _, Submitted, cx| line.submitted(cx));
+        let typed = cx.observe(&input, |line, _, cx| line.typed(cx));
         Self {
             input,
             url: url.to_owned(),
             engine: crate::settings::search(),
             clicked_from_elsewhere: false,
+            offer: Offer {
+                seen: url.to_owned(),
+                ..Offer::default()
+            },
             _submitted: submitted,
+            _typed: typed,
         }
     }
 
@@ -260,11 +335,130 @@ impl AddressLine {
     /// address.
     #[must_use]
     pub fn said(&self, window: &Window, cx: &App) -> Option<String> {
-        let text = self.text(cx);
-        if !self.input.focus_handle(cx).is_focused(window) || text == self.url {
+        if !self.is_typed_in(window, cx) {
             return None;
         }
-        Some(Address::of(text)?.said(&self.engine))
+        if let Some(url) = self.filled_url(cx) {
+            return Some(format!("Go to {url}"));
+        }
+        Some(Address::of(self.text(cx))?.said(&self.engine))
+    }
+
+    /// The URLs of the pages visited the list offers under the line, the
+    /// best first, while the human types.
+    #[must_use]
+    pub fn offered(&self, window: &Window, cx: &App) -> Vec<String> {
+        if !self.is_typed_in(window, cx) {
+            return Vec::new();
+        }
+        self.offer
+            .pages
+            .iter()
+            .map(|page| page.url.clone())
+            .collect()
+    }
+
+    /// The row of the list chosen for Enter.
+    #[must_use]
+    pub fn chosen(&self) -> Row {
+        self.offer.chosen
+    }
+
+    /// Whether the line has the keyboard and holds something else than
+    /// the page's address.
+    fn is_typed_in(&self, window: &Window, cx: &App) -> bool {
+        self.input.focus_handle(cx).is_focused(window) && self.text(cx) != self.url
+    }
+
+    /// The URL of the page the line was filled in from, while it is so.
+    fn filled_url<'a>(&'a self, cx: &App) -> Option<&'a str> {
+        let filled = self.offer.filled.as_ref()?;
+        (filled.line == self.text(cx)).then_some(filled.url.as_str())
+    }
+
+    /// The line changed, or its cursor moved: the list offers the pages
+    /// that fit it now, and an address typed on at the end of the line is
+    /// filled in. Nothing is filled in after taking back, as with
+    /// Backspace, so that the fill goes and stays gone. What was filled in
+    /// counts as typed once it is no longer selected, as after Right.
+    fn typed(&mut self, cx: &mut Context<Self>) {
+        let input = self.input.read(cx);
+        let text = input.text().to_owned();
+        if text == self.offer.seen {
+            if self.filled_url(cx).is_some() && input.selected().is_empty() {
+                self.offer.typed = text;
+            }
+            return;
+        }
+        let at_end = input.cursor() == text.len() && !input.is_composing();
+        let took_back = self.offer.typed.starts_with(&text) && self.offer.seen != self.url;
+        text.clone_into(&mut self.offer.seen);
+        text.clone_into(&mut self.offer.typed);
+        self.offer.chosen = Row::Line;
+        if self
+            .offer
+            .filled
+            .as_ref()
+            .is_some_and(|filled| filled.line != text)
+        {
+            self.offer.filled = None;
+        }
+        if text == self.url {
+            self.offer.pages.clear();
+            cx.notify();
+            return;
+        }
+        let now = history::now();
+        let history = history::history(cx);
+        let fill = (at_end && !took_back)
+            .then(|| history.fill(&text, now))
+            .flatten();
+        let mut pages: Vec<Visited> = history
+            .offered(&text, now, OFFERED + 1)
+            .into_iter()
+            .filter(|page| fill.as_ref().is_none_or(|fill| fill.url != page.url))
+            .take(OFFERED)
+            .cloned()
+            .collect();
+        std::mem::swap(&mut self.offer.pages, &mut pages);
+        if let Some(fill) = fill {
+            let line = format!("{text}{}", fill.rest);
+            line.clone_into(&mut self.offer.seen);
+            self.offer.filled = Some(Filled {
+                line: line.clone(),
+                url: fill.url,
+            });
+            self.input.update(cx, |input, cx| {
+                input.set_text_selected(&line, text.len()..line.len(), cx);
+            });
+        }
+        cx.notify();
+    }
+
+    /// Up or Down, Control-P or Control-N, by `step`: chooses the row
+    /// above or below, round from one end to the other, while the list
+    /// is open. Answers whether the list took the key.
+    fn step(&mut self, step: isize, window: &Window, cx: &mut Context<Self>) -> bool {
+        if !self.is_typed_in(window, cx) {
+            return false;
+        }
+        let rows = self.offer.pages.len() + 1;
+        let place = self.offer.chosen.place().checked_add_signed(step);
+        self.offer.chosen = Row::at(place.unwrap_or(rows - 1) % rows);
+        cx.notify();
+        true
+    }
+
+    /// Where Enter goes: the page chosen in the list, the page the line
+    /// was filled in from, or what the line says.
+    fn going(&self, cx: &App) -> Option<String> {
+        if let Row::Page(page) = self.offer.chosen {
+            return self.offer.pages.get(page).map(|page| page.url.clone());
+        }
+        if let Some(url) = self.filled_url(cx) {
+            return Some(url.to_owned());
+        }
+        Some(Address::of(self.text(cx))?.url(&self.engine))
     }
 
     /// The page went to `url`: the line shows it, unless the human is in
@@ -285,6 +479,8 @@ impl AddressLine {
     }
 
     fn show_url(&mut self, cx: &mut Context<Self>) {
+        self.offer.chosen = Row::Line;
+        self.offer.filled = None;
         if self.text(cx) != self.url.as_str() {
             let url = self.url.clone();
             self.input.update(cx, |input, cx| input.set_text(&url, cx));
@@ -293,8 +489,8 @@ impl AddressLine {
     }
 
     fn submitted(&mut self, cx: &mut Context<Self>) {
-        if let Some(address) = Address::of(self.text(cx)) {
-            cx.emit(Asked::Go(address.url(&self.engine)));
+        if let Some(url) = self.going(cx) {
+            cx.emit(Asked::Go(url));
         }
     }
 
@@ -305,27 +501,81 @@ impl AddressLine {
         cx.emit(Asked::Back);
     }
 
-    fn render_said(said: String) -> impl IntoElement {
+    /// The list under the line: what Enter does with it, then the pages
+    /// visited that fit it, the row chosen marked.
+    fn render_offer(&self, said: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let chosen = self.offer.chosen;
+        let pages = self.offer.pages.iter().enumerate().map(|(place, page)| {
+            let url = page.url.clone();
+            let title = (!page.title.is_empty()).then(|| {
+                div()
+                    .flex_shrink_0()
+                    .max_w(relative(0.6))
+                    .overflow_hidden()
+                    .text_color(rgb(FOREGROUND))
+                    .child(ellipsis(page.title.clone()))
+            });
+            Self::render_row(Row::Page(place), chosen)
+                .children(title)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_color(rgb(DIM))
+                        .child(ellipsis(page.url.clone())),
+                )
+                .on_hint_click(cx.listener(move |_, _, _, cx| cx.emit(Asked::Go(url.clone()))))
+                .into_any_element()
+        });
+        let said = Self::render_row(Row::Line, chosen)
+            .text_color(rgb(FAINT))
+            .child(div().min_w_0().overflow_hidden().child(ellipsis(said)))
+            .on_hint_click(cx.listener(|line, _, _, cx| line.submitted(cx)))
+            .into_any_element();
         deferred(
             div()
-                .debug_selector(|| "address-says".to_owned())
+                .id("address-offer")
+                .occlude()
+                .child(crate::vim::hints::cover())
                 .absolute()
                 .top(relative(1.))
                 .left_0()
                 .right_0()
                 .mt(px(4.))
-                .px(px(10.))
-                .py(px(4.))
-                .rounded_sm()
+                .p(px(4.))
+                .bg(rgb(RAISED))
                 .border_1()
-                .border_color(rgb(BORDER))
-                .bg(rgb(SURFACE))
-                .text_size(px(12.))
-                .text_color(rgb(FAINT))
-                .truncate()
-                .child(said),
+                .border_color(rgb(BORDER_STRONG))
+                .rounded(px(10.))
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .child(said)
+                .children(pages),
         )
         .with_priority(1)
+    }
+
+    /// The row `row` of the list, marked if it is the one `chosen`.
+    fn render_row(row: Row, chosen: Row) -> Stateful<Div> {
+        div()
+            .id(("address-row", row.place()))
+            .debug_selector(move || match row {
+                Row::Line => "address-says".to_owned(),
+                Row::Page(page) => format!("address-page-{page}"),
+            })
+            .flex_shrink_0()
+            .h(px(28.))
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .rounded(px(6.))
+            .text_size(px(12.))
+            .cursor_pointer()
+            .when(row == chosen, |row| row.bg(rgb(SELECTED)))
+            .hover(|style| style.bg(rgb(SELECTED)))
     }
 }
 
@@ -347,6 +597,22 @@ impl Render for AddressLine {
             .bg(rgb(SELECTED))
             .on_action(cx.listener(|line, _: &Revert, _, cx| line.revert(cx)))
             .on_action(cx.listener(|line, _: &Leave, _, cx| line.revert(cx)))
+            .capture_action(cx.listener(|line, _: &input::Up, window, cx| {
+                if line.step(-1, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|line, _: &input::Down, window, cx| {
+                if line.step(1, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_action(cx.listener(|line, _: &Previous, window, cx| {
+                line.step(-1, window, cx);
+            }))
+            .on_action(cx.listener(|line, _: &Next, window, cx| {
+                line.step(1, window, cx);
+            }))
             .capture_any_mouse_down(cx.listener(|line, _, window, cx| {
                 line.clicked_from_elsewhere = !line.input.focus_handle(cx).is_focused(window);
             }))
@@ -359,7 +625,10 @@ impl Render for AddressLine {
                 }),
             )
             .child(self.input.clone())
-            .children(self.said(window, cx).map(Self::render_said))
+            .children(
+                self.said(window, cx)
+                    .map(|said| self.render_offer(said, cx).into_any_element()),
+            )
     }
 }
 
