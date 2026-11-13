@@ -17,6 +17,21 @@ pub mod device;
 pub mod running;
 pub mod sdk;
 
+#[cfg(test)]
+mod scratch;
+
+/// The environment's variables as `vars` says them, and no others.
+#[cfg(test)]
+fn env<'a>(
+    vars: &'a [(&str, &std::path::Path)],
+) -> impl Fn(&str) -> Option<std::ffi::OsString> + 'a {
+    |name| {
+        vars.iter()
+            .find(|(var, _)| *var == name)
+            .map(|(_, value)| value.as_os_str().to_owned())
+    }
+}
+
 pub mod proto {
     #![expect(
         clippy::pedantic,

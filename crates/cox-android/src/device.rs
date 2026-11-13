@@ -7,13 +7,15 @@
 //! hands it input and picks up the newest frame: [`Device`] is the tab's
 //! end of it.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tonic::Request;
 use tonic::metadata::MetadataValue;
@@ -42,9 +44,7 @@ const KEPT_LINES: usize = 12;
 pub struct Device {
     name: String,
     to: UnboundedSender<Input>,
-    frame: Arc<Mutex<Option<Frame>>>,
-    /// Whether a frame waits in `frame` that the tab was told of.
-    told: Arc<AtomicBool>,
+    newest: Arc<Newest>,
     /// The process of the emulator Cox started, once it runs.
     started: Arc<AtomicI32>,
 }
@@ -126,8 +126,7 @@ impl Device {
         let this = Self {
             name: device.to_owned(),
             to,
-            frame: Arc::default(),
-            told: Arc::default(),
+            newest: Arc::default(),
             started: Arc::default(),
         };
         let worker = Worker {
@@ -135,8 +134,7 @@ impl Device {
             program,
             boot,
             events,
-            frame: this.frame.clone(),
-            told: this.told.clone(),
+            newest: this.newest.clone(),
             started: this.started.clone(),
         };
         let spawned = std::thread::Builder::new()
@@ -162,9 +160,7 @@ impl Device {
     /// The newest frame, if one came since the last taken.
     #[must_use]
     pub fn take_frame(&self) -> Option<Frame> {
-        let frame = self.frame.lock().ok()?.take();
-        self.told.store(false, Ordering::Release);
-        frame
+        self.newest.take()
     }
 
     /// Stops the emulator, if Cox started it: one that ran already goes
@@ -191,9 +187,38 @@ struct Worker {
     program: Option<PathBuf>,
     boot: Boot,
     events: UnboundedSender<Event>,
-    frame: Arc<Mutex<Option<Frame>>>,
-    told: Arc<AtomicBool>,
+    newest: Arc<Newest>,
     started: Arc<AtomicI32>,
+}
+
+/// The newest frame, which the thread puts and the tab takes.
+#[derive(Default)]
+struct Newest {
+    frame: Mutex<Option<Frame>>,
+    /// Whether the tab was told of the frame waiting, and has not taken
+    /// it since.
+    told: AtomicBool,
+}
+
+impl Newest {
+    /// Keeps `frame` as the newest, and tells the tab by `events`, unless
+    /// it was told already of one it has not taken.
+    fn put(&self, frame: Frame, events: &UnboundedSender<Event>) {
+        if let Ok(mut newest) = self.frame.lock() {
+            *newest = Some(frame);
+        }
+        if !self.told.swap(true, Ordering::AcqRel) {
+            events.send(Event::Frame).ok();
+        }
+    }
+
+    /// The newest frame, if one came since the last taken. The tab is
+    /// readied to be told before the frame is taken, so that one put as it
+    /// is taken is told of, not left waiting untold.
+    fn take(&self) -> Option<Frame> {
+        self.told.store(false, Ordering::Release);
+        self.frame.lock().ok()?.take()
+    }
 }
 
 impl Worker {
@@ -240,12 +265,25 @@ impl Worker {
             }
         };
         self.status(Status::Showing);
+        // What the tab sent as the emulator started is taken first, so
+        // that the first frames come at the size it asked for last.
         let mut size = None;
+        loop {
+            match from_tab.try_recv() {
+                Ok(Input::Size { width, height }) => {
+                    size = resized(size, width, height).or(size);
+                }
+                Ok(input) => send(&mut client, input, display).await,
+                Err(TryRecvError::Empty) => break,
+                // The tab closed: the device stops as it drops.
+                Err(TryRecvError::Disconnected) => return Ok(()),
+            }
+        }
         // Until the tab asks for pictures of its size, as while it is not
         // drawn, the display comes at a size of its own, for an agent to
         // see it by.
-        let (width, height) = fitted(display, UNDRAWN_SIDE);
-        let mut frames = Some(stream(&mut client, width, height).await?);
+        let (width, height) = size.unwrap_or_else(|| fitted(display, UNDRAWN_SIDE));
+        let mut frames = stream(&mut client, width, height).await?;
         loop {
             tokio::select! {
                 input = from_tab.recv() => {
@@ -254,16 +292,16 @@ impl Worker {
                         return Ok(());
                     };
                     if let Input::Size { width, height } = input {
-                        if size != Some((width, height)) && width > 0 && height > 0 {
-                            size = Some((width, height));
-                            frames = Some(stream(&mut client, width, height).await?);
+                        if let Some(new) = resized(size, width, height) {
+                            size = Some(new);
+                            frames = stream(&mut client, new.0, new.1).await?;
                         }
                     } else {
                         send(&mut client, input, display).await;
                     }
                 }
-                image = next(frames.as_mut()) => {
-                    match image {
+                image = frames.message() => {
+                    match image.transpose() {
                         Some(image) => self.show(image?),
                         None => anyhow::bail!("the emulator stopped sending its display"),
                     }
@@ -317,14 +355,8 @@ impl Worker {
     /// Keeps `image` as the newest frame, and tells the tab, unless it was
     /// told already of one it has not taken.
     fn show(&self, image: crate::proto::Image) {
-        let Some(frame) = frame_of(image) else {
-            return;
-        };
-        if let Ok(mut newest) = self.frame.lock() {
-            *newest = Some(frame);
-        }
-        if !self.told.swap(true, Ordering::AcqRel) {
-            self.events.send(Event::Frame).ok();
+        if let Some(frame) = frame_of(image) {
+            self.newest.put(frame, &self.events);
         }
     }
 }
@@ -338,10 +370,47 @@ fn command(program: &Path) -> tokio::process::Command {
     command
 }
 
-/// A port no one listens on now, for the emulator to.
+/// The ports Cox hands the emulators it starts: below those the system
+/// hands out for connections, on macOS and on Linux, so that none is
+/// taken by one between Cox finding it free and the emulator listening on
+/// it.
+const PORTS: std::ops::Range<u16> = 20_000..30_000;
+
+/// The ports this process handed out, so that emulators it starts at once
+/// are not handed the same.
+static HANDED: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+
+/// A port no one listens on now, among [`PORTS`], for the emulator to:
+/// they are tried from one of the process's own, so that two processes
+/// starting emulators at once seldom try the same.
+///
+/// A port is tried by connecting to it, not by listening on it: on macOS
+/// a socket is made to close as a program starts only after it is made,
+/// so an emulator another thread starts in between could keep it, and
+/// with it the port, which the emulator it is handed to could then not
+/// listen on.
 fn free_port() -> anyhow::Result<u16> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-    Ok(listener.local_addr()?.port())
+    let mut handed = HANDED.lock().unwrap_or_else(PoisonError::into_inner);
+    let count = u32::from(PORTS.end - PORTS.start);
+    // Processes started one after another have ids next to each other,
+    // which this spreads across the ports.
+    let first = std::process::id().wrapping_mul(2_654_435_761) % count;
+    let port = (0..count)
+        .filter_map(|offset| u16::try_from((first + offset) % count).ok())
+        .map(|offset| PORTS.start + offset)
+        .find(|port| !handed.contains(port) && !listened_on(*port))
+        .ok_or_else(|| anyhow::anyhow!("no port is free for the emulator"))?;
+    handed.insert(port);
+    Ok(port)
+}
+
+/// Whether anything listens on `port` of this machine, or may: only a
+/// connection refused says nothing does.
+fn listened_on(port: u16) -> bool {
+    !matches!(
+        std::net::TcpStream::connect(("127.0.0.1", port)),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused
+    )
 }
 
 type Client =
@@ -446,13 +515,10 @@ async fn stream(
     Ok(client.stream_screenshot(format).await?.into_inner())
 }
 
-async fn next(
-    frames: Option<&mut tonic::Streaming<crate::proto::Image>>,
-) -> Option<Result<crate::proto::Image, tonic::Status>> {
-    match frames {
-        Some(frames) => frames.message().await.transpose(),
-        None => std::future::pending().await,
-    }
+/// The size the tab asks for, `width` by `height`, if it is not `size`,
+/// which the frames come at now, and has pixels.
+fn resized(size: Option<(u32, u32)>, width: u32, height: u32) -> Option<(u32, u32)> {
+    (size != Some((width, height)) && width > 0 && height > 0).then_some((width, height))
 }
 
 /// Sends `input` to the emulator, whose display is `display` pixels: what
@@ -587,6 +653,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ports_handed_out_are_not_handed_again_and_none_is_the_systems() {
+        let ports: BTreeSet<u16> = (0..20).map(|_| free_port().unwrap()).collect();
+        assert_eq!(ports.len(), 20, "each port once");
+        assert!(ports.iter().all(|port| PORTS.contains(port)));
+    }
+
+    #[test]
+    fn a_port_is_listened_on_while_a_listener_has_it() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(listened_on(port));
+        drop(listener);
+        assert!(!listened_on(port));
+    }
+
+    #[test]
     fn an_undrawn_display_comes_no_bigger_than_its_side() {
         assert_eq!(fitted((1080, 2424), 1280), (570, 1280));
         assert_eq!(fitted((540, 1170), 1280), (540, 1170));
@@ -621,5 +703,38 @@ mod tests {
     #[test]
     fn an_empty_image_is_no_frame() {
         assert!(frame_of(crate::proto::Image::default()).is_none());
+    }
+
+    fn frame(seq: u32) -> Frame {
+        Frame {
+            width: 1,
+            height: 1,
+            bgra: vec![0; 4],
+            seq,
+        }
+    }
+
+    #[test]
+    fn the_tab_is_told_once_of_frames_it_has_not_taken_and_takes_the_newest() {
+        let (events, mut told) = unbounded_channel();
+        let newest = Newest::default();
+        newest.put(frame(1), &events);
+        newest.put(frame(2), &events);
+        assert_eq!(told.try_recv(), Ok(Event::Frame));
+        assert!(told.try_recv().is_err(), "told once");
+        assert_eq!(newest.take().map(|frame| frame.seq), Some(2));
+        assert!(newest.take().is_none(), "a frame is taken once");
+    }
+
+    #[test]
+    fn a_frame_put_after_one_is_taken_is_told_again() {
+        let (events, mut told) = unbounded_channel();
+        let newest = Newest::default();
+        newest.put(frame(1), &events);
+        assert_eq!(told.try_recv(), Ok(Event::Frame));
+        assert!(newest.take().is_some());
+        newest.put(frame(2), &events);
+        assert_eq!(told.try_recv(), Ok(Event::Frame));
+        assert_eq!(newest.take().map(|frame| frame.seq), Some(2));
     }
 }
