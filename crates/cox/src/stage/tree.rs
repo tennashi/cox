@@ -1028,3 +1028,55 @@ impl Render for Unchosen {
             )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn the_tree_is_unfolded_until_the_human_folds_it(cx: &mut gpui::TestAppContext) {
+        assert!(!cx.update(|cx| is_folded(cx)));
+    }
+
+    #[gpui::test]
+    fn the_tree_folded_stays_folded(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| fold(true, cx));
+
+        assert!(cx.update(|cx| is_folded(cx)));
+    }
+
+    #[gpui::test]
+    fn the_tree_unfolded_again_is_unfolded(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| fold(true, cx));
+
+        cx.update(|cx| fold(false, cx));
+
+        assert!(!cx.update(|cx| is_folded(cx)));
+    }
+
+    /// Rows at the depths `depths`, one after another.
+    fn rows(depths: &[u16]) -> Vec<Row<'static>> {
+        depths
+            .iter()
+            .map(|&depth| Row::Unread {
+                error: "",
+                depth,
+                bright: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_row_is_in_the_folders_above_it_one_level_up_each() {
+        let rows = rows(&[0, 1, 2, 2, 1, 2, 3]);
+
+        assert_eq!(folders_of(&rows, 6), [0, 4, 5]);
+    }
+
+    #[test]
+    fn a_row_at_the_top_level_is_in_no_folder() {
+        let rows = rows(&[0, 1, 0]);
+
+        assert_eq!(folders_of(&rows, 2), Vec::<usize>::new());
+    }
+}
