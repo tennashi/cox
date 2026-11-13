@@ -254,3 +254,32 @@ fn a_command_no_window_shows_is_interrupted_once_no_one_waits() {
     run_unseen("sleep 30", &cwd, false);
     std::fs::remove_dir_all(cwd).unwrap();
 }
+
+/// A terminal tells when its program ends, for the stage to close a
+/// shell's tab and leave insert mode; a shell typed `exit` into ends too.
+#[gpui::test]
+fn a_terminal_tells_when_its_program_ends(cx: &mut TestAppContext) {
+    let cwd = scratch("exited");
+    std::fs::create_dir_all(&cwd).unwrap();
+    cx.update(cox::stage::terminal::bind_keys);
+    let running = Running::start(Program::Shell, &cwd).unwrap();
+    let (terminal, cx) = cx.add_window_view(|_, cx| Terminal::new(running, None, cx));
+    cx.update(|window, cx| window.focus(&terminal.focus_handle(cx)));
+    assert!(terminal.read_with(cx, |terminal, _| terminal.runs_a_shell()));
+    let told = std::rc::Rc::new(std::cell::Cell::new(false));
+    let _told = cx.update({
+        let told = told.clone();
+        |_, cx| {
+            cx.subscribe(&terminal, move |_, _: &cox::stage::terminal::Exited, _| {
+                told.set(true);
+            })
+        }
+    });
+    cx.run_until_parked();
+    assert!(!told.get());
+
+    cx.simulate_input("exit\n");
+    wait_until(cx, |_| told.get());
+    assert!(ended(cx, &terminal).is_some());
+    std::fs::remove_dir_all(cwd).unwrap();
+}

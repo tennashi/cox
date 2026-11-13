@@ -245,6 +245,12 @@ impl Terminal {
         self.term.lock().grid().display_offset()
     }
 
+    /// Whether it runs a shell the human opened, rather than a command.
+    #[must_use]
+    pub const fn runs_a_shell(&self) -> bool {
+        matches!(self.program, Program::Shell)
+    }
+
     /// What the terminal tells of itself.
     fn heard(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
@@ -264,7 +270,10 @@ impl Terminal {
             }
             Event::TextAreaSizeRequest(format) => self.write(format(self.window_size).into_bytes()),
             Event::ChildExit(status) => self.status = Some(status),
-            Event::Exit => self.exited(),
+            Event::Exit => {
+                self.exited();
+                cx.emit(Exited);
+            }
         }
         cx.notify();
     }
@@ -693,6 +702,11 @@ impl Shows for Terminal {
         }
     }
 }
+
+/// The terminal's program ended.
+pub struct Exited;
+
+impl gpui::EventEmitter<Exited> for Terminal {}
 
 impl Focusable for Terminal {
     fn focus_handle(&self, _: &App) -> FocusHandle {

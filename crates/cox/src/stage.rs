@@ -127,7 +127,7 @@ use crate::stage::outline::Outlines;
 use crate::stage::page::{Opens, Page};
 use crate::stage::plugins::Plugins;
 use crate::stage::tab::{Shows, Tab, TabContent};
-use crate::stage::terminal::{Program, Running, Terminal};
+use crate::stage::terminal::{Exited, Program, Running, Terminal};
 use crate::stage::tree::{Chosen, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
 use crate::ui::Panel;
@@ -537,10 +537,47 @@ impl Stage {
             }
         };
         let terminal = cx.new(|cx| Terminal::new(running, None, cx));
-        let changes = cx.observe(&terminal, |stage, _, cx| stage.changed(cx));
+        let changes = Subscription::join(
+            cx.observe(&terminal, |stage, _, cx| stage.changed(cx)),
+            Self::follow_exit(&terminal, window, cx),
+        );
         self.push(TabContent::Terminal(terminal), changes, None, true, cx);
         self.focus_shown(window, cx);
         crate::vim::typing(crate::vim::Region::Terminal, window, cx);
+    }
+
+    /// Watches for `terminal`'s program to end (see [`Self::exited`]).
+    fn follow_exit(
+        terminal: &Entity<Terminal>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe_in(
+            terminal,
+            window,
+            |stage, terminal, _: &Exited, window, cx| {
+                stage.exited(terminal, window, cx);
+            },
+        )
+    }
+
+    /// `terminal`'s program ended: a shell the human opened takes its tab
+    /// with it, and the keyboard, if it was there, leaves insert mode,
+    /// which sent every key to the program, for normal mode.
+    fn exited(&mut self, terminal: &Entity<Terminal>, window: &mut Window, cx: &mut Context<Self>) {
+        let had_keys = terminal.focus_handle(cx).contains_focused(window, cx);
+        if terminal.read(cx).runs_a_shell()
+            && let Some(index) = self.tabs.iter().position(
+                |tab| matches!(&tab.content, TabContent::Terminal(shown) if shown == terminal),
+            )
+        {
+            // The last tab stays, its shell ended.
+            let _ = self.close_tab(index, window, cx);
+        }
+        if had_keys {
+            crate::vim::enter(crate::vim::Mode::Normal, cx);
+            window.refresh();
+        }
     }
 
     /// Shows the tab of the Android emulator's virtual devices, opening it
