@@ -74,6 +74,7 @@ use crate::vim::keymap::Motion;
 mod complete;
 mod entries;
 mod find;
+pub use find::{NextEntry, PreviousEntry};
 mod settings;
 
 use crate::vim::hints::Hinted as _;
@@ -1013,7 +1014,7 @@ impl ChatView {
             .on_action(cx.listener(Self::translate))
             .on_action(cx.listener(Self::add_to_chat))
             .on_action(cx.listener(Self::move_by_keys))
-            .on_action(cx.listener(Self::find_text))
+            .map(|conversation| Self::go_through_by_keys(conversation, cx))
             .capture_key_down(cx.listener(Self::choose_with_key))
             // The list over the input takes its keys first, while it is
             // open.
