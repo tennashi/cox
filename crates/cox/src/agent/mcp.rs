@@ -591,9 +591,14 @@ pub fn start(
     // The server stops when the chat lets go of the requests.
     let until = served.requests.clone();
     // What the server says is said in the span it starts in, its chat's:
-    // its runtime runs on this one thread.
+    // its runtime runs on this one thread, which keeps what lasts where
+    // this one was told to.
     let span = tracing::Span::current();
+    let data = crate::storage::kept_on_this_thread();
+    let trash = crate::trash::kept_on_this_thread();
     thread::spawn(move || {
+        crate::storage::keep_on_this_thread(data);
+        crate::trash::keep_on_this_thread(trash);
         let _entered = span.enter();
         if let Err(error) = serve(listener, served, until.closed()) {
             tracing::error!("the agent's tools stopped: {error:#}");
