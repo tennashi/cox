@@ -424,4 +424,49 @@ mod tests {
         assert_eq!(heard.try_recv(), Ok(Event::Frame));
         assert!(heard.try_recv().is_err());
     }
+
+    /// A mirror of no window, sharing `shared` with its worker.
+    fn mirror_of(shared: &Arc<Shared>) -> Mirror {
+        let (to, _inputs) = std::sync::mpsc::channel();
+        Mirror {
+            to,
+            shared: Arc::clone(shared),
+        }
+    }
+
+    /// A picture one pixel high, `width` wide, which tells it apart.
+    fn picture(width: u32) -> Frame {
+        Frame {
+            width,
+            height: 1,
+            bgra: vec![0; 4 * width as usize],
+        }
+    }
+
+    #[test]
+    fn a_picture_put_after_one_is_taken_is_told_again() {
+        let (events, mut heard) = unbounded_channel();
+        let shared = Arc::new(Shared::default());
+        let mirror = mirror_of(&shared);
+        shared.put(picture(1), &events);
+        assert_eq!(heard.try_recv(), Ok(Event::Frame));
+        assert_eq!(mirror.take_frame().map(|frame| frame.width), Some(1));
+
+        shared.put(picture(2), &events);
+
+        assert_eq!(heard.try_recv(), Ok(Event::Frame));
+        assert_eq!(mirror.take_frame().map(|frame| frame.width), Some(2));
+    }
+
+    #[test]
+    fn the_newest_picture_is_taken_once() {
+        let (events, _heard) = unbounded_channel();
+        let shared = Arc::new(Shared::default());
+        let mirror = mirror_of(&shared);
+        shared.put(picture(1), &events);
+        shared.put(picture(2), &events);
+
+        assert_eq!(mirror.take_frame().map(|frame| frame.width), Some(2));
+        assert!(mirror.take_frame().is_none());
+    }
 }
