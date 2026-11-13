@@ -21,7 +21,7 @@ use gpui::{
     Subscription, Window, actions, px,
 };
 
-use self::keymap::{Answer, Command, Follow, Keymap, Motion, Place, Reach, Sent};
+use self::keymap::{Across, Answer, Command, Follow, Keymap, Motion, Place, Reach, Sent};
 use self::search::{Find, Search};
 
 /// Moves what the part of the window with the keyboard shows, or its
@@ -32,6 +32,16 @@ use self::search::{Find, Search};
 pub struct Move {
     pub motion: Motion,
     /// The count typed before the keys, as `3` of `3j`.
+    pub count: Option<u32>,
+}
+
+/// Moves the cursor of code across its text, as Vim's keys ask: an
+/// action only code handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = vim, no_json)]
+pub struct MoveAcross {
+    pub across: Across,
+    /// The count typed before the keys, as `3` of `3w`.
     pub count: Option<u32>,
 }
 
@@ -468,6 +478,7 @@ impl Vim {
                     | Command::Reset
                     | Command::Window(_)
                     | Command::Move(_)
+                    | Command::Across(_)
                     | Command::Send(_) => {}
                 }
                 Outcome::Do(command, count)
@@ -715,6 +726,9 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         }
         Outcome::Do(Command::Move(motion), count) => {
             window.dispatch_action(Box::new(Move { motion, count }), cx);
+        }
+        Outcome::Do(Command::Across(across), count) => {
+            window.dispatch_action(Box::new(MoveAcross { across, count }), cx);
         }
         Outcome::Do(Command::Send(sent), count) => {
             for _ in 0..sent.times(count) {

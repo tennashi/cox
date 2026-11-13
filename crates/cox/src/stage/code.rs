@@ -29,6 +29,7 @@
 //!   says of a name, and [`locations`] the places it found.
 
 mod bar;
+mod cursor;
 mod file;
 mod hover;
 mod locations;
@@ -47,6 +48,7 @@ use cox_editor::line::Shown;
 use cox_editor::lsp::{Client, Encoding, OpenFile, Position};
 use cox_editor::syntax::Syntax;
 
+use self::cursor::Cursor;
 use self::file::File;
 use self::text::Text;
 /// How code is drawn, by what its syntax says it is, as a tab of code
@@ -69,7 +71,7 @@ use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::keymap::Motion;
 use crate::vim::search::{self, Find};
-use crate::vim::{Definition, Move, Visual};
+use crate::vim::{Definition, Move, MoveAcross, Visual};
 
 actions!(
     code,
@@ -163,9 +165,8 @@ struct Look {
     selecting: bool,
     /// How the last frame laid the text out.
     laid: Option<Laid>,
-    /// The line, from 0, of the cursor Vim's keys move, once drawn with
-    /// them on.
-    cursor: Option<usize>,
+    /// The cursor Vim's keys move, once drawn with them on.
+    cursor: Option<Cursor>,
     /// The line whole lines are selected from to the cursor's, while
     /// they are (`V`).
     visual: Option<usize>,
@@ -187,10 +188,11 @@ enum Follow {
 }
 
 impl Look {
-    /// Puts the cursor on `line`, and the selection of whole lines with
+    /// Puts the cursor at `cursor`, and the selection of whole lines with
     /// it, while they are selected.
-    fn put_cursor(&mut self, line: usize) {
-        self.cursor = Some(line);
+    fn put_cursor(&mut self, cursor: Cursor) {
+        self.cursor = Some(cursor);
+        let line = cursor.line;
         if let Some(from) = self.visual {
             self.selection = Some((
                 Place::new(from.min(line), 0),
@@ -203,12 +205,18 @@ impl Look {
     /// with the cursor of Vim's keys on `cursor`, if they are on.
     fn laid_out(&mut self, laid: Laid, scroll: Point<Pixels>, cursor: Option<usize>) {
         if let Some(line) = cursor {
-            self.put_cursor(line);
+            self.put_cursor(self.cursor_on(line));
         }
         self.follow = Follow::Scroll;
         self.reveal = None;
         self.scroll = scroll;
         self.laid = Some(laid);
+    }
+
+    /// The cursor, moved to `line`, at the character it goes to.
+    fn cursor_on(&self, line: usize) -> Cursor {
+        self.cursor
+            .map_or(Cursor::on(line), |cursor| cursor.to_line(line))
     }
 
     /// Stops selecting whole lines, with the selection: answers whether
@@ -350,7 +358,21 @@ impl Code {
     /// them on.
     #[must_use]
     pub fn cursor(&self) -> Option<usize> {
-        self.look.cursor
+        self.look.cursor.map(|cursor| cursor.line)
+    }
+
+    /// Where the cursor Vim's keys move is, as its line and the byte of
+    /// the line it is at, once drawn with them on.
+    #[must_use]
+    pub fn cursor_place(&self) -> Option<(usize, usize)> {
+        let place = self.cursor_at()?;
+        Some((place.line, place.column))
+    }
+
+    /// Where the cursor Vim's keys move is in the text.
+    fn cursor_at(&self) -> Option<Place> {
+        let cursor = self.look.cursor?;
+        Some(cursor.place(&self.file.buffer.line(cursor.line)))
     }
 
     /// What the server says of the name the mouse rests on, as Markdown,
@@ -737,10 +759,10 @@ impl Code {
             return;
         };
         self.look.visual = None;
-        if self.look.cursor.is_some() {
-            self.look.cursor = Some(place.line);
-        }
         let line = self.file.buffer.line(place.line);
+        if self.look.cursor.is_some() {
+            self.look.cursor = Some(Cursor::at(place, &line));
+        }
         self.look.selection = Some(match event.click_count {
             1 => (place, place),
             2 => {
@@ -916,7 +938,7 @@ impl Code {
     /// The line of the cursor Vim's keys move, with the file it is
     /// from, as it goes to the agent when handed to the chat.
     fn cursor_attachment(&self) -> Option<Attachment> {
-        let line = self.look.cursor?;
+        let line = self.look.cursor?.line;
         let lines = Lines {
             first: line + 1,
             last: line + 1,
@@ -972,7 +994,10 @@ impl Code {
     /// Moves the cursor as Vim's keys ask, and scrolls with it.
     fn move_by_keys(&mut self, motion: &Move, _: &mut Window, cx: &mut Context<Self>) {
         let last = self.file.buffer.lines().saturating_sub(1);
-        let at = self.look.cursor.unwrap_or_else(|| self.in_sight().start);
+        let at = self
+            .look
+            .cursor
+            .map_or_else(|| self.in_sight().start, |cursor| cursor.line);
         let line = motion.moved(at, self.half_page(), last);
         if matches!(motion.motion, Motion::HalfDown | Motion::HalfUp)
             && let Some(laid) = &self.look.laid
@@ -984,19 +1009,56 @@ impl Code {
             let by = laid.line_height * (line as f32 - at as f32);
             self.look.scroll.y = (self.look.scroll.y + by).max(px(0.));
         }
-        self.hover = None;
         self.menu = None;
-        self.look.put_cursor(line);
+        self.look.put_cursor(self.look.cursor_on(line));
         self.look.follow = Follow::Cursor;
+        self.rest_on_cursor(cx);
         cx.notify();
+    }
+
+    /// Moves the cursor across the text as Vim's keys ask, by characters
+    /// and words, and scrolls with it.
+    fn move_across(&mut self, across: &MoveAcross, _: &mut Window, cx: &mut Context<Self>) {
+        let buffer = &self.file.buffer;
+        let lines: Vec<String> = (0..buffer.lines())
+            .map(|line| buffer.line(line).into_owned())
+            .collect();
+        let at = self
+            .look
+            .cursor_on(self.cursor().unwrap_or_else(|| self.in_sight().start));
+        let times = across
+            .count
+            .map_or(1, |count| usize::try_from(count).unwrap_or(usize::MAX));
+        self.menu = None;
+        self.look
+            .put_cursor(cursor::moved(across.across, at, times, &lines));
+        self.look.follow = Follow::Cursor;
+        self.rest_on_cursor(cx);
+        cx.notify();
+    }
+
+    /// The cursor came to rest: on a word, the server is asked of it, as
+    /// of a word the mouse rests on, and else what it said goes.
+    fn rest_on_cursor(&mut self, cx: &mut Context<Self>) {
+        let word = self.cursor_at().and_then(|place| {
+            let line = self.file.buffer.line(place.line);
+            let word = word_around(&line, place.column);
+            line[word.clone()]
+                .starts_with(is_word)
+                .then_some((place.line, word))
+        });
+        if word != self.pointed {
+            self.hover = None;
+        }
+        self.rest_on(word, cx);
     }
 
     /// Starts selecting whole lines from the cursor's, or stops (`V`).
     fn visual(&mut self, _: &Visual, _: &mut Window, cx: &mut Context<Self>) {
         if !self.look.end_visual() {
-            let line = self.look.cursor.unwrap_or_else(|| self.in_sight().start);
+            let line = self.cursor().unwrap_or_else(|| self.in_sight().start);
             self.look.visual = Some(line);
-            self.look.put_cursor(line);
+            self.look.put_cursor(self.look.cursor_on(line));
         }
         cx.notify();
     }
@@ -1014,7 +1076,7 @@ impl Code {
                 let start = anchor.min(head);
                 (start.line, start.column)
             }
-            None => (self.look.cursor.unwrap_or_else(|| self.in_sight().start), 0),
+            None => (self.cursor().unwrap_or_else(|| self.in_sight().start), 0),
         };
         self.look.found = Some(find.text.clone());
         match search::next(&lines, from, &find.text, find.direction) {
@@ -1022,7 +1084,9 @@ impl Code {
                 self.look.end_visual();
                 self.look.selection =
                     Some((Place::new(line, range.start), Place::new(line, range.end)));
-                self.look.put_cursor(line);
+                let start = Place::new(line, range.start);
+                self.look
+                    .put_cursor(Cursor::at(start, &self.file.buffer.line(line)));
                 self.look.follow = Follow::Cursor;
                 self.notice = None;
             }
@@ -1031,15 +1095,22 @@ impl Code {
         cx.notify();
     }
 
-    /// Goes to where the first name of the cursor's line is defined.
+    /// Goes to where the name under the cursor is defined, or with the
+    /// cursor on no name, the first name of its line.
     fn definition(&mut self, _: &Definition, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(line) = self.look.cursor else {
+        let Some(place) = self.cursor_at() else {
             return;
         };
-        let text = self.file.buffer.line(line);
-        if let Some(column) = first_name(&text, &self.file.highlights(line)) {
+        let text = self.file.buffer.line(place.line);
+        let highlights = self.file.highlights(place.line);
+        let column = if is_name(&text, &word_around(&text, place.column), &highlights) {
+            Some(place.column)
+        } else {
+            first_name(&text, &highlights)
+        };
+        if let Some(column) = column {
             self.look.end_visual();
-            self.go_to_definition(Place::new(line, column), cx);
+            self.go_to_definition(Place::new(place.line, column), cx);
         }
     }
 }
@@ -1050,8 +1121,20 @@ fn first_name(line: &str, highlights: &[(Range<usize>, Highlight)]) -> Option<us
     let mut column = 0;
     while column < line.len() {
         let word = word_around(line, column);
-        let named = line[word.clone()].starts_with(|c: char| c.is_alphabetic() || c == '_');
-        let plain = !highlights.iter().any(|(range, highlight)| {
+        if is_name(line, &word, highlights) {
+            return Some(word.start);
+        }
+        column = word.end.max(column + 1);
+    }
+    None
+}
+
+/// Whether `word`, bytes of `line`, is a name: a word the syntax says,
+/// as `highlights`, is no keyword, comment, string or literal.
+fn is_name(line: &str, word: &Range<usize>, highlights: &[(Range<usize>, Highlight)]) -> bool {
+    let named = line[word.clone()].starts_with(|c: char| c.is_alphabetic() || c == '_');
+    named
+        && !highlights.iter().any(|(range, highlight)| {
             range.contains(&word.start)
                 && matches!(
                     highlight,
@@ -1060,13 +1143,7 @@ fn first_name(line: &str, highlights: &[(Range<usize>, Highlight)]) -> Option<us
                         | Highlight::String
                         | Highlight::Literal
                 )
-        });
-        if named && plain {
-            return Some(word.start);
-        }
-        column = word.end.max(column + 1);
-    }
-    None
+        })
 }
 
 impl Follows for Code {
@@ -1170,6 +1247,7 @@ impl Render for Code {
             .on_action(cx.listener(Self::forward))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::move_by_keys))
+            .on_action(cx.listener(Self::move_across))
             .on_action(cx.listener(Self::visual))
             .on_action(cx.listener(Self::definition))
             .on_action(cx.listener(Self::find_text))

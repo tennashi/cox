@@ -15,8 +15,8 @@ use cox::stage::tab::Shows as _;
 use cox_core::tabs::Lines;
 use cox_editor::language::Highlight;
 use gpui::{
-    Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Point, ScrollDelta,
-    ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext, point, px,
+    Entity, Focusable as _, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Point,
+    ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext, point, px,
 };
 
 fn scratch(name: &str) -> PathBuf {
@@ -379,6 +379,46 @@ fn shows_what_the_server_says_of_the_name_the_mouse_rests_on(cx: &mut TestAppCon
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert_eq!(hover(&code, cx), None);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[gpui::test]
+fn vim_s_keys_move_the_cursor_onto_a_name_and_the_server_says_what_it_is(cx: &mut TestAppContext) {
+    let directory = scratch("hover-keys");
+    let servers = Servers::new(fake_lsp::start(Arc::default()));
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let (code, cx) = open_project(cx, &directory, &servers);
+    cx.update(|window, cx| window.focus(&code.focus_handle(cx)));
+    cx.run_until_parked();
+    let place = |cx: &mut VisualTestContext| code.read_with(cx, |code, _| code.cursor_place());
+    let keys = |cx: &mut VisualTestContext, keys: &str| {
+        for key in keys.split(' ') {
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+        }
+    };
+
+    keys(cx, "l l l");
+    assert_eq!(place(cx), Some((0, 3)), "on `main`, by characters");
+    keys(cx, "j");
+    assert_eq!(place(cx), Some((1, 3)), "down, on the same character");
+    keys(cx, "w");
+    assert_eq!(place(cx), Some((1, 4)), "on to `helper`");
+    assert_eq!(hover(&code, cx), None, "not before the cursor rests");
+    cx.executor().advance_clock(Duration::from_millis(400));
+    wait_until(cx, |cx| hover(&code, cx).is_some());
+    assert_eq!(hover(&code, cx).as_deref(), Some(fake_lsp::HOVER));
+    let shown = cx.debug_bounds("code-hover").unwrap();
+    assert!(shown.top() > at(&code, cx, 1, 4).y, "under the name");
+
+    keys(cx, "e");
+    assert_eq!(place(cx), Some((1, 9)), "along the name, it stays");
+    assert!(hover(&code, cx).is_some());
+    keys(cx, "w");
+    assert_eq!(place(cx), Some((1, 10)), "off the name, to `();`");
+    assert_eq!(hover(&code, cx), None, "it goes at once");
+    keys(cx, "0 $");
+    assert_eq!(place(cx), Some((1, 12)));
     std::fs::remove_dir_all(directory).unwrap();
 }
 
