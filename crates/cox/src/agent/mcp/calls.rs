@@ -2337,20 +2337,54 @@ mod tests {
 
     #[test]
     fn lists_the_tools() {
-        let listed = tools(None);
-        assert_eq!(listed[0]["name"], SHOW_MARKDOWN);
-        assert_eq!(listed[1]["name"], SHOW_FILE);
-        assert_eq!(listed[2]["name"], SHOW_CHANGES);
-        assert_eq!(listed[3]["name"], SHOW_MAP);
-        assert_eq!(listed[4]["name"], RUN_COMMAND);
-        assert_eq!(listed[5]["name"], OPEN_CHAT);
-        assert_eq!(listed[7]["name"], READ_CHAT);
-        assert_eq!(listed[8]["name"], SHOW_MEDIA);
-        assert_eq!(listed[10]["name"], PROPOSE_NAME);
-        assert_eq!(listed[11]["name"], PROPOSE_ABOUT);
-        assert_eq!(listed[12]["name"], PROPOSE_ICON);
-        assert_eq!(listed[13]["name"], PROPOSE_PROJECT);
-        assert_eq!(listed[14]["name"], START_SKETCH);
+        let names = |listed: Value| -> Vec<String> {
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let mut expected = vec![
+            "show_markdown",
+            "show_file",
+            "show_changes",
+            "show_map",
+            "run_command",
+            "open_chat",
+            "wait_chat",
+            "read_chat",
+            "show_media",
+            "propose_goal",
+            "propose_name",
+            "propose_about",
+            "propose_icon",
+            "propose_project",
+            "start_sketch",
+            "wiki_search",
+            "wiki_read",
+            "wiki_write",
+            "raw_keep",
+            "raw_search",
+            "raw_read",
+            "android_devices",
+            "android_look",
+            "android_tap",
+            "android_swipe",
+            "android_type",
+            "android_key",
+        ];
+        if cfg!(target_os = "macos") {
+            expected.extend([
+                "mac_windows",
+                "mac_window_look",
+                "mac_window_click",
+                "mac_window_type",
+                "mac_window_key",
+                "mac_window_scroll",
+            ]);
+        }
+        assert_eq!(names(tools(None)), expected);
     }
 
     #[test]
