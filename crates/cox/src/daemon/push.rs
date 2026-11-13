@@ -565,7 +565,6 @@ mod tests {
         let mut again = again;
         again.unsubscribe("https://fcm.googleapis.com/fcm/send/abc");
         assert!(!again.any());
-        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]

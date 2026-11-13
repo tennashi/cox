@@ -944,6 +944,8 @@ mod tests {
         // Kept, it is not asked again: a block that changed is.
         let changed = translator.page("# Hello\n\nAnother.\n", &shouting);
         assert_eq!((changed.done, changed.of), (1, 2));
+        let changed = translated(&translator, "# Hello\n\nAnother.\n", &shouting);
+        assert_eq!((changed.done, changed.of), (2, 2));
     }
 
     #[test]

@@ -349,7 +349,6 @@ mod tests {
         assert_eq!(of("rust/errors")["title"], "rust/errors");
         assert_eq!(of("rust/errors")["marks"], json!([UNTITLED, UNUSED]));
         assert_eq!(of("rust/errors")["linked_from"], json!(["gpui"]));
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -379,7 +378,6 @@ mod tests {
             (json!(1), json!(2))
         );
         assert_eq!(translation["error"], Value::Null);
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -406,6 +404,5 @@ mod tests {
         assert_eq!(page["file"], root.join("gpui.md").display().to_string());
         assert_eq!(page["translation"], Value::Null);
         assert_eq!(super::page(&root, "nothing"), None);
-        let _ = fs::remove_dir_all(&root);
     }
 }

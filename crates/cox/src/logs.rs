@@ -233,7 +233,8 @@ mod tests {
 
     #[test]
     fn a_run_gets_a_file_of_its_own() {
-        let directory = TempDir::new().join("logs");
+        let scratch = TempDir::new();
+        let directory = scratch.join("logs");
 
         let (path, _) = open(&directory).unwrap();
 
@@ -243,7 +244,6 @@ mod tests {
             name.ends_with(&format!("-{}.jsonl", std::process::id())),
             "{name}"
         );
-        fs::remove_dir_all(directory.parent().unwrap()).unwrap();
     }
 
     #[test]

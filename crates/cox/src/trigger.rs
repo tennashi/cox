@@ -1371,7 +1371,6 @@ mod tests {
     /// in a project Cox has not opened, and the project's own. Answers the
     /// home, the project, that project's folder and the workflow.
     fn schedules_in(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
-        let _ = std::fs::remove_dir_all(root);
         let home = root.join("home");
         let projects = home.join(crate::settings::PROJECTS);
         let (project, elsewhere) = (projects.join("app"), projects.join("notes"));
