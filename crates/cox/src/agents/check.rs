@@ -181,7 +181,23 @@ mod tests {
         assert_eq!(find("sh", Some("/nowhere".as_ref()), cwd), None);
         assert_eq!(find("/bin/sh", None, cwd), Some(PathBuf::from("/bin/sh")));
         assert_eq!(find("bin/sh", None, cwd), Some(PathBuf::from("/bin/sh")));
-        assert_eq!(find("/etc/hostname", None, cwd), None);
+    }
+
+    #[test]
+    fn a_file_that_does_not_run_is_not_a_program() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let folder = TempDir::new();
+        let notes = folder.join("notes");
+        std::fs::write(&notes, "").unwrap();
+        std::fs::set_permissions(&notes, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::create_dir(folder.join("tools")).unwrap();
+        let path = folder.as_os_str();
+        assert_eq!(find("notes", Some(path), &folder), None);
+        assert_eq!(find("./notes", None, &folder), None);
+        assert_eq!(find("tools", Some(path), &folder), None);
+        std::fs::set_permissions(&notes, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(find("notes", Some(path), &folder), Some(notes.clone()));
+        assert_eq!(find("./notes", None, &folder), Some(folder.join("./notes")));
     }
 
     #[test]
