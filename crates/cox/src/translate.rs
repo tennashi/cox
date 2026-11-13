@@ -956,13 +956,18 @@ mod tests {
     #[test]
     fn a_command_that_fails_says_why_until_another_is_named() {
         let folder = scratch("fails");
+        fs::create_dir_all(&folder).unwrap();
+        let runs = folder.join("runs");
         let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
         let failing = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
                 "sh".to_owned(),
                 "-c".to_owned(),
-                "echo no model >&2; exit 3".to_owned(),
+                format!(
+                    "echo ran >> '{}'; echo no model >&2; exit 3",
+                    runs.display()
+                ),
             ]),
             agent: None,
         };
@@ -972,16 +977,18 @@ mod tests {
         let error = page.error.unwrap();
         assert!(error.starts_with("sh failed"), "{error}");
         assert!(error.ends_with("no model"), "{error}");
-        // It is not tried again the same way, but another way is.
-        assert!(translator.shared.state().pending.is_empty());
         let _ = translator.page("Hello.\n", &failing);
-        assert!(translator.shared.state().pending.is_empty());
         let working = Translation {
             command: Some(vec!["cat".to_owned()]),
             ..failing
         };
         let page = translated(&translator, "Hello.\n", &working);
         assert_eq!((page.done, page.error), (1, None));
+        assert_eq!(
+            fs::read_to_string(&runs).unwrap(),
+            "ran\n",
+            "the failing command is not run again, though asked before the working one"
+        );
         let _ = fs::remove_dir_all(&folder);
     }
 
@@ -1100,13 +1107,20 @@ mod tests {
     #[test]
     fn a_selection_is_told_as_far_as_it_has_arrived() {
         let folder = scratch("arriving");
+        fs::create_dir_all(&folder).unwrap();
+        let go_on = folder.join("go-on");
         let translator = Translator::start(folder.clone(), None, GIVES_UP_AFTER);
         let slow = Translation {
             language: "Japanese".to_owned(),
             command: Some(vec![
                 "sh".to_owned(),
                 "-c".to_owned(),
-                "cat >/dev/null; printf '縮'; sleep 0.3; printf 'める'".to_owned(),
+                format!(
+                    "cat >/dev/null; printf '縮'; i=0; \
+                     while [ ! -e '{}' ] && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; \
+                     printf 'める'",
+                    go_on.display()
+                ),
             ]),
             agent: None,
         };
@@ -1116,6 +1130,7 @@ mod tests {
             answer.blocking_recv(),
             Some(Arriving::SoFar("縮".to_owned()))
         );
+        fs::write(&go_on, "").unwrap();
         assert_eq!(
             answer.blocking_recv(),
             Some(Arriving::SoFar("縮める".to_owned()))
