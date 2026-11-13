@@ -423,6 +423,34 @@ fn vim_s_keys_move_the_cursor_onto_a_name_and_the_server_says_what_it_is(cx: &mu
 }
 
 #[gpui::test]
+fn shift_k_says_what_the_name_is_at_once_and_gr_lists_where_it_is_used(cx: &mut TestAppContext) {
+    let directory = scratch("look-up-keys");
+    let servers = Servers::new(fake_lsp::start(Arc::default()));
+    cx.update(|cx| cox::vim::turn(true, cx));
+    let (code, cx) = open_project(cx, &directory, &servers);
+    cx.update(|window, cx| window.focus(&code.focus_handle(cx)));
+    cx.run_until_parked();
+    let keys = |cx: &mut VisualTestContext, keys: &str| {
+        for key in keys.split(' ') {
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+        }
+    };
+
+    keys(cx, "j w");
+    assert_eq!(hover(&code, cx), None, "not before the cursor rests");
+    keys(cx, "shift-k");
+    wait_until(cx, |cx| hover(&code, cx).is_some());
+    assert_eq!(hover(&code, cx).as_deref(), Some(fake_lsp::HOVER));
+
+    keys(cx, "escape g r");
+    wait_until(cx, |cx| cx.debug_bounds("code-locations").is_some());
+    assert!(cx.debug_bounds("code-place-1").is_some(), "in lib.rs");
+    assert!(cx.debug_bounds("code-place-3").is_some(), "in main.rs");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[gpui::test]
 fn goes_to_the_definition_and_back(cx: &mut TestAppContext) {
     let directory = scratch("definition");
     let servers = Servers::new(fake_lsp::start(Arc::default()));

@@ -91,8 +91,42 @@ impl Code {
             self._hovering = Task::ready(());
             return;
         };
+        self.ask_hover(line, word, REST, cx);
+    }
+
+    /// Asks the server of `word`, the bytes of `line`, at once, as Vim's
+    /// `K` does, unless what it said of it shows.
+    pub(super) fn look_up(&mut self, line: usize, word: Range<usize>, cx: &mut Context<Self>) {
+        if self
+            .hover
+            .as_ref()
+            .is_some_and(|hovered| hovered.covers(line, &word))
+        {
+            return;
+        }
+        self.hover = None;
+        self.pointed = Some((line, word.clone()));
+        self.ask_hover(line, word, Duration::ZERO, cx);
+        cx.notify();
+    }
+
+    /// Asks the server of `word`, the bytes of `line`, once `wait` is
+    /// over, to show what it says while the word is still pointed at.
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the waiting is only held: dropping it stops it"
+    )]
+    fn ask_hover(
+        &mut self,
+        line: usize,
+        word: Range<usize>,
+        wait: Duration,
+        cx: &mut Context<Self>,
+    ) {
         self._hovering = cx.spawn(async move |code, cx| {
-            cx.background_executor().timer(REST).await;
+            if !wait.is_zero() {
+                cx.background_executor().timer(wait).await;
+            }
             let asked = code.update(cx, |code, cx| {
                 code.ask(Place::new(line, word.start), Client::hover, cx)
             });

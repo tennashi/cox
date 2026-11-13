@@ -62,6 +62,9 @@ fn kind(c: Option<char>) -> Kind {
     }
 }
 
+/// The brackets `%` goes between, each opening and closing.
+const BRACKETS: [(char, char); 3] = [('(', ')'), ('[', ']'), ('{', '}')];
+
 /// A place in the text, stepped through a character at a time, the end
 /// of each line a space between it and the next.
 struct Text<'a> {
@@ -163,6 +166,64 @@ impl Text<'_> {
         place
     }
 
+    /// The bracket that matches the one at `at`, or else the next on its
+    /// line, if it has a match (`%`).
+    fn matching_bracket(&self, at: Place) -> Option<Place> {
+        let (column, bracket) = self.lines[at.line][at.column..]
+            .char_indices()
+            .find(|(_, c)| BRACKETS.iter().any(|(open, close)| c == open || c == close))?;
+        let &(open, close) = BRACKETS
+            .iter()
+            .find(|(open, close)| bracket == *open || bracket == *close)?;
+        let forward = bracket == open;
+        let other = if forward { close } else { open };
+        let mut place = Place::new(at.line, at.column + column);
+        let mut depth = 0_usize;
+        loop {
+            place = if forward {
+                self.next(place)?
+            } else {
+                self.previous(place)?
+            };
+            match self.char_at(place) {
+                Some(c) if c == bracket => depth += 1,
+                Some(c) if c == other => match depth.checked_sub(1) {
+                    Some(outer) => depth = outer,
+                    None => return Some(place),
+                },
+                _ => {}
+            }
+        }
+    }
+
+    /// The next empty line after the text from `line` on, or the one
+    /// before it going back: else the last character, or the first (`}`,
+    /// `{`).
+    fn paragraph(&self, line: usize, forward: bool) -> Place {
+        let empty = |line: usize| self.lines[line].is_empty();
+        let mut at = line;
+        let mut in_text = !empty(at);
+        loop {
+            let next = if forward {
+                Some(at + 1).filter(|next| *next < self.lines.len())
+            } else {
+                at.checked_sub(1)
+            };
+            let Some(next) = next else {
+                return if forward {
+                    self.last_char(Place::new(at, 0))
+                } else {
+                    Place::new(0, 0)
+                };
+            };
+            at = next;
+            if empty(at) && in_text {
+                return Place::new(at, 0);
+            }
+            in_text |= !empty(at);
+        }
+    }
+
     /// The last character of `place`'s line, or its start when empty.
     fn last_char(&self, place: Place) -> Place {
         let line = &self.lines[place.line];
@@ -212,6 +273,13 @@ pub(crate) fn moved(across: Across, at: Cursor, times: usize, lines: &[String]) 
         Across::WordForward => char_of((0..times).fold(place, |place, _| text.word_forward(place))),
         Across::WordEnd => char_of((0..times).fold(place, |place, _| text.word_end(place))),
         Across::WordBack => char_of((0..times).fold(place, |place, _| text.word_back(place))),
+        Across::Bracket => text.matching_bracket(place).map_or(at, char_of),
+        Across::ParagraphForward => {
+            char_of((0..times).fold(place, |place, _| text.paragraph(place.line, true)))
+        }
+        Across::ParagraphBack => {
+            char_of((0..times).fold(place, |place, _| text.paragraph(place.line, false)))
+        }
     }
 }
 
@@ -304,6 +372,41 @@ mod tests {
         assert_eq!(go(text, (0, 3), Across::WordBack, 1), (0, 0));
         assert_eq!(go(text, (1, 4), Across::WordBack, 1), (0, 10));
         assert_eq!(go(text, (0, 0), Across::WordBack, 1), (0, 0));
+    }
+
+    #[test]
+    fn percent_goes_to_the_matching_bracket_across_lines() {
+        let text = "fn main() {\n    let a = [(1), 2];\n}";
+        assert_eq!(go(text, (0, 7), Across::Bracket, 1), (0, 8));
+        assert_eq!(go(text, (0, 8), Across::Bracket, 1), (0, 7));
+        assert_eq!(go(text, (0, 0), Across::Bracket, 1), (0, 8), "the next");
+        assert_eq!(go(text, (0, 10), Across::Bracket, 1), (2, 0));
+        assert_eq!(go(text, (2, 0), Across::Bracket, 1), (0, 10));
+        assert_eq!(go(text, (1, 12), Across::Bracket, 1), (1, 19), "nested");
+        assert_eq!(go(text, (1, 13), Across::Bracket, 1), (1, 15));
+        assert_eq!(go(text, (1, 20), Across::Bracket, 1), (1, 20), "none");
+        assert_eq!(go("(a", (0, 0), Across::Bracket, 1), (0, 0), "unmatched");
+    }
+
+    #[test]
+    fn braces_go_to_the_empty_lines_between_paragraphs() {
+        let text = "a\nb\n\n\nc\n\nd";
+        assert_eq!(go(text, (0, 0), Across::ParagraphForward, 1), (2, 0));
+        assert_eq!(go(text, (2, 0), Across::ParagraphForward, 1), (5, 0));
+        assert_eq!(go(text, (0, 0), Across::ParagraphForward, 2), (5, 0));
+        assert_eq!(
+            go(text, (5, 0), Across::ParagraphForward, 1),
+            (6, 0),
+            "the end"
+        );
+        assert_eq!(go("a\nbc", (0, 0), Across::ParagraphForward, 1), (1, 1));
+        assert_eq!(go(text, (6, 0), Across::ParagraphBack, 1), (5, 0));
+        assert_eq!(go(text, (5, 0), Across::ParagraphBack, 1), (3, 0));
+        assert_eq!(
+            go(text, (6, 0), Across::ParagraphBack, 3),
+            (0, 0),
+            "the start"
+        );
     }
 
     #[test]

@@ -1072,6 +1072,102 @@ fn code_selects_whole_lines_and_copies_them(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn code_selects_characters_from_the_cursor_and_copies_them(cx: &mut TestAppContext) {
+    let path = folder("code-visual-characters", &[]).join("long.rs");
+    let (code, cx) = open_code(cx, path, &numbered(20), true);
+    let selected = |cx: &mut VisualTestContext| code.read_with(cx, |code, _| code.selected_text());
+
+    type_keys(cx, "w v e");
+    assert_eq!(selected(cx), "line_1");
+    type_keys(cx, "y");
+    let copied = cx
+        .update(|_, cx| cx.read_from_clipboard())
+        .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("line_1"));
+    assert_eq!(selected(cx), "");
+
+    type_keys(cx, "b v j");
+    assert_eq!(selected(cx), "line_1 = 1;\nlet l");
+    type_keys(cx, "shift-v");
+    assert_eq!(selected(cx), "let line_1 = 1;\nlet line_2 = 2;\n");
+    type_keys(cx, "v k b");
+    assert_eq!(selected(cx), "let l", "back before the start");
+    type_keys(cx, "escape");
+    assert_eq!(selected(cx), "");
+}
+
+#[gpui::test]
+fn code_finds_the_word_under_the_cursor_whole_and_again(cx: &mut TestAppContext) {
+    let path = folder("code-star", &[]).join("star.rs");
+    let text = "let a = helper;\nlet b = helpers;\nlet c = helper;\n\nlet d = helper;";
+    let (code, cx) = open_code(cx, path, text, true);
+    let place = |cx: &mut VisualTestContext| code.read_with(cx, |code, _| code.cursor_place());
+
+    type_keys(cx, "3 w *");
+    assert_eq!(place(cx), Some((2, 8)), "past `helpers`");
+    type_keys(cx, "n");
+    assert_eq!(place(cx), Some((4, 8)));
+    type_keys(cx, "n");
+    assert_eq!(place(cx), Some((0, 8)), "round");
+    type_keys(cx, "#");
+    assert_eq!(place(cx), Some((4, 8)), "back, round");
+    type_keys(cx, "shift-n");
+    assert_eq!(place(cx), Some((0, 8)), "the other way from `#`");
+    type_keys(cx, "j 0 *");
+    assert_eq!(place(cx), Some((2, 0)), "`let`, from the line's start");
+}
+
+#[gpui::test]
+fn code_goes_to_matching_brackets_and_between_paragraphs(cx: &mut TestAppContext) {
+    let path = folder("code-brackets", &[]).join("brackets.rs");
+    let text = "fn main() {\n    let a = [(1), 2];\n\n    helper();\n}";
+    let (code, cx) = open_code(cx, path, text, true);
+    let place = |cx: &mut VisualTestContext| code.read_with(cx, |code, _| code.cursor_place());
+
+    type_keys(cx, "%");
+    assert_eq!(place(cx), Some((0, 8)), "the next bracket's match");
+    type_keys(cx, "%");
+    assert_eq!(place(cx), Some((0, 7)));
+    type_keys(cx, "$ %");
+    assert_eq!(place(cx), Some((4, 0)));
+    type_keys(cx, "%");
+    assert_eq!(place(cx), Some((0, 10)));
+
+    type_keys(cx, "}");
+    assert_eq!(place(cx), Some((2, 0)));
+    type_keys(cx, "}");
+    assert_eq!(place(cx), Some((4, 0)), "the end");
+    type_keys(cx, "{");
+    assert_eq!(place(cx), Some((2, 0)));
+    type_keys(cx, "j 2 {");
+    assert_eq!(place(cx), Some((0, 0)), "the start");
+}
+
+#[gpui::test]
+fn code_scrolls_the_cursor_s_line_to_the_top_middle_and_bottom(cx: &mut TestAppContext) {
+    let path = folder("code-z", &[]).join("long.rs");
+    let (code, cx) = open_code(cx, path, &numbered(200), true);
+    let bounds = cx.debug_bounds("code").expect("the code is drawn");
+    let height = bounds.size.height;
+    let y = |cx: &mut VisualTestContext| {
+        code.read_with(cx, |code, _| code.point_of(99, 0))
+            .expect("line 100 is in sight")
+            .y
+    };
+
+    type_keys(cx, "1 0 0 shift-g z t");
+    assert_eq!(cursor(&code, cx), Some(99));
+    assert!(y(cx) - bounds.top() < height / 8., "at the top");
+    type_keys(cx, "z b");
+    assert_eq!(cursor(&code, cx), Some(99));
+    assert!(bounds.bottom() - y(cx) < height / 8., "at the bottom");
+    type_keys(cx, "z z");
+    assert_eq!(cursor(&code, cx), Some(99));
+    let middle = bounds.center().y;
+    assert!((y(cx) - middle).abs() < height / 8., "in the middle");
+}
+
+#[gpui::test]
 fn code_hands_the_lines_selected_or_the_cursor_s_to_the_chat(cx: &mut TestAppContext) {
     let path = folder("code-hand", &[]).join("long.rs");
     let (code, cx) = open_code(cx, path, &numbered(20), true);

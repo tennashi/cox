@@ -22,8 +22,10 @@ use gpui::{
     ScrollHandle, Subscription, Window, actions, point, px,
 };
 
-use self::keymap::{Across, Answer, Command, Edit, Follow, Keymap, Motion, Place, Reach, Sent};
-use self::search::{Find, Search};
+use self::keymap::{
+    Across, Answer, Command, Edit, Follow, Keymap, Motion, Place, Reach, Sent, Sight,
+};
+use self::search::{Direction, Find, Search};
 
 /// Moves what the part of the window with the keyboard shows, or its
 /// cursor, as Vim's keys ask: an action each part that moves so handles
@@ -135,6 +137,21 @@ pub struct Hint {
     pub follow: Follow,
 }
 
+/// Finds the whole word under the cursor of code, as `direction` goes,
+/// which becomes the last search (`*`, `#`).
+#[derive(Clone, Debug, PartialEq, Eq, Action)]
+#[action(namespace = vim, no_json)]
+pub struct FindWord {
+    pub direction: Direction,
+}
+
+/// Scrolls code so the cursor's line is where `sight` says.
+#[derive(Clone, Debug, PartialEq, Eq, Action)]
+#[action(namespace = vim, no_json)]
+pub struct ScrollTo {
+    pub sight: Sight,
+}
+
 /// A key typed in hint mode, toward the label of a hint.
 #[derive(Clone, Debug, PartialEq, Eq, Action)]
 #[action(namespace = vim, no_json)]
@@ -147,8 +164,15 @@ actions!(
     [
         /// Starts selecting whole lines, from the cursor's, or stops.
         Visual,
+        /// Starts selecting characters, from the cursor's, or stops.
+        VisualCharacters,
         /// Goes to where the first name of the cursor's line is defined.
         Definition,
+        /// Lists where the name under the cursor is used.
+        References,
+        /// Shows what the language server says of the name under the
+        /// cursor, at once.
+        LookUp,
         /// Opens what is selected.
         Open,
         /// Closes the folder selected, or selects the folder it is in.
@@ -176,7 +200,12 @@ impl Sent {
             Self::Back => Box::new(crate::stage::code::Back),
             Self::Forward => Box::new(crate::stage::code::Forward),
             Self::Visual => Box::new(Visual),
+            Self::VisualCharacters => Box::new(VisualCharacters),
             Self::Definition => Box::new(Definition),
+            Self::References => Box::new(References),
+            Self::LookUp => Box::new(LookUp),
+            Self::FindWord(direction) => Box::new(FindWord { direction }),
+            Self::ScrollTo(sight) => Box::new(ScrollTo { sight }),
             Self::Open => Box::new(Open),
             Self::Close => Box::new(Close),
             Self::Reload => Box::new(Reload),
@@ -784,6 +813,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
                 let find = Find {
                     text: search.text.clone(),
                     direction: search.direction.then(direction),
+                    word: search.word,
                 };
                 window.dispatch_action(Box::new(find), cx);
             }

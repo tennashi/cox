@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 
 use cox_core::entry::Attachment;
 use cox_core::tabs::{KeptTab, Lines};
-use cox_editor::buffer::{Point as Place, is_word, word_around};
+use cox_editor::buffer::{Buffer, Point as Place, is_word, word_around};
 use cox_editor::history::History;
 use cox_editor::language::Highlight;
 use cox_editor::line::Shown;
@@ -70,8 +70,10 @@ use crate::ui::paths::shortened;
 use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::keymap::Motion;
-use crate::vim::search::{self, Find};
-use crate::vim::{Definition, Move, MoveAcross, Visual};
+use crate::vim::search::{self, Find, Search};
+use crate::vim::{
+    Definition, FindWord, LookUp, Move, MoveAcross, References, ScrollTo, VisualCharacters,
+};
 
 actions!(
     code,
@@ -167,13 +169,22 @@ struct Look {
     laid: Option<Laid>,
     /// The cursor Vim's keys move, once drawn with them on.
     cursor: Option<Cursor>,
-    /// The line whole lines are selected from to the cursor's, while
-    /// they are (`V`).
-    visual: Option<usize>,
+    /// Where Vim's visual mode started, and what it selects from there
+    /// to the cursor, while it is on.
+    visual: Option<(Place, Visual)>,
     /// Which of the cursor and the scroll the next frame keeps to.
     follow: Follow,
     /// What Vim's `/` looked for last, whose matches are marked.
-    found: Option<String>,
+    found: Option<Find>,
+}
+
+/// What Vim's visual mode selects from where it started to the cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Visual {
+    /// The characters, both ends with them (`v`).
+    Characters,
+    /// The whole lines (`V`).
+    Lines,
 }
 
 /// What the next frame keeps to, of the cursor of Vim's keys and the
@@ -188,24 +199,36 @@ enum Follow {
 }
 
 impl Look {
-    /// Puts the cursor at `cursor`, and the selection of whole lines with
-    /// it, while they are selected.
-    fn put_cursor(&mut self, cursor: Cursor) {
+    /// Puts the cursor at `cursor`, in `text`, and the end of the
+    /// selection of visual mode with it, while it is on.
+    fn put_cursor(&mut self, cursor: Cursor, text: &Buffer) {
         self.cursor = Some(cursor);
-        let line = cursor.line;
-        if let Some(from) = self.visual {
-            self.selection = Some((
-                Place::new(from.min(line), 0),
-                Place::new(from.max(line) + 1, 0),
-            ));
-        }
+        let Some((from, visual)) = self.visual else {
+            return;
+        };
+        let at = cursor.place(&text.line(cursor.line));
+        let (start, end) = (from.min(at), from.max(at));
+        self.selection = Some(match visual {
+            Visual::Lines => (Place::new(start.line, 0), Place::new(end.line + 1, 0)),
+            // An empty line's character is its line break.
+            Visual::Characters => match text.line(end.line)[end.column..].chars().next() {
+                Some(c) => (start, Place::new(end.line, end.column + c.len_utf8())),
+                None => (start, Place::new(end.line + 1, 0)),
+            },
+        });
     }
 
     /// Keeps how a frame laid the text out, as `laid`, scrolled `scroll`,
-    /// with the cursor of Vim's keys on `cursor`, if they are on.
-    fn laid_out(&mut self, laid: Laid, scroll: Point<Pixels>, cursor: Option<usize>) {
+    /// with the cursor of Vim's keys on `cursor` of `text`, if they are on.
+    fn laid_out(
+        &mut self,
+        laid: Laid,
+        scroll: Point<Pixels>,
+        cursor: Option<usize>,
+        text: &Buffer,
+    ) {
         if let Some(line) = cursor {
-            self.put_cursor(self.cursor_on(line));
+            self.put_cursor(self.cursor_on(line), text);
         }
         self.follow = Follow::Scroll;
         self.reveal = None;
@@ -219,8 +242,7 @@ impl Look {
             .map_or(Cursor::on(line), |cursor| cursor.to_line(line))
     }
 
-    /// Stops selecting whole lines, with the selection: answers whether
-    /// they were.
+    /// Leaves visual mode, with its selection: answers whether it was on.
     fn end_visual(&mut self) -> bool {
         let was = self.visual.take().is_some();
         if was {
@@ -1010,7 +1032,8 @@ impl Code {
             self.look.scroll.y = (self.look.scroll.y + by).max(px(0.));
         }
         self.menu = None;
-        self.look.put_cursor(self.look.cursor_on(line));
+        self.look
+            .put_cursor(self.look.cursor_on(line), &self.file.buffer);
         self.look.follow = Follow::Cursor;
         self.rest_on_cursor(cx);
         cx.notify();
@@ -1030,8 +1053,10 @@ impl Code {
             .count
             .map_or(1, |count| usize::try_from(count).unwrap_or(usize::MAX));
         self.menu = None;
-        self.look
-            .put_cursor(cursor::moved(across.across, at, times, &lines));
+        self.look.put_cursor(
+            cursor::moved(across.across, at, times, &lines),
+            &self.file.buffer,
+        );
         self.look.follow = Follow::Cursor;
         self.rest_on_cursor(cx);
         cx.notify();
@@ -1054,13 +1079,80 @@ impl Code {
     }
 
     /// Starts selecting whole lines from the cursor's, or stops (`V`).
-    fn visual(&mut self, _: &Visual, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.look.end_visual() {
-            let line = self.cursor().unwrap_or_else(|| self.in_sight().start);
-            self.look.visual = Some(line);
-            self.look.put_cursor(self.look.cursor_on(line));
+    fn visual_lines(&mut self, _: &crate::vim::Visual, _: &mut Window, cx: &mut Context<Self>) {
+        self.visual(Visual::Lines, cx);
+    }
+
+    /// Starts selecting characters from the cursor's, or stops (`v`).
+    fn visual_characters(&mut self, _: &VisualCharacters, _: &mut Window, cx: &mut Context<Self>) {
+        self.visual(Visual::Characters, cx);
+    }
+
+    /// Starts selecting as `visual` says from the cursor, or selects so
+    /// from where the other started, or stops if it selects so already.
+    fn visual(&mut self, visual: Visual, cx: &mut Context<Self>) {
+        let cursor = self
+            .look
+            .cursor_on(self.cursor().unwrap_or_else(|| self.in_sight().start));
+        match self.look.visual {
+            Some((_, was)) if was == visual => {
+                self.look.end_visual();
+            }
+            Some((from, _)) => self.look.visual = Some((from, visual)),
+            None => {
+                let from = cursor.place(&self.file.buffer.line(cursor.line));
+                self.look.visual = Some((from, visual));
+            }
         }
+        self.look.put_cursor(cursor, &self.file.buffer);
         cx.notify();
+    }
+
+    /// Scrolls the cursor's line to the top, the middle or the bottom
+    /// (`zt`, `zz`, `zb`).
+    fn scroll_to(&mut self, to: &ScrollTo, _: &mut Window, cx: &mut Context<Self>) {
+        let (Some(line), Some(laid)) = (self.cursor(), &self.look.laid) else {
+            return;
+        };
+        self.look.scroll.y = text::scrolled_for(to.sight, line, laid);
+        self.look.follow = Follow::Scroll;
+        self.hover = None;
+        self.menu = None;
+        cx.notify();
+    }
+
+    /// Finds the whole word under the cursor, or the next on its line,
+    /// as the last search, from it (`*`, `#`).
+    fn find_word(&mut self, asked: &FindWord, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(place) = self.cursor_at() else {
+            return;
+        };
+        let line = self.file.buffer.line(place.line);
+        let Some(column) = line[place.column..]
+            .char_indices()
+            .find(|(_, c)| is_word(*c))
+            .map(|(at, _)| place.column + at)
+        else {
+            return;
+        };
+        let word = word_around(&line, column);
+        let find = Find {
+            text: line[word.clone()].to_owned(),
+            direction: asked.direction,
+            word: true,
+        };
+        let search = Search {
+            text: find.text.clone(),
+            direction: find.direction,
+            word: true,
+        };
+        crate::vim::searched(search, cx);
+        self.look.end_visual();
+        self.look.selection = Some((
+            Place::new(place.line, word.start),
+            Place::new(place.line, word.end),
+        ));
+        self.find_text(&find, window, cx);
     }
 
     /// Selects the next match of what Vim's `/` or `n` looks for, from
@@ -1078,15 +1170,17 @@ impl Code {
             }
             None => (self.cursor().unwrap_or_else(|| self.in_sight().start), 0),
         };
-        self.look.found = Some(find.text.clone());
-        match search::next(&lines, from, &find.text, find.direction) {
+        self.look.found = Some(find.clone());
+        match search::next(&lines, from, &find.text, find.word, find.direction) {
             Some((line, range)) => {
                 self.look.end_visual();
                 self.look.selection =
                     Some((Place::new(line, range.start), Place::new(line, range.end)));
                 let start = Place::new(line, range.start);
-                self.look
-                    .put_cursor(Cursor::at(start, &self.file.buffer.line(line)));
+                self.look.put_cursor(
+                    Cursor::at(start, &self.file.buffer.line(line)),
+                    &self.file.buffer,
+                );
                 self.look.follow = Follow::Cursor;
                 self.notice = None;
             }
@@ -1095,22 +1189,44 @@ impl Code {
         cx.notify();
     }
 
+    /// The name under the cursor, or with the cursor on no name, the
+    /// first name of its line: its line and the bytes of it.
+    fn name_at_cursor(&self) -> Option<(usize, Range<usize>)> {
+        let place = self.cursor_at()?;
+        let text = self.file.buffer.line(place.line);
+        let highlights = self.file.highlights(place.line);
+        let word = word_around(&text, place.column);
+        let column = if is_name(&text, &word, &highlights) {
+            word.start
+        } else {
+            first_name(&text, &highlights)?
+        };
+        Some((place.line, word_around(&text, column)))
+    }
+
     /// Goes to where the name under the cursor is defined, or with the
     /// cursor on no name, the first name of its line.
     fn definition(&mut self, _: &Definition, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(place) = self.cursor_at() else {
-            return;
-        };
-        let text = self.file.buffer.line(place.line);
-        let highlights = self.file.highlights(place.line);
-        let column = if is_name(&text, &word_around(&text, place.column), &highlights) {
-            Some(place.column)
-        } else {
-            first_name(&text, &highlights)
-        };
-        if let Some(column) = column {
+        if let Some((line, name)) = self.name_at_cursor() {
             self.look.end_visual();
-            self.go_to_definition(Place::new(place.line, column), cx);
+            self.go_to_definition(Place::new(line, name.start), cx);
+        }
+    }
+
+    /// Lists where the name under the cursor is used, or with the cursor
+    /// on no name, the first name of its line.
+    fn references(&mut self, _: &References, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((line, name)) = self.name_at_cursor() {
+            self.look.end_visual();
+            self.find_references(Place::new(line, name.start), cx);
+        }
+    }
+
+    /// Shows at once what the server says of the name under the cursor,
+    /// or with the cursor on no name, of the first name of its line.
+    fn look_up_name(&mut self, _: &LookUp, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((line, name)) = self.name_at_cursor() {
+            self.look_up(line, name, cx);
         }
     }
 }
@@ -1248,8 +1364,13 @@ impl Render for Code {
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::move_by_keys))
             .on_action(cx.listener(Self::move_across))
-            .on_action(cx.listener(Self::visual))
+            .on_action(cx.listener(Self::visual_lines))
+            .on_action(cx.listener(Self::visual_characters))
             .on_action(cx.listener(Self::definition))
+            .on_action(cx.listener(Self::references))
+            .on_action(cx.listener(Self::look_up_name))
+            .on_action(cx.listener(Self::find_word))
+            .on_action(cx.listener(Self::scroll_to))
             .on_action(cx.listener(Self::find_text))
             .child(self.render_bar(cx))
             .child(

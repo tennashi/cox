@@ -167,8 +167,11 @@ keyboard in its input. `o` opens a new chat in the project selected.
 | Code, a document, the tree, changes, a page | `j`, `k`, Ctrl-D, Ctrl-U, `gg`, `G` | Moves the cursor or the selection, or scrolls, a line, half the tab, or to its ends. In code, `12G` goes to line 12. |
 | Code, a document, a page, a terminal | `/`, `?`, `n`, `N` | Finds text forward or back, as typed, in any case unless it has a capital, and again either way. |
 | Code | `h`, `l`, `w`, `b`, `e`, `0`, `^`, `$` | Moves the cursor by characters and words, and to the line's start, first character and end. `j` and `k` keep the character it goes to. Resting on a name, the cursor shows what the language server says of it, as the mouse does. |
-| Code | `V`, `y` | Selects whole lines from the cursor's, and copies them. |
-| Code | `ga`, `gd`, Ctrl-O, Ctrl-I | Hands the lines to the chat, goes to the definition of the name under the cursor, or of its line's first name, goes back, goes forward. |
+| Code | `%`, `{`, `}` | Goes to the bracket that matches the one under the cursor, or the next on its line, of `()`, `[]` and `{}`, and to the empty line before or after, or the count's. |
+| Code | `*`, `#` | Finds the whole word under the cursor, or the next on its line, forward or back. `n` and `N` find it again. |
+| Code | `zt`, `zz`, `zb` | Scrolls the cursor's line to the top, the middle or the bottom. |
+| Code | `v`, `V`, `y` | Selects characters, or whole lines, from the cursor's, and copies them. Escape stops selecting. |
+| Code | `ga`, `gd`, `gr`, `K`, Ctrl-O, Ctrl-I | Hands the selection or the cursor's line to the chat, goes to the definition of the name under the cursor, or of its line's first name, lists where it is used, shows at once what the language server says of it, goes back, goes forward. |
 | A document | `]]`, `[[`, `y`, `ga` | Selects the next block, a paragraph, heading, list item, code block or table cell, or the one before, from the first in sight, scrolling to it; copies what is selected, or hands it to the chat. |
 | The tree | `l` or Enter, `h` | Opens what is selected, or closes its folder. A file opened goes on with the keyboard. |
 | Changes | Enter | Opens the file selected. |

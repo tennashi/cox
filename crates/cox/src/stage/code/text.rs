@@ -17,6 +17,7 @@ use super::{Code, Follow, Laid, PADDING, Place, Row};
 use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, CODE_FONT, DISABLED, FOREGROUND, HOVER, LINK, SELECTION,
 };
+use crate::vim::keymap::Sight;
 
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.4;
@@ -208,7 +209,7 @@ impl Text {
         (painted.hovered, painted.link) = code.names(&laid);
         painted.found = code.matches_in_sight(&laid);
         self.code.update(cx, |code, _| {
-            code.look.laid_out(laid, scroll, cursor);
+            code.look.laid_out(laid, scroll, cursor, &code.file.buffer);
             code.file.highlighted.extend(highlighted);
         });
         painted
@@ -218,13 +219,18 @@ impl Text {
 impl Code {
     /// Where the matches in sight of what Vim's `/` looked for are drawn.
     fn matches_in_sight(&self, laid: &Laid) -> Vec<Bounds<Pixels>> {
-        let Some(query) = &self.look.found else {
+        let Some(found) = &self.look.found else {
             return Vec::new();
+        };
+        let find = if found.word {
+            crate::vim::search::words
+        } else {
+            crate::vim::search::matches
         };
         laid.rows
             .iter()
             .flat_map(|row| {
-                crate::vim::search::matches(query, &self.file.buffer.line(row.line))
+                find(&found.text, &self.file.buffer.line(row.line))
                     .into_iter()
                     .filter_map(|range| laid.stretch(row.line, &range))
             })
@@ -316,6 +322,22 @@ fn scrolled_to(line: usize, scroll: Pixels, line_height: Pixels, height: Pixels)
         bottom - height
     } else {
         scroll
+    }
+}
+
+/// How far the text, laid out as `laid`, scrolls down for `line` to be
+/// at the top, the middle or the bottom of it, as `sight` says.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "line counts are far below what f32 keeps exactly"
+)]
+pub(super) fn scrolled_for(sight: Sight, line: usize, laid: &Laid) -> Pixels {
+    let (line_height, height) = (laid.line_height, laid.text.size.height);
+    let top = line_height * line as f32;
+    match sight {
+        Sight::Top => top,
+        Sight::Middle => top + line_height / 2. + px(PADDING) - height / 2.,
+        Sight::Bottom => top + line_height + px(PADDING * 2.) - height,
     }
 }
 
