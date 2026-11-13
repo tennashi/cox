@@ -611,9 +611,24 @@ mod tests {
     #[test]
     fn a_shell_trigger_is_tried_in_its_folder() {
         let folder = TempDir::new();
+        let tried = run("pwd -P", &folder);
+        assert_eq!(
+            tried.said,
+            Some(format!("{}\n\nit exited 0", folder.display()))
+        );
+    }
+
+    #[test]
+    fn a_shell_trigger_that_exits_0_passes_saying_what_it_printed() {
+        let folder = TempDir::new();
         let passed = run("echo hi", &folder);
         assert_eq!(passed.state, CheckState::Passed);
         assert_eq!(passed.said.as_deref(), Some("hi\n\nit exited 0"));
+    }
+
+    #[test]
+    fn a_shell_trigger_that_exits_otherwise_fails_saying_what_it_printed() {
+        let folder = TempDir::new();
         let failed = run("echo no >&2; exit 3", &folder);
         assert_eq!(failed.state, CheckState::Failed);
         assert_eq!(failed.said.as_deref(), Some("no\n\nit exited 3"));
@@ -643,8 +658,16 @@ mod tests {
             prompt(&line),
             "The card reads now:\n\n```trigger\n---\non: turn.end\nby: shell\n---\n\ncargo test\n```\n\nTried on the last turn, it found something, saying:\n\n1 failed\n\nThe human says: Why?"
         );
+    }
+
+    #[test]
+    fn the_agent_of_a_talk_is_told_the_trigger_s_file_and_what_it_last_said() {
         assert!(context(None, Some("FAIL: x")).ends_with(
             "It is new: it has no file yet.\n\nWhen it last ran, it said:\n\nFAIL: x\n"
         ));
+        assert!(
+            context(Some(Path::new("/p/ci.md")), None).ends_with("Its file is /p/ci.md."),
+            "a trigger with a file, never run"
+        );
     }
 }
