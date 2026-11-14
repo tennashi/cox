@@ -827,23 +827,36 @@ impl Daemon {
             .with_settings(settings)
             .with_commands(commands)
             .with_keeping(keeps);
-        let record = Record::new(Rc::clone(&self.store), kept);
-        let agents = self.spawns.agents();
-        let chosen = agent_of(&agents, Some(kept), &self.store);
-        let starts = self.spawns.starts(&chosen);
-        let chat = Chat::new(
-            key,
-            conversation,
-            Some(record),
-            again,
-            Some(starts),
-            Some((agents, chosen)),
-            self.internal.clone(),
-        );
+        let chat = self.make_chat(key, Some(kept), conversation, again);
         if let Some(slot) = self.slot_mut(key) {
             slot.chat = Some(chat);
             slot.state = State::Closed;
         }
+    }
+
+    /// The chat `key`, kept as `kept` if it is, showing `conversation`,
+    /// with the agent chosen for it and that agent's judge; `again` says
+    /// how a closed chat starts again.
+    fn make_chat(
+        &self,
+        key: u64,
+        kept: Option<ChatId>,
+        conversation: Conversation,
+        again: Option<Again>,
+    ) -> Chat {
+        let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
+        let agents = self.spawns.agents();
+        let chosen = agent_of(&agents, kept, &self.store);
+        let starts = self.spawns.starts(&chosen);
+        Chat::new(
+            key,
+            conversation,
+            record,
+            again,
+            Some(starts),
+            Some((agents, chosen)),
+            self.internal.clone(),
+        )
     }
 
     /// Reads the chat `key` again from what is kept of it, as when it
@@ -1130,21 +1143,9 @@ impl Daemon {
         {
             tracing::error!("the chat's folder is not kept: {error:#}");
         }
-        let record = kept.map(|kept| Record::new(Rc::clone(&self.store), kept));
         let key = self.next_key();
-        let agents = self.spawns.agents();
-        let chosen = agent_of(&agents, kept, &self.store);
-        let starts = self.spawns.starts(&chosen);
         let conversation = Chat::opening(&instructions.paths(), setup.as_ref());
-        let chat = Chat::new(
-            key,
-            conversation,
-            record,
-            None,
-            Some(starts),
-            Some((agents, chosen)),
-            self.internal.clone(),
-        );
+        let chat = self.make_chat(key, kept, conversation, None);
         self.add(Slot {
             key,
             project: index,
