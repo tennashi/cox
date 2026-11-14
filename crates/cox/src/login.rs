@@ -9,12 +9,12 @@
 //! human types in has it, and takes it in, as Zed and VS Code do.
 
 use std::ffi::{OsStr, OsString};
-use std::io::Read as _;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::process::Command;
 use std::time::Duration;
+
+use crate::process::run_with_deadline;
 
 /// How long the shell has to start and say its environment.
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -94,34 +94,24 @@ fn shell() -> PathBuf {
 /// which reads the profiles the human's terminal does, without the
 /// variables it sets of itself.
 fn environment_of(shell: &std::path::Path) -> Result<Vec<(OsString, OsString)>, String> {
-    let mut child = Command::new(shell)
-        .args(["-l", "-i", "-c"])
-        .arg(format!("printf '\\0{MARK}\\0'; exec /usr/bin/env -0"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    let mut stdout = child.stdout.take().ok_or("it has no output")?;
-    let (said, heard) = mpsc::channel();
-    // A thread of its own, which touches no environment, so that a shell
-    // that never ends does not keep Cox from opening.
-    std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let read = stdout.read_to_end(&mut output).map(|_| output);
-        let _ = said.send(read);
-    });
-    let Ok(read) = heard.recv_timeout(PATIENCE) else {
-        let _ = child.kill();
-        let _ = child.wait();
+    // Its threads touch no environment, and a shell that never ends does
+    // not keep Cox from opening.
+    let output = run_with_deadline(
+        Command::new(shell)
+            .args(["-l", "-i", "-c"])
+            .arg(format!("printf '\\0{MARK}\\0'; exec /usr/bin/env -0")),
+        None,
+        PATIENCE,
+        |_| {},
+    )
+    .map_err(|error| error.to_string())?;
+    let Some(status) = output.status else {
         return Err(format!("it said nothing in {} seconds", PATIENCE.as_secs()));
     };
-    let output = read.map_err(|error| error.to_string())?;
-    let status = child.wait().map_err(|error| error.to_string())?;
     if !status.success() {
         return Err(format!("it ended with {status}"));
     }
-    parse(&output).ok_or_else(|| "it did not say its environment".to_owned())
+    parse(&output.stdout).ok_or_else(|| "it did not say its environment".to_owned())
 }
 
 /// The variables `output` lists, after the mark, each `NAME=value` and a

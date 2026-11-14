@@ -105,7 +105,9 @@ fn pid_of(path: &Path) -> Option<i32> {
 fn alive(pid: i32) -> bool {
     // Signal 0 checks that the process is there, and sends nothing.
     // SAFETY: kill with signal 0 only asks whether the process exists.
-    unsafe { libc::kill(pid, 0) == 0 }
+    let there = unsafe { libc::kill(pid, 0) == 0 };
+    // One of another user's is there too.
+    there || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 /// What a file of an emulator's says of it: `key=value` lines.
