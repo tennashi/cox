@@ -2607,7 +2607,8 @@ impl Daemon {
     /// Takes the window of the connection `id`, which says `hello`, to
     /// tell what it does on `window` from now on, unless another window
     /// is there, or the window is of another build than the daemon's,
-    /// `build` (see [`Hello::answer`]). Answers which of those it is.
+    /// `build`, that speaks otherwise or comes while no chat is at work
+    /// (see [`Hello::answer`]). Answers which of those it is.
     fn attach(
         &mut self,
         id: u64,
@@ -2623,12 +2624,17 @@ impl Daemon {
             .iter()
             .chain(&self.archived)
             .any(|slot| working(slot.state));
-        let answer = hello.answer(build, at_work);
+        let answer = hello.answer(build, Some(wire::SPEAKS), at_work);
         if answer == FromDaemon::Busy {
             tracing::warn!("a window of another build waits, since a chat is at work");
         }
         if answer != FromDaemon::Joined {
             return answer;
+        }
+        if hello.build != build {
+            tracing::info!(
+                "a window of another build that speaks alike joins, as a chat is at work"
+            );
         }
         let Hello { home, command, .. } = hello;
         // A window not given a home leaves Cox's own chats where

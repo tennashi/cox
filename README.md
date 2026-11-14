@@ -65,7 +65,9 @@ This installs Cox to `~/Applications/Cox.app` on macOS, or to
 
 To update Cox, pull the changes and run `cargo xtask install` again, then
 restart the window. `coxd` moves to the new version the next time a
-window opens while no chat is at work.
+window opens while no chat is at work. Until then, a window whose build
+speaks to `coxd` as the running one does, as after a change to the window
+alone, opens at once beside it, and the chats go on.
 
 To stop `coxd` starting at login:
 

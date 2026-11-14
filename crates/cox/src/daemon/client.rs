@@ -242,4 +242,36 @@ mod tests {
         );
         assert_eq!(waited.load(Ordering::SeqCst), 1, "the human is told once");
     }
+
+    #[test]
+    fn a_window_joins_a_coxd_of_another_build_at_work_that_speaks_as_it_does() {
+        let folder = TempDir::new();
+        let socket = folder.join("speaks.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let heard = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let hello: Hello = serde_json::from_str(&line).unwrap();
+            let answer = hello.answer(None, Some(crate::daemon::wire::SPEAKS), true);
+            (&stream)
+                .write_all(format!("{}\n", serde_json::to_string(&answer).unwrap()).as_bytes())
+                .unwrap();
+            (answer, stream)
+        });
+
+        let connected = connect(
+            &socket,
+            &Hello::new(None, Vec::new()),
+            &|| Err(std::io::Error::other("coxd runs already")),
+            &|| panic!("the window does not wait for a coxd that speaks as it does"),
+            || {},
+        );
+
+        assert!(connected.is_ok(), "{:?}", connected.err());
+        let (answer, _stream) = heard.join().unwrap();
+        assert_eq!(answer, FromDaemon::Joined);
+    }
 }
