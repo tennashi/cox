@@ -245,8 +245,8 @@ mod tests {
 
     #[test]
     fn a_window_joins_a_coxd_of_another_build_at_work_that_speaks_as_it_does() {
-        let socket = std::env::temp_dir().join(format!("cox-speaks-{}.sock", std::process::id()));
-        let _ = std::fs::remove_file(&socket);
+        let folder = TempDir::new();
+        let socket = folder.join("speaks.sock");
         let listener = UnixListener::bind(&socket).unwrap();
         let heard = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -273,6 +273,5 @@ mod tests {
         assert!(connected.is_ok(), "{:?}", connected.err());
         let (answer, _stream) = heard.join().unwrap();
         assert_eq!(answer, FromDaemon::Joined);
-        let _ = std::fs::remove_file(&socket);
     }
 }
