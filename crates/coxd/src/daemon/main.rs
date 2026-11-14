@@ -68,7 +68,7 @@ pub fn run(data: Option<&Path>) -> ExitCode {
 const FOLLOW_EVERY: Duration = Duration::from_secs(1);
 
 /// Follows `settings.json` and `agents.json` for coxd, on a thread of its
-/// own, as the window does for itself (see [`crate::settings::window::follow`]):
+/// own, as the window does for itself (see `cox::settings::window::follow`):
 /// a chat opened from then on talks to the agents they list and name.
 fn follow_agents(agents: Agents) {
     let files: Vec<PathBuf> = [crate::storage::Kept::Settings, crate::storage::Kept::Agents]

@@ -1,7 +1,7 @@
 //! What Cox keeps only while it runs, as the sockets of the chats' tool
 //! servers: a folder of each run's own among the system's temporary
 //! files, `cox-<pid>`, which only the human may enter. The stage keeps a
-//! throwaway profile there too (see [`cox_browser::profile`]).
+//! throwaway profile there too (see `cox_browser::profile`).
 //!
 //! A Cox that ends as it should takes away what it made there; one that
 //! does not, as when it crashes, leaves its folder, which the next Cox to

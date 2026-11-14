@@ -34,47 +34,18 @@ coxd.workspace = true
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 # The version gpui uses, to hand it the browser's frames.
 image = "0.25.10"
-# Drawing an SVG the human chooses as a project's icon into a picture,
-# as gpui draws SVGs: see `src/project_icon.rs`.
+# Drawing a Mermaid diagram's SVG into a picture, as gpui draws SVGs:
+# see `src/ui/diagram.rs`.
 resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts"] }
-# Which files changed, of those a trigger's `changed` names: see
-# `src/trigger.rs`.
-globset = "0.4.20"
-# The time each run's file of what Cox says is named after: see
-# `src/logs.rs`.
+# The time the stage's plugins are told it is: see
+# `src/stage/plugins.rs`.
 jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
-# Reading the agent's replies as Markdown: see `src/ui/markdown.rs`; and
-# the wiki's pages as HTML, for the stage's Wiki plugin: see
-# `src/wiki/told.rs`.
+# Reading the agent's replies as Markdown: see `src/ui/markdown.rs`.
 pulldown-cmark = { version = "0.13.5", default-features = false, features = ["html"] }
-# Drawing the Mermaid diagrams in Markdown: see `src/ui/diagram.rs`.
-mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
-# What Cox says of itself, and what gpui and others say through `log`, on
-# standard error, and as JSON in a file of each run's own: see
-# `src/logs.rs`.
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt", "json", "std", "tracing-log"] }
 unicode-segmentation = "1.12.0"
-# Fetching the ACP Registry's agents: see `src/agents.rs`.
-ureq = "3.4.2"
-# Reading a web page whole for raw_keep, its article as Markdown, apart
-# from the site's menus, as Readability does: see `src/raw/page.rs`.
-dom_smoothie = "0.19.0"
-dom_query = "0.29.0"
-encoding_rs = "0.8.42"
 url = "2.5.8"
-# The page coxd serves the human's phone: see `src/daemon/phone.rs`. The
-# versions tonic, for the Android emulator, has already.
-hyper = { version = "1.12.0", features = ["client", "http1", "server"] }
-hyper-util = { version = "0.1.21", features = ["tokio"] }
-http-body = "1.1.0"
-http-body-util = "0.1.5"
-bytes = "1.12.1"
-# Telling the phones of the chats with Web Push, encrypted for each and
-# signed as coxd: see `src/daemon/push.rs`. The version rustls, for ureq,
-# has already.
-ring = "0.17.14"
 # The code a phone pairs with, which the settings show: see
 # `src/settings/view/phone.rs`.
 qrcodegen = "1.8.0"
@@ -84,10 +55,8 @@ qrcodegen = "1.8.0"
 # point the dynamic loader at it on Linux. Cargo tells that to the build
 # scripts of direct dependents alone.
 cef-dll-sys = "=152.3.0"
-# Keeping Cox's open files from the agent (`src/agent.rs`), and the
-# terminals' pseudoterminals (`src/stage/terminal/pty.rs`).
-libc.workspace = true
-# Cox's own MCP server: see `src/agent/mcp.rs`.
+# What the window reads and writes as JSON, as the stage's plugins'
+# messages: see `src/stage/plugins.rs`.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # The socket that answers for Cox as a whole: see `src/inspect.rs`. The
@@ -96,13 +65,6 @@ base64 = "0.22.1"
 # The stage's terminals, which the human types into and the agent runs
 # commands in: see `src/stage/terminal.rs`.
 alacritty_terminal = "0.26.0"
-# Downloading the programs of the ACP Registry's agents, checking each
-# archive's SHA-256 and unpacking it: see `src/agents/download.rs`.
-sha2 = "0.10.9"
-flate2 = "1.1.10"
-tar = "0.4.46"
-bzip2 = "0.6.1"
-zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
 
 # The system's notifications, and the Dock's badge: see `src/notices/macos.rs`.
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -1,7 +1,7 @@
 //! Where Cox keeps what lasts across its runs, each kind apart (see
 //! [`Kept`]): what the human writes or chooses, at the top; what Cox
 //! would lose, as the chats (see [`cox_core::store`]) and the stage's
-//! profile (see [`cox_browser::profile`]), in `state`; what Cox can make
+//! profile (see `cox_browser::profile`), in `state`; what Cox can make
 //! again, in `cache`; what Cox said of each run (see [`crate::logs`]), in
 //! `logs`; and what is there only while Cox runs, in `run`.
 //!
@@ -49,7 +49,7 @@ pub enum Kept {
     /// The agents the human lists (see [`crate::agents`]).
     Agents,
     /// The language servers the human names, over Cox's (see
-    /// [`crate::stage::servers`]).
+    /// `cox::stage::servers`).
     Servers,
     /// The folders the sketches work in, and what is kept of those
     /// discarded (see [`crate::chat::sketch`]).
@@ -63,14 +63,14 @@ pub enum Kept {
     /// The agents of the registry that Cox downloaded.
     Downloads,
     /// The language servers that Cox downloaded (see
-    /// [`crate::stage::servers`]).
+    /// `cox::stage::servers`).
     ServerDownloads,
     /// The translations (see [`crate::translate`]).
     Translations,
     /// What Cox said of each run.
     Logs,
     /// The socket an agent asks Cox how it stands on (see
-    /// [`crate::inspect`]).
+    /// `cox::inspect`).
     Inspect,
     /// The socket the window reaches coxd on, which runs the chats (see
     /// [`crate::daemon::process`]).
@@ -79,7 +79,7 @@ pub enum Kept {
     /// [`crate::schedule`]).
     Schedules,
     /// The pictures of the regions of the window the human handed the
-    /// chats (see [`crate::chat::region`]).
+    /// chats (see `cox::chat::region`).
     Pictures,
     /// The pictures, videos and files shown in the conversations (see
     /// [`crate::media`]).
@@ -105,7 +105,7 @@ pub enum Kept {
     /// Where coxd pushes to each phone that asked to be told of the
     /// chats (see [`crate::daemon::push`]).
     Pushes,
-    /// The pages the stage visited (see [`crate::stage::page::history`]).
+    /// The pages the stage visited (see `cox::stage::page::history`).
     History,
 }
 

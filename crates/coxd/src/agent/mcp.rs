@@ -14,7 +14,7 @@
 //! request as it is done, so a command that runs long holds up nothing
 //! else, and stops the command when the agent cancels the request. The
 //! server itself serves whatever [`Serves`] its tools: the socket that
-//! answers for Cox as a whole, in `crate::inspect`, is one of these
+//! answers for Cox as a whole, in `cox::inspect`, is one of these
 //! servers too, and the same bridge reaches it.
 //!
 //! The tools themselves are in [`calls`]: what the agent learns of them,

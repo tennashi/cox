@@ -9,7 +9,7 @@
 //!    ([`crate::agent::spawn_known`], [`Launcher::tools`]).
 //!
 //! The window starts the chat's stage, and the relay to it (see
-//! [`crate::chat::launcher`]).
+//! `cox::chat::launcher`).
 
 use std::ffi::OsString;
 use std::path::PathBuf;

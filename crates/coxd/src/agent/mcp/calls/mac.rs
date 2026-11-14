@@ -1,7 +1,7 @@
 //! The tools that look at and use the windows of the Mac's other apps, as
 //! the agent learns of them, and what each asks of the chat's stage: the
 //! window shows on a tab, where the human sees what the agent sees, and
-//! its pointer where it clicks (see [`crate::stage::mac_window`]).
+//! its pointer where it clicks (see `cox::stage::mac_window`).
 
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
