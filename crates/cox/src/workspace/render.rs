@@ -160,6 +160,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|workspace, _: &AddRegionToChat, window, cx| {
                 workspace.lay_sheet(window, cx);
             }))
+            .on_action(cx.listener(Self::act))
             .on_action(cx.listener(Self::open_line))
             .on_action(cx.listener(Self::run))
             .relative()

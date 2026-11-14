@@ -23,7 +23,7 @@ use gpui::{
 };
 
 use self::keymap::{
-    Across, Answer, Command, Edit, Follow, Keymap, Motion, Place, Reach, Selects, Sent, Sight,
+    Across, Act, Answer, Command, Edit, Follow, Keymap, Motion, Place, Reach, Selects, Sent, Sight,
 };
 use self::search::{Direction, Find, Search};
 
@@ -144,6 +144,16 @@ impl Move {
 #[action(namespace = vim, no_json)]
 pub struct TypeInInput {
     pub place: Place,
+}
+
+/// Does what the window does for Vim's keys, pressed in `region` after
+/// `count`: an action the window handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Action)]
+#[action(namespace = vim, no_json)]
+pub struct DoInWindow {
+    pub act: Act,
+    pub region: Region,
+    pub count: Option<u32>,
 }
 
 /// Draws hints over what can be clicked in the page with the keyboard,
@@ -873,11 +883,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
             window.dispatch_action(Box::new(crate::chat::view::Stop), cx);
         }
         Outcome::Do(Command::Window(act), count) => {
-            if let Some(Some(workspace)) = window.root::<crate::workspace::Workspace>() {
-                workspace.update(cx, |workspace, cx| {
-                    workspace.act(act, region, count, window, cx);
-                });
-            }
+            window.dispatch_action(Box::new(DoInWindow { act, region, count }), cx);
         }
         Outcome::Do(Command::Line(prompt), _) => {
             window.dispatch_action(Box::new(line::OpenLine { prompt }), cx);
