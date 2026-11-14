@@ -6,23 +6,11 @@
 use std::collections::VecDeque;
 
 use cox_core::entry::Entry;
-use gpui::{
-    Context, InteractiveElement as _, IntoElement, ListOffset, Window, actions, canvas, px,
-};
+use gpui::{Context, InteractiveElement as _, IntoElement, ListOffset, Window, canvas, px};
 
 use super::ChatView;
 use crate::vim::search::{self, Direction, Find};
-
-actions!(
-    chat,
-    [
-        /// Selects the next entry of the conversation (`]]`), or block of
-        /// a document.
-        NextEntry,
-        /// Selects the entry, or block, before (`[[`).
-        PreviousEntry,
-    ]
-);
+use crate::vim::{NextEntry, PreviousEntry};
 
 /// What a search through the conversation looks for in an entry.
 enum Looked {

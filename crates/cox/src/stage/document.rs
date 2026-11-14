@@ -19,7 +19,6 @@ use gpui::{
 };
 
 use crate::chat::region::{self, Described};
-use crate::chat::view::{NextEntry, PreviousEntry};
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::tab::{Shows, ShowsFile, TabContent};
 use crate::stage::tree;
@@ -30,8 +29,8 @@ use crate::ui::selected::{self, Selected};
 use crate::ui::text::Reading;
 use crate::ui::theme::{BORDER, DIM, FAILED};
 use crate::ui::{Copy, LinkClicked};
-use crate::vim::Move;
 use crate::vim::search::{Direction, Find};
+use crate::vim::{Move, NextEntry, PreviousEntry};
 
 pub(crate) const KEY_CONTEXT: &str = "Document";
 
