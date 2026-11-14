@@ -150,24 +150,7 @@ fn copies_the_line_the_human_selects(cx: &mut TestAppContext) {
     let (terminal, mut waiting, cx) = run(cx, "printf 'first\\nsecond\\n'", &cwd);
     ran(cx, &mut waiting);
 
-    // Three clicks on the first line select it.
-    let bounds = cx.debug_bounds("terminal").expect("the terminal is drawn");
-    let first = bounds.origin + point(px(20.), px(10.));
-    for click_count in 1..=3 {
-        cx.simulate_event(MouseDownEvent {
-            button: MouseButton::Left,
-            position: first,
-            modifiers: Modifiers::none(),
-            click_count,
-            first_mouse: false,
-        });
-        cx.simulate_event(MouseUpEvent {
-            button: MouseButton::Left,
-            position: first,
-            modifiers: Modifiers::none(),
-            click_count,
-        });
-    }
+    select_first_line(cx);
     assert_eq!(
         terminal
             .read_with(cx, |terminal, _| terminal.selected_text())
@@ -186,6 +169,59 @@ fn copies_the_line_the_human_selects(cx: &mut TestAppContext) {
             .as_deref(),
         Some("first\n")
     );
+}
+
+#[gpui::test]
+fn hands_and_translates_the_line_the_human_selects(cx: &mut TestAppContext) {
+    scratch::data();
+    cx.update(cox::chat::hand::bind_keys);
+    cx.update(cox::ui::translation::bind_keys);
+    let cwd = scratch("handed");
+    let (_terminal, mut waiting, cx) = run(cx, "printf 'first\\nsecond\\n'", &cwd);
+    ran(cx, &mut waiting);
+    select_first_line(cx);
+
+    let (hand, translate) = if cfg!(target_os = "macos") {
+        ("cmd-l", "cmd-shift-t")
+    } else {
+        ("ctrl-shift-l", "ctrl-shift-t")
+    };
+    cx.simulate_keystrokes(hand);
+    let handed = cx.update(|_, cx| cox::chat::hand::take(cx));
+    assert_eq!(handed.len(), 1);
+    assert_eq!(handed[0].uri, "cox://terminal");
+    assert_eq!(handed[0].text, "first\n");
+
+    cx.simulate_keystrokes(translate);
+    let said = cx.update(|_, cx| {
+        let shown = cx.global::<cox::ui::translation::Shown>().0.clone();
+        shown.map(|card| card.read(cx).said())
+    });
+    assert!(
+        said.as_deref().is_some_and(|said| said.contains("first")),
+        "a card translates the line: {said:?}"
+    );
+}
+
+/// Three clicks on the first line of the terminal select it.
+fn select_first_line(cx: &mut VisualTestContext) {
+    let bounds = cx.debug_bounds("terminal").expect("the terminal is drawn");
+    let first = bounds.origin + point(px(20.), px(10.));
+    for click_count in 1..=3 {
+        cx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position: first,
+            modifiers: Modifiers::none(),
+            click_count,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position: first,
+            modifiers: Modifiers::none(),
+            click_count,
+        });
+    }
 }
 
 /// Runs `command` in `cwd` with no tab, as coxd does while no window is

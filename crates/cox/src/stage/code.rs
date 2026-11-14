@@ -55,19 +55,18 @@ use self::text::Text;
 pub(crate) use self::text::style as syntax_style;
 use crate::vim::cursor::{self, Cursor};
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
-    Pixels, Point, ScrollWheelEvent, ShapedLine, Subscription, Task, Window, actions, div, point,
-    prelude::*, px, size,
+    App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyBinding,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, Point,
+    ScrollWheelEvent, ShapedLine, Subscription, Task, Window, actions, div, point, prelude::*, px,
+    size,
 };
 
-use crate::chat::hand::AddToChat;
 use crate::chat::region::{self, Described};
 use crate::stage::follow::{self, Follows, Stamp};
 use crate::stage::servers::{LanguageServer, Servers};
 use crate::stage::tab::{self, Shows, ShowsFile};
 use crate::ui::paths::shortened;
-use crate::ui::translation::Translate;
+use crate::ui::selected::{self, Selected};
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::keymap::Motion;
 use crate::vim::search::{self, Find, Search};
@@ -874,27 +873,6 @@ impl Code {
         cx.stop_propagation();
     }
 
-    /// Shows the translation of the text selected, or with nothing
-    /// selected leaves the keys to what holds the part.
-    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.chosen_text();
-        if text.trim().is_empty() {
-            cx.propagate();
-            return;
-        }
-        crate::ui::translation::show(&text, window, cx);
-    }
-
-    /// The text selected: in what the mouse rests on, if any of it is,
-    /// or else in the code.
-    fn chosen_text(&self) -> String {
-        self.hover
-            .as_ref()
-            .map(hover::Hovered::selected_text)
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| self.selected_text())
-    }
-
     /// The text selected in the code, with the file and the lines it is
     /// from, as it goes to the agent when handed to the chat.
     fn selected_attachment(&self) -> Attachment {
@@ -971,32 +949,6 @@ impl Code {
             Some(lines),
             text,
         ))
-    }
-
-    /// Hands the text selected in the code to the chat shown, or with
-    /// nothing selected the line of the cursor Vim's keys move, or else
-    /// leaves the keys to what holds the part.
-    fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
-        let attachment = match self.look.selection {
-            None => self.cursor_attachment(),
-            Some(_) => Some(self.selected_attachment()),
-        };
-        if attachment.is_some_and(|attachment| crate::chat::hand::hand(attachment, cx)) {
-            self.look.end_visual();
-            cx.notify();
-        } else {
-            cx.propagate();
-        }
-    }
-
-    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let text = self.chosen_text();
-        if !text.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-        }
-        if self.look.end_visual() {
-            cx.notify();
-        }
     }
 
     /// How many lines half the text in sight is, as last laid out.
@@ -1348,6 +1300,31 @@ impl Focusable for Code {
     }
 }
 
+impl Selected for Code {
+    /// The text selected: in what the mouse rests on, if any of it is,
+    /// or else in the code.
+    fn chosen_text(&self) -> String {
+        self.hover
+            .as_ref()
+            .map(hover::Hovered::selected_text)
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| self.selected_text())
+    }
+
+    /// The text selected in the code, or with nothing selected the line
+    /// of the cursor Vim's keys move.
+    fn attachment(&self) -> Option<Attachment> {
+        match self.look.selection {
+            None => self.cursor_attachment(),
+            Some(_) => Some(self.selected_attachment()),
+        }
+    }
+
+    fn end_visual(&mut self) -> bool {
+        self.look.end_visual()
+    }
+}
+
 impl Render for Code {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -1356,9 +1333,7 @@ impl Render for Code {
             .flex_col()
             .track_focus(&self.focus_handle)
             .key_context(KEY_CONTEXT)
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::translate))
-            .on_action(cx.listener(Self::add_to_chat))
+            .map(|code| selected::on_actions(code, cx))
             .on_action(cx.listener(Self::back))
             .on_action(cx.listener(Self::forward))
             .on_action(cx.listener(Self::dismiss))

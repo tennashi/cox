@@ -46,15 +46,14 @@ use cox_core::entry::Attachment;
 use cox_core::goal;
 use cox_core::tabs::KeptTabs;
 use gpui::{
-    AnyView, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
-    KeyBinding, KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
+    AnyView, App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
+    KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Window, actions, div, list,
     prelude::*, px, relative, rgb,
 };
 
 use crate::agents::Agents;
 use crate::chat::conversation::{Answer, Conversation, GOAL_TURNS, Goal, Patch, State};
-use crate::chat::hand::AddToChat;
 use crate::chat::region::{self, AddRegionToChat, Described};
 use crate::chat::sketch::Sketch;
 use crate::daemon::Link;
@@ -62,6 +61,7 @@ use crate::daemon::wire::ToDaemon;
 use crate::stage::Stage;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{self, LineInput, Submitted};
+use crate::ui::selected::{self, Selected};
 use crate::ui::selection::Spot;
 use crate::ui::text::Reading;
 use crate::ui::text::cursor::Step;
@@ -69,7 +69,6 @@ use crate::ui::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND,
     OFFERING_EDGE, RAISED, UI_FONT,
 };
-use crate::ui::translation::Translate;
 use crate::ui::{Copy, Panel, tip};
 
 use crate::vim::keymap::{Across, Motion, Place, Selects};
@@ -333,18 +332,6 @@ impl ChatView {
         &self.attached
     }
 
-    /// The text selected in the conversation, with where it is from, as
-    /// it goes to the agent when handed to the chat.
-    fn selected_attachment(&self) -> Attachment {
-        let text = self.selected_text();
-        Attachment {
-            label: crate::chat::hand::quoted(&text),
-            uri: format!("cox://chat/{}", self.key),
-            text,
-            picture: None,
-        }
-    }
-
     /// What of the conversation shows under `over`, a stretch of a region
     /// in the window's points.
     fn described(&self, over: Bounds<Pixels>) -> Described {
@@ -366,20 +353,9 @@ impl ChatView {
     /// The right button went down on the conversation: offers what to do
     /// with the text selected, if any is.
     fn offer_selection(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let handed = Some(self.selected_attachment());
+        let handed = self.attachment();
         if crate::ui::translation::offer(&self.selected_text(), handed, window, cx) {
             cx.stop_propagation();
-        }
-    }
-
-    /// Hands the text selected in the conversation to the chat shown, or
-    /// with nothing selected leaves the keys to what holds the part.
-    fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
-        if !crate::chat::hand::hand(self.selected_attachment(), cx) {
-            cx.propagate();
-        }
-        if self.reading.end_visual(false) {
-            cx.notify();
         }
     }
 
@@ -785,16 +761,6 @@ impl ChatView {
         (self.open_link)(url, window, cx);
     }
 
-    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let text = self.selected_text();
-        if !text.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-        }
-        if self.reading.end_visual(false) {
-            cx.notify();
-        }
-    }
-
     /// Gives the keyboard to the conversation, for Vim's keys to move a
     /// cursor through it: on the start of what is selected, or of the
     /// first row in sight, if it was nowhere yet.
@@ -1023,17 +989,6 @@ impl ChatView {
         ))
     }
 
-    /// Shows the translation of the text selected, or with nothing
-    /// selected leaves the keys to what holds the part.
-    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.selected_text();
-        if text.trim().is_empty() {
-            cx.propagate();
-            return;
-        }
-        crate::ui::translation::show(&text, window, cx);
-    }
-
     /// Scrolls the conversation as Vim's keys ask, while the keyboard is
     /// in the input in normal mode.
     fn move_by_keys(
@@ -1042,17 +997,13 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let at = -self.list.scroll_px_offset_for_scrollbar().y;
-        let most = self.list.max_offset_for_scrollbar().height;
-        let height = self.list.viewport_bounds().size.height;
-        let to = motion.scrolled(at, most, window.line_height(), height);
         match motion.motion {
             Motion::Top => self.list.scroll_to(ListOffset::default()),
             Motion::Bottom => self.list.scroll_to(ListOffset {
                 item_ix: self.places.len(),
                 offset_in_item: px(0.),
             }),
-            _ => self.list.scroll_by(to - at),
+            _ => motion.scroll_list(&self.list, window.line_height()),
         }
         cx.notify();
     }
@@ -1138,6 +1089,27 @@ impl ChatView {
 impl Focusable for ChatView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.input.focus_handle(cx)
+    }
+}
+
+impl Selected for ChatView {
+    fn chosen_text(&self) -> String {
+        self.selected_text()
+    }
+
+    /// The text selected in the conversation, with where it is from.
+    fn attachment(&self) -> Option<Attachment> {
+        let text = self.selected_text();
+        Some(Attachment {
+            label: crate::chat::hand::quoted(&text),
+            uri: format!("cox://chat/{}", self.key),
+            text,
+            picture: None,
+        })
+    }
+
+    fn end_visual(&mut self) -> bool {
+        self.reading.end_visual(false)
     }
 }
 
@@ -1282,9 +1254,7 @@ impl ChatView {
         div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &Stop, _, cx| view.stop(cx)))
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::translate))
-            .on_action(cx.listener(Self::add_to_chat))
+            .map(|conversation| selected::on_actions(conversation, cx))
             .on_action(cx.listener(Self::move_by_keys))
             .map(|conversation| Self::go_through_by_keys(conversation, cx))
             .capture_key_down(cx.listener(Self::choose_with_key))

@@ -1260,6 +1260,18 @@ fn code_hands_the_lines_selected_or_the_cursor_s_to_the_chat(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn code_ends_visual_mode_on_blank_lines_it_has_nothing_to_hand_of(cx: &mut TestAppContext) {
+    let path = folder("code-hand-blank", &[]).join("blank.rs");
+    let (code, cx) = open_code(cx, path, "a\n\nb\n", true);
+
+    type_keys(cx, "j shift-v");
+    assert_eq!(code.read_with(cx, |code, _| code.selected_text()), "\n");
+    type_keys(cx, "g a");
+    assert_eq!(cx.update(|_, cx| cox::chat::hand::take(cx)).len(), 0);
+    assert_eq!(code.read_with(cx, |code, _| code.selected_text()), "");
+}
+
+#[gpui::test]
 fn code_goes_back_and_forward_with_control_o_and_control_i(cx: &mut TestAppContext) {
     let folder = folder("code-back", &["a.rs", "b.rs", "c.rs"]);
     let (code, cx) = open_code(cx, folder.join("a.rs"), "a\n", true);

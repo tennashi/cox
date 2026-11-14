@@ -18,7 +18,6 @@ use gpui::{
     point, prelude::*, px, rgb,
 };
 
-use crate::chat::hand::AddToChat;
 use crate::chat::region::{self, Described};
 use crate::chat::view::{NextEntry, PreviousEntry};
 use crate::stage::follow::{self, Follows, Stamp};
@@ -27,9 +26,9 @@ use crate::stage::tree;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::markdown::{self, Block};
 use crate::ui::paths::shortened;
+use crate::ui::selected::{self, Selected};
 use crate::ui::text::Reading;
 use crate::ui::theme::{BORDER, DIM, FAILED};
-use crate::ui::translation::Translate;
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::Move;
 use crate::vim::search::{Direction, Find};
@@ -134,30 +133,6 @@ impl Document {
         }
     }
 
-    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let text = self.selected_text();
-        if !text.is_empty() {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-        }
-    }
-
-    /// Shows the translation of the text selected, or with nothing
-    /// selected leaves the keys to what holds the part.
-    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.selected_text();
-        if text.trim().is_empty() {
-            cx.propagate();
-            return;
-        }
-        crate::ui::translation::show(&text, window, cx);
-    }
-
-    /// The text selected, with the file it is from, as it goes to the
-    /// agent when handed to the chat.
-    fn selected_attachment(&self) -> Attachment {
-        crate::chat::hand::of_file(&self.path, None, self.selected_text())
-    }
-
     /// Scrolls as Vim's keys ask.
     fn move_by_keys(&mut self, motion: &Move, window: &mut Window, cx: &mut Context<Self>) {
         motion.scroll(&self.scroll, window.line_height());
@@ -198,14 +173,6 @@ impl Document {
         self.scroll
             .set_offset(point(offset.x, -down.clamp(px(0.), most.max(px(0.)))));
         cx.notify();
-    }
-
-    /// Hands the text selected to the chat shown, or with nothing
-    /// selected leaves the keys to what holds the part.
-    fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
-        if !crate::chat::hand::hand(self.selected_attachment(), cx) {
-            cx.propagate();
-        }
     }
 }
 
@@ -277,6 +244,21 @@ impl ShowsFile for Document {
     }
 }
 
+impl Selected for Document {
+    fn chosen_text(&self) -> String {
+        self.selected_text()
+    }
+
+    /// The text selected, with the file it is from.
+    fn attachment(&self) -> Option<Attachment> {
+        Some(crate::chat::hand::of_file(
+            &self.path,
+            None,
+            self.selected_text(),
+        ))
+    }
+}
+
 impl Focusable for Document {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -341,9 +323,7 @@ impl Render for Document {
         div()
             .track_focus(&self.focus_handle)
             .key_context(KEY_CONTEXT)
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::translate))
-            .on_action(cx.listener(Self::add_to_chat))
+            .map(|document| selected::on_actions(document, cx))
             .on_action(cx.listener(Self::move_by_keys))
             .on_action(cx.listener(Self::find_text))
             .on_action(cx.listener(Self::next_block))
@@ -366,7 +346,7 @@ impl Render for Document {
                         MouseButton::Right,
                         cx.listener(|document, _, window, cx| {
                             let text = document.selected_text();
-                            let handed = Some(document.selected_attachment());
+                            let handed = document.attachment();
                             if crate::ui::translation::offer(&text, handed, window, cx) {
                                 cx.stop_propagation();
                             }
