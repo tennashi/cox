@@ -54,7 +54,7 @@ use gpui::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::agent::mcp::ToolRequest;
-use crate::agent::setup::{Setup, keeps_in_wiki};
+use crate::agent::setup::Setup;
 use crate::agents::Agents;
 use crate::chat::Stages;
 use crate::chat::conversation::State;
@@ -1565,9 +1565,9 @@ impl Workspace {
     /// Whether the human can ask the agent of the chat at `index` to keep
     /// what it learned in the wiki: it is not at work, and has the tool.
     fn saves_to_wiki(&self, index: usize) -> bool {
-        self.chats.get(index).is_some_and(|chat| {
-            !crate::daemon::working(chat.state) && keeps_in_wiki(chat.setup.as_ref())
-        })
+        self.chats
+            .get(index)
+            .is_some_and(|chat| crate::daemon::saves_to_wiki(chat.state, chat.setup.as_ref()))
     }
 
     /// Whether the human can open a sketch beside the chat at `index`: it
@@ -1595,22 +1595,20 @@ impl Workspace {
     /// The sketch the chat at `index` is, what it started from and the
     /// folder it works in, while the folder is there.
     fn sketch_of(&self, index: usize) -> Option<(Sketch, PathBuf)> {
-        let setup = self.chats.get(index)?.setup.as_ref()?;
-        let folder = setup.folder.clone().filter(|folder| folder.exists())?;
-        Some((setup.sketch?, folder))
+        crate::daemon::sketch_of(self.chats.get(index)?.setup.as_ref())
     }
 
     /// Whether the sketch at `index` can end: its folder is there, and was
     /// not opened as a project, which the human goes on with, and it is
     /// not on its way to an end already.
     fn ends_sketch(&self, index: usize) -> bool {
-        self.chats.get(index).is_some_and(|chat| !chat.ending)
-            && self.sketch_of(index).is_some_and(|(_, folder)| {
-                !self
-                    .projects
+        self.chats.get(index).is_some_and(|chat| {
+            crate::daemon::ends_sketch(chat.setup.as_ref(), chat.ending, |folder| {
+                self.projects
                     .iter()
                     .any(|project| !project.deleted && project.folder == folder)
             })
+        })
     }
 
     /// The ways the sketch at `index` can end, as the human's workflow
