@@ -649,7 +649,7 @@ fn free(sketches: &Path, name: &str) -> Result<PathBuf, String> {
 /// Runs Git in `folder` with `args`, and answers what it printed, or
 /// what it said went wrong.
 fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
-    git_with(folder, args, &[], None)
+    cox_editor::git::raw(folder, args)
 }
 
 /// Runs Git in `folder` with `args`, with `env` added to its environment
@@ -661,7 +661,7 @@ fn git_with(
     env: &[(&str, &OsStr)],
     input: Option<&[u8]>,
 ) -> Result<String, String> {
-    let mut child = crate::git::command()
+    let mut child = cox_editor::git::command()
         .arg("-C")
         .arg(folder)
         .args(args)

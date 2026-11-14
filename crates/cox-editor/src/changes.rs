@@ -9,7 +9,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use crate::git;
 
 /// The ref that marks where a sketch started, in its worktree.
 pub const START: &str = "refs/worktree/cox-start";
@@ -165,7 +166,7 @@ pub fn read(folder: &Path) -> Result<Diff, String> {
 /// What changed in the worktree at `top` since `from`, a commit or a tree,
 /// which is `since`, with the files Git does not track, which are new.
 pub(crate) fn read_from(top: PathBuf, since: Since, from: &str) -> Result<Diff, String> {
-    let patch = git(
+    let patch = git::raw(
         &top,
         &[
             "-c",
@@ -182,7 +183,7 @@ pub(crate) fn read_from(top: PathBuf, since: Since, from: &str) -> Result<Diff, 
         ],
     )?;
     let mut files = parse(&patch);
-    let untracked = git(&top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let untracked = git::raw(&top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     files.extend(
         untracked
             .split('\0')
@@ -202,7 +203,7 @@ pub(crate) fn read_from(top: PathBuf, since: Since, from: &str) -> Result<Diff, 
 /// changed, with what Git said.
 pub fn count(folder: &Path) -> Result<usize, String> {
     let (top, _, from) = since(folder)?;
-    let names = git(
+    let names = git::raw(
         &top,
         &[
             "diff",
@@ -214,7 +215,7 @@ pub fn count(folder: &Path) -> Result<usize, String> {
             "--",
         ],
     )?;
-    let untracked = git(&top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let untracked = git::raw(&top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     Ok([names, untracked]
         .iter()
         .map(|listed| listed.split('\0').filter(|path| !path.is_empty()).count())
@@ -233,7 +234,7 @@ pub fn hows(folder: &Path) -> Result<HashMap<PathBuf, How>, String> {
     let (top, _, from) = since(folder)?;
     // As a tree of the files names them, through no link.
     let top = std::fs::canonicalize(&top).unwrap_or(top);
-    let names = git(
+    let names = git::raw(
         &top,
         &[
             "diff",
@@ -263,7 +264,7 @@ pub fn hows(folder: &Path) -> Result<HashMap<PathBuf, How>, String> {
         };
         hows.insert(top.join(path), how);
     }
-    let untracked = git(&top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    let untracked = git::raw(&top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     hows.extend(
         untracked
             .split('\0')
@@ -276,8 +277,8 @@ pub fn hows(folder: &Path) -> Result<HashMap<PathBuf, How>, String> {
 /// The top of the worktree `folder` is in, what its files changed since,
 /// and the commit or tree that is, for Git to tell what changed from it.
 fn since(folder: &Path) -> Result<(PathBuf, Since, String), String> {
-    let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
-    let empty = git(&top, &["hash-object", "-t", "tree", "/dev/null"])?;
+    let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
+    let empty = git::raw(&top, &["hash-object", "-t", "tree", "/dev/null"])?;
     let empty = empty.trim();
     let (since, from) = if let Some(start) = commit(&top, START) {
         let since = if start == empty {
@@ -303,11 +304,11 @@ fn since(folder: &Path) -> Result<(PathBuf, Since, String), String> {
 pub fn start(folder: &Path) -> Result<(), String> {
     let from = match commit(folder, "HEAD") {
         Some(head) => head,
-        None => git(folder, &["hash-object", "-w", "-t", "tree", "/dev/null"])?
+        None => git::raw(folder, &["hash-object", "-w", "-t", "tree", "/dev/null"])?
             .trim()
             .to_owned(),
     };
-    git(folder, &["update-ref", START, &from]).map(drop)
+    git::raw(folder, &["update-ref", START, &from]).map(drop)
 }
 
 /// Forgets where a sketch started in the worktree at `folder`, which goes
@@ -321,13 +322,13 @@ pub fn forget(folder: &Path) -> Result<(), String> {
     if commit(folder, START).is_none() {
         return Ok(());
     }
-    git(folder, &["update-ref", "-d", START]).map(drop)
+    git::raw(folder, &["update-ref", "-d", START]).map(drop)
 }
 
 /// The full name of what `name` names in the repository at `folder`, if
 /// it names anything.
 pub(crate) fn commit(folder: &Path, name: &str) -> Option<String> {
-    git(folder, &["rev-parse", "--verify", "--quiet", name])
+    git::raw(folder, &["rev-parse", "--verify", "--quiet", name])
         .ok()
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty())
@@ -506,42 +507,6 @@ fn starts(stretch: &str) -> Option<(usize, usize)> {
     Some((old, new))
 }
 
-/// Runs Git in `folder` with `args`, and answers what it printed, or what
-/// it said went wrong. Git asks of the repository `folder` is in, even
-/// when Cox runs where the environment names another, as in a Git hook.
-pub(crate) fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(folder).args(args);
-    for variable in REPOSITORY_VARIABLES {
-        command.env_remove(variable);
-    }
-    // Tests make their repositories as Git does with no one's settings.
-    #[cfg(test)]
-    command
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1");
-    let output = command
-        .output()
-        .map_err(|error| format!("cannot run git: {error}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
-    }
-}
-
-/// The variables that name a repository, its index or its objects, by
-/// which Git would ask of another repository than the folder's.
-const REPOSITORY_VARIABLES: [&str; 7] = [
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_NAMESPACE",
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,7 +516,7 @@ mod tests {
     /// commit of the files `files`, saying what they say.
     fn repository(files: &[(&str, &str)]) -> Folder {
         let folder = Folder::new();
-        git(&folder, &["init", "--quiet"]).unwrap();
+        git::raw(&folder, &["init", "--quiet"]).unwrap();
         for (path, text) in files {
             std::fs::write(folder.join(path), text).unwrap();
         }
@@ -562,8 +527,8 @@ mod tests {
     }
 
     fn commit_all(folder: &Path) {
-        git(folder, &["add", "--all"]).unwrap();
-        git(
+        git::raw(folder, &["add", "--all"]).unwrap();
+        git::raw(
             folder,
             &[
                 "-c",
@@ -584,7 +549,7 @@ mod tests {
         let folder = repository(&[("a.txt", "one\n"), ("b.txt", "two\n"), ("c.txt", "three\n")]);
         std::fs::write(folder.join("a.txt"), "1\n").unwrap();
         std::fs::remove_file(folder.join("b.txt")).unwrap();
-        git(&folder, &["mv", "c.txt", "moved.txt"]).unwrap();
+        git::raw(&folder, &["mv", "c.txt", "moved.txt"]).unwrap();
         std::fs::write(folder.join("new.txt"), "new\n").unwrap();
         let top = std::fs::canonicalize(&folder).unwrap();
         let mut hows: Vec<_> = hows(&folder).unwrap().into_iter().collect();
@@ -652,7 +617,7 @@ mod tests {
             ("old.txt", "the same\nlines\nhere\n"),
         ]);
         std::fs::remove_file(folder.join("gone.txt")).unwrap();
-        git(&folder, &["mv", "old.txt", "new.txt"]).unwrap();
+        git::raw(&folder, &["mv", "old.txt", "new.txt"]).unwrap();
         let diff = read(&folder).unwrap();
         let files: Vec<_> = diff
             .files
@@ -708,7 +673,7 @@ mod tests {
     fn a_folder_out_of_git_is_no_repository() {
         let folder = Folder::new();
         // The temporary folder may be in a repository, on some machines.
-        if git(&folder, &["rev-parse", "--show-toplevel"]).is_err() {
+        if git::raw(&folder, &["rev-parse", "--show-toplevel"]).is_err() {
             assert!(read(&folder).is_err());
         }
     }

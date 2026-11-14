@@ -110,6 +110,8 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 objc2-core-graphics = "0.3.2"
 
 [dev-dependencies]
+# Git run under the tests as under cox-editor's own: see its `src/git.rs`.
+cox-editor = { workspace = true, features = ["test-support"] }
 agent-client-protocol.workspace = true
 gpui = { version = "0.2.2", features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }

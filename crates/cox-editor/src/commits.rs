@@ -15,7 +15,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::changes::{self, Diff, Since, commit, git, parse, short};
+use crate::changes::{self, Diff, Since, commit, parse, short};
+use crate::git;
 
 /// The notes Cox marks commits with the turn they were made in.
 pub const NOTES: &str = "refs/notes/cox";
@@ -137,7 +138,7 @@ impl Base {
 ///
 /// When `folder` is not in a Git repository, with what Git said.
 pub fn history(folder: &Path) -> Result<History, String> {
-    let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
+    let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
     let (base, after) = base(&top);
     let commits = match (&base, after) {
         (_, Some(after)) => log(&top, &[&format!("{after}..HEAD")], MOST),
@@ -162,14 +163,14 @@ fn base(top: &Path) -> (Base, Option<String>) {
     let Some(head) = commit(top, "HEAD") else {
         return (Base::Recent, None);
     };
-    let default = git(
+    let default = git::raw(
         top,
         &["rev-parse", "--abbrev-ref", "refs/remotes/origin/HEAD"],
     )
     .ok()
     .map(|name| name.trim().to_owned())
     .filter(|name| !name.is_empty() && name != "refs/remotes/origin/HEAD");
-    let upstream = git(
+    let upstream = git::raw(
         top,
         &[
             "rev-parse",
@@ -185,7 +186,7 @@ fn base(top: &Path) -> (Base, Option<String>) {
         .chain(["origin/main".to_owned(), "origin/master".to_owned()])
         .chain(upstream);
     for other in others {
-        let Some(at) = git(top, &["merge-base", "HEAD", &other])
+        let Some(at) = git::raw(top, &["merge-base", "HEAD", &other])
             .ok()
             .map(|at| at.trim().to_owned())
             .filter(|at| !at.is_empty())
@@ -215,7 +216,7 @@ fn base(top: &Path) -> (Base, Option<String>) {
 /// When `folder` is not in a Git repository, or Git cannot tell what
 /// changed, with what Git said.
 pub fn everything(folder: &Path) -> Result<Option<Diff>, String> {
-    let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
+    let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
     match base(&top) {
         (Base::Start(_) | Base::Nothing, _) => changes::read(folder).map(Some),
         (Base::Branched { from, at }, Some(after)) => {
@@ -233,11 +234,11 @@ pub fn everything(folder: &Path) -> Result<Option<Diff>, String> {
 /// When `folder` is not in a Git repository, or Git cannot tell what
 /// changed, with what Git said.
 pub fn uncommitted(folder: &Path) -> Result<Diff, String> {
-    let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
+    let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
     if let Some(head) = commit(&top, "HEAD") {
         changes::read_from(top, Since::Head(short(&head)), &head)
     } else {
-        let empty = git(&top, &["hash-object", "-t", "tree", "/dev/null"])?;
+        let empty = git::raw(&top, &["hash-object", "-t", "tree", "/dev/null"])?;
         changes::read_from(top, Since::Nothing, empty.trim())
     }
 }
@@ -250,10 +251,10 @@ pub fn uncommitted(folder: &Path) -> Result<Diff, String> {
 /// When `folder` is not in a Git repository, or has no such commit, with
 /// what Git said.
 pub fn diff_of(folder: &Path, id: &str) -> Result<Diff, String> {
-    let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
+    let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
     let before = match commit(&top, &format!("{id}^")) {
         Some(before) => before,
-        None => git(&top, &["hash-object", "-t", "tree", "/dev/null"])?
+        None => git::raw(&top, &["hash-object", "-t", "tree", "/dev/null"])?
             .trim()
             .to_owned(),
     };
@@ -268,7 +269,7 @@ pub fn diff_of(folder: &Path, id: &str) -> Result<Diff, String> {
 /// When `folder` is not in a Git repository, or has no such commits, with
 /// what Git said.
 pub fn amendment(folder: &Path, from: &str, to: &str) -> Result<Diff, String> {
-    let top = PathBuf::from(git(folder, &["rev-parse", "--show-toplevel"])?.trim());
+    let top = PathBuf::from(git::raw(folder, &["rev-parse", "--show-toplevel"])?.trim());
     let since = Since::Amended {
         from: short(from),
         to: short(to),
@@ -279,7 +280,7 @@ pub fn amendment(folder: &Path, from: &str, to: &str) -> Result<Diff, String> {
 /// What differs between the files of `before` and those of `after`, in the
 /// worktree at `top`, as a [`Diff`] since `since`.
 fn between(top: PathBuf, before: &str, after: &str, since: Since) -> Result<Diff, String> {
-    let patch = git(
+    let patch = git::raw(
         &top,
         &[
             "-c",
@@ -333,7 +334,7 @@ pub fn made(folder: &Path, from: Option<&str>) -> Vec<Commit> {
 pub fn mark(folder: &Path, id: &str, turn: &Turn) -> Result<(), String> {
     // A note is a commit of the notes, which Git makes as someone: Cox, as
     // the human may have told Git no name.
-    git(
+    git::raw(
         folder,
         &[
             "-c",
@@ -358,7 +359,7 @@ pub fn mark(folder: &Path, id: &str, turn: &Turn) -> Result<(), String> {
 /// of the worktree `folder` is in tells: Git logs each amend there, with
 /// what `HEAD` was before it.
 fn amended(folder: &Path) -> HashMap<String, String> {
-    let Ok(printed) = git(
+    let Ok(printed) = git::raw(
         folder,
         &["log", "--walk-reflogs", "--format=%H%x1f%gs", "HEAD", "--"],
     ) else {
@@ -451,7 +452,7 @@ fn log(folder: &Path, args: &[&str], most: usize) -> Vec<Commit> {
     ];
     all.extend(args);
     all.push("--");
-    let Ok(printed) = git(folder, &all) else {
+    let Ok(printed) = git::raw(folder, &all) else {
         return Vec::new();
     };
     printed
@@ -496,7 +497,7 @@ mod tests {
     use crate::scratch::Folder;
 
     fn run(folder: &Path, args: &[&str]) {
-        git(folder, args).unwrap();
+        git::raw(folder, args).unwrap();
     }
 
     /// A folder of its own for a test, made a Git repository with a first
@@ -569,7 +570,7 @@ mod tests {
             ]
         );
         // The notes are Cox's own, not those `git log` shows.
-        let shown = git(&folder, &["log", "-1", "--format=%N"]).unwrap();
+        let shown = git::raw(&folder, &["log", "-1", "--format=%N"]).unwrap();
         assert_eq!(shown.trim(), "");
     }
 
