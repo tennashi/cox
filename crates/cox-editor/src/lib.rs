@@ -8,6 +8,7 @@
 //! - [`history`] is where a tab has been, to go back and forward.
 //! - [`files`] lists what is in a project's folders.
 //! - [`fuzzy`] finds a path by a few of its letters.
+//! - [`git`] runs Git on a folder's repository, asking nothing.
 //! - [`changes`] is what changed in them, as Git tells it, and
 //!   [`words`] what changed within the lines a change replaced.
 //! - [`commits`] is the commits that made the changes, each with the turn
@@ -25,6 +26,7 @@ pub mod changes;
 pub mod commits;
 pub mod files;
 pub mod fuzzy;
+pub mod git;
 pub mod history;
 pub mod language;
 pub mod line;

@@ -124,15 +124,9 @@ pub fn today() -> String {
 /// one with a commit.
 #[must_use]
 pub fn commit_of(folder: &Path) -> Option<String> {
-    let output = crate::git::command()
-        .args(["rev-parse", "--short", "HEAD"])
-        .current_dir(folder)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    let commit = String::from_utf8(output.stdout).ok()?;
-    let commit = commit.trim();
-    (output.status.success() && !commit.is_empty()).then(|| commit.to_owned())
+    cox_editor::git::run(folder, &["rev-parse", "--short", "HEAD"])
+        .ok()
+        .filter(|commit| !commit.is_empty())
 }
 
 /// A page a search found.

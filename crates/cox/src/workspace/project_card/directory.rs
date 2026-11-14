@@ -6,8 +6,8 @@
 //! directory named as its project is renamed with it, until the human
 //! names it otherwise.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 pub use crate::settings::DIRECTORIES;
 
@@ -122,15 +122,15 @@ pub fn make(into: &Path) -> Result<(), String> {
 /// that needs a login Git has not got fails. Answers why it failed, as
 /// Git says it last.
 pub fn clone(url: &str, into: &Path) -> Result<(), String> {
-    if let Some(parent) = into.parent() {
-        make(parent)?;
-    }
-    git(crate::git::command()
-        .arg("clone")
-        .arg("--")
-        .arg(url)
-        .arg(into))
-    .map(drop)
+    let parent = into.parent().unwrap_or(into);
+    make(parent)?;
+    let args = [
+        OsStr::new("clone"),
+        OsStr::new("--"),
+        OsStr::new(url),
+        into.as_os_str(),
+    ];
+    run(parent, &args).map(drop)
 }
 
 /// Makes the directory `folder` a Git repository, with no remote yet.
@@ -167,30 +167,17 @@ pub fn link(folder: &Path, url: &str) -> Result<Linked, String> {
     Ok(Linked::CheckedOut(branch))
 }
 
-/// Runs Git with `args` in `folder`, answering what it printed, or why
-/// it failed.
-fn run(folder: &Path, args: &[&str]) -> Result<String, String> {
-    git(crate::git::command().arg("-C").arg(folder).args(args))
-}
-
-/// Runs `command` of Git, asking nothing, and answers what it printed,
-/// or why it failed, as Git says it last.
-fn git(command: &mut Command) -> Result<String, String> {
-    let output = command
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("Git does not start: {error}"))?;
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
-    }
-    let said = String::from_utf8_lossy(&output.stderr);
-    Err(said
-        .lines()
-        .map(str::trim)
-        .rfind(|line| !line.is_empty())
-        .unwrap_or("Git failed, saying nothing.")
-        .to_owned())
+/// Runs Git with `args` in `folder`, asking nothing, and answers what it
+/// printed, or why it failed, as Git says it last: the line the human
+/// reads.
+fn run(folder: &Path, args: &[impl AsRef<OsStr>]) -> Result<String, String> {
+    cox_editor::git::run(folder, args).map_err(|said| {
+        said.lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty())
+            .unwrap_or("Git failed, saying nothing.")
+            .to_owned()
+    })
 }
 
 #[cfg(test)]
