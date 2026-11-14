@@ -15,7 +15,7 @@
 //! Control-C.
 //!
 //! The program, its pseudoterminal and its colors are
-//! [`crate::terminal`]'s, which runs a command with no tab too.
+//! [`coxd::terminal`]'s, which runs a command with no tab too.
 //!
 //! - [`keys`] says what the program gets for the human's keys and pastes.
 //! - [`grid`] draws the grid.
@@ -54,9 +54,6 @@ use self::grid::{Grid, Laid, whole_cells};
 use self::keys::{key_bytes, pasted};
 use crate::chat::region::{self, Described};
 use crate::stage::tab::Shows;
-use crate::terminal::colors::color_at;
-use crate::terminal::pty::{Listener, START_SIZE, Size};
-use crate::terminal::{Program, Running, START_CELL, ended_of, text_of};
 use crate::ui::Copy;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::Paste;
@@ -66,6 +63,9 @@ use crate::vim::search::{Direction, Find};
 use crate::vim::{Move, Region, Visual};
 use coxd::agent::mcp::{Ended, Ran};
 use coxd::paths::shortened;
+use coxd::terminal::colors::color_at;
+use coxd::terminal::pty::{Listener, START_SIZE, Size};
+use coxd::terminal::{Program, Running, START_CELL, ended_of, text_of};
 use coxd::theme::{ACCENT, BORDER, DIM, FAILED};
 
 pub(crate) const KEY_CONTEXT: &str = "Terminal";
@@ -138,7 +138,7 @@ impl Terminal {
             term,
             pty,
             mut events,
-            _held: held,
+            held,
         } = running;
         let heard = cx.spawn(async move |this, cx| {
             while let Some(event) = events.recv().await {

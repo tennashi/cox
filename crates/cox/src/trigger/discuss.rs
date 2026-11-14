@@ -22,12 +22,12 @@ use tokio::sync::oneshot;
 use super::card::Draft;
 use super::{By, Scope};
 use crate::daemon::chat::GATHER_FOR;
-use crate::terminal::run_unseen;
 use coxd::agent::mcp::Ended;
 use coxd::agent::setup::{Policy, Setup, StageUse};
 use coxd::agent::{Agent, AgentEvent, Command, Start};
 use coxd::agents::Agents;
 use coxd::chat::judge::{ALLOWED, Verdict};
+use coxd::terminal::run_unseen;
 
 /// The agents Cox knows, once the window has read them.
 static AGENTS: OnceLock<Agents> = OnceLock::new();

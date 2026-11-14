@@ -19,8 +19,8 @@ use crate::stage::code::Code;
 use crate::stage::document::Document;
 use crate::stage::tab::{Tab, TabContent};
 use crate::stage::terminal::Terminal;
-use crate::terminal::{Program, Running};
 use coxd::agent::mcp::{ASKED, Ran, ToolRequest};
+use coxd::terminal::{Program, Running};
 
 impl Stage {
     /// Carries out what the relay of the chat `chat` tells the stage for

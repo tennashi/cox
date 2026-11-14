@@ -10,6 +10,10 @@
 //!   hands the agent.
 //! - [`workflow`] is what Cox tells a chat's agent in the human's place
 //!   at the turns of a sketch, which the human's workflow can say instead.
+//! - [`schedule`] is the agents the human has run on a schedule, a chat
+//!   that coxd opens at the times they say.
+//! - [`terminal`] is a program on a pseudoterminal, as a tab of the
+//!   window's stage shows it, or as coxd runs it with none.
 //! - [`translate`] is text read in the human's language.
 //! - [`project_icon`] is the icons the human gives the projects.
 //! - [`agents`] is the agents a chat can talk to: the command line's,
@@ -23,7 +27,8 @@
 //! - [`media`] is the pictures and files the conversations show, kept as
 //!   they were shown.
 //! - [`theme`] is how Cox looks, which the window and the page coxd
-//!   serves a phone share, and [`paths`] how paths are written.
+//!   serves a phone share, [`diagram`] the Mermaid diagrams drawn in its
+//!   colors, and [`paths`] how paths are written.
 //! - [`process`] is what Cox does as it starts a program, the agent's or
 //!   a terminal's.
 //! - [`storage`] says where this Cox keeps what lasts across its runs,
@@ -37,6 +42,7 @@
 pub mod agent;
 pub mod agents;
 pub mod chat;
+pub mod diagram;
 pub mod home;
 pub mod login;
 pub mod logs;
@@ -46,9 +52,11 @@ pub mod process;
 pub mod project_icon;
 pub mod raw;
 pub mod repositories;
+pub mod schedule;
 pub mod scratch;
 pub mod settings;
 pub mod storage;
+pub mod terminal;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod theme;

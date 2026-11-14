@@ -19,10 +19,6 @@ use cox_git::commits::{self, Turn};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::chat::conversation::{
-    self, Answer, Came, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch,
-    Proposed, State, TerminalLogin,
-};
 use crate::daemon::Internal;
 use crate::trigger::{self, Arranged, By, On, Trigger};
 use cox_acp::{Login, StopReason};
@@ -30,6 +26,10 @@ use coxd::agent::mcp::{Ended, Ran, ToolRequest};
 use coxd::agent::setup::Setup;
 use coxd::agent::{Agent, AgentEvent, AgentThread, Command};
 use coxd::agents::Agents;
+use coxd::chat::conversation::{
+    self, Answer, Came, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch,
+    Proposed, State, TerminalLogin,
+};
 use coxd::chat::judge::{Heard, Judge, Starts};
 
 /// How long the name of the chat that opened a chat grows, in
@@ -1669,8 +1669,8 @@ mod tests {
     use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
     use super::*;
-    use crate::chat::conversation::CheckState;
     use coxd::agent::AgentThread;
+    use coxd::chat::conversation::CheckState;
     use coxd::testing::TempDir;
 
     fn words(words: &[&str]) -> Vec<String> {

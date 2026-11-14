@@ -13,7 +13,6 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use cox::chat::conversation::{Entry, State};
 use cox::chat::view::ChatView;
 use cox::stage::Tabs;
 use cox::stage::changes::Changes;
@@ -21,10 +20,11 @@ use cox::stage::code::Code;
 use cox::stage::document::Document;
 use cox::stage::terminal::Terminal;
 use cox::stage::tree::{Chosen, Tree};
-use cox::terminal::{Program, Running};
 use cox::vim::Mode;
 use cox::vim::keymap::Follow;
 use cox::workspace::Workspace;
+use coxd::chat::conversation::{Entry, State};
+use coxd::terminal::{Program, Running};
 use gpui::{
     Entity, EntityInputHandler as _, Focusable as _, ScrollDelta, ScrollWheelEvent, TestAppContext,
     TouchPhase, VisualTestContext, px,

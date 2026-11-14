@@ -130,8 +130,8 @@ use crate::stage::tab::{Shows, Tab, TabContent};
 use crate::stage::terminal::{Exited, Terminal};
 use crate::stage::tree::{Chosen, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
-use crate::terminal::{Program, Running};
 use crate::ui::Panel;
+use coxd::terminal::{Program, Running};
 use coxd::theme::BORDER;
 
 actions!(

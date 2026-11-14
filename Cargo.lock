@@ -1717,6 +1717,7 @@ name = "coxd"
 version = "0.0.0"
 dependencies = [
  "agent-client-protocol",
+ "alacritty_terminal",
  "anyhow",
  "base64 0.22.1",
  "bzip2",
@@ -1732,6 +1733,7 @@ dependencies = [
  "image",
  "jiff",
  "libc",
+ "mermaid-rs-renderer",
  "pulldown-cmark",
  "resvg",
  "serde",

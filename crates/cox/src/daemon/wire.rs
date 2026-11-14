@@ -13,9 +13,9 @@ use cox_core::store::{ChatId, Named, ProjectId};
 use cox_core::tabs::{KeptTabs, Lines};
 use serde::{Deserialize, Serialize};
 
-use crate::chat::conversation::{Answer, Patch, State};
 use coxd::agent::mcp::{AndroidAct, MacAct, Ran, Seen};
 use coxd::agent::setup::Setup;
+use coxd::chat::conversation::{Answer, Patch, State};
 use coxd::chat::sketch::Sketch;
 
 /// A project, as the window lists it on its rail.

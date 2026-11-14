@@ -70,7 +70,7 @@ pub(crate) mod tailnet;
 use super::push::{self, Notice, Pushed, Pushes, Subscription};
 use super::wire::{FromDaemon, ToDaemon};
 use super::{Internal, Sketching};
-use crate::chat::conversation::{Content, Entry};
+use coxd::chat::conversation::{Content, Entry};
 use coxd::storage::{self, Kept};
 use coxd::theme;
 
@@ -852,7 +852,7 @@ impl Page {
 
     /// The Mermaid diagram `request` holds, `?source=<source>`, as an SVG
     /// in the window's colors, as the window draws it (see
-    /// [`crate::ui::diagram`]).
+    /// [`coxd::diagram`]).
     async fn diagram(&self, request: &Request<Incoming>) -> Response<Body> {
         if !self.paired(request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
@@ -864,7 +864,7 @@ impl Page {
             return answer(StatusCode::BAD_REQUEST, TEXT, "No diagram");
         };
         // Drawing it reads the system's fonts the first time.
-        match tokio::task::spawn_blocking(move || crate::ui::diagram::svg(&source)).await {
+        match tokio::task::spawn_blocking(move || coxd::diagram::svg(&source)).await {
             Ok(Ok(svg)) => {
                 let mut response = answer(StatusCode::OK, "image/svg+xml", svg);
                 // The same source draws the same diagram.
@@ -1791,7 +1791,7 @@ mod tests {
 
     #[test]
     fn tells_the_phone_how_many_things_a_call_shows_but_not_them() {
-        use crate::chat::conversation::{Patch, State};
+        use coxd::chat::conversation::{Patch, State};
         let call = Entry::ToolCall {
             id: "1".into(),
             title: "Read a.rs".into(),

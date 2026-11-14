@@ -7,11 +7,11 @@ use gpui::{
 };
 
 use super::{PROJECT_RADIUS, PROJECT_SIZE, Project, RAIL, RAIL_WIDTH, Workspace};
-use crate::chat::conversation::State;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, app_icon, icon};
 use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
+use coxd::chat::conversation::State;
 use coxd::paths::shortened;
 use coxd::theme::{
     ACCENT, ACCENT_GROUND, ASKING, BORDER, BORDER_STRONG, FAINT, FOREGROUND, GROUND, HOVER, LINK,

@@ -17,8 +17,6 @@
 //!   files, a tree of the project's files, and terminals.
 //! - [`settings`] is the settings screen, and the window following what
 //!   the human sets as it changes.
-//! - [`schedule`] is the agents the human has run on a schedule, a chat
-//!   that coxd opens at the times they say.
 //! - [`notices`] tells the human of chats that need them while they look
 //!   elsewhere.
 //! - [`inspect`] answers for the window to an agent that debugs Cox, on a
@@ -28,13 +26,12 @@
 //! - [`ui`] is what all of the window's parts share: the text the human
 //!   types into, text that can be selected, Markdown, and how it all
 //!   looks.
-//! - [`terminal`] is a program on a pseudoterminal, as a tab of the
-//!   stage shows it, or as coxd runs it with none.
 //!
 //! Below them all are [`coxd`], what runs the chats apart from the
 //! window, with what the two share: a chat's agent and the tools Cox
-//! hands it, the agents a chat can talk to, what the human sets, the
-//! wiki, what the agents read, the workflow, where Cox keeps what lasts,
+//! hands it, its conversation, the agents a chat can talk to, what the
+//! human sets, the wiki, what the agents read, the workflow, the
+//! schedule, programs on a pseudoterminal, where Cox keeps what lasts,
 //! and how it looks; and [`cox_browser`]: CEF, which renders the stages'
 //! pages, and what keeps the agent to its chat's pages. Each is a crate
 //! of its own, with no GPUI in it.
@@ -45,10 +42,8 @@ pub mod chat;
 pub mod daemon;
 pub mod inspect;
 pub mod notices;
-pub mod schedule;
 pub mod settings;
 pub mod stage;
-pub mod terminal;
 pub mod trigger;
 pub mod ui;
 pub mod vim;

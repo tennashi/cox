@@ -9,13 +9,13 @@ use cox_core::store::ChatId;
 use cox_core::tabs::KeptTab;
 use gpui::{App, Focusable as _, Window};
 
-use crate::chat::conversation::{
-    Answer, Attachment, Check, CheckState, Content, Entry, GOAL_TURNS, Proposal, Proposed, State,
-    Step, StepState, ToolCallResult,
-};
 use crate::chat::view::ChatView;
 use crate::ui::translation::Shown;
 use crate::workspace::{Chat, Gives, Workspace};
+use coxd::chat::conversation::{
+    Answer, Attachment, Check, CheckState, Content, Entry, GOAL_TURNS, Proposal, Proposed, State,
+    Step, StepState, ToolCallResult,
+};
 
 /// The most of a reply, a thought or a note the state tells; the rest is
 /// counted.

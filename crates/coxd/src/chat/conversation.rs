@@ -1,6 +1,6 @@
 //! What the window shows of a chat, and what the human's input means,
 //! without GPUI: the conversation, as the agent's events change it, and
-//! the commands the human's lines turn into (see [`coxd::agent`]).
+//! the commands the human's lines turn into (see [`crate::agent`]).
 //!
 //! The goal and the triggers that run as a turn ends, or as something
 //! else happens, live in `checks`.
@@ -19,8 +19,8 @@ use cox_core::goal;
 use cox_core::settings::Setting;
 use cox_core::store::ChatId;
 
-use coxd::agent::mcp::{Ended, Ran};
-use coxd::agent::{AgentEvent, Command, Opened, Prompt};
+use crate::agent::mcp::{Ended, Ran};
+use crate::agent::{AgentEvent, Command, Opened, Prompt};
 
 mod checks;
 
@@ -908,7 +908,12 @@ impl Conversation {
 
     /// Shows the human the picture or video `shown`, kept from the path
     /// `from`, with `caption`, if given.
-    pub fn show_media(&mut self, shown: coxd::media::Shown, from: String, caption: Option<String>) {
+    pub fn show_media(
+        &mut self,
+        shown: crate::media::Shown,
+        from: String,
+        caption: Option<String>,
+    ) {
         self.push(Entry::Media {
             file: shown.file,
             kind: shown.kind,
@@ -1590,7 +1595,7 @@ pub fn switched_note(from: &str, to: &str) -> String {
 /// those of the file at `path`.
 #[must_use]
 pub fn instructions_note(path: &Path) -> String {
-    format!("Instructions: {}", coxd::paths::shortened(path))
+    format!("Instructions: {}", crate::paths::shortened(path))
 }
 
 /// The note that tells the human the context the agent was set up with,
@@ -1614,7 +1619,7 @@ pub fn sketch_note(folder: &Path) -> String {
 /// its project's, as the chat of a schedule works where it says.
 #[must_use]
 pub fn folder_note(folder: &Path) -> String {
-    format!("Works in: {}", coxd::paths::shortened(folder))
+    format!("Works in: {}", crate::paths::shortened(folder))
 }
 
 /// Whether `entry` starts a turn: a line sent to the agent, by the human
@@ -1677,7 +1682,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use coxd::agent::Prompt;
+    use crate::agent::Prompt;
 
     fn asks_to_log_in() -> AgentEvent {
         AgentEvent::LoginNeeded {

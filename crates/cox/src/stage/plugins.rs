@@ -431,7 +431,7 @@ impl Plugins {
                 home: &home(),
                 arranged: arranged.as_deref(),
                 runs: runs.as_deref(),
-                schedules: &crate::schedule::Ran::read(path(Kept::Schedules)),
+                schedules: &coxd::schedule::Ran::read(path(Kept::Schedules)),
             },
             &jiff::Zoned::now(),
         )
