@@ -15,16 +15,20 @@ pub mod ex;
 pub mod hints;
 pub mod keymap;
 pub mod line;
+mod region;
 pub mod search;
 
 use gpui::{
-    Action, App, Context, FocusHandle, Global, KeyContext, Keystroke, KeystrokeEvent, ListState,
-    Pixels, ScrollHandle, Subscription, Window, actions, point, px,
+    Action, App, Context, FocusHandle, Global, Keystroke, KeystrokeEvent, ListState, Pixels,
+    ScrollHandle, Subscription, Window, actions, point, px,
 };
+
+pub use self::region::Region;
 
 use self::keymap::{
     Across, Act, Answer, Command, Edit, Follow, Keymap, Motion, Place, Reach, Selects, Sent, Sight,
 };
+use self::region::Kind;
 use self::search::{Direction, Find, Search};
 
 /// Moves what the part of the window with the keyboard shows, or its
@@ -303,179 +307,6 @@ impl Mode {
     }
 }
 
-/// Where the keyboard is, as far as Vim's keys tell.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Region {
-    /// The window, with no part of it holding the keyboard.
-    #[default]
-    Workspace,
-    /// The rail of projects down the window's left side.
-    Rail,
-    /// The list of the chosen project's chats, over the chat.
-    List,
-    /// A chat's input.
-    Chat,
-    /// A chat's conversation, which a cursor moves through.
-    Reading,
-    /// The input that sets a chat's goal.
-    Goal,
-    /// The input that starts a sketch of a chat.
-    Sketch,
-    /// The input that renames a chat.
-    Renaming,
-    Settings,
-    ProjectCard,
-    /// The translation of what was selected.
-    Translation,
-    /// The sheet a region of the window is dragged on.
-    Sheet,
-    /// The menu of the stage's +.
-    StageMenu,
-    Page,
-    /// A page's address line.
-    Address,
-    Terminal,
-    Code,
-    Document,
-    Tree,
-    Changes,
-    Android,
-    Devices,
-    Flow,
-    Windows,
-    MacWindow,
-    /// The line at the window's foot, which `:` and `/` open.
-    Command,
-}
-
-/// The key contexts that say the region the keyboard is in.
-const REGIONS: &[(&str, Region)] = &[
-    ("Workspace", Region::Workspace),
-    (crate::workspace::RAIL, Region::Rail),
-    (crate::workspace::LIST, Region::List),
-    (crate::chat::view::KEY_CONTEXT, Region::Chat),
-    (crate::chat::view::READING, Region::Reading),
-    (crate::chat::view::GOAL, Region::Goal),
-    (crate::chat::view::SKETCH, Region::Sketch),
-    (crate::workspace::RENAMING, Region::Renaming),
-    (crate::settings::view::KEY_CONTEXT, Region::Settings),
-    (
-        crate::workspace::project_card::KEY_CONTEXT,
-        Region::ProjectCard,
-    ),
-    (crate::ui::translation::KEY_CONTEXT, Region::Translation),
-    (crate::chat::region::KEY_CONTEXT, Region::Sheet),
-    (crate::stage::bar::MENU_CONTEXT, Region::StageMenu),
-    (crate::stage::page::KEY_CONTEXT, Region::Page),
-    (crate::stage::page::ADDRESS, Region::Address),
-    (crate::stage::terminal::KEY_CONTEXT, Region::Terminal),
-    (crate::stage::code::KEY_CONTEXT, Region::Code),
-    (crate::stage::document::KEY_CONTEXT, Region::Document),
-    (crate::stage::tree::KEY_CONTEXT, Region::Tree),
-    (crate::stage::changes::KEY_CONTEXT, Region::Changes),
-    (crate::stage::android::KEY_CONTEXT, Region::Android),
-    (crate::stage::devices::KEY_CONTEXT, Region::Devices),
-    (crate::stage::flow::KEY_CONTEXT, Region::Flow),
-    (crate::stage::windows::KEY_CONTEXT, Region::Windows),
-    (crate::stage::mac_window::KEY_CONTEXT, Region::MacWindow),
-    (line::KEY_CONTEXT, Region::Command),
-];
-
-impl Region {
-    /// The region of the innermost of `contexts`, the window's first, that
-    /// says one.
-    #[must_use]
-    pub fn of(contexts: &[KeyContext]) -> Self {
-        contexts
-            .iter()
-            .rev()
-            .filter_map(|context| context.primary())
-            .find_map(|entry| {
-                REGIONS
-                    .iter()
-                    .find(|(name, _)| entry.key == *name)
-                    .map(|(_, region)| *region)
-            })
-            .unwrap_or_default()
-    }
-
-    /// Whether the region is a program's, which gets every key its tab
-    /// sends in insert mode, and none in normal mode: a terminal's, or an
-    /// Android device's.
-    #[must_use]
-    pub const fn runs_a_program(self) -> bool {
-        matches!(self, Self::Terminal | Self::Android)
-    }
-
-    /// Whether the region's program gets `keystroke` from its tab: a
-    /// terminal every key, an Android device those with no Control or
-    /// Alt, which are Cox's.
-    const fn program_gets(self, keystroke: &Keystroke) -> bool {
-        match self {
-            Self::Terminal => true,
-            Self::Android => !keystroke.modifiers.control && !keystroke.modifiers.alt,
-            _ => false,
-        }
-    }
-
-    /// Whether the region is a screen of inputs, each to type in as the
-    /// keyboard comes to it, though the screen comes in normal mode.
-    const fn has_fields(self) -> bool {
-        matches!(self, Self::Settings | Self::ProjectCard)
-    }
-
-    /// Whether `v` and `V` select there in visual mode: in code, in the
-    /// conversation, and in an input. A terminal's `V` only makes its
-    /// selection whole lines.
-    const fn has_visual_mode(self) -> bool {
-        matches!(
-            self,
-            Self::Code
-                | Self::Reading
-                | Self::Chat
-                | Self::Goal
-                | Self::Sketch
-                | Self::Renaming
-                | Self::Settings
-                | Self::ProjectCard
-        )
-    }
-
-    /// Whether the region is typed in whatever the mode, as a field of a
-    /// page is: the page's address line, which Esc leaves.
-    const fn has_no_mode(self) -> bool {
-        matches!(self, Self::Address)
-    }
-
-    /// The mode the keys go to as the keyboard comes into the region, if
-    /// it has one: insert in what opens only to type a line in, normal in
-    /// a screen of settings, where nothing is typed, and in a program, as
-    /// Neovim's terminal is, until the human types in it (see [`typing`]).
-    /// A page tells its own, by whether a field of it has the keyboard.
-    const fn enters_in(self) -> Option<Mode> {
-        match self {
-            Self::Goal | Self::Sketch | Self::Renaming | Self::Address => Some(Mode::Insert),
-            Self::Command => Some(Mode::Command),
-            Self::Settings
-            | Self::ProjectCard
-            | Self::Rail
-            | Self::List
-            | Self::Reading
-            | Self::Code
-            | Self::Document
-            | Self::Tree
-            | Self::Changes
-            | Self::Devices
-            | Self::Flow
-            | Self::Windows
-            | Self::MacWindow
-            | Self::Terminal
-            | Self::Android => Some(Mode::Normal),
-            _ => None,
-        }
-    }
-}
-
 /// What the line at the window's foot shows of Vim's keys, as Vim's
 /// `showmode` and `showcmd` do: the mode, and the count and keys held
 /// toward a command, as `3g` of `3gt`.
@@ -561,14 +392,14 @@ impl Vim {
         if matches!(self.mode, Mode::Hint | Mode::Command | Mode::Visual(_)) {
             self.mode = Mode::Normal;
         }
-        if let Some(mode) = region.enters_in().filter(|_| !back) {
+        if let Some(mode) = region.props().enters_in.filter(|_| !back) {
             self.mode = mode;
         }
     }
 
     pub fn key(&mut self, keymap: &Keymap, region: Region, keystroke: &Keystroke) -> Outcome {
         self.arrive(region);
-        if region.has_no_mode() && self.mode != Mode::Insert {
+        if region.is(Kind::Modeless) && self.mode != Mode::Insert {
             self.mode = Mode::Insert;
         }
         if !keymap.knows(region) {
@@ -600,7 +431,7 @@ impl Vim {
             Answer::Act(command) => {
                 let count = self.count;
                 self.reset();
-                if let Some(visual) = command.selects().filter(|_| region.has_visual_mode()) {
+                if let Some(visual) = command.selects().filter(|_| region.is(Kind::Visual)) {
                     self.mode = if self.mode == Mode::Visual(visual) {
                         Mode::Normal
                     } else {
@@ -778,7 +609,7 @@ pub fn typing(region: Region, window: &mut Window, cx: &mut App) {
 /// mode, as a browser's Vim keys do in a page's field.
 pub fn came_to_field(window: &mut Window, cx: &mut App) {
     let region = Region::of(&window.context_stack());
-    if !region.has_fields() {
+    if !region.is(Kind::Fields) {
         return;
     }
     if cx
@@ -865,7 +696,7 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
         }
         Outcome::Do(Command::Hints(reach), _) => {
             let part = match reach {
-                Reach::Part => hints::Part::of(region),
+                Reach::Part => region.props().hints,
                 Reach::Window => None,
             };
             let reaches = reach == Reach::Window || part.is_some();

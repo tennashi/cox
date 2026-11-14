@@ -1,6 +1,7 @@
 //! What a key does in Vim's keys: a table of what the keys do, by the
 //! mode, the region the keyboard is in, and the keys held before.
 
+use super::region::Kind;
 use super::search::Direction;
 use super::{Mode, Region};
 
@@ -328,7 +329,8 @@ pub enum Place {
 #[derive(Debug)]
 pub struct Binding {
     pub mode: Mode,
-    pub regions: &'static [Region],
+    /// Whether it is in a region.
+    pub within: Within,
     /// As GPUI writes keystrokes: `"escape"`, `"shift-a"`, `"ctrl-c"`.
     pub keys: &'static [&'static str],
     pub command: Command,
@@ -339,142 +341,43 @@ pub struct Binding {
 #[derive(Debug)]
 pub struct Keymap(pub &'static [Binding]);
 
-/// The regions with a mode: the chat, and what opens over it to type in.
-const FORMS: &[Region] = &[
-    Region::Chat,
-    Region::Goal,
-    Region::Sketch,
-    Region::Renaming,
-    Region::Settings,
-    Region::ProjectCard,
-];
+/// Which regions a binding is in.
+pub type Within = fn(Region) -> bool;
 
-/// The regions whose keyboard is in an input of one line or a few.
-const LINES: &[Region] = &[Region::Chat, Region::Goal, Region::Sketch, Region::Renaming];
-
-/// The parts of the window `ctrl-w` and the stage's tabs' keys work in:
-/// all but the inputs, screens and menus that open over them.
-const PARTS: &[Region] = &[
-    Region::Workspace,
-    Region::Rail,
-    Region::List,
-    Region::Chat,
-    Region::Reading,
-    Region::Page,
-    Region::Code,
-    Region::Document,
-    Region::Tree,
-    Region::Changes,
-    Region::Devices,
-    Region::Flow,
-    Region::Windows,
-    Region::MacWindow,
-    Region::Terminal,
-    Region::Android,
-];
-
-/// The parts `f` draws hints in: all but a page, which draws its own,
-/// and the screens over them.
-const HINTERS: &[Region] = &[
-    Region::Workspace,
-    Region::Rail,
-    Region::List,
-    Region::Chat,
-    Region::Reading,
-    Region::Code,
-    Region::Document,
-    Region::Tree,
-    Region::Changes,
-    Region::Devices,
-    Region::Flow,
-    Region::Windows,
-    Region::MacWindow,
-    Region::Terminal,
-    Region::Android,
-    Region::Settings,
-    Region::ProjectCard,
-];
-
-/// Where hint mode can be, which escape leaves.
-const HINTED: &[Region] = &[
-    Region::Workspace,
-    Region::Rail,
-    Region::List,
-    Region::Chat,
-    Region::Reading,
-    Region::Page,
-    Region::Code,
-    Region::Document,
-    Region::Tree,
-    Region::Changes,
-    Region::Devices,
-    Region::Flow,
-    Region::Windows,
-    Region::MacWindow,
-    Region::Terminal,
-    Region::Android,
-    Region::Settings,
-    Region::ProjectCard,
-];
-
-/// The parts Vim's `/` searches the text of.
-const SEARCHERS: &[Region] = &[
-    Region::Chat,
-    Region::Reading,
-    Region::Page,
-    Region::Code,
-    Region::Document,
-    Region::Terminal,
-];
-
-/// The tabs that run a program, which gets every key in insert mode, as
-/// in Neovim's terminal mode: a terminal's, and an Android device's.
-const PROGRAMS: &[Region] = &[Region::Terminal, Region::Android];
+const FORMS: Within = |region| region.is(Kind::Form);
+const LINES: Within = |region| region.is(Kind::Line);
+const PARTS: Within = |region| region.is(Kind::Part);
+const HINTERS: Within = |region| region.is(Kind::Hinter);
+const HINTED: Within = |region| region.is(Kind::Hinted);
+const SEARCHERS: Within = |region| region.is(Kind::Searcher);
+const PICKERS: Within = |region| region.is(Kind::Picker);
+const MOVERS: Within = |region| region.is(Kind::Mover);
+const PROGRAMS: Within = Region::runs_a_program;
 
 /// The line at the window's foot.
-const LINE: &[Region] = &[Region::Command];
-
-/// The parts with a selection to move: the rail and the list of chats.
-const PICKERS: &[Region] = &[Region::Rail, Region::List];
-
-/// The parts Vim's keys scroll, or move a cursor or selection in: the
-/// conversation, from the chat's input too, a page, the stage's tabs that
-/// take no text, the settings and a project's card.
-const MOVERS: &[Region] = &[
-    Region::Chat,
-    Region::Reading,
-    Region::Page,
-    Region::Code,
-    Region::Document,
-    Region::Tree,
-    Region::Changes,
-    Region::Terminal,
-    Region::Settings,
-    Region::ProjectCard,
-];
-
+const LINE: Within = |region| region == Region::Command;
 /// The chat: its input, and its conversation.
-const CHAT: &[Region] = &[Region::Chat, Region::Reading];
+const CHAT: Within = |region| matches!(region, Region::Chat | Region::Reading);
 /// The conversation, with the keyboard.
-const READING: &[Region] = &[Region::Reading];
-const PAGE: &[Region] = &[Region::Page];
-const ADDRESS: &[Region] = &[Region::Address];
-const CODE: &[Region] = &[Region::Code];
-const DOCUMENT: &[Region] = &[Region::Document];
-const TREE: &[Region] = &[Region::Tree];
-const CHANGES: &[Region] = &[Region::Changes];
-const TERMINAL: &[Region] = &[Region::Terminal];
+const READING: Within = |region| region == Region::Reading;
+const PAGE: Within = |region| region == Region::Page;
+const ADDRESS: Within = |region| region == Region::Address;
+const CODE: Within = |region| region == Region::Code;
+const DOCUMENT: Within = |region| region == Region::Document;
+const TREE: Within = |region| region == Region::Tree;
+const CHANGES: Within = |region| region == Region::Changes;
+const TERMINAL: Within = |region| region == Region::Terminal;
 
-const fn act(regions: &'static [Region], keys: &'static [&'static str], act: Act) -> Binding {
-    bind(Mode::Normal, regions, keys, Command::Window(act))
+const fn act(within: Within, keys: &'static [&'static str], act: Act) -> Binding {
+    bind(Mode::Normal, within, keys, Command::Window(act))
 }
 
-const fn go(regions: &'static [Region], keys: &'static [&'static str], motion: Motion) -> Binding {
-    bind(Mode::Normal, regions, keys, Command::Move(motion))
+const fn go(within: Within, keys: &'static [&'static str], motion: Motion) -> Binding {
+    bind(Mode::Normal, within, keys, Command::Move(motion))
 }
 
-const fn across(regions: &'static [Region], keys: &'static [&'static str], to: Across) -> Binding {
-    bind(Mode::Normal, regions, keys, Command::Across(to))
+const fn across(within: Within, keys: &'static [&'static str], to: Across) -> Binding {
+    bind(Mode::Normal, within, keys, Command::Across(to))
 }
 
 const fn edit(keys: &'static [&'static str], edit: Edit) -> Binding {
@@ -485,27 +388,23 @@ const fn edit(keys: &'static [&'static str], edit: Edit) -> Binding {
 /// selects: [`Keymap::answer`] looks them up for both.
 const VISUAL: Mode = Mode::Visual(Selects::Characters);
 
-const fn visual(
-    regions: &'static [Region],
-    keys: &'static [&'static str],
-    command: Command,
-) -> Binding {
-    bind(VISUAL, regions, keys, command)
+const fn visual(within: Within, keys: &'static [&'static str], command: Command) -> Binding {
+    bind(VISUAL, within, keys, command)
 }
 
-const fn send(regions: &'static [Region], keys: &'static [&'static str], sent: Sent) -> Binding {
-    bind(Mode::Normal, regions, keys, Command::Send(sent))
+const fn send(within: Within, keys: &'static [&'static str], sent: Sent) -> Binding {
+    bind(Mode::Normal, within, keys, Command::Send(sent))
 }
 
 const fn bind(
     mode: Mode,
-    regions: &'static [Region],
+    within: Within,
     keys: &'static [&'static str],
     command: Command,
 ) -> Binding {
     Binding {
         mode,
-        regions,
+        within,
         keys,
         command,
     }
@@ -515,7 +414,12 @@ impl Keymap {
     pub const VIM: Self = Self(&[
         bind(Mode::Insert, FORMS, &["escape"], Command::Normal),
         bind(Mode::Normal, CHAT, &["escape"], Command::Reset),
-        bind(Mode::Normal, &[Region::Chat], &["ctrl-c"], Command::Stop),
+        bind(
+            Mode::Normal,
+            |region| region == Region::Chat,
+            &["ctrl-c"],
+            Command::Stop,
+        ),
         bind(Mode::Normal, FORMS, &["i"], Command::Insert(Place::Cursor)),
         bind(
             Mode::Normal,
@@ -597,11 +501,15 @@ impl Keymap {
         act(PARTS, &["g", "shift-t"], Act::PreviousTab),
         act(CHAT, &["ctrl-w", "k"], Act::Go(Toward::Up)),
         act(
-            &[Region::List, Region::Reading],
+            |region| matches!(region, Region::List | Region::Reading),
             &["ctrl-w", "j"],
             Act::Go(Toward::Down),
         ),
-        act(&[Region::List], &["escape"], Act::Go(Toward::Down)),
+        act(
+            |region| region == Region::List,
+            &["escape"],
+            Act::Go(Toward::Down),
+        ),
         act(PICKERS, &["j"], Act::Pick(Pick::Down)),
         act(PICKERS, &["k"], Act::Pick(Pick::Up)),
         act(PICKERS, &["g", "g"], Act::Pick(Pick::First)),
@@ -795,9 +703,7 @@ impl Keymap {
     /// Whether any binding is in `region`.
     #[must_use]
     pub fn knows(&self, region: Region) -> bool {
-        self.0
-            .iter()
-            .any(|binding| binding.regions.contains(&region))
+        self.0.iter().any(|binding| (binding.within)(region))
     }
 
     /// What `keys`, the keys held and the one pressed after them, do in
@@ -822,7 +728,7 @@ impl Keymap {
         let bindings = self
             .0
             .iter()
-            .filter(|binding| binding.mode == mode && binding.regions.contains(&region));
+            .filter(|binding| binding.mode == mode && (binding.within)(region));
         let mut held = false;
         for binding in bindings {
             if binding.keys == keys {
@@ -837,15 +743,18 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::{
-        Across, Act, Answer, Command, Direction, Follow, Keymap, Mode, Motion, Pick, Place, Prompt,
-        Reach, Region, Sent, Toward, bind,
+        Across, Act, Answer, Command, Direction, Follow, Keymap, Kind, Mode, Motion, Pick, Place,
+        Prompt, Reach, Region, Sent, Toward, bind,
     };
 
     #[test]
     fn escape_in_insert_mode_goes_to_normal_wherever_there_is_a_mode() {
-        for region in super::FORMS {
+        for region in Region::ALL
+            .into_iter()
+            .filter(|region| region.is(Kind::Form))
+        {
             assert_eq!(
-                Keymap::VIM.answer(Mode::Insert, *region, &["escape"]),
+                Keymap::VIM.answer(Mode::Insert, region, &["escape"]),
                 Answer::Act(Command::Normal),
                 "{region:?}"
             );
@@ -1339,7 +1248,7 @@ mod tests {
     fn the_start_of_a_sequence_is_held() {
         const SEQUENCE: &[super::Binding] = &[bind(
             Mode::Normal,
-            &[Region::Chat],
+            |region| region == Region::Chat,
             &["g", "g"],
             Command::Reset,
         )];

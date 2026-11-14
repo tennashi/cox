@@ -16,7 +16,6 @@ use gpui::{
     Pixels, StatefulInteractiveElement, Styled, Window, WindowId, canvas, deferred, div, px, rgb,
 };
 
-use super::Region;
 use crate::ui::theme::{ASKING, GROUND, UI_FONT};
 
 /// The letters labels are made of, those under the fingers first.
@@ -69,42 +68,6 @@ pub enum Part {
     Stage,
     Settings,
     ProjectCard,
-}
-
-impl Part {
-    /// The part `f` labels with the keyboard in `region`, if it labels
-    /// one: a page labels its own.
-    #[must_use]
-    pub const fn of(region: Region) -> Option<Self> {
-        match region {
-            Region::Rail => Some(Self::Rail),
-            Region::List => Some(Self::List),
-            Region::Workspace
-            | Region::Chat
-            | Region::Reading
-            | Region::Goal
-            | Region::Sketch
-            | Region::Renaming => Some(Self::Chat),
-            Region::Settings => Some(Self::Settings),
-            Region::ProjectCard => Some(Self::ProjectCard),
-            Region::Terminal
-            | Region::Code
-            | Region::Document
-            | Region::Tree
-            | Region::Changes
-            | Region::Android
-            | Region::Devices
-            | Region::Flow
-            | Region::Windows
-            | Region::MacWindow => Some(Self::Stage),
-            Region::Page
-            | Region::Address
-            | Region::Translation
-            | Region::Sheet
-            | Region::StageMenu
-            | Region::Command => None,
-        }
-    }
 }
 
 /// A page whose hints join the window's (`F`): it lists what can be
