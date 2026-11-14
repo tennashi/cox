@@ -72,9 +72,9 @@ Every key is optional. Paths may be absolute or start with `~`.
 | `translation.language` | Your language. Text in English is translated into it, and other text into English. Without it, translation is off. | none |
 | `translation.command` | A command that reads text on standard input and writes its translation on standard output. `{from}` and `{to}` in its arguments stand for the languages. | none |
 | `translation.agent` | The name of an agent to translate with, used when there is no `command`. | the agent a new chat starts |
-| `phone` | `false` turns off the page for the phone. | on |
+| `phone` | `false` turns off the page for the phone, and `true` turns it on for a Cox that is not installed, such as one `cargo xtask run` runs. | on for an installed Cox, off for any other |
 | `phone.port` | The port of the page for the phone. The relay, which passes the pages served on the Mac's own address on to the phone, listens on the next port, and the sketches' mocks are served on the one after. | `7421` |
-| `phone.tailscale` | `false` stops `coxd` from running `tailscale serve` for the page and the pages the relay passes on. | `true` |
+| `phone.tailscale` | `false` stops `coxd` from running `tailscale serve` for the page and the pages the relay passes on, and `true` has a Cox that is not installed run it. | `true` for an installed Cox, `false` for any other |
 | `vim` | `true` makes the keys work as in Vim. See [Vim's keys](#vims-keys). | `false` |
 | `search` | The search engine: the address of its results, from `http://` or `https://`, with `%s` where the words go. Cox searches with it for the words typed in a page's address line, as a browser does (a `?` first searches for whatever follows), and after Vim's `t`, `:open` or `:tabopen`. One without `%s` is not used. | `https://www.google.com/search?q=%s` |
 

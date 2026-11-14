@@ -205,10 +205,35 @@ pub fn root() -> Option<PathBuf> {
     if let Some(data) = DATA.get() {
         return Some(data.clone());
     }
-    // Without links, so the installed Cox is found however it was run.
+    let (exe, home) = where_this_runs()?;
+    root_at(&exe, home.as_deref(), std::env::var_os("XDG_DATA_HOME"))
+}
+
+/// Whether this is an installed Cox, keeping what lasts in the human's
+/// own data folder: not one being built, nor one told where to keep it,
+/// as a test or `cargo xtask run` tells it. Only an installed Cox reaches
+/// beyond its data folder, as to the phone.
+#[must_use]
+pub fn installed() -> bool {
+    if kept_on_this_thread().is_some() || DATA.get().is_some() {
+        return false;
+    }
+    where_this_runs().is_some_and(|(exe, home)| home.is_some_and(|home| installed_at(&exe, &home)))
+}
+
+/// This Cox's executable, and the human's home, without links, so the
+/// installed Cox is found however it was run.
+fn where_this_runs() -> Option<(PathBuf, Option<PathBuf>)> {
     let exe = std::env::current_exe().and_then(fs::canonicalize).ok()?;
     let home = crate::home::home().map(|home| fs::canonicalize(&home).unwrap_or(home));
-    root_at(&exe, home.as_deref(), std::env::var_os("XDG_DATA_HOME"))
+    Some((exe, home))
+}
+
+/// Whether the Cox at `exe` is installed, by `cargo xtask install` or by
+/// Homebrew.
+fn installed_at(exe: &Path, home: &Path) -> bool {
+    exe == home.join(INSTALLED)
+        || (cfg!(target_os = "macos") && exe == Path::new(INSTALLED_BY_HOMEBREW))
 }
 
 /// Where this Cox keeps `kept`, making the folder it is in, or `None`
@@ -346,11 +371,7 @@ fn write_whole_as(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()
 /// other keeps it in `cox-data` beside it, or beside its app on macOS,
 /// which `cargo xtask bundle` makes anew each time.
 fn root_at(exe: &Path, home: Option<&Path>, xdg_data_home: Option<OsString>) -> Option<PathBuf> {
-    let installed = |home: &&Path| {
-        exe == home.join(INSTALLED)
-            || (cfg!(target_os = "macos") && exe == Path::new(INSTALLED_BY_HOMEBREW))
-    };
-    let Some(home) = home.filter(installed) else {
+    let Some(home) = home.filter(|home| installed_at(exe, home)) else {
         return Some(outside_app(exe)?.join(BESIDE));
     };
     Some(if cfg!(target_os = "macos") {
