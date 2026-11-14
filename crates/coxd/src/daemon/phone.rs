@@ -2,8 +2,11 @@
 //! the chats away from the Mac: the projects and chats, and a chat's
 //! conversation, as they change.
 //!
-//! coxd serves it unless `settings.json` turns it off, as
-//! `{"phone": false}`, on [`PORT`], and only on the Mac's own `127.0.0.1`:
+//! An installed coxd serves it unless `settings.json` turns it off, as
+//! `{"phone": false}`; any other, as a test's or `cargo xtask run`'s,
+//! only when it turns it on, so that a Cox being built takes neither the
+//! installed one's port nor its place in the tailnet. It serves it on
+//! [`PORT`], and only on the Mac's own `127.0.0.1`:
 //! the phone reaches it through `tailscale serve`, which hands the page
 //! to the human's tailnet over HTTPS, and which coxd sets up as it
 //! starts (see [`tailnet`]). Since any page in any browser on the Mac,
@@ -147,28 +150,47 @@ const FILES: &[(&str, &str, &str)] = &[
 pub const PORT: u16 = 7421;
 
 /// The port the page is served on, or none when `settings.json` turns it
-/// off, as `{"phone": false}`.
+/// off, as `{"phone": false}`, or, for a coxd that is not installed, when
+/// it does not turn it on.
 #[must_use]
 pub fn port() -> Option<u16> {
+    let unsaid = storage::installed().then_some(PORT);
     let Some(file) = storage::path(Kept::Settings) else {
-        return Some(PORT);
+        return unsaid;
     };
     let Ok(bytes) = std::fs::read(&file) else {
-        return Some(PORT);
+        return unsaid;
     };
-    port_in(&bytes)
+    port_in(&bytes, unsaid)
         .inspect_err(|why| tracing::error!("\"phone\" in {} cannot be read: {why}", file.display()))
-        .unwrap_or(Some(PORT))
+        .unwrap_or(unsaid)
 }
 
-/// The port the settings `bytes` say the page is served on: [`PORT`],
-/// unless they turn it off, or name another, as `{"phone": {"port":
-/// 7422}}`.
-fn port_in(bytes: &[u8]) -> Result<Option<u16>, String> {
+/// The port the page is served on, or why there is none.
+fn served_port() -> anyhow::Result<u16> {
+    port().with_context(|| {
+        let turned_off = storage::path(Kept::Settings)
+            .and_then(|file| std::fs::read(file).ok())
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .is_some_and(|value| value.get("phone") == Some(&serde_json::Value::Bool(false)));
+        if turned_off || storage::installed() {
+            "settings.json turns the phone's page off, with {\"phone\": false}"
+        } else {
+            "a Cox that is not installed serves the phone's page only when settings.json \
+             turns it on, as with {\"phone\": true}"
+        }
+    })
+}
+
+/// The port the settings `bytes` say the page is served on: `unsaid`
+/// when they say nothing of the phone, else [`PORT`], unless they turn it
+/// off, or name another, as `{"phone": {"port": 7422}}`.
+fn port_in(bytes: &[u8], unsaid: Option<u16>) -> Result<Option<u16>, String> {
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     match value.get("phone") {
-        None | Some(serde_json::Value::Null | serde_json::Value::Bool(true)) => Ok(Some(PORT)),
+        None | Some(serde_json::Value::Null) => Ok(unsaid),
+        Some(serde_json::Value::Bool(true)) => Ok(Some(PORT)),
         Some(serde_json::Value::Bool(false)) => Ok(None),
         Some(phone) => match phone.get("port") {
             None => Ok(Some(PORT)),
@@ -181,21 +203,25 @@ fn port_in(bytes: &[u8]) -> Result<Option<u16>, String> {
     }
 }
 
-/// Whether coxd has the tailnet hand the page to the phone: unless
-/// `settings.json` says not, as `{"phone": {"tailscale": false}}`.
+/// Whether coxd has the tailnet hand the page to the phone: an installed
+/// one unless `settings.json` says not, as `{"phone": {"tailscale":
+/// false}}`, and any other only when it says so, as `{"phone":
+/// {"tailscale": true}}`.
 #[must_use]
 pub fn tailscale() -> bool {
+    let unsaid = storage::installed();
     storage::path(Kept::Settings)
         .and_then(|file| std::fs::read(file).ok())
-        .is_none_or(|bytes| tailscale_in(&bytes))
+        .map_or(unsaid, |bytes| tailscale_in(&bytes, unsaid))
 }
 
-/// Whether the settings `bytes` leave the tailnet to coxd.
-fn tailscale_in(bytes: &[u8]) -> bool {
+/// Whether the settings `bytes` leave the tailnet to coxd, or `unsaid`
+/// when they do not say.
+fn tailscale_in(bytes: &[u8], unsaid: bool) -> bool {
     serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
         .and_then(|value| value.pointer("/phone/tailscale")?.as_bool())
-        .unwrap_or(true)
+        .unwrap_or(unsaid)
 }
 
 /// The secret a phone is paired with, made and kept the first time.
@@ -272,8 +298,7 @@ pub struct Pairing {
 ///
 /// When the settings turn the page off, or the secret cannot be had.
 pub fn pairing() -> anyhow::Result<Pairing> {
-    let port =
-        port().context("settings.json turns the phone's page off, with {\"phone\": false}")?;
+    let port = served_port()?;
     let token = token()?;
     let status = tailscale().then(tailnet::status).flatten();
     Ok(match status {
@@ -308,8 +333,7 @@ pub fn pairing() -> anyhow::Result<Pairing> {
 pub fn link() -> anyhow::Result<String> {
     use std::fmt::Write as _;
 
-    let port =
-        port().context("settings.json turns the phone's page off, with {\"phone\": false}")?;
+    let port = served_port()?;
     let token = token()?;
     let status = tailscale().then(tailnet::status).flatten();
     let Some((
@@ -1512,19 +1536,49 @@ mod tests {
 
     #[test]
     fn reads_the_port_from_the_settings() {
-        assert_eq!(port_in(br#"{"home": "~/cox"}"#), Ok(Some(PORT)));
-        assert_eq!(port_in(br#"{"phone": false}"#), Ok(None));
-        assert_eq!(port_in(br#"{"phone": true}"#), Ok(Some(PORT)));
-        assert_eq!(port_in(br#"{"phone": {}}"#), Ok(Some(PORT)));
-        assert_eq!(port_in(br#"{"phone": {"port": 7422}}"#), Ok(Some(7422)));
-        assert!(port_in(br#"{"phone": {"port": 70000}}"#).is_err());
+        let installed = Some(PORT);
+        assert_eq!(port_in(br#"{"home": "~/cox"}"#, installed), Ok(Some(PORT)));
+        assert_eq!(port_in(br#"{"phone": false}"#, installed), Ok(None));
+        assert_eq!(port_in(br#"{"phone": true}"#, installed), Ok(Some(PORT)));
+        assert_eq!(port_in(br#"{"phone": {}}"#, installed), Ok(Some(PORT)));
+        assert_eq!(
+            port_in(br#"{"phone": {"port": 7422}}"#, installed),
+            Ok(Some(7422))
+        );
+        assert!(port_in(br#"{"phone": {"port": 70000}}"#, installed).is_err());
+    }
+
+    #[test]
+    fn a_cox_not_installed_serves_the_phone_only_when_told() {
+        assert_eq!(port_in(br#"{"home": "~/cox"}"#, None), Ok(None));
+        assert_eq!(port_in(br#"{"phone": true}"#, None), Ok(Some(PORT)));
+        assert_eq!(
+            port_in(br#"{"phone": {"port": 7422}}"#, None),
+            Ok(Some(7422))
+        );
     }
 
     #[test]
     fn leaves_the_tailnet_to_coxd_unless_told_not() {
-        assert!(tailscale_in(br#"{"home": "~/cox"}"#));
-        assert!(tailscale_in(br#"{"phone": {"port": 7422}}"#));
-        assert!(!tailscale_in(br#"{"phone": {"tailscale": false}}"#));
+        assert!(tailscale_in(br#"{"home": "~/cox"}"#, true));
+        assert!(tailscale_in(br#"{"phone": {"port": 7422}}"#, true));
+        assert!(!tailscale_in(br#"{"phone": {"tailscale": false}}"#, true));
+    }
+
+    #[test]
+    fn a_cox_not_installed_leaves_the_tailnet_be_unless_told() {
+        assert!(!tailscale_in(br#"{"phone": {"port": 7422}}"#, false));
+        assert!(tailscale_in(br#"{"phone": {"tailscale": true}}"#, false));
+    }
+
+    #[test]
+    fn a_coxd_of_a_test_takes_no_port_and_leaves_the_tailnet_be() {
+        let folder = TempDir::new();
+        storage::keep_on_this_thread(Some(folder.to_path_buf()));
+        let (port, tailscale) = (port(), tailscale());
+        storage::keep_on_this_thread(None);
+        assert_eq!(port, None);
+        assert!(!tailscale);
     }
 
     #[test]
