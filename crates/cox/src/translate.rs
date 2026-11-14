@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command as Process;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
@@ -349,7 +349,7 @@ impl Worker {
                 ),
             }
             .and_then(|translated| {
-                keep(&job.file, &translated)
+                crate::storage::write_whole(&job.file, &translated)
                     .map_err(|error| format!("cannot keep the translation: {error}"))?;
                 Ok(translated)
             });
@@ -592,17 +592,6 @@ fn run(
         return Err(format!("{program} wrote nothing"));
     }
     Ok(translated)
-}
-
-/// Keeps `translated` in `file`, whole or not at all, as a page may be
-/// read at any time.
-fn keep(file: &Path, translated: &str) -> std::io::Result<()> {
-    if let Some(folder) = file.parent() {
-        fs::create_dir_all(folder)?;
-    }
-    let part = file.with_extension("part");
-    fs::write(&part, translated)?;
-    fs::rename(&part, file)
 }
 
 /// The name of the file the translation of `text` the way `way` says, by

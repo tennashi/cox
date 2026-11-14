@@ -569,14 +569,8 @@ fn keep_in(file: &Path, key: &str, value: Option<Value>) -> anyhow::Result<()> {
             settings.remove(key);
         }
     }
-    if let Some(parent) = file.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("making {}", parent.display()))?;
-    }
-    let mut text = serde_json::to_string_pretty(&Value::Object(settings))?;
-    text.push('\n');
-    let part = file.with_extension("part");
-    fs::write(&part, text).with_context(|| format!("writing {}", part.display()))?;
-    fs::rename(&part, file).with_context(|| format!("writing {}", file.display()))
+    crate::storage::write_json(file, &Value::Object(settings))
+        .with_context(|| format!("writing {}", file.display()))
 }
 
 /// The folder `text` names, as the human types it on the settings screen:

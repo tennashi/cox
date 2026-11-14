@@ -231,11 +231,7 @@ impl Save {
         draft.name = name;
         draft.scope = Some(scope);
         let trigger = draft.trigger(&kept)?;
-        if let Some(parent) = kept.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("cannot make {}: {error}", parent.display()))?;
-        }
-        std::fs::write(&kept, draft.written())
+        crate::storage::write_whole(&kept, draft.written())
             .map_err(|error| format!("cannot write {}: {error}", kept.display()))?;
         let runs = self
             .file

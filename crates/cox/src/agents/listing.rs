@@ -116,13 +116,9 @@ impl Listing {
     }
 
     fn keep_in(&self, file: &Path) -> anyhow::Result<()> {
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("making {}", parent.display()))?;
-        }
         let listed: Vec<Value> = self.agents.iter().cloned().map(Value::Object).collect();
-        let mut text = serde_json::to_string_pretty(&listed)?;
-        text.push('\n');
-        fs::write(file, text).with_context(|| format!("writing {}", file.display()))
+        crate::storage::write_json(file, &listed)
+            .with_context(|| format!("writing {}", file.display()))
     }
 
     fn position(&self, name: &str) -> Option<usize> {

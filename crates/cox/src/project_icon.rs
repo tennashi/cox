@@ -190,15 +190,12 @@ pub fn remove(id: ProjectId) -> anyhow::Result<()> {
     }
 }
 
-/// Keeps `png` as the icon of the project kept as `id`, through a file
-/// beside it, so that the rail never reads half of it.
+/// Keeps `png` as the icon of the project kept as `id`, whole, so that
+/// the rail never reads half of it.
 fn keep(id: ProjectId, png: &[u8]) -> anyhow::Result<()> {
     let path = &path(id).context("Cox cannot tell where it keeps what lasts")?;
-    let folder = path.parent().context("an icon's path has a folder")?;
-    std::fs::create_dir_all(folder).with_context(|| format!("cannot make {}", folder.display()))?;
-    let partial = path.with_extension("png.partial");
-    std::fs::write(&partial, png).with_context(|| format!("cannot write {}", partial.display()))?;
-    std::fs::rename(&partial, path).with_context(|| format!("cannot write {}", path.display()))
+    crate::storage::write_whole(path, png)
+        .with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// The icon, as a PNG of [`SIZE`] pixels square, of the picture in the

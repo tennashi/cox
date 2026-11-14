@@ -254,34 +254,6 @@ pub fn moved(moved: cox_core::moved::Moved<'_>) -> Result<(), String> {
     }
 }
 
-/// Keeps `bytes` in `file` for the human alone, whole or not at all:
-/// through a file beside it, which none but the human may read, put in
-/// its place once written.
-///
-/// # Errors
-///
-/// When it cannot be written.
-pub fn keep_secret(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    let mut partial = file.as_os_str().to_owned();
-    partial.push(format!(".{}.partial", std::process::id()));
-    let partial = PathBuf::from(partial);
-    let _ = fs::remove_file(&partial);
-    let written = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&partial)
-        .and_then(|mut kept| kept.write_all(bytes))
-        .and_then(|()| fs::rename(&partial, file));
-    if written.is_err() {
-        let _ = fs::remove_file(&partial);
-    }
-    written
-}
-
 /// Makes the JSON file at `path`, if there is one, name where a folder
 /// moved, as `moved` says.
 fn move_in(path: &Path, moved: cox_core::moved::Moved<'_>) -> Result<(), String> {
@@ -295,21 +267,52 @@ fn move_in(path: &Path, moved: cox_core::moved::Moved<'_>) -> Result<(), String>
     if !moved.json(&mut value) {
         return Ok(());
     }
-    let text = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
-    write_whole(path, &(text + "\n"))
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))
+    write_json(path, &value).map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
-/// Writes `text` to the file at `path` whole: to a file of this write's
-/// own beside it first, then put in its place, so that another process
-/// reading it meanwhile, as coxd reads which triggers the window turned
-/// on, reads it as it was or as it is now, and never part of each.
+/// Writes `contents` to the file at `path` whole, making its folder if
+/// need be: to a file of this write's own beside it first, then put in
+/// its place, so that another process reading it meanwhile, as coxd reads
+/// which triggers the window turned on, reads it as it was or as it is
+/// now, and never part of each.
 ///
 /// # Errors
 ///
 /// When the file beside it cannot be written, or put in its place.
-pub fn write_whole(path: &Path, text: &str) -> std::io::Result<()> {
+pub fn write_whole(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    write_whole_as(path, contents.as_ref(), 0o666)
+}
+
+/// Writes `value` to the file at `path` whole, as [`write_whole`] does,
+/// as JSON a human can read, ending in a newline.
+///
+/// # Errors
+///
+/// When `value` is no JSON, or it cannot be written.
+pub fn write_json(path: &Path, value: &impl serde::Serialize) -> std::io::Result<()> {
+    let mut text = serde_json::to_string_pretty(value).map_err(std::io::Error::other)?;
+    text.push('\n');
+    write_whole(path, text)
+}
+
+/// Keeps `bytes` in `file` whole, as [`write_whole`] does, for the human
+/// alone: none but the human may read it, even while it is written.
+///
+/// # Errors
+///
+/// When it cannot be written.
+pub fn keep_secret(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_whole_as(file, bytes, 0o600)
+}
+
+fn write_whole_as(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
     static NEXT: AtomicU64 = AtomicU64::new(0);
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder)?;
+    }
     let mut part = path.as_os_str().to_owned();
     part.push(format!(
         ".{}-{}.part",
@@ -317,7 +320,15 @@ pub fn write_whole(path: &Path, text: &str) -> std::io::Result<()> {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let part = PathBuf::from(part);
-    let written = fs::write(&part, text).and_then(|()| fs::rename(&part, path));
+    // One a Cox that crashed left, by a process id used again.
+    let _ = fs::remove_file(&part);
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(&part)
+        .and_then(|mut file| file.write_all(contents))
+        .and_then(|()| fs::rename(&part, path));
     if written.is_err() {
         let _ = fs::remove_file(&part);
     }
@@ -445,6 +456,73 @@ mod tests {
         assert_eq!(
             now(root_at(installed, home, None), Kept::Registry),
             PathBuf::from("/home/h/.local/share/cox/cache/registry.json")
+        );
+    }
+
+    #[test]
+    fn a_file_written_whole_is_read_as_it_was_or_as_it_is_now() {
+        use std::sync::atomic::AtomicBool;
+
+        let dir = TempDir::new();
+        let file = dir.join("deep/agents.json");
+        let was = "was".repeat(1 << 18);
+        let one = "one".repeat(1 << 18);
+        let other = "other".repeat(1 << 18);
+        write_whole(&file, &was).unwrap();
+        let written = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                let mut reads = 0;
+                while !written.load(Ordering::Relaxed) || reads == 0 {
+                    let read = fs::read_to_string(&file).unwrap();
+                    assert!(
+                        read == was || read == one || read == other,
+                        "read {} bytes that are part of each",
+                        read.len()
+                    );
+                    reads += 1;
+                }
+            });
+            let file = &file;
+            let writers = [&one, &other]
+                .map(|text| scope.spawn(move || (0..20).try_for_each(|_| write_whole(file, text))));
+            let ends = writers.map(|writer| writer.join().unwrap());
+            written.store(true, Ordering::Relaxed);
+            reader.join().unwrap();
+            for end in ends {
+                end.unwrap();
+            }
+        });
+        let now = fs::read_to_string(&file).unwrap();
+        assert!(now == one || now == other);
+        let left: Vec<_> = fs::read_dir(dir.join("deep")).unwrap().collect();
+        assert_eq!(left.len(), 1, "no file of a write is left beside it");
+    }
+
+    #[test]
+    fn a_secret_is_kept_for_the_human_alone() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = TempDir::new();
+        let file = dir.join("phone-token");
+        fs::write(&file, "old").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        keep_secret(&file, b"new").unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "new");
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn json_is_written_as_a_human_reads_it() {
+        let dir = TempDir::new();
+        let file = dir.join("schedules.json");
+        write_json(&file, &serde_json::json!({"daily": "2026-11-14T00:00:00Z"})).unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "{\n  \"daily\": \"2026-11-14T00:00:00Z\"\n}\n"
         );
     }
 }

@@ -83,7 +83,7 @@ impl History {
     /// When it cannot be written.
     pub fn write(&self, file: &Path) -> std::io::Result<()> {
         let text = serde_json::to_string(self).map_err(std::io::Error::other)?;
-        storage::write_whole(file, &text)
+        storage::write_whole(file, text)
     }
 
     #[must_use]
