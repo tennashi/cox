@@ -210,7 +210,7 @@ pub fn run(settings: Settings) -> ExitCode {
                 &|| start_daemon(data.as_deref()),
                 &tell_waiting,
                 // The window shows nothing once coxd is gone.
-                cox_browser::quit::ask,
+                cox_core::quit::ask,
             )
         });
     let crate::daemon::client::Connected { link, from_daemon } = match connected {
@@ -226,7 +226,7 @@ pub fn run(settings: Settings) -> ExitCode {
     let cef = cox_browser::start(profile);
     let devtools = cef.devtools_port();
     // In place of CEF's handlers, which quit without the app's quit handlers.
-    if let Err(error) = cox_browser::quit::on_signals() {
+    if let Err(error) = cox_core::quit::on_signals() {
         tracing::error!("signals will end Cox without stopping the agents: {error}");
     }
     let stages = CefStages {
@@ -421,7 +421,7 @@ pub fn bind_keys(cx: &mut App) {
 const PUMP_INTERVAL: Duration = Duration::from_millis(8);
 
 /// How often the app looks whether it was asked to quit from where it
-/// could not quit right away (see [`cox_browser::quit`]).
+/// could not quit right away (see [`cox_core::quit`]).
 const QUIT_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Gives CEF what it needs of the app while the app runs: on macOS, the
@@ -452,7 +452,7 @@ fn quit_when_asked(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(QUIT_CHECK_INTERVAL).await;
-            if cox_browser::quit::take_asked() {
+            if cox_core::quit::take_asked() {
                 let _ = cx.update(|cx| cx.quit());
             }
         }

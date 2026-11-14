@@ -1623,8 +1623,8 @@ dependencies = [
  "anyhow",
  "cef",
  "cef-dll-sys",
+ "cox-core",
  "futures-util",
- "libc",
  "objc2",
  "serde",
  "serde_json",
@@ -1639,6 +1639,7 @@ name = "cox-core"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

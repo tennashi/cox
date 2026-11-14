@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# Signal handlers in place of CEF's: see `src/quit.rs`.
+libc.workspace = true
 # SQLite built from its source, so that every Cox keeps chats the same way
 # whatever the system has.
 rusqlite = { version = "0.41.0", features = ["bundled"] }

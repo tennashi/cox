@@ -186,12 +186,12 @@ fn listen(socket: &Path) -> anyhow::Result<UnixListener> {
 /// Stops the daemon once a signal asks it to, or once its socket, which
 /// was the file `bound`, is gone, as when its data folder was taken away.
 async fn stop_when_asked(socket: PathBuf, bound: u64, stop: oneshot::Sender<()>) {
-    if let Err(error) = cox_browser::quit::on_signals() {
+    if let Err(error) = cox_core::quit::on_signals() {
         tracing::error!("signals end coxd without stopping the agents: {error}");
     }
     loop {
         tokio::time::sleep(LOOK_EVERY).await;
-        if cox_browser::quit::take_asked() {
+        if cox_core::quit::take_asked() {
             tracing::info!("coxd was asked to stop");
             break;
         }

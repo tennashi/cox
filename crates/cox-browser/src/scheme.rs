@@ -44,8 +44,6 @@ use cef::{
     wrap_resource_request_handler,
 };
 
-pub use crate::links::percent_decoded;
-
 /// The scheme, as an address starts.
 pub const SCHEME: &str = "cox";
 

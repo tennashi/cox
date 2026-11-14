@@ -25,8 +25,8 @@
 //!   page's icon, which its tab shows.
 //! - [`scheme`] serves the `cox:` addresses a stage's pages read what Cox
 //!   knows from, as the stage [serves](scheme::Serve) them.
-//! - [`quit`] lets signals, and CEF on macOS, ask the app to quit, and
-//!   [`macos`] gives CEF what it expects of the app there.
+//! - [`macos`] gives CEF what it expects of the app there, and asks the
+//!   app to quit through [`cox_core::quit`], as signals do.
 
 mod cursor;
 mod events;
@@ -39,7 +39,6 @@ mod links;
 pub mod macos;
 pub mod pointer;
 pub mod profile;
-pub mod quit;
 pub mod relay;
 pub mod scheme;
 mod timeline;
