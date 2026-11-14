@@ -6,10 +6,12 @@ You need:
 
 - Rust, as [rustup](https://rustup.rs) installs it: it takes the version
   `rust-toolchain.toml` pins.
-- On Linux, the system libraries (Debian and Ubuntu package names):
+- On Linux, the system libraries, and `cmake`, `ninja` and a C++
+  compiler for CEF's wrapper (Debian and Ubuntu package names):
 
   ```sh
-  sudo apt-get install libvulkan-dev libwayland-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev
+  sudo apt-get install libvulkan-dev libwayland-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev \
+    cmake ninja-build g++
   ```
 
 - On macOS, the Command Line Tools, `cmake` and `ninja`:
