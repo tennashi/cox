@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use super::page::address::Address;
+use crate::home::expanded;
 use crate::settings::SearchEngine;
 
 /// What a line typed in the menu opens.
@@ -61,12 +62,7 @@ pub(super) fn typed(line: &str, cwd: &Path, unmatched: Unmatched) -> Option<Type
         let command = command.trim();
         return (!command.is_empty()).then(|| Typed::Command(command.to_owned()));
     }
-    let path = match line.strip_prefix("~/") {
-        Some(rest) => {
-            std::env::home_dir().map_or_else(|| PathBuf::from(line), |home| home.join(rest))
-        }
-        None => cwd.join(line),
-    };
+    let path = expanded(line).map_or_else(|| PathBuf::from(line), |path| cwd.join(path));
     let a_path = ["/", "./", "../", "~/"]
         .iter()
         .any(|start| line.starts_with(start));

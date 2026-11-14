@@ -13,6 +13,7 @@ use gpui::{
 use serde_json::Value;
 
 use super::words::Words;
+use crate::home::home;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
@@ -127,8 +128,7 @@ impl FolderField {
         if text.trim().is_empty() {
             return self.keep(None, cx);
         }
-        let user = std::env::var_os("HOME").map(PathBuf::from);
-        match crate::settings::folder_of(&text, user.as_deref()) {
+        match crate::settings::folder_of(&text, home().as_deref()) {
             Ok(folder) => self.keep(Some(&folder), cx),
             Err(why) => self.tell(why, FAILED, cx),
         }

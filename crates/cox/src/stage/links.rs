@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use cox_core::tabs::Lines;
 use gpui::{Context, EventEmitter, Focusable as _, Subscription, Window, prelude::*};
 
+use crate::home::{expanded_in, home};
 use crate::stage::Stage;
 use crate::stage::changes::{self, Changes, ShowTurn};
 use crate::stage::code::Code;
@@ -133,8 +134,7 @@ impl Stage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let path = linked(link.path, from, home.as_deref());
+        let path = linked(link.path, from, home().as_deref());
         if let Err(error) = self.open_path(&path, link.lines, window, cx) {
             tracing::warn!("cannot open {}: {error}", path.display());
         }
@@ -457,13 +457,10 @@ impl Stage {
     }
 }
 
-/// The file a link to `path` is to, from `from`, where the link is: `~/`
+/// The file a link to `path` is to, from `from`, where the link is: `~`
 /// stands for `home`, when there is one.
 fn linked(path: &str, from: &Path, home: Option<&Path>) -> PathBuf {
-    match (path.strip_prefix("~/"), home) {
-        (Some(rest), Some(home)) => home.join(rest),
-        _ => from.join(path),
-    }
+    from.join(expanded_in(path, home).unwrap_or_else(|| PathBuf::from(path)))
 }
 
 /// Which tab a file opens on, from a link to it or from the tree.
@@ -529,6 +526,10 @@ mod tests {
         assert_eq!(
             linked("~/notes.md", from, Some(Path::new("/home/me"))),
             Path::new("/home/me/notes.md")
+        );
+        assert_eq!(
+            linked("~", from, Some(Path::new("/home/me"))),
+            Path::new("/home/me")
         );
         assert_eq!(
             linked("~/notes.md", from, None),

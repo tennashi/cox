@@ -221,10 +221,7 @@ impl Saved {
     }
 
     fn parse(bytes: &[u8]) -> anyhow::Result<Self> {
-        Self::parse_for(
-            bytes,
-            std::env::var_os("HOME").map(PathBuf::from).as_deref(),
-        )
+        Self::parse_for(bytes, crate::home::home().as_deref())
     }
 
     /// The settings `bytes` hold, for a human whose home directory is
@@ -307,7 +304,7 @@ pub const DIRECTORIES: &str = "directories";
 /// path, which the agent needs.
 #[must_use]
 pub fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
-    home_for_chats_of(home, std::env::var_os("HOME").map(PathBuf::from))
+    home_for_chats_of(home, crate::home::home())
 }
 
 /// Where Cox's own chats work as [`home_for_chats`] says, for a human
@@ -587,13 +584,8 @@ pub fn folder_of(text: &str, user: Option<&Path>) -> Result<PathBuf, &'static st
     if text.is_empty() {
         return Err("Give the folder's path.");
     }
-    let path = match text.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-            let user = user.ok_or("There is no home directory for ~ to stand for.")?;
-            user.join(rest.trim_start_matches('/'))
-        }
-        _ => PathBuf::from(text),
-    };
+    let path = crate::home::expanded_in(text, user)
+        .ok_or("There is no home directory for ~ to stand for.")?;
     if !path.is_absolute() {
         return Err("Give the whole path, from / or from ~.");
     }

@@ -45,6 +45,7 @@ use self::search::SearchSection;
 use self::servers::ServersSection;
 use self::translation::TranslationSection;
 use self::words::Words;
+use crate::home::home;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
@@ -267,9 +268,8 @@ impl SettingsView {
 
     /// Sets the home to the folder the input names, if it names one.
     fn submit(&mut self, cx: &mut Context<Self>) {
-        let user = std::env::var_os("HOME").map(PathBuf::from);
         let text = self.input.read(cx).text().to_owned();
-        match super::folder_of(&text, user.as_deref()) {
+        match super::folder_of(&text, home().as_deref()) {
             Ok(folder) => self.set(folder, cx),
             Err(why) => self.tell(Told::Failed(why.to_owned()), cx),
         }
