@@ -63,15 +63,14 @@ use self::pty::{Listener, START_SIZE, Size};
 pub use self::pty::{Program, Running};
 pub use self::unseen::run_unseen;
 use crate::agent::mcp::{Ended, Ran};
-use crate::chat::hand::AddToChat;
 use crate::chat::region::{self, Described};
 use crate::stage::tab::Shows;
 use crate::ui::Copy;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::Paste;
 use crate::ui::paths::shortened;
+use crate::ui::selected::{self, Selected};
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED};
-use crate::ui::translation::Translate;
 use crate::vim::keymap::Motion;
 use crate::vim::search::{Direction, Find};
 use crate::vim::{Move, Region, Visual};
@@ -353,34 +352,6 @@ impl Terminal {
         }
     }
 
-    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.selected_text().filter(|text| !text.is_empty()) {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-        }
-    }
-
-    /// Shows the translation of the text selected, or with nothing
-    /// selected leaves the keys to what holds the part.
-    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.selected_text().unwrap_or_default();
-        if text.trim().is_empty() {
-            cx.propagate();
-            return;
-        }
-        crate::ui::translation::show(&text, window, cx);
-    }
-
-    /// The text selected, with the terminal it is from, by what it runs,
-    /// as it goes to the agent when handed to the chat.
-    fn selected_attachment(&self) -> Attachment {
-        Attachment {
-            label: self.title(),
-            uri: "cox://terminal".to_owned(),
-            text: self.selected_text().unwrap_or_default(),
-            picture: None,
-        }
-    }
-
     /// What the rows of the terminal under `over`, a stretch of a region
     /// in the window's points, say, as the last frame drew them.
     fn described(&self, over: Bounds<Pixels>) -> Option<Described> {
@@ -429,14 +400,6 @@ impl Terminal {
             ),
             name: title,
         })
-    }
-
-    /// Hands the text selected to the chat shown, or with nothing
-    /// selected leaves the keys to what holds the part.
-    fn add_to_chat(&mut self, _: &AddToChat, _: &mut Window, cx: &mut Context<Self>) {
-        if !crate::chat::hand::hand(self.selected_attachment(), cx) {
-            cx.propagate();
-        }
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
@@ -708,6 +671,22 @@ pub struct Exited;
 
 impl gpui::EventEmitter<Exited> for Terminal {}
 
+impl Selected for Terminal {
+    fn chosen_text(&self) -> String {
+        self.selected_text().unwrap_or_default()
+    }
+
+    /// The text selected, with the terminal it is from, by what it runs.
+    fn attachment(&self) -> Option<Attachment> {
+        Some(Attachment {
+            label: self.title(),
+            uri: "cox://terminal".to_owned(),
+            text: self.chosen_text(),
+            picture: None,
+        })
+    }
+}
+
 impl Focusable for Terminal {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -849,9 +828,7 @@ impl Render for Terminal {
                     .track_focus(&self.focus_handle)
                     .key_context(KEY_CONTEXT)
                     .on_key_down(cx.listener(Self::key_down))
-                    .on_action(cx.listener(Self::copy))
-                    .on_action(cx.listener(Self::translate))
-                    .on_action(cx.listener(Self::add_to_chat))
+                    .map(|terminal| selected::on_actions(terminal, cx))
                     .on_action(cx.listener(Self::paste))
                     .on_action(cx.listener(Self::move_by_keys))
                     .on_action(cx.listener(Self::find))
@@ -861,7 +838,7 @@ impl Render for Terminal {
                         MouseButton::Right,
                         cx.listener(|terminal, _, window, cx| {
                             let text = terminal.selected_text().unwrap_or_default();
-                            let handed = Some(terminal.selected_attachment());
+                            let handed = terminal.attachment();
                             if crate::ui::translation::offer(&text, handed, window, cx) {
                                 cx.stop_propagation();
                             }

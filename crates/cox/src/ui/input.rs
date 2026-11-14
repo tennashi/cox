@@ -24,6 +24,7 @@ mod macos;
 
 use std::ops::Range;
 
+use cox_core::entry::Attachment;
 use gpui::{
     App, AvailableSpace, Bounds, ClipboardItem, ContentMask, Context, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
@@ -34,8 +35,8 @@ use gpui::{
 };
 
 use self::draft::{Draft, one_line, unix_line_breaks};
+use crate::ui::selected::{self, Selected};
 use crate::ui::theme::{ACCENT, FAINT, FOREGROUND, SELECTION};
-use crate::ui::translation::Translate;
 
 actions!(
     line_input,
@@ -516,17 +517,6 @@ impl LineInput {
         }
     }
 
-    /// Shows the translation of the text selected, or with nothing
-    /// selected leaves the keys to what holds the part.
-    fn translate(&mut self, _: &Translate, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.draft.selected_text().to_owned();
-        if text.trim().is_empty() {
-            cx.propagate();
-            return;
-        }
-        crate::ui::translation::show(&text, window, cx);
-    }
-
     /// A key with Control that no binding took, while nothing is being
     /// composed: the input method's to take, as macSKK's Control-J (see
     /// [`macos`]). While it composes, GPUI hands it every key first.
@@ -790,6 +780,18 @@ impl LineInput {
     }
 }
 
+/// The input copies with its own Copy, which goes with Cut, and what
+/// is selected in it is the human's own words, not to hand to the chat.
+impl Selected for LineInput {
+    fn chosen_text(&self) -> String {
+        self.draft.selected_text().to_owned()
+    }
+
+    fn attachment(&self) -> Option<Attachment> {
+        None
+    }
+}
+
 impl EventEmitter<Submitted> for LineInput {}
 
 impl EventEmitter<Blurred> for LineInput {}
@@ -962,7 +964,7 @@ impl Render for LineInput {
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::translate))
+            .on_action(cx.listener(selected::translate))
             .on_action(cx.listener(Self::paste))
             .map(|input| {
                 #[cfg(target_os = "macos")]

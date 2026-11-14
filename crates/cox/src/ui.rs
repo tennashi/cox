@@ -13,6 +13,8 @@
 //!   stage share: whether the stage is in sight.
 //! - A [`card`] is what the window's parts sit in, on its ground.
 //! - [`translation`] shows what the human selected in their language.
+//! - [`selected`] is what every part does alike with what the human
+//!   selects in it: copies, translates, or hands it to the chat shown.
 //! - [`screen`] captures what the screen shows of the window.
 
 pub mod button;
@@ -25,6 +27,7 @@ pub mod markdown;
 pub mod menu;
 pub mod paths;
 pub mod screen;
+pub mod selected;
 pub mod selection;
 pub mod text;
 pub mod theme;
