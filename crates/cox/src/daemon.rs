@@ -2105,13 +2105,10 @@ impl Daemon {
         };
         let why = match which {
             None => Some("the chat that learned it is not among the tabs"),
-            Some(which) if !self.saves_to_wiki(which) => {
+            Some(which) if !self.save_to_wiki(which) => {
                 Some("its agent is at work, or has no wiki_write: ask once it waits")
             }
-            Some(which) => {
-                self.save_to_wiki(which);
-                None
-            }
+            Some(_) => None,
         };
         if let Some(why) = why
             && let Some(chat) = self.chat(key)
@@ -2124,7 +2121,12 @@ impl Daemon {
     /// the chat learned in the human's wiki, as their workflow says to
     /// (see [`workflow::WIKI_SAVE`]), when it can; answers whether it did.
     fn save_to_wiki(&mut self, key: u64) -> bool {
-        if !self.saves_to_wiki(key) {
+        let saves = self
+            .chats
+            .iter()
+            .find(|slot| slot.key == key)
+            .is_some_and(|slot| saves_to_wiki(slot.state, slot.setup.as_ref()));
+        if !saves {
             return false;
         }
         let line = workflow::WIKI_SAVE.say(&[]);
@@ -2148,15 +2150,6 @@ impl Daemon {
                 chat.merge(&line);
             }
         }
-    }
-
-    /// Whether the human can ask the agent of the chat `key` to keep what
-    /// it learned in the wiki: it is not at work, and has the tool.
-    fn saves_to_wiki(&self, key: u64) -> bool {
-        self.chats
-            .iter()
-            .find(|slot| slot.key == key)
-            .is_some_and(|slot| !working(slot.state) && keeps_in_wiki(slot.setup.as_ref()))
     }
 
     /// Answers `answer` with how the chat that goes by `key`, of the
@@ -2565,6 +2558,35 @@ pub fn merges(setup: Option<&Setup>) -> bool {
     setup.is_none_or(|setup| setup.folder.is_none() && setup.sketch.is_none())
 }
 
+/// Whether the human can ask the agent of a chat that stands as `state`,
+/// set up as `setup`, to keep what it learned in the wiki: it is not at
+/// work, and has the tool.
+#[must_use]
+pub fn saves_to_wiki(state: State, setup: Option<&Setup>) -> bool {
+    !working(state) && keeps_in_wiki(setup)
+}
+
+/// The sketch a chat set up as `setup` is, what it started from and the
+/// folder it works in, while the folder is there.
+#[must_use]
+pub fn sketch_of(setup: Option<&Setup>) -> Option<(Sketch, PathBuf)> {
+    let setup = setup?;
+    let folder = setup.folder.clone().filter(|folder| folder.exists())?;
+    Some((setup.sketch?, folder))
+}
+
+/// Whether a chat set up as `setup` is a sketch that can end: its folder
+/// is there, and was not opened as a project, as `is_project` says, which
+/// the human goes on with, and it is not `ending` already.
+#[must_use]
+pub fn ends_sketch(
+    setup: Option<&Setup>,
+    ending: bool,
+    is_project: impl FnOnce(&Path) -> bool,
+) -> bool {
+    !ending && sketch_of(setup).is_some_and(|(_, folder)| !is_project(&folder))
+}
+
 /// Whether an agent that stands as `state` is at work.
 #[must_use]
 pub fn working(state: State) -> bool {
@@ -2887,6 +2909,44 @@ mod tests {
         assert!(merges(Some(&Setup::default())));
         assert!(!merges(Some(&in_folder)));
         assert!(!merges(Some(&in_sketch)));
+    }
+
+    #[test]
+    fn a_sketch_ends_while_its_folder_is_there_and_no_projects() {
+        let home = TempDir::new();
+        let sketch = Setup {
+            folder: Some(home.to_path_buf()),
+            sketch: Some(Sketch::Empty),
+            ..Setup::default()
+        };
+        let gone = Setup {
+            folder: Some(home.join("gone")),
+            ..sketch.clone()
+        };
+        let opened_by_a_sketch = Setup {
+            sketch: None,
+            ..sketch.clone()
+        };
+        let no_project = |_: &Path| false;
+
+        assert!(ends_sketch(Some(&sketch), false, no_project));
+        assert!(!ends_sketch(Some(&sketch), true, no_project));
+        assert!(!ends_sketch(Some(&sketch), false, |folder| folder == &*home));
+        assert!(!ends_sketch(Some(&gone), false, no_project));
+        assert!(!ends_sketch(Some(&opened_by_a_sketch), false, no_project));
+        assert!(!ends_sketch(None, false, no_project));
+    }
+
+    #[test]
+    fn a_chat_saves_to_the_wiki_while_it_waits_with_the_tool() {
+        let without = Setup {
+            tools: Some(vec!["show_file".to_owned()]),
+            ..Setup::default()
+        };
+
+        assert!(saves_to_wiki(State::Idle, None));
+        assert!(!saves_to_wiki(State::Busy, None));
+        assert!(!saves_to_wiki(State::Idle, Some(&without)));
     }
 
     #[test]

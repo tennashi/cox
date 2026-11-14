@@ -88,9 +88,7 @@ impl Daemon {
     /// The sketch the chat `key` is, what it started from and the folder
     /// it works in, while the folder is there.
     pub(super) fn sketch_of(&self, key: u64) -> Option<(Sketch, PathBuf)> {
-        let setup = self.slot(key)?.setup.as_ref()?;
-        let folder = setup.folder.clone().filter(|folder| folder.exists())?;
-        Some((setup.sketch?, folder))
+        super::sketch_of(self.slot(key)?.setup.as_ref())
     }
 
     /// What the human may do of sketches in the chat `key`, as the window's
@@ -113,10 +111,11 @@ impl Daemon {
     /// opened as a project, which the human goes on with, and it is not on
     /// its way to an end already.
     pub(super) fn ends_sketch(&self, key: u64) -> bool {
-        self.slot(key).is_some_and(|slot| slot.ending.is_none())
-            && self
-                .sketch_of(key)
-                .is_some_and(|(_, folder)| self.project_at(&folder).is_none())
+        self.slot(key).is_some_and(|slot| {
+            super::ends_sketch(slot.setup.as_ref(), slot.ending.is_some(), |folder| {
+                self.project_at(folder).is_some()
+            })
+        })
     }
 
     /// Ends the sketch `key` as `ending` says: asks its agent to sum it up
