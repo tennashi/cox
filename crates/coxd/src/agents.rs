@@ -4,7 +4,7 @@
 //! 1. The agent of the command line, which every chat talks to until the
 //!    human chooses another.
 //! 2. The agents the human lists in `agents.json`, where Cox keeps what
-//!    lasts (see [`coxd::storage`]), each by its `name`, with its
+//!    lasts (see [`crate::storage`]), each by its `name`, with its
 //!    `command`, as the command line gives one.
 //! 3. The agents of the [ACP Registry](https://agentclientprotocol.com),
 //!    which Cox fetches as it starts, and keeps for the runs that cannot,
@@ -211,7 +211,7 @@ impl Agents {
             match fetched {
                 Ok((listed, text)) => {
                     if let Some(path) = registry_path()
-                        && let Err(error) = coxd::storage::write_whole(&path, text)
+                        && let Err(error) = crate::storage::write_whole(&path, text)
                     {
                         tracing::warn!("the registry is not kept for later runs: {error}");
                     }
@@ -326,7 +326,7 @@ fn first(command: &[String], named: Option<&str>, mut own: Vec<Known>) -> Vec<Kn
 /// The agents the human lists in `agents.json`, none when there is no
 /// such file.
 fn own() -> anyhow::Result<Vec<Known>> {
-    let Some(path) = coxd::storage::path(coxd::storage::Kept::Agents) else {
+    let Some(path) = crate::storage::path(crate::storage::Kept::Agents) else {
         return Ok(Vec::new());
     };
     if !path.exists() {
@@ -337,7 +337,7 @@ fn own() -> anyhow::Result<Vec<Known>> {
 
 /// Where Cox keeps the registry as it fetched it last.
 fn registry_path() -> Option<PathBuf> {
-    coxd::storage::path(coxd::storage::Kept::Registry)
+    crate::storage::path(crate::storage::Kept::Registry)
 }
 
 /// The registry, as its JSON: the ACP Registry, or the one

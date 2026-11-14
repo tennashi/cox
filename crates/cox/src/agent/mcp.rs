@@ -171,7 +171,7 @@ pub enum ChatRequest {
     /// `from`, with `caption`, if the agent gave one, in the
     /// conversation; answer once it is there.
     ShowMedia {
-        shown: crate::media::Shown,
+        shown: coxd::media::Shown,
         from: String,
         caption: Option<String>,
         answer: oneshot::Sender<()>,

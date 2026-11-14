@@ -390,7 +390,7 @@ fn the_registry_a_daemon_fetched_lists_its_agents_on_the_runs_after() {
     let _daemon = Daemon::start(&folder, &data, &registry());
     coxd::storage::keep_on_this_thread(Some(data));
     waits::until("a run after lists the registry's agent", || {
-        cox::agents::Agents::read(Vec::new(), None)
+        coxd::agents::Agents::read(Vec::new(), None)
             .all()
             .iter()
             .any(|agent| agent.id == "registry:parrot" && agent.name == "Parrot" && agent.listed)

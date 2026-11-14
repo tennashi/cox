@@ -11,7 +11,6 @@ use std::time::Duration;
 use cox::agent::Start;
 use cox::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest};
 use cox::agent::setup::Setup;
-use cox::agents::{Agents as Choices, Known};
 use cox::chat::Stages;
 use cox::chat::judge::Starts;
 use cox::chat::view::{ChatView, OpenLink, StageView};
@@ -23,6 +22,7 @@ use cox_acp::McpServer;
 use cox_browser::relay::Relay;
 use cox_core::store::Store;
 use cox_core::tabs::KeptTabs;
+use coxd::agents::{Agents as Choices, Known};
 use gpui::{
     App, AppContext as _, Context, Entity, Focusable, IntoElement, ParentElement as _, Render,
     Styled as _, TestAppContext, VisualTestContext, Window, div,

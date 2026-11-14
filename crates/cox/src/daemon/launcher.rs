@@ -20,8 +20,8 @@ use cox_acp::McpServer;
 use super::{Spawned, Spawns};
 use crate::agent::mcp::ToolServer;
 use crate::agent::{Agent, Start};
-use crate::agents::Agents;
 use crate::chat::judge::Starts;
+use coxd::agents::Agents;
 
 /// Starts the agents of the chats, each with the agent it talks to: the
 /// daemon's [`Spawns`] when Cox runs.

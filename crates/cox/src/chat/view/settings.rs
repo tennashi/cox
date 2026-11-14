@@ -19,11 +19,11 @@ use gpui::{
 use cox_core::settings::{Choice, Setting};
 
 use super::ChatView;
-use crate::agents::REGISTRY_GROUP;
 use crate::chat::conversation::State;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::menu::{ROW_HEIGHT, ROW_RADIUS};
 use crate::vim::hints::Hinted as _;
+use coxd::agents::REGISTRY_GROUP;
 use coxd::theme::{BORDER, BUTTON, DIM, FAINT, FOREGROUND, SELECTED, SURFACE, chat_color};
 
 /// How wide the list of a setting's choices is.

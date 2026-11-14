@@ -122,7 +122,7 @@ fn starts_word(line: &str, at: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     #[test]
     fn the_path_typed_is_the_word_after_the_at() {

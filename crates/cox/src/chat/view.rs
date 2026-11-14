@@ -52,7 +52,6 @@ use gpui::{
     prelude::*, px, relative, rgb,
 };
 
-use crate::agents::Agents;
 use crate::chat::conversation::{Answer, Conversation, GOAL_TURNS, Goal, Patch, Proposed, State};
 use crate::chat::region::{self, AddRegionToChat, Described};
 use crate::chat::sketch::Sketch;
@@ -66,6 +65,7 @@ use crate::ui::selection::Spot;
 use crate::ui::text::Reading;
 use crate::ui::text::cursor::Step;
 use crate::ui::{Copy, Panel, tip};
+use coxd::agents::Agents;
 use coxd::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND,
     OFFERING_EDGE, RAISED, UI_FONT,

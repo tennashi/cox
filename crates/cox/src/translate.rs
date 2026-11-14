@@ -45,9 +45,9 @@ use tokio::sync::mpsc;
 
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{Agent, AgentEvent, Command, Start};
-use crate::agents::Agents;
 use crate::settings::Translation;
 use crate::wiki::told::options;
+use coxd::agents::Agents;
 use coxd::process::run_with_deadline;
 
 /// The language the agents write in, and that text not in it goes into.

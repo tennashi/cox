@@ -1295,7 +1295,7 @@ fn project_icon(project: &str) -> Response<Body> {
 /// the part of it `range` asks for, as a phone's browser asks to play a
 /// video.
 fn media(file: &str, range: Option<&HeaderValue>) -> Response<Body> {
-    let Some((path, kind)) = crate::media::kept(file) else {
+    let Some((path, kind)) = coxd::media::kept(file) else {
         return answer(StatusCode::NOT_FOUND, TEXT, "Not found");
     };
     let Ok(bytes) = std::fs::read(path) else {

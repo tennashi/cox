@@ -11,7 +11,7 @@ use std::time::Duration;
 use cox_core::store::Store;
 
 use super::launcher::Launcher;
-use crate::agents::Agents;
+use coxd::agents::Agents;
 
 /// Runs coxd until it is stopped, keeping what lasts in `data` when
 /// given: the chats, kept where this Cox keeps

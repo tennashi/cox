@@ -92,7 +92,7 @@ pub fn check(command: Vec<String>, cwd: &Path) -> Checked {
     if find(&program, std::env::var_os("PATH").as_deref(), &here).is_none() {
         return Checked::NotFound(program);
     }
-    coxd::process::close_on_exec();
+    crate::process::close_on_exec();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -151,7 +151,8 @@ pub fn check(command: Vec<String>, cwd: &Path) -> Checked {
 
 /// Where `program` is: on `path`, as a shell finds a program by its
 /// name, or, for a path, there, from `here` when it is relative.
-pub(crate) fn find(program: &str, path: Option<&std::ffi::OsStr>, here: &Path) -> Option<PathBuf> {
+#[must_use]
+pub fn find(program: &str, path: Option<&std::ffi::OsStr>, here: &Path) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt as _;
     let runs = |file: &Path| {
         std::fs::metadata(file)
@@ -169,7 +170,7 @@ pub(crate) fn find(program: &str, path: Option<&std::ffi::OsStr>, here: &Path) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_program_is_found_on_the_path_or_where_its_path_says() {

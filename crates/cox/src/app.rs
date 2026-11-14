@@ -28,12 +28,12 @@ use gpui::{
     prelude::*, px, size,
 };
 
-use crate::agents::Agents;
 use crate::chat::launcher::CefStages;
 use crate::stage::servers::Servers;
 use crate::ui::icons::Icons;
 use crate::workspace::Workspace;
 use cox_browser::Cef;
+use coxd::agents::Agents;
 
 actions!(cox, [Quit]);
 

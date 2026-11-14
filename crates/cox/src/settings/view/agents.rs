@@ -1,11 +1,11 @@
 //! The agents on the settings screen: those the human lists in
 //! `agents.json`, a row each, with its name and its command on one line,
-//! as a shell takes it (see [`crate::agents::line`]), which Enter keeps,
+//! as a shell takes it (see [`coxd::agents::line`]), which Enter keeps,
 //! as the keyboard leaving the row does once it has both.
 //! A dot marks the agent a new chat talks to when the command line names
 //! none, as `settings.json` names it, and a click on another's dot names
 //! that one. "Test" starts the agent and asks it to open a session (see
-//! [`crate::agents::check`]), × takes it out of the list, and "Add agent"
+//! [`coxd::agents::check`]), × takes it out of the list, and "Add agent"
 //! adds one of the ACP Registry, as the registry runs it, for the human to
 //! change, or one of their own.
 //!
@@ -19,16 +19,16 @@ use gpui::{
 };
 
 use super::words::{Part, Words};
-use crate::agents::Known;
-use crate::agents::check::{self, Checked};
-use crate::agents::line;
-use crate::agents::listing::Listing;
 use crate::settings::window::AppAgents;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
+use coxd::agents::Known;
+use coxd::agents::check::{self, Checked};
+use coxd::agents::line;
+use coxd::agents::listing::Listing;
 use coxd::theme::{
     ACCENT, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER, LINK,
     RAISED,
@@ -364,7 +364,7 @@ impl AgentsSection {
         let (name, command) = known.map_or_else(Default::default, |known| {
             (
                 known.name,
-                line::joined(&crate::agents::unpinned(&known.command)),
+                line::joined(&coxd::agents::unpinned(&known.command)),
             )
         });
         let row = self.row(None, &name, &command, cx);
@@ -571,11 +571,11 @@ impl AgentsSection {
                         .text_size(px(11.))
                         .font_weight(FontWeight::BOLD)
                         .text_color(rgb(FAINT))
-                        .child(crate::agents::REGISTRY_GROUP.to_uppercase()),
+                        .child(coxd::agents::REGISTRY_GROUP.to_uppercase()),
                 )
             })
             .children(listed.into_iter().map(|known| {
-                let said = line::joined(&crate::agents::unpinned(&known.command));
+                let said = line::joined(&coxd::agents::unpinned(&known.command));
                 choice(
                     format!("add-agent-{}", known.id).into(),
                     known.name.clone(),

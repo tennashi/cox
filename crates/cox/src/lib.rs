@@ -17,8 +17,6 @@
 //!   files, a tree of the project's files, and terminals.
 //! - [`agent`] is a chat's agent: the ACP connection, and the tools Cox
 //!   hands the agent.
-//! - [`agents`] is the agents a chat can talk to: the command line's,
-//!   the human's, and the ACP Registry's.
 //! - [`settings`] is what the human sets of Cox itself, on its settings
 //!   screen: the folder Cox's own chats work in.
 //! - [`wiki`] is the human's wiki, where the agents keep what they
@@ -43,20 +41,19 @@
 //! - [`logs`] is what Cox says of itself as it runs.
 //!
 //! Below them all are [`coxd`], what runs the chats apart from the
-//! window, with what the two share: where Cox keeps what lasts, how it
-//! starts programs, and how it looks; and [`cox_browser`]: CEF, which
-//! renders the stages' pages, and what keeps the agent to its chat's
-//! pages. Each is a crate of its own, with no GPUI in it.
+//! window, with what the two share: the agents a chat can talk to, where
+//! Cox keeps what lasts, how it starts programs, and how it looks; and
+//! [`cox_browser`]: CEF, which renders the stages' pages, and what keeps
+//! the agent to its chat's pages. Each is a crate of its own, with no
+//! GPUI in it.
 
 pub mod agent;
-pub mod agents;
 pub mod app;
 pub mod busy;
 pub mod chat;
 pub mod daemon;
 pub mod inspect;
 pub mod logs;
-pub mod media;
 pub mod notices;
 pub mod project_icon;
 pub mod raw;

@@ -20,7 +20,6 @@ use std::sync::Arc;
 use cox::agent::instructions::Instructions;
 use cox::agent::mcp::{ChatRequest, Waited};
 use cox::agent::setup::{Policy, Setup};
-use cox::agents::Agents as Choices;
 use cox::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, State, WENT_ON};
 use cox::chat::sketch::Sketch;
 use cox::chat::view::ChatView;
@@ -33,6 +32,7 @@ use cox_core::goal::Goal as KeptGoal;
 use cox_core::settings::{Choice, Setting};
 use cox_core::store::Named;
 use cox_core::store::Store;
+use coxd::agents::Agents as Choices;
 use fake_agent::{
     BACKGROUND_FINISHED, BACKGROUND_STARTED, Event, FakeAgent, LogsIn, Resumes, TITLE,
 };
@@ -2050,7 +2050,7 @@ async fn an_agent_proposes_an_icon_which_the_project_has_once_the_human_sets_it(
     click(cx, Box::leak(format!("set-icon-{card}").into_boxed_str()));
     settled(cx, &workspace);
     assert_eq!(proposed(cx)[0].1, Some(Answer::Set));
-    let (kept, _) = cox::media::kept(&teal).unwrap();
+    let (kept, _) = coxd::media::kept(&teal).unwrap();
     assert_eq!(std::fs::read(&icon).unwrap(), std::fs::read(kept).unwrap());
     // The next proposal hears the project has one; one dismissed leaves
     // it be.
@@ -2064,7 +2064,7 @@ async fn an_agent_proposes_an_icon_which_the_project_has_once_the_human_sets_it(
     );
     settled(cx, &workspace);
     assert_eq!(proposed(cx)[1].1, Some(Answer::Dismissed));
-    let (kept, _) = cox::media::kept(&teal).unwrap();
+    let (kept, _) = coxd::media::kept(&teal).unwrap();
     assert_eq!(std::fs::read(&icon).unwrap(), std::fs::read(kept).unwrap());
     let _ = std::fs::remove_file(&icon);
 }

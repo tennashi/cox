@@ -19,7 +19,6 @@ pub mod conversation;
 pub mod hand;
 pub mod judge;
 pub mod launcher;
-pub mod mention;
 pub mod region;
 pub mod sketch;
 pub mod view;

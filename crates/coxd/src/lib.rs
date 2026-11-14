@@ -5,6 +5,11 @@
 //!
 //! The modules go from the top down, each using only what is below it:
 //!
+//! - [`chat`] is one chat, apart from how the window draws it.
+//! - [`agents`] is the agents a chat can talk to: the command line's,
+//!   the human's, and the ACP Registry's.
+//! - [`media`] is the pictures and files the conversations show, kept as
+//!   they were shown.
 //! - [`theme`] is how Cox looks, which the window and the page coxd
 //!   serves a phone share, and [`paths`] how paths are written.
 //! - [`process`] is what Cox does as it starts a program, the agent's or
@@ -16,8 +21,11 @@
 //!   system opened, as from the Finder.
 //! - [`home`] is the human's home directory.
 
+pub mod agents;
+pub mod chat;
 pub mod home;
 pub mod login;
+pub mod media;
 pub mod paths;
 pub mod process;
 pub mod scratch;

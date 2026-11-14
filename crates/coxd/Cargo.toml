@@ -13,9 +13,14 @@ workspace = true
 test-support = ["dep:cox-git", "cox-git/test-support"]
 
 [dependencies]
+anyhow.workspace = true
+cox-acp.workspace = true
 cox-core.workspace = true
 # Git run as under tests, for `testing`'s repositories.
 cox-git = { workspace = true, optional = true }
+# The version gpui uses, to read the pictures the conversations show:
+# see `src/media.rs`.
+image = "0.25.10"
 # When a file went to the trash: see `src/trash.rs`.
 jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 # Keeping Cox's open files from the programs it starts: see
@@ -23,8 +28,18 @@ jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-sy
 libc.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+tokio = { workspace = true, features = ["process", "rt", "time"] }
 tracing.workspace = true
+# Fetching the ACP Registry's agents: see `src/agents.rs`.
+ureq = "3.4.2"
 url = "2.5.8"
+# Downloading the programs of the ACP Registry's agents, checking each
+# archive's SHA-256 and unpacking it: see `src/agents/download.rs`.
+sha2 = "0.10.9"
+flate2 = "1.1.10"
+tar = "0.4.46"
+bzip2 = "0.6.1"
+zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
 cox-git = { workspace = true, features = ["test-support"] }

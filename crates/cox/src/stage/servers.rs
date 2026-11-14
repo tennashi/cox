@@ -19,8 +19,8 @@ use cox_editor::lsp::servers::Got;
 use cox_editor::lsp::{self, Client, Error, Server, Status, languages};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
-use crate::agents::download;
 use crate::settings::DIRECTORIES;
+use coxd::agents::download;
 use coxd::storage::Kept;
 
 /// What starts a server in a project's folder, and answers it once it is
@@ -187,7 +187,7 @@ impl Found {
         }
         let program = server.command.first().cloned().unwrap_or_default();
         let here = std::env::current_dir().unwrap_or_default();
-        crate::agents::check::find(&program, std::env::var_os("PATH").as_deref(), &here)
+        coxd::agents::check::find(&program, std::env::var_os("PATH").as_deref(), &here)
             .map_or(Self::Missing(program), Self::At)
     }
 }
