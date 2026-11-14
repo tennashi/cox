@@ -104,9 +104,7 @@ pub fn rename(project: &Path, from: &str, to: &str) -> Result<(), String> {
     if to == from {
         return Ok(());
     }
-    // A name that differs only in case is the same folder where the disk
-    // does not tell cases apart, as on macOS.
-    if to.exists() && to.canonicalize().ok() != from.canonicalize().ok() {
+    if cox_core::folder::taken(&to, &from) {
         return Err("The project has a directory of that name already.".to_owned());
     }
     std::fs::rename(&from, &to).map_err(|error| format!("The directory is not renamed: {error}"))

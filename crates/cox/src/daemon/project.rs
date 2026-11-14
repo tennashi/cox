@@ -40,9 +40,7 @@ impl Daemon {
         }
         let from = &self.projects[index].folder;
         let to = from.with_file_name(name);
-        // A name that differs only in case is the same folder where the
-        // disk does not tell cases apart, as on macOS.
-        if to != *from && to.exists() && to.canonicalize().ok() != from.canonicalize().ok() {
+        if cox_core::folder::taken(&to, from) {
             return Err("There is a folder of that name there already.".to_owned());
         }
         if self.at_work(index) {
@@ -88,9 +86,7 @@ impl Daemon {
         let directories = from.join(crate::settings::DIRECTORIES);
         let was = directories.join(from.file_name()?);
         let now = directories.join(to.file_name()?);
-        // A name that differs only in case is the same folder where the
-        // disk does not tell cases apart, as on macOS.
-        if !was.is_dir() || now.exists() && now.canonicalize().ok() != was.canonicalize().ok() {
+        if !was.is_dir() || cox_core::folder::taken(&now, &was) {
             return None;
         }
         let renamed = Renamed { was, now };
@@ -352,12 +348,7 @@ impl Daemon {
             .folder
             .join(crate::settings::PROJECTS)
             .join(name);
-        let taken = folder.exists()
-            || self
-                .projects
-                .iter()
-                .any(|project| !project.deleted && project.folder == folder);
-        if taken {
+        if folder.exists() || self.project_at(&folder).is_some() {
             return Err(format!("There is a project {name} already."));
         }
         Ok(folder)

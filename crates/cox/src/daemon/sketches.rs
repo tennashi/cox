@@ -114,9 +114,9 @@ impl Daemon {
     /// its way to an end already.
     pub(super) fn ends_sketch(&self, key: u64) -> bool {
         self.slot(key).is_some_and(|slot| slot.ending.is_none())
-            && self.sketch_of(key).is_some_and(|(_, folder)| {
-                !self.projects.iter().any(|project| project.folder == folder)
-            })
+            && self
+                .sketch_of(key)
+                .is_some_and(|(_, folder)| self.project_at(&folder).is_none())
     }
 
     /// Ends the sketch `key` as `ending` says: asks its agent to sum it up
