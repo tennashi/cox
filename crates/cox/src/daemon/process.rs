@@ -18,7 +18,7 @@
 //! of its own build (see [`super::client`]).
 //!
 //! Every minute, coxd runs the human's schedules that are due (see
-//! [`crate::schedule`]), whether a window is there or not.
+//! [`coxd::schedule`]), whether a window is there or not.
 //!
 //! Unless the settings turn it off, coxd serves the human's phone a page
 //! of the chats too (see [`super::phone`]).
@@ -213,7 +213,7 @@ const SCHEDULES_FIRST: Duration = Duration::from_secs(5);
 const SCHEDULES_EVERY: Duration = Duration::from_mins(1);
 
 /// Has the daemon run the schedules that are due, now and then, as
-/// `internal` tells it (see [`crate::schedule`]).
+/// `internal` tells it (see [`coxd::schedule`]).
 async fn schedules(internal: UnboundedSender<Internal>) {
     tokio::time::sleep(SCHEDULES_FIRST).await;
     loop {

@@ -55,7 +55,6 @@ use gpui::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::chat::Stages;
-use crate::chat::conversation::State;
 use crate::chat::view::{ChatView, OpenLink, Row, StageView};
 use crate::daemon::Link;
 use crate::daemon::wire::{ChatRow, FromDaemon, Listing, ProjectRow, ToDaemon};
@@ -64,6 +63,7 @@ use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView, 
 use coxd::agent::mcp::ToolRequest;
 use coxd::agent::setup::Setup;
 use coxd::agents::Agents;
+use coxd::chat::conversation::State;
 use coxd::chat::sketch::{self, Sketch};
 
 pub(crate) mod project_card;

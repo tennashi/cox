@@ -6,11 +6,11 @@
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
-use coxd::theme::SURFACE;
+use crate::theme::SURFACE;
 
 /// Brighter than the window's, as a terminal's text is.
-pub(crate) const FOREGROUND: u32 = 0xe0_e0e0;
-pub(crate) const CURSOR: u32 = 0xc0_c0c0;
+pub const FOREGROUND: u32 = 0xe0_e0e0;
+pub const CURSOR: u32 = 0xc0_c0c0;
 /// The sixteen colors programs name: black, red, green, yellow, blue,
 /// magenta, cyan and white, then the bright of each.
 const PALETTE: [u32; 16] = [
@@ -20,7 +20,8 @@ const PALETTE: [u32; 16] = [
 
 /// The color at `index` of the terminal's: the program's own if it set
 /// one, or Cox's.
-pub(crate) fn color_at(index: usize, colors: &Colors) -> Rgb {
+#[must_use]
+pub fn color_at(index: usize, colors: &Colors) -> Rgb {
     if let Some(color) = colors[index] {
         return color;
     }
@@ -59,7 +60,8 @@ pub(crate) fn color_at(index: usize, colors: &Colors) -> Rgb {
     }
 }
 
-pub(crate) fn dim(color: Rgb) -> Rgb {
+#[must_use]
+pub fn dim(color: Rgb) -> Rgb {
     let dim = |value: u8| u8::try_from(u16::from(value) * 2 / 3).unwrap_or(value);
     Rgb {
         r: dim(color.r),
@@ -69,7 +71,8 @@ pub(crate) fn dim(color: Rgb) -> Rgb {
 }
 
 /// The color `color` names, as the terminal's colors are now.
-pub(crate) fn resolve(color: Color, colors: &Colors) -> Rgb {
+#[must_use]
+pub fn resolve(color: Color, colors: &Colors) -> Rgb {
     match color {
         Color::Spec(color) => color,
         Color::Named(name) => color_at(name as usize, colors),

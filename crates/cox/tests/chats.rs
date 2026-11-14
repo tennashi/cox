@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use cox::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, State, WENT_ON};
 use cox::chat::view::ChatView;
 use cox::notices::{AppNotices, Notices};
 use cox::ui::input::LineInput;
@@ -31,6 +30,7 @@ use coxd::agent::instructions::Instructions;
 use coxd::agent::mcp::{ChatRequest, Waited};
 use coxd::agent::setup::{Policy, Setup};
 use coxd::agents::Agents as Choices;
+use coxd::chat::conversation::{Check, CheckState, Conversation, Entry, Goal, State, WENT_ON};
 use coxd::chat::sketch::Sketch;
 use coxd::workflow;
 use fake_agent::{

@@ -11,7 +11,7 @@ use cox_core::store::ProjectId;
 
 use super::wire::FromDaemon;
 use super::{Daemon, working};
-use crate::chat::conversation::{Entry, Proposed, State};
+use coxd::chat::conversation::{Entry, Proposed, State};
 use coxd::chat::sketch::{self, Sketch};
 use coxd::storage;
 

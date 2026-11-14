@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use cox::stage::tab::Shows as _;
 use cox::stage::terminal::Terminal;
-use cox::terminal::{Program, Running};
 use coxd::agent::mcp::{Ended, Ran};
+use coxd::terminal::{Program, Running};
 use gpui::{
     Entity, Focusable as _, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext,
     VisualTestContext, point, px,
@@ -237,7 +237,7 @@ fn run_unseen(command: &str, cwd: &std::path::Path, waits: bool) -> Option<Ran> 
     if !waits {
         // The agent stops waiting once the command runs, and the command
         // ends on the interrupt, before it would be hung up on.
-        let ran = cox::terminal::run_unseen(command.to_owned(), cwd, answer);
+        let ran = coxd::terminal::run_unseen(command.to_owned(), cwd, answer);
         let started = cwd.join("started");
         let stops = async {
             while !started.exists() {
@@ -253,7 +253,7 @@ fn run_unseen(command: &str, cwd: &std::path::Path, waits: bool) -> Option<Ran> 
             .expect("the command ends as no one waits for it");
         return None;
     }
-    runtime.block_on(cox::terminal::run_unseen(command.to_owned(), cwd, answer));
+    runtime.block_on(coxd::terminal::run_unseen(command.to_owned(), cwd, answer));
     Some(
         runtime
             .block_on(waiting)

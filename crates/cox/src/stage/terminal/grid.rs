@@ -17,9 +17,9 @@ use gpui::{
 };
 
 use super::Terminal;
-use crate::terminal::colors::{CURSOR, FOREGROUND, dim, resolve};
-use crate::terminal::pty::Size;
-use crate::terminal::{FONT_SIZE, LINE_HEIGHT};
+use coxd::terminal::colors::{CURSOR, FOREGROUND, dim, resolve};
+use coxd::terminal::pty::Size;
+use coxd::terminal::{FONT_SIZE, LINE_HEIGHT};
 use coxd::theme::{CODE_FONT, SELECTION, SURFACE};
 
 /// Room between the grid and the tab's edges.

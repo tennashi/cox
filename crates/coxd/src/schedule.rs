@@ -20,7 +20,7 @@
 //!
 //! coxd looks every minute which are due, and opens a chat for each (see
 //! [`crate::daemon`]). When each last ran is kept where Cox keeps what
-//! lasts (see [`coxd::storage::Kept::Schedules`]), so that a run Cox
+//! lasts (see [`crate::storage::Kept::Schedules`]), so that a run Cox
 //! missed, as while the machine slept, runs once as Cox finds it due,
 //! however many were missed.
 
@@ -257,7 +257,7 @@ pub fn line(text: &str, name: &str, now: &Zoned, last: Option<Timestamp>) -> Str
         || "never".to_owned(),
         |last| at(&last.to_zoned(now.time_zone().clone())),
     );
-    coxd::workflow::fill(text, &[("name", name), ("now", &at(now)), ("last", &last)])
+    crate::workflow::fill(text, &[("name", name), ("now", &at(now)), ("last", &last)])
 }
 
 /// What the chat of the schedule `name` is named, as it runs `now`.
@@ -311,7 +311,7 @@ impl Ran {
             .iter()
             .map(|(id, when)| (id.as_str(), when.to_string()))
             .collect();
-        if let Err(error) = coxd::storage::write_json(path, &kept) {
+        if let Err(error) = crate::storage::write_json(path, &kept) {
             tracing::error!(
                 "{} does not keep when schedules ran: {error}",
                 path.display()
@@ -327,7 +327,7 @@ mod tests {
     use jiff::tz::TimeZone;
 
     use super::{Cron, Ran};
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     fn at(day: i8, hour: i8, minute: i8) -> Zoned {
         // 2026-11-02 is a Monday.

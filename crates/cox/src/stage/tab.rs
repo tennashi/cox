@@ -28,9 +28,9 @@ use super::page::Page;
 use super::terminal::Terminal;
 use super::tree::Unchosen;
 use super::windows::Windows;
-use crate::terminal::Program;
 use crate::ui::LinkClicked;
 use cox_browser::TargetId;
+use coxd::terminal::Program;
 
 /// What a tab shows, whichever kind it is.
 pub trait Shows: Render + Focusable + 'static {

@@ -48,8 +48,6 @@ use cox_core::tabs::{KeptTab, KeptTabs};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
-use crate::terminal::run_unseen;
 use crate::trigger::By;
 use chat::{Again, Chat, Task, spawn};
 use coxd::agent::instructions::Instructions;
@@ -57,9 +55,11 @@ use coxd::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, 
 use coxd::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
 use coxd::agent::{Agent, AgentEvent, Start};
 use coxd::agents::Agents;
+use coxd::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
 use coxd::chat::judge::{Heard, Starts};
 use coxd::chat::sketch::{self, Sketch};
 use coxd::storage;
+use coxd::terminal::run_unseen;
 use coxd::workflow;
 use wire::{Build, ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
@@ -254,7 +254,7 @@ pub enum Internal {
     /// The daemon is to stop, with its chats' agents.
     Quit,
     /// It is time to look which of the triggers on a schedule are due,
-    /// and run them (see [`crate::schedule`]).
+    /// and run them (see [`coxd::schedule`]).
     Schedules,
 }
 
@@ -437,8 +437,8 @@ pub struct Daemon {
     /// Whether the daemon is to stop.
     done: bool,
     /// When each of the human's schedules last ran (see
-    /// [`crate::schedule`]), read as the daemon first looks.
-    ran: Option<crate::schedule::Ran>,
+    /// [`coxd::schedule`]), read as the daemon first looks.
+    ran: Option<coxd::schedule::Ran>,
     /// The chat of the last run of each schedule, by the path of its
     /// file.
     scheduled: HashMap<String, u64>,
@@ -1753,7 +1753,7 @@ impl Daemon {
     /// each run, in the project of the folder it works in, or of Cox's
     /// own, on the trigger's text, sent in the human's place, its agent
     /// going on unasked with what the trigger allows (see
-    /// [`crate::schedule`]).
+    /// [`coxd::schedule`]).
     fn run_schedules(&mut self, workflow: &Path, now: &jiff::Zoned) {
         // The first is Cox's own, in the home.
         let home = self.projects[0].folder.clone();
@@ -1771,7 +1771,7 @@ impl Daemon {
         let mut ran = self
             .ran
             .take()
-            .unwrap_or_else(|| crate::schedule::Ran::read(storage::path(storage::Kept::Schedules)));
+            .unwrap_or_else(|| coxd::schedule::Ran::read(storage::path(storage::Kept::Schedules)));
         for (trigger, works) in scheduled {
             let (Some(cron), By::New { allow, reject, .. }) = (trigger.cron(), &trigger.by) else {
                 continue;
@@ -1808,12 +1808,12 @@ impl Daemon {
             let store = Rc::clone(&self.store);
             if let Some(slot) = self.slot_mut(key) {
                 slot.name_as(
-                    &crate::schedule::chat_name(&trigger.name, now),
+                    &coxd::schedule::chat_name(&trigger.name, now),
                     Named::Human,
                     &store,
                 );
             }
-            let line = crate::schedule::line(&trigger.text, &trigger.name, now, last);
+            let line = coxd::schedule::line(&trigger.text, &trigger.name, now, last);
             if let Some(chat) = self.chat(key) {
                 chat.told(&line);
             }

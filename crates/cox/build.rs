@@ -36,7 +36,7 @@ const SPEAKS: &[&str] = &[
     "src/daemon/process.rs",
     "../coxd/src/agent/mcp.rs",
     "../coxd/src/agent/setup.rs",
-    "src/chat/conversation.rs",
+    "../coxd/src/chat/conversation.rs",
     "../coxd/src/chat/sketch.rs",
     "../coxd/src/workflow.rs",
     "../cox-core/src",

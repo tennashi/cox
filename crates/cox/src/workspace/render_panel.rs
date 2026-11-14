@@ -11,11 +11,11 @@ use super::{
     CancelRename, Chat, FOLDED_WIDTH, LIST, PANEL_WIDTH, RENAMING, ROW_HEIGHT, ROW_RADIUS,
     Workspace,
 };
-use crate::chat::conversation::State;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::{card, tip};
 use crate::vim::hints::{self, Hinted as _, Part};
+use coxd::chat::conversation::State;
 use coxd::theme::{
     ACCENT, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAINT, FOREGROUND, GAP, GROUND, HOVER,
     LINK, RAISED, SELECTED, chat_color,

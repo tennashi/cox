@@ -20,12 +20,12 @@ use super::code::Code;
 use super::plugins::Plugin;
 use super::tab::{Tab, TabContent};
 use super::typed::{Typed, Unmatched, typed};
-use crate::terminal::Program;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Follow;
+use coxd::terminal::Program;
 use coxd::theme::{
     ACCENT, ASKING, BORDER_STRONG, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED, SURFACE,
 };

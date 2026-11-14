@@ -7,7 +7,7 @@
 //! paths of files in the text are links even where the agent did not mark
 //! them as such, as in what a command printed, or a place in the code the
 //! agent names, such as `src/main.rs:12`. A code block of Mermaid is a
-//! diagram, which the window draws (see [`super::diagram`]).
+//! diagram, which the window draws (see [`coxd::diagram`]).
 
 use std::ops::Range;
 

@@ -18,13 +18,13 @@ use alacritty_terminal::tty;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::START_CELL;
-use coxd::process::close_on_exec;
+use crate::process::close_on_exec;
 
 /// How many lines the terminal keeps of what scrolled off.
 const SCROLLBACK: usize = 10_000;
 
 /// The size a terminal starts at, before the tab is laid out.
-pub(crate) const START_SIZE: Size = Size {
+pub const START_SIZE: Size = Size {
     columns: 80,
     lines: 24,
 };
@@ -40,9 +40,9 @@ pub enum Program {
 
 /// The terminal's size in cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Size {
-    pub(crate) columns: usize,
-    pub(crate) lines: usize,
+pub struct Size {
+    pub columns: usize,
+    pub lines: usize,
 }
 
 impl Dimensions for Size {
@@ -62,7 +62,8 @@ impl Dimensions for Size {
 impl Size {
     /// As the pseudoterminal is told it, with cells `width` by `height`
     /// pixels.
-    pub(crate) fn window_size(self, width: f32, height: f32) -> WindowSize {
+    #[must_use]
+    pub fn window_size(self, width: f32, height: f32) -> WindowSize {
         let whole = |count: usize| u16::try_from(count).unwrap_or(u16::MAX);
         WindowSize {
             num_lines: whole(self.lines),
@@ -84,7 +85,7 @@ fn whole_pixels(pixels: f32) -> u16 {
 
 /// Hands what the terminal tells of itself to the tab.
 #[derive(Clone)]
-pub(crate) struct Listener(UnboundedSender<Event>);
+pub struct Listener(UnboundedSender<Event>);
 
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
@@ -94,13 +95,13 @@ impl EventListener for Listener {
 
 /// A program running on a pseudoterminal, before a tab shows it.
 pub struct Running {
-    pub(crate) program: Program,
-    pub(crate) cwd: PathBuf,
-    pub(crate) term: Arc<FairMutex<Term<Listener>>>,
-    pub(crate) pty: EventLoopSender,
-    pub(crate) events: UnboundedReceiver<Event>,
+    pub program: Program,
+    pub cwd: PathBuf,
+    pub term: Arc<FairMutex<Term<Listener>>>,
+    pub pty: EventLoopSender,
+    pub events: UnboundedReceiver<Event>,
     /// The program's end of the pseudoterminal, held open.
-    pub(crate) _held: OwnedFd,
+    pub held: OwnedFd,
 }
 
 impl Running {
@@ -156,7 +157,7 @@ impl Running {
             term,
             pty: sender,
             events,
-            _held: held,
+            held,
         })
     }
 }

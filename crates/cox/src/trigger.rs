@@ -26,7 +26,7 @@
 //! the project's, then the human's, each by name. The first that fails
 //! stops them, and the chat's agent is told what it found, as the next
 //! turn, as a goal that is not met tells it (see
-//! [`crate::chat::conversation`]).
+//! [`coxd::chat::conversation`]).
 //!
 //! Which triggers run in a folder, and in which order, the human chooses
 //! on the stage's Triggers tab, which Cox keeps apart from the files (see
@@ -42,8 +42,8 @@ use std::path::{Path, PathBuf};
 use cox_core::entry::CheckState;
 use sha2::{Digest as _, Sha256};
 
-use crate::schedule::Cron;
 use coxd::agent::setup::{Policy, Setup, StageUse};
+use coxd::schedule::Cron;
 
 pub mod card;
 pub mod discuss;
@@ -98,7 +98,7 @@ pub enum On {
     #[serde(rename = "permission.asked")]
     PermissionAsked,
     /// The times a cron says, in no chat, as `schedule: {cron: "0 9 * * *"}`
-    /// (see [`crate::schedule`]).
+    /// (see [`coxd::schedule`]).
     #[serde(rename = "schedule")]
     Schedule { cron: Cron },
 }
@@ -959,7 +959,7 @@ pub struct Kept<'a> {
     pub home: &'a Path,
     pub arranged: Option<&'a Path>,
     pub runs: Option<&'a Path>,
-    pub schedules: &'a crate::schedule::Ran,
+    pub schedules: &'a coxd::schedule::Ran,
 }
 
 /// What the stage's Triggers tab is told, as `cox://api/triggers`: the
@@ -1327,7 +1327,7 @@ mod tests {
 
         /// What the tab is told of the project.
         fn told(&self) -> serde_json::Value {
-            let schedules = crate::schedule::Ran::default();
+            let schedules = coxd::schedule::Ran::default();
             let kept = Kept {
                 workflow: &self.workflow,
                 home: &self.root.join("home"),
@@ -1489,7 +1489,7 @@ mod tests {
     fn a_schedule_shows_where_its_chat_works() {
         let root = TempDir::new();
         let (home, project, elsewhere, workflow) = schedules_in(&root);
-        let mut schedules = crate::schedule::Ran::default();
+        let mut schedules = coxd::schedule::Ran::default();
         let now = jiff::civil::date(2026, 11, 3)
             .at(10, 0, 0, 0)
             .to_zoned(jiff::tz::TimeZone::UTC)

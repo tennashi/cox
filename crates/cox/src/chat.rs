@@ -11,11 +11,10 @@
 //! - [`hand`] is what the human hands a chat from elsewhere on the
 //!   screen, as text selected in a tab, and [`region`] a region of the
 //!   window they drag, as a picture.
-//! - [`conversation`] holds what the view shows and decides what the
-//!   human's input means, in plain Rust, so it is tested without GPUI.
-//!   `cox-core` keeps what it shows.
+//!
+//! What the view shows, and what the human's input means, is coxd's
+//! [`coxd::chat::conversation`], in plain Rust, tested without GPUI.
 
-pub mod conversation;
 pub mod hand;
 pub mod launcher;
 pub mod region;

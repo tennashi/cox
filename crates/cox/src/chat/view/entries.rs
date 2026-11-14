@@ -22,14 +22,14 @@ use gpui::{AnyElement, Context, FontWeight, SharedString, Stateful, div, prelude
 use cox_core::entry::MediaKind;
 use cox_core::goal::Goal;
 
-use crate::chat::conversation::{
-    self, Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, Proposal, Proposed,
-    State, Step, StepState, ToolCallResult,
-};
 use crate::chat::view::ChatView;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::text::Writer;
 use crate::vim::hints::Hinted as _;
+use coxd::chat::conversation::{
+    self, Answer, Attachment, Check, CheckState, Content, Entry, LoginOption, Proposal, Proposed,
+    State, Step, StepState, ToolCallResult,
+};
 use coxd::theme::{
     ACCENT, ACCENT_GROUND, ADDED_GROUND, ASKING, ASKING_BUTTON, ASKING_EDGE, ASKING_GROUND, BORDER,
     BORDER_STRONG, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, DISABLED, FAILED, FAILED_GROUND,

@@ -9,10 +9,10 @@ use cox_core::goal::Goal;
 use cox_core::store::Named;
 
 use super::{Daemon, Ends, NAME_LENGTH, Sketching, make_sketch, working};
-use crate::chat::conversation::{Entry, State};
 use coxd::agent;
 use coxd::agent::mcp::{OpenedChat, Waited};
 use coxd::agent::setup::{Policy, Setup, keeps_in_wiki};
+use coxd::chat::conversation::{Entry, State};
 use coxd::chat::sketch::{self, Sketch};
 use coxd::storage;
 use coxd::workflow;
