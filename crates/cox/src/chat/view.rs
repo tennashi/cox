@@ -65,11 +65,11 @@ use crate::ui::selected::{self, Selected};
 use crate::ui::selection::Spot;
 use crate::ui::text::Reading;
 use crate::ui::text::cursor::Step;
-use crate::ui::theme::{
+use crate::ui::{Copy, Panel, tip};
+use coxd::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND,
     OFFERING_EDGE, RAISED, UI_FONT,
 };
-use crate::ui::{Copy, Panel, tip};
 
 use crate::vim::keymap::{Across, Motion, Place, Selects};
 

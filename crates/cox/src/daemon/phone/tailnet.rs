@@ -14,7 +14,7 @@
 use std::process::Command;
 use std::time::Duration;
 
-use crate::process::{Output, run_with_deadline};
+use coxd::process::{Output, run_with_deadline};
 
 /// Where `tailscale` is: on `PATH`, as Homebrew's or the app's own
 /// installed from its settings, or in the app.

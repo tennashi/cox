@@ -36,7 +36,7 @@ use gpui::{
 
 use self::draft::{Draft, one_line, unix_line_breaks};
 use crate::ui::selected::{self, Selected};
-use crate::ui::theme::{ACCENT, FAINT, FOREGROUND, SELECTION};
+use coxd::theme::{ACCENT, FAINT, FOREGROUND, SELECTION};
 
 actions!(
     line_input,

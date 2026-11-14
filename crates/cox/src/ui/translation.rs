@@ -16,8 +16,8 @@ use gpui::{
 use cox_core::entry::Attachment;
 
 use crate::translate::{Arriving, Way};
-use crate::ui::theme::{BORDER_STRONG, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED};
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{BORDER_STRONG, BUTTON_HOVER, DIM, FAILED, FAINT, FOREGROUND, RAISED};
 
 actions!(
     cox,

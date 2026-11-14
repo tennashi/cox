@@ -92,7 +92,7 @@ pub fn check(command: Vec<String>, cwd: &Path) -> Checked {
     if find(&program, std::env::var_os("PATH").as_deref(), &here).is_none() {
         return Checked::NotFound(program);
     }
-    crate::process::close_on_exec();
+    coxd::process::close_on_exec();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -169,7 +169,7 @@ pub(crate) fn find(program: &str, path: Option<&std::ffi::OsStr>, here: &Path) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn a_program_is_found_on_the_path_or_where_its_path_says() {

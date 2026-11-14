@@ -603,7 +603,7 @@ fn cannot_run(error: &str) -> Tried {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn a_reply_proposes_the_trigger_in_its_fenced_block() {

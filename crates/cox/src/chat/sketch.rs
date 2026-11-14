@@ -8,7 +8,7 @@
 //! from it.
 //!
 //! Cox makes the folder when the chat opens, in a folder of its own for
-//! sketches (see [`crate::storage`]), and keeps where it is with the chat's
+//! sketches (see [`coxd::storage`]), and keeps where it is with the chat's
 //! setup, so the chat goes on there once it is started again. It marks
 //! where the sketch starts in the folder's repository, so that what the
 //! sketch changed shows on the stage as all it changed since then (see
@@ -696,8 +696,8 @@ mod tests {
 
     use super::*;
     use crate::agent::setup::{Asked, Decision};
-    use crate::testing::TempDir;
-    use crate::testing::run_git as git;
+    use coxd::testing::TempDir;
+    use coxd::testing::run_git as git;
 
     #[test]
     fn a_sketch_works_in_a_worktree_of_the_last_commit() {

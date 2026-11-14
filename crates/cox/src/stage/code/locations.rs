@@ -17,18 +17,18 @@ use gpui::{
 use super::Code;
 use super::text::NUMBER;
 use crate::ui::ellipsis::ellipsis;
-use crate::ui::paths::shortened;
-use crate::ui::theme::{
+use crate::vim::hints::Hinted as _;
+use coxd::paths::shortened;
+use coxd::theme::{
     ACCENT_GROUND, BORDER, BUTTON_HOVER, CARD_INNER_RADIUS, CODE_FONT, DIM, FOREGROUND, GROUND,
     HOVER,
 };
-use crate::vim::hints::Hinted as _;
 
 /// How tall the list is, as a part of the tab's height.
 const HEIGHT: f32 = 0.35;
 
 /// The stretch of a line that is the place.
-const FOUND: u32 = crate::ui::theme::CODE;
+const FOUND: u32 = coxd::theme::CODE;
 
 /// What the human asked the server to find.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

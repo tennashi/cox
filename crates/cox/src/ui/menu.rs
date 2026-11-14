@@ -5,7 +5,7 @@
 
 use gpui::{Div, ElementId, Stateful, div, prelude::*, px, rgb};
 
-use crate::ui::theme::{BORDER, BORDER_STRONG, FAINT, FOREGROUND, RAISED, SELECTED};
+use coxd::theme::{BORDER, BORDER_STRONG, FAINT, FOREGROUND, RAISED, SELECTED};
 
 /// How round a menu is, and a row of it.
 const RADIUS: f32 = 14.;

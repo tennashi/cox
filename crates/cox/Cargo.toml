@@ -27,6 +27,8 @@ cox-browser.workspace = true
 cox-core.workspace = true
 cox-editor.workspace = true
 cox-git.workspace = true
+# What runs the chats apart from the window, which it shows.
+coxd.workspace = true
 # runtime_shaders: compile the Metal shaders when the app starts, so a Mac
 # with only the Command Line Tools (no Xcode, no `metal` compiler) can build.
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
@@ -113,6 +115,8 @@ objc2-core-graphics = "0.3.2"
 [dev-dependencies]
 # Git run under the tests as under cox-git's own: see its `src/git.rs`.
 cox-git = { workspace = true, features = ["test-support"] }
+# What the tests share with coxd's: see its `src/testing.rs`.
+coxd = { workspace = true, features = ["test-support"] }
 agent-client-protocol.workspace = true
 gpui = { version = "0.2.2", features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }

@@ -24,7 +24,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use tokio::net::TcpListener;
 
 use super::{Body, TEXT, answer};
-use crate::storage::{self, Kept};
+use coxd::storage::{self, Kept};
 
 /// The port the mocks are served on, for the page served on `page`: two
 /// after it, the one after it being the relay's.
@@ -269,7 +269,7 @@ fn told(request: &Request<Incoming>, port: u16) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn lists_the_pages_of_a_sketch_alone() {

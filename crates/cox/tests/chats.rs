@@ -673,7 +673,7 @@ fn the_settings_name_the_search_engine(cx: &mut TestAppContext) {
 async fn the_settings_unpair_every_phone(cx: &mut TestAppContext) {
     let home = scratch::folder("unpair-home");
     let (_agents, workspace, cx) = open_window(cx, home.clone());
-    let file = cox::storage::path(cox::storage::Kept::PhoneToken).unwrap();
+    let file = coxd::storage::path(coxd::storage::Kept::PhoneToken).unwrap();
     let before = cox::daemon::phone::token().unwrap();
 
     click(cx, "open-settings");
@@ -3477,7 +3477,7 @@ fn turn_on(folder: &Path, file: &Path) {
         on: true,
         sum: Some(trigger.sum),
     }
-    .make(cox::storage::path(cox::storage::Kept::Triggers).as_deref())
+    .make(coxd::storage::path(coxd::storage::Kept::Triggers).as_deref())
     .unwrap();
 }
 
@@ -3985,7 +3985,7 @@ async fn open_sketch(
         .unwrap()
         .folder
         .expect("a sketch's folder");
-    let sketches = cox::storage::path(cox::storage::Kept::Sketches).unwrap();
+    let sketches = coxd::storage::path(coxd::storage::Kept::Sketches).unwrap();
     assert!(folder.starts_with(&sketches), "{}", folder.display());
     settle_on(cx, workspace).await;
     folder
@@ -4058,7 +4058,7 @@ async fn a_chat_opens_a_sketch_beside_it(cx: &mut TestAppContext) {
     // what it tries.
     let opened = start(cx, 0).await.unwrap().unwrap();
     let folder = opened.folder.clone().expect("a sketch's folder");
-    let sketches = cox::storage::path(cox::storage::Kept::Sketches).unwrap();
+    let sketches = coxd::storage::path(coxd::storage::Kept::Sketches).unwrap();
     assert!(folder.starts_with(&sketches), "{}", folder.display());
     assert_eq!(opened.name, "A warmer greeting.");
     cx.condition(&workspace, |workspace, _| workspace.chats(0).count() == 2)

@@ -29,13 +29,11 @@ use crate::ui::card;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
-use crate::ui::paths::shortened;
-use crate::ui::theme::{
-    ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED,
-};
 use crate::ui::tip;
 use crate::vim::Move;
 use crate::vim::hints::Hinted as _;
+use coxd::paths::shortened;
+use coxd::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK, RAISED};
 
 actions!(
     cox,
@@ -1105,7 +1103,7 @@ fn label(text: &'static str) -> gpui::Div {
 #[cfg(test)]
 mod tests {
     use super::{Drawing, Standing, why_not_renamed};
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     /// A project in `root/app`, idle, beside a folder named `taken`.
     fn app_in(root: &TempDir) -> Standing {

@@ -16,7 +16,7 @@ use gpui::{
     Pixels, StatefulInteractiveElement, Styled, Window, WindowId, canvas, deferred, div, px, rgb,
 };
 
-use crate::ui::theme::{ASKING, GROUND, UI_FONT};
+use coxd::theme::{ASKING, GROUND, UI_FONT};
 
 /// The letters labels are made of, those under the fingers first.
 const LETTERS: &[char] = &[

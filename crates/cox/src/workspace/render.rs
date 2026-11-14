@@ -10,10 +10,8 @@ use crate::chat::region::{self, AddRegionToChat};
 use crate::settings::view::OpenSettings;
 use crate::stage::{NewPage, NewTerminal, OpenFile, Stage};
 use crate::ui::card;
-use crate::ui::theme::{
-    CARD_INNER_RADIUS, CARD_RADIUS, FOCUSED_EDGE, FOREGROUND, GAP, GROUND, UI_FONT,
-};
 use crate::vim::hints::{self, Part};
+use coxd::theme::{CARD_INNER_RADIUS, CARD_RADIUS, FOCUSED_EDGE, FOREGROUND, GAP, GROUND, UI_FONT};
 
 impl Workspace {
     /// The settings screen, over the window and dimming it, while it is

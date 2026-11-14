@@ -132,7 +132,7 @@ use crate::stage::tree::{Chosen, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
 use crate::terminal::{Program, Running};
 use crate::ui::Panel;
-use crate::ui::theme::BORDER;
+use coxd::theme::BORDER;
 
 actions!(
     stage,

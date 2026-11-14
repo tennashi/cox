@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use cox_core::entry::MediaKind;
 use sha2::{Digest as _, Sha256};
 
-use crate::storage::{self, Kept};
+use coxd::storage::{self, Kept};
 
 /// The most a picture or a video shown may hold.
 const MOST: u64 = 100 * 1024 * 1024;
@@ -193,7 +193,7 @@ pub fn printed(output: &str) -> Vec<(Option<String>, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn keeps_the_text_of_a_file_shown_as_it_was() {

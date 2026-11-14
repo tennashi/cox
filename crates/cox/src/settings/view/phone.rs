@@ -19,8 +19,8 @@ use qrcodegen::{QrCode, QrCodeEcc};
 use super::words::{Part, Words};
 use crate::daemon::phone::{Pairing, pairing};
 use crate::ui::button::{Kind, button};
-use crate::ui::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND};
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND};
 
 /// How wide the code is drawn, its quiet edge too.
 const CODE_SIZE: f32 = 184.;

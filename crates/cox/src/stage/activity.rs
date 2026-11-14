@@ -265,7 +265,7 @@ fn kept_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     fn chat(key: u64, cwd: &Path, project: &Path, asking: bool, unread: bool) -> Chat {
         Chat {

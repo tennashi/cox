@@ -365,7 +365,7 @@ mod tests {
 
     use super::*;
     use crate::agent::setup::{Asked, Decision};
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn the_verdict_is_the_replys_last_line() {

@@ -14,10 +14,8 @@ use gpui::{
 
 use super::file::Spans;
 use super::{Code, Follow, Laid, PADDING, Place, Row};
-use crate::ui::theme::{
-    ACCENT, ACCENT_GROUND, CODE_FONT, DISABLED, FOREGROUND, HOVER, LINK, SELECTION,
-};
 use crate::vim::keymap::Sight;
+use coxd::theme::{ACCENT, ACCENT_GROUND, CODE_FONT, DISABLED, FOREGROUND, HOVER, LINK, SELECTION};
 
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.4;
@@ -28,7 +26,7 @@ const REVEAL_AT: f32 = 1. / 3.;
 
 pub(super) const NUMBER: u32 = DISABLED;
 /// The name the server says something of.
-const HOVERED: u32 = crate::ui::theme::BUTTON_HOVER;
+const HOVERED: u32 = coxd::theme::BUTTON_HOVER;
 /// How code that is nothing in particular is drawn.
 pub(super) const PLAIN: (u32, FontWeight, FontStyle) =
     (FOREGROUND, FontWeight::NORMAL, FontStyle::Normal);

@@ -68,7 +68,7 @@
 //!
 //! A plugin draws in the window's colors by linking the stylesheet at
 //! `cox://api/theme.css`, whose custom properties on `:root` are the
-//! colors of [`crate::ui::theme`], named after them, as `--asking-ground`.
+//! colors of [`coxd::theme`], named after them, as `--asking-ground`.
 //!
 //! A plugin shows a chat of the window by going to `cox://chat/<key>`,
 //! the number the Activity page is told it by.
@@ -247,7 +247,7 @@ impl Plugins {
             if path == "theme.css" {
                 return Some(Resource {
                     mime: "text/css".to_owned(),
-                    body: crate::ui::theme::css().into_bytes(),
+                    body: coxd::theme::css().into_bytes(),
                 });
             }
             return self.api(path);
@@ -306,7 +306,7 @@ impl Plugins {
                     if !runs_there {
                         return None;
                     }
-                    let kept = crate::storage::path(crate::storage::Kept::Triggers);
+                    let kept = coxd::storage::path(coxd::storage::Kept::Triggers);
                     if let Err(error) = change.make(kept.as_deref()) {
                         tracing::error!("the triggers are not arranged as asked: {error}");
                     }
@@ -386,7 +386,7 @@ impl Plugins {
                 }
                 let made = save.make(
                     &crate::settings::workflow(),
-                    crate::storage::path(crate::storage::Kept::Triggers).as_deref(),
+                    coxd::storage::path(coxd::storage::Kept::Triggers).as_deref(),
                 );
                 let mut told = self.triggers();
                 match made {
@@ -407,7 +407,7 @@ impl Plugins {
                 if !shown(&tried.folder) {
                     return None;
                 }
-                discuss::try_on(tried, crate::storage::path(crate::storage::Kept::LastTurns))
+                discuss::try_on(tried, coxd::storage::path(coxd::storage::Kept::LastTurns))
             }
             "discussion" => discuss::told(&said),
             "tried" => discuss::tried(&said),
@@ -422,7 +422,7 @@ impl Plugins {
     /// The triggers of the folder, as `cox://api/triggers` tells them
     /// (see [`crate::trigger::told`]).
     fn triggers(&self) -> serde_json::Value {
-        use crate::storage::{Kept, path};
+        use coxd::storage::{Kept, path};
         let (arranged, runs) = (path(Kept::Triggers), path(Kept::TriggerRuns));
         crate::trigger::told(
             &self.trigger_folders(),
@@ -542,7 +542,7 @@ fn mime(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn addresses_split_into_host_and_path() {

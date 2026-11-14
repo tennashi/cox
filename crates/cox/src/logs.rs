@@ -7,7 +7,7 @@
 //! it down to `debug`, or as `COX_LOG` asks, in a file of each run's own,
 //! one JSON object a line, for an agent that debugs Cox to read and search
 //! once the run is over too: `logs/<time>-<process id>.jsonl` where Cox
-//! keeps what lasts (see [`crate::storage`]). It keeps the files of the
+//! keeps what lasts (see [`coxd::storage`]). It keeps the files of the
 //! last [`RUNS_KEPT`] runs. A panic goes there too, with its backtrace.
 //! Each line says where in Cox's code it was said, so that what Cox did
 //! can be followed back to the code, as [`flow`] does for a tool call.
@@ -45,7 +45,7 @@ pub mod flow;
 pub const RUNS_KEPT: usize = 20;
 
 /// What the file of a run keeps when `COX_LOG` does not say.
-const KEPT: &str = "info,cox=debug";
+const KEPT: &str = "info,cox=debug,coxd=debug";
 
 /// The mode of a run's file: what the agents say is the human's user's only.
 const OWNER_ONLY: u32 = 0o600;
@@ -196,7 +196,7 @@ mod tests {
 
     use super::*;
     use crate::agent::mcp::{self, Answered, Serves};
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     fn names(directory: &Path) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(directory)

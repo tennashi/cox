@@ -39,7 +39,7 @@ pub fn describe(
         std::process::id(),
         std::env::current_dir().map_or_else(|_| "?".to_owned(), |cwd| cwd.display().to_string())
     );
-    if let Some(data) = crate::storage::root() {
+    if let Some(data) = coxd::storage::root() {
         let _ = writeln!(told, "It keeps what lasts in {}", data.display());
     }
     match crate::logs::file() {

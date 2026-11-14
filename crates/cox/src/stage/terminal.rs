@@ -61,12 +61,12 @@ use crate::terminal::{Program, Running, START_CELL, ended_of, text_of};
 use crate::ui::Copy;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::Paste;
-use crate::ui::paths::shortened;
 use crate::ui::selected::{self, Selected};
-use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED};
 use crate::vim::keymap::Motion;
 use crate::vim::search::{Direction, Find};
 use crate::vim::{Move, Region, Visual};
+use coxd::paths::shortened;
+use coxd::theme::{ACCENT, BORDER, DIM, FAILED};
 
 pub(crate) const KEY_CONTEXT: &str = "Terminal";
 

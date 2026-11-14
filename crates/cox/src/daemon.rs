@@ -56,11 +56,11 @@ use crate::agents::Agents;
 use crate::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
 use crate::chat::judge::{Heard, Starts};
 use crate::chat::sketch::{self, Sketch};
-use crate::storage;
 use crate::terminal::run_unseen;
 use crate::trigger::By;
 use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
+use coxd::storage;
 use wire::{Build, ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
 /// What the project of chats with no folder is called.
@@ -505,12 +505,12 @@ pub fn start(
     let (to, from_window) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
     let data = storage::kept_on_this_thread();
-    let trash = crate::trash::kept_on_this_thread();
+    let trash = coxd::trash::kept_on_this_thread();
     let thread = std::thread::Builder::new()
         .name("daemon".to_owned())
         .spawn(move || {
             storage::keep_on_this_thread(data);
-            crate::trash::keep_on_this_thread(trash);
+            coxd::trash::keep_on_this_thread(trash);
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -2609,7 +2609,7 @@ pub fn at_work(state: State) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     /// No agents, for a daemon whose chats stay closed.
     struct NoAgents;
@@ -2832,7 +2832,7 @@ mod tests {
     fn a_chat_opens_in_a_folder_again_in_a_new_project_once_its_project_was_deleted() {
         let home = TempDir::new();
         storage::keep_on_this_thread(Some(home.join("data")));
-        crate::trash::keep_on_this_thread(Some(home.join("Trash")));
+        coxd::trash::keep_on_this_thread(Some(home.join("Trash")));
         let folder = home.join("shop");
         std::fs::create_dir(&folder).unwrap();
         let (store, _) = one_chat(&folder);

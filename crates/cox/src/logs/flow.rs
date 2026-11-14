@@ -529,7 +529,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     /// A line as Cox keeps it, said at `at` seconds into the run.
     fn line(at: f64, target: &str, from: Option<&str>, message: &str, file: &str) -> String {

@@ -83,7 +83,7 @@ mod tests {
     use cox_editor::map::MAPS_FOLDER;
 
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     const A_MAP: &str = r#"{
       "tiers": [

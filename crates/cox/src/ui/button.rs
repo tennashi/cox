@@ -5,7 +5,7 @@
 
 use gpui::{Div, ElementId, FontWeight, Stateful, div, prelude::*, px, rgb};
 
-use crate::ui::theme::{ACCENT, BUTTON, BUTTON_HOVER, DIM, FOREGROUND, GROUND};
+use coxd::theme::{ACCENT, BUTTON, BUTTON_HOVER, DIM, FOREGROUND, GROUND};
 
 /// How tall a button is.
 pub const HEIGHT: f32 = 28.;

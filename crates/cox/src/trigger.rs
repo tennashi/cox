@@ -837,7 +837,7 @@ pub fn asked_to_gather(about: &str) -> String {
 
 /// Which triggers the human turned on or off in a folder, and the order
 /// they run in there, by their files, as the stage's Triggers tab sets
-/// them: kept in Cox's state (see [`crate::storage::Kept::Triggers`]), a
+/// them: kept in Cox's state (see [`coxd::storage::Kept::Triggers`]), a
 /// folder each.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Arranged {
@@ -857,7 +857,7 @@ pub struct Arranged {
 
 impl Arranged {
     /// How the triggers of `folder` are arranged, as `kept`, the file Cox
-    /// keeps it in (see [`crate::storage::Kept::Triggers`]), has it.
+    /// keeps it in (see [`coxd::storage::Kept::Triggers`]), has it.
     #[must_use]
     pub fn read(kept: Option<&Path>, folder: &Path) -> Self {
         read_arranged(kept).remove(folder).unwrap_or_default()
@@ -926,7 +926,7 @@ pub struct Ran {
 
 impl Ran {
     /// How the triggers of `folder` last ran, by their files, as `kept`,
-    /// the file Cox keeps it in (see [`crate::storage::Kept::TriggerRuns`]),
+    /// the file Cox keeps it in (see [`coxd::storage::Kept::TriggerRuns`]),
     /// has it.
     #[must_use]
     pub fn read(kept: Option<&Path>, folder: &Path) -> BTreeMap<PathBuf, Self> {
@@ -1133,7 +1133,7 @@ fn read_arranged(kept: Option<&Path>) -> BTreeMap<PathBuf, Arranged> {
 
 /// Writes `all` to `path` whole, as JSON, a folder's each.
 fn write_kept<T: serde::Serialize>(path: &Path, all: &BTreeMap<PathBuf, T>) -> Result<(), String> {
-    crate::storage::write_json(path, all)
+    coxd::storage::write_json(path, all)
         .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
@@ -1248,7 +1248,7 @@ fn tempfile_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{TempDir, run_git};
+    use coxd::testing::{TempDir, run_git};
 
     fn parse(text: &str) -> Result<Trigger, String> {
         Trigger::parse("t", Path::new("t.md"), Scope::Global, text)

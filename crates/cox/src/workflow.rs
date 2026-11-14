@@ -297,7 +297,7 @@ pub fn fill(text: &str, values: &[(&str, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn a_text_is_filled_in_once() {

@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use gpui::{App, AppContext as _, Global, Task};
 use serde::{Deserialize, Serialize};
 
-use crate::storage;
+use coxd::storage;
 
 /// The most pages the history keeps: past it, those visited least lately
 /// go.
@@ -322,7 +322,7 @@ fn write_soon(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     const NOW: u64 = 1_800_000_000;
 

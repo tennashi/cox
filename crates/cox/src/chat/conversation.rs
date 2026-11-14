@@ -1595,7 +1595,7 @@ pub fn switched_note(from: &str, to: &str) -> String {
 /// those of the file at `path`.
 #[must_use]
 pub fn instructions_note(path: &Path) -> String {
-    format!("Instructions: {}", crate::ui::paths::shortened(path))
+    format!("Instructions: {}", coxd::paths::shortened(path))
 }
 
 /// The note that tells the human the context the agent was set up with,
@@ -1619,7 +1619,7 @@ pub fn sketch_note(folder: &Path) -> String {
 /// its project's, as the chat of a schedule works where it says.
 #[must_use]
 pub fn folder_note(folder: &Path) -> String {
-    format!("Works in: {}", crate::ui::paths::shortened(folder))
+    format!("Works in: {}", coxd::paths::shortened(folder))
 }
 
 /// Whether `entry` starts a turn: a line sent to the agent, by the human

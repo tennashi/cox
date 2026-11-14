@@ -38,13 +38,13 @@ use gpui::{
 use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::theme::{
-    ACCENT, ACCENT_GROUND, BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER,
-    SURFACE, chat_color,
-};
 use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
 use crate::vim::{Close, Move, Open};
+use coxd::theme::{
+    ACCENT, ACCENT_GROUND, BORDER, BUTTON_HOVER, DIM, DISABLED, FAILED, FAINT, FOREGROUND, HOVER,
+    SURFACE, chat_color,
+};
 
 pub(crate) const KEY_CONTEXT: &str = "Tree";
 

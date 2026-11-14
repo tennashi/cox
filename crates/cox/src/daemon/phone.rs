@@ -71,8 +71,8 @@ use super::push::{self, Notice, Pushed, Pushes, Subscription};
 use super::wire::{FromDaemon, ToDaemon};
 use super::{Internal, Sketching};
 use crate::chat::conversation::{Content, Entry};
-use crate::storage::{self, Kept};
-use crate::ui::theme;
+use coxd::storage::{self, Kept};
+use coxd::theme;
 
 /// The cookie that holds the secret, once the phone is paired.
 const COOKIE: &str = "cox_phone";
@@ -1497,7 +1497,7 @@ fn shows(content: &Content) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn serves_the_part_of_a_video_a_browser_asks_for() {

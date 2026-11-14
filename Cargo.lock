@@ -1548,6 +1548,7 @@ dependencies = [
  "cox-editor",
  "cox-git",
  "cox-mac",
+ "coxd",
  "dom_query",
  "dom_smoothie",
  "encoding_rs",
@@ -1709,6 +1710,20 @@ dependencies = [
  "objc2-screen-capture-kit",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "coxd"
+version = "0.0.0"
+dependencies = [
+ "cox-core",
+ "cox-git",
+ "jiff",
+ "libc",
+ "serde",
+ "serde_json",
+ "tracing",
+ "url",
 ]
 
 [[package]]

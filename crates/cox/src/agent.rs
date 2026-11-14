@@ -42,8 +42,8 @@ use crate::agent::instructions::Instructions;
 use crate::agent::setup::{Asked, Decision, Policy, Setup};
 use crate::agents::{Known, download};
 use crate::chat::mention;
-use crate::process::close_on_exec;
-use crate::storage::Kept;
+use coxd::process::close_on_exec;
+use coxd::storage::Kept;
 
 /// What the agent side tells the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1404,7 +1404,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn a_line_runs_a_command_the_agent_named() {

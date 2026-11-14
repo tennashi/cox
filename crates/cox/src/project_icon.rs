@@ -22,8 +22,8 @@ use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{AgentEvent, Command, Start};
 use crate::agents::Agents;
 use crate::chat::judge::ALLOWED;
-use crate::storage::{self, Kept};
 use crate::workflow;
+use coxd::storage::{self, Kept};
 
 /// How many pixels square an icon is kept at: enough for the rail's
 /// square on a screen of any density.
@@ -185,7 +185,7 @@ pub fn remove(id: ProjectId) -> anyhow::Result<()> {
 /// the rail never reads half of it.
 fn keep(id: ProjectId, png: &[u8]) -> anyhow::Result<()> {
     let path = &path(id).context("Cox cannot tell where it keeps what lasts")?;
-    crate::storage::write_whole(path, png)
+    coxd::storage::write_whole(path, png)
         .with_context(|| format!("cannot write {}", path.display()))
 }
 
@@ -269,7 +269,7 @@ fn draw_svg(bytes: &[u8]) -> anyhow::Result<DynamicImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     /// A file in a folder of the test's own, named `name`, holding
     /// `bytes`.

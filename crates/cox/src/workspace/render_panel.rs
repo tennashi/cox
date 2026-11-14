@@ -14,12 +14,12 @@ use super::{
 use crate::chat::conversation::State;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::theme::{
+use crate::ui::{card, tip};
+use crate::vim::hints::{self, Hinted as _, Part};
+use coxd::theme::{
     ACCENT, ASKING, BORDER, BORDER_STRONG, DIM, DISABLED, FAINT, FOREGROUND, GAP, GROUND, HOVER,
     LINK, RAISED, SELECTED, chat_color,
 };
-use crate::ui::{card, tip};
-use crate::vim::hints::{self, Hinted as _, Part};
 
 impl Workspace {
     /// The panel of the chat shown, at the window's right: at its head,

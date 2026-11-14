@@ -6,8 +6,8 @@
 //!   links, replies as the Markdown that [`markdown`] reads, with the
 //!   Mermaid diagrams in it that [`diagram`] draws; [`selection`] is what
 //!   the human selected.
-//! - [`theme`] is how things look, [`icons`] the icons drawn, and
-//!   [`paths`] how paths are written.
+//! - [`icons`] is the icons drawn; how things look is
+//!   [`coxd::theme`], which the page coxd serves a phone shares.
 //! - The [`Copy`] action and the [`LinkClicked`] event are what the parts
 //!   tell the window alike, and a [`Panel`] is what the window and a
 //!   stage share: whether the stage is in sight.
@@ -25,12 +25,10 @@ pub mod icons;
 pub mod input;
 pub mod markdown;
 pub mod menu;
-pub mod paths;
 pub mod screen;
 pub mod selected;
 pub mod selection;
 pub mod text;
-pub mod theme;
 pub mod translation;
 
 use gpui::{
@@ -38,7 +36,9 @@ use gpui::{
     Styled, Window, actions, div, px, rgb,
 };
 
-use theme::{ACCENT, BORDER, BORDER_STRONG, CARD_RADIUS, FOREGROUND, RAISED, SURFACE, UI_FONT};
+use coxd::theme::{
+    ACCENT, BORDER, BORDER_STRONG, CARD_RADIUS, FOREGROUND, RAISED, SURFACE, UI_FONT,
+};
 
 actions!(
     cox,
@@ -77,7 +77,7 @@ impl Panel {
 ///
 /// Its corners are round, but what it holds is not cut to them, so a
 /// part that fills its card to a corner leaves its ground to the card,
-/// or rounds its own corner by [`theme::CARD_INNER_RADIUS`].
+/// or rounds its own corner by [`coxd::theme::CARD_INNER_RADIUS`].
 #[must_use]
 pub fn card() -> Div {
     div()

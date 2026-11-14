@@ -15,8 +15,8 @@ use crate::agents::line;
 use crate::settings::window::AppAgents;
 use crate::ui::button::INPUT_HEIGHT;
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
 use crate::vim::hints::Hinted as _;
+use coxd::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
 
 /// What translates.
 #[derive(Debug, Clone, PartialEq, Eq)]

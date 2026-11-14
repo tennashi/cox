@@ -14,8 +14,8 @@ use crate::agent::mcp::{OpenedChat, Waited};
 use crate::agent::setup::{Policy, Setup, keeps_in_wiki};
 use crate::chat::conversation::{Entry, State};
 use crate::chat::sketch::{self, Sketch};
-use crate::storage;
 use crate::workflow;
+use coxd::storage;
 
 impl Daemon {
     /// Opens a sketch beside the chat `key`, under it in the list, that
@@ -587,7 +587,7 @@ fn showed_in_sketch(entries: &[Entry], kept: &Path, sources: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn a_sketch_keeps_the_pictures_it_showed_beside_its_source() {

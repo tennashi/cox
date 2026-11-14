@@ -12,6 +12,10 @@ pub struct TempDir(PathBuf);
 
 impl TempDir {
     /// Makes a folder no other test, in this process or another, has.
+    ///
+    /// # Panics
+    ///
+    /// If the folder cannot be made, which fails the test.
     #[must_use]
     pub fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -79,6 +83,10 @@ pub fn git(folder: &Path) -> Command {
 /// # Errors
 ///
 /// When Git fails, with what it wrote on its standard error.
+///
+/// # Panics
+///
+/// If Git does not start, which fails the test.
 pub fn run_git(folder: &Path, args: &[&str]) -> Result<String, String> {
     let output = git(folder).args(args).output().unwrap();
     if output.status.success() {

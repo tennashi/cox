@@ -10,10 +10,10 @@ use super::hints::{Hinting, Shown, Typed};
 use super::{Opens, Page};
 use crate::stage::Tabs;
 use crate::stage::code::{Back, Forward};
-use crate::ui::theme::DIM;
 use crate::vim::keymap::{Follow, Motion};
 use crate::vim::search::{self, Direction, Find};
 use crate::vim::{self, Address, CopyAddress, FocusField, Label, Leave, Mode, Move, Reload, hints};
+use coxd::theme::DIM;
 
 /// What Vim's `/` looks for in a page, and how many matches the page
 /// found of it, and which it selected, once it says.

@@ -23,12 +23,12 @@ use super::typed::{Typed, Unmatched, typed};
 use crate::terminal::Program;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
-use crate::ui::theme::{
-    ACCENT, ASKING, BORDER_STRONG, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED, SURFACE,
-};
 use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Follow;
+use coxd::theme::{
+    ACCENT, ASKING, BORDER_STRONG, DIM, FAINT, FOREGROUND, HOVER, RAISED, SELECTED, SURFACE,
+};
 
 /// How tall a view's button is, and the +, and how round each is.
 const VIEW_HEIGHT: f32 = 28.;

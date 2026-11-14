@@ -526,7 +526,7 @@ fn named(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn a_place_is_asked_of_once_and_told_once_learned() {

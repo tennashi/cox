@@ -65,8 +65,6 @@ use crate::chat::region::{self, Described};
 use crate::stage::follow::{self, Follows};
 use crate::stage::servers::{LanguageServer, Servers};
 use crate::stage::tab::{self, Shows, ShowsFile};
-use crate::storage::Stamp;
-use crate::ui::paths::shortened;
 use crate::ui::selected::{self, Selected};
 use crate::ui::{Copy, LinkClicked};
 use crate::vim::keymap::Motion;
@@ -74,6 +72,8 @@ use crate::vim::search::{self, Find, Search};
 use crate::vim::{
     Definition, FindWord, LookUp, Move, MoveAcross, References, ScrollTo, VisualCharacters,
 };
+use coxd::paths::shortened;
+use coxd::storage::Stamp;
 
 actions!(
     code,

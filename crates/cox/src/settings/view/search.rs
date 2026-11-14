@@ -11,7 +11,7 @@ use super::words::Words;
 use crate::settings::{DEFAULT_SEARCH, SearchEngine};
 use crate::ui::button::INPUT_HEIGHT;
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
+use coxd::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
 
 /// The key of the engine in `settings.json`.
 const KEY: &str = "search";

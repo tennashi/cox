@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use gpui::RenderImage;
 use resvg::{tiny_skia, usvg};
 
-use crate::ui::theme::RAISED;
+use coxd::theme::RAISED;
 
 /// How many pixels the window's picture of a diagram has to each of its
 /// points: enough for a screen of any density.

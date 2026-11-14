@@ -18,7 +18,7 @@ use alacritty_terminal::tty;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::START_CELL;
-use crate::process::close_on_exec;
+use coxd::process::close_on_exec;
 
 /// How many lines the terminal keeps of what scrolled off.
 const SCROLLBACK: usize = 10_000;

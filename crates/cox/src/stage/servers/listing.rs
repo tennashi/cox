@@ -138,7 +138,7 @@ impl Listing {
 
     fn keep_in(&self, file: &Path) -> anyhow::Result<()> {
         let whole = serde_json::json!({ "servers": self.servers });
-        crate::storage::write_json(file, &whole)
+        coxd::storage::write_json(file, &whole)
             .with_context(|| format!("writing {}", file.display()))
     }
 }
@@ -149,14 +149,14 @@ impl Listing {
 ///
 /// When Cox has no place for it.
 pub fn file() -> anyhow::Result<PathBuf> {
-    crate::storage::path(crate::storage::Kept::Servers)
+    coxd::storage::path(coxd::storage::Kept::Servers)
         .context("there is no place to keep the language servers")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|&word| word.to_owned()).collect()

@@ -388,7 +388,7 @@ fn the_registry_a_daemon_fetched_lists_its_agents_on_the_runs_after() {
     let data = folder.join("data");
     set(&data, r#"{"phone": false}"#);
     let _daemon = Daemon::start(&folder, &data, &registry());
-    cox::storage::keep_on_this_thread(Some(data));
+    coxd::storage::keep_on_this_thread(Some(data));
     waits::until("a run after lists the registry's agent", || {
         cox::agents::Agents::read(Vec::new(), None)
             .all()

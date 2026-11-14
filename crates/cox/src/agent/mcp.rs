@@ -594,11 +594,11 @@ pub fn start(
     // its runtime runs on this one thread, which keeps what lasts where
     // this one was told to.
     let span = tracing::Span::current();
-    let data = crate::storage::kept_on_this_thread();
-    let trash = crate::trash::kept_on_this_thread();
+    let data = coxd::storage::kept_on_this_thread();
+    let trash = coxd::trash::kept_on_this_thread();
     thread::spawn(move || {
-        crate::storage::keep_on_this_thread(data);
-        crate::trash::keep_on_this_thread(trash);
+        coxd::storage::keep_on_this_thread(data);
+        coxd::trash::keep_on_this_thread(trash);
         let _entered = span.enter();
         if let Err(error) = serve(listener, served, until.closed()) {
             tracing::error!("the agent's tools stopped: {error:#}");
@@ -616,9 +616,9 @@ pub fn start(
 }
 
 /// Makes a new directory for a socket that only this user can enter, in
-/// the folder of this run (see [`crate::scratch`]).
+/// the folder of this run (see [`coxd::scratch`]).
 fn private_directory() -> anyhow::Result<PathBuf> {
-    let scratch = crate::scratch::folder().context("cannot make the folder of this run")?;
+    let scratch = coxd::scratch::folder().context("cannot make the folder of this run")?;
     loop {
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
         let directory = scratch.join(number.to_string());

@@ -1,6 +1,6 @@
 //! What the human sets of Cox itself, on its settings screen (see
 //! [`view`]), which lasts across runs in `settings.json`, where Cox keeps
-//! what lasts (see [`crate::storage`]), as `{"home": "/home/me/Cox"}`.
+//! what lasts (see [`coxd::storage`]), as `{"home": "/home/me/Cox"}`.
 //!
 //! That is Cox's home: the folder Cox's own chats work in, which the
 //! rail shows as Cox's icon. `--home` on the command line goes ahead of it for
@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, bail};
 use serde_json::{Map, Value};
 
-use crate::storage::Kept;
+use coxd::storage::Kept;
 
 /// The folder Cox's own chats work in, in the home directory, unless
 /// the human chose another.
@@ -194,7 +194,7 @@ impl Saved {
     /// cannot be read, which is said.
     #[must_use]
     pub fn read() -> Self {
-        crate::storage::path(Kept::Settings)
+        coxd::storage::path(Kept::Settings)
             .map_or_else(Self::default, |file| Self::read_from(&file))
     }
 
@@ -213,7 +213,7 @@ impl Saved {
     }
 
     fn parse(bytes: &[u8]) -> anyhow::Result<Self> {
-        Self::parse_for(bytes, crate::home::home().as_deref())
+        Self::parse_for(bytes, coxd::home::home().as_deref())
     }
 
     /// The settings `bytes` hold, for a human whose home directory is
@@ -296,7 +296,7 @@ pub const DIRECTORIES: &str = "directories";
 /// path, which the agent needs.
 #[must_use]
 pub fn home_for_chats(home: Option<PathBuf>) -> PathBuf {
-    home_for_chats_of(home, crate::home::home())
+    home_for_chats_of(home, coxd::home::home())
 }
 
 /// Where Cox's own chats work as [`home_for_chats`] says, for a human
@@ -425,7 +425,7 @@ pub fn translation() -> Option<Translation> {
 /// cannot be read as settings or written.
 pub fn keep_home(home: &Path) -> anyhow::Result<()> {
     let file =
-        crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
+        coxd::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
     keep_home_in(&file, home)
 }
 
@@ -447,7 +447,7 @@ fn keep_home_in(file: &Path, home: &Path) -> anyhow::Result<()> {
 /// settings or written.
 pub fn keep_agent(agent: Option<&str>) -> anyhow::Result<()> {
     let file =
-        crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
+        coxd::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
     keep_in(
         &file,
         "agent",
@@ -459,7 +459,7 @@ pub fn keep_agent(agent: Option<&str>) -> anyhow::Result<()> {
 /// it holds it.
 #[must_use]
 pub fn kept(key: &str) -> Option<Value> {
-    let file = crate::storage::path(Kept::Settings)?;
+    let file = coxd::storage::path(Kept::Settings)?;
     let mut settings: Map<String, Value> = serde_json::from_slice(&fs::read(file).ok()?).ok()?;
     settings.remove(key).filter(|value| !value.is_null())
 }
@@ -473,7 +473,7 @@ pub fn kept(key: &str) -> Option<Value> {
 /// settings or written.
 pub fn keep(key: &str, value: Option<Value>) -> anyhow::Result<()> {
     let file =
-        crate::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
+        coxd::storage::path(Kept::Settings).context("there is no place to keep the settings")?;
     keep_in(&file, key, value)
 }
 
@@ -508,7 +508,7 @@ fn keep_in(file: &Path, key: &str, value: Option<Value>) -> anyhow::Result<()> {
             settings.remove(key);
         }
     }
-    crate::storage::write_json(file, &Value::Object(settings))
+    coxd::storage::write_json(file, &Value::Object(settings))
         .with_context(|| format!("writing {}", file.display()))
 }
 
@@ -526,7 +526,7 @@ pub fn folder_of(text: &str, user: Option<&Path>) -> Result<PathBuf, &'static st
     if text.is_empty() {
         return Err("Give the folder's path.");
     }
-    let path = crate::home::expanded_in(text, user)
+    let path = coxd::home::expanded_in(text, user)
         .ok_or("There is no home directory for ~ to stand for.")?;
     if !path.is_absolute() {
         return Err("Give the whole path, from / or from ~.");
@@ -542,7 +542,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{Saved, SearchEngine, Translation, folder_of, keep_home_in, keep_in};
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     #[test]
     fn the_home_is_read_and_kept_beside_what_else_the_file_holds() {

@@ -107,9 +107,9 @@ impl Places {
     }
 
     /// Where `kept` is kept, if Cox can tell.
-    fn kept(&self, kept: crate::storage::Kept) -> Option<PathBuf> {
+    fn kept(&self, kept: coxd::storage::Kept) -> Option<PathBuf> {
         match self {
-            Self::Cox => crate::storage::path(kept),
+            Self::Cox => coxd::storage::path(kept),
             #[cfg(test)]
             Self::In(root) => Some(root.join(kept.place())),
         }
@@ -449,7 +449,7 @@ impl Chat {
         for why in unread {
             tracing::error!("a trigger does not run: {why}");
         }
-        let kept = self.places.kept(crate::storage::Kept::Triggers);
+        let kept = self.places.kept(coxd::storage::Kept::Triggers);
         let triggers: Vec<Trigger> = Arranged::read(kept.as_deref(), cwd)
             .apply(triggers)
             .into_iter()
@@ -895,7 +895,7 @@ impl Chat {
         };
         // For the human to try a trigger on, from its card.
         let said = self.conversation.turn_told().map(str::to_owned);
-        let last = self.places.kept(crate::storage::Kept::LastTurns);
+        let last = self.places.kept(coxd::storage::Kept::LastTurns);
         if let Err(error) = trigger::card::keep_last_turn(last.as_deref(), &cwd, said.as_deref()) {
             tracing::error!("the turn is not kept to try triggers on: {error}");
         }
@@ -1240,7 +1240,7 @@ impl Chat {
             at: jiff::Timestamp::now().as_second(),
             said: check.said.clone(),
         };
-        let kept = self.places.kept(crate::storage::Kept::TriggerRuns);
+        let kept = self.places.kept(coxd::storage::Kept::TriggerRuns);
         if let Err(error) = ran.keep(kept.as_deref(), cwd, &file) {
             tracing::error!("how the trigger ran is not kept: {error}");
         }
@@ -1658,7 +1658,7 @@ fn quoted(word: &str) -> String {
 /// The note that tells the human where a chat set up to work in `folder`
 /// works: a sketch's, apart from the project, or another folder.
 fn folder_note(folder: &Path) -> String {
-    let sketches = crate::storage::path(crate::storage::Kept::Sketches);
+    let sketches = coxd::storage::path(coxd::storage::Kept::Sketches);
     if sketches.is_some_and(|sketches| folder.starts_with(sketches)) {
         conversation::sketch_note(folder)
     } else {
@@ -1676,7 +1676,7 @@ mod tests {
     use super::*;
     use crate::agent::AgentThread;
     use crate::chat::conversation::CheckState;
-    use crate::testing::TempDir;
+    use coxd::testing::TempDir;
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|&word| word.to_owned()).collect()
@@ -2076,7 +2076,7 @@ mod tests {
                 sum: None,
             }
             .make(Some(
-                &talk.places.join(crate::storage::Kept::Triggers.place()),
+                &talk.places.join(coxd::storage::Kept::Triggers.place()),
             ))
             .unwrap();
 
@@ -2152,7 +2152,7 @@ mod tests {
             };
             talk.chat.heard_check(generation, ran);
 
-            let runs = talk.places.join(crate::storage::Kept::TriggerRuns.place());
+            let runs = talk.places.join(coxd::storage::Kept::TriggerRuns.place());
             let kept = trigger::Ran::read(Some(&runs), &talk.cwd);
             assert_eq!(
                 kept.get(&file).map(|ran| ran.state),

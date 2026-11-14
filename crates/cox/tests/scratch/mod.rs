@@ -48,8 +48,8 @@ pub fn data() -> PathBuf {
     DATA.with_borrow_mut(|data| {
         data.get_or_insert_with(|| {
             let data = made("data");
-            cox::storage::keep_on_this_thread(Some(data.clone()));
-            cox::trash::keep_on_this_thread(Some(data.join("Trash")));
+            coxd::storage::keep_on_this_thread(Some(data.clone()));
+            coxd::trash::keep_on_this_thread(Some(data.join("Trash")));
             data
         })
         .clone()

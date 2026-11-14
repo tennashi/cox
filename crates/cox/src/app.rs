@@ -90,7 +90,7 @@ pub struct Settings {
     /// settings say, or `~/cox` (see [`crate::settings`]).
     pub home: Option<PathBuf>,
     /// Where Cox keeps what lasts across its runs, if not where it keeps
-    /// it from the place it runs from (see [`crate::storage`]).
+    /// it from the place it runs from (see [`coxd::storage`]).
     pub data: Option<PathBuf>,
     /// The agent each chat starts with, and its arguments, or none when
     /// the system opens Cox, as from the Finder, which then starts the
@@ -172,7 +172,7 @@ impl Settings {
 /// Runs the app as `settings` say, until the human quits it.
 #[must_use]
 pub fn run(settings: Settings) -> ExitCode {
-    let profile = crate::storage::path(crate::storage::Kept::Stage);
+    let profile = coxd::storage::path(coxd::storage::Kept::Stage);
     // On Linux, CEF's helper processes run this same executable with
     // arguments of their own, and exit inside `start`, before they reach
     // coxd.
@@ -199,7 +199,7 @@ pub fn run(settings: Settings) -> ExitCode {
     // 3. coxd, which runs the chats, in a process of its own.
     let hello = crate::daemon::wire::Hello::new(settings.home, settings.command);
     let data = settings.data;
-    let connected = crate::storage::path(crate::storage::Kept::Daemon)
+    let connected = coxd::storage::path(coxd::storage::Kept::Daemon)
         .ok_or_else(|| anyhow::anyhow!("there is no place for coxd's socket"))
         .and_then(|socket| {
             crate::daemon::client::connect(
@@ -371,13 +371,13 @@ fn quit_when_asked(cx: &mut App) {
 }
 
 /// Shuts the browser down when the app quits, then takes away what this
-/// run kept only while it ran (see [`crate::scratch`]). Quitting ends the
+/// run kept only while it ran (see [`coxd::scratch`]). Quitting ends the
 /// app's run loop, or on macOS the whole process, so the browsers go
 /// before either. coxd, and the chats' agents, go on.
 fn shut_down_on_quit(cef: Cef, cx: &mut App) {
     cx.on_app_quit(move |_| {
         cef.clone().shutdown();
-        crate::scratch::take_away();
+        coxd::scratch::take_away();
         async {}
     })
     .detach();

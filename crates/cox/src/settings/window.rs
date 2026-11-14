@@ -9,8 +9,8 @@ use gpui::{App, AsyncApp, Global, WindowHandle};
 
 use super::{Saved, home_for_chats, view};
 use crate::agents::Agents;
-use crate::storage::{Kept, Stamp};
 use crate::workspace::Workspace;
+use coxd::storage::{Kept, Stamp};
 
 /// How often Cox looks whether `settings.json` or `agents.json` changed.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
@@ -29,7 +29,7 @@ impl Global for AppAgents {}
 pub fn follow(window: WindowHandle<Workspace>, agents: Agents, cx: &mut App) {
     let files: Vec<PathBuf> = [Kept::Settings, Kept::Agents, Kept::Servers]
         .into_iter()
-        .filter_map(crate::storage::path)
+        .filter_map(coxd::storage::path)
         .collect();
     cx.spawn(async move |cx: &mut AsyncApp| {
         let stamps = |files: Vec<PathBuf>| async move {
