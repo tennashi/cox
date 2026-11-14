@@ -311,14 +311,7 @@ impl Ran {
             .iter()
             .map(|(id, when)| (id.as_str(), when.to_string()))
             .collect();
-        let written = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| {
-                let text = serde_json::to_string_pretty(&kept).map_err(std::io::Error::other)?;
-                std::fs::write(path, text + "\n")
-            });
-        if let Err(error) = written {
+        if let Err(error) = crate::storage::write_json(path, &kept) {
             tracing::error!(
                 "{} does not keep when schedules ran: {error}",
                 path.display()

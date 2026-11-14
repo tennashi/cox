@@ -137,13 +137,9 @@ impl Listing {
     }
 
     fn keep_in(&self, file: &Path) -> anyhow::Result<()> {
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("making {}", parent.display()))?;
-        }
         let whole = serde_json::json!({ "servers": self.servers });
-        let mut text = serde_json::to_string_pretty(&whole)?;
-        text.push('\n');
-        fs::write(file, text).with_context(|| format!("writing {}", file.display()))
+        crate::storage::write_json(file, &whole)
+            .with_context(|| format!("writing {}", file.display()))
     }
 }
 

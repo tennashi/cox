@@ -214,7 +214,7 @@ impl Agents {
             match fetched {
                 Ok((listed, text)) => {
                     if let Some(path) = registry_path()
-                        && let Err(error) = std::fs::write(&path, text)
+                        && let Err(error) = crate::storage::write_whole(&path, text)
                     {
                         tracing::warn!("the registry is not kept for later runs: {error}");
                     }

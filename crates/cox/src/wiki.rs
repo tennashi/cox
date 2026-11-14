@@ -346,11 +346,8 @@ pub fn write(root: &Path, name: &str, text: &str, used: &Used) -> Result<PathBuf
         page.push_str(line);
         page.push('\n');
     }
-    if let Some(folder) = file.parent() {
-        fs::create_dir_all(folder)
-            .map_err(|error| format!("cannot make {}: {error}", folder.display()))?;
-    }
-    fs::write(&file, page).map_err(|error| format!("cannot write {}: {error}", file.display()))?;
+    crate::storage::write_whole(&file, page)
+        .map_err(|error| format!("cannot write {}: {error}", file.display()))?;
     if let Err(error) = keep_index(root) {
         tracing::warn!("the wiki's index is not kept: {error}");
     }
@@ -401,7 +398,7 @@ fn keep_index(root: &Path) -> io::Result<()> {
         }
         text.push('\n');
     }
-    fs::write(index, text)
+    crate::storage::write_whole(&index, text)
 }
 
 /// The text of the first heading of `page`, if it has one.

@@ -1133,10 +1133,7 @@ fn read_arranged(kept: Option<&Path>) -> BTreeMap<PathBuf, Arranged> {
 
 /// Writes `all` to `path` whole, as JSON, a folder's each.
 fn write_kept<T: serde::Serialize>(path: &Path, all: &BTreeMap<PathBuf, T>) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(all).map_err(|error| error.to_string())?;
-    path.parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| crate::storage::write_whole(path, &(text + "\n")))
+    crate::storage::write_json(path, all)
         .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
