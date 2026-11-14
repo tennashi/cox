@@ -12,6 +12,7 @@ pub const GIVEN_UP: Duration = Duration::from_secs(30);
 /// then, unless the sender is dropped first. A thread keeps the time,
 /// and ends as soon as the wait does, as a test waits many times, and
 /// macOS lets a process have only a few thousand threads.
+#[must_use]
 pub fn given_up() -> (
     std::sync::mpsc::Sender<()>,
     tokio::sync::oneshot::Receiver<()>,
@@ -28,6 +29,10 @@ pub fn given_up() -> (
 
 /// Waits until `done` says so, asking it again every few milliseconds,
 /// and fails saying `what` never came after [`GIVEN_UP`].
+///
+/// # Panics
+///
+/// When it never came, which fails the test.
 pub fn until(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + GIVEN_UP;
     while !done() {

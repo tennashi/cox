@@ -15,14 +15,14 @@
 //!
 //! The chats run in coxd, `cox [--data <dir>] --daemon`, which the window
 //! starts when it does not run, and which goes on after the window closes
-//! (see `cox::daemon::process`).
+//! (see `coxd::daemon::process`).
 //!
 //! The agents run `cox` too, as `cox --mcp <socket>`, the MCP server of
 //! Cox's own tools that `coxd::agent::mcp` hands them. An agent that debugs
 //! Cox runs `cox [--data <dir>] --inspect <tool>` to ask a running Cox how
 //! it stands, and to drive it (see `cox::inspect`). `cox [--data <dir>]
 //! --phone-link` prints the link that pairs a phone with the page coxd
-//! serves it (see `cox::daemon::phone`). Cox reads a web page
+//! serves it (see `coxd::daemon::phone`). Cox reads a web page
 //! for `raw_keep` as `cox --read-page <url>`, apart from itself (see
 //! `coxd::raw::page`). And on Linux, CEF runs
 //! `cox` for its helper processes, which `cox_browser` tells apart.
@@ -61,7 +61,7 @@ fn main() -> ExitCode {
             }
             app::run(settings)
         }
-        Mode::Daemon { data } => cox::daemon::main::run(data.as_deref()),
+        Mode::Daemon { data } => coxd::daemon::main::run(data.as_deref()),
         Mode::Bridge(socket) => {
             coxd::logs::init(None);
             match coxd::agent::mcp::bridge(&socket) {
@@ -93,7 +93,7 @@ fn main() -> ExitCode {
             if let Some(data) = &data {
                 coxd::storage::keep_in(data);
             }
-            match cox::daemon::phone::link() {
+            match coxd::daemon::phone::link() {
                 Ok(link) => {
                     print!("{link}");
                     ExitCode::SUCCESS

@@ -124,7 +124,7 @@ pub fn icon(icon: Icon, size: f32, color: u32) -> Svg {
 }
 
 /// Cox's app icon, as `cargo xtask bundle` renders it for macOS.
-const APP_ICON: &str = include_str!("../../assets/app-icon.svg");
+const APP_ICON: &str = include_str!("../../../coxd/assets/app-icon.svg");
 
 /// What the app icon's file says of its size, and the room it leaves
 /// around its rounded square for the shadow macOS draws.

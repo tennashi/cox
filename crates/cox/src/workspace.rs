@@ -8,7 +8,7 @@
 //! instructions there.
 //!
 //! The window runs no chat itself: the daemon does (see
-//! [`crate::daemon`]), which tells it the projects and chats, and how the
+//! [`coxd::daemon`]), which tells it the projects and chats, and how the
 //! conversation of each chat the window shows changes, and which the
 //! window tells what the human does. What the window keeps of its own is
 //! what it shows: which chat, the menus and inputs open, and the stage of
@@ -56,8 +56,6 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::chat::Stages;
 use crate::chat::view::{ChatView, OpenLink, Row, StageView};
-use crate::daemon::Link;
-use crate::daemon::wire::{ChatRow, FromDaemon, Listing, ProjectRow, ToDaemon};
 use crate::notices::AppNotices;
 use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView, UnpairPhones};
 use coxd::agent::mcp::ToolRequest;
@@ -65,6 +63,8 @@ use coxd::agent::setup::Setup;
 use coxd::agents::Agents;
 use coxd::chat::conversation::State;
 use coxd::chat::sketch::{self, Sketch};
+use coxd::daemon::Link;
+use coxd::daemon::wire::{ChatRow, FromDaemon, Listing, ProjectRow, ToDaemon};
 
 pub(crate) mod project_card;
 mod render;
@@ -1140,7 +1140,7 @@ impl Workspace {
         self.chats
             .iter()
             .chain(&self.archived)
-            .any(|chat| chat.project == index && crate::daemon::working(chat.state))
+            .any(|chat| chat.project == index && coxd::daemon::working(chat.state))
     }
 
     /// Reads again the icon of the project kept as `id`, as it is now.
@@ -1237,7 +1237,7 @@ impl Workspace {
                 .chats
                 .iter()
                 .chain(&self.archived)
-                .any(|chat| chat.project == index && crate::daemon::working(chat.state)),
+                .any(|chat| chat.project == index && coxd::daemon::working(chat.state)),
         }
     }
 
@@ -1563,7 +1563,7 @@ impl Workspace {
     /// merge what it made: it is not at work, nor a sketch's.
     fn merges(&self, index: usize) -> bool {
         self.chats.get(index).is_some_and(|chat| {
-            !crate::daemon::working(chat.state) && crate::daemon::merges(chat.setup.as_ref())
+            !coxd::daemon::working(chat.state) && coxd::daemon::merges(chat.setup.as_ref())
         })
     }
 
@@ -1572,7 +1572,7 @@ impl Workspace {
     fn saves_to_wiki(&self, index: usize) -> bool {
         self.chats
             .get(index)
-            .is_some_and(|chat| crate::daemon::saves_to_wiki(chat.state, chat.setup.as_ref()))
+            .is_some_and(|chat| coxd::daemon::saves_to_wiki(chat.state, chat.setup.as_ref()))
     }
 
     /// Whether the human can open a sketch beside the chat at `index`: it
@@ -1600,7 +1600,7 @@ impl Workspace {
     /// The sketch the chat at `index` is, what it started from and the
     /// folder it works in, while the folder is there.
     fn sketch_of(&self, index: usize) -> Option<(Sketch, PathBuf)> {
-        crate::daemon::sketch_of(self.chats.get(index)?.setup.as_ref())
+        coxd::daemon::sketch_of(self.chats.get(index)?.setup.as_ref())
     }
 
     /// Whether the sketch at `index` can end: its folder is there, and was
@@ -1608,7 +1608,7 @@ impl Workspace {
     /// not on its way to an end already.
     fn ends_sketch(&self, index: usize) -> bool {
         self.chats.get(index).is_some_and(|chat| {
-            crate::daemon::ends_sketch(chat.setup.as_ref(), chat.ending, |folder| {
+            coxd::daemon::ends_sketch(chat.setup.as_ref(), chat.ending, |folder| {
                 self.projects
                     .iter()
                     .any(|project| !project.deleted && project.folder == folder)
@@ -1632,7 +1632,7 @@ impl Workspace {
     }
 
     /// Shows the sketch at `index`, and ends it as `ending` says (see
-    /// [`crate::daemon`]).
+    /// [`coxd::daemon`]).
     pub fn end_sketch_as(
         &mut self,
         index: usize,

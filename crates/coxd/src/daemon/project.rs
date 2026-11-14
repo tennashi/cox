@@ -11,9 +11,9 @@ use cox_core::store::ProjectId;
 
 use super::wire::FromDaemon;
 use super::{Daemon, working};
-use coxd::chat::conversation::{Entry, Proposed, State};
-use coxd::chat::sketch::{self, Sketch};
-use coxd::storage;
+use crate::chat::conversation::{Entry, Proposed, State};
+use crate::chat::sketch::{self, Sketch};
+use crate::storage;
 
 impl Daemon {
     /// Renames the project kept as `project` `name`, and its folder with
@@ -83,7 +83,7 @@ impl Daemon {
     /// Cox keeps of the stage there name where it is now; answers the
     /// directory renamed, if one is.
     fn rename_directory(&self, from: &Path, to: &Path) -> Option<Renamed> {
-        let directories = from.join(coxd::settings::DIRECTORIES);
+        let directories = from.join(crate::settings::DIRECTORIES);
         let was = directories.join(from.file_name()?);
         let now = directories.join(to.file_name()?);
         if !was.is_dir() || cox_core::folder::taken(&now, &was) {
@@ -206,7 +206,7 @@ impl Daemon {
         let id = self.projects[project]
             .id
             .ok_or("This chat is in no project: Cox's own chats have no icon to propose.")?;
-        let has = coxd::project_icon::path(id).is_some_and(|path| path.is_file());
+        let has = crate::project_icon::path(id).is_some_and(|path| path.is_file());
         let proposed = Proposed::Icon {
             file: file.to_owned(),
             from: from.to_owned(),
@@ -265,7 +265,7 @@ impl Daemon {
         let Some(id) = self.projects[project].id else {
             return;
         };
-        if let Err(error) = coxd::project_icon::set_proposed(id, file) {
+        if let Err(error) = crate::project_icon::set_proposed(id, file) {
             tracing::error!("the project's icon is not set: {error:#}");
             return;
         }
@@ -346,7 +346,7 @@ impl Daemon {
         }
         let folder = self.projects[0]
             .folder
-            .join(coxd::settings::PROJECTS)
+            .join(crate::settings::PROJECTS)
             .join(name);
         if folder.exists() || self.project_at(&folder).is_some() {
             return Err(format!("There is a project {name} already."));
@@ -539,7 +539,7 @@ impl Daemon {
             })?;
             let (note, _) = self.with_sketch_kept(
                 sketch,
-                &folder.join(coxd::raw::PROJECT_RAW),
+                &folder.join(crate::raw::PROJECT_RAW),
                 Some(name),
                 &format!(
                     "The sketch moved into the project {name}, to make there what it tried; what \
@@ -743,7 +743,7 @@ impl Daemon {
         }
         let folder = self.projects[index].folder.clone();
         if folder.exists()
-            && let Err(why) = coxd::trash::put(&folder)
+            && let Err(why) = crate::trash::put(&folder)
         {
             // The trash can fail after it took the folder, as for a name
             // it was given beside it; the folder gone is what counts.
@@ -756,7 +756,7 @@ impl Daemon {
         if let Err(error) = self.store.delete_project(id) {
             tracing::error!("the project's chats are not forgotten: {error:#}");
         }
-        if let Err(error) = coxd::project_icon::remove(id) {
+        if let Err(error) = crate::project_icon::remove(id) {
             tracing::error!("the project's icon is not removed: {error:#}");
         }
         let mut gone = HashSet::new();

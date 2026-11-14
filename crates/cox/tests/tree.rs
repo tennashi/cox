@@ -2,8 +2,7 @@
 //! read it, and the tree marking the file of the tab shown.
 
 mod git;
-#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
-mod scratch;
+use coxd::testing::scratch;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};

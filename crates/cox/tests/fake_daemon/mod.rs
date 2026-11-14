@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use cox::chat::Stages;
 use cox::chat::view::{ChatView, OpenLink, StageView};
-use cox::daemon::{Running, Spawned, Spawns};
 use cox::stage::Tabs;
 use cox::ui::Panel;
 use cox::workspace::Workspace;
@@ -23,6 +22,7 @@ use coxd::agent::mcp::{ChatRequest, Ended, Ran, ToolRequest};
 use coxd::agent::setup::Setup;
 use coxd::agents::{Agents as Choices, Known};
 use coxd::chat::judge::Starts;
+use coxd::daemon::{Running, Spawned, Spawns};
 use gpui::{
     App, AppContext as _, Context, Entity, Focusable, IntoElement, ParentElement as _, Render,
     Styled as _, TestAppContext, VisualTestContext, Window, div,
@@ -433,7 +433,7 @@ fn over_daemon(
 ) -> Workspace {
     let choices = fakes.choices.clone();
     let (to_window, from_daemon) = tokio::sync::mpsc::unbounded_channel();
-    let running = cox::daemon::start(
+    let running = coxd::daemon::start(
         home.clone(),
         false,
         move || {

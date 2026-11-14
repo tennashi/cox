@@ -19,18 +19,18 @@ use cox_git::commits::{self, Turn};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::daemon::Internal;
-use crate::trigger::{self, Arranged, By, On, Trigger};
-use cox_acp::{Login, StopReason};
-use coxd::agent::mcp::{Ended, Ran, ToolRequest};
-use coxd::agent::setup::Setup;
-use coxd::agent::{Agent, AgentEvent, AgentThread, Command};
-use coxd::agents::Agents;
-use coxd::chat::conversation::{
+use crate::agent::mcp::{Ended, Ran, ToolRequest};
+use crate::agent::setup::Setup;
+use crate::agent::{Agent, AgentEvent, AgentThread, Command};
+use crate::agents::Agents;
+use crate::chat::conversation::{
     self, Answer, Came, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch,
     Proposed, State, TerminalLogin,
 };
-use coxd::chat::judge::{Heard, Judge, Starts};
+use crate::chat::judge::{Heard, Judge, Starts};
+use crate::daemon::Internal;
+use crate::trigger::{self, Arranged, By, On, Trigger};
+use cox_acp::{Login, StopReason};
 
 /// How long the name of the chat that opened a chat grows, in
 /// characters, in the note that says so.
@@ -63,7 +63,7 @@ impl Drop for Task {
 /// The repositories of `cwd`, where a chat works, each with its last
 /// commit now.
 fn heads(cwd: &Path) -> Vec<Head> {
-    coxd::repositories::of(cwd)
+    crate::repositories::of(cwd)
         .into_iter()
         .map(|(name, folder)| Head {
             commit: commits::head(&folder),
@@ -100,16 +100,16 @@ impl Places {
     /// The folder of the human's workflow, with its triggers.
     fn workflow(&self) -> PathBuf {
         match self {
-            Self::Cox => coxd::settings::workflow(),
+            Self::Cox => crate::settings::workflow(),
             #[cfg(test)]
             Self::In(root) => root.join("workflow"),
         }
     }
 
     /// Where `kept` is kept, if Cox can tell.
-    fn kept(&self, kept: coxd::storage::Kept) -> Option<PathBuf> {
+    fn kept(&self, kept: crate::storage::Kept) -> Option<PathBuf> {
         match self {
-            Self::Cox => coxd::storage::path(kept),
+            Self::Cox => crate::storage::path(kept),
             #[cfg(test)]
             Self::In(root) => Some(root.join(kept.place())),
         }
@@ -207,7 +207,7 @@ pub struct Chat {
 /// A repository of the folder a chat works in, as a turn started.
 struct Head {
     /// The project's directory it is, by name, or none for the repository
-    /// the folder is in (see [`coxd::repositories::of`]).
+    /// the folder is in (see [`crate::repositories::of`]).
     name: Option<String>,
     folder: PathBuf,
     /// Its last commit then, by its full name, if it had one.
@@ -288,7 +288,7 @@ impl Chat {
                     .filter_map(|setup| setup.context.as_deref())
                     .map(conversation::context_note),
             );
-        Conversation::noting_each(notes).with_keeping(coxd::agent::setup::keeps_in_wiki(setup))
+        Conversation::noting_each(notes).with_keeping(crate::agent::setup::keeps_in_wiki(setup))
     }
 
     #[must_use]
@@ -449,7 +449,7 @@ impl Chat {
         for why in unread {
             tracing::error!("a trigger does not run: {why}");
         }
-        let kept = self.places.kept(coxd::storage::Kept::Triggers);
+        let kept = self.places.kept(crate::storage::Kept::Triggers);
         let triggers: Vec<Trigger> = Arranged::read(kept.as_deref(), cwd)
             .apply(triggers)
             .into_iter()
@@ -895,7 +895,7 @@ impl Chat {
         };
         // For the human to try a trigger on, from its card.
         let said = self.conversation.turn_told().map(str::to_owned);
-        let last = self.places.kept(coxd::storage::Kept::LastTurns);
+        let last = self.places.kept(crate::storage::Kept::LastTurns);
         if let Err(error) = trigger::card::keep_last_turn(last.as_deref(), &cwd, said.as_deref()) {
             tracing::error!("the turn is not kept to try triggers on: {error}");
         }
@@ -1122,7 +1122,12 @@ impl Chat {
 
     /// Shows the human `shown`, a picture or a video kept from the path
     /// `from`, with `caption`, if given, in the conversation.
-    pub fn show_media(&mut self, shown: coxd::media::Shown, from: String, caption: Option<String>) {
+    pub fn show_media(
+        &mut self,
+        shown: crate::media::Shown,
+        from: String,
+        caption: Option<String>,
+    ) {
         self.conversation.show_media(shown, from, caption);
     }
 
@@ -1138,7 +1143,7 @@ impl Chat {
         markdown: bool,
         lines: Option<(usize, usize)>,
     ) {
-        let file = match coxd::media::keep_text(text, markdown, None) {
+        let file = match crate::media::keep_text(text, markdown, None) {
             Ok(file) => file,
             Err(error) => {
                 tracing::warn!("{} is not kept to read: {error}", path.display());
@@ -1162,8 +1167,8 @@ impl Chat {
         let Some(cwd) = self.running.as_ref().map(|running| running.cwd.clone()) else {
             return;
         };
-        for (caption, path) in coxd::media::printed(output) {
-            match coxd::media::keep(&cwd.join(&path), None) {
+        for (caption, path) in crate::media::printed(output) {
+            match crate::media::keep(&cwd.join(&path), None) {
                 Ok(shown) => self.conversation.show_media(shown, path, caption),
                 Err(why) => self.conversation.note(format!("Not shown: {why}")),
             }
@@ -1235,7 +1240,7 @@ impl Chat {
             at: jiff::Timestamp::now().as_second(),
             said: check.said.clone(),
         };
-        let kept = self.places.kept(coxd::storage::Kept::TriggerRuns);
+        let kept = self.places.kept(crate::storage::Kept::TriggerRuns);
         if let Err(error) = ran.keep(kept.as_deref(), cwd, &file) {
             tracing::error!("how the trigger ran is not kept: {error}");
         }
@@ -1578,8 +1583,8 @@ impl Chat {
 
     /// What the agent that waits for this chat is told of how it stands.
     #[must_use]
-    pub fn stands(&self) -> coxd::agent::mcp::Waited {
-        coxd::agent::mcp::Waited {
+    pub fn stands(&self) -> crate::agent::mcp::Waited {
+        crate::agent::mcp::Waited {
             asking: self.conversation.asking_for().map(str::to_owned),
             said: self.conversation.last_told().map(str::to_owned),
         }
@@ -1653,7 +1658,7 @@ fn quoted(word: &str) -> String {
 /// The note that tells the human where a chat set up to work in `folder`
 /// works: a sketch's, apart from the project, or another folder.
 fn folder_note(folder: &Path) -> String {
-    let sketches = coxd::storage::path(coxd::storage::Kept::Sketches);
+    let sketches = crate::storage::path(crate::storage::Kept::Sketches);
     if sketches.is_some_and(|sketches| folder.starts_with(sketches)) {
         conversation::sketch_note(folder)
     } else {
@@ -1669,9 +1674,9 @@ mod tests {
     use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
     use super::*;
-    use coxd::agent::AgentThread;
-    use coxd::chat::conversation::CheckState;
-    use coxd::testing::TempDir;
+    use crate::agent::AgentThread;
+    use crate::chat::conversation::CheckState;
+    use crate::testing::TempDir;
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|&word| word.to_owned()).collect()
@@ -2021,7 +2026,7 @@ mod tests {
             let mut talk = Talk::new(Some(again(&cwd)));
             talk.hear(AgentEvent::Opened {
                 id: "session-1".to_owned(),
-                how: coxd::agent::Opened::New,
+                how: crate::agent::Opened::New,
                 steers: false,
             });
             talk.hear(AgentEvent::Closed(None));
@@ -2071,7 +2076,7 @@ mod tests {
                 sum: None,
             }
             .make(Some(
-                &talk.places.join(coxd::storage::Kept::Triggers.place()),
+                &talk.places.join(crate::storage::Kept::Triggers.place()),
             ))
             .unwrap();
 
@@ -2147,7 +2152,7 @@ mod tests {
             };
             talk.chat.heard_check(generation, ran);
 
-            let runs = talk.places.join(coxd::storage::Kept::TriggerRuns.place());
+            let runs = talk.places.join(crate::storage::Kept::TriggerRuns.place());
             let kept = trigger::Ran::read(Some(&runs), &talk.cwd);
             assert_eq!(
                 kept.get(&file).map(|ran| ran.state),

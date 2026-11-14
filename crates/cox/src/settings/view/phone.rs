@@ -1,13 +1,13 @@
 //! The phone on the settings screen: where a phone follows the chats,
 //! and the code it pairs with, so that the human pairs one without a
 //! terminal: a phone scans the code, which opens the link that pairs it
-//! (see [`crate::daemon::phone::pairing`]). The code holds the secret, so
+//! (see [`coxd::daemon::phone::pairing`]). The code holds the secret, so
 //! it shows only once the human asks for it, and goes as they hide it,
 //! or as the screen closes.
 //!
 //! A phone lost, or a code seen by someone else, the human unpairs every
 //! phone: coxd makes the secret again, and lets in no phone paired with
-//! the one before (see [`crate::daemon::wire::ToDaemon::UnpairPhones`]).
+//! the one before (see [`coxd::daemon::wire::ToDaemon::UnpairPhones`]).
 //! The code, if it showed, shows again, with the new secret.
 
 use gpui::{
@@ -17,9 +17,9 @@ use gpui::{
 use qrcodegen::{QrCode, QrCodeEcc};
 
 use super::words::{Part, Words};
-use crate::daemon::phone::{Pairing, pairing};
 use crate::ui::button::{Kind, button};
 use crate::vim::hints::Hinted as _;
+use coxd::daemon::phone::{Pairing, pairing};
 use coxd::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND};
 
 /// How wide the code is drawn, its quiet edge too.

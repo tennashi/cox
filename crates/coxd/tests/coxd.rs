@@ -1,25 +1,23 @@
 //! coxd over its socket: a window reaches it, one at a time, hears what
 //! it says, and hears that it is gone once it stops.
 
-#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
-mod scratch;
-#[expect(dead_code, reason = "these tests use only part of the waits")]
-mod waits;
+use coxd::testing::scratch;
+use coxd::testing::waits;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cox::daemon::client::{self, Connected};
-use cox::daemon::wire::{FromDaemon, Hello, ToDaemon};
-use cox::daemon::{Spawned, Spawns};
 use cox_core::entry::Attachment;
 use cox_core::store::Store;
 use cox_core::tabs::{KeptTab, KeptTabs};
 use coxd::agent::Start;
 use coxd::agents::Agents;
 use coxd::chat::judge::Starts;
+use coxd::daemon::client::{self, Connected};
+use coxd::daemon::wire::{FromDaemon, Hello, ToDaemon};
+use coxd::daemon::{Spawned, Spawns};
 
 /// Spawns no agent: the tests start no chat's agent, and judge no goal,
 /// though a chat read from what is kept is given what would judge it.
@@ -59,7 +57,7 @@ fn run_keeping(
     let (socket, home) = (socket.to_owned(), home.to_owned());
     let kept = kept.map(Path::to_owned);
     std::thread::spawn(move || {
-        cox::daemon::process::run(
+        coxd::daemon::process::run(
             &socket,
             home,
             move || {

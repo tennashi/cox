@@ -25,7 +25,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair as _};
 use serde::{Deserialize, Serialize};
 
-use coxd::storage::{self, Kept};
+use crate::storage::{self, Kept};
 
 /// How long a push service keeps what coxd pushes for a phone it cannot
 /// reach, as one switched off: a chat that waited a day is in the list.
@@ -453,7 +453,7 @@ mod tests {
     use ring::signature::{ECDSA_P256_SHA256_FIXED, UnparsedPublicKey as Verifying};
 
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     /// A phone's keys, and its private key, to read what is pushed to it.
     fn phone(random: &SystemRandom) -> (EphemeralPrivateKey, Vec<u8>, [u8; 16]) {

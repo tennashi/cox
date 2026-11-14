@@ -52,16 +52,16 @@
 //!   run in there, each with whether it runs there and how it last ran,
 //!   those on a schedule with when they run next, and in the home, those
 //!   of each project too (see
-//!   [`crate::trigger::told`]); `cox://api/triggers/set/<change>` turns
+//!   [`coxd::trigger::told`]); `cox://api/triggers/set/<change>` turns
 //!   one on or off, or orders them, as the JSON of `<change>` says (see
-//!   [`crate::trigger::Change`]), and answers them so;
+//!   [`coxd::trigger::Change`]), and answers them so;
 //!   `cox://api/triggers/save/<save>` writes a trigger's card to its file
-//!   (see [`crate::trigger::card::Save`]), `triggers/discuss/<line>` has
+//!   (see [`coxd::trigger::card::Save`]), `triggers/discuss/<line>` has
 //!   an agent talk the card through with the human, and
 //!   `triggers/discussion/<card>` tells how that stands, and
 //!   `triggers/try/<try>` tries the card on the last turn of a chat in
 //!   the folder, and `triggers/tried/<card>` tells how it went (see
-//!   [`crate::trigger::discuss`]). Only a plugin's own `fetch` has the
+//!   [`coxd::trigger::discuss`]). Only a plugin's own `fetch` has the
 //!   triggers set, or a card saved, talked through, tried or ended
 //!   (`triggers/end/<card>`): a tab sent to one of those, by a link or a
 //!   page elsewhere, gets nothing (see [`Asker`]).
@@ -293,7 +293,7 @@ impl Plugins {
                     json
                 } else {
                     let change = rest.strip_prefix("set/")?;
-                    let change: crate::trigger::Change =
+                    let change: coxd::trigger::Change =
                         serde_json::from_str(&percent_decoded(change)).ok()?;
                     // Only where a trigger shown runs.
                     let shown = self.triggers();
@@ -370,7 +370,7 @@ impl Plugins {
     /// it is the card's: to save it, to talk it through or try it, and how
     /// those stand, of a folder the tab shows only.
     fn card(&self, rest: &str) -> Option<serde_json::Value> {
-        use crate::trigger::{card, discuss};
+        use coxd::trigger::{card, discuss};
         let (what, said) = rest.split_once('/')?;
         let said = percent_decoded(said);
         let shown = |folder: &Path| {
@@ -420,13 +420,13 @@ impl Plugins {
     }
 
     /// The triggers of the folder, as `cox://api/triggers` tells them
-    /// (see [`crate::trigger::told`]).
+    /// (see [`coxd::trigger::told`]).
     fn triggers(&self) -> serde_json::Value {
         use coxd::storage::{Kept, path};
         let (arranged, runs) = (path(Kept::Triggers), path(Kept::TriggerRuns));
-        crate::trigger::told(
+        coxd::trigger::told(
             &self.trigger_folders(),
-            &crate::trigger::Kept {
+            &coxd::trigger::Kept {
                 workflow: &coxd::settings::workflow(),
                 home: &home(),
                 arranged: arranged.as_deref(),
@@ -618,10 +618,9 @@ mod tests {
     #[test]
     fn the_schedules_of_the_folder_are_told_among_its_triggers() {
         let root = TempDir::new();
-        std::fs::create_dir_all(root.join(crate::trigger::PROJECT_TRIGGERS)).unwrap();
+        std::fs::create_dir_all(root.join(coxd::trigger::PROJECT_TRIGGERS)).unwrap();
         std::fs::write(
-            root.join(crate::trigger::PROJECT_TRIGGERS)
-                .join("triage.md"),
+            root.join(coxd::trigger::PROJECT_TRIGGERS).join("triage.md"),
             "---\non: {schedule: {cron: \"0 */6 * * *\"}}\n---\n\nLook at what changed.\n",
         )
         .unwrap();
