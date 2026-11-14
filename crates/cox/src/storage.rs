@@ -203,7 +203,7 @@ pub fn root() -> Option<PathBuf> {
     }
     // Without links, so the installed Cox is found however it was run.
     let exe = std::env::current_exe().and_then(fs::canonicalize).ok()?;
-    let home = std::env::var_os("HOME").map(|home| fs::canonicalize(&home).unwrap_or(home.into()));
+    let home = crate::ui::paths::home().map(|home| fs::canonicalize(&home).unwrap_or(home));
     root_at(&exe, home.as_deref(), std::env::var_os("XDG_DATA_HOME"))
 }
 

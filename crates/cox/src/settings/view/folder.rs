@@ -16,7 +16,7 @@ use super::words::Words;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
-use crate::ui::paths::shortened;
+use crate::ui::paths::{home, shortened};
 use crate::ui::theme::{ACCENT, BORDER, DIM, FAILED, FAINT, FOREGROUND};
 use crate::vim::hints::Hinted as _;
 
@@ -127,8 +127,7 @@ impl FolderField {
         if text.trim().is_empty() {
             return self.keep(None, cx);
         }
-        let user = std::env::var_os("HOME").map(PathBuf::from);
-        match crate::settings::folder_of(&text, user.as_deref()) {
+        match crate::settings::folder_of(&text, home().as_deref()) {
             Ok(folder) => self.keep(Some(&folder), cx),
             Err(why) => self.tell(why, FAILED, cx),
         }
