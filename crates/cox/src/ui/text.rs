@@ -1071,12 +1071,12 @@ impl Writer {
     /// A Mermaid diagram, drawn at its size, or less where there is less
     /// room, or its source as a code block when it cannot be drawn.
     fn diagram(&mut self, source: &str) -> gpui::Div {
-        let Some(picture) = diagram::picture(source) else {
+        let Some(picture) = diagram::picture::of(source) else {
             return self.code(&markdown::Text::plain(source));
         };
         let size = picture.size(0);
         #[expect(clippy::cast_precision_loss, reason = "a picture's pixels")]
-        let width = size.width.0 as f32 / diagram::SCALE;
+        let width = size.width.0 as f32 / diagram::picture::SCALE;
         div().max_w_full().p_2().rounded_sm().bg(rgb(RAISED)).child(
             img(ImageSource::Render(picture))
                 .w(px(width))

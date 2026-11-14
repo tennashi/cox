@@ -13,7 +13,7 @@ use tokio::sync::oneshot;
 
 use super::colors::color_at;
 use super::pty::{Program, Running, START_SIZE};
-use super::{ended_of, start_cell, text_of};
+use super::{START_CELL, ended_of, text_of};
 use crate::agent::mcp::Ran;
 
 /// How long a command has to end once it is interrupted, as no one waits
@@ -53,7 +53,7 @@ pub async fn run_unseen(
             write(format(color).into_bytes());
         }
         Event::TextAreaSizeRequest(format) => {
-            write(format(START_SIZE.window_size(start_cell())).into_bytes());
+            write(format(START_SIZE.window_size(START_CELL.0, START_CELL.1)).into_bytes());
         }
         Event::ChildExit(exited) => status = Some(exited),
         _ => {}

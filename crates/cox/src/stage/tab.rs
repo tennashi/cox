@@ -25,9 +25,10 @@ use super::document::Document;
 use super::flow::Flow;
 use super::mac_window::MacWindow;
 use super::page::Page;
-use super::terminal::{Program, Terminal};
+use super::terminal::Terminal;
 use super::tree::Unchosen;
 use super::windows::Windows;
+use crate::terminal::Program;
 use crate::ui::LinkClicked;
 use cox_browser::TargetId;
 

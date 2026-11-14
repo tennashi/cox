@@ -16,22 +16,20 @@
 //!    process there, so nothing runs after `run`.
 //!
 //! [`run`] is steps 2 to 5, each a function of its own, called in that
-//! order. [`daemon`] runs coxd, with the [`Launcher`] that starts the
-//! chats' agents (see [`crate::daemon::process`]).
+//! order. coxd runs apart (see [`crate::daemon::main`]).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::Duration;
 
-use cox_core::store::Store;
 use gpui::{
     App, Application, Bounds, Focusable, WindowBounds, WindowHandle, WindowOptions, actions,
     prelude::*, px, size,
 };
 
 use crate::agents::Agents;
-use crate::chat::launcher::{CefStages, Launcher};
+use crate::chat::launcher::CefStages;
 use crate::stage::servers::Servers;
 use crate::ui::icons::Icons;
 use crate::workspace::Workspace;
@@ -210,7 +208,7 @@ pub fn run(settings: Settings) -> ExitCode {
                 &|| start_daemon(data.as_deref()),
                 &tell_waiting,
                 // The window shows nothing once coxd is gone.
-                cox_browser::quit::ask,
+                cox_core::quit::ask,
             )
         });
     let crate::daemon::client::Connected { link, from_daemon } = match connected {
@@ -226,7 +224,7 @@ pub fn run(settings: Settings) -> ExitCode {
     let cef = cox_browser::start(profile);
     let devtools = cef.devtools_port();
     // In place of CEF's handlers, which quit without the app's quit handlers.
-    if let Err(error) = cox_browser::quit::on_signals() {
+    if let Err(error) = cox_core::quit::on_signals() {
         tracing::error!("signals will end Cox without stopping the agents: {error}");
     }
     let stages = CefStages {
@@ -240,7 +238,7 @@ pub fn run(settings: Settings) -> ExitCode {
             bind_keys(cx);
             crate::vim::turn(crate::settings::vim(), cx);
             cx.set_global(Servers::default());
-            cx.set_global(agents.clone());
+            cx.set_global(crate::settings::window::AppAgents(agents.clone()));
             serve_browser(&cef, cx);
             crate::busy::watch(cx);
             quit_when_asked(cx);
@@ -255,7 +253,7 @@ pub fn run(settings: Settings) -> ExitCode {
                 agents: agents.clone(),
             };
             let window = open_window(workspace, cx);
-            crate::settings::follow(window, agents, cx);
+            crate::settings::window::follow(window, agents, cx);
             crate::inspect::start(window, devtools, inspected, cx);
         });
     ExitCode::SUCCESS
@@ -307,94 +305,6 @@ fn start_daemon(data: Option<&Path>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Runs coxd until it is stopped: the chats, kept where this Cox keeps
-/// what lasts, their agents started as `agents.json` and `settings.json`
-/// say, following them as they change.
-#[must_use]
-pub fn daemon() -> ExitCode {
-    let Some(socket) = crate::storage::path(crate::storage::Kept::Daemon) else {
-        eprintln!("cox: there is no place for coxd's socket");
-        return ExitCode::from(1);
-    };
-    let saved = crate::settings::Saved::read();
-    let home = crate::settings::home_for_chats(saved.home);
-    let agents = Agents::read(Vec::new(), saved.agent.as_deref());
-    agents.fetch();
-    follow_agents(agents.clone());
-    let launcher = Launcher {
-        agents,
-        path: std::env::var_os("PATH").unwrap_or_default(),
-        exe: std::env::current_exe()
-            .inspect_err(|error| {
-                tracing::error!("the agents get no tools of Cox's own: {error}");
-            })
-            .ok(),
-    };
-    let ran = crate::daemon::process::run(
-        &socket,
-        home,
-        move || Rc::new(open_store()),
-        move || Rc::new(launcher),
-    );
-    crate::scratch::take_away();
-    match ran {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            tracing::error!("{error:#}");
-            eprintln!("cox: {error:#}");
-            ExitCode::from(1)
-        }
-    }
-}
-
-/// How often coxd looks whether `settings.json` or `agents.json` changed.
-const FOLLOW_EVERY: Duration = Duration::from_secs(1);
-
-/// Follows `settings.json` and `agents.json` for coxd, on a thread of its
-/// own, as the window does for itself (see [`crate::settings::follow`]):
-/// a chat opened from then on talks to the agents they list and name.
-fn follow_agents(agents: Agents) {
-    let files: Vec<PathBuf> = [crate::storage::Kept::Settings, crate::storage::Kept::Agents]
-        .into_iter()
-        .filter_map(crate::storage::path)
-        .collect();
-    let stamps = move || {
-        files
-            .iter()
-            .map(|file| crate::stage::follow::Stamp::of(file).ok())
-            .collect::<Vec<_>>()
-    };
-    let spawned = std::thread::Builder::new()
-        .name("coxd's settings".to_owned())
-        .spawn(move || {
-            let mut seen = stamps();
-            loop {
-                std::thread::sleep(FOLLOW_EVERY);
-                let now = stamps();
-                if now != seen {
-                    seen = now;
-                    agents.reload(crate::settings::agent().as_deref());
-                }
-            }
-        });
-    if let Err(error) = spawned {
-        tracing::error!("coxd does not follow the settings: {error}");
-    }
-}
-
-/// The store of the chats this Cox keeps, or one for this run only when
-/// that cannot be opened.
-fn open_store() -> Store {
-    let kept = crate::storage::path(crate::storage::Kept::Chats)
-        .ok_or_else(|| anyhow::anyhow!("there is no place to keep them"))
-        .and_then(|path| Store::open(&path));
-    kept.or_else(|error| {
-        tracing::error!("the chats last for this run only: {error:#}");
-        Store::in_memory()
-    })
-    .expect("SQLite opens a database in memory")
-}
-
 /// Binds the keys of every part of the window, and of quitting.
 pub fn bind_keys(cx: &mut App) {
     crate::ui::input::bind_keys(cx);
@@ -421,7 +331,7 @@ pub fn bind_keys(cx: &mut App) {
 const PUMP_INTERVAL: Duration = Duration::from_millis(8);
 
 /// How often the app looks whether it was asked to quit from where it
-/// could not quit right away (see [`cox_browser::quit`]).
+/// could not quit right away (see [`cox_core::quit`]).
 const QUIT_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Gives CEF what it needs of the app while the app runs: on macOS, the
@@ -452,7 +362,7 @@ fn quit_when_asked(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(QUIT_CHECK_INTERVAL).await;
-            if cox_browser::quit::take_asked() {
+            if cox_core::quit::take_asked() {
                 let _ = cx.update(|cx| cx.quit());
             }
         }

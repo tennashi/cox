@@ -3,34 +3,14 @@
 //! so that the human reads what the agent writes as it writes it.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use gpui::{Context, Task};
 
+use crate::storage::Stamp;
+
 /// How often a tab looks whether its file changed.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
-
-/// When a file last changed, and how long it was, as a tab last read it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Stamp {
-    modified: SystemTime,
-    len: u64,
-}
-
-impl Stamp {
-    /// When the file at `path` last changed, and how long it is.
-    ///
-    /// # Errors
-    ///
-    /// When the file cannot be looked at, as when there is none.
-    pub fn of(path: &Path) -> std::io::Result<Self> {
-        let metadata = std::fs::metadata(path)?;
-        Ok(Self {
-            modified: metadata.modified()?,
-            len: metadata.len(),
-        })
-    }
-}
 
 /// A tab that shows a file and follows it.
 pub trait Follows: Sized + 'static {

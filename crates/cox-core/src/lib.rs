@@ -13,13 +13,17 @@
 //! - [`store`] keeps all of it in `SQLite`.
 //! - [`moved`] makes what is kept of a folder name where it moved, and
 //!   [`folder`] says when a folder is taken.
+//! - [`address`] decodes an address's escapes, and [`quit`] is how a
+//!   signal, or anything else that cannot quit right away, asks Cox to.
 
+pub mod address;
 pub mod diff;
 pub mod entry;
 pub mod folder;
 pub mod goal;
 pub mod list;
 pub mod moved;
+pub mod quit;
 pub mod settings;
 pub mod store;
 pub mod tabs;

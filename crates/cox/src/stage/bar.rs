@@ -19,8 +19,8 @@ use super::Stage;
 use super::code::Code;
 use super::plugins::Plugin;
 use super::tab::{Tab, TabContent};
-use super::terminal::Program;
 use super::typed::{Typed, Unmatched, typed};
+use crate::terminal::Program;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{LineInput, Submitted};
 use crate::ui::theme::{
@@ -536,7 +536,7 @@ impl Stage {
 /// whether it has a map, and counts the chats of the folder that wait for
 /// the human, now and then, while the stage is open, for the bar to show
 /// "Changes" only in a Git repository, or a project with one among its
-/// directories (see [`super::changes::repositories`]), with the count of
+/// directories (see [`crate::repositories::of`]), with the count of
 /// the files of all of them, "Map" only for a project with a map, and the
 /// count on "Activity".
 pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
@@ -553,7 +553,7 @@ pub(super) fn count_changes(cx: &mut Context<Stage>) -> Task<()> {
                     .spawn(async move {
                         let mapped = !cox_editor::map::list(&cwd).is_empty();
                         let waiting = super::activity::waiting(&cwd);
-                        (super::changes::count(&cwd).ok(), mapped, waiting)
+                        (crate::repositories::count(&cwd).ok(), mapped, waiting)
                     })
                     .await;
                 let counted = this.update(cx, |stage, cx| {

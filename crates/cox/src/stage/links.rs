@@ -251,7 +251,7 @@ impl Stage {
     }
 
     /// Shows what changed in the files of the repositories of `folder`, an
-    /// absolute path (see [`super::changes::repositories`]): on its tab,
+    /// absolute path (see [`crate::repositories::of`]): on its tab,
     /// or a new one, with the keyboard in it.
     pub(super) fn show_changes(
         &mut self,
@@ -272,7 +272,7 @@ impl Stage {
     }
 
     /// Shows what the commit `id` changed, of the repository `name` of
-    /// `folder` (see [`super::changes::repositories`]), on the tab of what
+    /// `folder` (see [`crate::repositories::of`]), on the tab of what
     /// changed in `folder`, or a new one.
     pub fn show_commit(
         &mut self,

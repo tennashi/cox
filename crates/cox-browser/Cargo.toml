@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# The flag that asks Cox to quit, which the app looks at: see `src/macos.rs`.
+cox-core.workspace = true
 # Cox runs on Linux and macOS: the browser is CEF, which on macOS lives in
 # an app bundle that `cargo xtask bundle` assembles; see CONTRIBUTING.md.
 cef = { version = "=152.3.0", default-features = false }
@@ -20,8 +22,6 @@ cef-dll-sys = "=152.3.0"
 # The relay between the agent's browser tools and the browser: see
 # `src/relay.rs`.
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
-# Signal handlers in place of CEF's: see `src/quit.rs`.
-libc.workspace = true
 # Reading only the head of what the browser sends the agent: see
 # `src/relay.rs`.
 serde = { version = "1.0.229", features = ["derive"] }

@@ -530,7 +530,7 @@ fn follow_settings(cx: &mut VisualTestContext, agents: &Choices) {
         .update(|window, _| window.window_handle().downcast::<Workspace>())
         .expect("the window shows a workspace");
     let agents = agents.clone();
-    cx.update(|_, cx| cox::settings::follow(window, agents, cx));
+    cx.update(|_, cx| cox::settings::window::follow(window, agents, cx));
     cx.run_until_parked();
 }
 

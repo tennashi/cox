@@ -79,7 +79,8 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use cox_browser::scheme::{Asker, Resource, Serve, percent_decoded};
+use cox_browser::scheme::{Asker, Resource, Serve};
+use cox_core::address::percent_decoded;
 
 use crate::stage::calls::Calls;
 use crate::stage::lines;

@@ -154,7 +154,7 @@ enum Found {
 /// the sketch's folder, as through `..` or a link, nor hidden in it, as
 /// its `.git`.
 fn file(sketches: &Path, path: &str) -> Option<Found> {
-    let path = cox_browser::scheme::percent_decoded(path.trim_start_matches('/'));
+    let path = cox_core::address::percent_decoded(path.trim_start_matches('/'));
     let mut parts = path.split('/');
     let name = parts.next()?;
     let rest: Vec<&str> = parts.filter(|part| !part.is_empty()).collect();

@@ -19,9 +19,10 @@ use gpui::{
 };
 
 use crate::chat::region::{self, Described};
-use crate::stage::follow::{self, Follows, Stamp};
+use crate::stage::follow::{self, Follows};
 use crate::stage::tab::{Shows, ShowsFile, TabContent};
 use crate::stage::tree;
+use crate::storage::Stamp;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::markdown::{self, Block};
 use crate::ui::paths::shortened;

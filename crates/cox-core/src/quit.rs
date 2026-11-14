@@ -2,8 +2,9 @@
 //!
 //! Quitting runs the app's quit handlers, which shut CEF down and stop the
 //! agent. A signal handler can do none of that, and neither can CEF's turn
-//! on the main thread on macOS (see [`crate::macos`]). Those only [`ask`],
-//! and the app quits when it next looks ([`take_asked`]).
+//! on the main thread on macOS (see `cox_browser::macos`). Those only
+//! [`ask`], and the app quits when it next looks ([`take_asked`]), as coxd
+//! does.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};

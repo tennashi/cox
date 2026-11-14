@@ -127,9 +127,10 @@ use crate::stage::outline::Outlines;
 use crate::stage::page::{Opens, Page};
 use crate::stage::plugins::Plugins;
 use crate::stage::tab::{Shows, Tab, TabContent};
-use crate::stage::terminal::{Exited, Program, Running, Terminal};
+use crate::stage::terminal::{Exited, Terminal};
 use crate::stage::tree::{Chosen, Tree};
 use crate::stage::windows::{ShowWindow, Windows};
+use crate::terminal::{Program, Running};
 use crate::ui::Panel;
 use crate::ui::theme::BORDER;
 

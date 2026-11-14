@@ -63,7 +63,7 @@ impl Drop for Task {
 /// The repositories of `cwd`, where a chat works, each with its last
 /// commit now.
 fn heads(cwd: &Path) -> Vec<Head> {
-    crate::stage::changes::repositories(cwd)
+    crate::repositories::of(cwd)
         .into_iter()
         .map(|(name, folder)| Head {
             commit: commits::head(&folder),
@@ -207,7 +207,7 @@ pub struct Chat {
 /// A repository of the folder a chat works in, as a turn started.
 struct Head {
     /// The project's directory it is, by name, or none for the repository
-    /// the folder is in (see [`crate::stage::changes::repositories`]).
+    /// the folder is in (see [`crate::repositories::of`]).
     name: Option<String>,
     folder: PathBuf,
     /// Its last commit then, by its full name, if it had one.

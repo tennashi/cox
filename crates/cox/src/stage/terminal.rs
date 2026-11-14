@@ -14,24 +14,18 @@
 //! human stops the agent's turn, the command gets an interrupt, as from
 //! Control-C.
 //!
-//! - [`pty`] starts the program on the pseudoterminal, and reads what it
-//!   writes.
+//! The program, its pseudoterminal and its colors are
+//! [`crate::terminal`]'s, which runs a command with no tab too.
+//!
 //! - [`keys`] says what the program gets for the human's keys and pastes.
-//! - [`colors`] holds the terminal's colors, and what a program's names.
 //! - [`grid`] draws the grid.
-//! - [`unseen`] runs a command the agent asks for while no window is
-//!   there, with no tab to show it.
 
-mod colors;
 mod grid;
 mod keys;
-mod pty;
-mod unseen;
 
 use std::borrow::Cow;
 use std::ops::Range;
 use std::os::fd::OwnedFd;
-use std::os::unix::process::ExitStatusExt as _;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::Arc;
@@ -52,19 +46,18 @@ use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, IntoElement,
     KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
     Point, ScrollDelta, ScrollWheelEvent, Subscription, Task, UTF16Selection, Window, div, point,
-    prelude::*, px, rgb, size,
+    prelude::*, px, rgb,
 };
 use tokio::sync::oneshot;
 
-use self::colors::color_at;
-use self::grid::{FONT_SIZE, Grid, LINE_HEIGHT, Laid, whole_cells};
+use self::grid::{Grid, Laid, whole_cells};
 use self::keys::{key_bytes, pasted};
-use self::pty::{Listener, START_SIZE, Size};
-pub use self::pty::{Program, Running};
-pub use self::unseen::run_unseen;
 use crate::agent::mcp::{Ended, Ran};
 use crate::chat::region::{self, Described};
 use crate::stage::tab::Shows;
+use crate::terminal::colors::color_at;
+use crate::terminal::pty::{Listener, START_SIZE, Size};
+use crate::terminal::{Program, Running, START_CELL, ended_of, text_of};
 use crate::ui::Copy;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::Paste;
@@ -80,25 +73,6 @@ pub(crate) const KEY_CONTEXT: &str = "Terminal";
 /// How often a command the agent runs looks whether the agent still waits
 /// for it.
 const WATCH_EVERY: Duration = Duration::from_millis(250);
-
-/// What `term` shows, with what scrolled off, as text: a line the
-/// terminal wrapped is one line.
-fn text_of(term: &Term<Listener>) -> String {
-    let start = Cell::new(term.topmost_line(), Column(0));
-    let end = Cell::new(term.bottommost_line(), term.last_column());
-    term.bounds_to_string(start, end).trim_end().to_owned()
-}
-
-/// How a program ended, as it exited with `status`, if it was learned.
-fn ended_of(status: Option<ExitStatus>) -> Ended {
-    match status {
-        Some(status) => status.code().map_or_else(
-            || status.signal().map_or(Ended::Unknown, Ended::Signal),
-            Ended::Exited,
-        ),
-        None => Ended::Unknown,
-    }
-}
 
 /// Binds the keys of the tab: copying and pasting with the secondary key,
 /// which is Command on macOS. Elsewhere it is Control, which the program
@@ -119,11 +93,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-p", gpui::NoAction, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-\\", gpui::NoAction, Some(KEY_CONTEXT)),
     ]);
-}
-
-/// The size of a cell, before the tab is laid out.
-pub(super) fn start_cell() -> gpui::Size<Pixels> {
-    size(px(8.), (px(FONT_SIZE) * LINE_HEIGHT).round())
 }
 
 pub struct Terminal {
@@ -198,7 +167,7 @@ impl Terminal {
             term,
             pty,
             size: START_SIZE,
-            window_size: START_SIZE.window_size(start_cell()),
+            window_size: START_SIZE.window_size(START_CELL.0, START_CELL.1),
             laid: None,
             title: None,
             status: None,
@@ -329,7 +298,7 @@ impl Terminal {
             return;
         }
         self.size = size;
-        self.window_size = size.window_size(cell);
+        self.window_size = size.window_size(cell.width.into(), cell.height.into());
         self.term.lock().resize(size);
         let _ = self.pty.send(Msg::Resize(self.window_size));
     }
@@ -466,9 +435,7 @@ impl Terminal {
     }
 
     fn scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let line = self
-            .laid
-            .map_or(start_cell().height, |laid| laid.cell.height);
+        let line = self.laid.map_or(px(START_CELL.1), |laid| laid.cell.height);
         self.scrolling += match event.delta {
             ScrollDelta::Lines(lines) => lines.y,
             ScrollDelta::Pixels(pixels) => pixels.y / line,

@@ -1,7 +1,8 @@
 //! A program running on a pseudoterminal, as `alacritty_terminal` runs
 //! it: the pseudoterminal is opened, the program started in it, working
 //! where the chat does, and a thread of its own reads what the program
-//! writes into the terminal's grid. The tab shows it from there.
+//! writes into the terminal's grid. A tab shows it from there, or no
+//! one does (see [`super::run_unseen`]).
 
 use std::collections::HashMap;
 use std::os::fd::{FromRawFd as _, OwnedFd};
@@ -14,17 +15,16 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
-use gpui::Pixels;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use super::start_cell;
+use super::START_CELL;
 use crate::process::close_on_exec;
 
 /// How many lines the terminal keeps of what scrolled off.
 const SCROLLBACK: usize = 10_000;
 
 /// The size a terminal starts at, before the tab is laid out.
-pub(super) const START_SIZE: Size = Size {
+pub(crate) const START_SIZE: Size = Size {
     columns: 80,
     lines: 24,
 };
@@ -40,9 +40,9 @@ pub enum Program {
 
 /// The terminal's size in cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Size {
-    pub(super) columns: usize,
-    pub(super) lines: usize,
+pub(crate) struct Size {
+    pub(crate) columns: usize,
+    pub(crate) lines: usize,
 }
 
 impl Dimensions for Size {
@@ -60,14 +60,15 @@ impl Dimensions for Size {
 }
 
 impl Size {
-    /// As the pseudoterminal is told it, with cells of `cell`.
-    pub(super) fn window_size(self, cell: gpui::Size<Pixels>) -> WindowSize {
+    /// As the pseudoterminal is told it, with cells `width` by `height`
+    /// pixels.
+    pub(crate) fn window_size(self, width: f32, height: f32) -> WindowSize {
         let whole = |count: usize| u16::try_from(count).unwrap_or(u16::MAX);
         WindowSize {
             num_lines: whole(self.lines),
             num_cols: whole(self.columns),
-            cell_width: whole_pixels(cell.width),
-            cell_height: whole_pixels(cell.height),
+            cell_width: whole_pixels(width),
+            cell_height: whole_pixels(height),
         }
     }
 }
@@ -77,13 +78,13 @@ impl Size {
     clippy::cast_sign_loss,
     reason = "a cell is a few pixels; rounding is the point"
 )]
-fn whole_pixels(pixels: Pixels) -> u16 {
-    f32::from(pixels).round().max(0.) as u16
+fn whole_pixels(pixels: f32) -> u16 {
+    pixels.round().max(0.) as u16
 }
 
 /// Hands what the terminal tells of itself to the tab.
 #[derive(Clone)]
-pub(super) struct Listener(UnboundedSender<Event>);
+pub(crate) struct Listener(UnboundedSender<Event>);
 
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
@@ -93,13 +94,13 @@ impl EventListener for Listener {
 
 /// A program running on a pseudoterminal, before a tab shows it.
 pub struct Running {
-    pub(super) program: Program,
-    pub(super) cwd: PathBuf,
-    pub(super) term: Arc<FairMutex<Term<Listener>>>,
-    pub(super) pty: EventLoopSender,
-    pub(super) events: UnboundedReceiver<Event>,
+    pub(crate) program: Program,
+    pub(crate) cwd: PathBuf,
+    pub(crate) term: Arc<FairMutex<Term<Listener>>>,
+    pub(crate) pty: EventLoopSender,
+    pub(crate) events: UnboundedReceiver<Event>,
     /// The program's end of the pseudoterminal, held open.
-    pub(super) _held: OwnedFd,
+    pub(crate) _held: OwnedFd,
 }
 
 impl Running {
@@ -138,7 +139,7 @@ impl Running {
             drain_on_exit: true,
             env: environment(),
         };
-        let (controller, user) = open_pty(START_SIZE.window_size(start_cell()))?;
+        let (controller, user) = open_pty(START_SIZE.window_size(START_CELL.0, START_CELL.1))?;
         // Cox holds the program's end open as well, so that its own end
         // never reads as hung up: on Linux, the terminal then drops what
         // the program wrote last, when it reads that after the hang-up.

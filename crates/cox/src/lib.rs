@@ -38,6 +38,8 @@
 //! - [`ui`] is what all of the window's parts share: the text the human
 //!   types into, text that can be selected, Markdown, and how it all
 //!   looks.
+//! - [`terminal`] is a program on a pseudoterminal, as a tab of the
+//!   stage shows it, or as coxd runs it with none.
 //! - [`process`] is what Cox does as it starts a program, the agent's or
 //!   a terminal's.
 //! - [`storage`] says where this Cox keeps what lasts across its runs,
@@ -65,11 +67,13 @@ pub mod notices;
 pub mod process;
 pub mod project_icon;
 pub mod raw;
+pub mod repositories;
 pub mod schedule;
 pub mod scratch;
 pub mod settings;
 pub mod stage;
 pub mod storage;
+pub mod terminal;
 #[cfg(test)]
 mod testing;
 pub mod translate;
