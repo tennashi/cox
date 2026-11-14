@@ -1546,6 +1546,7 @@ dependencies = [
  "cox-browser",
  "cox-core",
  "cox-editor",
+ "cox-git",
  "cox-mac",
  "dom_query",
  "dom_smoothie",
@@ -1649,6 +1650,7 @@ dependencies = [
 name = "cox-editor"
 version = "0.0.0"
 dependencies = [
+ "cox-git",
  "ignore",
  "ropey",
  "serde",
@@ -1680,6 +1682,13 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "cox-git"
+version = "0.0.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

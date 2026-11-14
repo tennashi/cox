@@ -14,7 +14,7 @@
 //! change that moves it.
 //!
 //! Over it goes what the project is now: what changed, as
-//! [`crate::changes`] tells it, falls on the boxes that hold the files,
+//! [`cox_git::changes`] tells it, falls on the boxes that hold the files,
 //! and up on the boxes that open their tiers, and a box whose paths are
 //! gone is stale, for an agent to bring the map up to date (see
 //! [`all_facts`]).
@@ -320,7 +320,7 @@ pub struct Facts {
 
 /// What Cox knows of each box of `map`, by id, for the project in
 /// `root`, among `changed`, the lines each file that changed gained and
-/// lost, by its absolute path (see [`crate::changes::changed_files`]):
+/// lost, by its absolute path (see [`cox_git::changes::changed_files`]):
 /// what a box holds, and what changed in it, counting the files its own
 /// holds have and those the boxes of the tier it opens have, all the way
 /// down, each once.

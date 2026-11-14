@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use cox_core::tabs::KeptTab;
-use cox_editor::changes;
-use cox_editor::changes::changed_files;
+use cox_git::changes;
+use cox_git::changes::changed_files;
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
     ScrollHandle, StyledText, Task, Window, div, prelude::*, px, rgb,

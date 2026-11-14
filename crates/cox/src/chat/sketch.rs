@@ -12,7 +12,7 @@
 //! setup, so the chat goes on there once it is started again. It marks
 //! where the sketch starts in the folder's repository, so that what the
 //! sketch changed shows on the stage as all it changed since then (see
-//! [`cox_editor::changes`]).
+//! [`cox_git::changes`]).
 //!
 //! Once the human has what they wanted of it, the sketch ends, in the
 //! ways the human's workflow says (see [`crate::workflow::Sketch`]): as
@@ -40,7 +40,7 @@ use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 
-use cox_editor::changes;
+use cox_git::changes;
 
 use crate::agent::setup::Policy;
 use crate::chat::judge;
@@ -649,7 +649,7 @@ fn free(sketches: &Path, name: &str) -> Result<PathBuf, String> {
 /// Runs Git in `folder` with `args`, and answers what it printed, or
 /// what it said went wrong.
 fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
-    cox_editor::git::raw(folder, args)
+    cox_git::git::raw(folder, args)
 }
 
 /// Runs Git in `folder` with `args`, with `env` added to its environment
@@ -661,7 +661,7 @@ fn git_with(
     env: &[(&str, &OsStr)],
     input: Option<&[u8]>,
 ) -> Result<String, String> {
-    let mut child = cox_editor::git::command()
+    let mut child = cox_git::git::command()
         .arg("-C")
         .arg(folder)
         .args(args)

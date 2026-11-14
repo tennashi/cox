@@ -9,8 +9,8 @@
 
 use std::path::Path;
 
-use cox_editor::changes;
 use cox_editor::map;
+use cox_git::changes;
 
 /// The map of the project in `root` named `name`, or its first unless
 /// named, as JSON, for a page of the stage to draw it (see

@@ -28,8 +28,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cox_core::tabs::KeptTab;
-use cox_editor::changes::How;
 use cox_editor::files::{self, Listed};
+use cox_git::changes::How;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, EventEmitter, FocusHandle, Focusable, FontWeight,
     Global, ScrollHandle, Stateful, Task, Window, div, prelude::*, px, rgb,

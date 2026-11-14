@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use cox::stage::changes::{Changes, Chosen, Pick, Repository, ShowTurn};
 use cox::stage::tab::Shows as _;
-use cox_editor::changes::{Diff, Since};
-use cox_editor::commits::{self, Turn};
+use cox_git::changes::{Diff, Since};
+use cox_git::commits::{self, Turn};
 use git::git;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 
@@ -239,7 +239,7 @@ fn lists_the_commits_and_shows_what_one_changed_and_the_turn_it_was_made_in(
     cx: &mut TestAppContext,
 ) {
     let folder = repository("history", "one\n");
-    cox_editor::changes::start(&folder).unwrap();
+    cox_git::changes::start(&folder).unwrap();
     std::fs::write(folder.join("a.txt"), "one\ntwo\n").unwrap();
     let two = commit(&folder, "Two");
     let turn = Turn {
@@ -313,7 +313,7 @@ fn a_folder_with_no_repository_counts_none() {
 #[gpui::test]
 fn an_amended_commit_shows_what_it_was_and_what_amending_it_changed(cx: &mut TestAppContext) {
     let folder = repository("amended", "one\n");
-    cox_editor::changes::start(&folder).unwrap();
+    cox_git::changes::start(&folder).unwrap();
     std::fs::write(folder.join("a.txt"), "one\ntwo\n").unwrap();
     let first = commit(&folder, "Two");
     let made = Turn {

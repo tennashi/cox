@@ -25,6 +25,7 @@ const TEMP_HOMES: &[&str] = &[
     "crates/cox/tests/scratch/mod.rs",
     "crates/cox-android/src/scratch.rs",
     "crates/cox-editor/src/scratch.rs",
+    "crates/cox-git/src/scratch.rs",
 ];
 
 /// What a test must not do without saying why.

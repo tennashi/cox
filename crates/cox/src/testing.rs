@@ -63,7 +63,7 @@ impl Drop for TempDir {
 /// committing as a test.
 #[must_use]
 pub fn git(folder: &Path) -> Command {
-    let mut git = cox_editor::git::command();
+    let mut git = cox_git::git::command();
     git.arg("-C")
         .arg(folder)
         .env("GIT_AUTHOR_NAME", "Test")
