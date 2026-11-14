@@ -1007,10 +1007,7 @@ pub fn why_not_renamed(standing: &Standing, name: &str) -> Option<&'static str> 
         return Some("A chat of the project is at work: rename it once the turn ends.");
     }
     let to = standing.folder.with_file_name(name);
-    // A name that differs only in case is the same folder where the disk
-    // does not tell cases apart, as on macOS.
-    let same = to.canonicalize().ok() == standing.folder.canonicalize().ok();
-    if to.exists() && !same {
+    if cox_core::folder::taken(&to, &standing.folder) {
         return Some("There is a folder of that name there already.");
     }
     None

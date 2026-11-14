@@ -1393,6 +1393,7 @@ impl Workspace {
             projects: self
                 .projects
                 .iter()
+                .filter(|project| !project.deleted)
                 .map(|project| (project.folder.clone(), project.name.to_string()))
                 .collect(),
             home: self.projects[0].folder.clone(),
@@ -1605,7 +1606,10 @@ impl Workspace {
     fn ends_sketch(&self, index: usize) -> bool {
         self.chats.get(index).is_some_and(|chat| !chat.ending)
             && self.sketch_of(index).is_some_and(|(_, folder)| {
-                !self.projects.iter().any(|project| project.folder == folder)
+                !self
+                    .projects
+                    .iter()
+                    .any(|project| !project.deleted && project.folder == folder)
             })
     }
 

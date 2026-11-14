@@ -1027,14 +1027,18 @@ impl Daemon {
         }))
     }
 
+    /// The project at `folder`, by its place in the projects: not one the
+    /// human deleted, which is at no folder (see [`cox_core::folder`]).
+    fn project_at(&self, folder: &Path) -> Option<usize> {
+        self.projects
+            .iter()
+            .position(|project| !project.deleted && project.folder == folder)
+    }
+
     /// The project of `folder`, by its place in the projects, made and
     /// kept if there is none yet.
     fn project(&mut self, folder: PathBuf) -> usize {
-        if let Some(index) = self
-            .projects
-            .iter()
-            .position(|project| project.folder == folder && !project.deleted)
-        {
+        if let Some(index) = self.project_at(&folder) {
             // A project put away comes back as its folder is opened again.
             if self.projects[index].archived {
                 self.put_away(index, false);
@@ -1078,13 +1082,7 @@ impl Daemon {
         let projects = self.projects[0].folder.join(crate::settings::PROJECTS);
         (1..=u32::MAX)
             .map(|number| projects.join(format!("untitled-{number}")))
-            .find(|folder| {
-                !folder.exists()
-                    && self
-                        .projects
-                        .iter()
-                        .all(|project| project.deleted || project.folder != *folder)
-            })
+            .find(|folder| !folder.exists() && self.project_at(folder).is_none())
             .expect("some number is free")
     }
 
@@ -1282,10 +1280,7 @@ impl Daemon {
                 // Only in a project the human has, whose folder is there.
                 let index = match folder {
                     None => Some(0),
-                    Some(folder) => self
-                        .projects
-                        .iter()
-                        .position(|project| project.folder == folder),
+                    Some(folder) => self.project_at(&folder),
                 };
                 if let Some(index) = index.filter(|&index| self.projects[index].folder.is_dir()) {
                     self.open_in(index, None, None);
@@ -2772,6 +2767,75 @@ mod tests {
         daemon.act(ToDaemon::NewChat { folder: Some(gone) });
 
         assert_eq!(store.chats().unwrap().len(), 1, "no chat is kept");
+    }
+
+    /// The projects kept, by id, each with how many chats of it are kept.
+    fn kept_projects(store: &Store) -> Vec<(ProjectId, usize)> {
+        let chats = store.chats().unwrap();
+        store
+            .projects()
+            .unwrap()
+            .into_iter()
+            .map(|project| {
+                let of = |chat: &&cox_core::store::KeptChat| chat.project == Some(project.id);
+                (project.id, chats.iter().filter(of).count())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_folder_opened_with_a_slash_after_it_is_of_its_project() {
+        let home = TempDir::new();
+        storage::keep_on_this_thread(Some(home.join("data")));
+        let folder = home.join("shop");
+        std::fs::create_dir(&folder).unwrap();
+        let (store, _) = one_chat(&folder);
+        let (mut daemon, _told) = daemon_of(&store, &home);
+        let shop = store.projects().unwrap()[0].id;
+
+        daemon.act(ToDaemon::Open {
+            folder: Some(home.join("shop/")),
+        });
+        daemon.act(ToDaemon::NewChat {
+            folder: Some(home.join("shop/")),
+        });
+
+        assert_eq!(kept_projects(&store), [(shop, 3)]);
+    }
+
+    #[test]
+    fn a_chat_opens_in_a_folder_again_in_a_new_project_once_its_project_was_deleted() {
+        let home = TempDir::new();
+        storage::keep_on_this_thread(Some(home.join("data")));
+        crate::trash::keep_on_this_thread(Some(home.join("Trash")));
+        let folder = home.join("shop");
+        std::fs::create_dir(&folder).unwrap();
+        let (store, _) = one_chat(&folder);
+        let (mut daemon, mut told) = daemon_of(&store, &home);
+        let deleted = store.projects().unwrap()[0].id;
+        daemon.act(ToDaemon::DeleteProject { project: deleted });
+        std::fs::create_dir(&folder).unwrap();
+
+        daemon.act(ToDaemon::Open {
+            folder: Some(folder.clone()),
+        });
+        daemon.act(ToDaemon::NewChat {
+            folder: Some(folder),
+        });
+        daemon.settle();
+
+        let mut listing = None;
+        while let Ok(message) = told.try_recv() {
+            if let FromDaemon::Listing(now) = message {
+                listing = Some(now);
+            }
+        }
+        let listing = listing.expect("the window is told the list");
+        let projects: Vec<usize> = listing.chats.iter().map(|chat| chat.project).collect();
+        assert_eq!(projects.len(), 2, "two chats are listed");
+        for project in projects {
+            assert!(!listing.projects[project].deleted, "{:?}", listing.projects);
+        }
     }
 
     #[test]
