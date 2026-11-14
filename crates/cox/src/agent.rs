@@ -33,7 +33,8 @@ use tokio::sync::oneshot;
 use tracing::Instrument as _;
 
 use cox_core::entry::{
-    Answer, Attachment, Content, Entry, LoginOption, Step, StepState, TerminalLogin, ToolCallResult,
+    Answer, Attachment, Content, Entry, LoginOption, Proposal, Proposed, Step, StepState,
+    TerminalLogin, ToolCallResult,
 };
 use cox_core::settings::{Choice, Setting};
 
@@ -1100,63 +1101,36 @@ fn decided(policy: &Policy, request: &cox_acp::PermissionRequest) -> Option<usiz
 /// characters: past it, the start is left out.
 const RETOLD_LENGTH: usize = 100_000;
 
-/// What the agent is told of a goal, a name, what the project is or a
-/// project it proposed, and what the human did with it.
-fn told_of_proposal(entry: &Entry) -> Option<String> {
-    match entry {
-        Entry::Proposal { goal, answer, .. } => {
-            let answer = match answer {
-                Some(Answer::Set) => "the human set it",
-                Some(Answer::Changed) => "the human changed it, and set that",
-                Some(Answer::Dismissed) => "the human let it be",
-                None => "the human has not answered",
-            };
-            Some(format!("[you proposed the goal: {goal}; {answer}]"))
-        }
-        Entry::NameProposal { name, answer, .. } => {
-            let answer = match answer {
-                Some(Answer::Set | Answer::Changed) => "the human renamed the project so",
-                Some(Answer::Dismissed) => "the human let it be",
-                None => "the human has not answered",
-            };
-            Some(format!(
-                "[you proposed the project's name: {name}; {answer}]"
-            ))
-        }
-        Entry::AboutProposal { about, answer, .. } => {
-            let answer = match answer {
-                Some(Answer::Set | Answer::Changed) => "the human set it",
-                Some(Answer::Dismissed) => "the human let it be",
-                None => "the human has not answered",
-            };
-            Some(format!(
-                "[you proposed what the project is: {about}; {answer}]"
-            ))
-        }
-        Entry::IconProposal { from, answer, .. } => {
-            let answer = match answer {
-                Some(Answer::Set | Answer::Changed) => "the human set it",
-                Some(Answer::Dismissed) => "the human let it be",
-                None => "the human has not answered",
-            };
-            Some(format!(
-                "[you proposed an icon for the project, from {from}; {answer}]"
-            ))
-        }
-        Entry::ProjectProposal { name, answer, .. } => {
-            let answer = match answer {
-                Some(Answer::Set | Answer::Changed) => {
-                    "the human made it, and the chat moved into it"
-                }
-                Some(Answer::Dismissed) => "the human let it be",
-                None => "the human has not answered",
-            };
-            Some(format!(
-                "[you proposed making the chat the project {name}; {answer}]"
-            ))
-        }
-        _ => None,
-    }
+/// What the agent is told of what it proposed, and what the human did
+/// with it.
+fn told_of_proposal(
+    Proposal {
+        proposed, answer, ..
+    }: &Proposal,
+) -> String {
+    let (what, done) = match proposed {
+        Proposed::Goal(goal) => (format!("the goal: {goal}"), "the human set it"),
+        Proposed::Name(name) => (
+            format!("the project's name: {name}"),
+            "the human renamed the project so",
+        ),
+        Proposed::About(about) => (format!("what the project is: {about}"), "the human set it"),
+        Proposed::Icon { from, .. } => (
+            format!("an icon for the project, from {from}"),
+            "the human set it",
+        ),
+        Proposed::Project { name, .. } => (
+            format!("making the chat the project {name}"),
+            "the human made it, and the chat moved into it",
+        ),
+    };
+    let answer = match (proposed, answer) {
+        (_, None) => "the human has not answered",
+        (_, Some(Answer::Dismissed)) => "the human let it be",
+        (Proposed::Goal(_), Some(Answer::Changed)) => "the human changed it, and set that",
+        (_, Some(Answer::Set | Answer::Changed)) => done,
+    };
+    format!("[you proposed {what}; {answer}]")
 }
 
 /// The conversation so far, `entries`, as an agent is told it: what
@@ -1258,11 +1232,7 @@ fn said(entries: &[Entry]) -> Option<(String, bool)> {
                     "[you asked permission for: {title}; {who} chose: {chosen}]"
                 ))
             }
-            Entry::Proposal { .. }
-            | Entry::NameProposal { .. }
-            | Entry::AboutProposal { .. }
-            | Entry::IconProposal { .. }
-            | Entry::ProjectProposal { .. } => told_of_proposal(entry),
+            Entry::Proposal(proposal) => Some(told_of_proposal(proposal)),
             Entry::Switched { from, to } => Some(format!(
                 "[the human switched the chat from the agent {from} to the agent {to}]"
             )),
@@ -1432,11 +1402,11 @@ mod tests {
                 gathered: Vec::new(),
             },
             Entry::Reply("Done".to_owned()),
-            Entry::Proposal {
-                goal: "$ make".to_owned(),
+            Entry::Proposal(Proposal {
+                proposed: Proposed::Goal("$ make".to_owned()),
                 why: Some("make builds it".to_owned()),
                 answer: Some(Answer::Changed),
-            },
+            }),
             Entry::Note("Stopped.".to_owned()),
         ];
         let told = retold(&entries, true).unwrap();

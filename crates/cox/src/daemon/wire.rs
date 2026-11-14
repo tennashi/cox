@@ -325,7 +325,7 @@ pub enum ToDaemon {
     Stop { key: u64 },
     /// The human set the goal of the chat `key`, or cleared it.
     SetGoal { key: u64, goal: Option<Goal> },
-    /// The human answered the goal proposed at `index` in the chat `key`.
+    /// The human answered what was proposed at `index` in the chat `key`.
     AnswerProposal {
         key: u64,
         index: usize,
@@ -334,34 +334,6 @@ pub enum ToDaemon {
     /// The human changed the goal proposed at `index` in the chat `key`
     /// into `goal`, and set it.
     ChangeProposal { key: u64, index: usize, goal: Goal },
-    /// The human answered what the project of the chat `key` is, as
-    /// proposed at `index`: set it, or let it be.
-    AnswerAboutProposal {
-        key: u64,
-        index: usize,
-        answer: Answer,
-    },
-    /// The human answered the name proposed at `index` in the chat `key`
-    /// for its project: rename it so, or let it be.
-    AnswerNameProposal {
-        key: u64,
-        index: usize,
-        answer: Answer,
-    },
-    /// The human answered the icon proposed at `index` in the chat `key`
-    /// for its project: set it, or let it be.
-    AnswerIconProposal {
-        key: u64,
-        index: usize,
-        answer: Answer,
-    },
-    /// The human answered the project proposed at `index` in the chat
-    /// `key`: make it, the chat moving into it, or let it be.
-    AnswerProjectProposal {
-        key: u64,
-        index: usize,
-        answer: Answer,
-    },
     /// The human chose, on the card at `index` of the chat `key`, whether
     /// to keep what a chat learned in the wiki.
     AnswerKeep { key: u64, index: usize, keep: bool },

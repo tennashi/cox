@@ -10,8 +10,8 @@ use cox_core::tabs::KeptTab;
 use gpui::{App, Focusable as _, Window};
 
 use crate::chat::conversation::{
-    Answer, Attachment, Check, CheckState, Content, Entry, GOAL_TURNS, State, Step, StepState,
-    ToolCallResult,
+    Answer, Attachment, Check, CheckState, Content, Entry, GOAL_TURNS, Proposal, Proposed, State,
+    Step, StepState, ToolCallResult,
 };
 use crate::chat::view::ChatView;
 use crate::ui::translation::Shown;
@@ -519,81 +519,7 @@ fn describe_entry(entry: &Entry) -> String {
                 contents(content)
             )
         }
-        Entry::Proposal { goal, why, answer } => {
-            let answer = match answer {
-                None => "open",
-                Some(Answer::Set) => "set",
-                Some(Answer::Changed) => "changed and set",
-                Some(Answer::Dismissed) => "dismissed",
-            };
-            match why {
-                Some(why) => format!("proposal {goal:?}, {answer}: {}", text_of(why)),
-                None => format!("proposal {goal:?}, {answer}"),
-            }
-        }
-        Entry::NameProposal { name, why, answer } => {
-            let answer = match answer {
-                None => "open",
-                Some(Answer::Set | Answer::Changed) => "renamed",
-                Some(Answer::Dismissed) => "dismissed",
-            };
-            match why {
-                Some(why) => format!("name proposal {name:?}, {answer}: {}", text_of(why)),
-                None => format!("name proposal {name:?}, {answer}"),
-            }
-        }
-        Entry::AboutProposal { about, why, answer } => {
-            let answer = match answer {
-                None => "open",
-                Some(Answer::Set | Answer::Changed) => "set",
-                Some(Answer::Dismissed) => "dismissed",
-            };
-            match why {
-                Some(why) => format!("about proposal {about:?}, {answer}: {}", text_of(why)),
-                None => format!("about proposal {about:?}, {answer}"),
-            }
-        }
-        Entry::IconProposal {
-            file,
-            from,
-            why,
-            answer,
-        } => {
-            let answer = match answer {
-                None => "open",
-                Some(Answer::Set | Answer::Changed) => "set",
-                Some(Answer::Dismissed) => "dismissed",
-            };
-            match why {
-                Some(why) => format!(
-                    "icon proposal {from:?} ({file}), {answer}: {}",
-                    text_of(why)
-                ),
-                None => format!("icon proposal {from:?} ({file}), {answer}"),
-            }
-        }
-        Entry::ProjectProposal {
-            name,
-            why,
-            sketch,
-            sketch_name,
-            answer,
-        } => {
-            let answer = match answer {
-                None => "open",
-                Some(Answer::Set | Answer::Changed) => "made",
-                Some(Answer::Dismissed) => "dismissed",
-            };
-            let mut line = format!("project proposal {name:?}, {answer}");
-            if let Some(sketch) = sketch {
-                let named = sketch_name.as_deref().unwrap_or_default();
-                let _ = write!(line, ", with the sketch {named:?} in {}", sketch.display());
-            }
-            if let Some(why) = why {
-                let _ = write!(line, ": {}", text_of(why));
-            }
-            line
-        }
+        Entry::Proposal(proposal) => describe_proposal(proposal),
         Entry::Keep { why, chat, kept } => describe_keep(why, *chat, *kept),
         Entry::Commits(commits) => format!(
             "commits: {}",
@@ -680,6 +606,43 @@ fn describe_checks(on: &str, checks: &[Check]) -> String {
         })
         .collect();
     format!("{on}: {}", checks.join(", "))
+}
+
+/// What was proposed, and what the human did with it, in a line.
+fn describe_proposal(
+    Proposal {
+        proposed,
+        why,
+        answer,
+    }: &Proposal,
+) -> String {
+    let (mut line, done) = match proposed {
+        Proposed::Goal(goal) => (format!("proposal {goal:?}"), "set"),
+        Proposed::Name(name) => (format!("name proposal {name:?}"), "renamed"),
+        Proposed::About(about) => (format!("about proposal {about:?}"), "set"),
+        Proposed::Icon { file, from } => (format!("icon proposal {from:?} ({file})"), "set"),
+        Proposed::Project { name, .. } => (format!("project proposal {name:?}"), "made"),
+    };
+    let answer = match (proposed, answer) {
+        (_, None) => "open",
+        (_, Some(Answer::Dismissed)) => "dismissed",
+        (Proposed::Goal(_), Some(Answer::Changed)) => "changed and set",
+        (_, Some(Answer::Set | Answer::Changed)) => done,
+    };
+    let _ = write!(line, ", {answer}");
+    if let Proposed::Project {
+        sketch: Some(sketch),
+        sketch_name,
+        ..
+    } = proposed
+    {
+        let named = sketch_name.as_deref().unwrap_or_default();
+        let _ = write!(line, ", with the sketch {named:?} in {}", sketch.display());
+    }
+    if let Some(why) = why {
+        let _ = write!(line, ": {}", text_of(why));
+    }
+    line
 }
 
 /// Cox's card asking whether to keep in the wiki what a chat learned, at

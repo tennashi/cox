@@ -98,74 +98,6 @@ pub enum Entry {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         gathered: Vec<Check>,
     },
-    /// A goal the agent proposed for the chat, for the human to set as it
-    /// is, to change before they set it, or to let be.
-    Proposal {
-        /// The goal, as the input that sets it reads: `$ ` and a command,
-        /// or words.
-        goal: String,
-        /// Why the agent proposes it, if it said.
-        why: Option<String>,
-        /// What the human did with it, once they did.
-        answer: Option<Answer>,
-    },
-    /// A name the agent proposed for the chat's project, which is its
-    /// folder's, for the human to rename the project to or to let be.
-    NameProposal {
-        /// The name.
-        name: String,
-        /// Why the agent proposes it, if it said.
-        why: Option<String>,
-        /// What the human did with it, once they did: set it, or let it
-        /// be.
-        answer: Option<Answer>,
-    },
-    /// What the chat's project is, in a sentence or two, as the agent
-    /// proposed it, for the human to set as what each chat's agent is told
-    /// of the project, or to let be.
-    AboutProposal {
-        /// What the project is.
-        about: String,
-        /// Why the agent proposes it, if it said.
-        why: Option<String>,
-        /// What the human did with it, once they did: set it, or let it
-        /// be.
-        answer: Option<Answer>,
-    },
-    /// An icon the agent proposed for the chat's project, for the human
-    /// to give the project, in place of the one it has, or to let be.
-    IconProposal {
-        /// The icon, as the rail would draw it, by the name of the copy
-        /// Cox keeps of it, as of a picture shown (see [`Entry::Media`]).
-        file: String,
-        /// The path of the picture the agent made it from, as it gave it.
-        from: String,
-        /// Why the agent proposes it, if it said.
-        why: Option<String>,
-        /// What the human did with it, once they did: set it, or let it
-        /// be.
-        answer: Option<Answer>,
-    },
-    /// A project the agent of a chat in no project proposed to make of
-    /// it, named `name`, for the human to make, the chat moving into it,
-    /// or to let be.
-    ProjectProposal {
-        /// The project's name, which its folder is named.
-        name: String,
-        /// Why the agent proposes it, if it said.
-        why: Option<String>,
-        /// The folder of the sketch from nothing whose files go into the
-        /// project, as its directory, if the agent named one.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        sketch: Option<std::path::PathBuf>,
-        /// The sketch's name, as the human's list shows it, if the agent
-        /// named one.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        sketch_name: Option<String>,
-        /// What the human did with it, once they did: made it, or let it
-        /// be.
-        answer: Option<Answer>,
-    },
     /// Cox asks the human whether to keep what a chat learned in the
     /// wiki, at a milestone of it, as when its goal is met, or a sketch
     /// ended.
@@ -208,6 +140,173 @@ pub enum Entry {
         /// The way chosen, once the human chose one.
         chosen: Option<usize>,
     },
+    /// Something the agent proposed, for the human to answer. It is
+    /// written as the kind of it is (see [`Written`]), so it stays last.
+    #[serde(untagged)]
+    Proposal(Proposal),
+}
+
+/// Something the agent proposed, for the human to carry out, change
+/// first, as a goal, or let be.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "Written", into = "Written")]
+pub struct Proposal {
+    pub proposed: Proposed,
+    /// Why the agent proposes it, if it said.
+    pub why: Option<String>,
+    /// What the human did with it, once they did.
+    pub answer: Option<Answer>,
+}
+
+/// What the agent proposed, of each kind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Proposed {
+    /// A goal for the chat, as the input that sets it reads: `$ ` and a
+    /// command, or words.
+    Goal(String),
+    /// A name for the chat's project, which is its folder's.
+    Name(String),
+    /// What the chat's project is, in a sentence or two, for each chat's
+    /// agent to be told of the project.
+    About(String),
+    /// An icon for the chat's project, in place of the one it has.
+    Icon {
+        /// The icon, as the rail would draw it, by the name of the copy
+        /// Cox keeps of it, as of a picture shown (see [`Entry::Media`]).
+        file: String,
+        /// The path of the picture the agent made it from, as it gave it.
+        from: String,
+    },
+    /// A project to make of a chat in none, named `name`, the chat moving
+    /// into it.
+    Project {
+        /// The project's name, which its folder is named.
+        name: String,
+        /// The folder of the sketch from nothing whose files go into the
+        /// project, as its directory, if the agent named one.
+        sketch: Option<std::path::PathBuf>,
+        /// The sketch's name, as the human's list shows it, if the agent
+        /// named one.
+        sketch_name: Option<String>,
+    },
+}
+
+impl Proposed {
+    /// The goal, of a goal proposed, as its input reads, if it reads as
+    /// one.
+    #[must_use]
+    pub fn goal(&self) -> Option<crate::goal::Goal> {
+        match self {
+            Self::Goal(goal) => crate::goal::Goal::parse(goal),
+            _ => None,
+        }
+    }
+}
+
+/// A [`Proposal`] as Cox writes it, each kind under a name of its own,
+/// which chats on disk and the phone's page read it by.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Written {
+    Proposal {
+        goal: String,
+        why: Option<String>,
+        answer: Option<Answer>,
+    },
+    NameProposal {
+        name: String,
+        why: Option<String>,
+        answer: Option<Answer>,
+    },
+    AboutProposal {
+        about: String,
+        why: Option<String>,
+        answer: Option<Answer>,
+    },
+    IconProposal {
+        file: String,
+        from: String,
+        why: Option<String>,
+        answer: Option<Answer>,
+    },
+    ProjectProposal {
+        name: String,
+        why: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sketch: Option<std::path::PathBuf>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sketch_name: Option<String>,
+        answer: Option<Answer>,
+    },
+}
+
+impl From<Written> for Proposal {
+    fn from(written: Written) -> Self {
+        let (proposed, why, answer) = match written {
+            Written::Proposal { goal, why, answer } => (Proposed::Goal(goal), why, answer),
+            Written::NameProposal { name, why, answer } => (Proposed::Name(name), why, answer),
+            Written::AboutProposal { about, why, answer } => (Proposed::About(about), why, answer),
+            Written::IconProposal {
+                file,
+                from,
+                why,
+                answer,
+            } => (Proposed::Icon { file, from }, why, answer),
+            Written::ProjectProposal {
+                name,
+                why,
+                sketch,
+                sketch_name,
+                answer,
+            } => (
+                Proposed::Project {
+                    name,
+                    sketch,
+                    sketch_name,
+                },
+                why,
+                answer,
+            ),
+        };
+        Self {
+            proposed,
+            why,
+            answer,
+        }
+    }
+}
+
+impl From<Proposal> for Written {
+    fn from(
+        Proposal {
+            proposed,
+            why,
+            answer,
+        }: Proposal,
+    ) -> Self {
+        match proposed {
+            Proposed::Goal(goal) => Self::Proposal { goal, why, answer },
+            Proposed::Name(name) => Self::NameProposal { name, why, answer },
+            Proposed::About(about) => Self::AboutProposal { about, why, answer },
+            Proposed::Icon { file, from } => Self::IconProposal {
+                file,
+                from,
+                why,
+                answer,
+            },
+            Proposed::Project {
+                name,
+                sketch,
+                sketch_name,
+            } => Self::ProjectProposal {
+                name,
+                why,
+                sketch,
+                sketch_name,
+                answer,
+            },
+        }
+    }
 }
 
 /// Something on the screen the human hands a chat with their next line,
@@ -290,7 +389,7 @@ pub struct TerminalLogin {
     pub env: std::collections::BTreeMap<String, String>,
 }
 
-/// What the human did with a goal the agent proposed.
+/// What the human did with something the agent proposed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Answer {
@@ -500,10 +599,66 @@ mod tests {
 
     #[test]
     fn a_proposal_reads_and_writes_as_cox_has_written_it() {
-        for written in PROPOSALS {
+        let proposal = |proposed, why: Option<&str>, answer| {
+            Entry::Proposal(Proposal {
+                proposed,
+                why: why.map(str::to_owned),
+                answer,
+            })
+        };
+        let read = [
+            proposal(
+                Proposed::Goal("$ make".to_owned()),
+                Some("make builds it"),
+                None,
+            ),
+            proposal(
+                Proposed::Goal("The greeting names the user.".to_owned()),
+                None,
+                Some(Answer::Changed),
+            ),
+            proposal(
+                Proposed::Name("shop".to_owned()),
+                Some("It sells things."),
+                Some(Answer::Set),
+            ),
+            proposal(Proposed::Name("market".to_owned()), None, None),
+            proposal(
+                Proposed::About("A shop that sells tea.".to_owned()),
+                None,
+                Some(Answer::Dismissed),
+            ),
+            proposal(
+                Proposed::Icon {
+                    file: "icon-1.png".to_owned(),
+                    from: "logo.svg".to_owned(),
+                },
+                Some("The teal of the shop."),
+                None,
+            ),
+            proposal(
+                Proposed::Project {
+                    name: "market".to_owned(),
+                    sketch: None,
+                    sketch_name: None,
+                },
+                None,
+                None,
+            ),
+            proposal(
+                Proposed::Project {
+                    name: "shop".to_owned(),
+                    sketch: Some("/home/sketches/tea".into()),
+                    sketch_name: Some("tea shop".to_owned()),
+                },
+                Some("We agreed."),
+                Some(Answer::Set),
+            ),
+        ];
+        for (written, read) in PROPOSALS.into_iter().zip(read) {
             let entry: Entry = serde_json::from_str(written).unwrap();
+            assert_eq!(entry, read, "{written}");
             assert_eq!(serde_json::to_string(&entry).unwrap(), written);
         }
     }
 }
-

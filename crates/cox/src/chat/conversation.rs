@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use cox_acp::{PermissionAnswer, SlashCommand, StopReason};
 use cox_core::diff::Line;
 pub use cox_core::entry::{
-    Answer, Attachment, Check, CheckState, Committed, Content, Entry, LoginOption, Step, StepState,
-    TerminalLogin, ToolCallResult,
+    Answer, Attachment, Check, CheckState, Committed, Content, Entry, LoginOption, Proposal,
+    Proposed, Step, StepState, TerminalLogin, ToolCallResult,
 };
 use cox_core::goal;
 use cox_core::settings::Setting;
@@ -733,192 +733,37 @@ impl Conversation {
         }
     }
 
-    /// Shows `goal`, which the agent proposes for the chat, for the human
-    /// to set, change, or let be, with `why` the agent proposes it, if it
-    /// said.
-    pub fn propose(&mut self, goal: &goal::Goal, why: Option<String>) {
-        self.push(Entry::Proposal {
-            goal: goal.input(),
+    /// Shows what the agent proposes, `proposed`, for the human to answer,
+    /// with `why` it proposes it, if it said.
+    pub fn propose(&mut self, proposed: Proposed, why: Option<String>) {
+        self.push(Entry::Proposal(Proposal {
+            proposed,
             why: why.filter(|why| !why.trim().is_empty()),
             answer: None,
-        });
+        }));
     }
 
-    /// The goal proposed at `index`, while the human has not answered it.
+    /// What was proposed at `index`, while the human has not answered it.
     #[must_use]
-    pub fn proposed(&self, index: usize) -> Option<goal::Goal> {
+    pub fn proposed(&self, index: usize) -> Option<&Proposed> {
         match self.entries.get(index)? {
-            Entry::Proposal {
-                goal, answer: None, ..
-            } => goal::Goal::parse(goal),
-            _ => None,
-        }
-    }
-
-    /// Takes the human's `answer` to the goal proposed at `index`, and
-    /// returns the goal proposed, unless they answered it already. Setting
-    /// a goal is the caller's, with [`Conversation::set_goal`].
-    pub fn answer_proposal(&mut self, index: usize, answer: Answer) -> Option<goal::Goal> {
-        let proposed = self.proposed(index)?;
-        if let Some(Entry::Proposal { answer: taken, .. }) = self.entries.get_mut(index) {
-            *taken = Some(answer);
-            self.changed.insert(index);
-        }
-        Some(proposed)
-    }
-
-    /// Shows `name`, which the agent proposes for the chat's project, for
-    /// the human to rename it to or to let be, with `why` the agent
-    /// proposes it, if it said.
-    pub fn propose_name(&mut self, name: &str, why: Option<String>) {
-        self.push(Entry::NameProposal {
-            name: name.to_owned(),
-            why: why.filter(|why| !why.trim().is_empty()),
-            answer: None,
-        });
-    }
-
-    /// The name proposed at `index`, while the human has not answered it.
-    #[must_use]
-    pub fn proposed_name(&self, index: usize) -> Option<&str> {
-        match self.entries.get(index)? {
-            Entry::NameProposal {
-                name, answer: None, ..
-            } => Some(name),
-            _ => None,
-        }
-    }
-
-    /// Takes the human's `answer` to the name proposed at `index`, unless
-    /// they answered it already. Renaming the project is the caller's.
-    pub fn answer_name_proposal(&mut self, index: usize, answer: Answer) {
-        if self.proposed_name(index).is_none() {
-            return;
-        }
-        if let Some(Entry::NameProposal { answer: taken, .. }) = self.entries.get_mut(index) {
-            *taken = Some(answer);
-            self.changed.insert(index);
-        }
-    }
-
-    /// Shows `about`, what the agent proposes the chat's project is, for
-    /// the human to set or to let be, with `why` the agent proposes it, if
-    /// it said.
-    pub fn propose_about(&mut self, about: &str, why: Option<String>) {
-        self.push(Entry::AboutProposal {
-            about: about.to_owned(),
-            why: why.filter(|why| !why.trim().is_empty()),
-            answer: None,
-        });
-    }
-
-    /// What the project is as proposed at `index`, while the human has
-    /// not answered it.
-    #[must_use]
-    pub fn proposed_about(&self, index: usize) -> Option<&str> {
-        match self.entries.get(index)? {
-            Entry::AboutProposal {
-                about,
+            Entry::Proposal(Proposal {
+                proposed,
                 answer: None,
                 ..
-            } => Some(about),
+            }) => Some(proposed),
             _ => None,
         }
     }
 
-    /// Takes the human's `answer` to what the project is as proposed at
-    /// `index`, unless they answered it already. Setting it is the
-    /// caller's.
-    pub fn answer_about_proposal(&mut self, index: usize, answer: Answer) {
-        if self.proposed_about(index).is_none() {
-            return;
-        }
-        if let Some(Entry::AboutProposal { answer: taken, .. }) = self.entries.get_mut(index) {
-            *taken = Some(answer);
-            self.changed.insert(index);
-        }
-    }
-
-    /// Shows the icon kept as `file`, which the agent proposes for the
-    /// chat's project, made from the picture at `from`, for the human to
-    /// set or to let be, with `why` the agent proposes it, if it said.
-    pub fn propose_icon(&mut self, file: &str, from: &str, why: Option<String>) {
-        self.push(Entry::IconProposal {
-            file: file.to_owned(),
-            from: from.to_owned(),
-            why: why.filter(|why| !why.trim().is_empty()),
-            answer: None,
-        });
-    }
-
-    /// The icon proposed at `index`, by the name of the copy Cox keeps of
-    /// it, while the human has not answered it.
-    #[must_use]
-    pub fn proposed_icon(&self, index: usize) -> Option<&str> {
-        match self.entries.get(index)? {
-            Entry::IconProposal {
-                file, answer: None, ..
-            } => Some(file),
-            _ => None,
-        }
-    }
-
-    /// Takes the human's `answer` to the icon proposed at `index`, unless
-    /// they answered it already. Setting it is the caller's.
-    pub fn answer_icon_proposal(&mut self, index: usize, answer: Answer) {
-        if self.proposed_icon(index).is_none() {
-            return;
-        }
-        if let Some(Entry::IconProposal { answer: taken, .. }) = self.entries.get_mut(index) {
-            *taken = Some(answer);
-            self.changed.insert(index);
-        }
-    }
-
-    /// Shows the project named `name`, which the agent proposes to make of
-    /// the chat, for the human to make or to let be, with `why` the agent
-    /// proposes it, if it said, and the sketch whose files go into it,
-    /// `sketch`, its name and folder, if it named one.
-    pub fn propose_project(
-        &mut self,
-        name: &str,
-        why: Option<String>,
-        sketch: Option<(String, PathBuf)>,
-    ) {
-        let (sketch_name, sketch) = sketch.unzip();
-        self.push(Entry::ProjectProposal {
-            name: name.to_owned(),
-            why: why.filter(|why| !why.trim().is_empty()),
-            sketch,
-            sketch_name,
-            answer: None,
-        });
-    }
-
-    /// The project proposed at `index`, its name and the folder of the
-    /// sketch that goes into it, if any, while the human has not answered
-    /// it.
-    #[must_use]
-    pub fn proposed_project(&self, index: usize) -> Option<(&str, Option<&Path>)> {
-        match self.entries.get(index)? {
-            Entry::ProjectProposal {
-                name,
-                sketch,
-                answer: None,
-                ..
-            } => Some((name, sketch.as_deref())),
-            _ => None,
-        }
-    }
-
-    /// Takes the human's `answer` to the project proposed at `index`,
-    /// unless they answered it already. Making the project is the
-    /// caller's.
-    pub fn answer_project_proposal(&mut self, index: usize, answer: Answer) {
-        if self.proposed_project(index).is_none() {
-            return;
-        }
-        if let Some(Entry::ProjectProposal { answer: taken, .. }) = self.entries.get_mut(index) {
+    /// Takes the human's `answer` to what was proposed at `index`, unless
+    /// they answered it already. Carrying it out is the caller's.
+    pub fn answer_proposal(&mut self, index: usize, answer: Answer) {
+        if let Some(Entry::Proposal(Proposal {
+            answer: taken @ None,
+            ..
+        })) = self.entries.get_mut(index)
+        {
             *taken = Some(answer);
             self.changed.insert(index);
         }
@@ -2737,28 +2582,26 @@ mod tests {
     }
 
     #[test]
-    fn a_goal_proposed_waits_for_the_human_to_answer_it() {
+    fn a_proposal_waits_for_the_human_to_answer_it() {
         let mut conversation = Conversation::new();
         conversation.submit("greet the user");
-        let make = goal::Goal::Command("make".to_owned());
-        conversation.propose(&make, Some("make builds it".to_owned()));
-        conversation.propose(
-            &goal::Goal::Words("It greets.".to_owned()),
-            Some(" ".to_owned()),
-        );
+        let make = Proposed::Goal("$ make".to_owned());
+        let name = Proposed::Name("greeter".to_owned());
+        conversation.propose(make.clone(), Some("make builds it".to_owned()));
+        conversation.propose(name.clone(), Some(" ".to_owned()));
         assert_eq!(
             conversation.entries()[1..],
             [
-                Entry::Proposal {
-                    goal: "$ make".to_owned(),
+                Entry::Proposal(Proposal {
+                    proposed: make.clone(),
                     why: Some("make builds it".to_owned()),
                     answer: None,
-                },
-                Entry::Proposal {
-                    goal: "It greets.".to_owned(),
+                }),
+                Entry::Proposal(Proposal {
+                    proposed: name.clone(),
                     why: None,
                     answer: None,
-                },
+                }),
             ]
         );
         // Proposing sets nothing, nor holds up the turn.
@@ -2766,20 +2609,23 @@ mod tests {
         assert_eq!(conversation.state(), State::Busy);
         conversation.take_changed();
 
-        assert_eq!(conversation.proposed(1), Some(make.clone()));
-        assert_eq!(conversation.answer_proposal(1, Answer::Set), Some(make));
+        assert_eq!(conversation.proposed(1), Some(&make));
+        assert_eq!(conversation.proposed(2), Some(&name));
+        conversation.answer_proposal(1, Answer::Set);
         assert_eq!(conversation.take_changed(), [1]);
         // Answered, it is answered for good.
         assert_eq!(conversation.proposed(1), None);
-        assert_eq!(conversation.answer_proposal(1, Answer::Dismissed), None);
-        assert_eq!(conversation.answer_proposal(0, Answer::Set), None);
+        conversation.answer_proposal(1, Answer::Dismissed);
+        conversation.answer_proposal(0, Answer::Set);
+        assert_eq!(conversation.take_changed(), Vec::<usize>::new());
         assert!(matches!(
             conversation.entries()[1],
-            Entry::Proposal {
+            Entry::Proposal(Proposal {
                 answer: Some(Answer::Set),
                 ..
-            }
+            })
         ));
+        assert_eq!(conversation.proposed(2), Some(&name));
     }
 
     #[test]

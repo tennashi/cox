@@ -1487,8 +1487,8 @@ function nameProposal(proposed, index) {
     el("div", {}, proposed.name),
     proposed.why ? el("div", { class: "why" }, proposed.why) : null,
     buttons([
-      ["Rename", { AnswerNameProposal: { key: chat.key, index, answer: "set" } }, true],
-      ["Dismiss", { AnswerNameProposal: { key: chat.key, index, answer: "dismissed" } }],
+      ["Rename", { AnswerProposal: { key: chat.key, index, answer: "set" } }, true],
+      ["Dismiss", { AnswerProposal: { key: chat.key, index, answer: "dismissed" } }],
     ]));
 }
 
@@ -1505,8 +1505,8 @@ function aboutProposal(proposed, index) {
     el("div", {}, proposed.about),
     proposed.why ? el("div", { class: "why" }, proposed.why) : null,
     buttons([
-      ["Set", { AnswerAboutProposal: { key: chat.key, index, answer: "set" } }, true],
-      ["Dismiss", { AnswerAboutProposal: { key: chat.key, index, answer: "dismissed" } }],
+      ["Set", { AnswerProposal: { key: chat.key, index, answer: "set" } }, true],
+      ["Dismiss", { AnswerProposal: { key: chat.key, index, answer: "dismissed" } }],
     ]));
 }
 
@@ -1524,8 +1524,8 @@ function iconProposal(proposed, index) {
     el("div", { class: "proposed-icon" }, el("span", { class: "square" }, icon), el("span", { class: "why" }, proposed.from)),
     proposed.why ? el("div", { class: "why" }, proposed.why) : null,
     buttons([
-      ["Set", { AnswerIconProposal: { key: chat.key, index, answer: "set" } }, true],
-      ["Dismiss", { AnswerIconProposal: { key: chat.key, index, answer: "dismissed" } }],
+      ["Set", { AnswerProposal: { key: chat.key, index, answer: "set" } }, true],
+      ["Dismiss", { AnswerProposal: { key: chat.key, index, answer: "dismissed" } }],
     ]));
 }
 
@@ -1543,8 +1543,8 @@ function projectProposal(proposed, index) {
     proposed.why ? el("div", { class: "why" }, proposed.why) : null,
     proposed.sketch_name ? el("div", { class: "why" }, `The files of the sketch \u201c${proposed.sketch_name}\u201d go into it, as its directory.`) : null,
     buttons([
-      ["Make project", { AnswerProjectProposal: { key: chat.key, index, answer: "set" } }, true],
-      ["Dismiss", { AnswerProjectProposal: { key: chat.key, index, answer: "dismissed" } }],
+      ["Make project", { AnswerProposal: { key: chat.key, index, answer: "set" } }, true],
+      ["Dismiss", { AnswerProposal: { key: chat.key, index, answer: "dismissed" } }],
     ]));
 }
 
