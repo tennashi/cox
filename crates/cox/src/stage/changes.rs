@@ -599,11 +599,7 @@ impl Changes {
             return;
         };
         if matches!(motion.motion, Motion::HalfDown | Motion::HalfUp) {
-            let at = -self.list.scroll_px_offset_for_scrollbar().y;
-            let most = self.list.max_offset_for_scrollbar().height;
-            let height = self.list.viewport_bounds().size.height;
-            let to = motion.scrolled(at, most, window.line_height(), height);
-            self.list.scroll_by(to - at);
+            motion.scroll_list(&self.list, window.line_height());
             cx.notify();
             return;
         }

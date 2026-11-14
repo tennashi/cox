@@ -18,8 +18,8 @@ pub mod line;
 pub mod search;
 
 use gpui::{
-    Action, App, Context, FocusHandle, Global, KeyContext, Keystroke, KeystrokeEvent, Pixels,
-    ScrollHandle, Subscription, Window, actions, point, px,
+    Action, App, Context, FocusHandle, Global, KeyContext, Keystroke, KeystrokeEvent, ListState,
+    Pixels, ScrollHandle, Subscription, Window, actions, point, px,
 };
 
 use self::keymap::{
@@ -126,6 +126,15 @@ impl Move {
         let most = scroll.max_offset().height;
         let to = self.scrolled(-offset.y, most, line, height);
         scroll.set_offset(point(offset.x, -to));
+    }
+
+    /// Scrolls the list `list` keeps, its lines `line` tall, as the motion
+    /// asks.
+    pub fn scroll_list(&self, list: &ListState, line: Pixels) {
+        let at = -list.scroll_px_offset_for_scrollbar().y;
+        let most = list.max_offset_for_scrollbar().height;
+        let height = list.viewport_bounds().size.height;
+        list.scroll_by(self.scrolled(at, most, line, height) - at);
     }
 }
 

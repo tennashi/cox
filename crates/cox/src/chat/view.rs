@@ -1042,17 +1042,13 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let at = -self.list.scroll_px_offset_for_scrollbar().y;
-        let most = self.list.max_offset_for_scrollbar().height;
-        let height = self.list.viewport_bounds().size.height;
-        let to = motion.scrolled(at, most, window.line_height(), height);
         match motion.motion {
             Motion::Top => self.list.scroll_to(ListOffset::default()),
             Motion::Bottom => self.list.scroll_to(ListOffset {
                 item_ix: self.places.len(),
                 offset_in_item: px(0.),
             }),
-            _ => self.list.scroll_by(to - at),
+            _ => motion.scroll_list(&self.list, window.line_height()),
         }
         cx.notify();
     }
