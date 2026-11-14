@@ -221,6 +221,15 @@ actions!(
         CopyAddress,
         /// Takes the keyboard to the page's address line.
         Address,
+        /// Selects the next entry of the conversation, or block of a
+        /// document (`]]`).
+        NextEntry,
+        /// Selects the entry, or block, before (`[[`).
+        PreviousEntry,
+        /// Selects the next stretch of changed lines, across files (`]c`).
+        NextStretch,
+        /// Selects the stretch before (`[c`).
+        PreviousStretch,
     ]
 );
 
@@ -251,10 +260,10 @@ impl Sent {
             Self::PreviousFit => Box::new(line::PreviousFit),
             Self::Older => Box::new(line::Older),
             Self::Newer => Box::new(line::Newer),
-            Self::NextEntry => Box::new(crate::chat::view::NextEntry),
-            Self::PreviousEntry => Box::new(crate::chat::view::PreviousEntry),
-            Self::NextStretch => Box::new(crate::stage::changes::NextStretch),
-            Self::PreviousStretch => Box::new(crate::stage::changes::PreviousStretch),
+            Self::NextEntry => Box::new(NextEntry),
+            Self::PreviousEntry => Box::new(PreviousEntry),
+            Self::NextStretch => Box::new(NextStretch),
+            Self::PreviousStretch => Box::new(PreviousStretch),
         }
     }
 

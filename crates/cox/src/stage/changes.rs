@@ -47,7 +47,7 @@ use cox_editor::words;
 use gpui::{
     AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
     Hsla, ListAlignment, ListOffset, ListState, Pixels, ScrollWheelEvent, SharedString, StyledText,
-    Task, TextRun, Window, actions, div, font, list, prelude::*, px, rgb,
+    Task, TextRun, Window, div, font, list, prelude::*, px, rgb,
 };
 
 use crate::settings::DIRECTORIES;
@@ -63,19 +63,9 @@ use crate::ui::theme::{
 };
 use crate::vim::hints::Hinted as _;
 use crate::vim::keymap::Motion;
-use crate::vim::{Move, Open};
+use crate::vim::{Move, NextStretch, Open, PreviousStretch};
 
 pub(crate) const KEY_CONTEXT: &str = "Changes";
-
-actions!(
-    changes,
-    [
-        /// Selects the next stretch of changed lines, across files (`]c`).
-        NextStretch,
-        /// Selects the stretch before (`[c`).
-        PreviousStretch,
-    ]
-);
 
 /// How often the tab looks at what changed.
 const LOOK_EVERY: Duration = Duration::from_secs(2);

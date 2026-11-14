@@ -76,7 +76,6 @@ use crate::vim::keymap::{Across, Motion, Place, Selects};
 mod complete;
 mod entries;
 mod find;
-pub use find::{NextEntry, PreviousEntry};
 mod settings;
 
 use crate::vim::hints::Hinted as _;
