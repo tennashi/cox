@@ -24,10 +24,10 @@ use super::{By, Scope};
 use crate::agent::mcp::Ended;
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{Agent, AgentEvent, Command, Start};
-use crate::agents::Agents;
 use crate::chat::judge::{ALLOWED, Verdict};
 use crate::daemon::chat::GATHER_FOR;
 use crate::terminal::run_unseen;
+use coxd::agents::Agents;
 
 /// The agents Cox knows, once the window has read them.
 static AGENTS: OnceLock<Agents> = OnceLock::new();

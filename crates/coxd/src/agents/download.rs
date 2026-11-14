@@ -4,7 +4,7 @@
 //! downloads the archive the first time it starts the program, checks it
 //! by the SHA-256 it is given, and unpacks it in `<id>/<version>`, in
 //! `cache/agents` or `cache/servers` where Cox keeps what lasts (see
-//! [`coxd::storage`]), for every chat and run after to start the program
+//! [`crate::storage`]), for every chat and run after to start the program
 //! from there.
 //!
 //! An archive is a `.tar.gz` (or `.tgz`), a `.tar.bz2` (or `.tbz2`), a
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use coxd::storage::Kept;
+use crate::storage::Kept;
 
 /// Where the program of an agent of the registry is downloaded from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,7 +64,7 @@ pub fn installed(
     download: &Download,
     told: &dyn Fn(String),
 ) -> anyhow::Result<PathBuf> {
-    let downloads = coxd::storage::path(kept)
+    let downloads = crate::storage::path(kept)
         .ok_or_else(|| anyhow::anyhow!("Cox has nowhere to keep what it downloads"))?;
     let folder = downloads.join(name(id)).join(name(&download.version));
     installed_in(&folder, download, told)?;
@@ -118,7 +118,7 @@ pub fn is_installed(kept: Kept, id: &str, version: &str) -> bool {
 /// [`installed`]).
 #[must_use]
 pub fn installed_at(kept: Kept, id: &str, version: &str) -> Option<PathBuf> {
-    let folder = coxd::storage::path(kept)?
+    let folder = crate::storage::path(kept)?
         .join(name(id))
         .join(name(version));
     folder.join(UNPACKED).exists().then_some(folder)
@@ -195,7 +195,7 @@ pub fn go_installed(
     version: &str,
     told: &dyn Fn(String),
 ) -> anyhow::Result<PathBuf> {
-    let downloads = coxd::storage::path(kept)
+    let downloads = crate::storage::path(kept)
         .ok_or_else(|| anyhow::anyhow!("Cox has nowhere to keep what it downloads"))?;
     let folder = downloads.join(name(id)).join(name(version));
     if folder.join(UNPACKED).exists() {
@@ -393,7 +393,7 @@ fn executable(_: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     /// A `.tar.gz` that holds `bin/agent`, a program.
     fn tar_gz(at: &Path) {

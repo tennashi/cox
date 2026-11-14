@@ -270,7 +270,7 @@ impl Plugins {
         // A picture or a video shown in a conversation, which a click on
         // it opens on the stage.
         if what == "media" {
-            let (path, mime) = crate::media::kept(rest)?;
+            let (path, mime) = coxd::media::kept(rest)?;
             return Some(Resource {
                 mime: mime.to_owned(),
                 body: std::fs::read(path).ok()?,

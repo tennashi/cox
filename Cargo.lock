@@ -1716,14 +1716,24 @@ dependencies = [
 name = "coxd"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "bzip2",
+ "cox-acp",
  "cox-core",
  "cox-git",
+ "flate2",
+ "image",
  "jiff",
  "libc",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tokio",
  "tracing",
+ "ureq",
  "url",
+ "zip",
 ]
 
 [[package]]

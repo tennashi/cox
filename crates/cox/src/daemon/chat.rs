@@ -22,7 +22,6 @@ use tokio::sync::oneshot;
 use crate::agent::mcp::{Ended, Ran, ToolRequest};
 use crate::agent::setup::Setup;
 use crate::agent::{Agent, AgentEvent, AgentThread, Command};
-use crate::agents::Agents;
 use crate::chat::conversation::{
     self, Answer, Came, Conversation, Does, Due, Entry, Gathered, Goal, LoginOption, Patch,
     Proposed, State, TerminalLogin,
@@ -31,6 +30,7 @@ use crate::chat::judge::{Heard, Judge, Starts};
 use crate::daemon::Internal;
 use crate::trigger::{self, Arranged, By, On, Trigger};
 use cox_acp::{Login, StopReason};
+use coxd::agents::Agents;
 
 /// How long the name of the chat that opened a chat grows, in
 /// characters, in the note that says so.
@@ -1122,12 +1122,7 @@ impl Chat {
 
     /// Shows the human `shown`, a picture or a video kept from the path
     /// `from`, with `caption`, if given, in the conversation.
-    pub fn show_media(
-        &mut self,
-        shown: crate::media::Shown,
-        from: String,
-        caption: Option<String>,
-    ) {
+    pub fn show_media(&mut self, shown: coxd::media::Shown, from: String, caption: Option<String>) {
         self.conversation.show_media(shown, from, caption);
     }
 
@@ -1143,7 +1138,7 @@ impl Chat {
         markdown: bool,
         lines: Option<(usize, usize)>,
     ) {
-        let file = match crate::media::keep_text(text, markdown, None) {
+        let file = match coxd::media::keep_text(text, markdown, None) {
             Ok(file) => file,
             Err(error) => {
                 tracing::warn!("{} is not kept to read: {error}", path.display());
@@ -1167,8 +1162,8 @@ impl Chat {
         let Some(cwd) = self.running.as_ref().map(|running| running.cwd.clone()) else {
             return;
         };
-        for (caption, path) in crate::media::printed(output) {
-            match crate::media::keep(&cwd.join(&path), None) {
+        for (caption, path) in coxd::media::printed(output) {
+            match coxd::media::keep(&cwd.join(&path), None) {
                 Ok(shown) => self.conversation.show_media(shown, path, caption),
                 Err(why) => self.conversation.note(format!("Not shown: {why}")),
             }

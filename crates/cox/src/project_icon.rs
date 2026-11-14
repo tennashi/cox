@@ -20,9 +20,9 @@ use image::{DynamicImage, ImageReader, RgbaImage};
 
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{AgentEvent, Command, Start};
-use crate::agents::Agents;
 use crate::chat::judge::ALLOWED;
 use crate::workflow;
+use coxd::agents::Agents;
 use coxd::storage::{self, Kept};
 
 /// How many pixels square an icon is kept at: enough for the rail's
@@ -65,7 +65,7 @@ pub fn set(id: ProjectId, from: &Path) -> anyhow::Result<()> {
 /// When the file is no picture Cox reads, or the copy cannot be written.
 pub fn propose(from: &Path) -> Result<String, String> {
     let png = make(from).map_err(|error| format!("{error:#}"))?;
-    crate::media::keep_png(&png)
+    coxd::media::keep_png(&png)
 }
 
 /// Gives the project kept as `id` the icon proposed for it, kept as
@@ -75,7 +75,7 @@ pub fn propose(from: &Path) -> Result<String, String> {
 ///
 /// When Cox keeps no such icon, or it cannot be written.
 pub fn set_proposed(id: ProjectId, file: &str) -> anyhow::Result<()> {
-    let (path, _) = crate::media::kept(file).context("no icon of that name is kept")?;
+    let (path, _) = coxd::media::kept(file).context("no icon of that name is kept")?;
     let png = std::fs::read(&path).with_context(|| format!("cannot read {}", path.display()))?;
     keep(id, &png)
 }

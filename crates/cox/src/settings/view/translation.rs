@@ -11,11 +11,11 @@ use serde_json::{Map, Value};
 
 use super::chip;
 use super::words::Words;
-use crate::agents::line;
 use crate::settings::window::AppAgents;
 use crate::ui::button::INPUT_HEIGHT;
 use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::vim::hints::Hinted as _;
+use coxd::agents::line;
 use coxd::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
 
 /// What translates.

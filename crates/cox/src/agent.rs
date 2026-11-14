@@ -40,8 +40,8 @@ use cox_core::settings::{Choice, Setting};
 
 use crate::agent::instructions::Instructions;
 use crate::agent::setup::{Asked, Decision, Policy, Setup};
-use crate::agents::{Known, download};
-use crate::chat::mention;
+use coxd::agents::{Known, download};
+use coxd::chat::mention;
 use coxd::process::close_on_exec;
 use coxd::storage::Kept;
 
@@ -415,7 +415,7 @@ pub(crate) fn spawn_known(
                 let installed = download::installed(Kept::Downloads, &id, &download, &|note| {
                     told(format!("{name}: {note}"));
                 })?;
-                crate::agents::located(&command, &installed)
+                coxd::agents::located(&command, &installed)
             }
             None => command,
         };

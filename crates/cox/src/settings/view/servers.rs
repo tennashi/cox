@@ -1,7 +1,7 @@
 //! The language servers on the settings screen: Cox's, then those the
 //! human names in their own `servers.json`, where Cox keeps what lasts, a
 //! row each, with the languages it knows, its command on one line, as a
-//! shell takes it (see [`crate::agents::line`]), and where its program is
+//! shell takes it (see [`coxd::agents::line`]), and where its program is
 //! (see [`Found`]).
 //!
 //! Enter, or the keyboard leaving the row, keeps a command changed: one of
@@ -19,7 +19,6 @@ use cox_editor::lsp::{Server, Servers};
 use gpui::{App, Context, Entity, Focusable, Subscription, Window, div, prelude::*, px, rgb};
 
 use super::words::{Part, Words};
-use crate::agents::line;
 use crate::stage::servers::Found;
 use crate::stage::servers::listing::{self, Listing, Named};
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
@@ -27,6 +26,7 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::tip;
 use crate::vim::hints::Hinted as _;
+use coxd::agents::line;
 use coxd::theme::{ACCENT, ASKING, BORDER, DIM, FAILED, FAINT, FOREGROUND, HOVER, LINK};
 
 /// The language servers Cox knows, as rows to change.

@@ -1500,7 +1500,7 @@ async fn show_media(
         Some(_) => return Err("`caption` is not a string".to_owned()),
     };
     let from = cwd.join(path);
-    let shown = crate::media::keep(&from, None)?;
+    let shown = coxd::media::keep(&from, None)?;
     let (answer, done) = oneshot::channel();
     chats
         .send(ChatRequest::ShowMedia {
@@ -3152,7 +3152,7 @@ mod tests {
         assert_eq!(why.as_deref(), Some("The teal of the shop."));
         // The card shows the icon as the rail would draw it: square, in
         // the logo's teal.
-        let (kept, _) = crate::media::kept(&file).expect("the icon is kept");
+        let (kept, _) = coxd::media::kept(&file).expect("the icon is kept");
         let icon = image::open(kept).unwrap().to_rgba8();
         assert_eq!(
             icon.dimensions(),

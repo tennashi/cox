@@ -1341,7 +1341,7 @@ const ANSWERED_ICON: f32 = 16.;
 /// The icon kept as `file`, as the rail draws a project's, rounded,
 /// `size` points square.
 fn icon_of(file: &str, size: f32) -> Option<AnyElement> {
-    let (path, _) = crate::media::kept(file)?;
+    let (path, _) = coxd::media::kept(file)?;
     Some(
         gpui::img(path)
             .size(px(size))
@@ -1681,7 +1681,7 @@ fn render_media(
     cx: &mut Context<ChatView>,
 ) -> AnyElement {
     let link = format!("cox://api/media/{file}");
-    let shown = match (kind, crate::media::kept(file)) {
+    let shown = match (kind, coxd::media::kept(file)) {
         (MediaKind::Image, Some((path, _))) => div()
             .max_w_full()
             .child(
@@ -1904,7 +1904,7 @@ fn render_thumbnail(
     cx: &mut Context<ChatView>,
 ) -> AnyElement {
     let link = format!("cox://api/media/{file}");
-    let shown = match (kind, crate::media::kept(file)) {
+    let shown = match (kind, coxd::media::kept(file)) {
         (MediaKind::Image, Some((path, _))) => gpui::img(path)
             .size(px(THUMBNAIL))
             .object_fit(gpui::ObjectFit::Cover)

@@ -56,7 +56,6 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::agent::mcp::ToolRequest;
 use crate::agent::setup::Setup;
-use crate::agents::Agents;
 use crate::chat::Stages;
 use crate::chat::conversation::State;
 use crate::chat::sketch::{self, Sketch};
@@ -65,6 +64,7 @@ use crate::daemon::Link;
 use crate::daemon::wire::{ChatRow, FromDaemon, Listing, ProjectRow, ToDaemon};
 use crate::notices::AppNotices;
 use crate::settings::view::{Dismissed, HomeChanged, OpenSettings, SettingsView, UnpairPhones};
+use coxd::agents::Agents;
 
 pub(crate) mod project_card;
 mod render;

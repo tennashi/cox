@@ -908,12 +908,7 @@ impl Conversation {
 
     /// Shows the human the picture or video `shown`, kept from the path
     /// `from`, with `caption`, if given.
-    pub fn show_media(
-        &mut self,
-        shown: crate::media::Shown,
-        from: String,
-        caption: Option<String>,
-    ) {
+    pub fn show_media(&mut self, shown: coxd::media::Shown, from: String, caption: Option<String>) {
         self.push(Entry::Media {
             file: shown.file,
             kind: shown.kind,

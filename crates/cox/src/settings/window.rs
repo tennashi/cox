@@ -8,8 +8,8 @@ use std::time::Duration;
 use gpui::{App, AsyncApp, Global, WindowHandle};
 
 use super::{Saved, home_for_chats, view};
-use crate::agents::Agents;
 use crate::workspace::Workspace;
+use coxd::agents::Agents;
 use coxd::storage::{Kept, Stamp};
 
 /// How often Cox looks whether `settings.json` or `agents.json` changed.
