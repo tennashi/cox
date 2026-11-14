@@ -1532,7 +1532,7 @@ dependencies = [
 
 [[package]]
 name = "cox"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "alacritty_terminal",
@@ -1567,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "cox-acp"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -1583,7 +1583,7 @@ dependencies = [
 
 [[package]]
 name = "cox-android"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "font8x8",
@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "cox-browser"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "cef",
@@ -1618,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "cox-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "cox-editor"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "cox-git",
  "ignore",
@@ -1657,7 +1657,7 @@ dependencies = [
 
 [[package]]
 name = "cox-fake-agent"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "cox-acp",
@@ -1669,14 +1669,14 @@ dependencies = [
 
 [[package]]
 name = "cox-git"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "cox-mac"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "block2",
@@ -1695,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "coxd"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "alacritty_terminal",
@@ -9185,7 +9185,7 @@ checksum = "32ac00cd3f8ec9c1d33fb3e7958a82df6989c42d747bd326c822b1d625283547"
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "resvg",

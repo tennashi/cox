@@ -6,7 +6,7 @@ members = ["crates/*", "xtask"]
 default-members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/tennashi/cox"
@@ -25,14 +25,14 @@ allow_attributes_without_reason = "warn"
 [workspace.dependencies]
 agent-client-protocol = "3.4.0"
 anyhow = "1.0.104"
-cox-acp = { path = "crates/cox-acp", version = "0.0.0" }
-cox-android = { path = "crates/cox-android", version = "0.0.0" }
-cox-browser = { path = "crates/cox-browser", version = "0.0.0" }
-cox-core = { path = "crates/cox-core", version = "0.0.0" }
-cox-editor = { path = "crates/cox-editor", version = "0.0.0" }
-cox-git = { path = "crates/cox-git", version = "0.0.0" }
-cox-mac = { path = "crates/cox-mac", version = "0.0.0" }
-coxd = { path = "crates/coxd", version = "0.0.0" }
+cox-acp = { path = "crates/cox-acp", version = "0.1.0" }
+cox-android = { path = "crates/cox-android", version = "0.1.0" }
+cox-browser = { path = "crates/cox-browser", version = "0.1.0" }
+cox-core = { path = "crates/cox-core", version = "0.1.0" }
+cox-editor = { path = "crates/cox-editor", version = "0.1.0" }
+cox-git = { path = "crates/cox-git", version = "0.1.0" }
+cox-mac = { path = "crates/cox-mac", version = "0.1.0" }
+coxd = { path = "crates/coxd", version = "0.1.0" }
 # Exactly this release: gpui's xattr 0.2 does not build with later ones on
 # Linux. Update it once gpui moves off that xattr.
 libc = "=0.2.188"
