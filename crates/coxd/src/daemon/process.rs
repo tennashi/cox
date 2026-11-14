@@ -4,7 +4,7 @@
 //! socket is taken away.
 //!
 //! A window reaches it on a Unix socket, `run/coxd.sock` in Cox's data
-//! folder (see [`coxd::storage`]), one message a line, each a JSON
+//! folder (see [`crate::storage`]), one message a line, each a JSON
 //! object: the window says its [`Hello`] first, and the daemon answers
 //! [`FromDaemon::Joined`], after which each line the window writes is a
 //! [`ToDaemon`] and each the daemon writes a [`FromDaemon`] (see
@@ -18,7 +18,7 @@
 //! of its own build (see [`super::client`]).
 //!
 //! Every minute, coxd runs the human's schedules that are due (see
-//! [`coxd::schedule`]), whether a window is there or not.
+//! [`crate::schedule`]), whether a window is there or not.
 //!
 //! Unless the settings turn it off, coxd serves the human's phone a page
 //! of the chats too (see [`super::phone`]).
@@ -213,7 +213,7 @@ const SCHEDULES_FIRST: Duration = Duration::from_secs(5);
 const SCHEDULES_EVERY: Duration = Duration::from_mins(1);
 
 /// Has the daemon run the schedules that are due, now and then, as
-/// `internal` tells it (see [`coxd::schedule`]).
+/// `internal` tells it (see [`crate::schedule`]).
 async fn schedules(internal: UnboundedSender<Internal>) {
     tokio::time::sleep(SCHEDULES_FIRST).await;
     loop {

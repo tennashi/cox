@@ -7,7 +7,7 @@
 //! 2. What the app depends on starts: the browser, which is CEF (see
 //!    [`cox_browser`]), and the signal handlers.
 //! 3. The window reaches coxd, which runs the chats, starting it when it
-//!    does not run (see [`crate::daemon::client`]).
+//!    does not run (see [`coxd::daemon::client`]).
 //! 4. GPUI runs the app: the keys are bound, the globals set, the loops
 //!    that keep the browser and the quit asks served start, and the
 //!    window opens, telling the human of its chats on macOS.
@@ -16,7 +16,7 @@
 //!    process there, so nothing runs after `run`.
 //!
 //! [`run`] is steps 2 to 5, each a function of its own, called in that
-//! order. coxd runs apart (see [`crate::daemon::main`]).
+//! order. coxd runs apart (see [`coxd::daemon::main`]).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -58,7 +58,7 @@ pub enum Mode {
     /// <agent command>`.
     App(Settings),
     /// coxd, which runs the chats, as `cox [--data <dir>] --daemon`, as
-    /// the window starts it (see [`crate::daemon::process`]).
+    /// the window starts it (see [`coxd::daemon::process`]).
     Daemon { data: Option<PathBuf> },
     /// The bridge between an agent and the server of its chat's tools on
     /// the socket given, as `cox --mcp <socket>` (see [`coxd::agent::mcp`]).
@@ -72,7 +72,7 @@ pub enum Mode {
         args: Vec<String>,
     },
     /// The link that pairs a phone with the page coxd serves it, as `cox
-    /// [--data <dir>] --phone-link` (see [`crate::daemon::phone`]).
+    /// [--data <dir>] --phone-link` (see [`coxd::daemon::phone`]).
     PhoneLink { data: Option<PathBuf> },
     /// The reader of the web page at the URL given, for `raw_keep`, as
     /// `cox --read-page <url>` (see [`coxd::raw::page`]).
@@ -195,14 +195,14 @@ pub fn run(settings: Settings) -> ExitCode {
     let agents = Agents::read(settings.command.clone(), named.as_deref());
     agents.fetch();
     coxd::translate::start(agents.clone());
-    crate::trigger::discuss::start(agents.clone());
+    coxd::trigger::discuss::start(agents.clone());
     // 3. coxd, which runs the chats, in a process of its own.
-    let hello = crate::daemon::wire::Hello::new(settings.home, settings.command);
+    let hello = coxd::daemon::wire::Hello::new(settings.home, settings.command);
     let data = settings.data;
     let connected = coxd::storage::path(coxd::storage::Kept::Daemon)
         .ok_or_else(|| anyhow::anyhow!("there is no place for coxd's socket"))
         .and_then(|socket| {
-            crate::daemon::client::connect(
+            coxd::daemon::client::connect(
                 &socket,
                 &hello,
                 &|| start_daemon(data.as_deref()),
@@ -211,7 +211,7 @@ pub fn run(settings: Settings) -> ExitCode {
                 cox_core::quit::ask,
             )
         });
-    let crate::daemon::client::Connected { link, from_daemon } = match connected {
+    let coxd::daemon::client::Connected { link, from_daemon } = match connected {
         Ok(connected) => connected,
         Err(error) => {
             tracing::error!("{error:#}");
@@ -386,8 +386,8 @@ fn shut_down_on_quit(cef: Cef, cx: &mut App) {
 /// What the window is opened with: the daemon it shows the chats of, and
 /// what it makes their stages with.
 struct Opened {
-    link: crate::daemon::Link,
-    from_daemon: tokio::sync::mpsc::UnboundedReceiver<crate::daemon::wire::FromDaemon>,
+    link: coxd::daemon::Link,
+    from_daemon: tokio::sync::mpsc::UnboundedReceiver<coxd::daemon::wire::FromDaemon>,
     /// Where Cox's own chats work, which `--home` gave when
     /// `home_given` says so.
     home: PathBuf,

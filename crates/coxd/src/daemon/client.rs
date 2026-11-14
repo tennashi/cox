@@ -186,7 +186,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     /// A coxd on `socket` that answers each window that comes, in turn,
     /// the line of `answers`, counting in `heard` the hellos it heard.

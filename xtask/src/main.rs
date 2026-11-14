@@ -122,7 +122,7 @@ const HELPERS: &[(&str, &str)] = &[
 const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
 /// The app's icon, drawn as an SVG, which `assemble` renders into
 /// `Contents/Resources/Cox.icns`.
-const ICON: &str = include_str!("../../crates/cox/assets/app-icon.svg");
+const ICON: &str = include_str!("../../crates/coxd/assets/app-icon.svg");
 /// The images an `.icns` holds, each a PNG: the type macOS knows it by,
 /// and its width in pixels, for 16 to 512 points at 1x and 2x.
 const ICNS_IMAGES: &[(&[u8; 4], u16)] = &[

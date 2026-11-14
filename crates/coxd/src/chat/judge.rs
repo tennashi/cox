@@ -67,7 +67,7 @@ const COMMAND: &str = "COMMAND:";
 /// [`crate::agent::setup::RUNS_OR_WRITES`], and one that runs the
 /// project's tests is given only what picks them, as
 /// [`crate::agent::setup::PICKS`] says, or nothing.
-pub const ALLOWED: &[&str] = &[
+pub(crate) const ALLOWED: &[&str] = &[
     "read:*",
     "search:*",
     "execute:ls",

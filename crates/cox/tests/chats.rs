@@ -7,9 +7,8 @@ mod fake_agent;
 #[expect(dead_code, reason = "these tests use only part of the fake daemon")]
 mod fake_daemon;
 mod git;
-mod scratch;
-#[expect(dead_code, reason = "these tests use only part of the waits")]
-mod waits;
+use coxd::testing::scratch;
+use coxd::testing::waits;
 
 use std::cell::RefCell;
 use std::ops::Deref;
@@ -674,7 +673,7 @@ async fn the_settings_unpair_every_phone(cx: &mut TestAppContext) {
     let home = scratch::folder("unpair-home");
     let (_agents, workspace, cx) = open_window(cx, home.clone());
     let file = coxd::storage::path(coxd::storage::Kept::PhoneToken).unwrap();
-    let before = cox::daemon::phone::token().unwrap();
+    let before = coxd::daemon::phone::token().unwrap();
 
     click(cx, "open-settings");
     let settings = workspace.read_with(cx, |workspace, _| {
@@ -3468,10 +3467,10 @@ async fn a_trigger_of_the_project_runs_only_once_the_human_turns_it_on(cx: &mut 
 /// is now, as the human does on the Triggers tab.
 fn turn_on(folder: &Path, file: &Path) {
     scratch::data();
-    let trigger = cox::trigger::Trigger::read(file, cox::trigger::Scope::Project)
+    let trigger = coxd::trigger::Trigger::read(file, coxd::trigger::Scope::Project)
         .unwrap()
         .unwrap();
-    cox::trigger::Change::Switch {
+    coxd::trigger::Change::Switch {
         folder: folder.to_owned(),
         file: file.to_owned(),
         on: true,

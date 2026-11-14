@@ -19,11 +19,11 @@ use gpui::{
 
 use super::ADDRESS;
 use super::history::{self, Visited};
-use crate::daemon::phone::relay::on_the_mac;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::input::{self, LineInput, Submitted};
 use crate::vim::hints::Hinted as _;
 use crate::vim::{self, Leave, Region};
+use coxd::daemon::phone::relay::on_the_mac;
 use coxd::settings::SearchEngine;
 use coxd::theme::{BORDER_STRONG, DIM, FAINT, FOREGROUND, RAISED, SELECTED};
 

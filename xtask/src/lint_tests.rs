@@ -13,7 +13,7 @@ use anyhow::bail;
 /// and this one, whose tests hold the rules' examples.
 const SLEEP_HOMES: &[&str] = &[
     "xtask/src/lint_tests.rs",
-    "crates/cox/tests/waits/mod.rs",
+    "crates/coxd/src/testing/waits.rs",
     "crates/cox/tests/fake_daemon/mod.rs",
 ];
 
@@ -22,7 +22,7 @@ const SLEEP_HOMES: &[&str] = &[
 const TEMP_HOMES: &[&str] = &[
     "xtask/src/lint_tests.rs",
     "crates/coxd/src/testing.rs",
-    "crates/cox/tests/scratch/mod.rs",
+    "crates/coxd/src/testing/scratch.rs",
     "crates/cox-android/src/scratch.rs",
     "crates/cox-editor/src/scratch.rs",
     "crates/cox-git/src/scratch.rs",
@@ -241,8 +241,8 @@ mod tests {
 
     #[test]
     fn the_rules_own_files_may_do_what_they_make_for_the_tests() {
-        let text = "fn folder() {\n    std::env::temp_dir();\n}\n";
-        assert_eq!(check("crates/cox/tests/scratch/mod.rs", text), []);
+        let text = "fn wait() {\n    std::thread::sleep(D);\n}\n";
+        assert_eq!(check("crates/cox/tests/fake_daemon/mod.rs", text), []);
     }
 
     #[test]

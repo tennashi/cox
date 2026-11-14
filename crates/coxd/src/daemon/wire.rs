@@ -13,10 +13,10 @@ use cox_core::store::{ChatId, Named, ProjectId};
 use cox_core::tabs::{KeptTabs, Lines};
 use serde::{Deserialize, Serialize};
 
-use coxd::agent::mcp::{AndroidAct, MacAct, Ran, Seen};
-use coxd::agent::setup::Setup;
-use coxd::chat::conversation::{Answer, Patch, State};
-use coxd::chat::sketch::Sketch;
+use crate::agent::mcp::{AndroidAct, MacAct, Ran, Seen};
+use crate::agent::setup::Setup;
+use crate::chat::conversation::{Answer, Patch, State};
+use crate::chat::sketch::Sketch;
 
 /// A project, as the window lists it on its rail.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,7 +98,7 @@ pub struct Listing {
 }
 
 /// What an agent's tools ask of its chat's stage, as Cox's
-/// [`ToolRequest`](coxd::agent::mcp::ToolRequest) says it, with a number
+/// [`ToolRequest`](crate::agent::mcp::ToolRequest) says it, with a number
 /// for a command, whose answer the window gives back.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StageAsk {
@@ -362,7 +362,7 @@ pub enum ToDaemon {
     /// The human ended the sketch `key` as `ending` says.
     EndSketch {
         key: u64,
-        ending: coxd::workflow::Ending,
+        ending: crate::workflow::Ending,
     },
     /// The window shows the stage of `folder` with no chat of it: tell it
     /// the tabs the stage had (see [`FromDaemon::StageOf`]).

@@ -70,9 +70,9 @@ pub(crate) mod tailnet;
 use super::push::{self, Notice, Pushed, Pushes, Subscription};
 use super::wire::{FromDaemon, ToDaemon};
 use super::{Internal, Sketching};
-use coxd::chat::conversation::{Content, Entry};
-use coxd::storage::{self, Kept};
-use coxd::theme;
+use crate::chat::conversation::{Content, Entry};
+use crate::storage::{self, Kept};
+use crate::theme;
 
 /// The cookie that holds the secret, once the phone is paired.
 const COOKIE: &str = "cox_phone";
@@ -842,7 +842,7 @@ impl Page {
         // Whether the project is in a Git repository asks Git, and the
         // workflow's endings are read from its folder.
         let told = tokio::task::spawn_blocking(move || {
-            told_sketching(sketching.as_ref(), &coxd::workflow::sketch().endings)
+            told_sketching(sketching.as_ref(), &crate::workflow::sketch().endings)
         });
         match told.await {
             Ok(told) => answer(StatusCode::OK, "application/json", told.to_string()),
@@ -852,7 +852,7 @@ impl Page {
 
     /// The Mermaid diagram `request` holds, `?source=<source>`, as an SVG
     /// in the window's colors, as the window draws it (see
-    /// [`coxd::diagram`]).
+    /// [`crate::diagram`]).
     async fn diagram(&self, request: &Request<Incoming>) -> Response<Body> {
         if !self.paired(request) {
             return answer(StatusCode::UNAUTHORIZED, TEXT, "Not paired");
@@ -864,7 +864,7 @@ impl Page {
             return answer(StatusCode::BAD_REQUEST, TEXT, "No diagram");
         };
         // Drawing it reads the system's fonts the first time.
-        match tokio::task::spawn_blocking(move || coxd::diagram::svg(&source)).await {
+        match tokio::task::spawn_blocking(move || crate::diagram::svg(&source)).await {
             Ok(Ok(svg)) => {
                 let mut response = answer(StatusCode::OK, "image/svg+xml", svg);
                 // The same source draws the same diagram.
@@ -964,7 +964,7 @@ impl Page {
         // A sketch ends only in a way the human's workflow says, as the
         // window's menu offers it.
         if let ToDaemon::EndSketch { ending, .. } = &message
-            && !coxd::workflow::sketch().endings.contains(ending)
+            && !crate::workflow::sketch().endings.contains(ending)
         {
             return answer(
                 StatusCode::FORBIDDEN,
@@ -1250,11 +1250,11 @@ fn place_asked(request: &Request<Incoming>) -> Option<usize> {
 /// window's menu offers them; or `{}`, neither.
 fn told_sketching(
     sketching: Option<&Sketching>,
-    endings: &[coxd::workflow::Ending],
+    endings: &[crate::workflow::Ending],
 ) -> serde_json::Value {
     match sketching {
         Some(Sketching::Starts { project }) => {
-            serde_json::json!({ "start": coxd::chat::sketch::from_at_first(project) })
+            serde_json::json!({ "start": crate::chat::sketch::from_at_first(project) })
         }
         Some(Sketching::Ends { from }) => serde_json::json!({
             "endings": endings.iter().filter(|ending| ending.ends(*from)).collect::<Vec<_>>(),
@@ -1284,7 +1284,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 /// The icon the human gave the project kept by the number `project`, as
 /// the rail draws it, if it has one.
 fn project_icon(project: &str) -> Response<Body> {
-    match coxd::project_icon::named(project).and_then(|path| std::fs::read(path).ok()) {
+    match crate::project_icon::named(project).and_then(|path| std::fs::read(path).ok()) {
         Some(bytes) => answer(StatusCode::OK, "image/png", bytes),
         None => answer(StatusCode::NOT_FOUND, TEXT, "Not found"),
     }
@@ -1295,7 +1295,7 @@ fn project_icon(project: &str) -> Response<Body> {
 /// the part of it `range` asks for, as a phone's browser asks to play a
 /// video.
 fn media(file: &str, range: Option<&HeaderValue>) -> Response<Body> {
-    let Some((path, kind)) = coxd::media::kept(file) else {
+    let Some((path, kind)) = crate::media::kept(file) else {
         return answer(StatusCode::NOT_FOUND, TEXT, "Not found");
     };
     let Ok(bytes) = std::fs::read(path) else {
@@ -1497,7 +1497,7 @@ fn shows(content: &Content) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     #[test]
     fn serves_the_part_of_a_video_a_browser_asks_for() {
@@ -1791,7 +1791,7 @@ mod tests {
 
     #[test]
     fn tells_the_phone_how_many_things_a_call_shows_but_not_them() {
-        use coxd::chat::conversation::{Patch, State};
+        use crate::chat::conversation::{Patch, State};
         let call = Entry::ToolCall {
             id: "1".into(),
             title: "Read a.rs".into(),
@@ -2178,8 +2178,8 @@ mod tests {
 
     #[test]
     fn tells_how_a_sketch_starts_or_the_ways_it_ends() {
-        use coxd::chat::sketch::Sketch;
-        let ending = |name: &str, from: Option<Sketch>, open: bool| coxd::workflow::Ending {
+        use crate::chat::sketch::Sketch;
+        let ending = |name: &str, from: Option<Sketch>, open: bool| crate::workflow::Ending {
             name: name.to_owned(),
             from,
             sum_up: None,
@@ -2260,7 +2260,7 @@ mod tests {
         assert_eq!(
             done(ToDaemon::StartSketch {
                 key: 1,
-                sketch: coxd::chat::sketch::Sketch::Empty,
+                sketch: crate::chat::sketch::Sketch::Empty,
                 what: "a mock".to_owned(),
             }),
             May::InChat(1)

@@ -7,12 +7,12 @@ use cox_editor::fuzzy;
 use gpui::{Context, Entity, FocusHandle, Focusable as _, Window};
 
 use super::Workspace;
-use crate::daemon::wire::ToDaemon;
 use crate::stage::Tabs;
 use crate::vim::ex::{Does, Names};
 use crate::vim::keymap::{Act, Pick, Toward};
 use crate::vim::line::{Line, OpenLine, Run};
 use crate::vim::{DoInWindow, Region};
+use coxd::daemon::wire::ToDaemon;
 
 /// A part of the window with no cursor of its own, where Vim's keys move
 /// a selection: the rail of projects, or the list of chats.

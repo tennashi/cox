@@ -18,7 +18,7 @@
 //! ```
 //!
 //! The human's triggers are in `triggers` in their workflow's folder (see
-//! [`coxd::settings::workflow`]), and run in every project; a project's
+//! [`crate::settings::workflow`]), and run in every project; a project's
 //! own are in `triggers` in its folder, beside its directories.
 //!
 //! As a chat's turn ends, as its agent ends it, its goal is checked first,
@@ -26,7 +26,7 @@
 //! the project's, then the human's, each by name. The first that fails
 //! stops them, and the chat's agent is told what it found, as the next
 //! turn, as a goal that is not met tells it (see
-//! [`coxd::chat::conversation`]).
+//! [`crate::chat::conversation`]).
 //!
 //! Which triggers run in a folder, and in which order, the human chooses
 //! on the stage's Triggers tab, which Cox keeps apart from the files (see
@@ -42,8 +42,8 @@ use std::path::{Path, PathBuf};
 use cox_core::entry::CheckState;
 use sha2::{Digest as _, Sha256};
 
-use coxd::agent::setup::{Policy, Setup, StageUse};
-use coxd::schedule::Cron;
+use crate::agent::setup::{Policy, Setup, StageUse};
+use crate::schedule::Cron;
 
 pub mod card;
 pub mod discuss;
@@ -98,7 +98,7 @@ pub enum On {
     #[serde(rename = "permission.asked")]
     PermissionAsked,
     /// The times a cron says, in no chat, as `schedule: {cron: "0 9 * * *"}`
-    /// (see [`coxd::schedule`]).
+    /// (see [`crate::schedule`]).
     #[serde(rename = "schedule")]
     Schedule { cron: Cron },
 }
@@ -333,7 +333,7 @@ impl Trigger {
     /// The trigger `name`, of `file`, whose text is `text`.
     fn parse(name: &str, file: &Path, scope: Scope, text: &str) -> Result<Self, String> {
         let sum = format!("{:x}", Sha256::digest(text));
-        let (lines, rest) = coxd::wiki::front(text);
+        let (lines, rest) = crate::wiki::front(text);
         let mut properties = properties(&lines)?;
         let key = |properties: &mut BTreeMap<String, Value>, key: &str| properties.remove(key);
         let on = match key(&mut properties, "on") {
@@ -486,7 +486,7 @@ impl Trigger {
             By::New {
                 project: Some(project),
                 ..
-            } => home.join(coxd::settings::PROJECTS).join(project),
+            } => home.join(crate::settings::PROJECTS).join(project),
             _ => home.to_owned(),
         }
     }
@@ -778,7 +778,7 @@ const GATHERS: &str = "You run as a trigger, as another chat's agent asks the hu
 /// refused what `reject` names.
 fn set_up(stance: &str, text: &str, allow: &[String], reject: &[String]) -> Setup {
     let allow = if allow.is_empty() {
-        coxd::chat::judge::ALLOWED
+        crate::chat::judge::ALLOWED
             .iter()
             .map(|&title| title.to_owned())
             .collect()
@@ -837,7 +837,7 @@ pub fn asked_to_gather(about: &str) -> String {
 
 /// Which triggers the human turned on or off in a folder, and the order
 /// they run in there, by their files, as the stage's Triggers tab sets
-/// them: kept in Cox's state (see [`coxd::storage::Kept::Triggers`]), a
+/// them: kept in Cox's state (see [`crate::storage::Kept::Triggers`]), a
 /// folder each.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Arranged {
@@ -857,7 +857,7 @@ pub struct Arranged {
 
 impl Arranged {
     /// How the triggers of `folder` are arranged, as `kept`, the file Cox
-    /// keeps it in (see [`coxd::storage::Kept::Triggers`]), has it.
+    /// keeps it in (see [`crate::storage::Kept::Triggers`]), has it.
     #[must_use]
     pub fn read(kept: Option<&Path>, folder: &Path) -> Self {
         read_arranged(kept).remove(folder).unwrap_or_default()
@@ -926,7 +926,7 @@ pub struct Ran {
 
 impl Ran {
     /// How the triggers of `folder` last ran, by their files, as `kept`,
-    /// the file Cox keeps it in (see [`coxd::storage::Kept::TriggerRuns`]),
+    /// the file Cox keeps it in (see [`crate::storage::Kept::TriggerRuns`]),
     /// has it.
     #[must_use]
     pub fn read(kept: Option<&Path>, folder: &Path) -> BTreeMap<PathBuf, Self> {
@@ -959,7 +959,7 @@ pub struct Kept<'a> {
     pub home: &'a Path,
     pub arranged: Option<&'a Path>,
     pub runs: Option<&'a Path>,
-    pub schedules: &'a coxd::schedule::Ran,
+    pub schedules: &'a crate::schedule::Ran,
 }
 
 /// What the stage's Triggers tab is told, as `cox://api/triggers`: the
@@ -1133,7 +1133,7 @@ fn read_arranged(kept: Option<&Path>) -> BTreeMap<PathBuf, Arranged> {
 
 /// Writes `all` to `path` whole, as JSON, a folder's each.
 fn write_kept<T: serde::Serialize>(path: &Path, all: &BTreeMap<PathBuf, T>) -> Result<(), String> {
-    coxd::storage::write_json(path, all)
+    crate::storage::write_json(path, all)
         .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
@@ -1248,7 +1248,7 @@ fn tempfile_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::{TempDir, run_git};
+    use crate::testing::{TempDir, run_git};
 
     fn parse(text: &str) -> Result<Trigger, String> {
         Trigger::parse("t", Path::new("t.md"), Scope::Global, text)
@@ -1327,7 +1327,7 @@ mod tests {
 
         /// What the tab is told of the project.
         fn told(&self) -> serde_json::Value {
-            let schedules = coxd::schedule::Ran::default();
+            let schedules = crate::schedule::Ran::default();
             let kept = Kept {
                 workflow: &self.workflow,
                 home: &self.root.join("home"),
@@ -1456,7 +1456,7 @@ mod tests {
     /// home, the project, that project's folder and the workflow.
     fn schedules_in(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let home = root.join("home");
-        let projects = home.join(coxd::settings::PROJECTS);
+        let projects = home.join(crate::settings::PROJECTS);
         let (project, elsewhere) = (projects.join("app"), projects.join("notes"));
         let workflow = root.join("workflow");
         for folder in [workflow.join(TRIGGERS), project.join(PROJECT_TRIGGERS)] {
@@ -1489,7 +1489,7 @@ mod tests {
     fn a_schedule_shows_where_its_chat_works() {
         let root = TempDir::new();
         let (home, project, elsewhere, workflow) = schedules_in(&root);
-        let mut schedules = coxd::schedule::Ran::default();
+        let mut schedules = crate::schedule::Ran::default();
         let now = jiff::civil::date(2026, 11, 3)
             .at(10, 0, 0, 0)
             .to_zoned(jiff::tz::TimeZone::UTC)

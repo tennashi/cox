@@ -1,10 +1,8 @@
 //! A terminal on a tab of the stage: the human types into it, and a
 //! command the agent runs there answers how it went.
 
-#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
-mod scratch;
-#[expect(dead_code, reason = "these tests use only part of the waits")]
-mod waits;
+use coxd::testing::scratch;
+use coxd::testing::waits;
 
 use std::path::PathBuf;
 use std::time::Duration;

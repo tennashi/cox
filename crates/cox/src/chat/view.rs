@@ -1,7 +1,7 @@
 //! One chat in the window: draws its conversation, in the panel at the
 //! window's right, and turns keystrokes and clicks into what the human
 //! does, which it tells the daemon, which runs the chat (see
-//! [`crate::daemon`]). Escape in the conversation, or its Stop button,
+//! [`coxd::daemon`]). Escape in the conversation, or its Stop button,
 //! stops the turn the agent is taking.
 //!
 //! The conversation the view draws is the daemon's, as the daemon tells
@@ -53,8 +53,6 @@ use gpui::{
 };
 
 use crate::chat::region::{self, AddRegionToChat, Described};
-use crate::daemon::Link;
-use crate::daemon::wire::ToDaemon;
 use crate::stage::Stage;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{self, LineInput, Submitted};
@@ -66,6 +64,8 @@ use crate::ui::{Copy, Panel, tip};
 use coxd::agents::Agents;
 use coxd::chat::conversation::{Answer, Conversation, GOAL_TURNS, Goal, Patch, Proposed, State};
 use coxd::chat::sketch::Sketch;
+use coxd::daemon::Link;
+use coxd::daemon::wire::ToDaemon;
 use coxd::theme::{
     ACCENT, ACCENT_GROUND, BORDER, BUTTON, BUTTON_HOVER, CODE_FONT, DIM, FAINT, FOREGROUND,
     OFFERING_EDGE, RAISED, UI_FONT,

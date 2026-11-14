@@ -2,10 +2,8 @@
 //! agent shows it at, and asking the language server what the code means.
 
 mod fake_lsp;
-#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
-mod scratch;
-#[expect(dead_code, reason = "these tests use only part of the waits")]
-mod waits;
+use coxd::testing::scratch;
+use coxd::testing::waits;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

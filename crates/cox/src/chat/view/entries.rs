@@ -401,7 +401,7 @@ impl ChatView {
             _ => false,
         };
         waits
-            && crate::daemon::merges(self.row.setup.as_ref())
+            && coxd::daemon::merges(self.row.setup.as_ref())
             && closing(self.conversation.entries()).is_some()
     }
 

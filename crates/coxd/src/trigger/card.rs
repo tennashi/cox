@@ -231,7 +231,7 @@ impl Save {
         draft.name = name;
         draft.scope = Some(scope);
         let trigger = draft.trigger(&kept)?;
-        coxd::storage::write_whole(&kept, draft.written())
+        crate::storage::write_whole(&kept, draft.written())
             .map_err(|error| format!("cannot write {}: {error}", kept.display()))?;
         let runs = self
             .file
@@ -291,7 +291,7 @@ pub fn last_turn(kept: Option<&Path>, folder: &Path) -> Option<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     #[test]
     fn a_card_writes_the_trigger_it_reads() {

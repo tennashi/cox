@@ -3,10 +3,8 @@
 //! lasts in a folder of the test's own, with a home and a temp folder of
 //! its own too, and reaches nothing outside the machine.
 
-#[expect(dead_code, reason = "these tests use only part of the scratch folders")]
-mod scratch;
-#[expect(dead_code, reason = "these tests use only part of the waits")]
-mod waits;
+use coxd::testing::scratch;
+use coxd::testing::waits;
 
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::net::TcpListener;

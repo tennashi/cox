@@ -1,5 +1,12 @@
-//! What the unit tests share: a folder of a test's own, and Git that reads
-//! none of the developer's settings.
+//! What the tests share, coxd's and the window's: a folder of a test's
+//! own, and Git that reads none of the developer's settings.
+//!
+//! - [`scratch`] is the folders of an integration test's own, and the
+//!   folder Cox keeps what lasts in for it.
+//! - [`waits`] is how long a test waits for what it waits for.
+
+pub mod scratch;
+pub mod waits;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

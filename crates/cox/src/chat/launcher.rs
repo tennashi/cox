@@ -1,5 +1,5 @@
 //! What the window starts of a chat, beside the agent the daemon starts
-//! (see [`crate::daemon`]'s launcher).
+//! (see [`coxd::daemon`]'s launcher).
 //!
 //! The window starts the chat's stage ([`CefStages`], the window's
 //! [`Stages`]): the stage itself, on the page every chat starts on, or on

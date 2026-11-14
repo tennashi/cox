@@ -1,6 +1,6 @@
 //! One chat: a human and an agent working in a folder, on the stage of the
 //! folder, which they share with the other chats there. The daemon runs it
-//! (see [`crate::daemon`]); this is what starts it, what it is, and how
+//! (see [`coxd::daemon`]); this is what starts it, what it is, and how
 //! the window shows it: the window makes each folder's stage through
 //! [`Stages`].
 //!

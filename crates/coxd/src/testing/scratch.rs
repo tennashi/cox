@@ -34,6 +34,11 @@ pub fn folder(name: &str) -> PathBuf {
 }
 
 /// A folder like [`folder`]'s, made.
+///
+/// # Panics
+///
+/// If it cannot be made, which fails the test.
+#[must_use]
 pub fn made(name: &str) -> PathBuf {
     let folder = folder(name);
     std::fs::create_dir_all(&folder).unwrap();
@@ -44,12 +49,16 @@ pub fn made(name: &str) -> PathBuf {
 /// test on this thread and the daemons it starts, made the first time it
 /// is asked for, with a trash of its own in it: apart from the other
 /// tests' and from the human's.
+#[expect(
+    clippy::must_use_candidate,
+    reason = "a test calls it to keep Cox's data apart before anything does"
+)]
 pub fn data() -> PathBuf {
     DATA.with_borrow_mut(|data| {
         data.get_or_insert_with(|| {
             let data = made("data");
-            coxd::storage::keep_on_this_thread(Some(data.clone()));
-            coxd::trash::keep_on_this_thread(Some(data.join("Trash")));
+            crate::storage::keep_on_this_thread(Some(data.clone()));
+            crate::trash::keep_on_this_thread(Some(data.join("Trash")));
             data
         })
         .clone()

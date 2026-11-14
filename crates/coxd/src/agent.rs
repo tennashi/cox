@@ -293,11 +293,10 @@ pub struct AgentThread {
     thread: Option<JoinHandle<()>>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 impl AgentThread {
     /// No thread, for an agent a test plays.
-    #[must_use]
-    pub fn none() -> Self {
+    pub(crate) fn none() -> Self {
         Self {
             stop: None,
             thread: None,
@@ -393,7 +392,12 @@ const NO_AGENT: &str = "Cox was opened without an agent command, and settings.js
 /// `tools`, as `start` says: a chat's agent, or one with no chat, such as
 /// the judge of a goal, or the agent that translates the wiki (see
 /// [`crate::translate`]).
-pub fn spawn_known(known: Known, cwd: PathBuf, tools: Vec<McpServer>, start: Start) -> Agent {
+pub(crate) fn spawn_known(
+    known: Known,
+    cwd: PathBuf,
+    tools: Vec<McpServer>,
+    start: Start,
+) -> Agent {
     tracing::info!(agent = %known.id, "starts the agent");
     let Known {
         id,

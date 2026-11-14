@@ -11,7 +11,7 @@ use std::time::Duration;
 use cox_core::store::Store;
 
 use super::launcher::Launcher;
-use coxd::agents::Agents;
+use crate::agents::Agents;
 
 /// Runs coxd until it is stopped, keeping what lasts in `data` when
 /// given: the chats, kept where this Cox keeps
@@ -20,21 +20,21 @@ use coxd::agents::Agents;
 #[must_use]
 pub fn run(data: Option<&Path>) -> ExitCode {
     // First, while coxd has no other thread.
-    let environment = coxd::login::take_in();
+    let environment = crate::login::take_in();
     if let Some(data) = data {
-        coxd::storage::keep_in(data);
+        crate::storage::keep_in(data);
     }
-    coxd::logs::init(coxd::storage::path(coxd::storage::Kept::Logs).as_deref());
-    coxd::scratch::sweep();
-    if let coxd::login::Taken::Failed(why) = environment {
+    crate::logs::init(crate::storage::path(crate::storage::Kept::Logs).as_deref());
+    crate::scratch::sweep();
+    if let crate::login::Taken::Failed(why) = environment {
         tracing::warn!("the agents get launchd's environment, not the login shell's: {why}");
     }
-    let Some(socket) = coxd::storage::path(coxd::storage::Kept::Daemon) else {
+    let Some(socket) = crate::storage::path(crate::storage::Kept::Daemon) else {
         eprintln!("cox: there is no place for coxd's socket");
         return ExitCode::from(1);
     };
-    let saved = coxd::settings::Saved::read();
-    let home = coxd::settings::home_for_chats(saved.home);
+    let saved = crate::settings::Saved::read();
+    let home = crate::settings::home_for_chats(saved.home);
     let agents = Agents::read(Vec::new(), saved.agent.as_deref());
     agents.fetch();
     follow_agents(agents.clone());
@@ -53,7 +53,7 @@ pub fn run(data: Option<&Path>) -> ExitCode {
         move || Rc::new(open_store()),
         move || Rc::new(launcher),
     );
-    coxd::scratch::take_away();
+    crate::scratch::take_away();
     match ran {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -71,14 +71,14 @@ const FOLLOW_EVERY: Duration = Duration::from_secs(1);
 /// own, as the window does for itself (see [`crate::settings::window::follow`]):
 /// a chat opened from then on talks to the agents they list and name.
 fn follow_agents(agents: Agents) {
-    let files: Vec<PathBuf> = [coxd::storage::Kept::Settings, coxd::storage::Kept::Agents]
+    let files: Vec<PathBuf> = [crate::storage::Kept::Settings, crate::storage::Kept::Agents]
         .into_iter()
-        .filter_map(coxd::storage::path)
+        .filter_map(crate::storage::path)
         .collect();
     let stamps = move || {
         files
             .iter()
-            .map(|file| coxd::storage::Stamp::of(file).ok())
+            .map(|file| crate::storage::Stamp::of(file).ok())
             .collect::<Vec<_>>()
     };
     let spawned = std::thread::Builder::new()
@@ -90,7 +90,7 @@ fn follow_agents(agents: Agents) {
                 let now = stamps();
                 if now != seen {
                     seen = now;
-                    agents.reload(coxd::settings::agent().as_deref());
+                    agents.reload(crate::settings::agent().as_deref());
                 }
             }
         });
@@ -102,7 +102,7 @@ fn follow_agents(agents: Agents) {
 /// The store of the chats this Cox keeps, or one for this run only when
 /// that cannot be opened.
 fn open_store() -> Store {
-    let kept = coxd::storage::path(coxd::storage::Kept::Chats)
+    let kept = crate::storage::path(crate::storage::Kept::Chats)
         .ok_or_else(|| anyhow::anyhow!("there is no place to keep them"))
         .and_then(|path| Store::open(&path));
     kept.or_else(|error| {

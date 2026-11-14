@@ -1,9 +1,8 @@
 //! An agent reaching its chat's tools through `cox --mcp`, as it starts
 //! the MCP server Cox hands it.
 
-mod scratch;
-#[expect(dead_code, reason = "these tests use only part of the waits")]
-mod waits;
+use coxd::testing::scratch;
+use coxd::testing::waits;
 
 use std::io::{BufRead as _, BufReader, Lines, Write as _};
 use std::path::PathBuf;

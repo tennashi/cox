@@ -3,7 +3,7 @@
 //! projects and their chats, keeps them as they go (see
 //! [`cox_core::store`]), starts each chat's agent, and goes on with its
 //! turns: the check of its goal, its judge, the chats its agent opens, and
-//! its sketches (see [`coxd::chat::sketch`]).
+//! its sketches (see [`crate::chat::sketch`]).
 //!
 //! A window tells it what the human does, as [`ToDaemon`], and hears from
 //! it, as [`FromDaemon`], the projects and chats, how the conversations it
@@ -48,19 +48,19 @@ use cox_core::tabs::{KeptTab, KeptTabs};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 
+use crate::agent::instructions::Instructions;
+use crate::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, Whereabouts};
+use crate::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
+use crate::agent::{Agent, AgentEvent, Start};
+use crate::agents::Agents;
+use crate::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
+use crate::chat::judge::{Heard, Starts};
+use crate::chat::sketch::{self, Sketch};
+use crate::storage;
+use crate::terminal::run_unseen;
 use crate::trigger::By;
+use crate::workflow;
 use chat::{Again, Chat, Task, spawn};
-use coxd::agent::instructions::Instructions;
-use coxd::agent::mcp::{ChatRequest, OpenedChat, Ran, Seen, ToolRequest, Waited, Whereabouts};
-use coxd::agent::setup::{Policy, Setup, StageUse, Withheld, keeps_in_wiki};
-use coxd::agent::{Agent, AgentEvent, Start};
-use coxd::agents::Agents;
-use coxd::chat::conversation::{Content, Conversation, Entry, Gathered, Patch, State};
-use coxd::chat::judge::{Heard, Starts};
-use coxd::chat::sketch::{self, Sketch};
-use coxd::storage;
-use coxd::terminal::run_unseen;
-use coxd::workflow;
 use wire::{Build, ChatRow, FromDaemon, Hello, Listing, ProjectRow, StageAsk, ToDaemon};
 
 /// What the project of chats with no folder is called.
@@ -254,7 +254,7 @@ pub enum Internal {
     /// The daemon is to stop, with its chats' agents.
     Quit,
     /// It is time to look which of the triggers on a schedule are due,
-    /// and run them (see [`coxd::schedule`]).
+    /// and run them (see [`crate::schedule`]).
     Schedules,
 }
 
@@ -437,8 +437,8 @@ pub struct Daemon {
     /// Whether the daemon is to stop.
     done: bool,
     /// When each of the human's schedules last ran (see
-    /// [`coxd::schedule`]), read as the daemon first looks.
-    ran: Option<coxd::schedule::Ran>,
+    /// [`crate::schedule`]), read as the daemon first looks.
+    ran: Option<crate::schedule::Ran>,
     /// The chat of the last run of each schedule, by the path of its
     /// file.
     scheduled: HashMap<String, u64>,
@@ -505,12 +505,12 @@ pub fn start(
     let (to, from_window) = unbounded_channel();
     let (stop, stopped) = oneshot::channel();
     let data = storage::kept_on_this_thread();
-    let trash = coxd::trash::kept_on_this_thread();
+    let trash = crate::trash::kept_on_this_thread();
     let thread = std::thread::Builder::new()
         .name("daemon".to_owned())
         .spawn(move || {
             storage::keep_on_this_thread(data);
-            coxd::trash::keep_on_this_thread(trash);
+            crate::trash::keep_on_this_thread(trash);
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -1082,7 +1082,7 @@ impl Daemon {
     /// first number no folder there has yet, in the projects of Cox's
     /// home.
     fn untitled(&self) -> PathBuf {
-        let projects = self.projects[0].folder.join(coxd::settings::PROJECTS);
+        let projects = self.projects[0].folder.join(crate::settings::PROJECTS);
         (1..=u32::MAX)
             .map(|number| projects.join(format!("untitled-{number}")))
             .find(|folder| !folder.exists() && self.project_at(folder).is_none())
@@ -1446,8 +1446,8 @@ impl Daemon {
         if index == 0 {
             return instructions;
         }
-        let wiki = project.folder.join(coxd::wiki::PROJECT_WIKI);
-        let pages = coxd::wiki::read(&wiki, coxd::wiki::INDEX).ok();
+        let wiki = project.folder.join(crate::wiki::PROJECT_WIKI);
+        let pages = crate::wiki::read(&wiki, crate::wiki::INDEX).ok();
         instructions
             .about(&project.name, project.about.as_deref())
             .wiki(&wiki, pages.as_deref())
@@ -1530,7 +1530,7 @@ impl Daemon {
                 .map_err(|error| format!("Chat {number} cannot be read: {error:#}"))?
                 .unwrap_or_default(),
         };
-        Ok(coxd::agent::read_out(number, &slot.name, &entries)
+        Ok(crate::agent::read_out(number, &slot.name, &entries)
             .unwrap_or_else(|| format!("Nothing was said in chat {number} yet.")))
     }
 
@@ -1742,7 +1742,7 @@ impl Daemon {
             }
             Internal::Quit => self.done = true,
             Internal::Schedules => {
-                self.run_schedules(&coxd::settings::workflow(), &jiff::Zoned::now());
+                self.run_schedules(&crate::settings::workflow(), &jiff::Zoned::now());
             }
         }
     }
@@ -1753,7 +1753,7 @@ impl Daemon {
     /// each run, in the project of the folder it works in, or of Cox's
     /// own, on the trigger's text, sent in the human's place, its agent
     /// going on unasked with what the trigger allows (see
-    /// [`coxd::schedule`]).
+    /// [`crate::schedule`]).
     fn run_schedules(&mut self, workflow: &Path, now: &jiff::Zoned) {
         // The first is Cox's own, in the home.
         let home = self.projects[0].folder.clone();
@@ -1771,7 +1771,7 @@ impl Daemon {
         let mut ran = self
             .ran
             .take()
-            .unwrap_or_else(|| coxd::schedule::Ran::read(storage::path(storage::Kept::Schedules)));
+            .unwrap_or_else(|| crate::schedule::Ran::read(storage::path(storage::Kept::Schedules)));
         for (trigger, works) in scheduled {
             let (Some(cron), By::New { allow, reject, .. }) = (trigger.cron(), &trigger.by) else {
                 continue;
@@ -1808,12 +1808,12 @@ impl Daemon {
             let store = Rc::clone(&self.store);
             if let Some(slot) = self.slot_mut(key) {
                 slot.name_as(
-                    &coxd::schedule::chat_name(&trigger.name, now),
+                    &crate::schedule::chat_name(&trigger.name, now),
                     Named::Human,
                     &store,
                 );
             }
-            let line = coxd::schedule::line(&trigger.text, &trigger.name, now, last);
+            let line = crate::schedule::line(&trigger.text, &trigger.name, now, last);
             if let Some(chat) = self.chat(key) {
                 chat.told(&line);
             }
@@ -1859,11 +1859,12 @@ impl Daemon {
         // the settings say now, which may have changed while none was
         // there.
         self.home_given = home.is_some();
-        self.projects[0].folder = home
-            .unwrap_or_else(|| coxd::settings::home_for_chats(coxd::settings::Saved::read().home));
+        self.projects[0].folder = home.unwrap_or_else(|| {
+            crate::settings::home_for_chats(crate::settings::Saved::read().home)
+        });
         self.spawns
             .agents()
-            .command(command, coxd::settings::agent().as_deref());
+            .command(command, crate::settings::agent().as_deref());
         self.window = Some(window);
         self.window_id = Some(id);
         self.window_watches.clear();
@@ -2608,7 +2609,7 @@ pub fn at_work(state: State) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coxd::testing::TempDir;
+    use crate::testing::TempDir;
 
     /// No agents, for a daemon whose chats stay closed.
     struct NoAgents;
@@ -2831,7 +2832,7 @@ mod tests {
     fn a_chat_opens_in_a_folder_again_in_a_new_project_once_its_project_was_deleted() {
         let home = TempDir::new();
         storage::keep_on_this_thread(Some(home.join("data")));
-        coxd::trash::keep_on_this_thread(Some(home.join("Trash")));
+        crate::trash::keep_on_this_thread(Some(home.join("Trash")));
         let folder = home.join("shop");
         std::fs::create_dir(&folder).unwrap();
         let (store, _) = one_chat(&folder);

@@ -11,12 +11,12 @@ use gpui::{App, Context, Window};
 
 use super::{Chat, NO_TAB, NO_TERMINAL, Staged, Workspace};
 use crate::chat::view::StageView;
-use crate::daemon::wire::{FromDaemon, StageAsk, ToDaemon};
 use crate::stage::Stage;
 use crate::stage::changes::ShowTurn;
 use crate::stage::owners::ShowChat;
 use coxd::agent::mcp::ToolRequest;
 use coxd::chat::conversation::State;
+use coxd::daemon::wire::{FromDaemon, StageAsk, ToDaemon};
 
 impl Workspace {
     /// Gives the chat `key` the stage of the folder it works in, unless it

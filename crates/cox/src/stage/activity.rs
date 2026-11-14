@@ -95,7 +95,7 @@ pub fn waiting(root: &Path) -> usize {
 
 /// What goes on in the folder `root`, as JSON, from how the chats stand
 /// now, the human's `wiki`, the folder's own, the sources at `raw`, and
-/// `triggers`, as [`crate::trigger::told`] tells them, of which the
+/// `triggers`, as [`coxd::trigger::told`] tells them, of which the
 /// schedules ran.
 #[must_use]
 pub fn told(root: &Path, wiki: &Path, raw: &Path, triggers: &Value) -> Value {

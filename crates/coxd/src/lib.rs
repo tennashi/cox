@@ -5,6 +5,11 @@
 //!
 //! The modules go from the top down, each using only what is below it:
 //!
+//! - [`daemon`] is coxd itself: it runs the chats, answers the windows
+//!   and the phones, and starts each chat's agent; its `main` is what
+//!   `cox --daemon` runs, and its `client` the window's side of the wire.
+//! - [`trigger`] is what runs, unasked, when something happens in a
+//!   folder.
 //! - [`chat`] is one chat, apart from how the window draws it.
 //! - [`agent`] is a chat's agent: the ACP connection, and the tools Cox
 //!   hands the agent.
@@ -42,6 +47,7 @@
 pub mod agent;
 pub mod agents;
 pub mod chat;
+pub mod daemon;
 pub mod diagram;
 pub mod home;
 pub mod login;
@@ -62,5 +68,6 @@ pub mod testing;
 pub mod theme;
 pub mod translate;
 pub mod trash;
+pub mod trigger;
 pub mod wiki;
 pub mod workflow;

@@ -5,8 +5,8 @@ mod fake_daemon;
 mod fake_lsp;
 mod git;
 mod keys;
-mod scratch;
-mod waits;
+use coxd::testing::scratch;
+use coxd::testing::waits;
 
 use std::cell::RefCell;
 use std::fmt::Write as _;

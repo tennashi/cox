@@ -9,8 +9,6 @@
 //!   asks for, what the app depends on, the app's parts, and the window.
 //! - [`workspace`] is the window: the projects and the chats open in them,
 //!   and the chat shown.
-//! - [`daemon`] is what runs the chats and their agents, apart from the
-//!   window, which only shows them and tells it what the human does.
 //! - [`chat`] is one chat: what starts it, its conversation, and how the
 //!   conversation is drawn.
 //! - [`stage`] is a chat's stage, beside its conversation: tabs of pages,
@@ -27,24 +25,22 @@
 //!   types into, text that can be selected, Markdown, and how it all
 //!   looks.
 //!
-//! Below them all are [`coxd`], what runs the chats apart from the
-//! window, with what the two share: a chat's agent and the tools Cox
+//! Below them all are [`coxd`], what runs the chats and their agents
+//! apart from the window, which only shows them and tells coxd what the
+//! human does, with what the two share: a chat's agent and the tools Cox
 //! hands it, its conversation, the agents a chat can talk to, what the
-//! human sets, the wiki, what the agents read, the workflow, the
-//! schedule, programs on a pseudoterminal, where Cox keeps what lasts,
-//! and how it looks; and [`cox_browser`]: CEF, which renders the stages'
-//! pages, and what keeps the agent to its chat's pages. Each is a crate
-//! of its own, with no GPUI in it.
+//! human sets, where Cox keeps what lasts, and how it looks; and
+//! [`cox_browser`]: CEF, which renders the stages' pages, and what keeps
+//! the agent to its chat's pages. Each is a crate of its own, with no
+//! GPUI in it.
 
 pub mod app;
 pub mod busy;
 pub mod chat;
-pub mod daemon;
 pub mod inspect;
 pub mod notices;
 pub mod settings;
 pub mod stage;
-pub mod trigger;
 pub mod ui;
 pub mod vim;
 pub mod workspace;

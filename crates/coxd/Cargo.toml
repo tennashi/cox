@@ -19,6 +19,20 @@ cox-core.workspace = true
 cox-editor.workspace = true
 cox-git.workspace = true
 cox-mac.workspace = true
+# Which files changed, of those a trigger's `changed` names: see
+# `src/trigger.rs`.
+globset = "0.4.20"
+# The page coxd serves the human's phone: see `src/daemon/phone.rs`. The
+# versions tonic, for the Android emulator, has already.
+hyper = { version = "1.12.0", features = ["client", "http1", "server"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+http-body = "1.1.0"
+http-body-util = "0.1.5"
+bytes = "1.12.1"
+# Telling the phones of the chats with Web Push, encrypted for each and
+# signed as coxd: see `src/daemon/push.rs`. The version rustls, for ureq,
+# has already.
+ring = "0.17.14"
 # The version gpui uses, to read the pictures the conversations show:
 # see `src/media.rs`.
 image = "0.25.10"
@@ -65,5 +79,7 @@ bzip2 = "0.6.1"
 zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
+# coxd's own integration tests share `testing` with the window's.
+coxd = { path = ".", features = ["test-support"] }
 agent-client-protocol.workspace = true
 cox-git = { workspace = true, features = ["test-support"] }
