@@ -11,8 +11,10 @@
 //! serve` as of the Mac's login. So every phone pairs, the human's own
 //! too (see [`super::Phones`]).
 
-use std::io::Read as _;
+use std::process::Command;
 use std::time::Duration;
+
+use crate::process::{Output, run_with_deadline};
 
 /// Where `tailscale` is: on `PATH`, as Homebrew's or the app's own
 /// installed from its settings, or in the app.
@@ -47,10 +49,10 @@ pub struct Status {
 pub fn status() -> Option<(&'static str, Status)> {
     PROGRAMS.iter().find_map(|program| {
         let ran = run(program, &["status", "--json"], ASKS)?;
-        if !ran.ok {
+        if !ran.success() {
             return None;
         }
-        Some((*program, status_in(&ran.out)?))
+        Some((*program, status_in(&ran.stdout)?))
     })
 }
 
@@ -170,8 +172,8 @@ fn relayed_in(bytes: &[u8], relay: u16) -> std::collections::BTreeSet<u16> {
 /// `tailscale serve`, through `program`, says, as coxd left them.
 pub fn relayed(program: &str, relay: u16) -> std::collections::BTreeSet<u16> {
     run(program, &["serve", "status", "--json"], ASKS)
-        .filter(|ran| ran.ok)
-        .map(|ran| relayed_in(&ran.out, relay))
+        .filter(Output::success)
+        .map(|ran| relayed_in(&ran.stdout, relay))
         .unwrap_or_default()
 }
 
@@ -184,7 +186,7 @@ pub fn relayed(program: &str, relay: u16) -> std::collections::BTreeSet<u16> {
 pub fn unserve(program: &str, https: u16) -> Result<(), String> {
     let at = format!("--https={https}");
     match run(program, &["serve", &at, "off"], ASKS) {
-        Some(ran) if ran.ok => Ok(()),
+        Some(ran) if ran.success() => Ok(()),
         Some(ran) => Err(said(&ran)),
         None => Err(format!("`{program}` does not start")),
     }
@@ -201,8 +203,8 @@ pub fn unserve(program: &str, https: u16) -> Result<(), String> {
 /// it on.
 pub fn serve(program: &str, port: u16, https: u16) -> Result<String, String> {
     let status = run(program, &["serve", "status", "--json"], ASKS)
-        .filter(|ran| ran.ok)
-        .map_or(Served::Nothing, |ran| served_in(&ran.out, port, https));
+        .filter(Output::success)
+        .map_or(Served::Nothing, |ran| served_in(&ran.stdout, port, https));
     let at = if https == 443 {
         String::new()
     } else {
@@ -221,8 +223,8 @@ pub fn serve(program: &str, port: u16, https: u16) -> Result<String, String> {
     let https = format!("--https={https}");
     let port_said = port.to_string();
     match run(program, &["serve", "--bg", &https, &port_said], ASKS) {
-        Some(ran) if ran.ok => Ok(format!("tailscale serves port {port} now")),
-        Some(ran) if ran.ended => Err(said(&ran)),
+        Some(ran) if ran.success() => Ok(format!("tailscale serves port {port} now")),
+        Some(ran) if ran.status.is_some() => Err(said(&ran)),
         // As in a tailnet with Serve off, which it says where to turn on.
         Some(ran) => Err(format!("`tailscale serve` waits: {}", said(&ran))),
         None => Err(format!("`{program}` does not start")),
@@ -230,8 +232,9 @@ pub fn serve(program: &str, port: u16, https: u16) -> Result<String, String> {
 }
 
 /// What a `tailscale` that failed said, on a line.
-fn said(ran: &Ran) -> String {
-    let text = String::from_utf8_lossy(&ran.err).into_owned() + &String::from_utf8_lossy(&ran.out);
+fn said(ran: &Output) -> String {
+    let text =
+        String::from_utf8_lossy(&ran.stderr).into_owned() + &String::from_utf8_lossy(&ran.stdout);
     text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with("Warning: client version"))
@@ -239,63 +242,10 @@ fn said(ran: &Ran) -> String {
         .join(" ")
 }
 
-/// What a program wrote, whether it ended in time, and whether it ended
-/// well.
-struct Ran {
-    ended: bool,
-    ok: bool,
-    out: Vec<u8>,
-    err: Vec<u8>,
-}
-
 /// Runs `program` with `args`, unless it fails to start, stopping it once
 /// it takes longer than `time`.
-fn run(program: &str, args: &[&str], time: Duration) -> Option<Ran> {
-    let mut child = std::process::Command::new(program)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .ok()?;
-    let read = |mut from: Box<dyn std::io::Read + Send>| {
-        let (wrote, written) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = from.read_to_end(&mut bytes);
-            let _ = wrote.send(bytes);
-        });
-        written
-    };
-    let out = read(Box::new(child.stdout.take()?));
-    let err = read(Box::new(child.stderr.take()?));
-    let started = std::time::Instant::now();
-    let wrote = out.recv_timeout(time).ok();
-    let said = err
-        .recv_timeout(time.saturating_sub(started.elapsed()))
-        .ok();
-    if let (Some(out), Some(err)) = (wrote.clone(), said.clone()) {
-        let status = child.wait().ok()?;
-        return Some(Ran {
-            ended: true,
-            ok: status.success(),
-            out,
-            err,
-        });
-    }
-    // Stopped, it ends what it wrote, which the readers then have whole.
-    let _ = child.kill();
-    let _ = child.wait();
-    let rest = |had: Option<Vec<u8>>, from: std::sync::mpsc::Receiver<Vec<u8>>| {
-        had.or_else(|| from.recv_timeout(Duration::from_secs(1)).ok())
-            .unwrap_or_default()
-    };
-    Some(Ran {
-        ended: false,
-        ok: false,
-        out: rest(wrote, out),
-        err: rest(said, err),
-    })
+fn run(program: &str, args: &[&str], time: Duration) -> Option<Output> {
+    run_with_deadline(Command::new(program).args(args), None, time, |_| {}).ok()
 }
 
 #[cfg(test)]
@@ -368,34 +318,6 @@ mod tests {
             Served::Other("https://mac.tail1234.ts.net:3000/".to_owned())
         );
         assert!(relayed_in(b"", 7422).is_empty());
-    }
-
-    #[test]
-    fn a_program_that_fails_is_told_with_what_it_wrote() {
-        let ran = run("sh", &["-c", "printf hi; printf no >&2; exit 3"], ASKS).unwrap();
-        assert!(ran.ended && !ran.ok);
-        assert_eq!(ran.out, b"hi");
-        assert_eq!(ran.err, b"no");
-    }
-
-    #[test]
-    fn stops_a_program_that_does_not_answer() {
-        let started = std::time::Instant::now();
-        let waits = run(
-            "sh",
-            &[
-                "-c",
-                "echo visit https://login.tailscale.com/f/serve; exec sleep 30",
-            ],
-            Duration::from_millis(500),
-        )
-        .unwrap();
-        assert!(!waits.ended && !waits.ok);
-        assert_eq!(waits.out, b"visit https://login.tailscale.com/f/serve\n");
-        assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "it waited for the program to end by itself"
-        );
     }
 
     #[test]

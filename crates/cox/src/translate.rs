@@ -31,10 +31,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, Read, Write as _};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::process::{Command as Process, Stdio};
+use std::process::Command as Process;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -47,6 +46,7 @@ use tokio::sync::mpsc;
 use crate::agent::setup::{Policy, Setup, StageUse};
 use crate::agent::{Agent, AgentEvent, Command, Start};
 use crate::agents::Agents;
+use crate::process::run_with_deadline;
 use crate::settings::Translation;
 use crate::wiki::told::options;
 
@@ -542,9 +542,9 @@ fn gave_up(gives_up_after: Duration, what: &str) -> String {
 
 /// What `command` writes for `text`, given on its standard input, with
 /// `{from}` and `{to}` in its arguments standing for the languages of
-/// `way`, telling `so_far` what it has written as it writes it; stopped,
-/// with every process it started, when it takes longer than
-/// `gives_up_after`.
+/// `way`, telling `so_far` what it has written as it writes it, up to its
+/// last whole character; stopped, with every process it started, when it
+/// takes longer than `gives_up_after`.
 fn run(
     command: &[String],
     way: &Way,
@@ -552,101 +552,46 @@ fn run(
     gives_up_after: Duration,
     mut so_far: impl FnMut(&str),
 ) -> Result<String, String> {
-    use std::os::unix::process::CommandExt as _;
     let words: Vec<String> = command
         .iter()
         .map(|word| word.replace("{from}", &way.from).replace("{to}", &way.to))
         .collect();
     let (program, arguments) = words.split_first().ok_or("the command is empty")?;
-    let mut child = Process::new(program)
-        .args(arguments)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .map_err(|error| format!("{program} does not start: {error}"))?;
-    let group = libc::pid_t::try_from(child.id()).map_err(|error| error.to_string())?;
-    let (finished, finishing) = std::sync::mpsc::channel::<()>();
-    // Its whole group, as what it started holds its output open too.
-    let watches = thread::spawn(move || {
-        let late = finishing.recv_timeout(gives_up_after)
-            == Err(std::sync::mpsc::RecvTimeoutError::Timeout);
-        if late {
-            // SAFETY: this only signals the command's group, whose id can
-            // be another's only once the command is waited for, a moment
-            // before this is told it finished.
-            unsafe { libc::killpg(group, libc::SIGKILL) };
-        }
-        late
-    });
-    let mut stdin = child.stdin.take().ok_or("the command takes no input")?;
-    let input = format!("{}\n", text.trim_end());
-    // Written apart from the reading, so that a command that writes as it
-    // reads does not wait on Cox while Cox waits on it.
-    let writes = thread::spawn(move || stdin.write_all(input.as_bytes()));
-    // Read apart from what it writes, so that neither fills while the
-    // other is read.
-    let mut stderr = child.stderr.take().ok_or("the command says nothing")?;
-    let complains = thread::spawn(move || {
-        let mut said = Vec::new();
-        let _ = stderr.read_to_end(&mut said);
-        said
-    });
-    let stdout = child.stdout.take().ok_or("the command writes nothing")?;
-    let written = as_written(stdout, &mut so_far)
-        .map_err(|error| format!("{program} cannot be read: {error}"))?;
-    let status = child
-        .wait()
-        .map_err(|error| format!("{program} cannot be waited for: {error}"))?;
-    drop(finished);
-    let late = watches.join().unwrap_or_default();
-    let _ = writes.join();
-    let said = complains.join().unwrap_or_default();
-    if late {
+    let input = format!("{}\n", text.trim_end()).into_bytes();
+    let output = run_with_deadline(
+        Process::new(program).args(arguments),
+        Some(input),
+        gives_up_after,
+        |written| {
+            // A chunk may end inside a character.
+            let whole = match std::str::from_utf8(written) {
+                Ok(whole) => whole,
+                Err(error) => {
+                    std::str::from_utf8(&written[..error.valid_up_to()]).unwrap_or_default()
+                }
+            };
+            if !whole.trim().is_empty() {
+                so_far(whole.trim());
+            }
+        },
+    )
+    .map_err(|error| format!("{program} does not start: {error}"))?;
+    let Some(status) = output.status else {
         return Err(gave_up(
             gives_up_after,
             &format!("{program} did not finish"),
         ));
-    }
+    };
     if !status.success() {
-        let said = String::from_utf8_lossy(&said);
+        let said = String::from_utf8_lossy(&output.stderr);
         let said = said.trim().lines().last().unwrap_or_default();
         return Err(format!("{program} failed ({status}): {said}"));
     }
-    let translated = String::from_utf8_lossy(&written).trim().to_owned();
+    let translated = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if translated.is_empty() {
         return Err(format!("{program} wrote nothing"));
     }
     Ok(translated)
-}
-
-/// All `from` writes, telling `so_far` what it has written as it writes
-/// it, up to its last whole character.
-///
-/// A read a signal interrupts is read again, as `read_to_end` does: the
-/// window's process, where CEF runs too, may handle a signal without
-/// having the system restart what it interrupted.
-fn as_written(mut from: impl Read, mut so_far: impl FnMut(&str)) -> io::Result<Vec<u8>> {
-    let mut written = Vec::new();
-    let mut chunk = [0; 4096];
-    loop {
-        let read = match from.read(&mut chunk) {
-            Ok(0) => return Ok(written),
-            Ok(read) => read,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        };
-        written.extend_from_slice(&chunk[..read]);
-        // Up to the last whole character, as a chunk may end inside one.
-        let whole = match std::str::from_utf8(&written) {
-            Ok(whole) => whole,
-            Err(error) => std::str::from_utf8(&written[..error.valid_up_to()]).unwrap_or_default(),
-        };
-        if !whole.trim().is_empty() {
-            so_far(whole.trim());
-        }
-    }
 }
 
 /// Keeps `translated` in `file`, whole or not at all, as a page may be
@@ -868,37 +813,6 @@ mod tests {
         );
         assert_eq!(unfenced(" こんにちは \n", "Hello"), "こんにちは");
         assert_eq!(unfenced("```\nx\n```", "```\nx\n```"), "```\nx\n```");
-    }
-
-    #[test]
-    fn a_read_a_signal_interrupts_is_read_again() {
-        /// Says `parts` one at a time, each after a read a signal
-        /// interrupts.
-        struct Interrupted {
-            parts: VecDeque<&'static [u8]>,
-            interrupt: bool,
-        }
-        impl Read for Interrupted {
-            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-                self.interrupt = !self.interrupt;
-                if self.interrupt {
-                    return Err(io::ErrorKind::Interrupted.into());
-                }
-                let Some(part) = self.parts.pop_front() else {
-                    return Ok(0);
-                };
-                buffer[..part.len()].copy_from_slice(part);
-                Ok(part.len())
-            }
-        }
-        let from = Interrupted {
-            parts: VecDeque::from(["こん".as_bytes(), "にちは".as_bytes()]),
-            interrupt: false,
-        };
-        let mut told = Vec::new();
-        let written = as_written(from, |so_far| told.push(so_far.to_owned())).unwrap();
-        assert_eq!(String::from_utf8(written).unwrap(), "こんにちは");
-        assert_eq!(told, ["こん", "こんにちは"]);
     }
 
     /// The page as `translator` translates it once it has all of it, or
