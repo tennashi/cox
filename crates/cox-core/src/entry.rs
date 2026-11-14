@@ -484,4 +484,26 @@ mod tests {
         ];
         assert_eq!(written(&entries), ["/work/a.rs", "/work/b.rs"]);
     }
+
+    /// What Cox has written of each proposal, as chats on disk and the
+    /// phone's page hold it.
+    const PROPOSALS: [&str; 8] = [
+        r#"{"proposal":{"goal":"$ make","why":"make builds it","answer":null}}"#,
+        r#"{"proposal":{"goal":"The greeting names the user.","why":null,"answer":"changed"}}"#,
+        r#"{"name_proposal":{"name":"shop","why":"It sells things.","answer":"set"}}"#,
+        r#"{"name_proposal":{"name":"market","why":null,"answer":null}}"#,
+        r#"{"about_proposal":{"about":"A shop that sells tea.","why":null,"answer":"dismissed"}}"#,
+        r#"{"icon_proposal":{"file":"icon-1.png","from":"logo.svg","why":"The teal of the shop.","answer":null}}"#,
+        r#"{"project_proposal":{"name":"market","why":null,"answer":null}}"#,
+        r#"{"project_proposal":{"name":"shop","why":"We agreed.","sketch":"/home/sketches/tea","sketch_name":"tea shop","answer":"set"}}"#,
+    ];
+
+    #[test]
+    fn a_proposal_reads_and_writes_as_cox_has_written_it() {
+        for written in PROPOSALS {
+            let entry: Entry = serde_json::from_str(written).unwrap();
+            assert_eq!(serde_json::to_string(&entry).unwrap(), written);
+        }
+    }
 }
+
