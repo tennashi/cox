@@ -309,7 +309,7 @@ fn of(root: &Path, topic: Option<&str>) -> Vec<String> {
 }
 
 /// The sources in the folder at `root`, as the stage's Knowledge page
-/// lists them, at `cox://api/raw` (see [`crate::stage::plugins`]): the
+/// lists them, at `cox://api/raw` (see `cox::stage::plugins`): the
 /// last kept first, each with its topic, its title, and, as its
 /// properties say, where it was read, the day it was kept, and the chat
 /// and project that kept it.

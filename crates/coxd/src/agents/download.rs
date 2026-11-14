@@ -1,6 +1,6 @@
 //! The programs of the ACP Registry's agents that Cox downloads, as the
 //! registry lists them for each platform, and of the language servers, as
-//! their `servers.json` does (see [`crate::stage::servers`]): Cox
+//! their `servers.json` does (see `cox::stage::servers`): Cox
 //! downloads the archive the first time it starts the program, checks it
 //! by the SHA-256 it is given, and unpacks it in `<id>/<version>`, in
 //! `cache/agents` or `cache/servers` where Cox keeps what lasts (see

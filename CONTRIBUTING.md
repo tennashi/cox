@@ -140,7 +140,7 @@ as an MCP server, as in Claude Code's `.mcp.json`.
 
 Each run's log is a file of JSON lines in `logs` in the data folder, such
 as `target/debug/cox-run/logs`. `COX_LOG` sets what goes into it, and the
-doc comment of [`logs.rs`](crates/cox/src/logs.rs) lists the targets
+doc comment of [`logs.rs`](crates/coxd/src/logs.rs) lists the targets
 worth asking for.
 
 ## Making a pull request

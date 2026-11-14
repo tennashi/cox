@@ -1,5 +1,5 @@
 //! The wiki as the stage's Knowledge plugin reads it, at `cox://api/wiki` and
-//! `cox://api/wiki/<page>` (see [`crate::stage::plugins`]): each page
+//! `cox://api/wiki/<page>` (see `cox::stage::plugins`): each page
 //! with its title, what it is about, the pages it links to and those that
 //! link to it, where it was used, the project it is kept in, if it is
 //! kept in one, and what Cox finds wrong with it, which

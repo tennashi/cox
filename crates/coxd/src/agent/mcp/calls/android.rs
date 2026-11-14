@@ -2,7 +2,7 @@
 //! as the agent learns of them, and what each asks of the chat's stage:
 //! the device's display shows on a tab, where the human sees what the
 //! agent sees, and its pointer where it taps (see
-//! [`crate::stage::android`]).
+//! `cox::stage::android`).
 
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;

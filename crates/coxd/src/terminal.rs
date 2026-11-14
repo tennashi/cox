@@ -1,6 +1,6 @@
 //! A program running on a pseudoterminal, as `alacritty_terminal` runs
 //! it, and what its terminal shows, apart from any window: a tab of the
-//! stage shows one (see [`crate::stage::terminal`]), and coxd runs a
+//! stage shows one (see `cox::stage::terminal`), and coxd runs a
 //! command the agent asks for with none (see [`run_unseen`]).
 //!
 //! - [`pty`] starts the program on the pseudoterminal, and reads what it
