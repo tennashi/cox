@@ -19,10 +19,11 @@ use gpui::{
 };
 
 use super::words::{Part, Words};
+use crate::agents::Known;
 use crate::agents::check::{self, Checked};
 use crate::agents::line;
 use crate::agents::listing::Listing;
-use crate::agents::{Agents, Known};
+use crate::settings::window::AppAgents;
 use crate::ui::button::{INPUT_HEIGHT, Kind, button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::input::{Blurred, LineInput, Submitted};
@@ -514,8 +515,8 @@ impl AgentsSection {
     /// of the human's own, then those of the registry not listed yet.
     fn render_adding(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let listed: Vec<Known> = cx
-            .try_global::<Agents>()
-            .map(Agents::all)
+            .try_global::<AppAgents>()
+            .map(|agents| agents.0.all())
             .unwrap_or_default()
             .into_iter()
             .filter(|known| known.listed && known.download.is_none())
@@ -596,7 +597,9 @@ fn is_assignment(word: &str) -> bool {
 
 impl Render for AgentsSection {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let commanded = cx.try_global::<Agents>().is_some_and(Agents::commanded);
+        let commanded = cx
+            .try_global::<AppAgents>()
+            .is_some_and(|agents| agents.0.commanded());
         let mut words = self.words.part();
         // The words are numbered as they are written, so the heading and
         // the lines over the rows go first.

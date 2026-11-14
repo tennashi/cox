@@ -48,8 +48,9 @@ use cox_core::goal::Goal;
 use cox_core::list::List;
 use cox_core::store::{ChatId, Named, ProjectId};
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, Image, KeyBinding, PathPromptOptions, Pixels,
-    Point, SharedString, Subscription, Task, Window, actions, prelude::*,
+    App, Context, Entity, FocusHandle, Focusable, Image, ImageFormat, KeyBinding,
+    PathPromptOptions, Pixels, Point, SharedString, Subscription, Task, Window, actions,
+    prelude::*,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -138,6 +139,13 @@ const NO_TERMINAL: &str = "its terminal went away";
 /// Why the agent sees nothing of a Mac window, or an Android device,
 /// whose stage went before it answered.
 const NO_TAB: &str = "the stage went away before it answered";
+
+/// The icon of the project kept as `id`, for GPUI to draw, if it has one
+/// (see [`crate::project_icon`]).
+fn icon_of(id: ProjectId) -> Option<Arc<Image>> {
+    let bytes = std::fs::read(crate::project_icon::path(id)?).ok()?;
+    Some(Arc::new(Image::from_bytes(ImageFormat::Png, bytes)))
+}
 
 /// Binds the keys that open chats and move between them, and the one
 /// that closes the card of a project.
@@ -744,12 +752,9 @@ impl Workspace {
                 name: row.name.into(),
                 folder: row.folder,
                 last: lasts.get(index).copied().flatten(),
-                icon: row.id.and_then(|id| {
-                    icons
-                        .get(&id)
-                        .cloned()
-                        .unwrap_or_else(|| crate::project_icon::read(id))
-                }),
+                icon: row
+                    .id
+                    .and_then(|id| icons.get(&id).cloned().unwrap_or_else(|| icon_of(id))),
                 missing: row.missing,
                 archived: row.archived,
                 deleted: row.deleted,
@@ -1141,7 +1146,7 @@ impl Workspace {
     /// Reads again the icon of the project kept as `id`, as it is now.
     fn read_icon(&mut self, id: ProjectId, cx: &mut Context<Self>) {
         if let Some(project) = self.projects.iter_mut().find(|p| p.id == Some(id)) {
-            project.icon = crate::project_icon::read(id);
+            project.icon = icon_of(id);
         }
         self.follow_project_card(cx);
         cx.notify();

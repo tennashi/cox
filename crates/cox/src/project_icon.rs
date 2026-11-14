@@ -12,11 +12,9 @@
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use cox_core::store::ProjectId;
-use gpui::{Image, ImageFormat};
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageReader, RgbaImage};
 
@@ -45,13 +43,6 @@ pub fn path(id: ProjectId) -> Option<PathBuf> {
 pub fn named(id: &str) -> Option<PathBuf> {
     let id: i64 = id.parse().ok()?;
     Some(storage::path(Kept::Icons)?.join(format!("{id}.png")))
-}
-
-/// The icon of the project kept as `id`, for GPUI to draw, if it has one.
-#[must_use]
-pub fn read(id: ProjectId) -> Option<Arc<Image>> {
-    let bytes = std::fs::read(path(id)?).ok()?;
-    Some(Arc::new(Image::from_bytes(ImageFormat::Png, bytes)))
 }
 
 /// Gives the project kept as `id` the picture in the file `from` as its
@@ -107,7 +98,7 @@ pub fn generate(agents: &Agents, id: ProjectId, name: &str, folder: &Path) -> an
         setup: Some(drawer()),
     };
     let mut agent =
-        crate::chat::launcher::spawn(agents.of(None), folder.to_owned(), Vec::new(), start);
+        crate::agent::spawn_known(agents.of(None), folder.to_owned(), Vec::new(), start);
     let ask = workflow::ICON_GENERATE.say(&[("name", name)]);
     agent
         .commands

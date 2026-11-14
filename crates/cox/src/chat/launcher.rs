@@ -9,7 +9,7 @@
 //!    passes on to the window.
 //! 2. The agent, working in the chat's directory, told of the two MCP
 //!    servers it starts to reach the stage's relay and the server
-//!    ([`spawn`], [`Launcher::tools`]).
+//!    ([`crate::agent::spawn_known`], [`Launcher::tools`]).
 //!
 //! The window starts the chat's stage ([`CefStages`], the window's
 //! [`Stages`]): the stage itself, on the page every chat starts on, or on
@@ -35,13 +35,12 @@ use gpui::{App, Window, prelude::*};
 
 use crate::agent::mcp::ToolServer;
 use crate::agent::{Agent, Start};
-use crate::agents::{Agents, Known, download};
+use crate::agents::Agents;
 use crate::chat::Stages;
 use crate::chat::judge::Starts;
 use crate::chat::view::{OpenLink, StageView};
 use crate::daemon::{Spawned, Spawns};
 use crate::stage::Stage;
-use crate::storage::Kept;
 use crate::ui::Panel;
 use cox_browser::relay::Relay;
 
@@ -155,46 +154,8 @@ impl Launcher {
     /// Starts the agent kept as `agent` working in `cwd` with `tools`, as
     /// `start` says.
     fn spawn(&self, cwd: PathBuf, tools: Vec<McpServer>, start: Start, agent: &str) -> Agent {
-        spawn(self.agents.of(Some(agent)), cwd, tools, start)
+        crate::agent::spawn_known(self.agents.of(Some(agent)), cwd, tools, start)
     }
-}
-
-/// Why no agent starts when Cox was opened without an agent command, as
-/// from the Finder, and the settings name none.
-const NO_AGENT: &str = "Cox was opened without an agent command, and settings.json, \
-    where Cox keeps what lasts, names none of the agents agents.json lists beside it, \
-    as {\"agent\": \"Claude\"} for [{\"name\": \"Claude\", \"command\": [\"npx\", \"-y\", \
-    \"@agentclientprotocol/claude-agent-acp\"]}]";
-
-/// Starts `known`, working in `cwd`, an absolute path, with the tools of
-/// `tools`, as `start` says: a chat's agent, or one with no chat, such as
-/// the judge of a goal, or the agent that translates the wiki (see
-/// [`crate::wiki::translate`]).
-pub(crate) fn spawn(known: Known, cwd: PathBuf, tools: Vec<McpServer>, start: Start) -> Agent {
-    tracing::info!(agent = %known.id, "starts the agent");
-    let Known {
-        id,
-        name,
-        command,
-        download,
-        ..
-    } = known;
-    let connect = move |told: &dyn Fn(String)| {
-        anyhow::ensure!(!command.is_empty(), NO_AGENT);
-        // The program of an agent of the registry that Cox downloads
-        // is downloaded the first time it starts.
-        let command = match download {
-            Some(download) => {
-                let installed = download::installed(Kept::Downloads, &id, &download, &|note| {
-                    told(format!("{name}: {note}"));
-                })?;
-                crate::agents::located(&command, &installed)
-            }
-            None => command,
-        };
-        cox_acp::launch(command)
-    };
-    crate::agent::spawn(connect, cwd, tools, start)
 }
 
 /// Makes the chats' stages in CEF: the window's [`Stages`] when Cox runs.

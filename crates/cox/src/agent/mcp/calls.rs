@@ -1035,7 +1035,7 @@ fn show_file(
 }
 
 /// Asks the chat to show what changed in the repositories of the folder
-/// `arguments` name (see [`crate::stage::changes::repositories`]), and
+/// `arguments` name (see [`crate::repositories::of`]), and
 /// answers what changed in each.
 fn show_changes(
     arguments: &Value,
@@ -1052,7 +1052,7 @@ fn show_changes(
     };
     let folder = fs::canonicalize(&folder)
         .map_err(|error| format!("cannot read {}: {error}", folder.display()))?;
-    let read = crate::stage::changes::read(&folder);
+    let read = crate::repositories::read(&folder);
     if !read.iter().any(|repository| repository.read.is_ok()) {
         let error = read
             .into_iter()

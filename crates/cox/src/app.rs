@@ -240,7 +240,7 @@ pub fn run(settings: Settings) -> ExitCode {
             bind_keys(cx);
             crate::vim::turn(crate::settings::vim(), cx);
             cx.set_global(Servers::default());
-            cx.set_global(agents.clone());
+            cx.set_global(crate::settings::window::AppAgents(agents.clone()));
             serve_browser(&cef, cx);
             crate::busy::watch(cx);
             quit_when_asked(cx);
@@ -255,7 +255,7 @@ pub fn run(settings: Settings) -> ExitCode {
                 agents: agents.clone(),
             };
             let window = open_window(workspace, cx);
-            crate::settings::follow(window, agents, cx);
+            crate::settings::window::follow(window, agents, cx);
             crate::inspect::start(window, devtools, inspected, cx);
         });
     ExitCode::SUCCESS
@@ -351,7 +351,7 @@ pub fn daemon() -> ExitCode {
 const FOLLOW_EVERY: Duration = Duration::from_secs(1);
 
 /// Follows `settings.json` and `agents.json` for coxd, on a thread of its
-/// own, as the window does for itself (see [`crate::settings::follow`]):
+/// own, as the window does for itself (see [`crate::settings::window::follow`]):
 /// a chat opened from then on talks to the agents they list and name.
 fn follow_agents(agents: Agents) {
     let files: Vec<PathBuf> = [crate::storage::Kept::Settings, crate::storage::Kept::Agents]

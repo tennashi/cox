@@ -8,7 +8,7 @@ use std::sync::Arc;
 use alacritty_terminal::index::Line;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
-use alacritty_terminal::vte::ansi::CursorShape;
+use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 use gpui::{
     App, Bounds, Element, ElementId, ElementInputHandler, Entity, FontStyle, FontWeight,
     GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, Point, ShapedLine,
@@ -17,12 +17,10 @@ use gpui::{
 };
 
 use super::Terminal;
-use super::colors::{CURSOR, FOREGROUND, dim, hsla, resolve};
-use super::pty::Size;
+use crate::terminal::colors::{CURSOR, FOREGROUND, dim, resolve};
+use crate::terminal::pty::Size;
+use crate::terminal::{FONT_SIZE, LINE_HEIGHT};
 use crate::ui::theme::{CODE_FONT, SELECTION, SURFACE};
-
-pub(super) const FONT_SIZE: f32 = 13.;
-pub(super) const LINE_HEIGHT: f32 = 1.3;
 
 /// Room between the grid and the tab's edges.
 const PADDING: f32 = 6.;
@@ -423,6 +421,10 @@ impl Element for Grid {
 )]
 pub(super) fn whole_cells(cells: f32) -> usize {
     cells.floor().max(0.) as usize
+}
+
+fn hsla(color: Rgb) -> Hsla {
+    rgb(u32::from(color.r) << 16 | u32::from(color.g) << 8 | u32::from(color.b)).into()
 }
 
 #[cfg(test)]

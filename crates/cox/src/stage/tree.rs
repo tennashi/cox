@@ -35,7 +35,6 @@ use gpui::{
     Global, ScrollHandle, Stateful, Task, Window, div, prelude::*, px, rgb,
 };
 
-use crate::stage::changes;
 use crate::stage::tab::Shows;
 use crate::ui::ellipsis::ellipsis;
 use crate::ui::icons::{Icon, icon};
@@ -821,7 +820,7 @@ fn follow(cx: &mut Context<Tree>) -> Task<()> {
                             (folder, listed)
                         })
                         .collect();
-                    (listed, changes::hows(&root))
+                    (listed, crate::repositories::hows(&root))
                 })
                 .await;
             if this

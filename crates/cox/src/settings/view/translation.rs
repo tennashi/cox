@@ -11,7 +11,8 @@ use serde_json::{Map, Value};
 
 use super::chip;
 use super::words::Words;
-use crate::agents::{Agents, line};
+use crate::agents::line;
+use crate::settings::window::AppAgents;
 use crate::ui::button::INPUT_HEIGHT;
 use crate::ui::input::{Blurred, LineInput, Submitted};
 use crate::ui::theme::{ACCENT, BORDER, FAILED, FAINT, FOREGROUND};
@@ -244,8 +245,8 @@ impl TranslationSection {
     /// the one the settings name, if it is none of them.
     fn agents(&self, cx: &App) -> Vec<String> {
         let mut names: Vec<String> = cx
-            .try_global::<Agents>()
-            .map(Agents::all)
+            .try_global::<AppAgents>()
+            .map(|agents| agents.0.all())
             .unwrap_or_default()
             .into_iter()
             .filter(|known| !known.listed && !known.command.is_empty())

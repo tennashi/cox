@@ -99,9 +99,6 @@ impl Known {
 #[derive(Clone)]
 pub struct Agents(Arc<Mutex<Lists>>);
 
-/// The agents of the app, for the settings screen to list.
-impl gpui::Global for Agents {}
-
 /// The human's agents, and the registry's.
 struct Lists {
     /// The agent of the command line, if it gives one.

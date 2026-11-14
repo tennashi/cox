@@ -40,8 +40,10 @@ use cox_core::settings::{Choice, Setting};
 
 use crate::agent::instructions::Instructions;
 use crate::agent::setup::{Asked, Decision, Policy, Setup};
+use crate::agents::{Known, download};
 use crate::chat::mention;
 use crate::process::close_on_exec;
+use crate::storage::Kept;
 
 /// What the agent side tells the window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -377,6 +379,49 @@ pub fn spawn<T: Transport + Send + 'static>(
             thread: Some(thread),
         },
     }
+}
+
+/// Why no agent starts when Cox was opened without an agent command, as
+/// from the Finder, and the settings name none.
+const NO_AGENT: &str = "Cox was opened without an agent command, and settings.json, \
+    where Cox keeps what lasts, names none of the agents agents.json lists beside it, \
+    as {\"agent\": \"Claude\"} for [{\"name\": \"Claude\", \"command\": [\"npx\", \"-y\", \
+    \"@agentclientprotocol/claude-agent-acp\"]}]";
+
+/// Starts `known`, working in `cwd`, an absolute path, with the tools of
+/// `tools`, as `start` says: a chat's agent, or one with no chat, such as
+/// the judge of a goal, or the agent that translates the wiki (see
+/// [`crate::translate`]).
+pub(crate) fn spawn_known(
+    known: Known,
+    cwd: PathBuf,
+    tools: Vec<McpServer>,
+    start: Start,
+) -> Agent {
+    tracing::info!(agent = %known.id, "starts the agent");
+    let Known {
+        id,
+        name,
+        command,
+        download,
+        ..
+    } = known;
+    let connect = move |told: &dyn Fn(String)| {
+        anyhow::ensure!(!command.is_empty(), NO_AGENT);
+        // The program of an agent of the registry that Cox downloads
+        // is downloaded the first time it starts.
+        let command = match download {
+            Some(download) => {
+                let installed = download::installed(Kept::Downloads, &id, &download, &|note| {
+                    told(format!("{name}: {note}"));
+                })?;
+                crate::agents::located(&command, &installed)
+            }
+            None => command,
+        };
+        cox_acp::launch(command)
+    };
+    spawn(connect, cwd, tools, start)
 }
 
 /// What the human handed, as blocks of the prompt: what it says, with
